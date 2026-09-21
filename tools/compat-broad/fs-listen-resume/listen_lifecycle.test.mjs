@@ -13,24 +13,31 @@ import { createBudget, createRecoveryBudget, ownedPaths, ownerMarker } from './l
 
 const NONCE = 'b'.repeat(32);
 const EMAIL = `o6-${NONCE}@example.test`;
+const EMAIL_B = `o6-${NONCE}-b@example.test`;
 const UID = 'owned-local-uid';
+const UID_B = 'owned-local-uid-b';
 const limits = { reads: 200, writes: 60, deletes: 100, snapshots: 120, listeners: 40 };
 const sampleCase = { caseId: 'LIFECYCLE-ONE', role: 'local', comparison: 'exact',
   listeners: [], steps: [{ kind: 'seed', doc: 'alpha', fields: { marker: 1 } }],
   expectedLocal: [], invariants: [] };
 const config = (clock = () => 0) => ({
   projectId: 'demo-local', firestoreHost: '127.0.0.1:18081', authHost: '127.0.0.1:18082',
-  account: { name: 'throwaway', email: EMAIL, password: 'PRIVATE-VALUE' }, nonce: NONCE,
+  account: { name: 'throwaway', email: EMAIL, password: 'PRIVATE-VALUE' },
+  secondaryAccount: { name: 'second', email: EMAIL_B, password: 'PRIVATE-VALUE-B' }, nonce: NONCE,
   catalog: { cases: [structuredClone(sampleCase)] }, stepTimeoutMs: 100,
   budget: createBudget({ now: clock, deadlineMs: 300000, limits }),
   cleanupBudget: createRecoveryBudget({ now: clock, deadlineMs: 180000,
     limits: { ...limits, writes: 0, listeners: 0, snapshots: 0 } }),
 });
 
+// Two principals: the first signs up on the primary client, the second on the
+// secondary client. `account()` reports the first one, `accountB()` the second.
 function fixture(fault = null, injected = {}) {
   const calls = [];
   const documents = new Map();
-  let account = null;
+  const accounts = new Map();
+  const account = () => accounts.get(EMAIL) ?? null;
+  const accountB = () => accounts.get(EMAIL_B) ?? null;
   let lookupCount = 0;
   const hit = name => {
     calls.push(name);
@@ -42,24 +49,29 @@ function fixture(fault = null, injected = {}) {
   });
   const sdk = {
     initializeApp: (_cfg, name) => {
-      const client = name.endsWith('primary') ? 'primary' : 'witness';
+      const client = name.split('-').at(-1);
       hit(`initialize:${client}`); return { client };
     },
     getFirestore: app => { hit(`database:${app.client}`); return { client: app.client }; },
     connectFirestoreEmulator: db => hit(`connect-database:${db.client}`),
     getAuth: app => { hit(`auth:${app.client}`); return { client: app.client }; },
     connectAuthEmulator: auth => hit(`connect-auth:${auth.client}`),
-    createUserWithEmailAndPassword: async auth => {
-      hit('signup');
-      account = { localId: UID, email: EMAIL };
-      auth.currentUser = { uid: UID, email: EMAIL };
-      hit('signup-after-create');
-      if (injected.signupResponse) return injected.signupResponse;
+    createUserWithEmailAndPassword: async (auth, email) => {
+      const second = auth.client === 'secondary';
+      hit(second ? 'signup-b' : 'signup');
+      const uid = second ? UID_B : UID;
+      accounts.set(email, { localId: uid, email });
+      auth.currentUser = { uid, email };
+      hit(second ? 'signup-b-after-create' : 'signup-after-create');
+      if (injected.signupResponse && !second) return injected.signupResponse;
       return { user: auth.currentUser };
     },
     signInWithEmailAndPassword: async auth => {
       hit(`signin:${auth.client}`);
-      return { user: { uid: injected.witnessUid && auth.client === 'witness' ? injected.witnessUid : UID } };
+      const uid = auth.client === 'secondary' ? UID_B
+        : injected.witnessUid && auth.client === 'witness' ? injected.witnessUid : UID;
+      auth.currentUser = { uid };
+      return { user: { uid } };
     },
     terminate: async db => hit(`terminate:${db.client}`),
     deleteApp: async app => hit(`delete-app:${app.client}`),
@@ -77,18 +89,26 @@ function fixture(fault = null, injected = {}) {
       lookupCount++;
       hit(`lookup:${lookupCount}`);
       if (injected.lookups?.[lookupCount]) return injected.lookups[lookupCount];
-      return { status: 200, body: { users: account ? [{ ...account }] : [] } };
+      const found = [...accounts.values()].filter(row =>
+        body.email ? body.email.includes(row.email) : body.localId.includes(row.localId));
+      return { status: 200, body: { users: found.map(row => ({ ...row })) } };
     }
-    assert.equal(operation, 'delete'); assert.equal(body.localId, UID);
-    hit('account-delete');
-    if (injected.deletion) return injected.deletion;
-    account = null; return { status: 200, body: {} };
+    if (operation === 'update') {
+      hit(`revoke:${body.localId}`);
+      return { status: 200, body: { localId: body.localId } };
+    }
+    assert.equal(operation, 'delete');
+    const second = body.localId === UID_B;
+    assert.ok(second || body.localId === UID);
+    hit(second ? 'account-delete-b' : 'account-delete');
+    if (injected.deletion && !second) return injected.deletion;
+    accounts.delete(second ? EMAIL_B : EMAIL); return { status: 200, body: {} };
   };
-  return { sdk, request, calls, documents, account: () => account };
+  return { sdk, request, calls, documents, account, accountB };
 }
 
 for (const stage of ['initialize', 'database', 'connect-database', 'auth', 'connect-auth']) {
-  for (const client of ['primary', 'witness']) {
+  for (const client of ['primary', 'witness', 'secondary']) {
     test(`partial SDK ${stage}:${client} still releases every constructed app`, async () => {
       const f = fixture(`${stage}:${client}`);
       const out = await executeLocalLifecycle(f.sdk, config(), { request: f.request });
@@ -105,21 +125,27 @@ for (const stage of ['initialize', 'database', 'connect-database', 'auth', 'conn
   }
 }
 
-for (const stage of ['signup', 'signup-after-create', 'signin:witness', 'write',
-  'terminate:primary', 'delete-app:primary', 'terminate:witness', 'delete-app:witness']) {
+for (const stage of ['signup', 'signup-after-create', 'signup-b', 'signup-b-after-create',
+  'signin:witness', 'write', 'terminate:primary', 'delete-app:primary', 'terminate:witness',
+  'delete-app:witness', 'terminate:secondary', 'delete-app:secondary']) {
   test(`${stage} failure is recorded while remaining cleanup still runs`, async () => {
     const f = fixture(stage);
     const out = await executeLocalLifecycle(f.sdk, config(), { request: f.request });
     assert.ok(out.lifecycle.failure || out.thrown || out.caseRecords.some(r => !r.complete) ||
       !out.lifecycle.clients.complete);
-    for (const name of ['primary', 'witness']) {
+    for (const name of ['primary', 'witness', 'secondary']) {
       assert.ok(f.calls.includes(`terminate:${name}`));
       assert.ok(f.calls.includes(`delete-app:${name}`));
     }
     if (stage === 'signup-after-create') {
       assert.equal(out.lifecycle.accountCleanup.outcome, 'creation-unconfirmed');
+      assert.equal(out.lifecycle.accountCleanup.accounts.primary.outcome, 'creation-unconfirmed');
       assert.ok(!f.calls.includes('account-delete'));
-    } else assert.equal(f.account(), null);
+    } else if (stage === 'signup-b-after-create') {
+      assert.equal(out.lifecycle.accountCleanup.accounts.secondary.outcome, 'creation-unconfirmed');
+      assert.equal(f.account(), null);
+      assert.ok(!f.calls.includes('account-delete-b'));
+    } else { assert.equal(f.account(), null); assert.equal(f.accountB(), null); }
     assert.equal(f.documents.size, 0);
     assert.ok(!JSON.stringify(out).includes('PRIVATE-VALUE'));
   });
@@ -131,10 +157,26 @@ test('normal catalog creates and deletes documents and the exact account before 
   assert.equal(out.lifecycle.complete, true);
   assert.equal(out.cleanup.complete, true);
   assert.equal(out.lifecycle.accountCleanup.outcome, 'deleted-and-absent');
-  assert.equal(out.lifecycle.localAdminRequests, 4);
+  assert.deepEqual(Object.keys(out.lifecycle.accountCleanup.accounts), ['primary', 'secondary']);
+  assert.equal(out.lifecycle.accountCleanup.accounts.secondary.outcome, 'deleted-and-absent');
+  // Two preflights and three cleanup calls per account; no revocation in this catalog.
+  assert.equal(out.lifecycle.localAdminRequests, 8);
   assert.equal(f.documents.size, 0);
   assert.equal(f.account(), null);
+  assert.equal(f.accountB(), null);
   assert.ok(f.calls.indexOf('account-delete') < f.calls.indexOf('terminate:primary'));
+  assert.ok(f.calls.indexOf('account-delete-b') < f.calls.indexOf('terminate:primary'));
+});
+
+test('the revoke step revokes the sessions of the client\'s current principal only', async () => {
+  const f = fixture();
+  const catalog = { cases: [{ ...structuredClone(sampleCase),
+    steps: [{ kind: 'revoke', client: 'primary' }, { kind: 'revoke', client: 'secondary' }] }] };
+  const out = await executeLocalLifecycle(f.sdk, { ...config(), catalog }, { request: f.request });
+  assert.equal(out.lifecycle.complete, true);
+  assert.deepEqual(f.calls.filter(call => call.startsWith('revoke:')), [`revoke:${UID}`, `revoke:${UID_B}`]);
+  assert.equal(out.lifecycle.localAdminRequests, 10);
+  assert.equal(out.caseRecords[0].transportTimeline.filter(e => e.kind === 'revoke-requested').length, 2);
 });
 
 test('outer catalog exception after an effect still executes document recovery', async () => {
@@ -166,7 +208,7 @@ for (const body of [{}, { users: null }, { users: [], error: {} },
   { users: [{ localId: UID, email: 'foreign@example.invalid' }] },
   { users: [{ localId: UID, email: EMAIL }, { localId: UID, email: EMAIL }] }]) {
   test(`ambiguous cleanup lookup cannot grant deletion: ${JSON.stringify(body)}`, async () => {
-    const f = fixture(null, { lookups: { 2: { status: 200, body } } });
+    const f = fixture(null, { lookups: { 3: { status: 200, body } } });
     const out = await executeLocalLifecycle(f.sdk, config(), { request: f.request });
     assert.equal(out.lifecycle.accountCleanup.complete, false);
     assert.equal(out.lifecycle.complete, false);
@@ -182,7 +224,7 @@ for (const signupResponse of [{}, { user: { uid: UID, email: 'other' } }, { user
     assert.ok(!f.calls.includes('account-delete'));
   });
 }
-for (const stage of ['lookup:2', 'account-delete', 'lookup:3']) {
+for (const stage of ['lookup:3', 'account-delete', 'lookup:4', 'lookup:5', 'account-delete-b', 'lookup:6']) {
   test(`${stage} failure is not masked by successful SDK teardown`, async () => {
     const f = fixture(stage);
     const out = await executeLocalLifecycle(f.sdk, config(), { request: f.request });
@@ -372,7 +414,9 @@ test('an unacknowledged signup remains unknown even after a complete absent look
   const out = await executeLocalLifecycle(f.sdk, config(), { request: f.request });
   assert.equal(out.lifecycle.accountCleanup.complete, false);
   assert.equal(out.lifecycle.accountCleanup.outcome, 'creation-unconfirmed');
-  assert.equal(out.lifecycle.accountCleanup.observedAbsent, true);
+  assert.equal(out.lifecycle.accountCleanup.accounts.primary.observedAbsent, true);
+  // The second signup never started, so the second principal has nothing to recover.
+  assert.equal(out.lifecycle.accountCleanup.accounts.secondary.outcome, 'not-created-by-this-run');
   assert.ok(!f.calls.includes('account-delete'));
 });
 

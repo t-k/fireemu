@@ -21,10 +21,12 @@ import {
   runCase,
   runCatalog,
   runCleanup,
+  secondaryPaths,
 } from './listen_collector.mjs';
 
 const NONCE = '0123456789abcdef0123456789abcdef';
 const UID = 'throwaway-uid';
+const UID_B = 'second-uid';
 
 const nowFactory = () => {
   let clock = 0;
@@ -147,6 +149,7 @@ const createFake = ({ denyPrivate = false } = {}) => {
       broadcast({});
     },
     async deleteOwnedDoc(client, path, condition) {
+      cleanupCalls.push(['delete', client, path]);
       const current = store.get(path);
       if (current && current.fields.owner !== condition.owner) {
         throw { code: 'failed-precondition' };
@@ -155,6 +158,7 @@ const createFake = ({ denyPrivate = false } = {}) => {
       broadcast({});
     },
     async getDoc(client, path) {
+      cleanupCalls.push(['read', client, path]);
       const value = store.get(path);
       return value ? { exists: true, ...value } : { exists: false, fields: null, updateTime: null };
     },
@@ -215,9 +219,15 @@ const createFake = ({ denyPrivate = false } = {}) => {
     },
   };
 
+  const revoked = [];
+  const cleanupCalls = [];
   const authApi = {
     async signIn(client) {
-      auth.set(client, UID);
+      // The secondary client is the second principal; everything else is the first.
+      auth.set(client, client === 'secondary' ? UID_B : UID);
+    },
+    async revoke(client) {
+      revoked.push(auth.get(client));
     },
     async signOut(client) {
       auth.set(client, null);
@@ -232,7 +242,8 @@ const createFake = ({ denyPrivate = false } = {}) => {
     },
   };
 
-  return { store, listeners, firestore, auth: authApi, setUid: (client, uid) => auth.set(client, uid) };
+  return { store, listeners, firestore, auth: authApi, revoked, cleanupCalls,
+    setUid: (client, uid) => auth.set(client, uid) };
 };
 
 const contextFor = (fake, clock, caseSpec, overrides = {}) => {
@@ -1035,4 +1046,113 @@ test('the session hook runs before the cleanup pass, not after it', async () => 
   });
   assert.equal(order[0], 'session-restored');
   assert.equal(order.indexOf('session-restored') < order.indexOf('cleanup-read'), true);
+});
+
+// Two principals: the secondary client is signed in as the second one, whose
+// only owned document is privateB.
+const twoPrincipalContext = (fake, clock, caseSpec, overrides = {}) => {
+  const paths = { ...ownedPaths(NONCE, UID), ...secondaryPaths(NONCE, UID_B) };
+  const names = new Map(Object.entries(paths).map(([name, path]) => [path, name]));
+  fake.setUid('primary', UID);
+  fake.setUid('witness', UID);
+  fake.setUid('secondary', UID_B);
+  return contextFor(fake, clock, caseSpec, {
+    clients: { primary: 'primary', witness: 'witness', secondary: 'secondary' },
+    paths, nameOf: path => names.get(path) ?? path.split('/').at(-1), ...overrides,
+  });
+};
+
+test('secondaryPaths binds the second private document to the second uid only', () => {
+  assert.deepEqual(secondaryPaths(NONCE, UID_B), { privateB: `o6_listen_private/${UID_B}` });
+  assert.throws(() => secondaryPaths('short', UID_B), /nonce/);
+  assert.throws(() => secondaryPaths(NONCE, '../x'), /uid/);
+});
+
+test('a listener on the other principal\'s private document errors without a server snapshot', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const caseSpec = caseFixture({
+    listeners: [{ name: 'primary', kind: 'document', target: 'privateB', includeMetadataChanges: true }],
+    steps: [
+      { kind: 'write', client: 'secondary', doc: 'privateB', fields: { value: 'b0' } },
+      { kind: 'listen', listener: 'primary' },
+      { kind: 'awaitError', listener: 'primary' },
+    ],
+    expectedLocal: [{ listener: 'primary', snapshotKind: 'error', changes: [], docs: [], exists: null,
+      fromCache: false, hasPendingWrites: false, error: 'permission-denied' }],
+    invariants: ['no-server-snapshot-before-error'],
+    comparedFields: ['listener', 'snapshotKind', 'error'],
+  });
+  const record = await runCase({ ...fake, now: clock.now, sleep: clock.sleep }, caseSpec,
+    twoPrincipalContext(fake, clock, caseSpec));
+  assert.equal(record.complete, true);
+  assert.deepEqual(record.invariantViolations, []);
+  assert.equal(record.observed.at(-1).error, 'permission-denied');
+  assert.ok(fake.store.has(`o6_listen_private/${UID_B}`), 'the second principal wrote its document');
+});
+
+test('a listener declared for the secondary client subscribes through that client', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const caseSpec = caseFixture({
+    listeners: [{ name: 'secondary', kind: 'document', target: 'privateB', client: 'secondary',
+      includeMetadataChanges: true }],
+    steps: [
+      { kind: 'write', client: 'secondary', doc: 'privateB', fields: { value: 'b0' } },
+      { kind: 'listen', listener: 'secondary' },
+      { kind: 'awaitServer', listener: 'secondary' },
+    ],
+    expectedLocal: [{ listener: 'secondary', snapshotKind: 'initial', changes: [], docs: ['privateB'],
+      exists: true, fromCache: false, hasPendingWrites: false, error: null }],
+  });
+  const record = await runCase({ ...fake, now: clock.now, sleep: clock.sleep }, caseSpec,
+    twoPrincipalContext(fake, clock, caseSpec));
+  assert.equal(record.complete, true);
+  assert.equal(fake.listeners[0].client, 'secondary');
+  assert.deepEqual(record.observed.map(row => [row.listener, row.snapshotKind, row.docs]),
+    [['secondary', 'initial', ['privateB']]]);
+});
+
+test('signIn, signOut and revoke steps target the client they name', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const caseSpec = caseFixture({
+    listeners: [],
+    steps: [
+      { kind: 'signOut', client: 'witness' },
+      { kind: 'signIn', client: 'witness', account: 'throwaway' },
+      { kind: 'revoke', client: 'secondary' },
+      { kind: 'revoke', client: 'primary' },
+    ],
+  });
+  const record = await runCase({ ...fake, now: clock.now, sleep: clock.sleep }, caseSpec,
+    twoPrincipalContext(fake, clock, caseSpec));
+  assert.equal(record.complete, true);
+  assert.deepEqual(fake.revoked, [UID_B, UID]);
+  assert.deepEqual(record.transportTimeline.map(entry => entry.kind),
+    ['revoke-requested', 'revoke-requested']);
+});
+
+test('cleanup deletes the second principal\'s document through its own client', async () => {
+  const fake = createFake();
+  const clock = nowFactory();
+  const paths = { ...ownedPaths(NONCE, UID), ...secondaryPaths(NONCE, UID_B) };
+  fake.setUid('primary', UID);
+  fake.setUid('secondary', UID_B);
+  await fake.firestore.setDoc('secondary', paths.privateB, { owner: ownerMarker(NONCE) });
+  await fake.firestore.setDoc('primary', paths.private, { owner: ownerMarker(NONCE) });
+  const budget = createBudget({ now: clock.now, deadlineMs: 60_000,
+    limits: { reads: 50, writes: 0, deletes: 20, snapshots: 0, listeners: 0 } });
+  const owned = await runCleanup(fake, { client: 'primary', paths, nonce: NONCE, budget,
+    clientFor: { privateB: 'secondary' } });
+  assert.equal(owned.complete, true);
+  assert.equal(owned.rows.find(row => row.name === 'privateB').outcome, 'deleted-and-absent');
+  assert.equal(owned.rows.find(row => row.name === 'private').outcome, 'deleted-and-absent');
+  assert.ok(!fake.store.has(paths.privateB));
+  // Every read and delete of privateB went through the secondary client; the
+  // first principal's documents stayed on the case client.
+  const byPath = path => fake.cleanupCalls.filter(call => call[2] === path).map(call => call[1]);
+  assert.deepEqual([...new Set(byPath(paths.privateB))], ['secondary']);
+  assert.deepEqual([...new Set(byPath(paths.private))], ['primary']);
+  assert.deepEqual([...new Set(byPath(paths.alpha))], ['primary']);
 });

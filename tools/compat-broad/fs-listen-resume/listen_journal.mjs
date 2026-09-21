@@ -5,7 +5,7 @@ import { constants, openSync, closeSync, writeFileSync, fsyncSync, lstatSync,
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { ownedPaths } from './listen_collector.mjs';
+import { ownedPaths, secondaryPaths } from './listen_collector.mjs';
 
 const phases = ['ready', 'account-create-intent', 'account-created',
   'documents-at-risk', 'lifecycle-result'];
@@ -36,9 +36,15 @@ export function createLifecycleJournal(directory, { nonce, projectId }) {
       throw new Error('invalid lifecycle checkpoint order');
     }
     if (phase === 'account-created') {
-      if (!sameKeys(value, ['uid', 'paths']) || typeof value.uid !== 'string' ||
-          !value.uid || value.uid.length > 128 || /[\x00-\x1f\x7f/]/.test(value.uid) ||
-          !isDeepStrictEqual(value.paths, ownedPaths(nonce, value.uid))) {
+      // One principal, or two: the second principal's uid and its single owned
+      // path are recorded in the same checkpoint so recovery knows both.
+      const safeUid = uid => typeof uid === 'string' && uid.length > 0 && uid.length <= 128 &&
+        !/[\x00-\x1f\x7f/]/.test(uid);
+      const two = sameKeys(value, ['uid', 'paths', 'secondaryUid', 'secondaryPaths']);
+      if ((!two && !sameKeys(value, ['uid', 'paths'])) || !safeUid(value.uid) ||
+          !isDeepStrictEqual(value.paths, ownedPaths(nonce, value.uid)) ||
+          (two && (!safeUid(value.secondaryUid) || value.secondaryUid === value.uid ||
+            !isDeepStrictEqual(value.secondaryPaths, secondaryPaths(nonce, value.secondaryUid))))) {
         throw new Error('invalid account checkpoint');
       }
     } else if (phase === 'lifecycle-result') {

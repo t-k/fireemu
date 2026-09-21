@@ -51,6 +51,7 @@ import {
   ownedPaths,
   runCatalog,
   runCleanup,
+  secondaryPaths,
 } from "/collector/listen_collector.mjs";
 
 const resultNode = document.getElementById("result");
@@ -65,6 +66,10 @@ const FIRESTORE_SETTINGS = Object.freeze({
     experimentalAutoDetectLongPolling: false,
   }),
 });
+
+// Mirrors CLIENT_ACCOUNTS / CLEANUP_CLIENT_FOR in listen_sdk_adapter.mjs.
+const CLIENT_ACCOUNTS = Object.freeze({ primary: "account", witness: "account", secondary: "secondaryAccount" });
+const CLEANUP_CLIENT_FOR = Object.freeze({ privateB: "secondary" });
 
 const nameOfFactory = (paths) => {
   const names = new Map(Object.entries(paths).map(([name, value]) => [value, name]));
@@ -177,13 +182,24 @@ const createDeps = (clients) => ({
     async signOut(client) {
       await signOut(clients[client].auth);
     },
+    // Revocation is a management operation; the Node runner exposes it to the
+    // page as window.__o6Revoke(uid) for the duration of the run.
+    async revoke(client) {
+      const user = clients[client].auth.currentUser;
+      if (typeof user?.uid !== "string" || !user.uid) throw new Error("revoke needs a signed-in client");
+      if (typeof window.__o6Revoke !== "function") throw new Error("session revocation is unavailable");
+      await window.__o6Revoke(user.uid, user.email);
+    },
   },
 });
 
-const buildClients = async ({ projectId, firestorePort, authPort, account, nonce, mode, clients }) => {
+const buildClients = async ({ projectId, firestorePort, authPort, account, secondaryAccount, nonce,
+  mode, clients }) => {
   const settings = FIRESTORE_SETTINGS[mode];
   if (!settings) throw new Error(`unknown browser transport mode: ${mode}`);
-  for (const name of ["primary", "witness"]) {
+  const accounts = { account, secondaryAccount };
+  for (const [name, accountKey] of Object.entries(CLIENT_ACCOUNTS)) {
+    const account = accounts[accountKey];
     const app = initializeApp({ projectId, apiKey: "fake-api-key" }, `o6-${nonce}-${mode}-${name}`);
     clients[name] = { app, account };
     const db = initializeFirestore(app, { ...settings });
@@ -232,10 +248,13 @@ const checkpoint = async (phase, value) => {
  * runner's job because the management route is not open to a browser origin.
  */
 const runLifecycle = async (config) => {
-  const { projectId, firestorePort, authPort, account, nonce, catalog, budgetSpec, mode,
-    stepTimeoutMs, deadlineMs } = config;
+  const { projectId, firestorePort, authPort, account, secondaryAccount, nonce, catalog, budgetSpec,
+    mode, stepTimeoutMs, deadlineMs } = config;
   if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) {
     throw new Error("local namespace required");
+  }
+  if (!secondaryAccount || secondaryAccount.email === account.email) {
+    throw new Error("two distinct throwaway accounts required");
   }
   if (!Number.isInteger(firestorePort) || !Number.isInteger(authPort)) {
     throw new Error("integer emulator ports required");
@@ -263,8 +282,11 @@ const runLifecycle = async (config) => {
     },
   });
   const clients = {};
-  let uid = null;
-  let signupAttempted = false;
+  // Both principals share one lifecycle: A is the case client, B owns privateB.
+  const principals = {
+    primary: { account, uid: null, signupAttempted: false },
+    secondary: { account: secondaryAccount, uid: null, signupAttempted: false },
+  };
   let paths = null;
   let catalogStarted = false;
   let catalogReturned = false;
@@ -276,38 +298,54 @@ const runLifecycle = async (config) => {
       if (budget.remainingMs() <= 0) throw new Error("observation phase expired");
     };
     admitObservation();
-    await buildClients({ projectId, firestorePort, authPort, account, nonce, mode, clients });
+    await buildClients({ projectId, firestorePort, authPort, account, secondaryAccount, nonce, mode, clients });
     admitObservation();
     await checkpoint("account-create-intent");
-    signupAttempted = true;
-    const credential = await createUserWithEmailAndPassword(
-      clients.primary.auth, account.email, account.password);
-    const user = credential?.user;
-    if (!user || typeof user.uid !== "string" || !user.uid || user.email !== account.email ||
-        clients.primary.auth.currentUser?.uid !== user.uid) {
-      throw new Error("signup identity unconfirmed");
-    }
-    uid = user.uid;
-    paths = ownedPaths(nonce, uid);
-    await checkpoint("account-created", { uid, paths });
+    const signUp = async (name, principal) => {
+      principal.signupAttempted = true;
+      const { email, password } = principal.account;
+      const credential = await createUserWithEmailAndPassword(clients[name].auth, email, password);
+      const user = credential?.user;
+      if (!user || typeof user.uid !== "string" || !user.uid || user.email !== email ||
+          clients[name].auth.currentUser?.uid !== user.uid) {
+        throw new Error("signup identity unconfirmed");
+      }
+      principal.uid = user.uid;
+    };
+    await signUp("primary", principals.primary);
+    await signUp("secondary", principals.secondary);
+    const uid = principals.primary.uid;
+    const secondaryUid = principals.secondary.uid;
+    if (secondaryUid === uid) throw new Error("second principal is not distinct");
+    paths = { ...ownedPaths(nonce, uid), ...secondaryPaths(nonce, secondaryUid) };
+    await checkpoint("account-created", { uid, paths: ownedPaths(nonce, uid), secondaryUid,
+      secondaryPaths: secondaryPaths(nonce, secondaryUid) });
     admitObservation();
     const witness = await signInWithEmailAndPassword(
       clients.witness.auth, account.email, account.password);
     if (witness?.user?.uid !== uid) throw new Error("witness identity mismatch");
     admitObservation();
     const deps = createDeps(clients);
+    // Both clients of the first principal are re-signed between cases: the
+    // revocation case invalidates every session that principal held.
     const restore = async () => {
-      const signed = await signInWithEmailAndPassword(
-        clients.primary.auth, account.email, account.password);
-      if (signed?.user?.uid !== uid) throw new Error("cleanup principal changed");
+      for (const name of ["primary", "witness"]) {
+        const signed = await signInWithEmailAndPassword(clients[name].auth, account.email, account.password);
+        if (signed?.user?.uid !== uid) throw new Error("cleanup principal changed");
+      }
+      if (clients.secondary.auth.currentUser?.uid !== secondaryUid) {
+        const signed = await signInWithEmailAndPassword(
+          clients.secondary.auth, secondaryAccount.email, secondaryAccount.password);
+        if (signed?.user?.uid !== secondaryUid) throw new Error("second principal changed");
+      }
     };
     await checkpoint("documents-at-risk");
     catalogStarted = true;
     outcome = await runCatalog(deps, {
-      catalog, budget, cleanupBudget, paths, nonce, client: "primary",
+      catalog, budget, cleanupBudget, paths, nonce, client: "primary", clientFor: CLEANUP_CLIENT_FOR,
       contextFor: () => ({
         client: "primary",
-        clients: { primary: "primary", witness: "witness" },
+        clients: { primary: "primary", witness: "witness", secondary: "secondary" },
         nonce, paths, nameOf: nameOfFactory(paths), stepTimeoutMs, pollMs: 25, budget,
       }),
       betweenCases: restore,
@@ -323,9 +361,12 @@ const runLifecycle = async (config) => {
         outcome.cleanup = await cleanupBudget.withPhase(async () => {
           const signed = await signInWithEmailAndPassword(
             clients.primary.auth, account.email, account.password);
-          if (signed?.user?.uid !== uid) throw new Error("cleanup principal changed");
+          if (signed?.user?.uid !== principals.primary.uid) throw new Error("cleanup principal changed");
+          const second = await signInWithEmailAndPassword(
+            clients.secondary.auth, secondaryAccount.email, secondaryAccount.password);
+          if (second?.user?.uid !== principals.secondary.uid) throw new Error("second principal changed");
           return runCleanup(createDeps(clients), {
-            client: "primary", paths, nonce, budget: cleanupBudget,
+            client: "primary", paths, nonce, budget: cleanupBudget, clientFor: CLEANUP_CLIENT_FOR,
           });
         });
       } catch (error) {
@@ -338,8 +379,10 @@ const runLifecycle = async (config) => {
   return {
     sdkVersion: SDK_VERSION,
     mode,
-    uid,
-    signupAttempted,
+    principals: {
+      primary: { uid: principals.primary.uid, signupAttempted: principals.primary.signupAttempted },
+      secondary: { uid: principals.secondary.uid, signupAttempted: principals.secondary.signupAttempted },
+    },
     caseRecords: outcome.caseRecords,
     cleanup: outcome.cleanup,
     cleanupPasses: outcome.cleanupPasses,

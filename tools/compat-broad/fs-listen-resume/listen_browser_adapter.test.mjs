@@ -21,7 +21,9 @@ const catalog = { catalogDigest: 'c'.repeat(64), cases: [{ caseId: 'FS-LISTEN-SD
 const campaignRecord = { campaignDigest: 'd'.repeat(64), campaign: { permission: null, sdk: { firebase: '12.18.0' } } };
 const budget = { used: { reads: 1, writes: 1, deletes: 0, snapshots: 1, listeners: 1 },
   limits: { reads: 10, writes: 10, deletes: 10, snapshots: 10, listeners: 10 }, deadlineMs: 1000, exceeded: [], exhausted: false };
-const cleanupRows = ['alpha', 'beta', 'gamma', 'absent', 'private'].map(name => ({
+const EMAIL = `o6-${'0'.repeat(32)}@example.test`;
+const EMAIL_B = `o6-${'0'.repeat(32)}-b@example.test`;
+const cleanupRows = ['alpha', 'beta', 'gamma', 'absent', 'private', 'privateB'].map(name => ({
   name, pathDigest: 'a'.repeat(64), outcome: 'not-created', detail: null }));
 const cleanup = { complete: true, rows: cleanupRows, unproven: [], deleted: 0 };
 const caseRecord = caseId => ({ caseId, role: 'observation', comparison: 'ordered-events', complete: true,
@@ -29,7 +31,9 @@ const caseRecord = caseId => ({ caseId, role: 'observation', comparison: 'ordere
   transportTimeline: [{ kind: 'connect', atMs: 5, derivedFrom: 'first server-backed snapshot' }],
   invariantViolations: [], listenersClosed: true });
 const pageResult = (overrides = {}) => ({
-  sdkVersion: '12.18.0', mode: 'long-polling', uid: 'uid-1', signupAttempted: true,
+  sdkVersion: '12.18.0', mode: 'long-polling',
+  principals: { primary: { uid: 'uid-1', signupAttempted: true },
+    secondary: { uid: 'uid-2', signupAttempted: true } },
   caseRecords: catalog.cases.map(row => caseRecord(row.caseId)), cleanup,
   cleanupPasses: [...catalog.cases.map(row => ({ pass: row.caseId, complete: true, deleted: 0, rows: cleanupRows })),
     { pass: 'final', complete: true, deleted: 0, rows: cleanupRows }],
@@ -74,13 +78,13 @@ test('account lookup only accepts the emulator shape naming this run\'s account'
 });
 
 test('a page result is validated by shape and a page error is surfaced as a code', () => {
-  assert.equal(validatePageResult(pageResult(), catalog).uid, 'uid-1');
+  assert.equal(validatePageResult(pageResult(), catalog).principals.primary.uid, 'uid-1');
   assert.throws(() => validatePageResult(null, catalog), /no result/);
   assert.throws(() => validatePageResult({ pageError: 'auth/network-request-failed', sdkVersion: '12.18.0' }, catalog),
     error => error.code === 'auth/network-request-failed');
   const { budget: _budget, ...missing } = pageResult();
   assert.throws(() => validatePageResult(missing, catalog), /missing budget/);
-  assert.throws(() => validatePageResult(pageResult({ uid: 5 }), catalog), /wrong shape/);
+  assert.throws(() => validatePageResult(pageResult({ principals: { primary: { uid: 5, signupAttempted: true } } }), catalog), /wrong shape/);
   assert.throws(() => validatePageResult(pageResult({ caseRecords: [1, 2, 3] }), catalog), /extra cases/);
 });
 
@@ -107,6 +111,7 @@ test('the browser receipt keeps the Node receipt shape and adds the transport ev
   for (const relative of BROWSER_BOUND_SOURCES) assert.match(receipt.sourceDigests[relative], /^[0-9a-f]{64}$/, relative);
   assert.equal(receipt.lifecycle.complete, true);
   assert.equal(receipt.lifecycle.localAdminRequests, 4);
+  assert.equal(receipt.lifecycle.localAdminRequestLimit, 10);
   assert.equal(receipt.complete, true);
   assert.equal(receipt.thrown, null);
 });
@@ -126,20 +131,22 @@ test('a receipt is incomplete when the page skipped a case or the account surviv
 
 const fakeChromium = (result, { onGoto = () => {} } = {}) => {
   const calls = [];
+  const exposed = {};
   const page = {
-    on: () => {}, exposeFunction: async () => {},
+    on: () => {}, exposeFunction: async (name, fn) => { exposed[name] = fn; },
     goto: async url => { calls.push(['goto', url]); onGoto(url); },
     waitForSelector: async () => {},
     evaluate: async (_fn, config) => { calls.push(['evaluate', config]); return typeof result === 'function' ? result(config) : result; },
     close: async () => calls.push(['page-close']),
   };
   const context = { newPage: async () => page, close: async () => calls.push(['context-close']) };
-  return { calls, chromium: { name: 'chromium', version: '151', browser: { newContext: async () => context } } };
+  return { calls, exposed, chromium: { name: 'chromium', version: '151', browser: { newContext: async () => context } } };
 };
 const modeInput = (chromium, request) => ({
   env: { O6_LISTEN_SDK_VERSION: '12.18.0' }, repoRoot: process.cwd(), chromium, serverOrigin: 'http://127.0.0.1:1',
   firestore: { host: '127.0.0.1', port: 8080 }, auth: { host: '127.0.0.1', port: 9099, raw: '127.0.0.1:9099' },
-  projectId: 'demo-o6', nonce: '0'.repeat(32), account: { name: 'throwaway', email: `o6-${'0'.repeat(32)}@example.test`, password: 'hunter2' },
+  projectId: 'demo-o6', nonce: '0'.repeat(32), account: { name: 'throwaway', email: EMAIL, password: 'hunter2' },
+  secondaryAccount: { name: 'second', email: EMAIL_B, password: 'hunter3' },
   catalog, campaignRecord, budgetSpec: { cleanupReserveSeconds: 1 }, boundSources: [], mode: 'streaming',
   stepTimeoutMs: 100, deadlineMs: 1000, request,
 });
@@ -155,43 +162,94 @@ const lookupResponse = users => ({ status: 200, body: { kind: 'identitytoolkit#G
 
 test('runMode refuses an occupied account namespace before opening a page', async () => {
   const { chromium, calls } = fakeChromium(pageResult());
-  const { request } = managementDouble(() => lookupResponse([{ localId: 'old', email: `o6-${'0'.repeat(32)}@example.test` }]));
+  const { request } = managementDouble((operation, body) =>
+    lookupResponse(body.email?.[0] === EMAIL_B ? [{ localId: 'old', email: EMAIL_B }] : []));
   await assert.rejects(runMode(modeInput(chromium, request)), /namespace occupied/);
   assert.deepEqual(calls, []);
 });
 
-test('runMode hands the page the account in memory, deletes the account afterwards and closes the page', async () => {
-  const email = `o6-${'0'.repeat(32)}@example.test`;
-  const { chromium, calls } = fakeChromium(pageResult({ mode: 'streaming' }));
-  const { request, log } = managementDouble((operation, body, n) => {
-    if (operation === 'lookup' && n === 1) return lookupResponse([]);
-    if (operation === 'lookup' && n === 2) return lookupResponse([{ localId: 'uid-1', email }]);
-    if (operation === 'delete') return { status: 200, body: {} };
-    return lookupResponse([]);
+// A management double that answers lookups from a small account table.
+const accountTable = () => {
+  const table = new Map([[EMAIL, 'uid-1'], [EMAIL_B, 'uid-2']]);
+  const created = new Set();
+  return {
+    create: email => created.add(email),
+    script: (operation, body) => {
+      if (operation === 'lookup') {
+        const rows = [...table].filter(([email, uid]) => created.has(email) &&
+          (body.email ? body.email.includes(email) : body.localId.includes(uid)));
+        return lookupResponse(rows.map(([email, localId]) => ({ localId, email })));
+      }
+      if (operation === 'update') return { status: 200, body: { localId: body.localId } };
+      if (operation === 'delete') { for (const [email, uid] of table) if (uid === body.localId) created.delete(email); return { status: 200, body: {} }; }
+      throw new Error(`unexpected ${operation}`);
+    },
+  };
+};
+
+test('runMode hands the page both accounts in memory, deletes both afterwards and closes the page', async () => {
+  const accounts = accountTable();
+  const { chromium, calls } = fakeChromium(config => {
+    accounts.create(config.account.email); accounts.create(config.secondaryAccount.email);
+    return pageResult({ mode: 'streaming' });
   });
+  const { request, log } = managementDouble(accounts.script);
   const receipt = await runMode(modeInput(chromium, request));
   assert.equal(receipt.complete, true);
-  assert.deepEqual(receipt.lifecycle.accountCleanup, { complete: true, outcome: 'deleted-and-absent' });
-  assert.equal(receipt.lifecycle.localAdminRequests, 4);
-  assert.deepEqual(log.map(row => row.operation), ['lookup', 'lookup', 'delete', 'lookup']);
-  assert.deepEqual(log[2].body, { localId: 'uid-1' });
+  assert.equal(receipt.lifecycle.accountCleanup.complete, true);
+  assert.equal(receipt.lifecycle.accountCleanup.outcome, 'deleted-and-absent');
+  assert.deepEqual(Object.keys(receipt.lifecycle.accountCleanup.accounts), ['primary', 'secondary']);
+  assert.equal(receipt.lifecycle.localAdminRequests, 8);
+  assert.deepEqual(log.map(row => row.operation),
+    ['lookup', 'lookup', 'lookup', 'delete', 'lookup', 'lookup', 'delete', 'lookup']);
+  assert.deepEqual(log[3].body, { localId: 'uid-1' });
+  assert.deepEqual(log[6].body, { localId: 'uid-2' });
   const gotoUrl = calls.find(call => call[0] === 'goto')[1];
   assert.equal(gotoUrl, 'http://127.0.0.1:1/listen-catalog.html');
   const config = calls.find(call => call[0] === 'evaluate')[1];
   assert.equal(config.account.password, 'hunter2');
+  assert.equal(config.secondaryAccount.password, 'hunter3');
   assert.equal(config.mode, 'streaming');
   assert.deepEqual(calls.slice(-2).map(call => call[0]), ['page-close', 'context-close']);
   assert.ok(!JSON.stringify(receipt).includes('hunter2'));
+  assert.ok(!JSON.stringify(receipt).includes('hunter3'));
 });
 
-test('runMode keeps an account whose documents were not proven absent and still closes the page', async () => {
+test('the exposed revocation only reaches an account this run owns', async () => {
+  const accounts = accountTable();
+  let revokeOutcomes;
+  const { chromium, exposed } = fakeChromium(async config => {
+    accounts.create(config.account.email); accounts.create(config.secondaryAccount.email);
+    revokeOutcomes = await Promise.allSettled([
+      exposed.__o6Revoke('uid-1', EMAIL),
+      exposed.__o6Revoke('uid-1', 'stranger@example.test'),
+      exposed.__o6Revoke('../x', EMAIL),
+    ]);
+    return pageResult();
+  });
+  const { request, log } = managementDouble(accounts.script);
+  const receipt = await runMode(modeInput(chromium, request));
+  assert.deepEqual(revokeOutcomes.map(row => row.status), ['fulfilled', 'rejected', 'rejected']);
+  assert.match(String(revokeOutcomes[1].reason), /outside this run/);
+  assert.match(String(revokeOutcomes[2].reason), /outside this run/);
+  const updates = log.filter(row => row.operation === 'update');
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].body.localId, 'uid-1');
+  assert.match(updates[0].body.validSince, /^[0-9]+$/);
+  assert.equal(receipt.lifecycle.localAdminRequests, 10);
+  assert.equal(receipt.complete, true);
+});
+
+test('runMode keeps both accounts whose documents were not proven absent and still closes the page', async () => {
   const unproven = { ...cleanup, complete: false, unproven: [cleanupRows[0]] };
   const { chromium, calls } = fakeChromium(pageResult({ cleanup: unproven }));
   const { request, log } = managementDouble(() => lookupResponse([]));
   const receipt = await runMode(modeInput(chromium, request));
   assert.equal(receipt.complete, false);
-  assert.deepEqual(receipt.lifecycle.accountCleanup, { complete: false, outcome: 'retained-for-document-recovery' });
-  assert.deepEqual(log.map(row => row.operation), ['lookup']);
+  assert.equal(receipt.lifecycle.accountCleanup.complete, false);
+  assert.equal(receipt.lifecycle.accountCleanup.outcome, 'retained-for-document-recovery');
+  assert.equal(receipt.lifecycle.accountCleanup.accounts.secondary.outcome, 'retained-for-document-recovery');
+  assert.deepEqual(log.map(row => row.operation), ['lookup', 'lookup']);
   assert.deepEqual(calls.slice(-2).map(call => call[0]), ['page-close', 'context-close']);
 });
 
@@ -205,4 +263,21 @@ test('a page that reports a lifecycle error is surfaced by code and the page is 
 test('the shadow document schema and transport are fixed names', () => {
   assert.equal(SCHEMA, 'o6-listen-browser-shadow-v1');
   assert.equal(TRANSPORT, 'browser-webchannel');
+});
+
+test('a revocation whose uid does not resolve to the run\'s account is refused after one lookup', async () => {
+  const accounts = accountTable();
+  let outcome;
+  const { chromium, exposed } = fakeChromium(async config => {
+    accounts.create(config.account.email); accounts.create(config.secondaryAccount.email);
+    outcome = await Promise.allSettled([exposed.__o6Revoke('uid-9', EMAIL)]);
+    return pageResult();
+  });
+  const { request, log } = managementDouble(accounts.script);
+  const receipt = await runMode(modeInput(chromium, request));
+  assert.equal(outcome[0].status, 'rejected');
+  assert.match(String(outcome[0].reason), /not this run/);
+  assert.equal(log.filter(row => row.operation === 'update').length, 0);
+  assert.equal(receipt.lifecycle.localAdminRequests, 9);
+  assert.equal(receipt.complete, true);
 });

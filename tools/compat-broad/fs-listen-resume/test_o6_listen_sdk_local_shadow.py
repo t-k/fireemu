@@ -33,7 +33,14 @@ def test_the_local_shadow_ran_to_completion_with_proven_cleanup():
 
 def test_every_cleanup_row_proves_absence_or_never_created_the_document():
     outcomes = {row["name"]: row["outcome"] for row in _receipt()["cleanup"]["rows"]}
-    assert set(outcomes) == {"alpha", "beta", "gamma", "absent", "private"}
+    assert set(outcomes) == {
+        "alpha",
+        "beta",
+        "gamma",
+        "absent",
+        "private",
+        "privateB",
+    }
     assert set(outcomes.values()) <= {
         "deleted-and-absent",
         "not-created",
@@ -104,6 +111,22 @@ def test_the_resume_case_is_the_one_that_broke_and_recovered():
         if entry["kind"] in {"break-requested", "resume-requested"}
     }
     assert breaking == {"FS-LISTEN-SDK-104"}
+
+
+def test_the_revocation_case_is_the_one_that_revoked_and_both_accounts_were_removed():
+    receipt = _receipt()
+    revoking = {
+        entry["caseId"]
+        for entry in receipt["transportTimeline"]
+        if entry["kind"] == "revoke-requested"
+    }
+    assert revoking == {"FS-LISTEN-SDK-109"}
+    cleanup = receipt["lifecycle"]["accountCleanup"]
+    assert cleanup["complete"] is True
+    assert set(cleanup["accounts"]) == {"primary", "secondary"}
+    assert all(
+        row["outcome"] == "deleted-and-absent" for row in cleanup["accounts"].values()
+    )
 
 
 def test_the_shadow_names_the_fireemu_binary_it_actually_ran():

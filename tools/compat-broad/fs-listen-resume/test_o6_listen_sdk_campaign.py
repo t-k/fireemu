@@ -97,7 +97,10 @@ def test_budget_bounds_runs_concurrency_accounts_and_deadline():
     budget = compile_campaign(NONCE)["budget"]
     assert budget["maxRuns"] == 1
     assert budget["maxConcurrency"] == 1
-    assert budget["maxAccounts"] == 1
+    # Two principals: the case client's account and the second principal of
+    # the cross-identity and revocation cases.
+    assert budget["maxAccounts"] == 2
+    assert budget["maxClients"] == 3
     assert 0 < budget["maxDurationSeconds"] <= 900
 
 
@@ -155,7 +158,7 @@ def test_campaign_records_the_paths_it_cannot_observe():
         "browser-webchannel",
         "android-sdk",
         "apple-sdk",
-        "cross-identity-isolation",
+        "tenant-isolation",
         "raw-resume-token",
     } == paths
 

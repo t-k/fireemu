@@ -153,6 +153,19 @@ export const ownedPaths = (nonce, uid) => {
   };
 };
 
+/**
+ * The second principal's private document. It lives under the same Rules
+ * pattern as `private`, so the only thing separating the two is the uid in the
+ * path: exactly what the cross-identity cases observe.
+ */
+export const secondaryPaths = (nonce, uid) => {
+  if (!/^[0-9a-f]{32}$/.test(nonce ?? '')) throw new Error('nonce must be 128-bit lowercase hex');
+  if (typeof uid !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid)) {
+    throw new Error('safe uid is required to bind the second private path');
+  }
+  return { privateB: `o6_listen_private/${uid}` };
+};
+
 /** Digest of an owned path, so a receipt never publishes a nonce or a uid. */
 export const pathDigest = value => createHash('sha256').update(String(value)).digest('hex');
 
@@ -357,19 +370,22 @@ const cleanupFailure = error =>
   typeof error?.code === 'string' && /^[a-zA-Z0-9_/-]{1,80}$/.test(error.code)
     ? error.code : 'cleanup-operation-failed';
 
-export const runCleanup = async (deps, { client, paths, nonce, budget }) => {
+export const runCleanup = async (deps, { client, paths, nonce, budget, clientFor = {} }) => {
   const rows = [];
   for (const target of planCleanup(paths, nonce)) {
     const row = { name: target.name, pathDigest: pathDigest(target.path),
       outcome: 'unattempted', detail: null };
     rows.push(row);
+    // A document owned by the second principal can only be read and deleted
+    // by the client signed in as that principal.
+    const owner = clientFor[target.name] ?? client;
     const readCharge = budget.charge('reads');
     if (!readCharge.ok) {
       row.outcome = 'budget-exhausted'; row.detail = readCharge.error; continue;
     }
     let current;
     try {
-      current = cleanupSnapshot(await deps.firestore.getDoc(client, target.path));
+      current = cleanupSnapshot(await deps.firestore.getDoc(owner, target.path));
       if (budget.remainingMs() <= 0) throw new Error('late-cleanup-read');
     } catch (error) {
       row.outcome = 'read-failed'; row.detail = cleanupFailure(error); continue;
@@ -393,7 +409,7 @@ export const runCleanup = async (deps, { client, paths, nonce, budget }) => {
       row.outcome = 'budget-exhausted'; row.detail = deleteCharge.error; continue;
     }
     try {
-      await deps.firestore.deleteOwnedDoc(client, target.path, { owner: target.requiredMarker });
+      await deps.firestore.deleteOwnedDoc(owner, target.path, { owner: target.requiredMarker });
       if (budget.remainingMs() <= 0) throw new Error('late-cleanup-delete');
     } catch (error) {
       row.outcome = 'delete-failed'; row.detail = cleanupFailure(error); continue;
@@ -403,7 +419,7 @@ export const runCleanup = async (deps, { client, paths, nonce, budget }) => {
       row.outcome = 'absence-unverified'; row.detail = absenceCharge.error; continue;
     }
     try {
-      const after = cleanupSnapshot(await deps.firestore.getDoc(client, target.path));
+      const after = cleanupSnapshot(await deps.firestore.getDoc(owner, target.path));
       if (budget.remainingMs() <= 0) throw new Error('late-cleanup-absence');
       row.outcome = after.exists ? 'still-present' : 'deleted-and-absent';
     } catch (error) {
@@ -526,10 +542,13 @@ export const runCase = async (deps, caseSpec, ctx) => {
       record(row);
     };
     const onError = error => record(normalizeListenerError(name, error));
+    // A listener subscribes through the case client unless it names another
+    // one (the second principal's own listener in the cross-identity control).
+    const owner = ctx.clients?.[spec.client] ?? ctx.client;
     const unsubscribe =
       spec.kind === 'document'
-        ? deps.firestore.onDocSnapshot(ctx.client, paths[spec.target], options, onNext, onError)
-        : deps.firestore.onQuerySnapshot(ctx.client, { ...spec, parent: paths.run }, options, onNext, onError);
+        ? deps.firestore.onDocSnapshot(owner, paths[spec.target], options, onNext, onError)
+        : deps.firestore.onQuerySnapshot(owner, { ...spec, parent: paths.run }, options, onNext, onError);
     registered.set(name, unsubscribe);
   };
 
@@ -645,10 +664,17 @@ export const runCase = async (deps, caseSpec, ctx) => {
           await deps.firestore.enableNetwork(ctx.client);
           break;
         case 'signIn':
-          await deps.auth.signIn(ctx.client, step.account);
+          await deps.auth.signIn(ctx.clients?.[step.client] ?? ctx.client, step.account);
           break;
         case 'signOut':
-          await deps.auth.signOut(ctx.client);
+          await deps.auth.signOut(ctx.clients?.[step.client] ?? ctx.client);
+          break;
+        case 'revoke':
+          // Out-of-band revocation of the client's current session, the way an
+          // operator would do it from the Admin SDK. The adapter owns the
+          // management call; the collector only records what the listener did.
+          note('revoke-requested', 'collector asked the adapter to revoke the session');
+          await deps.auth.revoke(ctx.clients?.[step.client] ?? ctx.client);
           break;
         default:
           failures.push(`unknown-step:${step.kind}`);
@@ -724,7 +750,8 @@ export const runCase = async (deps, caseSpec, ctx) => {
  */
 export const runCatalog = async (
   deps,
-  { catalog, contextFor, budget, cleanupBudget, paths, nonce, client, betweenCases, beforeFinalCleanup },
+  { catalog, contextFor, budget, cleanupBudget, paths, nonce, client, clientFor = {},
+    betweenCases, beforeFinalCleanup },
 ) => {
   const caseRecords = [];
   const cleanupPasses = [];
@@ -757,7 +784,7 @@ export const runCatalog = async (
       catch (error) { restorationFailure = cleanupFailure(error); }
       // A failed restoration does not prevent attempts on independent resources.
       const result = recordPass(label,
-        await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget }));
+        await runCleanup(deps, { client, paths, nonce, budget: cleanupBudget, clientFor }));
       if (restorationFailure) thrown = thrown ?? restorationFailure;
       return result;
     };

@@ -26,7 +26,7 @@ if not __package__:
     sys.modules[package.__name__] = package
     __package__ = package.__name__
 from . import local_supervisor as supervisor
-from .campaign import owned_paths
+from .campaign import owned_paths, secondary_paths
 from .export_spec import budget_document, campaign_document, cases_document
 
 SCHEMA = "local-listen-recovery-inspection-v1"
@@ -226,8 +226,13 @@ def _checkpoint(item: Any, index: int, previous: str | None, last: int,
         raise InvalidEvidence("invalid-checkpoint-chain")
     value = item["value"]
     if index == 2:
-        if (not _object(value, {"uid", "paths"}) or type(value["uid"]) is not str
+        two = _object(value, {"uid", "paths", "secondaryUid", "secondaryPaths"})
+        if ((not two and not _object(value, {"uid", "paths"})) or type(value["uid"]) is not str
                 or not UID.fullmatch(value["uid"]) or value["paths"] != owned_paths(launch["nonce"], value["uid"])):
+            raise InvalidEvidence("invalid-checkpoint-scope")
+        if two and (type(value["secondaryUid"]) is not str or not UID.fullmatch(value["secondaryUid"])
+                or value["secondaryUid"] == value["uid"]
+                or value["secondaryPaths"] != secondary_paths(launch["nonce"], value["secondaryUid"])):
             raise InvalidEvidence("invalid-checkpoint-scope")
     elif index == 4:
         if (not _object(value, {"complete", "accountCleanupComplete", "clientsComplete", "documentsCleanupComplete"})
@@ -267,7 +272,8 @@ def inspect(directory: Path) -> dict[str, Any]:
             # A missing current checkout file must not erase a historical UID.
             report["issues"].append("current-source-unavailable")
         scope = {k: launch[k] for k in ("nonce", "projectId", "accountEmail", "firestoreEndpoint", "authEndpoint")}
-        scope.update(uid=None, accountCreation="not-yet-inspected", documentsAtRisk=None, documents=[])
+        scope.update(uid=None, secondaryUid=None, accountCreation="not-yet-inspected", documentsAtRisk=None,
+                     documents=[])
         report["candidateScope"] = scope
         current = dict(zip(INPUTS, (campaign_document(launch["nonce"]), cases_document(), budget_document()), strict=True))
         matches = True
@@ -304,9 +310,11 @@ def inspect(directory: Path) -> dict[str, Any]:
             elif index == 2:
                 scope["uid"] = value["uid"]
                 scope["accountCreation"] = "acknowledgement-recorded-current-state-unknown"
+                scope["secondaryUid"] = value.get("secondaryUid")
                 scope["documents"] = [{"name": name, "path": path, "pathDigest": _sha(path.encode()),
                     "creationProven": False, "versionEvidence": None}
-                    for name, path in value["paths"].items() if name != "run"]
+                    for name, path in {**value["paths"], **value.get("secondaryPaths", {})}.items()
+                    if name != "run"]
             elif index == 3:
                 scope["documentsAtRisk"] = True
             elif index == 4:

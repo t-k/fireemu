@@ -68,7 +68,14 @@ def test_every_mode_ran_to_completion_with_proven_cleanup():
         assert receipt["budget"]["exhausted"] is False, mode
         assert receipt["cleanupBudget"]["exhausted"] is False, mode
         outcomes = {row["name"]: row["outcome"] for row in receipt["cleanup"]["rows"]}
-        assert set(outcomes) == {"alpha", "beta", "gamma", "absent", "private"}, mode
+        assert set(outcomes) == {
+            "alpha",
+            "beta",
+            "gamma",
+            "absent",
+            "private",
+            "privateB",
+        }, mode
         assert set(outcomes.values()) <= {
             "deleted-and-absent",
             "not-created",
@@ -225,14 +232,25 @@ def test_each_mode_created_and_removed_its_own_account():
         lifecycle = receipt["lifecycle"]
         assert lifecycle["complete"] is True, mode
         assert lifecycle["failure"] is None, mode
-        assert lifecycle["accountCleanup"] == {
-            "complete": True,
-            "outcome": "deleted-and-absent",
-        }, mode
+        cleanup = lifecycle["accountCleanup"]
+        assert cleanup["complete"] is True, mode
+        assert cleanup["outcome"] == "deleted-and-absent", mode
+        assert set(cleanup["accounts"]) == {"primary", "secondary"}, mode
+        assert all(
+            row["outcome"] == "deleted-and-absent"
+            for row in cleanup["accounts"].values()
+        ), mode
+        revoking = {
+            entry["caseId"]
+            for entry in receipt["transportTimeline"]
+            if entry["kind"] == "revoke-requested"
+        }
+        assert revoking == {"FS-LISTEN-SDK-109"}, mode
         assert lifecycle["clients"]["complete"] is True, mode
         assert {row["client"] for row in lifecycle["clients"]["rows"]} == {
             "primary",
             "witness",
+            "secondary",
         }
         assert lifecycle["localAdminRequests"] <= lifecycle["localAdminRequestLimit"], (
             mode

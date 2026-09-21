@@ -34,7 +34,7 @@ if not __package__:
     sys.modules[package.__name__] = package
     __package__ = package.__name__
 from .export_spec import budget_document, campaign_document, cases_document
-from .campaign import owned_paths
+from .campaign import owned_paths, secondary_paths
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -389,10 +389,19 @@ def _journal_summary(directory: Path, nonce: str, project: str) -> dict[str, Any
             raise Refused("invalid-lifecycle-value")
         if index == 2:
             uid = value.get("uid")
+            two = set(value) == {"uid", "paths", "secondaryUid", "secondaryPaths"}
             if (not isinstance(uid, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", uid)
-                    or set(value) != {"uid", "paths"} or value["paths"] != owned_paths(nonce, uid)):
+                    or (not two and set(value) != {"uid", "paths"})
+                    or value["paths"] != owned_paths(nonce, uid)):
                 raise Refused("invalid-lifecycle-ownership")
             path_digests = {k: _sha(v.encode()) for k, v in value["paths"].items() if k != "run"}
+            if two:
+                second = value["secondaryUid"]
+                if (not isinstance(second, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", second)
+                        or second == uid
+                        or value["secondaryPaths"] != secondary_paths(nonce, second)):
+                    raise Refused("invalid-lifecycle-ownership")
+                path_digests.update({k: _sha(v.encode()) for k, v in value["secondaryPaths"].items()})
         elif index == 4:
             if (set(value) != {"complete", "accountCleanupComplete", "clientsComplete",
                               "documentsCleanupComplete"}

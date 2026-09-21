@@ -33,7 +33,17 @@ import {
   runCleanup,
   ownedPaths,
   runCatalog,
+  secondaryPaths,
 } from './listen_collector.mjs';
+
+/** Client names and the account each one signs in as. */
+export const CLIENT_ACCOUNTS = Object.freeze({ primary: 'account', witness: 'account',
+  secondary: 'secondaryAccount' });
+/** Cleanup of the second principal's document goes through its own client. */
+export const CLEANUP_CLIENT_FOR = Object.freeze({ privateB: 'secondary' });
+/** Local management calls per run: two preflights, at most two for one revocation
+ * (the browser lane confirms the target first), three per account cleanup. */
+export const LOCAL_ADMIN_REQUEST_LIMIT = 10;
 
 export const MODE_LOCAL = 'local';
 export const MODE_PRODUCTION = 'production';
@@ -78,7 +88,7 @@ const nameOfFactory = paths => {
   return value => names.get(value) ?? String(value).split('/').at(-1);
 };
 
-export const createDeps = (sdk, clients) => ({
+export const createDeps = (sdk, clients, { revoke = null } = {}) => ({
   // Transport timeline timestamps are part of the cross-language receipt
   // contract, whose schema represents elapsed milliseconds as integers.
   now: () => Math.trunc(performance.now()),
@@ -174,8 +184,20 @@ export const createDeps = (sdk, clients) => ({
     async signOut(client) {
       await sdk.signOut(clients[client].auth);
     },
+    // Revoke the sessions of whoever this client is signed in as, through the
+    // management route the adapter owns. The SDK itself has no such API.
+    async revoke(client) {
+      const uid = clients[client].auth.currentUser?.uid;
+      if (typeof uid !== 'string' || !uid) throw new Error('revoke needs a signed-in client');
+      if (typeof revoke !== 'function') throw new Error('session revocation is unavailable');
+      await revoke(uid);
+    },
   },
 });
+
+/** The second principal's account: derived from the nonce like the first one. */
+export const secondaryAccountFor = (nonce, password) =>
+  ({ name: 'second', email: `o6-${nonce}-b@example.test`, password });
 
 /** Digest of the runtime under test, so a receipt names the binary that produced it. */
 export const artifactDigest = absolutePath => {
@@ -208,10 +230,13 @@ export const localEmulatorEndpoint = value => {
   return { host: match[1] === '[::1]' ? '::1' : match[1], port, origin: `http://${value}` };
 };
 
-const buildClients = async (sdk, { projectId, firestoreHost, authHost, account, nonce, clients }) => {
+const buildClients = async (sdk, { projectId, firestoreHost, authHost, account, secondaryAccount,
+  nonce, clients }) => {
   const firestoreEndpoint = localEmulatorEndpoint(firestoreHost);
   const authEndpoint = localEmulatorEndpoint(authHost);
-  for (const name of ['primary', 'witness']) {
+  const accounts = { account, secondaryAccount };
+  for (const [name, accountKey] of Object.entries(CLIENT_ACCOUNTS)) {
+    const account = accounts[accountKey];
     const app = sdk.initializeApp({ projectId, apiKey: 'fake-api-key' }, `o6-${nonce}-${name}`);
     // Register ownership before any subsequent initializer can throw.
     clients[name] = { app, account };
@@ -238,7 +263,7 @@ const plainObject = value => value !== null && typeof value === 'object' && !Arr
 export const localAccountRequest = (endpoint, projectId, operation, body, timeoutMs = 12000) => {
   const parsed = localEmulatorEndpoint(endpoint);
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(projectId) ||
-      !['lookup', 'delete'].includes(operation) || !plainObject(body) ||
+      !['lookup', 'delete', 'update'].includes(operation) || !plainObject(body) ||
       !Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 12000) {
     throw new Error('invalid local account request');
   }
@@ -326,26 +351,31 @@ const teardownClients = async (sdk, clients) => {
 export const executeLocalLifecycle = async (sdk, config, {
   request = localAccountRequest, run = runCatalog, checkpoint = () => {},
 } = {}) => {
-  const { projectId, firestoreHost, authHost, account, nonce, catalog,
+  const { projectId, firestoreHost, authHost, account, secondaryAccount, nonce, catalog,
     budget, cleanupBudget, stepTimeoutMs } = config;
   localEmulatorEndpoint(firestoreHost); localEmulatorEndpoint(authHost);
   if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[a-zA-Z0-9_-]{1,128}$/.test(projectId)) {
     throw new Error('local namespace required');
   }
+  if (!plainObject(secondaryAccount) || secondaryAccount.email === account.email) {
+    throw new Error('two distinct throwaway accounts required');
+  }
   const clients = {};
-  let uid = null;
-  let signupAttempted = false;
-  let preflightAbsent = false;
-  let accountCalls = 0;
+  // Both principals share one lifecycle: A is the case client, B owns privateB.
+  const principals = {
+    primary: { account, uid: null, signupAttempted: false, preflightAbsent: false },
+    secondary: { account: secondaryAccount, uid: null, signupAttempted: false, preflightAbsent: false },
+  };
   let paths = null;
   let catalogStarted = false;
   let catalogReturned = false;
+  let accountCalls = 0;
   let outcome = { caseRecords: [], cleanup: classifyCleanup([]), cleanupPasses: [],
     totalDeleted: 0, thrown: null };
   const lifecycle = { failure: null, accountCleanup: { complete: false, outcome: 'not-attempted' },
-    clients: null, localAdminRequests: 0, localAdminRequestLimit: 4 };
+    clients: null, localAdminRequests: 0, localAdminRequestLimit: LOCAL_ADMIN_REQUEST_LIMIT };
   const call = async (operation, body, recovery) => {
-    if (accountCalls >= 4) throw new Error('local account request budget exhausted');
+    if (accountCalls >= LOCAL_ADMIN_REQUEST_LIMIT) throw new Error('local account request budget exhausted');
     const remaining = recovery ? cleanupBudget.remainingMs() : budget.remainingMs();
     if (remaining <= 0) throw new Error('local account phase expired');
     accountCalls++;
@@ -353,7 +383,7 @@ export const executeLocalLifecycle = async (sdk, config, {
     if ((recovery ? cleanupBudget : budget).remainingMs() <= 0) throw new Error('late account response');
     return response;
   };
-  const cleanupAccount = async () => {
+  const cleanupOne = async ({ account, uid, signupAttempted, preflightAbsent }) => {
     if (!signupAttempted) return { complete: true, outcome: 'not-created-by-this-run' };
     if (paths && !outcome.cleanup?.complete) {
       return { complete: false, outcome: 'retained-for-document-recovery' };
@@ -372,39 +402,89 @@ export const executeLocalLifecycle = async (sdk, config, {
     const after = accountLookup(await call('lookup', { localId: [uid] }, true), account.email, uid);
     return { complete: after === null, outcome: after === null ? 'deleted-and-absent' : 'still-present' };
   };
+  // Every account is attempted even when an earlier one failed; the combined
+  // row is complete only when each one is, and names the first incomplete outcome.
+  const cleanupAccount = async () => {
+    const accounts = {};
+    let failure = null;
+    for (const [name, principal] of Object.entries(principals)) {
+      try { accounts[name] = await cleanupOne(principal); }
+      catch (error) {
+        accounts[name] = { complete: false, outcome: 'account-cleanup-unconfirmed',
+          failure: lifecycleFailure(error) };
+        failure = failure ?? error;
+      }
+    }
+    const rows = Object.values(accounts);
+    const complete = rows.every(row => row.complete === true);
+    const outcomes = new Set(rows.map(row => row.outcome));
+    const combined = { complete, outcome: complete && outcomes.size === 1 ? rows[0].outcome
+      : complete ? 'complete' : rows.find(row => row.complete !== true).outcome, accounts };
+    if (failure) combined.failure = lifecycleFailure(failure);
+    return combined;
+  };
+  const revoke = async uid => {
+    // validSince is a whole second: sessions issued strictly before it are revoked.
+    const validSince = String(Math.floor(Date.now() / 1000));
+    const updated = await call('update', { localId: uid, validSince }, false);
+    if (!plainObject(updated) || updated.status !== 200 || !plainObject(updated.body) ||
+        'error' in updated.body || updated.body.localId !== uid) throw new Error('revocation unconfirmed');
+  };
   try {
-    const found = accountLookup(await call('lookup', { email: [account.email] }, false), account.email);
-    if (found !== null) throw new Error('local account namespace occupied');
-    preflightAbsent = true;
+    for (const principal of Object.values(principals)) {
+      const found = accountLookup(await call('lookup', { email: [principal.account.email] }, false),
+        principal.account.email);
+      if (found !== null) throw new Error('local account namespace occupied');
+      principal.preflightAbsent = true;
+    }
     const admitObservation = () => {
       if (budget.remainingMs() <= 0) throw new Error('observation phase expired');
     };
     admitObservation();
-    await buildClients(sdk, { projectId, firestoreHost, authHost, account, nonce, clients });
+    await buildClients(sdk, { projectId, firestoreHost, authHost, account, secondaryAccount, nonce, clients });
     admitObservation();
     checkpoint('account-create-intent');
-    signupAttempted = true;
-    const credential = await sdk.createUserWithEmailAndPassword(clients.primary.auth, account.email, account.password);
-    const user = credential?.user;
-    if (!user || typeof user.uid !== 'string' || !user.uid || user.email !== account.email ||
-        clients.primary.auth.currentUser?.uid !== user.uid) throw new Error('signup identity unconfirmed');
-    uid = user.uid;
-    paths = ownedPaths(nonce, uid);
-    checkpoint('account-created', { uid, paths });
+    const signUp = async (name, principal) => {
+      principal.signupAttempted = true;
+      const { email, password } = principal.account;
+      const credential = await sdk.createUserWithEmailAndPassword(clients[name].auth, email, password);
+      const user = credential?.user;
+      if (!user || typeof user.uid !== 'string' || !user.uid || user.email !== email ||
+          clients[name].auth.currentUser?.uid !== user.uid) throw new Error('signup identity unconfirmed');
+      principal.uid = user.uid;
+    };
+    await signUp('primary', principals.primary);
+    await signUp('secondary', principals.secondary);
+    const uid = principals.primary.uid;
+    const secondaryUid = principals.secondary.uid;
+    if (secondaryUid === uid) throw new Error('second principal is not distinct');
+    paths = { ...ownedPaths(nonce, uid), ...secondaryPaths(nonce, secondaryUid) };
+    checkpoint('account-created', { uid, paths: ownedPaths(nonce, uid), secondaryUid,
+      secondaryPaths: secondaryPaths(nonce, secondaryUid) });
     admitObservation();
     const witness = await sdk.signInWithEmailAndPassword(clients.witness.auth, account.email, account.password);
     if (witness?.user?.uid !== uid) throw new Error('witness identity mismatch');
     admitObservation();
-    const deps = createDeps(sdk, clients);
+    const deps = createDeps(sdk, clients, { revoke });
+    // Both clients of the first principal are re-signed between cases: the
+    // revocation case invalidates every session that principal held.
     const restore = async () => {
-      const signed = await sdk.signInWithEmailAndPassword(clients.primary.auth, account.email, account.password);
-      if (signed?.user?.uid !== uid) throw new Error('cleanup principal changed');
+      for (const name of ['primary', 'witness']) {
+        const signed = await sdk.signInWithEmailAndPassword(clients[name].auth, account.email, account.password);
+        if (signed?.user?.uid !== uid) throw new Error('cleanup principal changed');
+      }
+      if (clients.secondary.auth.currentUser?.uid !== secondaryUid) {
+        const signed = await sdk.signInWithEmailAndPassword(clients.secondary.auth,
+          secondaryAccount.email, secondaryAccount.password);
+        if (signed?.user?.uid !== secondaryUid) throw new Error('second principal changed');
+      }
     };
     checkpoint('documents-at-risk');
     catalogStarted = true;
     outcome = await run(deps, {
-      catalog, budget, cleanupBudget, paths, nonce, client: 'primary',
-      contextFor: () => ({ client: 'primary', clients: { primary: 'primary', witness: 'witness' },
+      catalog, budget, cleanupBudget, paths, nonce, client: 'primary', clientFor: CLEANUP_CLIENT_FOR,
+      contextFor: () => ({ client: 'primary',
+        clients: { primary: 'primary', witness: 'witness', secondary: 'secondary' },
         nonce, paths, nameOf: nameOfFactory(paths), stepTimeoutMs, pollMs: 25, budget }),
       betweenCases: restore, beforeFinalCleanup: restore,
     });
@@ -418,9 +498,12 @@ export const executeLocalLifecycle = async (sdk, config, {
       try {
         outcome.cleanup = await cleanupBudget.withPhase(async () => {
           const signed = await sdk.signInWithEmailAndPassword(clients.primary.auth, account.email, account.password);
-          if (signed?.user?.uid !== uid) throw new Error('cleanup principal changed');
+          if (signed?.user?.uid !== principals.primary.uid) throw new Error('cleanup principal changed');
+          const second = await sdk.signInWithEmailAndPassword(clients.secondary.auth,
+            secondaryAccount.email, secondaryAccount.password);
+          if (second?.user?.uid !== principals.secondary.uid) throw new Error('second principal changed');
           return runCleanup(createDeps(sdk, clients), {
-            client: 'primary', paths, nonce, budget: cleanupBudget,
+            client: 'primary', paths, nonce, budget: cleanupBudget, clientFor: CLEANUP_CLIENT_FOR,
           });
         });
       } catch (error) {
@@ -541,9 +624,11 @@ export const main = async ({ env = process.env, argv = process.argv,
     ? createLifecycleJournal(env.O6_LISTEN_JOURNAL_DIR, { nonce, projectId }) : () => {};
   const password = readPasswordFromFd(env.O6_LISTEN_PASSWORD_FD) ?? randomBytes(24).toString('hex');
   const account = { name: 'throwaway', email: `o6-${nonce}@example.test`, password };
+  const secondaryAccount = secondaryAccountFor(nonce,
+    readPasswordFromFd(env.O6_LISTEN_SECONDARY_PASSWORD_FD) ?? randomBytes(24).toString('hex'));
   const sdk = await sdkLoader(moduleDir);
   const outcome = await executeLocalLifecycle(sdk, { projectId, firestoreHost, authHost,
-    account, nonce, catalog, budget, cleanupBudget, stepTimeoutMs }, { request, checkpoint });
+    account, secondaryAccount, nonce, catalog, budget, cleanupBudget, stepTimeoutMs }, { request, checkpoint });
   const { caseRecords, cleanup } = outcome;
 
   const receipt = buildReceipt({

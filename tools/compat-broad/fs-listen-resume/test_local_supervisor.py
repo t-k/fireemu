@@ -396,7 +396,8 @@ export const createUserWithEmailAndPassword=async()=>{
     assert "execution-deadline" in result["issues"]
     assert result["journal"]["lastPhase"] == "account-create-intent"
     assert (tmp_path / "unsettled/checkpoints/1-account-create-intent.json").exists()
-    assert calls == ["/identitytoolkit.googleapis.com/v1/projects/demo-local/accounts:lookup"]
+    # One preflight lookup per principal, then the unsettled signup of the first.
+    assert calls == ["/identitytoolkit.googleapis.com/v1/projects/demo-local/accounts:lookup"] * 2
     assert result["execution"]["elapsedSeconds"] < 4
 
 

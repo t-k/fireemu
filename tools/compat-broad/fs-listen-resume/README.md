@@ -21,10 +21,12 @@ uv run --project tools/compat-inventory --locked pytest -q tools/compat-broad/fs
 A second, separate layer prepares a bounded production campaign for the same
 inventory row. It does not execute one, and the row stays `WAITING_ORACLE`.
 
-- `cases.py` declares twelve Observation Cases: six observations, each with a
+- `cases.py` declares eighteen Observation Cases: nine observations, each with a
   control or negative counterpart, covering document and query event order,
-  `hasPendingWrites`, resume after a forced stream break, unsubscribe and auth
-  switching on a Rules-protected document.
+  `hasPendingWrites`, resume after a forced stream break, unsubscribe, auth
+  switching on a Rules-protected document, default-mode subscription, a second
+  principal's private document (cross-identity) and session revocation while a
+  listener is attached.
 - `campaign.py` freezes the manifest: resolved SDK identities with npm
   integrity digests, the budget, the permission envelope and the owner
   preconditions. A compiled campaign is `BLOCKED_OWNER` until a campaign-scoped

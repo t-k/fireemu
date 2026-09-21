@@ -32,12 +32,14 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { createLifecycleJournal } from './listen_journal.mjs';
 import {
+  LOCAL_ADMIN_REQUEST_LIMIT,
   MODE_LOCAL,
   admitMode,
   artifactDigest,
   localAccountRequest,
   localEmulatorEndpoint,
   readPasswordFromFd,
+  secondaryAccountFor,
   sourceDigests,
 } from './listen_sdk_adapter.mjs';
 import { argvIsClean, buildReceipt, redact } from './listen_collector.mjs';
@@ -104,15 +106,17 @@ export const accountLookup = (response, email, uid = null) => {
 export const validatePageResult = (result, catalog) => {
   if (!plainObject(result)) throw new Error('page returned no result');
   if (result.pageError) throw Object.assign(new Error('page lifecycle failed'), { code: result.pageError });
-  const required = ['sdkVersion', 'mode', 'uid', 'signupAttempted', 'caseRecords', 'cleanup',
+  const required = ['sdkVersion', 'mode', 'principals', 'caseRecords', 'cleanup',
     'cleanupPasses', 'totalDeleted', 'thrown', 'lifecycle', 'budget', 'cleanupBudget'];
   for (const key of required) {
     if (!Object.hasOwn(result, key)) throw new Error(`page result missing ${key}`);
   }
+  const principal = value => plainObject(value) && typeof value.signupAttempted === 'boolean' &&
+    (value.uid === null || typeof value.uid === 'string');
   if (!Array.isArray(result.caseRecords) || !plainObject(result.budget) ||
       !plainObject(result.cleanupBudget) || !plainObject(result.lifecycle) ||
-      typeof result.signupAttempted !== 'boolean' ||
-      (result.uid !== null && typeof result.uid !== 'string')) {
+      !plainObject(result.principals) || !principal(result.principals.primary) ||
+      !principal(result.principals.secondary)) {
     throw new Error('page result has the wrong shape');
   }
   if (result.caseRecords.length > catalog.cases.length) throw new Error('page returned extra cases');
@@ -127,7 +131,7 @@ export const assembleReceipt = ({ env, repoRoot, campaignRecord, catalog, boundS
     accountCleanup,
     clients: pageResult.lifecycle.clients,
     localAdminRequests,
-    localAdminRequestLimit: 4,
+    localAdminRequestLimit: LOCAL_ADMIN_REQUEST_LIMIT,
   };
   lifecycle.complete = lifecycle.failure === null && accountCleanup.complete === true &&
     pageResult.lifecycle.clients?.complete === true;
@@ -192,16 +196,34 @@ const withDeadline = (promise, ms, label) => {
 
 /** Drive one transport mode through a fresh page; always closes the page. */
 export const runMode = async ({ env, repoRoot, chromium, serverOrigin, firestore, auth, projectId,
-  nonce, account, catalog, campaignRecord, budgetSpec, boundSources, mode, stepTimeoutMs, deadlineMs,
-  request = localAccountRequest, checkpoint = null }) => {
+  nonce, account, secondaryAccount, catalog, campaignRecord, budgetSpec, boundSources, mode,
+  stepTimeoutMs, deadlineMs, request = localAccountRequest, checkpoint = null }) => {
   let accountCalls = 0;
   const call = async (operation, body) => {
-    if (accountCalls >= 4) throw new Error('local account request budget exhausted');
+    if (accountCalls >= LOCAL_ADMIN_REQUEST_LIMIT) throw new Error('local account request budget exhausted');
     accountCalls++;
     return request(auth.raw, projectId, operation, body, 12000);
   };
-  const found = accountLookup(await call('lookup', { email: [account.email] }), account.email);
-  if (found !== null) throw new Error('local account namespace occupied');
+  const accounts = { primary: account, secondary: secondaryAccount };
+  for (const row of Object.values(accounts)) {
+    const found = accountLookup(await call('lookup', { email: [row.email] }), row.email);
+    if (found !== null) throw new Error('local account namespace occupied');
+  }
+  // The page may only revoke a principal this run owns: the uid it names must
+  // resolve, through the management route, to one of the run's two emails.
+  const ownedEmails = new Set(Object.values(accounts).map(row => row.email));
+  const revoke = async (uid, email) => {
+    if (typeof uid !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(uid) || !ownedEmails.has(email)) {
+      throw new Error('revocation outside this run');
+    }
+    if (accountLookup(await call('lookup', { localId: [uid] }), email, uid) !== uid) {
+      throw new Error('revocation target is not this run\'s account');
+    }
+    const validSince = String(Math.floor(Date.now() / 1000));
+    const updated = await call('update', { localId: uid, validSince });
+    if (!plainObject(updated) || updated.status !== 200 || !plainObject(updated.body) ||
+        'error' in updated.body || updated.body.localId !== uid) throw new Error('revocation unconfirmed');
+  };
   const context = await chromium.browser.newContext();
   const page = await context.newPage();
   const webchannel = captureWebChannel(page, firestore.port);
@@ -224,17 +246,18 @@ export const runMode = async ({ env, repoRoot, chromium, serverOrigin, firestore
         checkpoint(phase, value === undefined ? {} : value);
       });
     }
+    await page.exposeFunction('__o6Revoke', revoke);
     await page.goto(`${serverOrigin}/listen-catalog.html`, { waitUntil: 'load' });
     await page.waitForSelector('body[data-catalog-ready="true"]', { timeout: 30000 });
-    const config = { projectId, firestorePort: firestore.port, authPort: auth.port, account, nonce,
-      catalog, budgetSpec, mode, stepTimeoutMs, deadlineMs };
+    const config = { projectId, firestorePort: firestore.port, authPort: auth.port, account,
+      secondaryAccount, nonce, catalog, budgetSpec, mode, stepTimeoutMs, deadlineMs };
     const raw = await withDeadline(
       page.evaluate(value => window.__o6RunCatalog(value), config),
       deadlineMs + budgetSpec.cleanupReserveSeconds * 1000 + 30000,
       'browser catalog run exceeded its deadline',
     );
     pageResult = validatePageResult(raw, catalog);
-    accountCleanup = await cleanupAccount({ call, account, pageResult });
+    accountCleanup = await cleanupAccounts({ call, accounts, pageResult });
     if (checkpoint) {
       checkpoint('lifecycle-result', {
         complete: pageResult.lifecycle.failure === null && accountCleanup.complete === true &&
@@ -258,10 +281,10 @@ export const runMode = async ({ env, repoRoot, chromium, serverOrigin, firestore
   return receipt;
 };
 
-const cleanupAccount = async ({ call, account, pageResult }) => {
-  const { uid, signupAttempted } = pageResult;
+const cleanupOne = async ({ call, account, principal, documentsComplete }) => {
+  const { uid, signupAttempted } = principal;
   if (!signupAttempted) return { complete: true, outcome: 'not-created-by-this-run' };
-  if (uid !== null && !pageResult.cleanup?.complete) {
+  if (uid !== null && !documentsComplete) {
     return { complete: false, outcome: 'retained-for-document-recovery' };
   }
   const selector = uid ? { localId: [uid] } : { email: [account.email] };
@@ -273,6 +296,28 @@ const cleanupAccount = async ({ call, account, pageResult }) => {
       'error' in deleted.body || 'users' in deleted.body) throw new Error('account delete unconfirmed');
   const after = accountLookup(await call('lookup', { localId: [uid] }), account.email, uid);
   return { complete: after === null, outcome: after === null ? 'deleted-and-absent' : 'still-present' };
+};
+
+/** Same combined row as the Node adapter: every account attempted, first incomplete outcome named. */
+export const cleanupAccounts = async ({ call, accounts, pageResult }) => {
+  const rows = {};
+  let failure = null;
+  for (const [name, account] of Object.entries(accounts)) {
+    try {
+      rows[name] = await cleanupOne({ call, account, principal: pageResult.principals[name],
+        documentsComplete: pageResult.cleanup?.complete === true });
+    } catch (error) {
+      rows[name] = { complete: false, outcome: 'account-cleanup-unconfirmed', failure: lifecycleFailure(error) };
+      failure = failure ?? error;
+    }
+  }
+  const values = Object.values(rows);
+  const complete = values.every(row => row.complete === true);
+  const outcomes = new Set(values.map(row => row.outcome));
+  const combined = { complete, outcome: complete && outcomes.size === 1 ? values[0].outcome
+    : complete ? 'complete' : values.find(row => row.complete !== true).outcome, accounts: rows };
+  if (failure) combined.failure = lifecycleFailure(failure);
+  return combined;
 };
 
 export const main = async ({ env = process.env, argv = process.argv,
@@ -333,6 +378,8 @@ export const main = async ({ env = process.env, argv = process.argv,
     ? createLifecycleJournal(env.O6_LISTEN_JOURNAL_DIR, { nonce, projectId }) : null;
   const password = readPasswordFromFd(env.O6_LISTEN_PASSWORD_FD) ?? randomBytes(24).toString('hex');
   const account = { name: 'throwaway', email: `o6-${nonce}@example.test`, password };
+  const secondaryAccount = secondaryAccountFor(nonce,
+    readPasswordFromFd(env.O6_LISTEN_SECONDARY_PASSWORD_FD) ?? randomBytes(24).toString('hex'));
 
   const receipts = {};
   const startedAt = performance.now();
@@ -342,8 +389,8 @@ export const main = async ({ env = process.env, argv = process.argv,
     chromium = await launchChromium(playwrightDir);
     for (const mode of modes) {
       receipts[mode] = await runMode({ env, repoRoot, chromium, serverOrigin: server.origin,
-        firestore, auth, projectId, nonce, account, catalog, campaignRecord, budgetSpec,
-        boundSources, mode, stepTimeoutMs, deadlineMs, checkpoint });
+        firestore, auth, projectId, nonce, account, secondaryAccount, catalog, campaignRecord,
+        budgetSpec, boundSources, mode, stepTimeoutMs, deadlineMs, checkpoint });
     }
   } finally {
     await closeAll([server.close, ...(chromium ? [chromium.close] : [])]);

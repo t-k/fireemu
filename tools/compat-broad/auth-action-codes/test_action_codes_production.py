@@ -24,6 +24,7 @@ import action_codes_descriptor as descriptor
 import action_codes_production as production
 import action_codes_plan as plan_module
 import credential_remote_transport as credential_remote
+import reservations
 
 from broad_contract import digest
 from test_action_codes_admission import _artifacts
@@ -117,9 +118,7 @@ def fixture_origin():
 def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp_path, fixture_origin):
     descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path)
     ledger_root = tmp_path / "ledger"
-    ledger_root.mkdir()
-    os.chmod(ledger_root, 0o700)
-    (ledger_root / "state.json").write_text('{"reservations": {}, "envelopes": {}}')
+    reservations.Ledger.create(ledger_root)
     worker = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
     capability = admission.issue_production_capability(
         inputs=inputs,
@@ -161,9 +160,7 @@ def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, status, b
     _ActionFixture.recovery_body = body
     descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path)
     ledger_root = tmp_path / "ledger"
-    ledger_root.mkdir()
-    os.chmod(ledger_root, 0o700)
-    (ledger_root / "state.json").write_text('{"reservations": {}, "envelopes": {}}')
+    reservations.Ledger.create(ledger_root)
     worker = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
     capability = admission.issue_production_capability(
         inputs=inputs, approval=approval, manifest=manifest,

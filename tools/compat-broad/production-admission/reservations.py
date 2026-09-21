@@ -1663,7 +1663,7 @@ class Ledger:
         if now is not None:
             _number(now)
         if not isinstance(parent_ticket, dict) or not isinstance(child_ticket, dict):
-            raise ValueError("exact recovery close tickets required")
+            raise ValueError("exact recovery close tickets required")  # noqa: TRY004
         with self._locked() as state:
             parent = self._row(state, parent_ticket)
             child = next(
@@ -1711,7 +1711,6 @@ class Ledger:
         parent_gate = Gate(parent_claim["gatePath"], _gate_job(parent_claim)).snapshot()
         if parent_gate.get("planDigest") != parent_claim["gatePlanDigest"] or parent_gate.get("coordinatorInflight") or any(job.get("inflight") for job in parent_gate.get("jobs", {}).values()):
             raise ValueError("original parent Gate is not frozen")
-        selected_job = parent_gate.get("jobs", {}).get(_gate_job(parent_claim), {})
         if unconfirmed_creates(parent_gate, _gate_job(parent_claim)) != 1:
             raise ValueError("original parent create is not uncertain")
         if not any(

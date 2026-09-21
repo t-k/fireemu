@@ -205,6 +205,116 @@ def typed_absence(status, body):
     return _typed_firestore_error(status, body, 404, "NOT_FOUND")
 
 
+_AUTH_ACCOUNT_IDENTIFIER = re.compile(r"[A-Za-z0-9_.@+-]{1,128}")
+BINDING_PREFIX = "$binding:"
+
+
+def _auth_account_form(resource, project=None):
+    if not isinstance(resource, str):
+        return False
+    parts = resource.split("/")
+    return (
+        len(parts) == 5
+        and parts[0] == "projects"
+        and bool(parts[1])
+        and (project is None or parts[1] == project)
+        and parts[2] == "auth"
+        and parts[3] == "accounts"
+        and _AUTH_ACCOUNT_IDENTIFIER.fullmatch(parts[4]) is not None
+        and parts[4] not in {".", ".."}
+    )
+
+
+def _auth_operation(operation):
+    return isinstance(operation, dict) and operation.get("service") == "auth"
+
+
+def _operation_resource(operation):
+    if _auth_operation(operation):
+        resource = operation.get("resource")
+        return resource if isinstance(resource, str) else ""
+    return operation["path"].split("?", 1)[0].removeprefix("/v1/")
+
+
+def auth_typed_absence(status, body):
+    if type(status) is not int or status != 200 or not isinstance(body, dict) or not body:
+        return False
+    if set(body) - {"kind", "users"}:
+        return False
+    if "kind" in body and body["kind"] != "identitytoolkit#GetAccountInfoResponse":
+        return False
+    if "users" in body:
+        return isinstance(body["users"], list) and body["users"] == []
+    return body == {"kind": "identitytoolkit#GetAccountInfoResponse"}
+
+
+def _auth_binding_name(operation):
+    account = operation.get("account")
+    return f"{account}Uid" if isinstance(account, str) and account else None
+
+
+def _auth_recovery_operation_valid(operation, project):
+    if not _auth_operation(operation):
+        return True
+    path = operation.get("path")
+    body = operation.get("body")
+    binding = _auth_binding_name(operation)
+    if not isinstance(path, str) or not isinstance(body, dict) or binding is None:
+        return False
+    prefix = f"identitytoolkit.googleapis.com/v1/projects/{project}/accounts:"
+    if path.endswith("/accounts:lookup"):
+        if "email" in body:
+            return path == prefix + "lookup" and set(body) == {"email"}
+        return (
+            path == prefix + "lookup"
+            and set(body) == {"localId"}
+            and isinstance(body["localId"], list)
+            and len(body["localId"]) == 1
+            and body["localId"][0] == BINDING_PREFIX + binding
+        )
+    if path.endswith("/accounts:delete"):
+        return (
+            path == prefix + "delete"
+            and set(body) == {"localId"}
+            and body["localId"] == BINDING_PREFIX + binding
+        )
+    return True
+
+
+def _auth_uid_absence_operation_valid(operation, project):
+    """Only a bound UID read can settle an Auth account resource."""
+    return (
+        operation.get("kind") == "uid-absence"
+        and operation.get("method") == "POST"
+        and operation.get("path", "").endswith("/accounts:lookup")
+        and _auth_recovery_operation_valid(operation, project)
+        and isinstance(operation.get("body"), dict)
+        and set(operation["body"]) == {"localId"}
+    )
+
+
+def _auth_creation_ownership(state, job, operation):
+    """Require a journaled creation event for this exact Auth account resource."""
+    account = operation.get("account")
+    record = job.get("authAccounts", {}).get(account)
+    if not isinstance(record, dict) or "createEvent" not in record:
+        return False
+    event_index = record["createEvent"]
+    if type(event_index) is not int or not 0 <= event_index < len(state["events"]):
+        return False
+    event = state["events"][event_index]
+    evidence = event.get("authEvidence")
+    return (
+        record.get("resource") == operation.get("resource")
+        and event.get("phase") == "observation"
+        and event.get("completed") is True
+        and event.get("creationOutcome") == "created"
+        and isinstance(evidence, dict)
+        and evidence.get("account") == account
+        and evidence.get("creationOutcome") == "created"
+    )
+
+
 def validate_absence_proofs(state, job_name):
     """Validate final typed readback against the registered recovery plan and journal."""
     policy = _stream_policy(state["plan"])
@@ -216,13 +326,25 @@ def validate_absence_proofs(state, job_name):
         raise ValueError("typed cleanup absence evidence incomplete")
     operations = state["plan"]["jobs"][job_name]["recovery"]
     for resource, proof in proofs.items():
-        candidates = [
-            index
-            for index, operation in enumerate(operations)
-            if operation["method"] == "GET"
-            and operation["service"] == "firestore"
-            and operation["path"] == "/v1/" + resource
-        ]
+        if _auth_account_form(resource):
+            candidates = [
+                index
+                for index, operation in enumerate(operations)
+                if _auth_operation(operation)
+                and operation.get("resource") == resource
+                and operation["method"] == "POST"
+                and _auth_uid_absence_operation_valid(operation, state["plan"].get("project"))
+            ]
+            absent = auth_typed_absence
+        else:
+            candidates = [
+                index
+                for index, operation in enumerate(operations)
+                if operation["method"] == "GET"
+                and operation["service"] == "firestore"
+                and operation["path"] == "/v1/" + resource
+            ]
+            absent = typed_absence
         index = proof.get("eventIndex")
         if (
             not candidates
@@ -244,7 +366,7 @@ def validate_absence_proofs(state, job_name):
             or event.get("requestDigest") != digest(expected)
             or event.get("completed") is not True
             or event.get("failure") is not None
-            or not typed_absence(event.get("status"), proof.get("body"))
+            or not absent(event.get("status"), proof.get("body"))
             or event.get("responseDigest") != digest(proof["body"])
         ):
             raise ValueError("typed cleanup absence evidence differs")
@@ -512,6 +634,27 @@ def create(path, plan):
     policy = _stream_policy(plan)
     if policy:
         policy.validate_plan(plan)
+    project = plan.get("project")
+    for job in plan.get("jobs", {}).values():
+        resources = set(job.get("resources", []))
+        for operation in job.get("observation", []) + job.get("recovery", []):
+            if not _auth_operation(operation):
+                continue
+            resource = operation.get("resource")
+            if resource is not None and not _auth_account_form(resource, project):
+                raise ValueError("canonical Auth account resource required")
+            if resource is not None and resource not in resources:
+                raise ValueError("Auth operation resource outside assigned resources")
+            if operation in job.get("recovery", []) and resource not in resources:
+                raise ValueError("cleanup target outside assigned resources")
+            if (
+                operation in job.get("observation", [])
+                and operation.get("method") == "POST"
+                and operation.get("path", "").endswith("/accounts:delete")
+            ):
+                raise ValueError("destructive Auth delete is recovery-only")
+            if operation in job.get("recovery", []) and resource is not None and not _auth_recovery_operation_valid(operation, project):
+                raise ValueError("canonical Auth UID binding or lookup route required")
     if (
         not _valid_request_seconds(plan, policy)
         or not _valid_ceiling(plan)
@@ -1518,7 +1661,7 @@ class Gate:
             expected.pop("versionFrom", None)
             if digest(operation) != digest(expected):
                 raise ValueError("request outside closed scenario")
-            resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+            resource = _operation_resource(operation)
             if resource in job.get("creationProofs", {}):
                 raise ValueError("a created resource must be cleaned, not skipped")
             job["scheduleDone"] += 1
@@ -1721,9 +1864,24 @@ class Gate:
                         )
                 if digest(operation) != digest(expected):
                     raise ValueError("request outside closed scenario")
-                resource = operation["path"].split("?", 1)[0].removeprefix("/v1/")
+                resource = _operation_resource(operation)
                 if recovery and resource not in job["resources"]:
                     raise ValueError("cleanup target outside assigned resources")
+                if (
+                    _auth_operation(operation)
+                    and operation.get("method") == "POST"
+                    and operation.get("path", "").endswith("/accounts:delete")
+                    and not recovery
+                ):
+                    raise ValueError("destructive Auth delete is recovery-only")
+                if (
+                    recovery
+                    and _auth_operation(operation)
+                    and operation.get("method") == "POST"
+                    and operation["path"].endswith("/accounts:delete")
+                    and not _auth_creation_ownership(state, job, operation)
+                ):
+                    raise ValueError("Auth delete requires creation ownership")
                 if operation["method"] == "DELETE" and (
                     source is None or valid_version
                 ):
@@ -1820,9 +1978,17 @@ class Gate:
             job[phase] += 1
             if schedule is not None:
                 job["scheduleDone"] += 1
-            if recovery and resource in job["absent"]:
+            if recovery and resource in job["absent"] and not (
+                _auth_operation(operation)
+                and isinstance(operation.get("body"), dict)
+                and "email" in operation["body"]
+            ):
                 job["absent"].remove(resource)
-            if recovery:
+            if recovery and not (
+                _auth_operation(operation)
+                and isinstance(operation.get("body"), dict)
+                and "email" in operation["body"]
+            ):
                 job.setdefault("absenceProofs", {}).pop(resource, None)
             job["inflight"] = True
             event = {
@@ -1899,6 +2065,23 @@ class Gate:
                     ):
                         job["stopped"] = True
                         raise ValueError("readback identity/body mismatch")
+                if (
+                    recovery
+                    and _auth_operation(operation)
+                    and resource in job["resources"]
+                    and operation["path"].endswith("/accounts:lookup")
+                    and _auth_uid_absence_operation_valid(operation, plan.get("project"))
+                ):
+                    if auth_typed_absence(status, body):
+                        if resource not in job["absent"]:
+                            job["absent"].append(resource)
+                        job.setdefault("absenceProofs", {})[resource] = {
+                            "eventIndex": len(state["events"]) - 1,
+                            "body": body,
+                        }
+                    elif status == 200:
+                        job["stopped"] = True
+                        raise ValueError("typed Auth absence required")
                 self._record_response(state, operation, recovery, event, status, body)
                 if recovery:
                     job["captures"][str(index)] = self._recovery_capture(

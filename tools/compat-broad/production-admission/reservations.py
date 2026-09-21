@@ -602,6 +602,35 @@ def _firestore_resource_scope(resource):
     return _scope({"key": key, "mode": "WRITE"})
 
 
+_AUTH_ACCOUNT_IDENTIFIER = re.compile(r"[A-Za-z0-9_.@+-]{1,128}")
+
+
+def _auth_account_scope(resource):
+    if not isinstance(resource, str):
+        raise TypeError("canonical Auth account resource required")
+    parts = resource.split("/")
+    if (
+        len(parts) != 5
+        or parts[0] != "projects"
+        or not parts[1]
+        or parts[2] != "auth"
+        or parts[3] != "accounts"
+        or _AUTH_ACCOUNT_IDENTIFIER.fullmatch(parts[4]) is None
+        or parts[4] in {".", ".."}
+    ):
+        raise ValueError("canonical Auth account resource required")
+    return _scope({"key": "/".join(("project", parts[1], "auth", "accounts", parts[4])), "mode": "WRITE"})
+
+
+def _resource_scope(resource):
+    if not isinstance(resource, str):
+        raise TypeError("canonical Auth account resource required")
+    parts = resource.split("/")
+    if len(parts) > 2 and parts[0] == "projects" and parts[2] == "auth":
+        return _auth_account_scope(resource)
+    return _firestore_resource_scope(resource)
+
+
 def conflicts(left, right):
     a, b = _scope(left), _scope(right)
     return (_ancestor(a, b) or _ancestor(b, a)) and not (
@@ -835,7 +864,7 @@ class Ledger:
             ):
                 raise ValueError("campaign outside permission window")
             for resource in resources:
-                resource_scope = _firestore_resource_scope(resource)
+                resource_scope = _resource_scope(resource)
                 if not any(
                     _ancestor(_scope(lock), resource_scope)
                     and MODES[lock["mode"]] >= MODES["WRITE"]

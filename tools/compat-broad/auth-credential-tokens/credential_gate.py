@@ -423,6 +423,14 @@ def gate_plan(
         raise ValueError("signing capability must be declared")
     observation = observation_operations(project, nonce, signing=signing)
     recovery = recovery_operations(project, nonce, signing=signing)
+    resources = {
+        account: account_resource(project, nonce, account)
+        for account in planned_accounts(signing)
+    }
+    for operation in observation + recovery:
+        account = operation.get("account")
+        if account is not None:
+            operation["resource"] = resources[account]
     slots = management_ids(signing)
     schedule = [
         {"phase": "observation", "index": index, "seconds": DATA_SLOT_SECONDS}
@@ -461,9 +469,7 @@ def gate_plan(
         "costMicrousd": cost_microusd,
         "receiptKind": "auth-credential-acquisition-receipt-v1",
         "plannedAccounts": list(planned_accounts(signing)),
-        "accountResources": [
-            account_resource(project, nonce, account) for account in planned_accounts(signing)
-        ],
+        "accountResources": list(resources.values()),
         "mintedBindings": list(MINTED_BINDINGS),
         "management": {
             "dispatchKind": "closed-v1",
@@ -487,7 +493,7 @@ def gate_plan(
         },
         "jobs": {
             JOB: {
-                "resources": route_resources(project),
+                "resources": list(resources.values()),
                 "observation": observation,
                 "recovery": recovery,
                 "schedule": schedule,
@@ -556,7 +562,38 @@ def create(path: Path, plan: dict[str, Any]) -> None:
     """Create the Gate directory for one plan compiled by `gate_plan`."""
     if not isinstance(plan, dict) or set(plan.get("jobs", {})) != {JOB}:
         raise ValueError("closed credential Gate plan required")
+    _validate_auth_account_plan(plan)
     frozen_create(path, plan)
+
+
+def _validate_auth_account_plan(plan: dict[str, Any]) -> None:
+    """Keep each logical account, resource, UID binding, and address closed."""
+    job = plan["jobs"][JOB]
+    accounts = planned_accounts(plan.get("signing") is True)
+    resources = {
+        account: account_resource(plan["project"], plan["nonce"], account)
+        for account in accounts
+    }
+    if set(job.get("resources", [])) != set(resources.values()):
+        raise ValueError("credential account/resource mapping differs")
+    for operation in job.get("observation", []) + job.get("recovery", []):
+        account = operation.get("account")
+        if account is None:
+            continue
+        if account not in resources or operation.get("resource") != resources[account]:
+            raise ValueError("credential account/resource mapping differs")
+        if operation in job.get("recovery", []):
+            kind = operation.get("kind")
+            body = operation.get("body")
+            if kind in {"delete", "uid-absence"}:
+                if body != {"localId": _binding(f"{account}Uid")} and body != {
+                    "localId": [_binding(f"{account}Uid")]
+                }:
+                    raise ValueError("credential UID binding differs from account")
+            elif kind == "address-absence":
+                index = {"acct0": 0, "acct1": 1}.get(account)
+                if index is None or body != {"email": [owned_email(plan["nonce"], index)]}:
+                    raise ValueError("credential address binding differs from account")
 
 
 class CredentialGate(FrozenGate):
@@ -636,6 +673,23 @@ class CredentialGate(FrozenGate):
         if strip_api_key(path) != declared["path"] or bool(owner) != declared["owner"]:
             raise ValueError("request outside closed scenario")
         self._resolve(body, declared["body"])
+        if recovery and declared.get("service") == "auth":
+            state = self.snapshot()
+            record = state["jobs"][self.job].get("authAccounts", {}).get(declared.get("account"))
+            if not isinstance(record, dict) or "createEvent" not in record:
+                raise ValueError("Auth cleanup requires creation ownership")
+            if declared.get("resource") != record.get("resource"):
+                raise ValueError("Auth cleanup resource differs from creation")
+            expected_uid = record.get("uid")
+            if declared.get("kind") == "delete":
+                actual_uid = body.get("localId")
+            elif declared.get("kind") == "uid-absence":
+                actual_uid = body.get("localId")
+                actual_uid = actual_uid[0] if isinstance(actual_uid, list) and len(actual_uid) == 1 else None
+            else:
+                actual_uid = expected_uid
+            if declared.get("kind") in {"delete", "uid-absence"} and actual_uid != expected_uid:
+                raise ValueError("Auth cleanup UID differs from creation")
         try:
             return super().dispatch(declared, recovery, send)
         except Exception:
@@ -717,7 +771,19 @@ class CredentialGate(FrozenGate):
                         raise ValueError("custom sign-in created an account outside the plan")
                     if account in accounts:
                         raise ValueError("an owned account was created twice")
-                    accounts[account] = {"uid": uid, "createEvent": position}
+                    if any(other.get("uid") == uid for other in accounts.values()):
+                        raise ValueError("owned account identities collide")
+                    resource = operation.get("resource")
+                    expected_resource = account_resource(
+                        state["plan"]["project"], state["plan"]["nonce"], account
+                    )
+                    if resource != expected_resource:
+                        raise ValueError("account creation resource differs")
+                    accounts[account] = {
+                        "uid": uid,
+                        "resource": resource,
+                        "createEvent": position,
+                    }
                     outcome = "created"
                 elif status == 200 and kind == "custom-sign-in":
                     # A 200 that did not create is a reused account, never owned here.

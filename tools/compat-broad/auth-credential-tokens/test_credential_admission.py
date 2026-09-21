@@ -187,7 +187,7 @@ def test_the_descriptor_constructs_with_every_member_real() -> None:
 
 def test_the_budget_is_the_lane_budget_with_management_slots_inside_it() -> None:
     ledger = campaign.ledger_budget()
-    assert ledger == {"requests": 60, "accounts": 4, "resources": 2, "costMicrousd": 50_000}
+    assert ledger == {"requests": 60, "accounts": 4, "resources": 4, "costMicrousd": 50_000}
     bounds = campaign.frozen_bounds()
     assert bounds["dataRequests"] == 42
     assert bounds["managementRequests"] == 7
@@ -336,8 +336,7 @@ def test_the_reservation_claim_binds_the_gate_plan_and_the_lane_budget(built, tm
     reservations._claim(claim)
 
 
-def test_the_shared_ledger_refuses_the_account_shaped_gate_plan_on_this_tree(built, tmp_path) -> None:
-    """The blocker this lane reports: the Ledger admits only Firestore document resources."""
+def test_the_shared_ledger_hosts_the_account_shaped_gate_plan(built, tmp_path) -> None:
     gate_plan = admission.gate_plan_for(built.inputs, built.permission)
     claim = admission.reservation_claim(built.inputs, gate_path=tmp_path / "gate", gate_plan=gate_plan)
     envelope = {
@@ -348,6 +347,5 @@ def test_the_shared_ledger_refuses_the_account_shaped_gate_plan_on_this_tree(bui
         "concurrency": 1,
         "scopes": list(claim["locks"]),
     }
-    with pytest.raises(ValueError, match="canonical Firestore resource required"):
-        reservations.Ledger(built.ledger).reserve(envelope, claim, gate_plan)
-    assert reservations.Ledger(built.ledger).snapshot()["reservations"] == {}
+    ticket = reservations.Ledger(built.ledger).reserve(envelope, claim, gate_plan)
+    assert ticket["reservation"] in reservations.Ledger(built.ledger).snapshot()["reservations"]

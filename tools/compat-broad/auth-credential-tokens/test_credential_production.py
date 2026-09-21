@@ -1,13 +1,4 @@
-"""Offline O8 integration: real capabilities, Gate journals and a temporary Ledger.
-
-Two facts are pinned side by side. On the current tree the shared Ledger refuses this
-campaign's Gate plan at `reserve`, because it admits only Firestore document
-resources; that refusal is the first test. The second applies, to the test process
-only, the two-function extension the lane proposes for the shared modules (an Auth
-account scope in the Ledger's resource mapping, and the facade's typed account
-absence as an acceptable absence proof) and shows that with it a hosted run reserves,
-reaches every case, cleans up every account, finishes the Gate and releases.
-"""
+"""Offline O8 integration: real capabilities, Gate journals and a temporary Ledger."""
 
 from __future__ import annotations
 
@@ -99,34 +90,6 @@ def wire_fixture(monkeypatch, *, tokeninfo_status=200, service=None):
     return calls, service
 
 
-def proposed_shared_extension(monkeypatch):
-    """The two-function extension the lane proposes, applied to this process only.
-
-    It is not on disk. `reservations._firestore_resource_scope` learns the Auth
-    account namespace a cleanup route acts on, and `validate_absence_proofs` accepts
-    a job whose facade recorded typed absence for every created account.
-    """
-    original_scope = reservations._firestore_resource_scope
-
-    def resource_scope(resource):
-        if isinstance(resource, str) and resource.startswith("identitytoolkit.googleapis.com/v1/projects/"):
-            project = resource.split("/")[3]
-            return reservations._scope({"key": f"project/{project}/auth/accounts/*", "mode": "WRITE"})
-        return original_scope(resource)
-
-    def absence_proofs(state, job_name):
-        job = state["jobs"][job_name]
-        if all(op.get("service") == "auth" for op in state["plan"]["jobs"][job_name]["recovery"]):
-            accounts = job.get("authAccounts", {})
-            if not accounts or any("absenceEvent" not in record for record in accounts.values()):
-                raise ValueError("typed cleanup absence evidence incomplete")
-            return
-        return shared_gate.validate_absence_proofs(state, job_name)
-
-    monkeypatch.setattr(reservations, "_firestore_resource_scope", resource_scope)
-    monkeypatch.setattr(reservations, "validate_absence_proofs", absence_proofs)
-
-
 def issue(built):
     binding, binding_digest = remote.worker_binding()
     return admission.issue_production_capability(**built.bindings(), binding=binding, binding_digest=binding_digest)
@@ -144,34 +107,10 @@ def run(built, tmp_path, *, reader=None):
     )
 
 
-# --- the current tree ------------------------------------------------------------------
+# --- hosted execution ---------------------------------------------------------------------
 
 
-def test_on_the_current_tree_the_ledger_refuses_the_run_before_any_gate_or_wire(tmp_path, monkeypatch) -> None:
-    built = Admission(tmp_path)
-    calls, _ = wire_fixture(monkeypatch)
-    read = []
-    with pytest.raises(ValueError, match="canonical Firestore resource required"):
-        run(built, tmp_path, reader=lambda: read.append(1))
-    output = tmp_path / "output"
-    refusal = json.loads((output / "refusal.json").read_bytes())
-    assert refusal["stage"] == "ledger-reserve"
-    assert not (output / "gate").exists()
-    assert read == [] and calls == {"management": [], "sign": [], "data": []}
-    assert reservations.Ledger(built.ledger).snapshot()["reservations"] == {}
-
-
-def test_the_launcher_reports_the_refusal_as_exit_two(tmp_path, monkeypatch) -> None:
-    built = Admission(tmp_path)
-    wire_fixture(monkeypatch)
-    assert launcher.main(built.argv(tmp_path)) == 2
-
-
-# --- with the proposed shared extension ----------------------------------------------------
-
-
-def test_with_the_proposed_shared_extension_a_hosted_run_releases(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
+def test_a_hosted_credential_run_releases_through_the_shared_ledger(tmp_path, monkeypatch) -> None:
     built = Admission(tmp_path)
     calls, service = wire_fixture(monkeypatch)
     result = run(built, tmp_path)
@@ -210,7 +149,6 @@ def test_with_the_proposed_shared_extension_a_hosted_run_releases(tmp_path, monk
 
 
 def test_with_the_extension_a_run_without_signing_records_the_dependent_rows_as_not_run(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path, signing=False)
     calls, _ = wire_fixture(monkeypatch)
     result = run(built, tmp_path)
@@ -225,7 +163,6 @@ def test_with_the_extension_a_run_without_signing_records_the_dependent_rows_as_
 
 
 def test_a_refused_bearer_stops_the_run_before_any_data_call(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)
     calls, _ = wire_fixture(monkeypatch, tokeninfo_status=401)
     result = run(built, tmp_path)
@@ -239,7 +176,6 @@ def test_a_refused_bearer_stops_the_run_before_any_data_call(tmp_path, monkeypat
 
 
 def test_a_privileged_call_refused_with_403_stops_every_later_bearer_use(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)
     calls, service = wire_fixture(monkeypatch)
     real_transmit = remote.transmit
@@ -267,7 +203,6 @@ def test_a_privileged_call_refused_with_403_stops_every_later_bearer_use(tmp_pat
 
 def test_a_refused_api_key_call_stops_observation_but_cleanup_still_runs(tmp_path, monkeypatch) -> None:
     """The mirror of the bearer latch: the key was refused, the bearer never was."""
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)
     calls, service = wire_fixture(monkeypatch)
     real_transmit = remote.transmit
@@ -296,7 +231,6 @@ def test_a_refused_api_key_call_stops_observation_but_cleanup_still_runs(tmp_pat
 
 
 def test_a_worker_timeout_on_a_refresh_is_observation_incomplete_not_unsettled(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)
     wire_fixture(monkeypatch)
     real_transmit = remote.transmit
@@ -319,7 +253,6 @@ def test_a_worker_timeout_on_a_refresh_is_observation_incomplete_not_unsettled(t
 
 
 def test_charged_calls_after_a_latch_count_only_admitted_slots(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)
     wire_fixture(monkeypatch)
     real_transmit = remote.transmit
@@ -342,7 +275,6 @@ def test_charged_calls_after_a_latch_count_only_admitted_slots(tmp_path, monkeyp
 
 
 def test_a_refused_explicit_valid_since_update_stops_the_run_without_a_row(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)
     wire_fixture(monkeypatch)
     real_transmit = remote.transmit
@@ -365,7 +297,6 @@ def test_a_refused_explicit_valid_since_update_stops_the_run_without_a_row(tmp_p
 
 
 def test_a_secret_shaped_value_in_the_receipt_is_refused_not_redacted(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)
     wire_fixture(monkeypatch)
     original = admission.build_receipt
@@ -382,7 +313,6 @@ def test_a_secret_shaped_value_in_the_receipt_is_refused_not_redacted(tmp_path, 
 
 
 def test_the_launcher_exits_zero_only_after_a_complete_release(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)
     wire_fixture(monkeypatch)
     assert launcher.main(built.argv(tmp_path)) == 0
@@ -392,7 +322,6 @@ def test_the_launcher_exits_zero_only_after_a_complete_release(tmp_path, monkeyp
 
 
 def test_a_second_run_on_the_same_nonce_is_refused_as_reserved(tmp_path, monkeypatch) -> None:
-    proposed_shared_extension(monkeypatch)
     built = Admission(tmp_path)
     wire_fixture(monkeypatch)
     assert run(built, tmp_path)["reservationReleased"] is True
@@ -403,6 +332,6 @@ def test_a_second_run_on_the_same_nonce_is_refused_as_reserved(tmp_path, monkeyp
 def test_the_gate_plan_names_only_placeholders_where_the_run_binds_values(tmp_path) -> None:
     built = Admission(tmp_path)
     plan = admission.gate_plan_for(built.inputs, built.permission)
-    assert plan["jobs"][gate_module.JOB]["resources"] == gate_module.route_resources(campaign.PROJECT)
+    assert plan["jobs"][gate_module.JOB]["resources"] == plan["accountResources"]
     serialized = json.dumps(plan)
     assert FIXTURE_TOKEN not in serialized and FIXTURE_KEY not in serialized

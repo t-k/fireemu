@@ -1519,7 +1519,7 @@ class Ledger:
         if not isinstance(receipt_digest, str) or not 1 <= len(receipt_digest) <= 256:
             raise ValueError("bounded recovery receipt correlation required")
         if not isinstance(canonical_parent_plan, dict):
-            raise ValueError("canonical parent compiler plan required")
+            raise ValueError("canonical parent compiler plan required")  # noqa: TRY004
         if not isinstance(child_ticket, dict) or set(child_ticket) != {
             "ledgerPath", "ledgerIdentity", "reservation", "claimDigest",
             "envelopeDigest", "parentReservation",

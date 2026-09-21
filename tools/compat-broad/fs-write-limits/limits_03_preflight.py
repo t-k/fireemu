@@ -128,13 +128,13 @@ def _field_readback(body, field=INDEX_FIELD):
     default wildcard field, which the API names in either state.
     """
     if not isinstance(body, dict) or body.get("name") != field:
-        raise TypeError("typed index field readback required")
+        raise ValueError("typed index field readback required")
     configuration = body.get("indexConfig", {})
     if not isinstance(configuration, dict):
-        raise TypeError("typed index field readback required")
+        raise ValueError("typed index field readback required")  # noqa: TRY004
     indexes = configuration.get("indexes", [])
     if not isinstance(indexes, list):
-        raise TypeError("typed index field readback required")
+        raise ValueError("typed index field readback required")  # noqa: TRY004
     uses_ancestor = configuration.get("usesAncestorConfig", False)
     if uses_ancestor is not True and uses_ancestor is not False:
         raise ValueError("typed index field readback required")

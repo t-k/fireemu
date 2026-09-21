@@ -39,7 +39,9 @@ def source_inputs() -> dict[str, str]:
     }
 
 
-def _real_child(output: Path, nonce: str, part: str = "ALL") -> None:
+def _real_child(
+    output: Path, nonce: str, part: str = "ALL", index_profile: str = "historical"
+) -> None:
     from broad import local_origin
     from owned_runner import control_get, local_addresses
     from shared_gate import Gate, create
@@ -94,11 +96,10 @@ def _real_child(output: Path, nonce: str, part: str = "ALL") -> None:
             timeout=12,
         )
 
-    # The supervisor pins a historical index configuration and verifies its
-    # digest, so this run cannot apply the declared exemption. That is a fact
-    # about this side, which is why the excuse is supplied here and not carried
-    # in the plan a production run would share.
-    excused = pending_rows(plan)
+    # The historical profile cannot apply the declared exemption and therefore
+    # records the four pending rows. The closed nx-local profile applies the
+    # exact local after-state and must not carry that historical excuse.
+    excused = pending_rows(plan) if index_profile == "historical" else []
     collected = collect(gate, plan, output / "collection", wire, excused=excused)
     rows, cleanup = collected["rows"], collected["cleanup"]
     infrastructure = collected["infrastructureFailures"]
@@ -229,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.child is not None:
         if not args.nonce:
             parser.error("--nonce is required with --child")
-        _real_child(args.child.resolve(), args.nonce, args.part)
+        _real_child(args.child.resolve(), args.nonce, args.part, args.index_profile)
         return 0
     result = run(args.output.resolve(), args.part, args.index_profile)
     print(json.dumps({"status": result.get("status")}))

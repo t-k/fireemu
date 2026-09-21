@@ -296,6 +296,13 @@ def test_pending_rows_are_recorded_with_their_reasons() -> None:
         pending["differences"]
         == shadow["execution"]["ALL"]["execution"]["pendingDifferences"]
     )
+    profile = shadow["execution"]["ALL"]["execution"]["indexConfiguration"].get(
+        "profile", "historical"
+    )
+    if profile == "nx-local":
+        assert pending["differences"] == []
+        assert shadow["execution"]["ALL"]["execution"]["pendingRows"] == []
+        return
     for difference in pending["differences"]:
         assert difference["pending"] is True
         assert difference["reason"]
@@ -348,7 +355,11 @@ def test_the_shadow_index_configuration_is_cross_checked() -> None:
         declared = configuration["shadowRanUnder"][part]
         recorded = shadow["execution"][part]["execution"]["indexConfiguration"]
         assert declared == recorded, part
-        assert declared["sha256"] != configuration["conformanceIndexesSha256Before"]
+        if recorded.get("profile", "historical") == "nx-local":
+            assert declared["sha256"] == configuration["conformanceIndexesSha256After"]
+            assert not configuration["shadowDifference"]
+        else:
+            assert declared["sha256"] != configuration["conformanceIndexesSha256Before"]
 
 
 def test_the_declared_data_cost_is_accounted_for_in_the_envelope() -> None:

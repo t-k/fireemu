@@ -780,6 +780,8 @@ def run(
             "--nonce",
             nonce,
         ]
+        if index_profile != "historical":
+            command.extend(["--index-profile", index_profile])
         if firestore_program is not None:
             command.extend(["--firestore-program", firestore_program])
         index_configuration = {

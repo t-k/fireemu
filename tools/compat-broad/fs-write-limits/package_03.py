@@ -166,8 +166,11 @@ def shadow_record(run: Path, commit: str) -> dict:
     execution["ownedDocuments"] = len(result["resourceAbsence"])
     execution["configurationDigest"] = supervisor["configurationDigest"]
     execution["indexConfiguration"] = {
-        key: supervisor["indexConfiguration"][key] for key in ("sha256", "sourceCommit")
+        key: supervisor["indexConfiguration"][key]
+        for key in ("sha256", "sourceCommit", "profile")
+        if key in supervisor["indexConfiguration"]
     }
+    index_profile = execution["indexConfiguration"].get("profile", "historical")
     execution["ownedProcess"] = {
         key: supervisor["ownedProcess"][key]
         for key in ("pid", "stopped", "listenersClosed")
@@ -192,10 +195,11 @@ def shadow_record(run: Path, commit: str) -> dict:
             "Local artifact evidence only. The executed nonces, the owned resource "
             "names and the retained binaries live in private output directories "
             "and are not published here. This is not a production observation and "
-            "promotes nothing. The local shadow supervisor pins the historical "
-            "index configuration and verifies its digest, so it cannot apply the "
-            "declared exemption; the document-name rows are pending for exactly "
-            "that reason."
+            "promotes nothing. The local shadow supervisor records the closed "
+            f"{index_profile} index profile and verifies its digest. "
+            "The historical profile cannot apply the declared exemption; the "
+            "nx-local profile applies the exact local after-state and does not "
+            "carry those pending rows."
         )
         + (
             ""
@@ -387,6 +391,11 @@ def manifest(
             "ALL": shadow["execution"]["ALL"]["execution"]["indexConfiguration"]
         },
     }
+    shadow_profile = value["indexConfiguration"]["shadowRanUnder"]["ALL"].get(
+        "profile", "historical"
+    )
+    if shadow_profile == "nx-local":
+        value["indexConfiguration"]["shadowDifference"] = False
     for case in value["cases"]:
         if case.get("limitId") == "FS-LIMIT-DOCUMENT-NAME-BYTES":
             prefix = len("projects/fireemu-35fe6/databases/(default)/documents/")

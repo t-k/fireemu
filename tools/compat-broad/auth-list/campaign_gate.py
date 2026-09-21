@@ -485,8 +485,10 @@ class CampaignGate(FrozenGate):
         extra = getattr(adapter, "campaign_operation", {})
         merged = {**operation, **extra}
         plan = _local_plan(self.snapshot()["plan"])
-        index = self.snapshot()["jobs"][self.job]["observation"]
-        declared = plan["jobs"][self.job]["observation"][index]
+        recovery = bool(getattr(getattr(adapter, "budget", None), "recovery", False))
+        phase = "recovery" if recovery else "observation"
+        index = self.snapshot()["jobs"][self.job][phase]
+        declared = plan["jobs"][self.job][phase][index]
         merged = _project_auth_operation(merged, plan["project"], declared)
         validate(merged)
         return super().adapter_request(adapter, merged, send)

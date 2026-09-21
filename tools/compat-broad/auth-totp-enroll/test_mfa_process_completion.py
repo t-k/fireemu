@@ -117,6 +117,21 @@ def test_parent_requires_successful_child_and_complete_current_receipt(
     binary.parent.mkdir(parents=True)
     binary.write_text("inert test fixture; never executed")
     output = tmp_path / "new-output"
+    (tmp_path / ".gitignore").write_text("new-output/\n")
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "fixture@example.test"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "MFA fixture"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "--quiet", "-m", "fixture"],
+        check=True,
+    )
     from mfa_manifest import compile_campaign
     from mfa_request_budget import RequestBudget
     plan = compile_campaign("f" * 32)
@@ -172,8 +187,13 @@ def test_parent_requires_successful_child_and_complete_current_receipt(
 
         return SimpleNamespace(pid=12345, wait=wait, poll=lambda: 0)
 
+    child_subprocess = SimpleNamespace(
+        Popen=start,
+        PIPE=subprocess.PIPE,
+        TimeoutExpired=subprocess.TimeoutExpired,
+    )
     monkeypatch.setattr(shadow, "repository_root", lambda: tmp_path)
-    monkeypatch.setattr(shadow.subprocess, "Popen", start)
+    monkeypatch.setattr(shadow, "subprocess", child_subprocess)
     monkeypatch.setattr(shadow, "capture_child_identity", lambda _process: CHILD)
     monkeypatch.setattr(shadow, "reap_owned_child", lambda *_: "stopped")
 

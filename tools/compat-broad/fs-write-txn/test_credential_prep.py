@@ -375,6 +375,190 @@ def test_private_worker_tokeninfo_stall_times_out_before_kill(oauth_server):
     )
 
 
+# --- Owner review a54c5abc8 regression coverage -----------------------------
+#
+# Adopted from docs.local/reviews/2026-09-21/owner-review-a54c5abc8/
+# test_fireemu_credential_review_a54c5ab.py. The owner's fixture drives
+# `_http_request`/`_private_request` directly against a raw
+# `ThreadingHTTPServer` so it can control header timing and chunked framing
+# precisely (the repo's `oauth_server` fixture above cannot delay headers or
+# emit incomplete chunked bodies), so it is kept as its own local server
+# context manager rather than folded into `oauth_server`.
+import contextlib
+import http.server
+import threading
+import time
+
+
+@contextlib.contextmanager
+def _boundary_server(scenario: str):
+    state = {"requests": 0, "sentBodyBytes": 0, "scenario": scenario}
+    stop = threading.Event()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self):
+            state["requests"] += 1
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.close_connection = True
+            if scenario == "delayed_headers_stall":
+                stop.wait(0.9)
+            self.send_response(200)
+            self.send_header("Connection", "close")
+            if scenario in ("chunked_truncated", "chunked_success"):
+                self.send_header("Transfer-Encoding", "chunked")
+            else:
+                self.send_header(
+                    "Content-Length", "32" if scenario != "success" else "2"
+                )
+            self.end_headers()
+            try:
+                if scenario in ("immediate_stall", "delayed_headers_stall"):
+                    stop.wait(20.0)
+                elif scenario in ("partial_stall", "fixed_truncated"):
+                    self.wfile.write(b"0123456789")
+                    self.wfile.flush()
+                    state["sentBodyBytes"] = 10
+                    if scenario == "partial_stall":
+                        stop.wait(20.0)
+                elif scenario == "chunked_truncated":
+                    # A complete ten-byte chunk, followed by EOF before the
+                    # required terminal zero chunk.
+                    self.wfile.write(b"A\r\n0123456789\r\n")
+                    self.wfile.flush()
+                    state["sentBodyBytes"] = 10
+                elif scenario == "chunked_success":
+                    self.wfile.write(b"2\r\n{}\r\n0\r\n\r\n")
+                    self.wfile.flush()
+                    state["sentBodyBytes"] = 2
+                else:
+                    self.wfile.write(b"{}")
+                    self.wfile.flush()
+                    state["sentBodyBytes"] = 2
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def log_message(self, *_args):
+            pass
+
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd.daemon_threads = True
+    thread = threading.Thread(
+        target=httpd.serve_forever, kwargs={"poll_interval": 0.02}
+    )
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{httpd.server_port}", state
+    finally:
+        stop.set()
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+
+def _observe(module, scenario: str, *, private: bool, deadline: float = 2.0):
+    with _boundary_server(scenario) as (origin, state):
+        start = time.monotonic()
+        if private:
+            result = module._private_request(
+                "tokeninfo",
+                "synthetic-review-token",
+                fixture_origin=origin,
+                deadline=deadline,
+            )
+        else:
+            result = module._http_request(
+                "tokeninfo",
+                "synthetic-review-token",
+                fixture_origin=origin,
+                timeout=0.3,
+            )
+        elapsed = time.monotonic() - start
+    observation = {
+        "scenario": scenario,
+        "result": result,
+        "fixture": dict(state),
+        "callerElapsedSeconds": elapsed,
+    }
+    assert state["requests"] == 1, observation
+    assert "synthetic-review-token" not in json.dumps(result), observation
+    return observation
+
+
+def test_immediate_body_stall_has_a_diagnostic():
+    module = prep()
+    observation = _observe(module, "immediate_stall", private=True)
+    result = observation["result"]
+    assert result["complete"] is False
+    assert result["workerReaped"] is True
+    assert result["failure"] == "read-timeout", observation
+    assert result["status"] == 200
+
+
+@pytest.mark.parametrize("deadline", [2.0, 12.0])
+def test_header_delay_must_not_consume_the_body_diagnostic_margin(deadline):
+    """Regression for owner review a54c5abc8 item 1: a fixed per-op socket
+    timeout let a 0.9s header delay plus a fresh full-length body timeout
+    exceed the coordinator's own kill deadline, so the worker was reaped
+    before it could return its own labeled diagnostic. With an absolute
+    per-call deadline, time spent waiting on headers comes out of the same
+    budget as the body read, so the worker always reports before the kill."""
+    module = prep()
+    observation = _observe(
+        module, "delayed_headers_stall", private=True, deadline=deadline
+    )
+    result = observation["result"]
+    assert result["complete"] is False
+    assert result["workerReaped"] is True
+    assert result["failure"] == "read-timeout", observation
+    assert result["status"] == 200, observation
+
+
+def test_partial_body_timeout_retains_received_byte_count():
+    """Regression for owner review a54c5abc8 item 2: a mid-body timeout used
+    to discard the bytes already read because `receivedBytes` was only ever
+    set after a whole `read()` call succeeded."""
+    module = prep()
+    observation = _observe(module, "partial_stall", private=False)
+    result = observation["result"]
+    assert result["failure"] == "read-timeout", observation
+    assert result["receivedBytes"] == 10, observation
+
+
+def test_truncated_chunked_body_has_a_truncation_diagnostic():
+    """Regression for owner review a54c5abc8 item 2: a chunked disconnect
+    before the terminator used to surface as transport-error/IncompleteRead
+    with receivedBytes 0 instead of body-truncated with the partial length."""
+    module = prep()
+    observation = _observe(module, "chunked_truncated", private=False)
+    result = observation["result"]
+    assert result["complete"] is False
+    assert result["failure"] == "body-truncated", observation
+    assert result["receivedBytes"] == 10, observation
+
+
+def test_fixed_length_truncation_positive_control():
+    module = prep()
+    observation = _observe(module, "fixed_truncated", private=False)
+    result = observation["result"]
+    assert result["failure"] == "body-truncated", observation
+    assert result["receivedBytes"] == 10
+    assert result["declaredLength"] == 32
+
+
+@pytest.mark.parametrize("scenario", ["success", "chunked_success"])
+def test_complete_json_positive_controls(scenario):
+    module = prep()
+    observation = _observe(module, scenario, private=True)
+    result = observation["result"]
+    assert result["complete"] is True, observation
+    assert result["body"] == {}
+    assert result["receivedBytes"] == 2
+    assert result["workerReaped"] is True
+
+
 @pytest.mark.parametrize(
     "mutation",
     [

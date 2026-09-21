@@ -1056,14 +1056,21 @@ def test_the_exemption_readback_requires_the_field_name_and_a_200():
         preflight.verify_index_exemption(
             {"name": preflight.DEFAULT_ANCESTOR_FIELD, "indexConfig": {}}, permission
         )
-    for status in (403, 404, 500):
+    for status, body in (
+        (403, {"error": {"code": 403, "status": "PERMISSION_DENIED"}}),
+        (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        # A non-2xx answer whose body happens to be the exempt shape is still
+        # not an attestation of the deployed state.
+        (500, EXEMPT_FIELD_BODY),
+        (299, EXEMPT_FIELD_BODY),
+    ):
         attestation = preflight.index_exemption_attestation(
             {
                 "complete": True,
                 "workerReaped": True,
                 "status": status,
                 "bodyKind": "json",
-                "body": {"error": {"code": status, "status": "PERMISSION_DENIED"}},
+                "body": body,
             },
             permission,
         )
@@ -1365,7 +1372,13 @@ def _run_worker(message: dict, body: bytes = b"") -> bytes:
             + NONCE
             + "/request-bytes-01/probe-u01/items/control"
         },
-        {"method": "PUT"},
+        {
+            "method": "PUT",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+            + NONCE
+            + "/limits-03/x",
+            "bodyBytes": 0,
+        },
         {"deadline": 60.0},
         {
             "method": "GET",
@@ -1402,5 +1415,5 @@ def test_the_worker_refuses_out_of_scope_messages_before_connecting(damage):
     message.update(damage)
     if "deadline" in damage:
         message["deadline"] = real_time.monotonic() + damage["deadline"]
-    frames = _run_worker(message, b"{}")
+    frames = _run_worker(message, b"{}" if message["bodyBytes"] else b"")
     assert frames == b"F" + (14).to_bytes(4, "big") + b"worker-failure"

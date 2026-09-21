@@ -84,8 +84,8 @@ The repair was independently reviewed at `0f56b3d0ddfa614666306a14909eba978487c8
 | `limits_03_remote_transport.py`, `limits_03_https_worker.py` | the fixed-origin transport bound to the recompiled plan slot, and its digest-pinned worker |
 | `limits_03_production.py` | one admitted acquisition and the saved-evidence verifier |
 | `limits_03_o8.py` | the launcher: `--inputs --approval --manifest --permission --source --artifact --ledger --output --credential-fd/--credential-file`; exit 0 released, 1 held with possible or created data, 2 refused or no data |
-| `limits_03_indexes.py` | `--write-after`, `--verify before|after`, `--precondition` for the index-exemption step |
-| `package_03.py` | `freeze --shadow-run <dir>` or `freeze --keep-shadow-record`: regenerates the three published records over HEAD |
+| `limits_03_indexes.py` | `--write-after`, `--verify before|after`, `--verify-deployed <readback>`, `--verify-restored <readback> --record <file>`, `--precondition` for the index-exemption step; the after state is never committed |
+| `package_03.py` | `freeze --shadow-run <dir>` or `freeze --keep-shadow-record`, plus `--restore-record <file>` once the restore is verified: regenerates the three published records over HEAD |
 
 ```
 uv run --project tools/compat-inventory --locked --python 3.12 -m pytest -q -p no:cacheprovider tools/compat-broad/fs-write-limits

@@ -1,10 +1,10 @@
 {
  "artifact": {
-  "byteCount": 69836408,
-  "path": "target/agent/query-abnormal-exit/normal/debug/fireemu",
+  "byteCount": 69725832,
+  "path": "target/agent/cx-query-shadow/normal/debug/fireemu",
   "reproducible": false,
-  "sha256": "b2151f11ae8cc40ad2bcb118f0dbc6737d2875f577073ed19c52d3afb419cc7b",
-  "sourceCommit": "85d180c82926f13116fa35feb8acbbc754f44844",
+  "sha256": "d32b3f2bc8a7387893524cd50b6f10bedc69c3ecc40f9afb172f862c0259fad6",
+  "sourceCommit": "24afd0d6b87272f0c9f671eb92d869de4448074a",
   "sourceTreeClean": true
  },
  "campaignId": "FS-QUERY-PARTITION-CURSOR-04",
@@ -18,7 +18,7 @@
   "observationRows": 31,
   "ownedProcess": {
    "listenersClosed": true,
-   "pid": 95581,
+   "pid": 6212,
    "stopped": true
   },
   "parentStatus": "pass",
@@ -43,7 +43,7 @@
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_case.py": "4f2dee90a4fbabcff4370baa972b014425aee524c0aaf5aca176e45e133907bc",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_collector.py": "3d3e43cfa02f82880d774119bd46a4d0ded33a45da4131d51faa31ae12a07c1f",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_comparator.py": "d50a97122aab4d5ffd35448ae03c4d18652ae85fc4a056780084078923b5fb06",
-  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_gate.py": "c50702ba36b39007f81f0b9101c0f62b5d63fc525366e62c01f9856344ff4df5",
+  "tools/compat-broad/fs-query-partition-cursor/partition_cursor_gate.py": "f727f22818d9f30df78bc6180c2f1ebc17f02d60929432d36b6d2f6f604ab11f",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_manifest.py": "4196b5b34796fd40b21a102f37b0f1a12cb11c63347ad84e9d3b2de18dd5c27e",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_o8.py": "01d1cd3bb6c59082b2d24a1a606b7c3d542ca30a064b66fc77587fefa8112560",
   "tools/compat-broad/fs-query-partition-cursor/partition_cursor_offline_fixture.py": "b015e95a172fafcaeef548a7e5b57a0c5b2ac8d8d697ca6b5612bff5132a5729",

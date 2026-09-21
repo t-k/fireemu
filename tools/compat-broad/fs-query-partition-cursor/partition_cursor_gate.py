@@ -647,19 +647,21 @@ class PartitionCursorGate(FrozenGate):
             token = body.get("nextPageToken")
             if isinstance(token, str) and token:
                 self._observed["pageToken"] = token
-        if event.get("creationOutcome") != "unknown":
-            return
         if _read_only_rpc(operation) is not None:
-            if _typed_error(body, status) or (
-                status == 200 and _partition_response_usable(body)
+            if not (
+                _typed_error(body, status)
+                or (status == 200 and _partition_response_usable(body))
             ):
-                # A read-only RPC cannot bring a document into existence. The
-                # shared Gate does not recognize this shape, so the facade
-                # settles it, and only for a response it can type.
+                raise ValueError("untyped read-only response")
+            if event.get("creationOutcome") == "unknown":
+                # A read-only RPC cannot bring a document into existence. This
+                # compatibility settlement remains only for legacy Gate plans
+                # that classified the operation as creating.
                 event["creationOutcome"] = "refused"
                 event["settledBy"] = "partition-cursor-read-only-rpc"
-                return
-            raise ValueError("untyped read-only response")
+            return
+        if event.get("creationOutcome") != "unknown":
+            return
         if kind == "cleanup-seed-delete":
             if _delete_commit_usable(body, len(operation["body"]["writes"])):
                 event["creationOutcome"] = "refused"

@@ -16,19 +16,22 @@ import time
 _HOST = "firestore.googleapis.com"
 _DATABASE = r"/v1/projects/fireemu-35fe6/databases"
 _GROUP = r"/\(default\)/collectionGroups/fsconfig_(?:ttl|exempt)_[0-9a-f]{12}"
-_PATH = re.compile(
-    _DATABASE
-    + r"(?:"
-    + r"/\(default\)"
-    + r"|\?showDeleted=(?:false|true)"
-    + _GROUP
-    + r"/fields/(?:expiresAt|payload)(?:\?updateMask=(?:ttlConfig|indexConfig))?"
-    + "|"
-    + _GROUP
-    + r"/fields\?filter=indexConfig\.usesAncestorConfig(?:%3A|:)false&pageSize=20"
-    + r"|/\(default\)/operations/[A-Za-z0-9_.-]{1,128}"
-    + r")\Z"
+# Exactly the campaign's own routes: the default database projection, the
+# enumeration, one field of each nonce-owned collection group (read or patched under
+# one of the two update masks), the two reconciliation listings of such a group, and
+# an operation under the default database. Each alternative is a whole route, so a
+# concatenation of two routes never matches.
+_ROUTES = (
+    r"/\(default\)",
+    r"\?showDeleted=(?:false|true)",
+    _GROUP + r"/fields/(?:expiresAt|payload)",
+    _GROUP + r"/fields/(?:expiresAt|payload)\?updateMask=(?:ttlConfig|indexConfig)",
+    _GROUP
+    + r"/fields\?filter=indexConfig\.usesAncestorConfig(?:%3A|:)false&pageSize=20",
+    _GROUP + r"/fields\?filter=ttlConfig(?:%3A|:)(?:%2A|\*)&pageSize=20",
+    r"/\(default\)/operations/[A-Za-z0-9_.-]{1,128}",
 )
+_PATH = re.compile(_DATABASE + "(?:" + "|".join(_ROUTES) + r")\Z")
 _TOKEN = re.compile(r"Bearer [A-Za-z0-9._~+/-]{1,8192}=*\Z")
 _MAX_BODY = 4096
 _RESPONSE_CAP = 256 * 1024

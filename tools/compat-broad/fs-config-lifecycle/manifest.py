@@ -201,8 +201,10 @@ _RECONCILIATION = {
 _CLEANUP_COMPLETION = (
     "Every ledger entry is marked recovered.",
     "Every reverted field configuration matches the baseline captured before its patch.",
-    "Both owned collection groups list no overridden index configuration and no "
-    "time-to-live policy.",
+    (
+        "Both owned collection groups list no overridden index configuration and no "
+        "time-to-live policy."
+    ),
     "The post-run database enumeration matches the one captured before the run.",
     "A run with any unrecovered resource exits non-zero and is not a valid observation.",
 )

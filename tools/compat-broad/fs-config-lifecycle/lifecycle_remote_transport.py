@@ -36,7 +36,7 @@ EXCHANGE_MODULE = (
 _TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{1,8192}=*")
 # The digest of the worker bytes above. A worker edit that is not accompanied by a
 # new digest here cannot run: the transport refuses before spawning it.
-_WORKER_SHA256 = "eaf06980227950bac1e109705e3797566e1a08ce018d88fe36da29cc17e2c790"
+_WORKER_SHA256 = "37bed7bc3df888df15429c0600e790ae2f7c35e1209cb792d80a1cf0d5d67eb0"
 
 
 def _load_exchange():

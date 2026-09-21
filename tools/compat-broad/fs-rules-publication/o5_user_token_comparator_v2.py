@@ -31,10 +31,20 @@ Every failed binding is a named error. A bundle that fails an identity or
 authority binding is ``REFUSED``; a bundle whose evidence is incomplete or
 internally contradictory is ``INDETERMINATE``. Only two admitted bundles are
 compared row by row, and a row that disagrees is ``SEMANTIC_MISMATCH``.
+
+Row comparison is typed and identity-preserving (owner review d7f7ce184,
+findings 1 and 3). An observed record is admitted only with a JSON-boolean
+``documentPresent``, a non-empty string ``status`` and finite JSON throughout;
+values are compared as encoded JSON, so ``1`` and ``true`` differ. A field the
+plan resolves to a principal is mapped to the logical principal reference
+through the run's own binding, the ``principal:<ref>`` label the collector's
+account readback recorded; a value with no such binding is not a principal
+and leaves the row ``INDETERMINATE``, never equal.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections.abc import Mapping
@@ -70,7 +80,7 @@ from o5_user_token_collector import (
 )
 from o5_user_token_shadow import unredacted_identifiers
 
-COMPARATOR_CONTRACT = "fs-rules-user-token-comparator-v3"
+COMPARATOR_CONTRACT = "fs-rules-user-token-comparator-v4"
 
 MATCH = "MATCH"
 SEMANTIC_MISMATCH = "SEMANTIC_MISMATCH"
@@ -81,6 +91,8 @@ CLASSIFICATIONS = (MATCH, SEMANTIC_MISMATCH, INDETERMINATE, REFUSED)
 SIDE_PRODUCTION = "production"
 SIDE_LOCAL = "local"
 _ROLE_FOR_SIDE = {SIDE_PRODUCTION: ROLE_PRODUCTION, SIDE_LOCAL: ROLE_LOCAL_SHADOW}
+# Per-condition summary: the weakest row decides the condition.
+_ROW_RANK = {MATCH: 0, SEMANTIC_MISMATCH: 1, INDETERMINATE: 2}
 _ENVIRONMENT_FOR_SIDE = {
     SIDE_PRODUCTION: ENVIRONMENT_PRODUCTION,
     SIDE_LOCAL: ENVIRONMENT_LOCAL,
@@ -133,6 +145,55 @@ _CLOCK_TOLERANCE_SECONDS = 60.0
 
 def _is_number(value: Any) -> bool:
     return type(value) in (int, float) and math.isfinite(value)
+
+
+def _json_value(value: Any, depth: int = 0, active: set[int] | None = None) -> bool:
+    """Observed records are finite JSON, not arbitrary Python object graphs.
+
+    Copied from ``tools/compat-broad/auth-credential-tokens/credential_comparator.py``
+    (``_json_value``) rather than imported, so the lane's source map binds no
+    foreign file.
+    """
+    if depth > 128:
+        return False
+    kind = type(value)
+    if kind is int:
+        return value.bit_length() <= 4096
+    if kind in (str, bool) or value is None:
+        return True
+    if kind is float:
+        return math.isfinite(value)
+    if kind not in (dict, list):
+        return False
+    active = set() if active is None else active
+    identity = id(value)
+    if identity in active:
+        return False
+    active.add(identity)
+    try:
+        if kind is dict and any(type(key) is not str for key in value):
+            return False
+        items = value.values() if kind is dict else value
+        return all(_json_value(item, depth + 1, active) for item in items)
+    finally:
+        active.discard(identity)
+
+
+def _same_json(left: Any, right: Any) -> bool:
+    """Type-preserving JSON equality: bool, int and float stay distinct at
+    every depth, lists and mappings are compared element by element.
+
+    Copied from ``credential_comparator._same_json`` in the
+    auth-credential-tokens lane. Row admission has already excluded non-JSON
+    graphs and nonfinite numbers; if a value still cannot be encoded it is
+    not equal, so a malformed value never reads as a match.
+    """
+    try:
+        return json.dumps(left, sort_keys=True, allow_nan=False) == json.dumps(
+            right, sort_keys=True, allow_nan=False
+        )
+    except (TypeError, ValueError):
+        return False
 
 
 def _hex(value: Any, pattern: re.Pattern[str]) -> bool:
@@ -436,6 +497,8 @@ def _admit_rows(side: _Side, rows: list[Any]) -> None:
             observed.get("status"), str
         ):
             side.fail(f"row-unobserved:{case_id}")
+        else:
+            _admit_observed(side, observed, case_id)
         at = row.get("at")
         if not _is_number(at):
             side.fail("time-contradiction:row-timestamp")
@@ -443,6 +506,22 @@ def _admit_rows(side: _Side, rows: list[Any]) -> None:
             side.fail("time-contradiction:rows-not-monotonic")
         else:
             previous_at = at
+
+
+def _admit_observed(side: _Side, observed: Mapping[str, Any], case_id: str) -> None:
+    """The comparable part of a row must have the schema the collector writes:
+    a non-empty string status, a JSON-boolean presence flag, fields that are a
+    mapping or absent, and finite JSON throughout. A number in a boolean slot
+    is a malformed record, not a value to compare."""
+    if not _json_value(dict(observed)):
+        side.fail(f"row-schema:{case_id}:not-json")
+    if not observed["status"]:
+        side.fail(f"row-schema:{case_id}:status")
+    if type(observed.get("documentPresent")) is not bool:
+        side.fail(f"row-schema:{case_id}:documentPresent")
+    fields = observed.get("fields")
+    if fields is not None and not isinstance(fields, Mapping):
+        side.fail(f"row-schema:{case_id}:fields")
 
 
 def _admit_endpoint(side: _Side, endpoint: Any, where: str) -> None:
@@ -928,29 +1007,42 @@ def _provenance_value(bundle: Any, key: str) -> Any:
 def _compare_rows(
     plan: dict[str, Any], production: dict[str, Any], local: dict[str, Any]
 ) -> list[dict[str, Any]]:
+    labels = {
+        SIDE_PRODUCTION: _principal_labels(production, plan),
+        SIDE_LOCAL: _principal_labels(local, plan),
+    }
     rows = []
     for operation, left, right in zip(
         plan["observation"], production["rows"], local["rows"], strict=True
     ):
+        projected, unmapped = {}, []
+        for side, observed_row in ((SIDE_PRODUCTION, left), (SIDE_LOCAL, right)):
+            projected[side], keys = _projection(observed_row, operation, labels[side])
+            unmapped.extend(f"{side}:principal-unmapped:{key}" for key in keys)
         row = {
             "caseId": operation["caseId"],
             "index": operation["index"],
             "condition": operation["condition"],
             "ruleset": operation["ruleset"],
             "expected": operation["expect"]["status"],
-            "production": _projection(left, operation),
-            "local": _projection(right, operation),
+            "production": projected[SIDE_PRODUCTION],
+            "local": projected[SIDE_LOCAL],
             "classification": MATCH,
             "reasons": [],
             "productionHypothesis": None,
             "hypothesisOutcome": None,
         }
-        if row["production"] != row["local"]:
+        if unmapped:
+            # A principal slot without a binding on either side cannot be
+            # compared at all; equality of two unmapped values is not agreement.
+            row["classification"] = INDETERMINATE
+            row["reasons"] = unmapped
+        elif not _same_json(row["production"], row["local"]):
             row["classification"] = SEMANTIC_MISMATCH
             row["reasons"] = sorted(
                 key
                 for key in row["production"]
-                if row["production"][key] != row["local"][key]
+                if not _same_json(row["production"][key], row["local"][key])
             )
         hypothesis = operation["expect"].get("productionHypothesis")
         if isinstance(hypothesis, Mapping):
@@ -986,32 +1078,82 @@ def _hypotheses(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     return dict(sorted(summary.items()))
 
 
-def _projection(row: Mapping[str, Any], operation: Mapping[str, Any]) -> dict[str, Any]:
-    """The comparable part of an observed row.
+def _principal_labels(bundle: Any, plan: Mapping[str, Any]) -> dict[str, str]:
+    """The run's own principal binding: ``principal:<ref>`` label to logical
+    principal reference.
+
+    The collector learns a uid only from the account readback of the recovery
+    phase and replaces it everywhere with ``principal:<ref>``; the readback
+    step itself then carries the label as its ``uid``. A label is evidence of
+    the mapping only when the bundle declares it in ``redactedPrincipals``,
+    the plan owns the account, and that account's readback recorded the
+    label as the identifier it deleted under. Nothing else maps.
+    """
+    if not isinstance(bundle, Mapping):
+        return {}
+    declared = bundle.get("redactedPrincipals")
+    cleanup = bundle.get("cleanup")
+    steps = cleanup.get("accountSteps") if isinstance(cleanup, Mapping) else None
+    if not isinstance(declared, list) or not isinstance(steps, list):
+        return {}
+    labels: dict[str, str] = {}
+    for entry in plan["ownedAccounts"]:
+        ref = entry["ref"]
+        label = f"principal:{ref}"
+        if label not in declared:
+            continue
+        for step in steps:
+            if (
+                isinstance(step, Mapping)
+                and step.get("kind") == "account-readback"
+                and step.get("accountRef") == ref
+            ):
+                observed = step.get("observed")
+                if (
+                    isinstance(observed, Mapping)
+                    and observed.get("accountPresent") is True
+                    and observed.get("uid") == label
+                ):
+                    labels[label] = ref
+                break
+    return labels
+
+
+def _projection(
+    row: Mapping[str, Any], operation: Mapping[str, Any], labels: Mapping[str, str]
+) -> tuple[dict[str, Any], list[str]]:
+    """The comparable part of an observed row, and the field keys whose
+    principal slot could not be mapped.
 
     Field values that resolve to a principal differ between sides by
-    construction, because the two runs mint different accounts, so only their
-    presence is compared. Every other field value is compared literally.
+    construction, because the two runs mint different accounts, so each is
+    mapped through ``labels`` to the logical principal ``{"$principal": ref}``
+    and that is what is compared. A value ``labels`` does not name is
+    projected as ``{"$principal": None}`` and reported as unmapped; being a
+    non-empty string is not a mapping. Every other field value is compared
+    literally, by typed JSON equality.
     """
     observed = row.get("observed") or {}
     fields = observed.get("fields")
     projected_fields: dict[str, Any] | None = None
+    unmapped: list[str] = []
     if isinstance(fields, Mapping):
         expected = operation["expect"].get("fields", {})
         projected_fields = {}
         for key in sorted(fields):
             value = fields[key]
             if isinstance(expected.get(key), Mapping):
-                projected_fields[key] = (
-                    "<principal>" if isinstance(value, str) and value else None
-                )
+                ref = labels.get(value) if isinstance(value, str) else None
+                projected_fields[key] = {"$principal": ref}
+                if ref is None:
+                    unmapped.append(key)
             else:
                 projected_fields[key] = value
     return {
         "status": observed.get("status"),
         "documentPresent": observed.get("documentPresent"),
         "fields": projected_fields,
-    }
+    }, unmapped
 
 
 def compare(
@@ -1081,12 +1223,24 @@ def compare(
     conditions: dict[str, str] = {}
     for row in rows:
         current = conditions.get(row["condition"], MATCH)
-        if row["classification"] == SEMANTIC_MISMATCH or current == SEMANTIC_MISMATCH:
-            conditions[row["condition"]] = SEMANTIC_MISMATCH
+        if _ROW_RANK[row["classification"]] > _ROW_RANK[current]:
+            conditions[row["condition"]] = row["classification"]
         else:
-            conditions[row["condition"]] = MATCH
+            conditions[row["condition"]] = current
     result["conditions"] = dict(sorted(conditions.items()))
     result["hypotheses"] = _hypotheses(rows)
+    for row in rows:
+        if row["classification"] == INDETERMINATE:
+            for reason in row["reasons"]:
+                side, name, key = reason.split(":", 2)
+                errors.append(f"{side}:{name}:{row['caseId']}:{key}")
+    if errors:
+        # Invariant: acquisitionValidated == (errors == []). A row whose
+        # principal slot has no binding is incomplete evidence, exactly like
+        # a uid-shaped string the redaction missed, and neither validates.
+        result["errors"] = errors
+        result["acquisitionValidated"] = False
+        return result
     if all(row["classification"] == MATCH for row in rows):
         result["classification"] = MATCH
         result["promotionReady"] = True

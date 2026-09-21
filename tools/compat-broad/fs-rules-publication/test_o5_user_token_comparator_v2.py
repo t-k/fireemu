@@ -129,13 +129,299 @@ def test_a_disagreeing_row_is_a_semantic_mismatch_that_names_the_row() -> None:
     )
 
 
-def test_principal_valued_fields_compare_by_presence_not_by_uid() -> None:
+# ---------------------------------------------------------------------------
+# Principal identity in observed fields (owner review d7f7ce184, finding 1)
+# ---------------------------------------------------------------------------
+
+
+def test_principal_valued_fields_compare_by_logical_principal_not_by_presence() -> None:
+    """Replaces the former ``compare_by_presence_not_by_uid`` test.
+
+    That test pinned the lossy behaviour the owner review named: any non-empty
+    string in a principal slot projected to ``<principal>``, so a production
+    ``ownerUid`` of an unrelated account compared equal to the local owner.
+    The slot is now mapped to the logical principal through the run's own
+    principal binding (the ``principal:<ref>`` label the collector's account
+    readback produced), and only that mapping is compared. A string that has
+    no such binding is not a principal and leaves the row indeterminate.
+    """
     production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    result = compare(production, local, plan)
+    assert result["classification"] == MATCH
+    assert result["rows"][0]["production"]["fields"]["ownerUid"] == {
+        "$principal": "owner-a"
+    }
+    assert result["rows"][0]["local"]["fields"]["ownerUid"] == {"$principal": "owner-a"}
     production["rows"][0]["observed"]["fields"]["ownerUid"] = "abc123"
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert result["promotionReady"] is False
+    assert (
+        "production:principal-unmapped:a-owner-reads-own-document:ownerUid"
+        in (result["errors"])
+    )
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = ""
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert (
+        "production:principal-unmapped:a-owner-reads-own-document:ownerUid"
+        in (result["errors"])
+    )
+
+
+def test_different_uids_bound_to_the_same_logical_principal_match() -> None:
+    """Production uid A and local uid X both map to owner-a: the sides mint
+    different accounts by construction, and the label is what each side's
+    readback recorded for its own owner-a account."""
+    production, local, plan = bound_pair()
+    assert (
+        production["acquisition"]["principals"]["owner-a"]["uidFingerprint"]
+        != local["acquisition"]["principals"]["owner-a"]["uidFingerprint"]
+    )
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    result = compare(production, local, plan)
+    assert result["classification"] == MATCH
+    assert result["rows"][0]["classification"] == MATCH
+
+
+def test_uids_bound_to_different_logical_principals_mismatch_on_that_row() -> None:
+    """Production uid A maps to owner-a, local uid Y maps to other-b."""
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:other-b"
+    result = compare(production, local, plan)
+    assert result["classification"] == SEMANTIC_MISMATCH
+    assert result["acquisitionValidated"] is True
+    assert result["promotionReady"] is False
+    mismatched = [row for row in result["rows"] if row["classification"] != MATCH]
+    assert [row["caseId"] for row in mismatched] == ["a-owner-reads-own-document"]
+    assert mismatched[0]["reasons"] == ["fields"]
+    assert mismatched[0]["production"]["fields"]["ownerUid"] == {
+        "$principal": "owner-a"
+    }
+    assert mismatched[0]["local"]["fields"]["ownerUid"] == {"$principal": "other-b"}
+
+
+def test_review_wrong_owner_is_not_hidden_by_principal_normalization() -> None:
+    """Owner review recipe: ``principal:owner-b`` is not a campaign principal
+    (the second owner is ``other-b``), so it is unmapped, never equal."""
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-b"
+    result = compare(production, local, plan)
+    assert result["classification"] != MATCH
+    assert result["classification"] == INDETERMINATE
+    assert (
+        "local:principal-unmapped:a-owner-reads-own-document:ownerUid"
+        in (result["errors"])
+    )
+    assert result["rows"][0]["classification"] == INDETERMINATE
+    assert result["rows"][0]["local"]["fields"]["ownerUid"] == {"$principal": None}
+    assert result["conditions"]["principal-separation"] == INDETERMINATE
+
+
+def test_a_principal_label_without_its_readback_binding_is_unmapped() -> None:
+    """The label must be the one this run's account readback recorded, not a
+    string in the self-reported ``redactedPrincipals`` list alone."""
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
     local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
     assert compare(production, local, plan)["classification"] == MATCH
-    production["rows"][0]["observed"]["fields"]["ownerUid"] = ""
-    assert compare(production, local, plan)["classification"] == SEMANTIC_MISMATCH
+    for step in local["cleanup"]["accountSteps"]:
+        if step["kind"] == "account-readback" and step["accountRef"] == "owner-a":
+            step["observed"]["uid"] = "principal:other-b"
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert (
+        "local:principal-unmapped:a-owner-reads-own-document:ownerUid"
+        in (result["errors"])
+    )
+
+
+def test_a_principal_label_missing_from_the_redaction_list_is_unmapped() -> None:
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    local["redactedPrincipals"] = [
+        label for label in local["redactedPrincipals"] if label != "principal:owner-a"
+    ]
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert (
+        "local:principal-unmapped:a-owner-reads-own-document:ownerUid"
+        in (result["errors"])
+    )
+
+
+def test_a_non_string_in_a_principal_slot_is_unmapped() -> None:
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = {"principal": "owner-a"}
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert (
+        "local:principal-unmapped:a-owner-reads-own-document:ownerUid"
+        in (result["errors"])
+    )
+
+
+def test_an_unmapped_principal_does_not_validate_the_acquisition() -> None:
+    """Invariant: ``acquisitionValidated`` is true exactly when ``errors`` is
+    empty. An unmapped principal slot is incomplete evidence, like the
+    neighbouring uid-shaped string the redaction missed, and neither
+    validates the acquisition."""
+    production, local, plan = bound_pair()
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "stranger"
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert result["errors"] != []
+    assert result["acquisitionValidated"] is False
+    assert result["promotionReady"] is False
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    result = compare(production, local, plan)
+    assert result["errors"] == []
+    assert result["acquisitionValidated"] is True
+
+
+def test_an_unmapped_principal_on_both_sides_never_matches() -> None:
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "stranger"
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "stranger"
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert result["promotionReady"] is False
+    assert set(result["errors"]) == {
+        "production:principal-unmapped:a-owner-reads-own-document:ownerUid",
+        "local:principal-unmapped:a-owner-reads-own-document:ownerUid",
+    }
+
+
+def test_an_unmapped_principal_and_a_status_mismatch_read_as_indeterminate() -> None:
+    """A row that cannot be mapped outranks a row that disagrees: the result
+    is indeterminate, and the disagreeing row is still reported as such."""
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "stranger"
+    production["rows"][1]["observed"]["status"] = "OK"
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert result["rows"][0]["classification"] == INDETERMINATE
+    assert result["rows"][1]["classification"] == SEMANTIC_MISMATCH
+    assert result["conditions"]["principal-separation"] == INDETERMINATE
+
+
+# ---------------------------------------------------------------------------
+# Typed JSON comparison of observed rows (owner review d7f7ce184, finding 3)
+# ---------------------------------------------------------------------------
+
+
+def test_review_numeric_document_presence_is_not_a_boolean() -> None:
+    """Owner review recipe: ``documentPresent: 1`` is a malformed record."""
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["documentPresent"] = True
+    local["rows"][0]["observed"]["documentPresent"] = 1
+    result = compare(production, local, plan)
+    assert result["classification"] != MATCH
+    assert result["classification"] == INDETERMINATE
+    assert result["promotionReady"] is False
+    assert result["acquisitionValidated"] is False
+    assert (
+        "local:row-schema:a-owner-reads-own-document:documentPresent"
+        in (result["errors"])
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "reason"),
+    [
+        ("documentPresent", 0, "documentPresent"),
+        ("documentPresent", "true", "documentPresent"),
+        ("documentPresent", None, "documentPresent"),
+        ("status", "", "status"),
+        ("fields", [], "fields"),
+        ("fields", "ok", "fields"),
+        ("fields", {"value": float("nan")}, "not-json"),
+        ("fields", {"value": {1: "x"}}, "not-json"),
+        ("code", float("inf"), "not-json"),
+    ],
+)
+def test_a_malformed_observed_record_is_named_and_not_compared(
+    key, value, reason
+) -> None:
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"][key] = value
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert result["rows"] == []
+    assert (
+        f"production:row-schema:a-owner-reads-own-document:{reason}"
+        in (result["errors"])
+    )
+
+
+def test_a_status_that_is_not_a_string_is_still_unobserved() -> None:
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["status"] = 200
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert "production:row-unobserved:a-owner-reads-own-document" in result["errors"]
+
+
+def test_a_field_number_is_not_a_field_boolean() -> None:
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["value"] = 1
+    local["rows"][0]["observed"]["fields"]["value"] = True
+    result = compare(production, local, plan)
+    assert result["classification"] == SEMANTIC_MISMATCH
+    assert result["rows"][0]["classification"] == SEMANTIC_MISMATCH
+    assert result["rows"][0]["reasons"] == ["fields"]
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (1, True),
+        (0, False),
+        (1, 1.0),
+        (1, "1"),
+        (None, False),
+        ([1], [True]),
+        ({"nested": 1}, {"nested": True}),
+        ({"nested": [0]}, {"nested": [False]}),
+    ],
+)
+def test_typed_field_values_that_python_equates_are_mismatches(left, right) -> None:
+    assert left == right or left != right  # Python equality is not the question.
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["value"] = left
+    local["rows"][0]["observed"]["fields"]["value"] = right
+    result = compare(production, local, plan)
+    assert result["classification"] == SEMANTIC_MISMATCH
+    assert result["rows"][0]["reasons"] == ["fields"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [True, False, 1, 0, 1.5, "1", None, [1, True, "x"], {"a": {"b": [False, 0]}}],
+)
+def test_identical_typed_field_values_still_match(value) -> None:
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["fields"]["value"] = copy.deepcopy(value)
+    local["rows"][0]["observed"]["fields"]["value"] = copy.deepcopy(value)
+    result = compare(production, local, plan)
+    assert result["classification"] == MATCH
+    assert result["rows"][0]["classification"] == MATCH
+
+
+def test_document_presence_is_compared_as_a_boolean() -> None:
+    production, local, plan = bound_pair()
+    production["rows"][0]["observed"]["documentPresent"] = False
+    result = compare(production, local, plan)
+    assert result["classification"] == SEMANTIC_MISMATCH
+    assert result["rows"][0]["reasons"] == ["documentPresent"]
 
 
 # ---------------------------------------------------------------------------

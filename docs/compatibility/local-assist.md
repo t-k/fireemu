@@ -167,8 +167,18 @@ flock. Do not put it in a retry loop.
   the requested and effective range.
 - The endpoint must be `http` on `127.0.0.1`, `localhost` or `::1`. Proxy
   environment variables are ignored and redirects are refused. The deadline
-  is wall-clock: the body is read in bounded chunks with the remaining time
-  as each read's timeout, and the socket is closed at the deadline.
+  is wall-clock and covers the whole exchange: connect, send, status line,
+  headers and body. Every socket read, including the ones made while parsing
+  the status line and headers, gets only the time that remains, so a server
+  trickling header fragments cannot extend the call past the deadline; the
+  socket is closed at the deadline and the request abandoned.
+- A reply counts only when the HTTP response was received in full: a
+  fixed-length body must deliver every byte of its `Content-Length` and a
+  chunked body must end with the terminating chunk. A body that happens to
+  parse as JSON but is short of the declared length is refused as
+  `server-error` ("incomplete body") with the server state marked unknown,
+  the same as after a timeout. A declared length above the 8 MiB response
+  cap is refused before the body is read.
 - One inference at a time (flock in the state dir, plus the in-flight
   marker above). One request, plus at most one repair round-trip for a
   schema-invalid reply. The lock only coordinates local-assist processes

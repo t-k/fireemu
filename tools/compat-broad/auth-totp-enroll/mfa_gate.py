@@ -479,15 +479,27 @@ def observation_operations(nonce: str) -> list[dict[str, Any]]:
 
 
 def recovery_operations(nonce: str) -> list[dict[str, Any]]:
-    """The cleanup the walk performs per owned account, in creation order."""
-    ops = []
+    """Reconcile every email address before the ordered per-account cleanup."""
+    reconcile = []
+    cleanup = []
     for role in ROLE_ORDER:
         name = _camel(role)
+        email = owned_email(nonce, role)
+        if email is not None:
+            reconcile.append(
+                _op(
+                    "address-reconcile",
+                    _admin("lookup"),
+                    {"email": [email]},
+                    account=role,
+                    owner=True,
+                )
+            )
         uid = _binding(f"{name}Uid")
-        ops.append(
+        cleanup.append(
             _op("delete", _admin("delete"), {"localId": uid}, account=role, owner=True)
         )
-        ops.append(
+        cleanup.append(
             _op(
                 "uid-absence",
                 _admin("lookup"),
@@ -496,9 +508,8 @@ def recovery_operations(nonce: str) -> list[dict[str, Any]]:
                 owner=True,
             )
         )
-        email = owned_email(nonce, role)
         if email is not None:
-            ops.append(
+            cleanup.append(
                 _op(
                     "address-absence",
                     _admin("lookup"),
@@ -507,7 +518,7 @@ def recovery_operations(nonce: str) -> list[dict[str, Any]]:
                     owner=True,
                 )
             )
-    return ops
+    return reconcile + cleanup
 
 
 def gate_plan(
@@ -877,6 +888,33 @@ class MfaGate(FrozenGate):
         as the evidence of the settlement, and the role's UID binding is recorded
         so its cleanup slots resolve.
         """
+        raise ValueError("direct account settlement is not permitted")
+
+    def _reconcile_uid(self, operation, status, body):
+        if type(status) is not int or status != 200 or not isinstance(body, dict):
+            raise ValueError("typed address reconciliation response required")
+        if set(body) == {"kind"}:
+            if body["kind"] != "identitytoolkit#GetAccountInfoResponse":
+                raise ValueError("typed address reconciliation response required")
+            return None
+        if "kind" in body and body["kind"] != "identitytoolkit#GetAccountInfoResponse":
+            raise ValueError("typed address reconciliation response required")
+        if set(body) - {"kind", "users"} or not isinstance(body.get("users"), list):
+            raise ValueError("typed address reconciliation response required")
+        email = owned_email(self.nonce, operation["account"])
+        users = body["users"]
+        if not users:
+            return None
+        if len(users) != 1 or not isinstance(users[0], dict):
+            raise ValueError("unique address reconciliation result required")
+        user = users[0]
+        uid = user.get("localId")
+        if user.get("email") != email or not _text(uid) or len(uid) > 128:
+            raise ValueError("address reconciliation identity differs")
+        return uid
+
+    def settle_reconciled_creation(self, role: str) -> dict[str, Any]:
+        """Settle one pending signup from its frozen reconciliation event only."""
         with self.locked() as state:
             job = state["jobs"][self.job]
             recipe = state["plan"]["jobs"][self.job]["observation"]
@@ -894,24 +932,50 @@ class MfaGate(FrozenGate):
             ):
                 raise ValueError("no unsettled signup for this account")
             event = events[0]
+            recovery_recipe = state["plan"]["jobs"][self.job]["recovery"]
+            reconcile_events = [
+                item
+                for item in state["events"]
+                if item.get("job") == self.job
+                and item.get("phase") == "recovery"
+                and item.get("completed") is True
+                and recovery_recipe[item["index"]].get("kind") == "address-reconcile"
+                and recovery_recipe[item["index"]].get("account") == role
+            ]
+            if len(reconcile_events) != 1:
+                raise ValueError("frozen address reconciliation event required")
+            reconcile = reconcile_events[0]
+            evidence = reconcile.get("authEvidence")
+            if not isinstance(evidence, dict) or evidence.get("account") != role:
+                raise ValueError("address reconciliation evidence differs")
+            uid = evidence.get("uid")
             accounts = job.setdefault("authAccounts", {})
             if role in accounts:
                 raise ValueError("an owned account was created twice")
             if uid is None:
-                event["creationOutcome"] = "refused"
-                event["settledBy"] = {"kind": "address-readback-absent", **evidence}
+                event["settledBy"] = {
+                    "kind": "address-readback-absent",
+                    "responseDigest": reconcile.get("responseDigest"),
+                }
             else:
                 if not _text(uid) or len(uid) > 128:
                     raise ValueError("typed account identity required")
                 position = state["events"].index(event)
+                create_operation = recipe[event["index"]]
                 accounts[role] = {
                     "uid": uid,
                     "createEvent": position,
                     "adopted": True,
-                    "resource": recipe[event["index"]].get("resource"),
+                    "resource": create_operation.get("resource"),
+                    "reconcileEvent": state["events"].index(reconcile),
                 }
+                # This is journal classification, not a replacement of the lost
+                # wire fields: failure, completion and response digest stay intact.
                 event["creationOutcome"] = "created"
-                event["settledBy"] = {"kind": "address-readback-present", **evidence}
+                event["settledBy"] = {
+                    "kind": "address-readback-present",
+                    "responseDigest": reconcile.get("responseDigest"),
+                }
                 name = _camel(role) + "Uid"
                 if name in self._observed and self._observed[name] != uid:
                     raise ValueError("account identity binding is immutable")
@@ -919,6 +983,7 @@ class MfaGate(FrozenGate):
                 self.bindings[name] = uid
                 self._save_bindings()
             _save(self.path, state)
+            return {"role": role, "uid": uid}
 
     # --- slot resolution ---
 
@@ -1008,11 +1073,14 @@ class MfaGate(FrozenGate):
                 return
             accounts = self.snapshot()["jobs"][self.job].get("authAccounts", {})
             if declared["account"] in accounts:
+                if declared["kind"] == "address-reconcile":
+                    self._skip_slot(True, declared, "signup already settled")
+                    continue
                 return
             if declared["account"] in unsettled:
-                # A signup whose answer was lost may have created the account;
-                # its cleanup is neither sendable nor skippable until a readback
-                # settles it.
+                # Only the frozen address-reconcile slot may settle it.
+                if declared["kind"] == "address-reconcile":
+                    return
                 raise ValueError("unsettled signup must be discovered before cleanup")
             self._skip_slot(True, declared, "account never created")
 
@@ -1108,6 +1176,12 @@ class MfaGate(FrozenGate):
                 self.bindings[name] = value
         self._save_bindings()
         evidence: dict[str, Any] = {"kind": kind, "account": account, "status": status}
+        if recovery and kind == "address-reconcile":
+            uid = self._reconcile_uid(operation, status, body)
+            evidence.update(uid=uid, email=owned_email(self.nonce, account))
+            evidence["responseDigest"] = event["responseDigest"]
+            event["authEvidence"] = evidence
+            return
         if not recovery:
             outcome = "refused"
             if kind in CREATING_KINDS:

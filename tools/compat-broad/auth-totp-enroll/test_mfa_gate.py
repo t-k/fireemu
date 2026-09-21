@@ -27,7 +27,7 @@ from mfa_cases import owned_accounts
 NONCE = "e" * 32
 
 
-def plan(wall=1200, recovery=240):
+def plan(wall=1200, recovery=300):
     import time
 
     value = mfa_gate.gate_plan(
@@ -44,7 +44,7 @@ def test_the_frozen_plan_is_created_by_the_shared_gate_at_its_wall_cap(tmp_path)
     snapshot = gate.snapshot()
     job = snapshot["plan"]["jobs"][mfa_gate.JOB]
     assert len(job["observation"]) == 93
-    assert len(job["recovery"]) == 32
+    assert len(job["recovery"]) == 42
     assert job["resources"] == [
         mfa_gate.account_resource("fireemu-35fe6", NONCE, role)
         for role in mfa_gate.ROLE_ORDER
@@ -302,7 +302,11 @@ def test_a_changed_account_identity_is_refused(tmp_path):
 
 def test_cleanup_of_an_account_the_run_never_created_is_refused(tmp_path):
     gate = _claimed_gate(tmp_path)
-    delete = mfa_gate.recovery_operations(NONCE)[0]
+    delete = next(
+        operation
+        for operation in mfa_gate.recovery_operations(NONCE)
+        if operation["kind"] == "delete"
+    )
     state = {
         "jobs": {mfa_gate.JOB: {"authAccounts": {}, "resources": [], "absent": []}},
         "events": [{}],
@@ -342,7 +346,7 @@ def test_an_unsettled_signup_is_neither_skipped_nor_settled_twice(tmp_path):
     # Its cleanup slots are neither sent nor skipped until a readback settles it.
     assert gate.drain_recovery() == 0
     assert gate.snapshot()["jobs"][mfa_gate.JOB]["recovery"] == 0
-    with pytest.raises(ValueError, match="unsettled signup"):
+    with pytest.raises(ValueError, match="outside closed scenario"):
         gate.dispatch_runtime(
             "/v1/projects/fireemu-35fe6/accounts:delete",
             {"localId": "uid-9"},
@@ -350,13 +354,31 @@ def test_an_unsettled_signup_is_neither_skipped_nor_settled_twice(tmp_path):
             recovery=True,
             send=lambda: (200, {}),
         )
-    gate.settle_creation(
-        "pending-control", "uid-9", evidence={"status": 200, "responseDigest": "d" * 64}
-    )
-    assert gate.unsettled_accounts() == []
-    assert gate.bindings["pendingControlUid"] == "uid-9"
-    with pytest.raises(ValueError, match="no unsettled signup"):
+    assert gate.unsettled_accounts() == ["pending-control"]
+    with pytest.raises(ValueError, match="direct account settlement"):
         gate.settle_creation("pending-control", "uid-9", evidence={})
+
+
+def test_address_reconciliation_accepts_typed_presence_and_kind_only_absence(tmp_path):
+    gate = _claimed_gate(tmp_path)
+    operation = next(
+        item
+        for item in mfa_gate.recovery_operations(NONCE)
+        if item["kind"] == "address-reconcile" and item["account"] == "pending-control"
+    )
+    email = operation["body"]["email"][0]
+    assert gate._reconcile_uid(
+        operation,
+        200,
+        {"kind": "identitytoolkit#GetAccountInfoResponse", "users": [{"email": email, "localId": "uid-1"}]},
+    ) == "uid-1"
+    assert gate._reconcile_uid(
+        operation, 200, {"kind": "identitytoolkit#GetAccountInfoResponse"}
+    ) is None
+    assert gate._reconcile_uid(operation, 200, {"users": []}) is None
+    for body in ({}, {"kind": "wrong", "users": []}):
+        with pytest.raises(ValueError):
+            gate._reconcile_uid(operation, 200, body)
 
 
 def test_adoption_requires_the_recorded_processes_to_be_gone(tmp_path, monkeypatch):

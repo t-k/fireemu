@@ -99,7 +99,7 @@ def test_the_full_walk_completes_cleans_up_and_restores(completed):
     assert evidence["createdAccounts"] == evidence["deletedAccounts"] == 11
     assert evidence["uidAbsenceReadbacks"] == 11
     assert evidence["addressAbsenceReadbacks"] == 10
-    assert evidence["skips"] == 1 and evidence["complete"] is True
+    assert evidence["skips"] == 11 and evidence["complete"] is True
     assert [item["id"] for item in result["managementEvidence"]] == [
         "observation:oauth-tokeninfo",
         "preflight:auth-key-project",
@@ -109,7 +109,7 @@ def test_the_full_walk_completes_cleans_up_and_restores(completed):
         "recovery:auth-config-restore",
         "recovery:auth-config-restore-readback",
     ]
-    assert result["chargedCalls"] == 93 + 32 - 1 + 6
+    assert result["chargedCalls"] == 93 + 42 - 11 + 6
     # Canonical Auth account resources are deliberately not covered by the
     # rehearsal's Firestore/configuration lock scopes, so Ledger.reserve refuses
     # the claim before its Firestore-resource parser. The Gate side still runs
@@ -767,10 +767,7 @@ def test_a_lost_signup_answer_is_discovered_and_the_account_deleted(tmp_path):
     assert result["cleanup"]["complete"] is True
     assert built.fake.accounts == {}
     assert result["accountEvidence"]["createdAccounts"] == 3
-    assert any(
-        item["id"] == "recover:address-lookup" and item["chargedByGate"] is False
-        for item in result["managementEvidence"]
-    )
+    assert not any(item["id"] == "recover:address-lookup" for item in result["managementEvidence"])
     assert result["gateComplete"] is True
     assert result["untrackedIntents"] == []
 

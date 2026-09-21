@@ -363,7 +363,60 @@ def _auth_creation_ownership(state, job, operation):
         and evidence.get("account") == account
         and evidence.get("creationOutcome") == "created"
     )
-    return ordinary
+    if ordinary:
+        return True
+    # MFA lost-signup recovery is accepted only as a closed two-event chain. The
+    # original wire event remains pending/unknown; a typed address lookup from its
+    # frozen recovery slot supplies the independent UID and response digest.
+    if record.get("adopted") is not True:
+        return False
+    reconcile_index = record.get("reconcileEvent")
+    if type(reconcile_index) is not int or not 0 <= reconcile_index < len(state["events"]):
+        return False
+    job_name = next((name for name, candidate in state["jobs"].items() if candidate is job), None)
+    if job_name is None:
+        return False
+    recipe = state["plan"]["jobs"].get(job_name)
+    if not isinstance(recipe, dict):
+        return False
+    observation = recipe.get("observation", [])
+    recovery = recipe.get("recovery", [])
+    reconcile = state["events"][reconcile_index]
+    reconcile_slot = reconcile.get("index")
+    observed_slot = event.get("index")
+    if type(observed_slot) is not int or observed_slot >= len(observation) or type(reconcile_slot) is not int or not 0 <= reconcile_slot < len(recovery):
+        return False
+    observed_operation = observation[observed_slot]
+    reconcile_operation = recovery[reconcile_slot]
+    reconcile_evidence = reconcile.get("authEvidence")
+    reconcile_body = reconcile_operation.get("body")
+    chain = (
+        event.get("phase") == "observation"
+        and observed_operation.get("kind") == "sign-up"
+        and observed_operation.get("account") == account
+        and event.get("requestDigest") == digest(observed_operation)
+        and reconcile.get("phase") == "recovery"
+        and reconcile_operation.get("kind") == "address-reconcile"
+        and reconcile_operation.get("account") == account
+        and reconcile_operation.get("resource") == operation.get("resource")
+        and reconcile_operation.get("method") == "POST"
+        and reconcile_operation.get("path", "").endswith("/accounts:lookup")
+        and isinstance(reconcile_body, dict)
+        and set(reconcile_body) == {"email"}
+        and isinstance(reconcile_body["email"], list)
+        and len(reconcile_body["email"]) == 1
+        and reconcile.get("requestDigest") == digest(reconcile_operation)
+        and reconcile.get("completed") is True
+        and reconcile.get("status") == 200
+        and isinstance(reconcile_evidence, dict)
+        and reconcile_evidence.get("account") == account
+        and reconcile_evidence.get("email") == reconcile_body["email"][0]
+        and reconcile_evidence.get("uid") == record.get("uid")
+        and reconcile_evidence.get("responseDigest") == reconcile.get("responseDigest")
+        and isinstance(event.get("settledBy"), dict)
+        and event["settledBy"].get("responseDigest") == reconcile.get("responseDigest")
+    )
+    return bool(chain)
 
 
 def validate_absence_proofs(state, job_name):

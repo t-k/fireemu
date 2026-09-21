@@ -8,6 +8,7 @@ import pytest
 import shared_gate
 from shared_gate import (
     Gate,
+    abandoned_cleanup_complete,
     body_reference,
     can_create,
     create,
@@ -575,3 +576,40 @@ def test_empty_batch_item_without_a_clean_refusal_stays_unknown(
     recover(gate, declared, created={RESOURCES[0]})
     with pytest.raises(ValueError, match="ownership retained"):
         gate.finish()
+
+
+def test_abandoned_run_closes_on_partial_creation_once_absence_is_proven(tmp_path):
+    """A stop between the first and the last create is not escalation-only.
+
+    Only RESOURCES[0] is created; RESOURCES[1] is typed-refused and therefore
+    never needs a creation proof, only the typed absence read every resource
+    gets. The job's overall creating outcome stays "unsettled" (one real
+    create among its events), so the Gate still dispatches every recovery
+    slot for the record instead of zero-wire skipping the untouched resource.
+    """
+    operation = bulk([conditional(resource) for resource in RESOURCES], "batchWrite")
+    gate, p = started(tmp_path, operation, scheduled=True, full_cleanup=True)
+    gate.dispatch(operation, False, lambda: response([0, 3]))
+    gate.abandon_observation("boundary stop before the batch finished creating")
+    recover(gate, p, created={RESOURCES[0]})
+    assert abandoned_cleanup_complete(gate.snapshot()) == [RESOURCES[0]]
+
+
+def test_abandoned_run_with_recovery_still_pending_stays_unclosed(tmp_path):
+    """Created-but-unproven: recovery has not run, so nothing is closable yet."""
+    operation = bulk([conditional(resource) for resource in RESOURCES], "batchWrite")
+    gate, p = started(tmp_path, operation, scheduled=True, full_cleanup=True)
+    gate.dispatch(operation, False, lambda: response([0, 3]))
+    gate.abandon_observation("boundary stop before recovery ran")
+    assert abandoned_cleanup_complete(gate.snapshot()) is None
+
+
+def test_abandoned_run_with_an_unconfirmed_create_stays_escalation_only(tmp_path):
+    """Dispatched-but-unconfirmed: an ambiguous acknowledgement is never abandon-closable."""
+    operation = bulk([conditional(resource) for resource in RESOURCES], "batchWrite")
+    gate, p = started(tmp_path, operation, scheduled=True, full_cleanup=True)
+    gate.dispatch(operation, False, lambda: response([0, 4]))
+    assert unconfirmed_creates(gate.snapshot(), "case") == 1
+    gate.abandon_observation("boundary stop with a lost second acknowledgement")
+    recover(gate, p, created={RESOURCES[0]})
+    assert abandoned_cleanup_complete(gate.snapshot()) is None

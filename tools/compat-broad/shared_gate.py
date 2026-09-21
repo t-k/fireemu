@@ -433,7 +433,11 @@ def abandoned_cleanup_complete(state):
             schedule is None
             or job.get("scheduleDone", 0) != len(schedule)
             or job["inflight"]
-            or set(proofs) != set(job["resources"])
+            # Only the resources this job actually created need a creation
+            # proof; a resource the plan merely assigned but never created
+            # (expected-refused, or a stop before its slot ran) is closed by
+            # its typed absence read alone, checked below for every resource.
+            or not set(proofs) <= set(job["resources"])
             or set(job.get("absent") or []) != set(job["resources"])
         ):
             return None

@@ -110,11 +110,33 @@ def run_bound_collection(
     frozen_gate = gate_plan(plan, permission_expires_at=permission_expires_at)
     if gate.snapshot().get("planDigest") != digest(frozen_gate):
         raise ValueError("Rules Gate plan differs")
+    def execute_management(operation: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+        """Adapt the transport body to the management session's typed receipt.
+
+        The shared transport intentionally returns the decoded body to the
+        collector. Rules lifecycle management additionally needs the HTTP
+        status to distinguish a typed 404 absence during cleanup. Derive that
+        status only from the response body (success is 200; the sole accepted
+        absence is the typed 404 error), without changing ordinary receipts.
+        """
+        raw = execute(operation, deadline=deadline)
+        if not isinstance(raw, dict):
+            raise TypeError("Rules management response body required")
+        error = raw.get("error")
+        status = 404 if isinstance(error, dict) and error.get("code") == 404 else 200
+        return {
+            "status": status,
+            "complete": True,
+            "workerReaped": True,
+            "bodyKind": "json",
+            "body": raw,
+        }
+
     session = RulesManagementSession(
         gate=gate,
         ledger=ledger,
         ticket=ticket,
-        execute=execute,
+        execute=execute_management,
         plan=plan,
     )
     return collector(

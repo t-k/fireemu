@@ -238,7 +238,7 @@ def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = Non
         "managementRequests": management["totalRequests"],
         "requestCostMicrousd": management["requestCostMicrousd"],
         "costMicrousd": management["totalRequests"],
-        "requestSeconds": 8.0,
+        "requestSeconds": 12.0,
         "wallSeconds": 600.0,
         "recoverySeconds": 300.0,
         "intervalSeconds": 0.25,

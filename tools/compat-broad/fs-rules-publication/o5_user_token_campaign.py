@@ -51,8 +51,8 @@ def rules_management_plan() -> dict[str, Any]:
     """Compiler-owned fixed Gate slots for response-derived Rules operations."""
     return {
         "dispatchKind": "closed-v1",
-        "observation": [{"id": value, "timeout": 8.0} for value in RULES_MANAGEMENT_OBSERVATION],
-        "recovery": [{"id": value, "timeout": 8.0} for value in RULES_MANAGEMENT_RECOVERY],
+        "observation": [{"id": value, "timeout": 12.0} for value in RULES_MANAGEMENT_OBSERVATION],
+        "recovery": [{"id": value, "timeout": 12.0} for value in RULES_MANAGEMENT_RECOVERY],
         "totalRequests": len(RULES_MANAGEMENT_OBSERVATION) + len(RULES_MANAGEMENT_RECOVERY),
         "requestCostMicrousd": 1,
         "wallClockDeadlineSeconds": 600.0,

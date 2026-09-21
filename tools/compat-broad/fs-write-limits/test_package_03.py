@@ -510,7 +510,10 @@ def test_the_shadow_index_configuration_is_cross_checked() -> None:
     """S1: the shadow did not run under the digest the manifest declares."""
     manifest, shadow = load(MANIFEST), load(SHADOW)
     configuration = manifest["indexConfiguration"]
-    assert configuration["shadowDifference"]
+    profile = shadow["execution"]["ALL"]["execution"]["indexConfiguration"].get(
+        "profile", "historical"
+    )
+    assert configuration["shadowDifference"] is (profile != "nx-local")
     for part in PARTS:
         declared = configuration["shadowRanUnder"][part]
         recorded = shadow["execution"][part]["execution"]["indexConfiguration"]

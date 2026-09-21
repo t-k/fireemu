@@ -29,6 +29,8 @@ Terminal events settle outstanding response waits, prevent further sends, and re
 
 The component durably charges one refresh request followed by one tokeninfo request, validates typed token/client/scope/lifetime results, and binds the sealed preparation journal to the permission, plan, reservation and collector source. Its transport uses fixed endpoints without redirects, proxies, retries or fallback, bounded responses, and an absolute deadline. Failed or unproven cleanup is retained rather than reported as successful.
 
+`_http_request`'s failures are a labeled, non-credential-bearing taxonomy (`body-truncated`, `body-oversize`, `read-timeout`, `connect-failed`, `transport-error`, `json-invalid`), each carrying received/declared byte counts and elapsed time so a stopped campaign is diagnosable instead of collapsing into one generic reason. `_private_request` derives the worker's socket timeout from the caller's actual deadline (`_bounded_socket_timeout`, with a fixed margin below the coordinator's own kill deadline and a small floor) instead of a hardcoded `REQUEST_SECONDS`, so a stalled connection is caught and labeled by the worker itself before the coordinator has to SIGKILL it.
+
 The fixed component `964e49a96`, integrated at `3388b0e2c`, passed independent review and 22 synthetic tests. The prepared CLI, final acquisition/recovery connection, and a renewed combined local rehearsal remain required before production execution. The older `a4577c97f` rehearsal does not verify this added credential path. Neither component tests nor a private credential binding establish production observation or owner approval.
 
 ## Next campaign preparation: transaction expiry, finished tokens and retry tokens

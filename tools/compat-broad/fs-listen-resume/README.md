@@ -32,6 +32,13 @@ inventory row. It does not execute one, and the row stays `WAITING_ORACLE`.
 - `listen_collector.mjs` is the bounded step machine, budget, invariant checker
   and cleanup contract. It imports no Firebase code; `listen_sdk_adapter.mjs`
   supplies the real SDK and refuses production mode.
+- `listen_browser_adapter.mjs` runs the same catalog through the browser build
+  of the SDK (WebChannel transport) in a headless Chromium it owns, once with
+  forced long polling and once with a streamed backchannel. The collector is
+  served to the page byte-identical, so the event rows have the Node receipt's
+  shape; the receipt adds the page's WebChannel request log and the digests of
+  the SDK bundles the browser executed. Playwright lives in its own package,
+  `tools/sdk-smoke-browser/` (see its README for the run command).
 - `observation.py` compares a local receipt against a production receipt. It
   reaches `MATCH` only on acquisition evidence and reports the paths it could
   not observe in every result.

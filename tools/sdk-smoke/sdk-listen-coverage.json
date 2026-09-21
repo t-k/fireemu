@@ -32,6 +32,40 @@
         "server acknowledgement clears pending metadata",
         "unsubscribe suppresses later callbacks",
         "sign-out denies the former user's server read"
+      ],
+      "automatedRunner": "../sdk-smoke-browser/run-browser.mjs",
+      "evidence": "spec/compatibility/fs-listen-sdk-browser-smoke-pages.json"
+    },
+    {
+      "id": "FS-LISTEN-SDK.browser-listener-lifecycle",
+      "runner": "web/listener-lifecycle.html",
+      "automatedRunner": "../sdk-smoke-browser/run-browser.mjs",
+      "transport": "browser-webchannel",
+      "evidence": "spec/compatibility/fs-listen-sdk-browser-smoke-pages.json",
+      "obligations": [
+        "unauthenticated and cross-user reads and writes are denied",
+        "one Write session per denied write",
+        "overlapping listeners on one document",
+        "route replacement leaves no callback to an unsubscribed listener",
+        "replacement listener observes the live write"
+      ]
+    },
+    {
+      "id": "FS-LISTEN-SDK.browser-webchannel-catalog",
+      "runner": "web/listen-catalog.html",
+      "automatedRunner": "../compat-broad/fs-listen-resume/listen_browser_adapter.mjs",
+      "transport": "browser-webchannel",
+      "webchannelModes": [
+        "long-polling",
+        "streaming"
+      ],
+      "evidence": "spec/compatibility/fs-listen-sdk-browser-local-shadow.json",
+      "obligations": [
+        "the fourteen frozen FS-LISTEN-SDK cases through the browser SDK build",
+        "forced long polling and streamed backchannel both exercised",
+        "WebChannel request log captured from the page",
+        "same normalized event rows as the Node receipt",
+        "document and account cleanup proven absent per mode"
       ]
     },
     {

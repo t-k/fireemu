@@ -245,6 +245,41 @@ deterministic, and that `fireemu` produces the expected local result. It does
 not show that production produces the same result; that is the campaign's whole
 purpose.
 
+## Browser WebChannel local shadow
+
+The Node build of the firebase JS SDK speaks gRPC, so the receipt above says
+nothing about WebChannel. A second shadow runs the same fourteen cases through
+the browser build of release `12.18.0` in a headless Chromium that
+`tools/compat-broad/fs-listen-resume/listen_browser_adapter.mjs` owns, against
+an owned `fireemu exec` child on OS-assigned loopback ports. The page loads
+`listen_collector.mjs` byte-identical from the lane directory (an import map
+supplies a browser SHA-256 for its single `node:crypto` import), so the
+normalised event rows have the Node receipt's shape by construction rather than
+by translation. The catalog runs twice, one throwaway account each: with
+`experimentalForceLongPolling` (every backchannel response closes at once,
+`CI=1`) and with auto-detection and long polling both off (one streamed
+backchannel per session, `CI=0`). Each per-mode receipt records
+`transport: browser-webchannel`, the mode, the Chromium version, the SHA-256 of
+the three gstatic bundles the browser executed, the `SDK_VERSION` the bundle
+reported, and the WebChannel request log taken from the page's own network view
+(stream, role, `CI` and status per request; never a session id, header or body).
+
+The checked-in result is `spec/compatibility/fs-listen-sdk-browser-local-shadow.json`,
+with its campaign record at `fs-listen-sdk-browser-local-shadow-campaign.json`.
+`test_o6_listen_sdk_browser_local_shadow.py` recomputes the bound source
+digests, the catalog digest, the ruleset and binary digests and every case
+comparison in both modes, and requires that the long-polling receipt saw only
+`CI=1` backchannels and the streaming receipt only `CI=0`. Each per-mode receipt
+also passes `local_shadow_check.mjs` unchanged. The two hand-written smoke pages
+(`listen-reconnect.html`, `listener-lifecycle.html`) are driven by
+`tools/sdk-smoke-browser/run-browser.mjs`; their result is
+`spec/compatibility/fs-listen-sdk-browser-smoke-pages.json`.
+
+All fourteen cases agreed with their expected local result in both modes. This
+removes "browser WebChannel path not executed" from the local side of the
+`FS-LISTEN-SDK` closure condition; production remains unobserved for every
+transport.
+
 ## What this preparation established about the SDK
 
 Three expectations written before the shadow ran turned out to be wrong about
@@ -273,7 +308,7 @@ covering them.
 | Path | Why it is unobserved | Plan |
 | --- | --- | --- |
 | Cross-identity isolation | The budget allows one account and both auth cases sign the same principal out and back in, so no case has one principal refused another principal's document. A `MATCH` must not be read as covering tenant or principal isolation. | A second throwaway account and a case where A opens a listener on B's private document and on B's run prefix, expecting `permission-denied` in both, with a control proving B's own listener succeeds. It needs the account budget raised to two. |
-| Browser WebChannel | The Node SDK build selects the gRPC transport. WebChannel framing, long-poll fallback and tab lifecycle are never exercised. | A separate browser campaign driving the same catalog through a headless Chromium page against the same oracle project, capturing the WebChannel request log from the page rather than from Node. |
+| Browser WebChannel | The Node SDK build selects the gRPC transport. WebChannel framing, long polling and the streamed backchannel are exercised only by the browser shadow above, which is local evidence; tab lifecycle is not exercised by any lane. | The browser adapter now exists and runs the same catalog locally. A production browser campaign would drive it against the oracle project with the same page-side request log. |
 | Android SDK | No Android runtime, Gradle toolchain or device is available here. | An instrumented Android test module replaying the same catalog and emitting the same normalized event rows. |
 | Apple SDK | No iOS or macOS SDK harness exists in this repository. | An XCTest target replaying the same catalog and emitting the same normalized event rows. |
 | Raw resume token | The Node client SDK owns the resume token and does not expose it, so `RESET`, stale tokens and compacted tokens cannot be driven from application code. | A direct gRPC Listen probe that supplies a chosen resume token and records the `TargetChange` response, kept as a separate case from SDK-level resume. |

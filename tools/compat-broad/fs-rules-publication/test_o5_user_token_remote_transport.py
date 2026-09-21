@@ -103,7 +103,11 @@ def fixture_origin():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(reservation["port"]) if reservation is not None else int(server.server_address[1])
+        port = (
+            int(reservation["port"])
+            if reservation is not None
+            else int(server.server_address[1])
+        )
         yield f"http://127.0.0.1:{port}"
     finally:
         server.shutdown()
@@ -542,6 +546,59 @@ def test_transport_requires_capability_before_any_wire_call(plan, fixture_origin
             capability=None,
         )
     assert _FixtureHandler.requests == []
+
+
+def test_timeout_reports_reaped_owned_worker_without_success_receipt(fixture_origin):
+    source = (ROOT / remote.WORKER_ENTRY).read_bytes()
+    envelope = {
+        "service": "firestore",
+        "route": "observation-get",
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cases/owned-a",
+        "headers": {},
+        "body": None,
+        "seconds": 0.03,
+    }
+    with pytest.raises(remote.WorkerExchangeError) as raised:
+        remote.run_worker(
+            envelope,
+            binding=source,
+            binding_digest=hashlib.sha256(source).hexdigest(),
+            fixture_origin=fixture_origin,
+        )
+    assert raised.value.worker_reaped is True
+
+
+def test_reap_owned_kills_only_its_new_process_group():
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); time.sleep(30)",
+        ],
+        start_new_session=True,
+    )
+    remote._OWNED_CHILDREN.add(child.pid)
+    try:
+        assert remote._reap_owned(child) is True
+        assert child.poll() is not None
+    finally:
+        remote._OWNED_CHILDREN.discard(child.pid)
+        if child.poll() is None:
+            remote._reap_owned(child)
+
+
+def test_reap_owned_refuses_foreign_process_group():
+    foreign = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        start_new_session=True,
+    )
+    try:
+        assert remote._reap_owned(foreign) is False
+        assert foreign.poll() is None
+    finally:
+        foreign.terminate()
+        foreign.wait(timeout=2)
 
 
 def test_binding_verifier_requires_exact_worker_bytes():

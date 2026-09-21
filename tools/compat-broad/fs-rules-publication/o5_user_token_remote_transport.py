@@ -9,7 +9,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -31,7 +33,7 @@ WORKER_ENTRY = f"{LANE_DIRECTORY}/o5_user_token_https_worker.py"
 FIRESTORE_ORIGIN = "https://firestore.googleapis.com"
 IDENTITY_ORIGIN = "https://identitytoolkit.googleapis.com"
 RULES_ORIGIN = "https://firebaserules.googleapis.com"
-MAX_SECONDS = 12.0
+MAX_SECONDS = 8.0
 MAX_ENVELOPE_BYTES = 1_048_576
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
@@ -40,7 +42,47 @@ _DOCUMENT = re.compile(
     r"^projects/([a-z][a-z0-9-]{4,28}[a-z0-9])/databases/\(default\)/documents/"
     r"o5-user-token/n([0-9a-f]{32})/cases/([A-Za-z0-9_-]{1,128})$"
 )
-_WORKER_SHA256 = "34f14455daf28f4fc0cadcd3cd0cf19b5a69e7f84568736d5a1c9708ac703593"
+_WORKER_SHA256 = "6e58b67918eec8f271c1d91f31e439bcd7d3d7e70ee9980c36aae8c4285b3385"
+_OWNED_CHILDREN: set[int] = set()
+
+
+class WorkerExchangeError(ValueError):
+    """A bounded worker failure with explicit process-reap status."""
+
+    def __init__(self, reason: str, *, worker_reaped: bool) -> None:
+        super().__init__(reason)
+        self.worker_reaped = worker_reaped
+
+
+def _reap_owned(child: subprocess.Popen[bytes]) -> bool:
+    """Terminate only the process group this transport created."""
+    if child.pid not in _OWNED_CHILDREN:
+        return False
+
+    def group_exists() -> bool:
+        try:
+            os.killpg(child.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except OSError:
+            return True
+
+    if not group_exists():
+        return child.poll() is not None
+    try:
+        os.killpg(child.pid, signal.SIGTERM)
+        child.wait(timeout=0.5)
+        return not group_exists()
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait(timeout=0.5)
+            return not group_exists()
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    except (OSError, ProcessLookupError):
+        return child.poll() is not None and not group_exists()
 
 
 def _compact(value: Any) -> bytes:
@@ -637,22 +679,39 @@ def _run_worker(
     argv = [sys.executable, "-I", "-S", "-B", str(worker)]
     if fixture_origin is not None:
         argv.extend(("--fixture-origin", fixture_origin))
+    child = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    _OWNED_CHILDREN.add(child.pid)
+    reaped = False
     try:
-        completed = subprocess.run(
-            argv,
-            input=payload,
-            capture_output=True,
-            timeout=float(envelope.get("seconds", MAX_SECONDS)),
-            check=False,
+        stdout, _stderr = child.communicate(
+            input=payload, timeout=float(envelope.get("seconds", MAX_SECONDS))
         )
+        reaped = child.poll() is not None
     except subprocess.TimeoutExpired:
-        raise ValueError("worker walltime exceeded") from None
-    if completed.returncode != 0 or len(completed.stdout) > MAX_OUTPUT_BYTES:
-        raise ValueError("worker exchange refused")
+        reaped = _reap_owned(child)
+        raise WorkerExchangeError(
+            "worker walltime exceeded", worker_reaped=reaped
+        ) from None
+    finally:
+        if child.poll() is None:
+            reaped = _reap_owned(child) and reaped
+        _OWNED_CHILDREN.discard(child.pid)
+    if not reaped:
+        raise WorkerExchangeError("worker reap unconfirmed", worker_reaped=False)
+    if child.returncode != 0 or len(stdout) > MAX_OUTPUT_BYTES:
+        raise WorkerExchangeError("worker exchange refused", worker_reaped=True)
     try:
-        result = json.loads(completed.stdout)
+        result = json.loads(stdout)
     except (TypeError, json.JSONDecodeError):
-        raise ValueError("worker response malformed") from None
+        raise WorkerExchangeError(
+            "worker response malformed", worker_reaped=True
+        ) from None
     if (
         not isinstance(result, dict)
         or set(result) != {"status", "body"}

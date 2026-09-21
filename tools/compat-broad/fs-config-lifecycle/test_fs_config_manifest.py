@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 
 import pytest
-from fs_config_lifecycle.cases import cases_digest, compile_cases
+from fs_config_lifecycle.cases import DROPPED_CASES, cases_digest, compile_cases
 from fs_config_lifecycle.manifest import (
     FORBIDDEN_PERMISSIONS,
+    HARD_CEILING_MICROUSD,
+    MAX_REQUESTS,
+    POLL_ATTEMPTS,
     REQUIRED_PERMISSIONS,
     compile_manifest,
+    lock_scopes,
     validate_manifest,
 )
 
@@ -39,40 +43,73 @@ def test_frozen_inputs_bind_the_matrix_the_cases_and_the_pinned_discovery() -> N
     assert NONCE not in json.dumps(frozen)
 
 
-def test_the_budget_stays_far_below_one_dollar_and_declares_its_basis() -> None:
+def test_the_manifest_records_the_scope_decision_that_dropped_thirteen_cases() -> None:
+    manifest = compile_manifest(NONCE)
+    assert manifest["caseCount"] == 12
+    assert manifest["scopeDecision"]["decidedOn"] == "2026-09-18"
+    assert manifest["scopeDecision"]["droppedCases"] == list(DROPPED_CASES)
+    assert len(manifest["scopeDecision"]["droppedCases"]) == 13
+    assert "managed-infrastructure" in manifest["scopeDecision"]["reason"]
+
+
+def test_the_budget_is_enforced_and_re_derived_from_the_request_bound() -> None:
     budget = compile_manifest(NONCE)["budget"]
     assert budget["estimatedCostUsd"] == 0.0
-    assert budget["hardCeilingUsd"] <= 1.0
-    assert budget["estimatedCostUsd"] < budget["hardCeilingUsd"]
+    assert budget["estimatedCostMicrousd"] == 0
+    assert budget["hardCeilingMicrousd"] == HARD_CEILING_MICROUSD == 1_000_000
+    assert budget["hardCeilingUsd"] == 1.0
+    assert (
+        budget["reservedMicrousd"] == MAX_REQUESTS * budget["requestAllowanceMicrousd"]
+    )
+    assert budget["reservedMicrousd"] < budget["hardCeilingMicrousd"]
     assert budget["basis"]
+    # Derivation: 2 controls + 2 steps x 5 + 1 listing + 4 operations x 16 polls
+    # + 3 reconciliation reads, rounded up to a power of two.
+    derived = 2 + 2 * 5 + 1 + 4 * POLL_ATTEMPTS + 3
+    assert derived <= budget["maxRequests"] == MAX_REQUESTS
     assert budget["maxRequests"] >= len(compile_cases(NONCE))
-    assert budget["maxWallSeconds"] <= 1800
-    assert budget["maxCreatedDatabases"] == 1
+    assert budget["maxWallSeconds"] <= 1200
+    assert 0 < budget["recoveryReserveSeconds"] < budget["maxWallSeconds"]
+    assert budget["maxCreatedDatabases"] == 0
+    assert budget["maxPatchedFieldConfigurations"] == 2
     assert budget["maxDocumentOperations"] == 0
-    assert budget["enforced"] is False
+    assert budget["enforced"] is True
+    assert budget["enforcedBy"].endswith("lifecycle_gate.py")
 
 
-def test_the_permission_envelope_excludes_every_document_and_billing_permission() -> (
-    None
-):
+def test_the_permission_envelope_names_no_database_lifecycle_permission() -> None:
     envelope = compile_manifest(NONCE)["permissionEnvelope"]
     assert set(envelope["required"]) == set(REQUIRED_PERMISSIONS)
     assert set(envelope["forbidden"]) == set(FORBIDDEN_PERMISSIONS)
     assert not set(envelope["required"]) & set(envelope["forbidden"])
     for permission in envelope["required"]:
         assert not permission.startswith("datastore.entities.")
-    assert "datastore.entities.get" in envelope["forbidden"]
+        assert permission not in {
+            "datastore.databases.create",
+            "datastore.databases.delete",
+            "datastore.databases.update",
+        }
+    for permission in (
+        "datastore.databases.create",
+        "datastore.databases.delete",
+        "datastore.entities.get",
+    ):
+        assert permission in envelope["forbidden"]
+    assert "datastore.indexes.update" in envelope["required"]
 
 
 def test_owner_preconditions_and_abort_rules_are_explicit_and_non_empty() -> None:
     manifest = compile_manifest(NONCE)
     assert len(manifest["ownerPreconditions"]) >= 4
     joined = " ".join(manifest["ownerPreconditions"]).lower()
-    assert "exclusive use" in joined
+    assert "exclusive" in joined
+    assert "projection digest" in joined
     assert len(manifest["abortRules"]) >= 4
     text = json.dumps(manifest["ownerPreconditions"] + manifest["abortRules"]).lower()
-    for topic in ("billing", "free", "delete protection", "abort", "retry"):
+    for topic in ("credential", "wall", "unrecovered", "held", "retry", "nonce"):
         assert topic in text
+    assert "billing plan" not in text
+    assert "delete protection" not in text
 
 
 def test_the_cleanup_contract_covers_every_mutating_case_and_forbids_a_partial_exit() -> (
@@ -80,27 +117,40 @@ def test_the_cleanup_contract_covers_every_mutating_case_and_forbids_a_partial_e
 ):
     manifest = compile_manifest(NONCE)
     cleanup = manifest["cleanup"]
-    recoverable = [
-        case["id"]
-        for case in compile_cases(NONCE)
-        if case["mutates"] or case["possiblyAllocates"]
-    ]
+    recoverable = [case["id"] for case in compile_cases(NONCE) if case["mutates"]]
     assert {entry["createdBy"] for entry in cleanup["ledger"]} == set(recoverable)
-    assert any(entry["conditional"] for entry in cleanup["ledger"])
     for entry in cleanup["ledger"]:
         assert entry["recovered"] is False
         assert entry["revertCase"]
-    assert cleanup["order"]
+        assert entry["kind"] == "fieldConfig"
+    assert cleanup["order"][0] == "revert-field-configurations"
+    assert cleanup["order"][-1] == "write-final-ledger"
+    assert "reconcile-database-enumeration" in cleanup["order"]
+    assert "reconcile-field-listings" in cleanup["order"]
+    assert "delete-created-database" not in cleanup["order"]
     assert cleanup["completionRequires"]
     assert cleanup["unrecoveredResourcesFailTheRun"] is True
-    assert "reconcile-database-enumeration" in cleanup["order"]
-    assert cleanup["order"].index("reconcile-database-enumeration") == (
-        len(cleanup["order"]) - 2
-    )
     assert cleanup["reconciliation"]["comparesAgainst"] == "OC-02"
     assert cleanup["reconciliation"]["failsClosed"] is True
-    reconciliation_text = json.dumps(cleanup["reconciliation"]).lower()
-    assert "fsconfig-" in reconciliation_text
+
+
+def test_lock_scopes_hold_exclusive_on_each_patched_field_and_read_around_it() -> None:
+    locks = lock_scopes(NONCE)
+    assert compile_manifest(NONCE)["lockScopes"] == locks
+    exclusive = [lock for lock in locks if lock["mode"] == "EXCLUSIVE"]
+    assert len(exclusive) == 2
+    for lock in exclusive:
+        assert lock["key"].startswith(
+            "project/fireemu-35fe6/firestore/(default)/fields/"
+        )
+        assert NONCE[:12] in lock["key"]
+    assert {lock["key"] for lock in locks if lock["mode"] == "READ"} == {
+        "project/fireemu-35fe6/firestore/(default)/database",
+        "project/fireemu-35fe6/firestore/(default)/indexes",
+        "project/fireemu-35fe6/identity",
+    }
+    assert not any(lock["mode"] == "WRITE" for lock in locks)
+    assert "documents" not in json.dumps(locks)
 
 
 def test_the_operation_poll_is_bounded_and_resumable() -> None:
@@ -108,7 +158,8 @@ def test_the_operation_poll_is_bounded_and_resumable() -> None:
     assert poll["maxAttemptsPerOperation"] >= 1
     assert poll["deadlineSeconds"] <= 900
     assert poll["initialBackoffSeconds"] < poll["maxBackoffSeconds"]
-    assert poll["onDeadline"] == "abort-and-run-cleanup"
+    assert poll["maxOperations"] == 4
+    assert poll["onDeadline"] == "abort-and-run-recovery"
     checkpoint = poll["checkpoint"]
     assert checkpoint["writtenAfterEveryPoll"] is True
     assert checkpoint["fsyncBeforeContinuing"] is True
@@ -138,21 +189,9 @@ def test_validation_rejects_a_mutated_budget_ledger_or_nonce() -> None:
     assert not validate_manifest(executed, NONCE)
 
 
-def test_every_allocating_case_is_in_the_ledger_or_covered_by_reconciliation() -> None:
-    manifest = compile_manifest(NONCE)
-    cleanup = manifest["cleanup"]
-    tracked = {entry["createdBy"] for entry in cleanup["ledger"]}
-    for case in compile_cases(NONCE):
-        if not case["method"].endswith("databases.create"):
-            continue
-        assert case["id"] in tracked, case["id"]
-        entry = next(e for e in cleanup["ledger"] if e["createdBy"] == case["id"])
-        assert entry["revertCase"]
-    assert cleanup["reconciliation"]["failsClosed"] is True
-
-
-def test_the_manifest_never_claims_a_message_shape_from_the_pinned_locators() -> None:
+def test_the_manifest_states_the_release_gap_and_never_claims_a_message_shape() -> None:
     unresolved = " ".join(compile_manifest(NONCE)["unresolved"])
     assert "locators only" in unresolved
     assert "never a message shape" in unresolved
-    assert "shapes are declared from the pinned" not in unresolved
+    assert "release" in unresolved
+    assert "shared_gate.create" in unresolved

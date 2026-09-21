@@ -6,15 +6,32 @@ import pytest
 from fs_config_lifecycle.cases import (
     BODY_KEYS,
     CASE_KINDS,
-    OWNED_DATABASE_PREFIX,
+    DROPPED_CASES,
+    EXECUTION_ORDER,
+    LOCKED_STEPS,
     compile_cases,
     declared_request_keys,
+    locked_steps,
     owned_resources,
     validate_cases,
 )
 from fs_config_lifecycle.surface_matrix import build_matrix
 
 NONCE = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+IN_SCOPE = (
+    "OC-01",
+    "OC-02",
+    "OC-13",
+    "OC-14",
+    "OC-15",
+    "OC-16",
+    "OC-17",
+    "OC-18",
+    "OC-19",
+    "OC-20",
+    "OC-21",
+    "OC-22",
+)
 
 
 def test_a_case_plan_needs_a_full_length_lowercase_hexadecimal_nonce() -> None:
@@ -24,56 +41,55 @@ def test_a_case_plan_needs_a_full_length_lowercase_hexadecimal_nonce() -> None:
     assert compile_cases(NONCE)
 
 
+def test_the_plan_carries_exactly_the_twelve_in_scope_cases() -> None:
+    assert [case["id"] for case in compile_cases(NONCE)] == list(IN_SCOPE)
+
+
+def test_every_managed_database_lifecycle_case_is_dropped_by_the_owner_decision() -> (
+    None
+):
+    """OC-03..12 and OC-23..25 created or deleted a named database (2026-09-18)."""
+    dropped = set(DROPPED_CASES)
+    assert dropped == {f"OC-{n:02d}" for n in (*range(3, 13), 23, 24, 25)}
+    assert not dropped & set(IN_SCOPE)
+    for case in compile_cases(NONCE):
+        assert not case["method"].endswith("databases.create")
+        assert not case["method"].endswith("databases.delete")
+
+
 def test_every_case_names_a_method_the_classification_matrix_already_covers() -> None:
     known = {row["locator"] for row in build_matrix()["methods"]}
     for case in compile_cases(NONCE):
         assert case["method"] in known
 
 
-def test_case_kinds_are_closed_and_controls_and_negatives_both_exist() -> None:
+def test_case_kinds_are_closed_and_only_controls_and_observations_remain() -> None:
     cases = compile_cases(NONCE)
     kinds = {case["kind"] for case in cases}
-    assert kinds <= set(CASE_KINDS)
-    assert "control" in kinds
-    assert "negative" in kinds
-    assert "observation" in kinds
-    assert "cleanup" in kinds
+    assert set(CASE_KINDS) == {"control", "observation"}
+    assert kinds == set(CASE_KINDS)
 
 
-def test_every_conditional_cleanup_case_reverts_a_negative_create() -> None:
-    cases = {case["id"]: case for case in compile_cases(NONCE)}
-    cleanups = [case for case in cases.values() if case["kind"] == "cleanup"]
-    assert len(cleanups) == 3
-    for case in cleanups:
-        assert case["conditional"] is True
-        assert case["method"].endswith("databases.delete")
-        origin = cases[case["isRevertOf"]]
-        assert origin["kind"] == "negative"
-        assert origin["method"].endswith("databases.create")
-
-
-def test_a_negative_case_is_expected_to_be_refused_and_never_expected_to_mutate() -> (
-    None
-):
-    for case in compile_cases(NONCE):
-        if case["kind"] == "negative":
-            assert case["mutates"] is False
-            assert case["expectedProductionOutcome"] == "refusal"
-
-
-def test_a_case_that_could_allocate_or_mutate_always_names_its_revert() -> None:
-    for case in compile_cases(NONCE):
-        recoverable = case["mutates"] or case["possiblyAllocates"]
-        if recoverable:
-            assert case["revertedBy"], case["id"]
+def test_a_mutating_case_always_names_its_revert_and_the_revert_names_it_back() -> None:
+    cases = compile_cases(NONCE)
+    by_id = {case["id"] for case in cases}
+    for case in cases:
+        if case["mutates"]:
+            assert case["revertedBy"] in by_id, case["id"]
+            revert = next(c for c in cases if c["id"] == case["revertedBy"])
+            assert revert["isRevertOf"] == case["id"]
+            assert revert["mutates"] is False
         else:
             assert case["revertedBy"] is None, case["id"]
 
 
-def test_every_create_call_counts_as_possibly_allocating_even_when_refused() -> None:
-    for case in compile_cases(NONCE):
-        if case["method"].endswith("databases.create"):
-            assert case["possiblyAllocates"] is True, case["id"]
+def test_exactly_two_cases_mutate_and_both_patch_a_nonce_owned_field() -> None:
+    mutating = [case for case in compile_cases(NONCE) if case["mutates"]]
+    assert [case["id"] for case in mutating] == ["OC-14", "OC-18"]
+    for case in mutating:
+        assert case["method"].endswith("collectionGroups.fields.patch")
+        assert NONCE[:12] in case["resources"][0]
+        assert "/databases/(default)/" in case["resources"][0]
 
 
 def test_every_request_key_is_a_parameter_or_body_the_pinned_discovery_declares() -> (
@@ -98,16 +114,6 @@ def test_a_body_key_is_only_used_where_discovery_declares_a_request_body() -> No
             )
 
 
-def test_the_negative_creates_vary_only_the_database_identifier() -> None:
-    cases = {case["id"]: case for case in compile_cases(NONCE)}
-    reference = cases["OC-03"]["request"]["database"]
-    for case_id in ("OC-08", "OC-09", "OC-10"):
-        request = cases[case_id]["request"]
-        assert request["database"] == reference, case_id
-        assert request["parent"] == cases["OC-03"]["request"]["parent"]
-        assert request["databaseId"] != cases["OC-03"]["request"]["databaseId"]
-
-
 def test_the_exemption_revert_never_sets_an_output_only_field() -> None:
     cases = {case["id"]: case for case in compile_cases(NONCE)}
     revert = cases["OC-20"]["request"]
@@ -115,43 +121,53 @@ def test_the_exemption_revert_never_sets_an_output_only_field() -> None:
     assert "usesAncestorConfig" not in json.dumps(revert)
 
 
-def test_every_declared_revert_is_itself_a_case_in_the_same_plan() -> None:
-    cases = compile_cases(NONCE)
-    ids = {case["id"] for case in cases}
-    for case in cases:
-        if case["revertedBy"]:
-            assert case["revertedBy"] in ids
-            revert = next(c for c in cases if c["id"] == case["revertedBy"])
-            assert revert["isRevertOf"] == case["id"]
-
-
-def test_every_addressed_resource_lives_inside_the_owned_nonce_namespace() -> None:
-    cases = compile_cases(NONCE)
-    for case in cases:
+def test_every_addressed_resource_is_the_default_database_or_nonce_owned() -> None:
+    for case in compile_cases(NONCE):
         for resource in case["resources"]:
-            if NONCE[:12] in resource or resource == "(default)":
-                continue
-            assert case["kind"] in {"negative", "cleanup"}, case["id"]
-            assert case["namespaceExemptReason"], case["id"]
+            assert resource == "(default)" or NONCE[:12] in resource, case["id"]
 
 
-def test_the_owned_ledger_covers_every_case_that_could_leave_a_resource() -> None:
+def test_the_owned_ledger_lists_exactly_the_two_field_configurations() -> None:
     cases = compile_cases(NONCE)
     ledger = owned_resources(cases)
-    recoverable = {
-        case["id"] for case in cases if case["mutates"] or case["possiblyAllocates"]
-    }
-    assert {entry["createdBy"] for entry in ledger} == recoverable
+    assert [entry["createdBy"] for entry in ledger] == ["OC-14", "OC-18"]
     for entry in ledger:
+        assert entry["kind"] == "fieldConfig"
         assert entry["revertCase"]
-        assert entry["kind"] in {"database", "fieldConfig"}
-        assert isinstance(entry["conditional"], bool)
-    databases = [e for e in ledger if e["kind"] == "database"]
-    assert len(databases) == 4
-    expected = [e for e in databases if not e["conditional"]]
-    assert len(expected) == 1
-    assert expected[0]["name"].startswith(OWNED_DATABASE_PREFIX)
-    assert all(e["conditional"] for e in databases if e is not expected[0])
+        assert entry["recovered"] is False
+        assert entry["conditional"] is False
+
+
+def test_locked_steps_bind_baseline_apply_readback_revert_and_lock_key() -> None:
+    steps = locked_steps(NONCE)
+    assert [step["id"] for step in steps] == [step["id"] for step in LOCKED_STEPS]
+    cases = {case["id"]: case for case in compile_cases(NONCE)}
+    for step in steps:
+        for role in ("baseline", "apply", "readback", "revert"):
+            assert step[role] in cases, (step["id"], role)
+        assert cases[step["apply"]]["mutates"] is True
+        assert cases[step["apply"]]["revertedBy"] == step["revert"]
+        assert cases[step["baseline"]]["resources"] == [step["resource"]]
+        assert step["lockKey"].startswith(
+            "project/fireemu-35fe6/firestore/(default)/fields/"
+        )
+        assert NONCE[:12] in step["lockKey"]
+        assert step["lockMode"] == "EXCLUSIVE"
+    assert steps[0]["poll"] == "OC-22"
+
+
+def test_the_execution_order_covers_every_case_once_and_reverts_after_readback() -> (
+    None
+):
+    ids = [case["id"] for case in compile_cases(NONCE)]
+    assert sorted(EXECUTION_ORDER) == sorted(ids)
+    for step in LOCKED_STEPS:
+        order = [
+            EXECUTION_ORDER.index(step[r])
+            for r in ("baseline", "apply", "readback", "revert")
+        ]
+        assert order == sorted(order)
+    assert EXECUTION_ORDER[:2] == ("OC-01", "OC-02")
 
 
 def test_no_case_reads_or_writes_a_document_so_no_storage_is_billed() -> None:
@@ -171,9 +187,6 @@ def test_expected_local_results_cite_the_classification_not_an_observation() -> 
             assert row["local"]["status"] in {"implemented", "partial"}
             assert "refusalReason" not in expected
         elif "refusalReason" in expected:
-            # A partially served method refuses this particular request. Collapsing the
-            # method's status to a per-case outcome must say so rather than claim the
-            # refusal is an answer.
             assert row["local"]["status"] == "partial"
             assert expected["refusalReason"]
         else:
@@ -193,29 +206,25 @@ def test_the_index_config_patches_are_expected_to_be_refused_locally() -> None:
             assert case["expectedLocal"]["outcome"] == "not-served"
             assert "UNIMPLEMENTED" in case["expectedLocal"]["refusalReason"]
         if case["id"] in {"OC-14", "OC-16"}:
-            # The ttlConfig half of the same method is served.
             assert case["expectedLocal"]["outcome"] == "served"
 
 
 def test_production_outcomes_are_declared_expectations_not_recorded_results() -> None:
     for case in compile_cases(NONCE):
         assert case["productionObserved"] is False
-        assert case["expectedProductionOutcome"] in {"success", "refusal"}
+        assert case["expectedProductionOutcome"] == "success"
 
 
 def test_a_different_nonce_gives_a_disjoint_resource_namespace() -> None:
     def owned(nonce: str) -> set[str]:
         return {
-            resource
-            for case in compile_cases(nonce)
-            for resource in case["resources"]
-            if case["kind"] not in {"negative", "cleanup"}
+            resource for case in compile_cases(nonce) for resource in case["resources"]
         }
 
     assert owned(NONCE) & owned("f" * 32) == {"(default)"}
 
 
-def test_validation_rejects_drift_a_missing_revert_and_an_unknown_kind() -> None:
+def test_validation_rejects_drift_a_missing_case_and_an_unknown_kind() -> None:
     cases = compile_cases(NONCE)
     assert validate_cases(cases, NONCE)
     assert not validate_cases([], NONCE)

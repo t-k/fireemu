@@ -1564,12 +1564,12 @@ def _management_abort_projection(state, marker, *, skipped):
 
 
 def _management_cancel_prefix_valid(state):
-    """Require a registered apply and only registered post-apply lifecycle slots."""
+    """Require the closed limits lifecycle apply and its registered suffix."""
     observation = state["plan"].get("management", {}).get("observation", [])
+    identities = ["observation:" + entry.get("id", "") for entry in observation]
+    apply_id = "observation:index-lifecycle-apply"
     apply_indexes = [
-        index
-        for index, entry in enumerate(observation)
-        if entry.get("lifecycle") == "apply"
+        index for index, identity in enumerate(identities) if identity == apply_id
     ]
     used = state.get("managementUsed", [])
     if len(apply_indexes) != 1:
@@ -1577,9 +1577,42 @@ def _management_cancel_prefix_valid(state):
     apply_index = apply_indexes[0]
     if len(used) <= apply_index:
         return False
+    if used[apply_index] != apply_id:
+        return False
+    lifecycle_ids = {
+        apply_id,
+        "observation:index-lifecycle-poll",
+        "observation:index-lifecycle-after",
+    }
     return all(
-        entry.get("lifecycle") in {"apply", "poll", "readback", "after"}
-        for entry in observation[apply_index : len(used)]
+        identity in lifecycle_ids
+        for identity in used[apply_index:]
+    )
+
+
+def _management_cancel_events_valid(state):
+    """Allow a completed prefix and one reaped unknown terminal lifecycle slot."""
+    events = state.get("managementEvents", [])
+    if not events:
+        return False
+    terminal = events[-1]
+    if all(
+        event.get("completed") is True and event.get("workerReaped") is True
+        for event in events
+    ):
+        return True
+    return (
+        terminal.get("id")
+        in {
+            "observation:index-lifecycle-poll",
+            "observation:index-lifecycle-after",
+        }
+        and terminal.get("completed") is False
+        and terminal.get("workerReaped") is True
+        and all(
+            event.get("completed") is True and event.get("workerReaped") is True
+            for event in events[:-1]
+        )
     )
 
 
@@ -1679,12 +1712,17 @@ def _validate_management_abort_marker(state):
         + len(recovery_used) * state["plan"]["requestCostMicrousd"]
         or state["reservedRecovery"]
         != values["reservedRecovery"] - len(recovery_used)
-        or any(
-            event.get("completed") is not True
-            or event.get("workerReaped") is not True
-            for event in state.get("managementEvents", [])[
-                0 if marker["applyOutcome"] == "coordinator-cancelled" else prefix_len :
-            ]
+        or (
+            marker["applyOutcome"] == "may-have-landed"
+            and any(
+                event.get("completed") is not True
+                or event.get("workerReaped") is not True
+                for event in state.get("managementEvents", [])[prefix_len:]
+            )
+        )
+        or (
+            marker["applyOutcome"] == "coordinator-cancelled"
+            and not _management_cancel_events_valid(state)
         )
         or (
             marker["applyOutcome"] == "coordinator-cancelled"
@@ -2034,11 +2072,7 @@ class Gate:
                 raise ValueError(
                     "management cancellation requires declared apply lifecycle"
                 )
-            completed_prefix = all(
-                event.get("completed") is True
-                and event.get("workerReaped") is True
-                for event in events
-            )
+            completed_prefix = _management_cancel_events_valid(state)
             if (
                 management.get("dispatchKind") != "closed-v1"
                 or not used

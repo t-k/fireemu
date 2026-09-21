@@ -41,12 +41,29 @@ def make_gate(tmp_path):
 
 def cancellation_gate(tmp_path):
     value = management_abort_plan()
+    value["wallSeconds"] = 600
+    value["recoverySeconds"] = 300
+    value["costMicrousd"] = 5000
+    value["permissionExpiresAt"] = time.time() + 1200
     value["management"]["observation"] = [
-        {"id": "credential", "lifecycle": "preflight", "timeout": 13},
-        {"id": "apply-slot", "lifecycle": "apply", "timeout": 13},
-        {"id": "poll-slot", "lifecycle": "poll", "timeout": 13},
-        {"id": "readback-slot", "lifecycle": "readback", "timeout": 13},
-        {"id": "after-slot", "lifecycle": "after", "timeout": 11},
+        {"id": "oauth-tokeninfo", "timeout": 13},
+        {"id": "project", "timeout": 13},
+        {"id": "database", "timeout": 13},
+        {"id": "index-exemption", "timeout": 13},
+        {"id": "auth", "timeout": 13},
+        {"id": "index-lifecycle-before", "timeout": 13},
+        {"id": "index-lifecycle-apply", "timeout": 13},
+        {"id": "index-lifecycle-poll", "timeout": 13},
+        {"id": "index-lifecycle-after", "timeout": 11},
+    ]
+    value["management"]["recovery"] = [
+        {"id": "project", "timeout": 13},
+        {"id": "database", "timeout": 13},
+        {"id": "index-exemption", "timeout": 13},
+        {"id": "auth", "timeout": 13},
+        {"id": "index-lifecycle-restore", "timeout": 13},
+        {"id": "index-lifecycle-poll-restore", "timeout": 13},
+        {"id": "index-lifecycle-restored", "timeout": 13},
     ]
     value["observationRequests"] = len(value["management"]["observation"])
     path = tmp_path / "cancellation-gate"
@@ -61,6 +78,60 @@ def reaped_unknown():
         "workerReaped": True,
         "bodyKind": None,
         "body": None,
+    }
+
+
+def dispatch_before_apply(gate):
+    for slot in (
+        "oauth-tokeninfo",
+        "project",
+        "database",
+        "index-exemption",
+        "auth",
+        "index-lifecycle-before",
+    ):
+        gate.management_dispatch(
+            "observation",
+            slot,
+            lambda _deadline, slot=slot: (
+                {
+                    **receipt(),
+                    "body": {
+                        "kind": "request-byte-token-attestation-v1",
+                        "principalDigest": "a" * 64,
+                        "requiredScopeVerified": True,
+                        "identityMode": "subject",
+                        "identityVerified": True,
+                        "oauthClientVerified": True,
+                        "expiresInSeconds": 3600,
+                        "remainingSecondsAtVerification": 120,
+                        "requiredSeconds": 60,
+                        "complete": True,
+                        "workerReaped": True,
+                    },
+                }
+                if slot == "oauth-tokeninfo"
+                else receipt()
+            ),
+        )
+
+
+def tokeninfo_receipt():
+    return {
+        **receipt(),
+        "body": {
+            "kind": "request-byte-token-attestation-v1",
+            "principalDigest": "a" * 64,
+            "requiredScopeVerified": True,
+            "identityMode": "subject",
+            "identityVerified": True,
+            "oauthClientVerified": True,
+            "expiresInSeconds": 3600,
+            "remainingSecondsAtVerification": 120,
+            "requiredSeconds": 60,
+            "complete": True,
+            "workerReaped": True,
+        },
     }
 
 
@@ -243,17 +314,12 @@ def test_coordinator_cancel_preserves_completed_apply_and_skips_remaining_observ
 ):
     gate = cancellation_gate(tmp_path)
     gate.claim()
-    gate.management_dispatch(
-        "observation", "credential", lambda _deadline: receipt()
-    )
+    dispatch_before_apply(gate)
     first = gate.management_dispatch(
-        "observation", "apply-slot", lambda _deadline: receipt()
+        "observation", "index-lifecycle-apply", lambda _deadline: receipt()
     )
     second = gate.management_dispatch(
-        "observation", "poll-slot", lambda _deadline: receipt()
-    )
-    gate.management_dispatch(
-        "observation", "readback-slot", lambda _deadline: receipt()
+        "observation", "index-lifecycle-poll", lambda _deadline: receipt()
     )
 
     after = gate.cancel_management_observation()
@@ -261,28 +327,32 @@ def test_coordinator_cancel_preserves_completed_apply_and_skips_remaining_observ
     assert first["complete"] is True
     assert second["complete"] is True
     assert after["managementUsed"] == [
-        "observation:credential",
-        "observation:apply-slot",
-        "observation:poll-slot",
-        "observation:readback-slot",
+        "observation:oauth-tokeninfo",
+        "observation:project",
+        "observation:database",
+        "observation:index-exemption",
+        "observation:auth",
+        "observation:index-lifecycle-before",
+        "observation:index-lifecycle-apply",
+        "observation:index-lifecycle-poll",
     ]
     assert after["managementSkipped"] == [
         {
-            "id": "observation:after-slot",
+            "id": "observation:index-lifecycle-after",
             "phase": "observation",
-            "index": 4,
+            "index": 8,
             "reason": "management-not-run",
         }
     ]
     assert after["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
     assert after["managementAbort"]["recoveryPrerequisite"] is True
-    assert after["managementEvents"][1]["status"] == first["status"]
-    assert after["managementEvents"][2]["responseDigest"]
+    assert after["managementEvents"][6]["status"] == first["status"]
+    assert after["managementEvents"][7]["responseDigest"]
     assert after["jobs"]["a"]["complete"] is False
     assert gate.cancel_management_observation() == after
 
     restored = gate.management_dispatch(
-        "recovery", "restore", lambda _deadline: receipt()
+        "recovery", "project", lambda _deadline: receipt()
     )
     assert restored["complete"] is True
 
@@ -290,7 +360,7 @@ def test_coordinator_cancel_preserves_completed_apply_and_skips_remaining_observ
 def test_coordinator_cancel_before_declared_apply_is_unchanged(tmp_path):
     gate = cancellation_gate(tmp_path)
     gate.management_dispatch(
-        "observation", "credential", lambda _deadline: receipt()
+        "observation", "oauth-tokeninfo", lambda _deadline: tokeninfo_receipt()
     )
     before = gate.snapshot()
     with pytest.raises(ValueError, match="declared apply"):
@@ -301,15 +371,13 @@ def test_coordinator_cancel_before_declared_apply_is_unchanged(tmp_path):
 def test_coordinator_cancel_rejects_unreaped_or_foreign_data_state_unchanged(tmp_path):
     gate = cancellation_gate(tmp_path)
     gate.claim()
+    dispatch_before_apply(gate)
     gate.management_dispatch(
-        "observation", "credential", lambda _deadline: receipt()
-    )
-    gate.management_dispatch(
-        "observation", "apply-slot", lambda _deadline: receipt()
+        "observation", "index-lifecycle-apply", lambda _deadline: receipt()
     )
     before = gate.snapshot()
     with gate.locked() as state:
-        state["managementEvents"][1]["workerReaped"] = False
+        state["managementEvents"][6]["workerReaped"] = False
         shared_gate._save(gate.path, state)
     forged = gate.snapshot()
     with pytest.raises(ValueError, match="admissible"):
@@ -317,7 +385,7 @@ def test_coordinator_cancel_rejects_unreaped_or_foreign_data_state_unchanged(tmp
     assert gate.snapshot() == forged
 
     with gate.locked() as state:
-        state["managementEvents"][1]["workerReaped"] = True
+        state["managementEvents"][6]["workerReaped"] = True
         state["jobs"]["a"]["pid"] = os.getpid() + 100000
         shared_gate._save(gate.path, state)
     foreign = gate.snapshot()
@@ -332,25 +400,40 @@ def test_coordinator_cancel_accepts_reaped_semantic_error_and_preserves_receipt(
 ):
     gate = cancellation_gate(tmp_path)
     gate.claim()
+    dispatch_before_apply(gate)
     response = gate.management_dispatch(
-        "observation", "credential", lambda _deadline: receipt()
+        "observation", "index-lifecycle-apply", lambda _deadline: receipt(400)
     )
     gate.management_dispatch(
-        "observation", "apply-slot", lambda _deadline: receipt(400)
+        "observation", "index-lifecycle-poll", lambda _deadline: receipt()
+    )
+    # The terminal after slot remains the uncharged cancellation suffix.
+
+    state = gate.cancel_management_observation()
+
+    assert response["status"] == 400
+    assert state["managementEvents"][6]["status"] == 400
+    assert state["managementEvents"][6]["completed"] is True
+    assert state["managementEvents"][6]["workerReaped"] is True
+
+
+def test_coordinator_cancel_accepts_reaped_unknown_terminal_poll(tmp_path):
+    gate = cancellation_gate(tmp_path)
+    gate.claim()
+    dispatch_before_apply(gate)
+    gate.management_dispatch(
+        "observation", "index-lifecycle-apply", lambda _deadline: receipt()
     )
     gate.management_dispatch(
-        "observation", "poll-slot", lambda _deadline: receipt()
-    )
-    gate.management_dispatch(
-        "observation", "readback-slot", lambda _deadline: receipt()
+        "observation", "index-lifecycle-poll", lambda _deadline: reaped_unknown()
     )
 
     state = gate.cancel_management_observation()
 
-    assert response["status"] == 200
-    assert state["managementEvents"][1]["status"] == 400
-    assert state["managementEvents"][1]["completed"] is True
-    assert state["managementEvents"][1]["workerReaped"] is True
+    assert state["managementEvents"][6]["completed"] is True
+    assert state["managementEvents"][7]["completed"] is False
+    assert state["managementEvents"][7]["workerReaped"] is True
+    assert state["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
 
 
 def test_coordinator_cancel_rejects_foreign_coordinator_without_state_change(tmp_path):

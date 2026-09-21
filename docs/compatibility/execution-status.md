@@ -14,6 +14,10 @@ Plan: [execution-plan.md](execution-plan.md). Scope: [emulator-scope.md](emulato
 - Merged, reviewed, not yet pushed: TP-AUTH-E-01 tenant isolation matrix and TP-AUTH-E-01-FIX (`44e02c183`). The fix removes an application-visible mismatch: a tenant user's refresh token in the pinned Web SDK request shape (securetoken `v1/token` with an API key and no `tenantId`) was refused with `INVALID_REFRESH_TOKEN`; it now renews the tenant session, while every cross-tenant refusal is unchanged. Local evidence only; production tenant observation remains a campaign.
 - Ledger corrections (FS-LEDGER-001): the four write-path limits are `implemented`, not `unsupported`; the cursor tickets are repaired or withdrawn; the Rules comparator statement names the v2 acquisition comparator.
 
+## History rewrite (2026-09-21)
+
+One commit of checkpoint 1 (`ec1707dbe`, runner discovery fix) carried an attribution trailer the owner does not permit. It was replaced by `a3d20ed18` (identical tree, author and parent) and every later commit was re-created with `git rebase --rebase-merges`; the resulting tree at the rewritten head is byte-identical to the pre-rewrite head `02265eda4`, all commits are signed, and the branch was force-updated with the owner's explicit instruction. Old commit ids therefore no longer exist on the branch: `b30d0ff36` is now `4e83c6d2b`, `e2d0a18e8` is `4c5c71c6f`, `475175e88` is `77a06ef68`, `44e02c183` is `d292dd161`, `0cd79d3f4` is `3273ec98f`, `02265eda4` is `d622c413a`. The two Rust-bound shadow records were regenerated on the rewritten history because their evidence tests resolve `runtime.sourceCommit` through git; the Listen shadow records cite lane commits that were not rewritten. A pre-rewrite mirror is retained privately. Gate reports recorded above for `b30d0ff36` apply to the identical tree at `4e83c6d2b`.
+
 ## Production observation frame
 
 - Authorization: cumulative US$10 for every production observation of this program (owner, 2026-09-21), not per campaign or per session.

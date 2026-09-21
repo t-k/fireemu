@@ -173,9 +173,10 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
     assert result["recovery"] == 6
     assert result["reservation"] == "released"
     assert len(_ActionFixture.calls) == 32
+    frozen_plan = plan_module.campaign_manifest(NONCE, project=descriptor.AUTHORIZED_PROJECT)
     expected_paths = [
         row["path"].format(project=descriptor.AUTHORIZED_PROJECT).lstrip("/")
-        for row in (*manifest["stages"], *manifest["recovery"])
+        for row in (*frozen_plan["stages"], *frozen_plan["recovery"])
     ]
     actual_paths = [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls]
     assert actual_paths == expected_paths
@@ -247,6 +248,6 @@ def test_observation_failure_attempts_all_known_cleanup_and_holds_unknown_signup
     assert len(_ActionFixture.calls) == 7
     assert all(
         call["path"].split("?", 1)[0]
-        == "/identitytoolkit.googleapis.com/v1/accounts:lookup"
+        == "identitytoolkit.googleapis.com/v1/accounts:lookup"
         for call in _ActionFixture.calls[1:]
     )

@@ -190,3 +190,6 @@ def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, status, b
             bindings=_bindings(), credential_handoff=_handoff(permission),
             verify_handoff=_verify_handoff, fixture_origin=fixture_origin,
         )
+    state = reservations.Ledger(ledger_root).snapshot()
+    rows = list(state["reservations"].values())
+    assert len(rows) == 1 and rows[0]["state"] == "held"

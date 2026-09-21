@@ -29,6 +29,20 @@ ADC_FIELDS = {"type", "client_id", "client_secret", "refresh_token"}
 SOCKET_TIMEOUT_FLOOR_SECONDS = 1.0
 WORKER_STARTUP_MARGIN_SECONDS = 0.5
 
+# `_http_request` treats its `timeout` argument as a single absolute
+# deadline for the whole exchange (connect, headers, every body read), not a
+# fixed per-operation socket timeout. Each phase gets whatever remains of
+# that deadline, less this small safety margin, so a slow earlier phase
+# (e.g. delayed headers) narrows the budget left for the next one instead of
+# each phase getting a fresh full-length timeout. The floor keeps a socket
+# call from ever being handed a zero or negative timeout (which would put
+# the socket in non-blocking mode) when the remaining budget is already
+# below the margin; in that case the phase is reported as timed out
+# immediately instead of attempting the call.
+PHASE_MARGIN_SECONDS = 0.01
+PHASE_TIMEOUT_FLOOR_SECONDS = 0.001
+BODY_READ_CHUNK_BYTES = 8192
+
 
 def _bounded_socket_timeout(deadline, cleanup_margin):
     """HTTP-layer timeout for one private-worker call, strictly below the
@@ -178,14 +192,24 @@ def build_request(slot, secret):
 
 
 def _http_request(slot, secret, fixture_origin=None, *, timeout=REQUEST_SECONDS):
-    """Bounded single-shot HTTP call with a diagnosable, non-credential-bearing
-    failure taxonomy: body-truncated, body-oversize, read-timeout,
-    connect-failed, transport-error (other OSError/http exceptions, tagged
-    with the exception class name) and json-invalid. Every failure carries
-    receivedBytes, declaredLength (when known) and elapsedSeconds; timeouts
-    also carry the effective socketTimeoutSeconds. None of these fields can
-    contain response or credential bytes -- they are counts, a header value
-    already bounded to MAX_BYTES, and exception type names."""
+    """Bounded HTTP call against a single absolute deadline (`timeout`
+    seconds from now), not a fixed per-operation socket timeout. The
+    deadline is recomputed before connecting, before reading headers and
+    before every body read, so a slow earlier phase (delayed headers, a
+    slow-trickling body) narrows what is left for the next phase instead of
+    each phase getting a fresh full-length timeout that could add up past
+    the caller's own kill deadline. See `_private_request` and
+    `_bounded_socket_timeout` for how that outer deadline is derived.
+
+    Failures are a diagnosable, non-credential-bearing taxonomy:
+    connect-timeout, connect-failed, headers-timeout, body-truncated,
+    body-oversize, read-timeout, transport-error (other OSError/http
+    exceptions, tagged with the exception class name) and json-invalid.
+    Every failure carries receivedBytes, declaredLength (when known),
+    elapsedSeconds and the phase it failed in; timeouts also carry the
+    requested socketTimeoutSeconds budget. None of these fields can contain
+    response or credential bytes -- they are counts, a header value already
+    bounded to MAX_BYTES, and exception type names."""
     import http.client
     import ssl
     import time
@@ -194,19 +218,8 @@ def _http_request(slot, secret, fixture_origin=None, *, timeout=REQUEST_SECONDS)
     from broad_contract import local_origin
 
     request = build_request(slot, secret)
-    if fixture_origin is None:
-        connection = http.client.HTTPSConnection(
-            request["host"],
-            timeout=timeout,
-            context=ssl.create_default_context(),
-        )
-    else:
-        local_origin(fixture_origin)
-        target = urlsplit(fixture_origin)
-        connection = http.client.HTTPConnection(
-            target.hostname, target.port, timeout=timeout
-        )
     started = time.monotonic()
+    deadline = started + timeout
     summary = {
         "complete": False,
         "status": None,
@@ -221,7 +234,57 @@ def _http_request(slot, secret, fixture_origin=None, *, timeout=REQUEST_SECONDS)
         summary["elapsedSeconds"] = time.monotonic() - started
         return {**summary, **fields}
 
+    def phase_budget():
+        """Timeout for the next blocking socket call, strictly below the
+        remaining time to `deadline`, or None once that margin is gone."""
+        remaining = deadline - time.monotonic()
+        if remaining <= PHASE_MARGIN_SECONDS:
+            return None
+        return max(remaining - PHASE_MARGIN_SECONDS, PHASE_TIMEOUT_FLOOR_SECONDS)
+
+    connect_budget = phase_budget()
+    if connect_budget is None:
+        return stamped(failure="connect-timeout", phase="connect")
+    if fixture_origin is None:
+        connection = http.client.HTTPSConnection(
+            request["host"],
+            timeout=connect_budget,
+            context=ssl.create_default_context(),
+        )
+    else:
+        local_origin(fixture_origin)
+        target = urlsplit(fixture_origin)
+        connection = http.client.HTTPConnection(
+            target.hostname, target.port, timeout=connect_budget
+        )
     try:
+        try:
+            connection.connect()
+        except TimeoutError as error:
+            return stamped(
+                failure="connect-timeout",
+                exceptionClass=type(error).__name__,
+                phase="connect",
+            )
+        except OSError as error:
+            return stamped(
+                failure="connect-failed",
+                exceptionClass=type(error).__name__,
+                phase="connect",
+            )
+
+        # Captured once, not re-read from `connection.sock`: once the
+        # response headers say the connection will close (as every fixed
+        # request here does), `HTTPConnection.getresponse()` immediately
+        # calls `self.close()`, which sets `connection.sock` to None even
+        # though the response body is still readable through this same
+        # socket object (the response's own buffered reader holds a
+        # separate reference to it via `sock.makefile()`).
+        sock = connection.sock
+        headers_budget = phase_budget()
+        if headers_budget is None:
+            return stamped(failure="headers-timeout", phase="headers")
+        sock.settimeout(headers_budget)
         try:
             connection.request(
                 "POST",
@@ -234,45 +297,96 @@ def _http_request(slot, secret, fixture_origin=None, *, timeout=REQUEST_SECONDS)
             )
             response = connection.getresponse()
         except TimeoutError as error:
-            return stamped(failure="read-timeout", exceptionClass=type(error).__name__)
+            return stamped(
+                failure="headers-timeout",
+                exceptionClass=type(error).__name__,
+                phase="headers",
+            )
         except OSError as error:
             return stamped(
-                failure="connect-failed", exceptionClass=type(error).__name__
+                failure="connect-failed",
+                exceptionClass=type(error).__name__,
+                phase="headers",
             )
         summary["status"] = response.status
         if response.status != 200:
-            return stamped(failure="http-status")
+            return stamped(failure="http-status", phase="headers")
         length = response.getheader("Content-Length")
         declared = None
         if length is not None:
             if not length.isdigit():
                 return stamped(
-                    failure="transport-error", exceptionClass="InvalidContentLength"
+                    failure="transport-error",
+                    exceptionClass="InvalidContentLength",
+                    phase="headers",
                 )
             declared = int(length)
             summary["declaredLength"] = declared
             if declared > MAX_BYTES:
-                return stamped(failure="body-oversize")
-        try:
-            raw = response.read(MAX_BYTES + 1)
-        except TimeoutError as error:
-            return stamped(failure="read-timeout", exceptionClass=type(error).__name__)
-        except Exception as error:  # noqa: BLE001 -- exception class name only.
-            return stamped(
-                failure="transport-error", exceptionClass=type(error).__name__
-            )
-        summary["receivedBytes"] = len(raw)
+                return stamped(failure="body-oversize", phase="headers")
+
+        # Read the body in bounded pieces rather than one call for the whole
+        # (possibly MAX_BYTES-sized) response: `receivedBytes` is updated
+        # after every piece, so a timeout or a truncated chunked stream
+        # partway through still reports the bytes already received instead
+        # of losing them inside one large, all-or-nothing read.
+        received = 0
+        buffer = bytearray()
+        while received <= MAX_BYTES:
+            body_budget = phase_budget()
+            if body_budget is None:
+                return stamped(
+                    failure="read-timeout", receivedBytes=received, phase="body"
+                )
+            sock.settimeout(body_budget)
+            want = min(BODY_READ_CHUNK_BYTES, MAX_BYTES + 1 - received)
+            try:
+                piece = response.read1(want)
+            except http.client.IncompleteRead as error:
+                # `.partial` is only the bytes read within this one call;
+                # `received` already carries the bytes from earlier pieces.
+                received += len(error.partial)
+                return stamped(
+                    failure="body-truncated", receivedBytes=received, phase="body"
+                )
+            except TimeoutError as error:
+                return stamped(
+                    failure="read-timeout",
+                    exceptionClass=type(error).__name__,
+                    receivedBytes=received,
+                    phase="body",
+                )
+            except Exception as error:  # noqa: BLE001 -- exception class name only.
+                return stamped(
+                    failure="transport-error",
+                    exceptionClass=type(error).__name__,
+                    receivedBytes=received,
+                    phase="body",
+                )
+            if not piece:
+                break
+            buffer += piece
+            received += len(piece)
+            summary["receivedBytes"] = received
+            if declared is not None and received >= declared:
+                break
+
+        raw = bytes(buffer)
         if len(raw) > MAX_BYTES:
-            return stamped(failure="body-oversize")
+            return stamped(
+                failure="body-oversize", receivedBytes=len(raw), phase="body"
+            )
         if declared is not None and len(raw) != declared:
-            return stamped(failure="body-truncated")
+            return stamped(
+                failure="body-truncated", receivedBytes=len(raw), phase="body"
+            )
         try:
             body = decode_json(raw)
             if not isinstance(body, dict):
                 raise TypeError("credential response object required")
         except Exception:  # noqa: BLE001 -- Never return credential-bearing text.
-            return stamped(failure="json-invalid")
-        return stamped(complete=True, body=body)
+            return stamped(failure="json-invalid", receivedBytes=len(raw), phase="body")
+        return stamped(complete=True, body=body, phase="body")
     except Exception as error:  # noqa: BLE001 -- Never return credential-bearing text.
         return stamped(failure="transport-error", exceptionClass=type(error).__name__)
     finally:

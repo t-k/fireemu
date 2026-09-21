@@ -182,6 +182,7 @@ def management_transport(slot, token, *, deadline, capability, binding, binding_
             print(
                 "management_transport oauth-tokeninfo incomplete:"
                 f" failure={result.get('failure')!r}"
+                f" phase={result.get('phase')!r}"
                 f" status={result.get('status')!r}"
                 f" workerReaped={result.get('workerReaped')!r}"
                 f" receivedBytes={result.get('receivedBytes')!r}"

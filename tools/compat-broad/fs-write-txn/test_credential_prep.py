@@ -1,8 +1,12 @@
 """Finite credential preparation uses synthetic secrets and owned local HTTP only."""
 
+import contextlib
+import http.server
 import importlib.util
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -308,7 +312,13 @@ def test_http_request_read_timeout_reports_effective_socket_timeout(oauth_server
     assert result["complete"] is False
     assert result["failure"] == "read-timeout"
     assert result["socketTimeoutSeconds"] == 0.3
-    assert result["elapsedSeconds"] >= 0.3
+    # `elapsedSeconds` is close to but no longer guaranteed to be exactly
+    # `>= timeout`: `_http_request` now spends the same absolute deadline
+    # across connect, headers and body phases (see PHASE_MARGIN_SECONDS), so
+    # the body-phase socket timeout that actually fires is the requested
+    # budget minus the earlier phases' (here, negligible) elapsed time and a
+    # small per-phase safety margin, not the full requested timeout.
+    assert result["elapsedSeconds"] >= 0.3 - module.PHASE_MARGIN_SECONDS - 0.05
     assert result["exceptionClass"]
     assert "synthetic" not in json.dumps(
         {k: v for k, v in result.items() if k != "body"}
@@ -384,10 +394,6 @@ def test_private_worker_tokeninfo_stall_times_out_before_kill(oauth_server):
 # precisely (the repo's `oauth_server` fixture above cannot delay headers or
 # emit incomplete chunked bodies), so it is kept as its own local server
 # context manager rather than folded into `oauth_server`.
-import contextlib
-import http.server
-import threading
-import time
 
 
 @contextlib.contextmanager

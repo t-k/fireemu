@@ -395,3 +395,111 @@ def test_one_unlocated_detail_does_not_guess_between_two_same_named_files():
     )
     result = parse_log(text)
     assert [f.group for f in result.failures] == ["pytest", "a.py", "b.py"]
+
+
+@pytest.mark.parametrize(
+    "value,expected_name",
+    [
+        ("[", "test_bad[[]"),
+        ("] - suffix", "test_bad[] - suffix]"),
+        ("a - b", "test_bad[a - b]"),
+        ("[x[1]]", "test_bad[[x[1]]]"),
+    ],
+)
+def test_short_summary_id_boundary_survives_unbalanced_or_dashed_brackets(
+    value, expected_name
+):
+    # pytest does not escape '[' or ']' inside a parametrize id, so a value
+    # containing either can desync a naive bracket-depth count: an
+    # unbalanced '[' never lets depth return to 0, and an unbalanced ']'
+    # can return depth to 0 too early. The line is built the same way
+    # pytest builds it (name[value]), not from the expected id, so this
+    # exercises the actual ambiguity rather than assuming the answer.
+    text = f"FAILED test_case.py::test_bad[{value}] - assert False\n1 failed in 0.00s\n"
+    result = parse_log(text)
+    assert len(result.failures) == 1
+    assert result.failures[0].name == expected_name
+    assert result.failures[0].message == ["assert False"]
+
+
+@pytest.mark.parametrize(
+    "nodeid,expected_name",
+    [
+        ("test_case.py::test_bad", "test_bad"),
+        ("test_case.py::test_bad[v]", "test_bad[v]"),
+    ],
+)
+def test_short_summary_dashed_message_is_not_mistaken_for_more_id(
+    nodeid, expected_name
+):
+    text = f"FAILED {nodeid} - AssertionError: some - message - here\n1 failed in 0.00s\n"
+    result = parse_log(text)
+    assert len(result.failures) == 1
+    assert result.failures[0].name == expected_name
+    assert result.failures[0].message == ["AssertionError: some - message - here"]
+
+
+def test_setup_error_only_joins_by_kind_and_phase():
+    log = "\n".join(
+        [
+            "=== ERRORS ===",
+            "___ ERROR at setup of test_bad ___",
+            "E RuntimeError: boom",
+            "tests/a.py:3: RuntimeError",
+            "=== short test summary info ===",
+            "ERROR tests/a.py::test_bad - RuntimeError: boom",
+            "1 error in 0.01s",
+        ]
+    )
+    result = parse_log(log)
+    assert len(result.failures) == 1
+    assert result.failures[0].group == "tests/a.py"
+    # The join corrects .group from the placeholder "pytest"; the detail
+    # block's own heading text is left as-is (see the class/fixture-error
+    # test above), so the phase phrase stays for a human reading the excerpt.
+    assert result.failures[0].name == "ERROR at setup of test_bad"
+
+
+def test_collection_error_only_joins_by_kind_and_phase():
+    log = "\n".join(
+        [
+            "=== ERRORS ===",
+            "___ ERROR collecting tests/bad.py ___",
+            "E SyntaxError: invalid syntax",
+            "=== short test summary info ===",
+            "ERROR tests/bad.py - SyntaxError: invalid syntax",
+            "1 error in 0.01s",
+        ]
+    )
+    result = parse_log(log)
+    assert len(result.failures) == 1
+    assert result.failures[0].group == "tests/bad.py"
+
+
+def test_body_failure_and_teardown_error_join_separately_by_kind():
+    # A body (call) failure and a teardown error of the same test share the
+    # same nodeid in the short summary; only FAILED/ERROR plus the phase
+    # recorded on each detail block ("test_bad" = body, "ERROR at teardown
+    # of test_bad" = teardown) disambiguates which block each line joins.
+    log = "\n".join(
+        [
+            "=== ERRORS ===",
+            "___ ERROR at teardown of test_bad ___",
+            "E RuntimeError: teardown failure",
+            "tests/a.py:5: RuntimeError",
+            "=== FAILURES ===",
+            "___ test_bad ___",
+            "E AssertionError: assert False",
+            "tests/a.py:7: AssertionError",
+            "=== short test summary info ===",
+            "FAILED tests/a.py::test_bad - AssertionError: assert False",
+            "ERROR tests/a.py::test_bad - RuntimeError: teardown failure",
+            "1 failed, 1 error in 0.01s",
+        ]
+    )
+    result = parse_log(log)
+    assert len(result.failures) == 2
+    assert {f.group for f in result.failures} == {"tests/a.py"}
+    by_message = {f.message[0]: f for f in result.failures}
+    assert "E AssertionError: assert False" in by_message
+    assert "E RuntimeError: teardown failure" in by_message

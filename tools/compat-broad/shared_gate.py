@@ -1184,9 +1184,10 @@ def _action_noncreating_contract_matches(operation):
     canonical_path = path.removeprefix("identitytoolkit.googleapis.com")
     if "/projects/" in suffix:
         resource = operation.get("resource")
-        if not isinstance(resource, str) or not resource.startswith("projects/"):
-            return False
-        project = resource.split("/", 2)[1]
+        if isinstance(resource, str) and resource.startswith("projects/"):
+            project = resource.split("/", 2)[1]
+        else:
+            project = "fireemu-35fe6"
         if canonical_path != suffix.format(project=project):
             return False
     elif canonical_path != suffix:

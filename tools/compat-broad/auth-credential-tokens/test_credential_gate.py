@@ -181,6 +181,18 @@ def test_the_shared_gate_admits_the_plan() -> None:
     ]
 
 
+def test_gate_rejects_an_account_resource_with_another_accounts_email(tmp_path: Path) -> None:
+    plan = _plan(signing=False)
+    address = next(
+        operation
+        for operation in plan["jobs"][gate_module.JOB]["recovery"]
+        if operation["kind"] == "address-absence" and operation["account"] == "acct0"
+    )
+    address["body"] = {"email": [gate_module.owned_email(NONCE, 1)]}
+    with pytest.raises(ValueError, match="address binding differs"):
+        gate_module.create(tmp_path / "gate", plan)
+
+
 def test_a_hosted_run_reaches_every_case_cleans_up_and_finishes(tmp_path, monkeypatch) -> None:
     gate, rows, failure, problems, tracker, budget, service = _hosted_run(tmp_path, monkeypatch)
     assert failure is None and problems == []

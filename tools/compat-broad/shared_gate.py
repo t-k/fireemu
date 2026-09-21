@@ -281,6 +281,18 @@ def _auth_recovery_operation_valid(operation, project):
     return True
 
 
+def _auth_uid_absence_operation_valid(operation, project):
+    """Only a bound UID read can settle an Auth account resource."""
+    return (
+        operation.get("kind") == "uid-absence"
+        and operation.get("method") == "POST"
+        and operation.get("path", "").endswith("/accounts:lookup")
+        and _auth_recovery_operation_valid(operation, project)
+        and isinstance(operation.get("body"), dict)
+        and set(operation["body"]) == {"localId"}
+    )
+
+
 def validate_absence_proofs(state, job_name):
     """Validate final typed readback against the registered recovery plan and journal."""
     policy = _stream_policy(state["plan"])
@@ -299,7 +311,7 @@ def validate_absence_proofs(state, job_name):
                 if _auth_operation(operation)
                 and operation.get("resource") == resource
                 and operation["method"] == "POST"
-                and _auth_recovery_operation_valid(operation, state["plan"].get("project"))
+                and _auth_uid_absence_operation_valid(operation, state["plan"].get("project"))
             ]
             absent = auth_typed_absence
         else:
@@ -613,6 +625,12 @@ def create(path, plan):
                 raise ValueError("Auth operation resource outside assigned resources")
             if operation in job.get("recovery", []) and resource not in resources:
                 raise ValueError("cleanup target outside assigned resources")
+            if (
+                operation in job.get("observation", [])
+                and operation.get("method") == "POST"
+                and operation.get("path", "").endswith("/accounts:delete")
+            ):
+                raise ValueError("destructive Auth delete is recovery-only")
             if operation in job.get("recovery", []) and resource is not None and not _auth_recovery_operation_valid(operation, project):
                 raise ValueError("canonical Auth UID binding or lookup route required")
     if (
@@ -1828,6 +1846,13 @@ class Gate:
                 if recovery and resource not in job["resources"]:
                     raise ValueError("cleanup target outside assigned resources")
                 if (
+                    _auth_operation(operation)
+                    and operation.get("method") == "POST"
+                    and operation.get("path", "").endswith("/accounts:delete")
+                    and not recovery
+                ):
+                    raise ValueError("destructive Auth delete is recovery-only")
+                if (
                     recovery
                     and _auth_operation(operation)
                     and operation.get("method") == "POST"
@@ -2027,7 +2052,7 @@ class Gate:
                     and _auth_operation(operation)
                     and resource in job["resources"]
                     and operation["path"].endswith("/accounts:lookup")
-                    and _auth_recovery_operation_valid(operation, plan.get("project"))
+                    and _auth_uid_absence_operation_valid(operation, plan.get("project"))
                 ):
                     if auth_typed_absence(status, body):
                         if resource not in job["absent"]:

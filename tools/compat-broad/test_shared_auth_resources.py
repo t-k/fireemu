@@ -146,6 +146,48 @@ def test_auth_delete_requires_a_recorded_creation_before_send(tmp_path: Path) ->
     assert gate.snapshot()["events"] == []
 
 
+def test_auth_observation_delete_is_rejected_before_send(tmp_path: Path) -> None:
+    path = tmp_path / "gate"
+    plan = _auth_plan()
+    delete = dict(
+        plan["jobs"]["auth-credential"]["recovery"][0],
+        kind="delete",
+        path="identitytoolkit.googleapis.com/v1/projects/demo/accounts:delete",
+        body={"localId": "$binding:acct0Uid"},
+    )
+    plan["observationRequests"] = 1
+    plan["jobs"]["auth-credential"]["observation"] = [delete]
+    plan["jobs"]["auth-credential"]["recovery"] = []
+    plan["recoverySeconds"] = 1
+    with pytest.raises(ValueError, match="observation.*delete|destructive Auth"):
+        create(path, plan)
+    assert not path.exists()
+
+
+def test_auth_email_only_lookup_is_supplemental_not_account_absence(tmp_path: Path) -> None:
+    path = tmp_path / "gate"
+    plan = _auth_plan()
+    operation = plan["jobs"]["auth-credential"]["recovery"][0]
+    operation["kind"] = "address-absence"
+    operation["body"] = {"email": ["foreign@example.com"]}
+    create(path, plan)
+    gate = Gate(path, "auth-credential")
+    gate.claim()
+    gate.dispatch(operation, True, lambda: (200, {"users": []}))
+    snapshot = gate.snapshot()
+    assert snapshot["jobs"]["auth-credential"].get("absenceProofs", {}) == {}
+    with pytest.raises(ValueError, match="cleanup incomplete"):
+        gate.finish()
+
+
+def test_auth_recovery_binding_cannot_cross_accounts(tmp_path: Path) -> None:
+    plan = _auth_plan()
+    operation = plan["jobs"]["auth-credential"]["recovery"][0]
+    operation["body"] = {"localId": ["$binding:acct1Uid"]}
+    with pytest.raises(ValueError, match="canonical Auth UID binding"):
+        create(tmp_path / "gate", plan)
+
+
 def test_auth_lookup_with_a_user_is_not_absence_and_stops_the_gate(tmp_path: Path) -> None:
     path = tmp_path / "gate"
     plan = _auth_plan()

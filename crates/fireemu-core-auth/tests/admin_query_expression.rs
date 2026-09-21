@@ -83,7 +83,7 @@ fn filtering_precedes_sort_offset_limit_and_count() {
 fn empty_partial_wildcard_and_case_changed_uid_are_not_broadened() {
     let store = fixture();
     for filter in [
-        Expr::Email("".into()),
+        Expr::Email(String::new()),
         Expr::Email("alice".into()),
         Expr::Email("%@example.com".into()),
         Expr::UserId("A".into()),

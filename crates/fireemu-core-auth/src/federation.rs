@@ -1,4 +1,4 @@
-//! Bounded process-local storage for replaying previously resolved IdP credentials.
+//! Bounded process-local storage for replaying previously resolved `IdP` credentials.
 //!
 //! These are emulator continuation handles, not Google credentials. A continuation is
 //! reusable until its local expiry; each use still needs the adapter's current provider

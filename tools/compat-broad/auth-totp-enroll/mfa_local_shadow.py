@@ -57,6 +57,8 @@ TEST_PHONE = "+15555550100"
 PHONE_SIGN_IN_INFO = {"recaptchaToken": "fireemu-local-shadow"}
 # The owned instance is reaped rather than abandoned when this deadline passes.
 CHILD_TIMEOUT_SECONDS = 900
+# Each aged sample is taken this long past its target age (see `_walk`).
+AGE_SAMPLE_MARGIN_SECONDS = 1
 CONFIG = {"schemaVersion": 1, "profile": "strict", "auth": {"totp": {}}}
 SCHEMA = "o2-mfa-local-shadow-v1"
 
@@ -568,9 +570,16 @@ def _walk(
         # A production run waits here; the owned local instance advances its own clock.
         # Either way the checkpoint written by the previous `finish` is what a resumed
         # process reloads, and every aged resource already exists.
+        #
+        # `now()` reads the instance clock truncated to whole seconds, so the origin
+        # can sit up to a second before the instant the last aged resource was
+        # created; advancing by exactly the remaining age would then sample it
+        # short of its target. One whole second of margin puts every sample just past
+        # its target and still short of the next boundary, as the campaign document
+        # says a sample is taken.
         elapsed = instance.now() - origin
-        if age > elapsed:
-            instance.advance(age - elapsed)
+        if age + AGE_SAMPLE_MARGIN_SECONDS > elapsed:
+            instance.advance(age + AGE_SAMPLE_MARGIN_SECONDS - elapsed)
         aged = pendings[age]
         status, payload, code = _observe(
             instance,

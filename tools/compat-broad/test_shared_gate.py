@@ -945,6 +945,7 @@ def test_action_stage_creation_cannot_be_relabelled_as_noncreating():
         "kind": "action-stage",
         "id": "signup-relabelled-readback",
         "service": "auth",
+        "project": "fireemu-35fe6",
         "method": "POST",
         "path": "identitytoolkit.googleapis.com/v1/accounts:signUp",
         "body": {"email": "owner@example.invalid"},
@@ -972,8 +973,23 @@ def test_action_noncreating_id_cannot_override_creation_route(route, identifier)
         "kind": "action-stage",
         "id": identifier,
         "service": "auth",
+        "project": "fireemu-35fe6",
         "method": "POST",
         "path": f"identitytoolkit.googleapis.com/v1/accounts:{route}",
+        "body": {"localId": "$binding:accountAUid"},
+    }
+    assert can_create(operation) is True
+
+
+def test_action_noncreating_route_cannot_derive_authority_from_foreign_resource():
+    operation = {
+        "kind": "action-stage",
+        "id": "account-a-readback",
+        "service": "auth",
+        "project": "fireemu-35fe6",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "resource": "projects/foreign/auth/accounts/owned",
         "body": {"localId": "$binding:accountAUid"},
     }
     assert can_create(operation) is True

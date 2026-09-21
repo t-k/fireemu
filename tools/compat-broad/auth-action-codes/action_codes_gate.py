@@ -86,6 +86,7 @@ def _operation(row: dict, project: str, nonce: str, *, recovery: bool) -> dict:
     operation = {
         "id": row["id"],
         "service": "auth",
+        "project": project,
         "method": "POST",
         "path": row["path"].format(project=project).lstrip("/"),
         "body": body,

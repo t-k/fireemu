@@ -496,18 +496,44 @@ modules changes the source digest and fails
 `test_txn_expiry_evidence.py`; the failure message carries the regeneration
 command.
 
+## O8 descriptor and launcher
+
+The campaign now has an O8 descriptor, admission, Gate projection and launcher
+in `tools/compat-broad/fs-write-txn/txn_expiry_{descriptor,admission,gate,
+preflight,remote_transport,https_worker,production,o8}.py`, built on the
+shared O8 core. The descriptor binds a 1200-second Gate wall (240 seconds of it
+reserved for recovery inside the Gate) plus this plan's 180-second recovery
+window, so the owner window is 1380 seconds; 95 Ledger request slots; five
+owned documents below `oracle/<nonce>/txn-expiry-04/`; the 16,688 micro-USD
+planning ceiling; one `EXCLUSIVE` document lock and five `READ` locks. The
+nonce is 32 lowercase hex characters and the owner marker identity is derived
+from it. Timing is wall-clock only: the descriptor refuses a clock advance and
+refuses the documented sleeper-shortening rehearsal switch on the production
+wire, and a rehearsal receipt is rejected by the comparator on its short waits.
+The launcher reads the bearer token on a private descriptor only after the
+Ledger reservation and the Gate claim; exit 0 is complete and released, exit 1
+is a held reservation with a receipt naming the retirement path, exit 2 is a
+refusal before any reservation. The lane README carries the exact command line.
+
+The credential-free integration proof runs the real Ledger, Gate and receipt
+path against an offline backend: all 13 cases, a no-data stop retired through
+`abort_no_data`, and a stop after the first case whose open transactions are
+rolled back and whose documents are recovered and closed through
+`close_after_abandon`. It is local evidence about the launcher, not a production
+observation, and the FS-TRANSACTION condition count is unchanged by it.
+
 ## Before execution
 
 None of the following is done, and none of it may be inferred from this
 document:
 
 - A fresh owner permission naming this campaign, with issue and expiry instants,
-  an owner identity, a recovery owner and recovery diagnostics.
-- A fresh nonce and a plan recompiled against it.
-- A credential path. This package binds none; the existing
-  `credential_prep.py` contract is the nearest reviewed precedent and its
-  envelope numbers do not apply here.
-- Shared Gate and Ledger admission for the reservation and the six locks.
-- A rebuilt, source-bound runtime artifact and a renewed local rehearsal against
-  it.
-- O7 admission review.
+  an owner identity, a recovery owner, a frozen credential principal and the
+  database-projection and Auth-configuration baseline digests.
+- A fresh 32-hex nonce and a plan recompiled against it.
+- A credential handoff on a private descriptor at launch time. This package
+  binds none.
+- A retained, source-bound runtime artifact matching the current shadow's
+  profile.
+- Independent O7 admission review and an owner-minted approval outside the
+  package.

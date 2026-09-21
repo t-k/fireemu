@@ -21,15 +21,14 @@ from __future__ import annotations
 import argparse
 import errno
 import hashlib
-import stat
 import json
 import math
 import os
 import re
-from datetime import datetime
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -38,6 +37,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,15 +45,26 @@ from typing import Any
 # entry point is imported or invoked by this local transport.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from batch_wire import NoRedirect, _read_bounded_response
-
+from o5_user_token_campaign import admitted_manifest_digest
 from o5_user_token_case import (
+    POST_SIGN_IN_DELETE,
+    POST_SIGN_IN_DISABLE,
+    POST_SIGN_IN_REVOKE,
     PRINCIPAL_EMPTY,
     PRINCIPAL_EXPIRED,
     PRINCIPAL_MALFORMED,
+    PRINCIPAL_REVOKED,
+    PRINCIPAL_REVOKED_EXPIRED,
     PRINCIPAL_UNAUTHENTICATED,
     compile_case,
+    digest,
 )
-from o5_user_token_collector import ROLE_LOCAL_SHADOW, collect
+from o5_user_token_collector import (
+    ENVIRONMENT_LOCAL,
+    READBACK_PUBLISH_ECHO,
+    ROLE_LOCAL_SHADOW,
+    collect,
+)
 from o5_user_token_shadow import (
     ENVIRONMENT_ALLOWLIST,
     launch_specification,
@@ -79,6 +90,13 @@ class Refused(RuntimeError):
     pass
 
 
+# What this process's transport records about every HTTP request it makes:
+# a running count, and the numeric loopback host and port the last request
+# was opened against. A receipt carries these as its wire facts. They are
+# written by ``_request`` after its loopback check, never by the caller.
+_WIRE = {"sequence": 0, "endpoint": None}
+
+
 # --------------------------------------------------------------------------
 # Transport helpers. Credentials live here and never leave this module.
 # --------------------------------------------------------------------------
@@ -90,9 +108,12 @@ def _request(
     try:
         parsed = urllib.parse.urlsplit(url)
         if (
-            parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "::1"}
-            or parsed.username is not None or parsed.password is not None
-            or parsed.fragment or not parsed.port
+            parsed.scheme != "http"
+            or parsed.hostname not in {"127.0.0.1", "::1"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+            or not parsed.port
             or method not in {"GET", "POST", "PATCH", "PUT", "DELETE"}
         ):
             raise ValueError("owned numeric loopback required")
@@ -103,7 +124,11 @@ def _request(
         if credential is not None:
             headers["Authorization"] = "Bearer " + credential
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
-        opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
+        opener = urllib.request.build_opener(
+            NoRedirect(), urllib.request.ProxyHandler({})
+        )
+        _WIRE["sequence"] += 1
+        _WIRE["endpoint"] = f"{parsed.hostname}:{parsed.port}"
         try:
             response = opener.open(request, timeout=REQUEST_TIMEOUT)
         except urllib.error.HTTPError as error:
@@ -115,7 +140,7 @@ def _request(
             # Empty or unparsable error bodies are not fabricated as {}.
             parsed_body = json.loads(raw)
             if not isinstance(parsed_body, dict):
-                raise ValueError("object response required")
+                raise ValueError("object response required")  # noqa: TRY004 -- refused like every other malformed response
             return response.status, parsed_body
     except (ValueError, OSError, urllib.error.URLError) as error:
         # Never include URLs, request headers, assertions or raw error bodies.
@@ -182,6 +207,7 @@ class LocalShadow:
         self.tenant: str | None = None
         self.tenant_attempted = False
         self.wire_requests = 0
+        self.releases = 0
         self.setup_accounts: list[str] = []
         self.setup_documents: dict[str, dict[str, Any]] = {}
         self.setup_journal: Path | None = None
@@ -203,7 +229,11 @@ class LocalShadow:
             raise Refused(f"tenant-create:{status}:{json.dumps(body)[:200]}")
         name = body.get("name")
         prefix = f"projects/{self.project}/tenants/"
-        tenant = name[len(prefix):] if isinstance(name, str) and name.startswith(prefix) else ""
+        tenant = (
+            name[len(prefix) :]
+            if isinstance(name, str) and name.startswith(prefix)
+            else ""
+        )
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", tenant) or "error" in body:
             raise Refused("tenant-create:missing-or-foreign-identifier")
         self.tenant = tenant
@@ -253,6 +283,100 @@ class LocalShadow:
         if status != 200:
             raise Refused(f"claims:{status}:{json.dumps(body)[:200]}")
 
+    def _auth_time(self, token: str) -> int | None:
+        """The auth_time claim of a token this process minted locally, or None.
+
+        The claim is read so that a revocation can be placed strictly after
+        the second the token was issued in; nothing else of the token is used
+        and nothing of it is recorded.
+        """
+        import base64
+
+        segments = token.split(".")
+        if len(segments) != 3:
+            return None
+        payload = segments[1] + "=" * (-len(segments[1]) % 4)
+        try:
+            claims = json.loads(base64.urlsafe_b64decode(payload))
+        except (ValueError, json.JSONDecodeError):
+            return None
+        auth_time = claims.get("auth_time", claims.get("iat"))
+        return auth_time if type(auth_time) is int and auth_time >= 0 else None
+
+    def _principal_action(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Apply one administrator action to an owned account, then read it back.
+
+        Revoke is what the Admin SDK's revokeRefreshTokens does, an
+        accounts:update with validSince, placed strictly after the token's
+        auth_time second so the token issued before it is revoked rather than
+        issued in the same second. The readback is an administrator lookup;
+        the receipt carries presence, the disabled flag and the uid
+        fingerprint, never the uid or the token.
+        """
+        ref = request["principalRef"]
+        action = request["action"]
+        entry = next(row for row in self.plan["ownedAccounts"] if row["ref"] == ref)
+        prefix = self.account_prefix(entry["tenant"])
+        uid = self.uids.get(ref)
+        token = self.tokens.get(ref)
+        auth_time = self._auth_time(token) if isinstance(token, str) else None
+        if not isinstance(uid, str) or not uid or auth_time is None:
+            return {"complete": False, "failure": "principal-action:identity-unknown"}
+        valid_since: int | None = None
+        if action == POST_SIGN_IN_DELETE:
+            status, body = _request(
+                "POST",
+                self._identity(f"{prefix}/accounts:delete"),
+                {"localId": uid},
+                OWNER_TOKEN,
+            )
+        elif action in (POST_SIGN_IN_REVOKE, POST_SIGN_IN_DISABLE):
+            payload: dict[str, Any] = {"localId": uid}
+            if action == POST_SIGN_IN_REVOKE:
+                valid_since = max(int(time.time()), auth_time + 1)
+                payload["validSince"] = str(valid_since)
+            else:
+                payload["disableUser"] = True
+            status, body = _request(
+                "POST",
+                self._identity(f"{prefix}/accounts:update"),
+                payload,
+                OWNER_TOKEN,
+            )
+        else:
+            return {"complete": False, "failure": "principal-action:unknown-action"}
+        if status != 200 or "error" in body:
+            return {"complete": False, "failure": f"principal-action:{action}"}
+        self._record_setup("account-post-sign-in", account=ref, action=action)
+        status, body = _request(
+            "POST",
+            self._identity(f"{prefix}/accounts:lookup"),
+            {"localId": [uid]},
+            OWNER_TOKEN,
+        )
+        users = body.get("users") if isinstance(body, dict) else None
+        if (
+            status != 200
+            or "error" in body
+            or not (users is None or isinstance(users, list))
+        ):
+            return {"complete": False, "failure": "principal-action:lookup"}
+        users = users or []
+        if len(users) > 1 or (users and users[0].get("localId") != uid):
+            return {"complete": False, "failure": "principal-action:lookup"}
+        present = bool(users)
+        disabled = bool(users[0].get("disabled", False)) if present else None
+        return {
+            "complete": True,
+            "status": "OK",
+            "action": action,
+            "authTime": auth_time,
+            "validSince": valid_since,
+            "present": present,
+            "disabled": disabled,
+            "uidFingerprint": digest(["uid", self.nonce, uid])[:16],
+        }
+
     def account_prefix(self, tenant: str | None) -> str:
         if tenant is None:
             return f"v1/projects/{self.project}"
@@ -278,7 +402,11 @@ class LocalShadow:
     def _record_setup(self, kind: str, **value: Any) -> None:
         if self.setup_journal is None:
             return
-        fd = os.open(self.setup_journal, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        fd = os.open(
+            self.setup_journal,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+            0o600,
+        )
         with os.fdopen(fd, "a", encoding="utf-8") as stream:
             stream.write(json.dumps({"kind": kind, **value}, allow_nan=False) + "\n")
             stream.flush()
@@ -291,21 +419,30 @@ class LocalShadow:
         self.setup_documents[resource] = proof
         self._record_setup("document-intent", resource=resource)
         status, body = _request(
-            "PATCH", self.document_url(resource) + "?currentDocument.exists=false",
-            {"fields": encoded}, OWNER_TOKEN,
+            "PATCH",
+            self.document_url(resource) + "?currentDocument.exists=false",
+            {"fields": encoded},
+            OWNER_TOKEN,
         )
         version = body.get("updateTime")
         valid_version = _valid_version(version)
         if (
-            type(status) is not int or status != 200 or "error" in body
-            or body.get("name") != resource or body.get("fields") != encoded
+            type(status) is not int
+            or status != 200
+            or "error" in body
+            or body.get("name") != resource
+            or body.get("fields") != encoded
             or not valid_version
         ):
             # A typed conditional conflict did not create this resource. Never
             # turn the pre-existing document into this run's deletion authority.
             error = body.get("error")
-            if (status == 409 and isinstance(error, dict)
-                    and error.get("status") == "ALREADY_EXISTS" and error.get("code") == 409):
+            if (
+                status == 409
+                and isinstance(error, dict)
+                and error.get("status") == "ALREADY_EXISTS"
+                and error.get("code") == 409
+            ):
                 proof["outcome"] = "rejected"
             raise Refused("fixture:creation-unconfirmed")
         proof.update(outcome="created", version=version)
@@ -318,13 +455,14 @@ class LocalShadow:
             return ""
         if ref == PRINCIPAL_MALFORMED:
             return "not-a-jwt"
-        if ref == PRINCIPAL_EXPIRED:
+        if ref in (PRINCIPAL_EXPIRED, PRINCIPAL_REVOKED_EXPIRED):
+            subject = "owner-a" if ref == PRINCIPAL_EXPIRED else PRINCIPAL_REVOKED
             return _unsigned_jwt(
                 {
                     "aud": self.project,
                     "iss": f"https://securetoken.google.com/{self.project}",
-                    "sub": self.uids.get("owner-a", "unknown"),
-                    "user_id": self.uids.get("owner-a", "unknown"),
+                    "sub": self.uids.get(subject, "unknown"),
+                    "user_id": self.uids.get(subject, "unknown"),
                     "iat": 1000,
                     "exp": 2000,
                     "firebase": {"sign_in_provider": "password", "identities": {}},
@@ -333,10 +471,48 @@ class LocalShadow:
         return self.tokens[ref]
 
     def execute(self, request: dict[str, Any]) -> dict[str, Any]:
-        """The injected transport the collector calls. Resolves refs to tokens."""
+        """The injected transport the collector calls. Resolves refs to tokens.
+
+        Every receipt carries the wire facts ``_request`` recorded for the
+        last HTTP request it made: the loopback host and port reached and the
+        process-wide request counter.
+        """
         self.wire_requests += 1
+        receipt = self._execute(request)
+        receipt["endpoint"] = _WIRE["endpoint"]
+        receipt["wireSequence"] = _WIRE["sequence"]
+        return receipt
+
+    def _release(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Publish the requested Ruleset and echo what was published.
+
+        The local runtime answers a publication with an empty issue list and has
+        no route that reads the active release back, so the readback is the
+        digest of the bytes this transport sent, labelled as such. The
+        collector checks it against the plan; the acquisition comparator
+        accepts a publish echo on the local side only.
+        """
+        label = request["ruleset"]
+        source = self.plan["rulesets"][label]["source"]
+        if digest(source) != request.get("sourceDigest"):
+            return {"complete": False, "failure": "ruleset-source-drift"}
+        self.publish(label)
+        self.releases += 1
+        return {
+            "complete": True,
+            "status": "OK",
+            "releaseName": f"local-{label}-{self.releases}",
+            "readbackKind": READBACK_PUBLISH_ECHO,
+            "readbackDigest": digest(source),
+        }
+
+    def _execute(self, request: dict[str, Any]) -> dict[str, Any]:
         if request.get("phase") == "recovery":
             return self._recover(request)
+        if request.get("phase") == "ruleset":
+            return self._release(request)
+        if request.get("phase") == "principal":
+            return self._principal_action(request)
         if request["ruleset"] != self.active_ruleset:
             self.publish(request["ruleset"])
         credential = self.credential_for(request["credentialRef"])
@@ -400,19 +576,35 @@ class LocalShadow:
             if status == 404:
                 error = body.get("error")
                 absent = (
-                    set(body) == {"error"} and isinstance(error, dict)
-                    and type(error.get("code")) is int and error["code"] == 404
+                    set(body) == {"error"}
+                    and isinstance(error, dict)
+                    and type(error.get("code")) is int
+                    and error["code"] == 404
                     and error.get("status") == "NOT_FOUND"
                 )
                 if absent:
-                    return {"complete": True, "status": "NOT_FOUND", "documentPresent": False, "version": None}
+                    return {
+                        "complete": True,
+                        "status": "NOT_FOUND",
+                        "documentPresent": False,
+                        "version": None,
+                    }
             elif status == 200 and "error" not in body and body.get("name") == resource:
                 version = body.get("updateTime")
                 if _valid_version(version):
-                    return {"complete": True, "status": "OK", "documentPresent": True, "version": version}
+                    return {
+                        "complete": True,
+                        "status": "OK",
+                        "documentPresent": True,
+                        "version": version,
+                    }
             return {"complete": False, "failure": "invalid-owned-document-readback"}
         version = request["precondition"]["updateTime"]
-        url = self.document_url(resource) + "?currentDocument.updateTime=" + urllib.parse.quote(version, safe="")
+        url = (
+            self.document_url(resource)
+            + "?currentDocument.updateTime="
+            + urllib.parse.quote(version, safe="")
+        )
         status, body = _request("DELETE", url, None, OWNER_TOKEN)
         return {
             "complete": type(status) is int and status == 200 and body == {},
@@ -436,9 +628,15 @@ class LocalShadow:
                 OWNER_TOKEN,
             )
             valid = (
-                type(status) is int and status == 200 and isinstance(body, dict)
-                and "error" not in body and "nextPageToken" not in body
-                and ("kind" not in body or body["kind"] == "identitytoolkit#GetAccountInfoResponse")
+                type(status) is int
+                and status == 200
+                and isinstance(body, dict)
+                and "error" not in body
+                and "nextPageToken" not in body
+                and (
+                    "kind" not in body
+                    or body["kind"] == "identitytoolkit#GetAccountInfoResponse"
+                )
             )
             if valid and "users" not in body:
                 valid = body == {"kind": "identitytoolkit#GetAccountInfoResponse"}
@@ -464,8 +662,12 @@ class LocalShadow:
             OWNER_TOKEN,
         )
         return {
-            "complete": type(status) is int and status == 200 and body in (
-                {}, {"kind": "identitytoolkit#DeleteAccountResponse"},
+            "complete": type(status) is int
+            and status == 200
+            and body
+            in (
+                {},
+                {"kind": "identitytoolkit#DeleteAccountResponse"},
             ),
             "status": STATUS_BY_HTTP.get(status, f"HTTP_{status}"),
             "accountPresent": False,
@@ -478,7 +680,12 @@ class LocalShadow:
             self._record_setup("account-intent", account=entry["ref"])
             self.setup_accounts.append(entry["ref"])
             uid, token = self.sign_up(entry["email"], tenant)
-            if not isinstance(uid, str) or not uid or not isinstance(token, str) or not token:
+            if (
+                not isinstance(uid, str)
+                or not uid
+                or not isinstance(token, str)
+                or not token
+            ):
                 raise Refused("signup:invalid-identity")
             self.uids[entry["ref"]] = uid
             self._record_setup("account-created", account=entry["ref"], uid=uid)
@@ -496,8 +703,11 @@ class LocalShadow:
         request could still complete late. No namespace-wide sweep is allowed.
         This path does not run after observation began or refill its budget.
         """
-        if (type(deadline_seconds) not in (int, float) or not math.isfinite(deadline_seconds)
-                or not 0 < deadline_seconds <= 600):
+        if (
+            type(deadline_seconds) not in (int, float)
+            or not math.isfinite(deadline_seconds)
+            or not 0 < deadline_seconds <= 600
+        ):
             raise Refused("invalid-setup-recovery-deadline")
         if self.setup_recovery_started:
             raise Refused("setup-recovery-already-started")
@@ -544,10 +754,16 @@ class LocalShadow:
                     continue
                 if current.get("version") != proof["version"]:
                     raise Refused("setup-version-changed")
-                request("delete", resource=resource, precondition={"updateTime": proof["version"]})
+                request(
+                    "delete",
+                    resource=resource,
+                    precondition={"updateTime": proof["version"]},
+                )
                 final = request("absence", resource=resource)
-                row.update(complete=final.get("documentPresent") is False,
-                           outcome="final-readback")
+                row.update(
+                    complete=final.get("documentPresent") is False,
+                    outcome="final-readback",
+                )
             except Exception as error:  # noqa: BLE001 -- keep independent rollback attempts
                 row.update(outcome="unconfirmed", failure=type(error).__name__)
         for ref in self.setup_accounts:
@@ -566,12 +782,19 @@ class LocalShadow:
                     raise Refused("setup-uid-changed")
                 request("account-delete", accountRef=ref, precondition={"uid": uid})
                 final = request("account-absence", accountRef=ref)
-                row.update(complete=final.get("accountPresent") is False,
-                           outcome="final-readback")
+                row.update(
+                    complete=final.get("accountPresent") is False,
+                    outcome="final-readback",
+                )
             except Exception as error:  # noqa: BLE001 -- recover unrelated accounts
                 row.update(outcome="unconfirmed", failure=type(error).__name__)
-        return {"complete": all(row["complete"] for row in rows), "rows": rows,
-                "requestLimit": limit, "requests": spent, "deadlineSeconds": deadline_seconds}
+        return {
+            "complete": all(row["complete"] for row in rows),
+            "rows": rows,
+            "requestLimit": limit,
+            "requests": spent,
+            "deadlineSeconds": deadline_seconds,
+        }
 
     def delete_tenant(self) -> bool:
         if self.tenant is None:
@@ -584,15 +807,70 @@ class LocalShadow:
         status, body = _request("GET", url, None, OWNER_TOKEN)
         error = body.get("error") if isinstance(body, dict) else None
         absent = (
-            type(status) is int and status == 404 and isinstance(body, dict) and set(body) == {"error"}
-            and isinstance(error, dict) and type(error.get("code")) is int
-            and error["code"] == 404 and error.get("message") == "TENANT_NOT_FOUND"
+            type(status) is int
+            and status == 404
+            and isinstance(body, dict)
+            and set(body) == {"error"}
+            and isinstance(error, dict)
+            and type(error.get("code")) is int
+            and error["code"] == 404
+            and error.get("message") == "TENANT_NOT_FOUND"
             and ("status" not in error or error["status"] == "NOT_FOUND")
-            and ("errors" not in error or error["errors"] == [{
-                "message": "TENANT_NOT_FOUND", "domain": "global", "reason": "invalid",
-            }])
+            and (
+                "errors" not in error
+                or error["errors"]
+                == [
+                    {
+                        "message": "TENANT_NOT_FOUND",
+                        "domain": "global",
+                        "reason": "invalid",
+                    }
+                ]
+            )
         )
         return deleted and absent
+
+
+def _local_acquisition(output: Path, shadow: LocalShadow) -> dict[str, Any]:
+    """The bindings a local shadow run carries into its bundle.
+
+    The environment is local, there is no reservation and no owner permission,
+    the artifact is what the parent recorded in ``launch.json`` before it
+    started this child, and each principal is fingerprinted from the nonce and
+    the uid the local Auth emulator assigned. No uid and no token is bound.
+    """
+    plan = shadow.plan
+    artifact = None
+    launch = output / "launch.json"
+    if launch.is_file() and not launch.is_symlink():
+        recorded = json.loads(launch.read_bytes()).get("artifact")
+        if isinstance(recorded, dict):
+            artifact = {
+                "artifactSha256": recorded.get("artifactSha256"),
+                "sourceCommit": recorded.get("sourceCommit"),
+            }
+    principals = {}
+    for entry in plan["ownedAccounts"]:
+        uid = shadow.uids.get(entry["ref"])
+        if not isinstance(uid, str) or not uid:
+            continue
+        principals[entry["ref"]] = {
+            "uidFingerprint": digest(["uid", plan["nonce"], uid])[:16],
+            "provider": "anonymous" if entry["kind"] == "anonymous" else "email",
+            "tenant": entry["tenant"],
+            "claimsDigest": digest(entry["claims"]),
+        }
+    return {
+        "environment": {"kind": ENVIRONMENT_LOCAL},
+        "campaignManifestDigest": admitted_manifest_digest(
+            plan["project"], plan["database"], plan["nonce"]
+        ),
+        "nonceReservation": None,
+        "ownerPermission": None,
+        "artifact": artifact,
+        "principals": principals,
+        "window": None,
+    }
 
 
 def run_child(output: Path, nonce: str) -> int:
@@ -602,8 +880,10 @@ def run_child(output: Path, nonce: str) -> int:
     # Parent launch metadata may exist, but a child invocation is single-use.
     with (output / "child-started").open("x", encoding="utf-8") as stream:
         stream.write("local-only\n")
-    if any((output / name).exists() or (output / name).is_symlink()
-           for name in ("local-shadow.json", "setup-journal.jsonl", "journal.jsonl")):
+    if any(
+        (output / name).exists() or (output / name).is_symlink()
+        for name in ("local-shadow.json", "setup-journal.jsonl", "journal.jsonl")
+    ):
         raise Refused("existing-child-evidence")
     shadow = LocalShadow(firestore, auth, PROJECT, nonce)
     shadow.setup_journal = output / "setup-journal.jsonl"
@@ -636,11 +916,15 @@ def run_child(output: Path, nonce: str) -> int:
             deadline_seconds=300.0,
             recovery_deadline_seconds=600.0,
             journal_path=output / "journal.jsonl",
+            acquisition=_local_acquisition(output, shadow),
         )
-        # Deviations are computed against the real uids, then everything that
-        # gets written out is reduced to principal labels. The raw uids stay in
-        # this process.
-        deviations = local_deviations(bundle, shadow.plan, shadow.uids)
+        # The collector has already replaced every uid its recovery readbacks
+        # returned with the principal label, so the frozen-field check resolves
+        # `$principal` to that label: a field equals the label exactly when it
+        # equalled the uid the administrator lookup returned for that account.
+        # The raw uids stay in this process.
+        labels = {ref: f"principal:{ref}" for ref in shadow.uids}
+        deviations = local_deviations(bundle, shadow.plan, labels)
         bundle["journal"] = Path(bundle["journal"]).name
         record["bundle"] = redact_principals(bundle, shadow.uids)
         record["deviations"] = redact_principals(deviations, shadow.uids)
@@ -651,6 +935,7 @@ def run_child(output: Path, nonce: str) -> int:
             and bundle["cleanup"].get("cleanupComplete") is True
         )
         record["wireRequests"] = shadow.wire_requests
+        record["httpRequests"] = _WIRE["sequence"]
         record["launchSpecification"] = launch_specification(shadow.plan)
     except Refused as error:
         record["failure"] = str(error).split(":", 1)[0]
@@ -702,11 +987,18 @@ def run_child(output: Path, nonce: str) -> int:
 def _socket_closed(origin: str) -> bool:
     """Only connection refusal proves closure; timeout/invalid address is unknown."""
     try:
-        value = urllib.parse.urlsplit(origin if origin.startswith("http://") else "http://" + origin)
+        value = urllib.parse.urlsplit(
+            origin if origin.startswith("http://") else "http://" + origin
+        )
         if (
-            value.scheme != "http" or value.hostname not in {"127.0.0.1", "::1"}
-            or not value.port or value.username is not None or value.password is not None
-            or value.path or value.query or value.fragment
+            value.scheme != "http"
+            or value.hostname not in {"127.0.0.1", "::1"}
+            or not value.port
+            or value.username is not None
+            or value.password is not None
+            or value.path
+            or value.query
+            or value.fragment
         ):
             return False
         with socket.create_connection((value.hostname, value.port), timeout=1):
@@ -749,6 +1041,7 @@ def _read_child_receipt(path: Path) -> tuple[dict[str, Any], str]:
         raw = stream.read(8 * 1024 * 1024 + 1)
     if len(raw) > 8 * 1024 * 1024:
         raise Refused("oversized-child-receipt")
+
     def unique(pairs):
         value = {}
         for key, item in pairs:
@@ -772,6 +1065,7 @@ def _stop_owned_process(child: subprocess.Popen) -> bool:
     An unreaped live leader pins its PID. Never signal a group after the leader
     has been reaped; closed listeners are verified separately in either case.
     """
+
     def group_gone() -> bool:
         try:
             os.killpg(child.pid, 0)
@@ -843,9 +1137,14 @@ def run_parent(output: Path) -> int:
         key: os.environ[key] for key in ENVIRONMENT_ALLOWLIST if key in os.environ
     }
     parent: dict[str, Any] = {
-        "contract": "fs-rules-user-token-parent-v2", "productionExecuted": False,
-        "completed": False, "processStopped": False, "originsClosed": False,
-        "childReceiptValid": False, "issues": [], "exitCode": None,
+        "contract": "fs-rules-user-token-parent-v2",
+        "productionExecuted": False,
+        "completed": False,
+        "processStopped": False,
+        "originsClosed": False,
+        "childReceiptValid": False,
+        "issues": [],
+        "exitCode": None,
     }
     child = None
     artifact = None
@@ -896,12 +1195,19 @@ def run_parent(output: Path) -> int:
                 "--nonce",
                 nonce,
             ]
-            _publish_new(output / "launch.json", {
-                "artifact": artifact, "environment": sorted(environment),
-                "privateExecutable": "fireemu", "newProcessGroup": True,
-            })
+            _publish_new(
+                output / "launch.json",
+                {
+                    "artifact": artifact,
+                    "environment": sorted(environment),
+                    "privateExecutable": "fireemu",
+                    "newProcessGroup": True,
+                },
+            )
             try:
-                child = subprocess.Popen(argv, cwd=private, env=environment, start_new_session=True)
+                child = subprocess.Popen(
+                    argv, cwd=private, env=environment, start_new_session=True
+                )
                 try:
                     parent["exitCode"] = child.wait(timeout=900)
                 except subprocess.TimeoutExpired:
@@ -921,21 +1227,31 @@ def run_parent(output: Path) -> int:
             parent["childReceiptSha256"] = sha
             required = {
                 "contract": "fs-rules-user-token-local-shadow-run-v1",
-                "status": "LOCAL_SHADOW_ONLY", "productionExecuted": False,
-                "productionReady": False, "completed": True, "nonce": nonce,
-                "recordingComplete": True, "stateValidation": True,
-                "resourceCleanupComplete": True, "tenantDeleted": True,
+                "status": "LOCAL_SHADOW_ONLY",
+                "productionExecuted": False,
+                "productionReady": False,
+                "completed": True,
+                "nonce": nonce,
+                "recordingComplete": True,
+                "stateValidation": True,
+                "resourceCleanupComplete": True,
+                "tenantDeleted": True,
             }
             parent["childReceiptValid"] = (
-                all(type(value.get(key)) is type(expected) and value.get(key) == expected
-                    for key, expected in required.items())
+                all(
+                    type(value.get(key)) is type(expected)
+                    and value.get(key) == expected
+                    for key, expected in required.items()
+                )
                 and value.get("failure") is None
-                and type(value.get("childPid")) is int and value["childPid"] > 0
+                and type(value.get("childPid")) is int
+                and value["childPid"] > 0
             )
             # Missing endpoints are never an empty conjunction proving closure.
             endpoints = [value.get(key) for key in ("firestoreOrigin", "authOrigin")]
             parent["originsClosed"] = all(
-                isinstance(origin, str) and _socket_closed(origin) for origin in endpoints
+                isinstance(origin, str) and _socket_closed(origin)
+                for origin in endpoints
             )
         except Exception as error:  # noqa: BLE001 -- retain absent/malformed receipt
             parent["issues"].append("child-receipt:" + type(error).__name__)

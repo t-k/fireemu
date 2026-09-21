@@ -30,7 +30,7 @@ that token as its bearer credential.
 
 ## Prepared conditions
 
-Twenty-six observation rows cover ten conditions. Every condition carries at
+Thirty-three observation rows cover eleven conditions. Every condition carries at
 least one control, negative or post-state row.
 
 | Condition | Rows | What the rows separate |
@@ -44,6 +44,7 @@ least one control, negative or post-state row.
 | `getAfter` | 2 | An atomic commit that also writes the partner document satisfies `getAfter()`; a separate control document whose guard is never created is denied |
 | `atomic-multiwrite` | 2 | A commit pairing one allowed and one denied write is refused as a whole, and a post-state read of the pinned field value proves the allowed half was not applied |
 | `credential-refusal` | 3 | An expired token, a malformed bearer and an empty bearer are authentication refusals, not Rules denials |
+| `credential-revocation` | 7 | RULES-REVOKE-005 phase 1, recorded as accept-then-refuse. For each of three principals: a positive control in which the unexpired ID token is accepted on a document any authenticated principal may read; then an administrator step the collector performs between the rows (refresh tokens revoked with `validSince` placed after the token's `auth_time`, account disabled, or account deleted) with an administrator lookup readback recorded under the collector's receipts as presence, disabled flag and uid fingerprint, plus the token's `auth_time` and the `validSince` set, never a uid or a token; then the same token presented again. An expired token of the revoked account is the seventh row, a control. The compiled status of the three within-`exp` rows is the current local decision, `UNAUTHENTICATED` (fireemu refuses revoked and disabled accounts and unknown users on the Rules path). Their production expectation is carried on the row as a hypothesis, `OK` until `exp`, from the Firebase documentation on detecting ID token revocation; it is not an observation |
 | `ruleset-transition` | 3 | Under Ruleset B the owner is denied on the same resource, while the explicit-null and custom-claim clauses still allow |
 
 The anonymous rows matter because an implementation that treats an
@@ -107,10 +108,10 @@ subject that cannot be read back stays outstanding and is never force deleted.
 
 | Quantity | Value |
 | --- | --- |
-| Observation requests | 26 |
-| Fixture, Auth and Rules requests | 26 |
-| Recovery requests | 54 |
-| Request upper bound | 106 |
+| Observation requests | 33 |
+| Fixture, Auth and Rules requests | 35 |
+| Recovery requests | 63 |
+| Request upper bound | 131 |
 | Concurrency | 1 |
 | Observation deadline | 600 s |
 | Recovery deadline | 900 s |
@@ -132,35 +133,90 @@ excludes every production credential variable.
 The executed record is
 [`spec/compatibility/fs-rules-user-token-local-shadow.json`](../../spec/compatibility/fs-rules-user-token-local-shadow.json).
 It binds the artifact digest, the `rustc` version and the source commit it was
-built from. In that run the local runtime produced all twenty-six expected
-decisions, including the field values of the multiwrite post-state row, with
-complete recording, complete document and account cleanup, the tenant deleted
-and both origins closed afterwards. There are no repair tickets from it.
+built from, and, since the collector became a bound collector, the digests of
+every manifest-bound lane module that produced it, the loopback endpoint and
+wire sequence of every receipt, the two Ruleset releases with their publish
+echo readback, the monotonic and wall clocks, and a fingerprint per principal
+derived from the nonce and the assigned uid. In the current run the local
+runtime produced all thirty-three expected decisions, including the field
+values of the multiwrite post-state row and the seven credential-revocation
+rows at the current local decision (each revocation principal accepted before
+the administrator step and refused after it, with the step's lookup readback
+recorded), with complete recording, complete document and account cleanup of
+all seven accounts (the deleted account absent at readback, every other
+account present), the tenant deleted and both origins closed afterwards.
+There are no repair tickets from it.
 
 That is local evidence. The local Auth emulator mints unsigned tokens, so a
 local allow proves a Rules decision and never production token verification.
-Changing the compiled matrix invalidates the record, and the binding test says
-so; the shadow then has to be re-run.
+Changing the compiled matrix or any manifest-bound lane module invalidates the
+record, and the binding tests say so: the recorded source digests must equal
+the sources on disk, and the recorded source commit must be `HEAD` or an
+ancestor within a bounded number of commits. The shadow then has to be re-run
+on a committed tree.
 
 ## Comparator contract
 
-The comparator has no positive classification. Every call returns
-`INDETERMINATE`.
+There are two comparator modules, recording two different decisions.
 
-That is deliberate. A collected pair of bundles is not evidence about
-production until each bundle binds the facts that make it an acquisition rather
-than a recording: the endpoint each request reached, the observer identity, the
-campaign manifest the run was admitted under, the Ruleset releases with their
-readback, an exclusive nonce reservation, sequential wire and cost counts, and
-version-bound cleanup with final absence. The comparator names each missing
-binding, refuses a bundle that claims authority, refuses a self-comparison, and
-refuses a bundle whose declared role does not match the side it was passed as.
+The first, `o5_user_token_comparator.py`, has no positive classification and
+every call returns `INDETERMINATE`. That is deliberate and unchanged. A
+collected pair of bundles is not evidence about production until each bundle
+binds the facts that make it an acquisition rather than a recording: the
+endpoint each request reached, the observer identity, the campaign manifest the
+run was admitted under, the Ruleset releases with their readback, an exclusive
+nonce reservation, sequential wire and request counts, and version-bound
+cleanup with final absence. The first module names each missing binding and
+refuses. (Its own vocabulary says "cost counts"; no comparator checks cost,
+which stays with the Ledger allocation and the owner.)
 
-A self-declared role string is not an acquisition. Collecting the same matrix
-twice locally and labelling one bundle as the production side must never produce
-agreement, and it cannot, because no path to agreement exists. Restoring a
-positive classification requires a separate review of a collector that produces
-those bindings.
+The second, `o5_user_token_comparator_v2.py`, is the separately reviewed
+acquisition comparator. It can reach `MATCH`, `SEMANTIC_MISMATCH`,
+`INDETERMINATE` or `REFUSED`, and it reaches a positive classification only
+when both bundles carry every binding above and each one verifies against
+something the bundle cannot fabricate: the lane source digests recomputed from
+disk, a production host allowlist on one side and loopback on the other, the
+Ruleset source digests from the plan and the activation order relative to the
+rows, the per-row credential fingerprint recomputed from the nonce and the
+reference (the per-account uid fingerprint is checked by shape, against the
+plan's provider, tenant and claims, and for difference between the two sides,
+since the comparator never holds a uid), the admitted manifest digest
+recomputed from the campaign module, typed cleanup steps for every owned
+document and account, and monotonic time and wire-sequence consistency against
+the enforced budget. The production side must also carry a nonce reservation,
+an owner permission reference and an approval window; the local side must
+carry its artifact binding and no reservation. Every other field a bundle
+carries is self-reported; `MATCH` means two fully bound, mutually consistent
+bundles agree row by row, and is not production evidence on its own.
+
+A row whose plan entry carries a production hypothesis is reported with that
+hypothesis and with whether the production status read as hypothesized or
+contrary, and the result carries a per-condition tally; neither touches the
+classification. For the 33-row campaign that means: if the hypothesis holds,
+the comparison is expected to classify `SEMANTIC_MISMATCH`, naming exactly the
+three within-`exp` `credential-revocation` rows, with those rows reading
+"as hypothesized". That outcome is the expected one, and the follow-up it calls
+for is a change to the Rules-path token verification in
+`crates/fireemu-core-auth/src/jwt.rs` (lane C), not a change to the
+comparator or to the compiled expectation, which records the local decision
+as it is.
+
+A self-declared role string is still not an acquisition. Collecting the same
+matrix twice locally and labelling one bundle as the production side is
+refused as `local-mislabelled-as-production`, by its environment label, by its
+loopback endpoints, by its artifact binding and by the principals it shares
+with the local side. A manifest digest that is not the recomputed one, a
+Ruleset whose readback is not the plan's source, a principal that does not
+match the plan, an incomplete record, a cleanup step with an unknown outcome,
+a time or count contradiction, the same run on both sides, and an authority
+claim without bindings are each a named error and never `MATCH`. The full
+table is in the lane README.
+
+The collector records these bindings in a bound run. The local shadow is one,
+and the O8 descriptor `o5_user_token_descriptor.py` declares the campaign to
+the shared admission core with the bound collector as its production side and
+the acquisition comparator against the published shadow; its wire members
+refuse, because the lane has no reviewed production transport.
 
 Expectation drift is reported by the local shadow, not by the comparator. A row
 where the local runtime disagrees with the compiled expectation is a repair

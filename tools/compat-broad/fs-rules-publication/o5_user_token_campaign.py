@@ -21,8 +21,10 @@ _SOURCE_FILES = (
     "o5_user_token_collector.py",
     "o5_user_token_campaign.py",
     "o5_user_token_comparator.py",
+    "o5_user_token_comparator_v2.py",
     "o5_user_token_shadow.py",
     "o5_user_token_local_run.py",
+    "o5_user_token_descriptor.py",
 )
 
 # Unit prices are the public Firestore Standard edition list prices used only to
@@ -49,7 +51,11 @@ OWNER_PRECONDITIONS = (
 PERMISSION_ENVELOPE = {
     "services": ["identitytoolkit.googleapis.com", "firestore.googleapis.com"],
     "firestoreScope": "the campaign nonce subtree only",
-    "authScope": "four throwaway accounts created by this campaign only",
+    "authScope": (
+        "seven throwaway accounts created by this campaign only, three of "
+        "which are revoked, disabled or deleted by the administrator credential "
+        "after sign-in"
+    ),
     "rulesScope": "read the active release; publish only the two campaign Rulesets",
     "forbidden": [
         "any document outside the nonce subtree",
@@ -62,7 +68,13 @@ PERMISSION_ENVELOPE = {
 }
 
 
-def _source_digests() -> dict[str, str]:
+def source_digests() -> dict[str, str]:
+    """SHA-256 of every lane module, read from disk now.
+
+    The collector records these as its observer identity and the acquisition
+    comparator recomputes them, so a bundle produced by other bytes than the
+    ones under review is named as drift rather than accepted.
+    """
     here = Path(__file__).resolve().parent
     digests = {}
     for name in _SOURCE_FILES:
@@ -79,8 +91,14 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
     fixtures = len(plan["fixtures"])
     accounts = plan["ownedAccounts"]
     # Per account: sign-up, plus a claim write and a re-sign-in when it carries
-    # a custom claim. Plus one tenant create and one tenant delete.
-    auth_requests = sum(3 if entry["claims"] else 1 for entry in accounts) + 2
+    # a custom claim, plus one administrator action and one lookup readback
+    # when the account is revoked, disabled or deleted between two rows. Plus
+    # one tenant create and one tenant delete.
+    auth_requests = (
+        sum(3 if entry["claims"] else 1 for entry in accounts)
+        + sum(2 for entry in accounts if entry.get("postSignIn"))
+        + 2
+    )
     # Rules: read the active release, publish two Rulesets, release each, read
     # back each release, restore the preexisting release and read it back.
     rules_requests = 8
@@ -123,7 +141,7 @@ def manifest(
         "productionReady": False,
         "frozenInputs": {
             "caseDigest": plan["planDigest"],
-            "sources": _source_digests(),
+            "sources": source_digests(),
             "rulesetDigests": {
                 label: digest(body["source"])
                 for label, body in plan["rulesets"].items()
@@ -145,6 +163,17 @@ def manifest(
         {key: value[key] for key in value if key != "manifestDigest"}
     )
     return value
+
+
+def admitted_manifest_digest(project: str, database: str, nonce: str) -> str:
+    """The digest of the manifest a run of this nonce is admitted under.
+
+    The tenant identifier is assigned by Identity Platform (or by the local
+    Auth emulator) only once the run has started, so the admitted manifest is
+    the one compiled with the placeholder tenant. Both sides of a comparison
+    bind this digest; the tenant-specific plan digests are bound separately.
+    """
+    return manifest(project, database, nonce)["manifestDigest"]
 
 
 def validate_manifest(value: Any) -> None:

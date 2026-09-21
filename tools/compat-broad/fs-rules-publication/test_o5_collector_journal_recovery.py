@@ -1,17 +1,21 @@
 """Collector failures after setup cannot bypass its existing recovery reserve."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import pytest
-
 import o5_user_token_collector as module
-from test_o5_user_token_collector import case, Transport
+import pytest
+from test_o5_user_token_collector import Transport, case
 
 
-@pytest.mark.parametrize("stage", ["run", "accounts", "attempt", "request", "outcome", "recovery", "close"])
-def test_failed_journal_stops_observation_but_recovers_existing_resources(tmp_path, monkeypatch, stage):
+@pytest.mark.parametrize(
+    "stage", ["run", "accounts", "attempt", "request", "outcome", "recovery", "close"]
+)
+def test_failed_journal_stops_observation_but_recovers_existing_resources(
+    tmp_path, monkeypatch, stage
+):
     plan = case()
     transport = Transport(plan)
     original = module._Journal.__init__
@@ -21,17 +25,25 @@ def test_failed_journal_stops_observation_but_recovers_existing_resources(tmp_pa
     class FailingHandle:
         def __init__(self, actual):
             self.actual = actual
+
         def write(self, line):
             if json.loads(line)["kind"] == stage:
                 hit.append(stage)
-                observation_counts_at_failure.append(sum(
-                    request.get("phase") != "recovery" for request in transport.requests))
+                observation_counts_at_failure.append(
+                    sum(
+                        request.get("phase") != "recovery"
+                        for request in transport.requests
+                    )
+                )
                 raise OSError("private-detail-must-not-escape")
             return self.actual.write(line)
+
         def flush(self):
             return self.actual.flush()
+
         def fileno(self):
             return self.actual.fileno()
+
         def close(self):
             self.actual.close()
             if stage == "close":
@@ -43,8 +55,13 @@ def test_failed_journal_stops_observation_but_recovers_existing_resources(tmp_pa
         self._handle = FailingHandle(self._handle)
 
     monkeypatch.setattr(module._Journal, "__init__", init)
-    result = module.collect(plan, transport, role=module.ROLE_LOCAL_SHADOW,
-                            run_id="journal", journal_path=tmp_path / "journal.jsonl")
+    result = module.collect(
+        plan,
+        transport,
+        role=module.ROLE_LOCAL_SHADOW,
+        run_id="journal",
+        journal_path=tmp_path / "journal.jsonl",
+    )
     assert hit
     assert result["recordingComplete"] is False
     assert result["abort"] is not None
@@ -53,24 +70,35 @@ def test_failed_journal_stops_observation_but_recovers_existing_resources(tmp_pa
     assert not any(transport.present.values()) and not any(transport.accounts.values())
     assert result["budget"]["recoverySpent"] <= result["budget"]["recoveryCeiling"]
     if stage in {"run", "accounts", "attempt", "request"}:
-        assert sum(request.get("phase") != "recovery" for request in transport.requests) == observation_counts_at_failure[0]
+        assert (
+            sum(request.get("phase") != "recovery" for request in transport.requests)
+            == observation_counts_at_failure[0]
+        )
     if stage == "outcome":
-        assert sum(request.get("phase") != "recovery" for request in transport.requests) == 1
+        assert (
+            sum(request.get("phase") != "recovery" for request in transport.requests)
+            == 1
+        )
     assert "private-detail" not in json.dumps(result)
 
 
-def test_journal_open_failure_still_recovers_preexisting_setup_resources(tmp_path, monkeypatch):
+def test_journal_open_failure_still_recovers_preexisting_setup_resources(
+    tmp_path, monkeypatch
+):
     path = tmp_path / "journal.jsonl"
     original = Path.open
+
     def failing(self, *args, **kwargs):
         if self == path:
             raise OSError("open-failed")
         return original(self, *args, **kwargs)
+
     monkeypatch.setattr(Path, "open", failing)
     plan = case()
     transport = Transport(plan)
-    result = module.collect(plan, transport, role=module.ROLE_LOCAL_SHADOW,
-                            run_id="open", journal_path=path)
+    result = module.collect(
+        plan, transport, role=module.ROLE_LOCAL_SHADOW, run_id="open", journal_path=path
+    )
     assert result["recordingComplete"] is False
     assert result["cleanup"]["cleanupComplete"] is True
     assert all(request.get("phase") == "recovery" for request in transport.requests)
@@ -83,14 +111,21 @@ def test_observation_processing_exception_enters_recovery(tmp_path, monkeypatch,
     transport = Transport(plan)
     original = getattr(module, point)
     triggered = []
+
     def failing(*args, **kwargs):
         if not triggered:
             triggered.append(True)
             raise ValueError("private-exception-detail")
         return original(*args, **kwargs)
+
     monkeypatch.setattr(module, point, failing)
-    result = module.collect(plan, transport, role=module.ROLE_LOCAL_SHADOW,
-                            run_id="processing", journal_path=tmp_path / "journal.jsonl")
+    result = module.collect(
+        plan,
+        transport,
+        role=module.ROLE_LOCAL_SHADOW,
+        run_id="processing",
+        journal_path=tmp_path / "journal.jsonl",
+    )
     assert result["recordingComplete"] is False
     assert result["cleanup"]["cleanupComplete"] is True
     assert not any(transport.present.values()) and not any(transport.accounts.values())
@@ -102,13 +137,17 @@ def test_recovery_processing_failure_retains_one_resource_and_continues(monkeypa
     transport = Transport(plan)
     original = module._accept
     failed = []
+
     def fail_first_recovery(raw, allowed):
         if allowed == module.RECOVERY_RECEIPT_KEYS and not failed:
             failed.append(True)
             raise ValueError("invalid-recovery-normalization")
         return original(raw, allowed)
+
     monkeypatch.setattr(module, "_accept", fail_first_recovery)
-    result = module.collect(plan, transport, role=module.ROLE_LOCAL_SHADOW, run_id="recovery")
+    result = module.collect(
+        plan, transport, role=module.ROLE_LOCAL_SHADOW, run_id="recovery"
+    )
     assert result["recordingComplete"] is False
     assert result["cleanup"]["outstandingResources"] == [plan["ownedResources"][0]]
     assert sum(transport.present.values()) == 1
@@ -116,33 +155,48 @@ def test_recovery_processing_failure_retains_one_resource_and_continues(monkeypa
 
 
 @pytest.mark.parametrize("method", ["flush", "fsync"])
-def test_failed_journal_flush_or_sync_keeps_cleanup_but_not_completion(tmp_path, monkeypatch, method):
+def test_failed_journal_flush_or_sync_keeps_cleanup_but_not_completion(
+    tmp_path, monkeypatch, method
+):
     plan = case()
     transport = Transport(plan)
     original = module._Journal.__init__
     hits = []
     if method == "fsync":
+
         def failed_sync(_fd):
             hits.append(True)
             raise OSError("private-sync-error")
+
         monkeypatch.setattr(module.os, "fsync", failed_sync)
     else:
+
         class Handle:
             def __init__(self, handle):
                 self.handle = handle
+
             def write(self, value):
                 return self.handle.write(value)
+
             def flush(self):
                 hits.append(True)
                 raise OSError("private-flush-error")
+
             def close(self):
                 self.handle.close()
+
         def init(self, path):
             original(self, path)
             self._handle = Handle(self._handle)
+
         monkeypatch.setattr(module._Journal, "__init__", init)
-    result = module.collect(plan, transport, role=module.ROLE_LOCAL_SHADOW,
-                            run_id="durability", journal_path=tmp_path / "journal.jsonl")
+    result = module.collect(
+        plan,
+        transport,
+        role=module.ROLE_LOCAL_SHADOW,
+        run_id="durability",
+        journal_path=tmp_path / "journal.jsonl",
+    )
     assert hits
     assert not result["recordingComplete"]
     assert result["cleanup"]["cleanupComplete"] is True
@@ -152,14 +206,21 @@ def test_failed_journal_flush_or_sync_keeps_cleanup_but_not_completion(tmp_path,
 
 
 @pytest.mark.parametrize("point", ["initial", "observation", "recovery"])
-@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1.0, True, "1", None, "raise"],
-                         ids=["nan", "infinite", "negative", "bool", "string", "null", "exception"])
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), -1.0, True, "1", None, "raise"],
+    ids=["nan", "infinite", "negative", "bool", "string", "null", "exception"],
+)
 def test_invalid_clock_latches_both_phases_without_free_requests(point, value):
     plan = case()
     transport = Transport(plan)
     ticks = []
-    invalid_at = {"initial": 0, "observation": 1,
-                  "recovery": 1 + len(plan["observation"])}[point]
+    invalid_at = {
+        "initial": 0,
+        "observation": 1,
+        "recovery": 1 + len(plan["observation"]),
+    }[point]
+
     def clock():
         index = len(ticks)
         ticks.append(index)
@@ -168,13 +229,19 @@ def test_invalid_clock_latches_both_phases_without_free_requests(point, value):
                 raise OSError("private-clock-details")
             return value
         return 0.0
-    result = module.collect(plan, transport, role=module.ROLE_LOCAL_SHADOW,
-                            run_id="clock", clock=clock)
+
+    result = module.collect(
+        plan, transport, role=module.ROLE_LOCAL_SHADOW, run_id="clock", clock=clock
+    )
     assert result["recordingComplete"] is False
     assert result["cleanup"]["cleanupComplete"] is False
     assert result["budget"]["recoverySpent"] == 0
-    assert len(ticks) == invalid_at + 1  # a later healthy reading cannot refill authority
-    assert len(transport.requests) == (len(plan["observation"]) if point == "recovery" else 0)
+    assert (
+        len(ticks) == invalid_at + 1
+    )  # a later healthy reading cannot refill authority
+    assert len(transport.requests) == (
+        len(plan["observation"]) if point == "recovery" else 0
+    )
     assert all(transport.present.values()) and all(transport.accounts.values())
     assert "private-clock-details" not in json.dumps(result)
 
@@ -183,8 +250,13 @@ def test_clock_rollback_after_first_response_stops_all_later_dispatches():
     plan = case()
     transport = Transport(plan)
     ticks = iter([10.0, 11.0, 9.0])
-    result = module.collect(plan, transport, role=module.ROLE_LOCAL_SHADOW,
-                            run_id="rollback", clock=lambda: next(ticks))
+    result = module.collect(
+        plan,
+        transport,
+        role=module.ROLE_LOCAL_SHADOW,
+        run_id="rollback",
+        clock=lambda: next(ticks),
+    )
     assert result["recordingComplete"] is False
     assert result["abort"] == "clock-regressed"
     assert len(transport.requests) == 1

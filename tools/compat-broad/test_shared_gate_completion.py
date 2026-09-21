@@ -91,17 +91,12 @@ def read(resource):
     }
 
 
-def auth_lookup(resource, account, *, recovery_marker=False, recovery_shape=True):
-    local_id = (
-        ["$binding:" + account + "Uid"]
-        if recovery_shape
-        else "$binding:" + account + "Uid"
-    )
+def auth_lookup(resource, account, *, recovery_marker=False):
     operation = {
         "service": "auth",
         "method": "POST",
         "path": "identitytoolkit.googleapis.com/v1/projects/demo/accounts:lookup",
-        "body": {"localId": local_id},
+        "body": {"localId": ["$binding:" + account + "Uid"]},
         "form": False,
         "owner": True,
         "kind": "uid-absence",
@@ -438,7 +433,7 @@ def test_generic_facade_completion_does_not_require_firestore_only_receipts(
     # Generic Gate completion and production Ledger release are different
     # boundaries. These synthetic facade responses test the former only;
     # they are not Identity Platform wire-format or production evidence.
-    operation = auth_lookup(AUTH_RESOURCES[0], "acct0", recovery_shape=False)
+    operation = read(RESOURCES[0])
     p = plan(operation)
     p["project"] = "demo"
     job = p["jobs"]["case"]
@@ -454,7 +449,7 @@ def test_generic_facade_completion_does_not_require_firestore_only_receipts(
     create(tmp_path / "gate", p)
     gate = Gate(tmp_path / "gate", "case")
     gate.claim()
-    gate.dispatch(operation, False, lambda: (200, {"users": []}))
+    gate.dispatch(operation, False, lambda: (404, copy.deepcopy(ABSENCE)))
     recover(gate, p)
     gate.finish()
     assert gate.snapshot()["jobs"]["case"]["complete"] is True

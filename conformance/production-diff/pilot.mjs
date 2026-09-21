@@ -350,10 +350,8 @@ export async function main(argv = process.argv.slice(2)) {
                 ? prepared.program.steps.length
                 : prepared.program.observation.length + prepared.program.recovery.length,
             source: prepared.state,
-            evidenceKind:
-              entry.adapter === "batch-write"
-                ? "saved-production-reference"
-                : "documented-production-outcome-reference",
+            evidenceKind: entry.evidenceKind,
+            oracleKind: entry.oracleKind,
             productionRequests: 0,
             compared: entry.compared,
             notEstablished: entry.notEstablished,

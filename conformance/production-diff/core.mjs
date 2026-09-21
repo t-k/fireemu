@@ -180,6 +180,10 @@ export function compareRecords({ entry, program, production, actual, comparator 
 }
 
 export function resultEnvelope({ entry, comparison, execution, provenance }) {
+  requireThat(
+    typeof entry.evidenceKind === "string" && typeof entry.oracleKind === "string",
+    "case-missing-evidence-kind",
+  );
   const complete =
     execution.state === "completed" &&
     execution.cleanup?.state === "confirmed" &&
@@ -190,8 +194,10 @@ export function resultEnvelope({ entry, comparison, execution, provenance }) {
     caseId: entry.id,
     parent: entry.parent,
     productionExecuted: false,
-    evidenceKind: "saved-production-reference",
-    oracleKind: "legacy-normalized-production-observation",
+    // Carried from the case definition (registry.mjs), not hard-coded here: the two cases
+    // publish different kinds of evidence (see registry.mjs's comment on COMMIT_TRANSFORM_CASE).
+    evidenceKind: entry.evidenceKind,
+    oracleKind: entry.oracleKind,
     profile: entry.profile,
     transport: entry.transport,
     comparison: { ...comparison, verdict: complete ? comparison.verdict : "INDETERMINATE" },
@@ -213,7 +219,7 @@ export function renderReport(result) {
     "",
     `Case: ${result.caseId}`,
     `Result: ${result.comparison.verdict}`,
-    `Evidence: ${result.evidenceKind}; new production requests: 0`,
+    `Evidence: ${result.evidenceKind} (oracle: ${result.oracleKind}); new production requests: 0`,
     `Execution: ${result.execution.state}; cleanup: ${result.execution.cleanup?.state ?? "unknown"}`,
     `Counts: ${JSON.stringify(result.comparison.counts)}`,
     "",

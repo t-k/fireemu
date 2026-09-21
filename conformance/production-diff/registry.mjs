@@ -15,6 +15,8 @@
 export const CASE = Object.freeze({
   id: "fs.batch-write.saved-20260907.v1",
   adapter: "batch-write",
+  evidenceKind: "saved-production-reference",
+  oracleKind: "legacy-normalized-production-observation",
   programId: "writes/batch-write",
   programDigest: "cdda66d1fbb8f32a707188b58880134781c9d2ea105bec3924dea9dee98e57af",
   parent: "FS-DATA-WRITE",
@@ -66,6 +68,12 @@ export const CASE = Object.freeze({
 export const COMMIT_TRANSFORM_CASE = Object.freeze({
   id: "fs.commit-transform-limits.saved-031c74bfe.v1",
   adapter: "commit-transform",
+  // Unlike CASE (a full normalized production/local row matrix, see legacy.mjs), the campaign
+  // published only a digest/summary record for this case; the typed reference this case compares
+  // against is derived from that summary plus the compiled request plan's own declared contract
+  // (see commit-transform.mjs's documentedReference()), not from a saved production row matrix.
+  evidenceKind: "documented-production-outcome-reference",
+  oracleKind: "documented-outcome-contract",
   programId: "writes/commit-transform-limits",
   programDigest: "23b4820c1adee6d4d99d4ce4857a68013d8cdc3a098ac00c5e0387fffd1d135d",
   parent: "FS-DATA-WRITE",

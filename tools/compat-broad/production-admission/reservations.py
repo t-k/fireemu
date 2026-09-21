@@ -1029,10 +1029,11 @@ class Ledger:
                     "aborted-no-data",
                     "closed-after-escalation",
                     "closed-after-abandon",
+                    "closed-after-recovery-child",
                 }:
                     raise ValueError("reservation binding changed")
                 children = row.get("recoveryChildren", [])
-                if children and row["state"] != "held":
+                if children and row["state"] not in {"held", "closed-after-recovery-child"}:
                     raise ValueError("recovery child parent is not held")
                 for child in children:
                     _recovery_child_claim(child["claim"])
@@ -1648,6 +1649,98 @@ class Ledger:
             child["finalGateDigest"] = final_gate_digest
             self._save(state)
             return copy.deepcopy(child["ticket"])
+
+    def close_after_recovery_child(
+        self,
+        parent_ticket,
+        child_ticket,
+        *,
+        receipt_digest,
+        canonical_parent_plan,
+        now=None,
+    ):
+        """Release only a held parent after its durable child has settled."""
+        if now is not None:
+            _number(now)
+        if not isinstance(parent_ticket, dict) or not isinstance(child_ticket, dict):
+            raise ValueError("exact recovery close tickets required")
+        with self._locked() as state:
+            parent = self._row(state, parent_ticket)
+            child = next(
+                (
+                    value for value in parent.get("recoveryChildren", [])
+                    if value.get("ticket") == child_ticket
+                ),
+                None,
+            )
+            if child is None or child_ticket.get("parentReservation") != parent_ticket.get("reservation"):
+                raise ValueError("recovery child is not nested under parent")
+            if parent["state"] == "closed-after-recovery-child":
+                if (
+                    parent.get("recoveryCloseReceiptDigest") != receipt_digest
+                    or parent.get("recoveryCloseChildTicketDigest") != digest(child_ticket)
+                    or parent.get("recoveryCloseChildClaimDigest") != child["claimDigest"]
+                ):
+                    raise ValueError("different recovery child close")
+                return copy.deepcopy(parent_ticket)
+            if parent["state"] != "held" or child.get("state") != "settled":
+                raise ValueError("settled recovery child and held parent required")
+            parent_claim = copy.deepcopy(parent["claim"])
+            parent_claim_digest = parent["claimDigest"]
+            child_claim = copy.deepcopy(child["claim"])
+            child_final_gate_digest = child.get("finalGateDigest")
+        self.settle_recovery_child(
+            child_ticket,
+            receipt_digest=receipt_digest,
+            canonical_parent_plan=canonical_parent_plan,
+            now=now,
+        )
+        lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+        sys.path.insert(0, str(lane))
+        try:
+            import request_bytes_compiler as request_compiler
+            actual_parent = request_compiler.compile_request_bytes_plan(
+                canonical_parent_plan["project"],
+                canonical_parent_plan["database"],
+                canonical_parent_plan["nonce"],
+            )
+        except (ImportError, KeyError, TypeError, ValueError) as error:
+            raise ValueError("canonical parent compiler refused inputs") from error
+        if digest(actual_parent) != digest(canonical_parent_plan) or digest(actual_parent) != child_claim["parentPlanDigest"]:
+            raise ValueError("canonical parent compiler plan differs")
+        parent_gate = Gate(parent_claim["gatePath"], _gate_job(parent_claim)).snapshot()
+        if parent_gate.get("planDigest") != parent_claim["gatePlanDigest"] or parent_gate.get("coordinatorInflight") or any(job.get("inflight") for job in parent_gate.get("jobs", {}).values()):
+            raise ValueError("original parent Gate is not frozen")
+        selected_job = parent_gate.get("jobs", {}).get(_gate_job(parent_claim), {})
+        if unconfirmed_creates(parent_gate, _gate_job(parent_claim)) != 1:
+            raise ValueError("original parent create is not uncertain")
+        if not any(
+            event.get("job") == _gate_job(parent_claim)
+            and event.get("phase") == "observation"
+            and event.get("completed") is False
+            and event.get("creationOutcome") in {"pending", "unknown"}
+            for event in parent_gate.get("events", [])
+        ):
+            raise ValueError("original parent unknown create event missing")
+        for pid in [parent_gate.get("coordinatorPid")] + [job.get("pid") for job in parent_gate.get("jobs", {}).values()]:
+            if pid is not None:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    continue
+                raise ValueError("original parent worker is still alive")
+        with self._locked() as state:
+            parent = self._row(state, parent_ticket)
+            child = next((value for value in parent.get("recoveryChildren", []) if value.get("ticket") == child_ticket), None)
+            if parent["state"] != "held" or parent["claimDigest"] != parent_claim_digest or parent["claim"] != parent_claim or child is None or child.get("state") != "settled" or child.get("finalGateDigest") != child_final_gate_digest:
+                raise ValueError("recovery parent changed during close")
+            parent["state"] = "closed-after-recovery-child"
+            parent["recoveryCloseReceiptDigest"] = receipt_digest
+            parent["recoveryCloseChildTicketDigest"] = digest(child_ticket)
+            parent["recoveryCloseChildClaimDigest"] = child["claimDigest"]
+            parent["finalGateDigest"] = child_final_gate_digest
+            self._save(state)
+            return copy.deepcopy(parent_ticket)
 
     def validate(self, ticket, *, now=None, duration=13):
         if now is not None:

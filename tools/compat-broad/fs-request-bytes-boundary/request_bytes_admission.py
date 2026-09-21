@@ -30,8 +30,8 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
 import o8_admission
-import request_bytes_descriptor as campaign
 import request_bytes_campaign as request_campaign
+import request_bytes_descriptor as campaign
 import request_bytes_preflight
 from broad_contract import digest
 from o8_admission import (
@@ -58,6 +58,7 @@ __all__ = [
     "ProductionWireCapability",
     "abort_generation",
     "bind_execute",
+    "build_no_data_abort_record",
     "build_receipt",
     "classify_stop",
     "descriptor",
@@ -66,6 +67,7 @@ __all__ = [
     "gate_plan_for",
     "gate_reservations",
     "issue_production_capability",
+    "management_call",
     "permission_bindings",
     "reservation_claim",
     "revoke_production_capability",
@@ -74,7 +76,6 @@ __all__ = [
     "validate_frozen_inputs",
     "validate_no_data_receipt",
     "validate_o7_admission",
-    "management_call",
 ]
 
 
@@ -119,7 +120,11 @@ def management_call(inputs, phase, slot_id, secret, *, deadline):
         raise ValueError("undeclared management slot")
     if not isinstance(secret, str) or not secret or len(secret) > 8192:
         raise ValueError("bounded management secret required")
-    if type(deadline) not in (int, float) or isinstance(deadline, bool) or not math.isfinite(deadline):
+    if (
+        type(deadline) not in (int, float)
+        or isinstance(deadline, bool)
+        or not math.isfinite(deadline)
+    ):
         raise ValueError("finite management deadline required")
     return {
         "kind": "management",
@@ -128,8 +133,6 @@ def management_call(inputs, phase, slot_id, secret, *, deadline):
         "token": secret,
         "deadline": deadline,
     }
-
-
 
 
 def issue_production_capability(**bindings):
@@ -300,9 +303,8 @@ def _approve(
     if (
         not isinstance(principal, dict)
         or set(principal) != identity_keys
-        or principal["requiredScopes"] != [
-            "https://www.googleapis.com/auth/cloud-platform"
-        ]
+        or principal["requiredScopes"]
+        != ["https://www.googleapis.com/auth/cloud-platform"]
     ):
         raise ValueError("owner-frozen credential principal required")
     request_bytes_preflight.validate_principal(principal)
@@ -469,14 +471,20 @@ def classify_stop(receipt) -> dict:
     A no-data stop is retirable: the run holds no creation proof and its own
     journal shows no document was written. An uncertain stop is not, however it
     is labelled, because a Commit whose receipt was lost may have been applied.
+
+    The receipt's own facts decide, as the launcher persists them: the stop
+    point, `mayHaveCreated` (any creating slot dispatched, whatever it
+    answered), and the data route journal in `metadata`, which lists the
+    ownership reads the run made before any Commit. A collection row is a
+    request that was sent, not a document that was created, so row counts are
+    not evidence either way; the Ledger settles creation from the Gate journal.
     """
     if not isinstance(receipt, dict):
         raise ValueError("bounded receipt required")  # noqa: TRY004 -- refusal class, not a type report
     stop = receipt.get("stopPoint")
-    collection = receipt.get("collection") or {}
-    created = int(collection.get("rowCount") or 0)
-    uncertain = bool(collection.get("uncertainCommit"))
-    if stop in UNCERTAIN_STOP_POINTS or uncertain:
+    collection = receipt.get("collection")
+    routes = receipt.get("metadata")
+    if stop in UNCERTAIN_STOP_POINTS or receipt.get("mayHaveCreated") is not False:
         return {
             "stopPoint": stop,
             "disposition": "owner-escalation",
@@ -489,10 +497,26 @@ def classify_stop(receipt) -> dict:
     if stop not in NO_DATA_STOP_POINTS:
         raise ValueError("unknown request-byte stop point")
     if (
-        created
-        or receipt.get("productionExecuted") is not True
-        or collection.get("cleanupComplete") is False
-        or any(collection.get(key) for key in ("overRefusal", "untypedOverRefusal"))
+        not isinstance(routes, list)
+        or receipt.get("productionExecuted") is not bool(routes)
+        or (collection is None) is not (routes == [])
+        or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("id"), str)
+            or not row["id"].startswith("observation:")
+            for row in routes
+        )
+        or (
+            collection is not None
+            and (
+                not isinstance(collection, dict)
+                or collection.get("recoveryRowCount") != 0
+                or collection.get("completed") is not False
+                or any(
+                    key in collection for key in ("overRefusal", "untypedOverRefusal")
+                )
+            )
+        )
     ):
         return {
             "stopPoint": stop,
@@ -529,6 +553,53 @@ def validate_no_data_receipt(receipt) -> dict:
     if receipt.get("routeDigest") != digest(metadata):
         raise ValueError("receipt route journal differs")
     return verdict
+
+
+ABORT_RECORD_KIND = "shared-no-data-abort-v1"
+
+
+def build_no_data_abort_record(receipt_path) -> dict:
+    """Derive the shared Ledger's no-data abort record from one persisted receipt.
+
+    Every field, the generation included, comes from the receipt the run wrote,
+    so a caller who does not hold the receipt of the run that made the
+    reservation cannot build a record the Ledger will accept. The Gate digest
+    is the one the receipt recorded at publication; the Ledger reads the
+    registered Gate itself and refuses the record if that Gate has moved since.
+    The receipt is classified first: an uncertain stop never yields a record.
+    """
+    path = Path(receipt_path)
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.name != "receipt.json"
+        or path.stat().st_size > MAX_INPUT_BYTES
+    ):
+        raise ValueError("persisted canonical receipt required")
+    receipt = json.loads(path.read_bytes())
+    if not isinstance(receipt, dict) or receipt.get("kind") != campaign.RECEIPT_KIND:
+        raise ValueError("persisted canonical receipt required")
+    validate_no_data_receipt(receipt)
+    gate_digest = receipt.get("gateDigest")
+    if (
+        not isinstance(gate_digest, str)
+        or len(gate_digest) != 64
+        or not isinstance(receipt.get("ticket"), dict)
+        or not isinstance(receipt.get("planDigest"), str)
+    ):
+        raise ValueError("receipt records no Gate binding")
+    generation = receipt["generation"]
+    return {
+        "kind": ABORT_RECORD_KIND,
+        "ticket": receipt["ticket"],
+        "planDigest": receipt["planDigest"],
+        "gateDigest": gate_digest,
+        "receiptPath": str(path.resolve()),
+        "receiptDigest": digest(receipt),
+        "collectorSourceDigest": generation["collectorSourceDigest"],
+        "sourceCommit": generation["sourceCommit"],
+        "sourceDigests": generation["sourceDigests"],
+    }
 
 
 def build_receipt(

@@ -128,6 +128,54 @@ uv run --offline --project tools/compat-inventory --locked pytest -q tools/compa
 ```
 
 
+## Exit codes and retiring a held reservation
+
+`request_bytes_o8.py` exits with the Ledger's state, not the data outcome:
+
+- **0**: the run completed, cleanup was verified, `release.json` was written and
+  the Ledger row is `released`.
+- **2**: the run was refused before any reservation existed. Nothing is held,
+  nothing is charged, `<output>/reservation.json` does not exist. A rebuilt
+  packet may reuse the nonce.
+- **1**: a reservation was taken and is still held. `<output>/reservation.json`
+  names the ticket and was written the moment the row existed, before the Gate,
+  the handoff or any wire activity. Do not retry and do not relaunch; retire the
+  row.
+
+The operator rule is therefore: **if `<output>/reservation.json` exists, a
+reservation was taken and must be retired**, whatever the exit code and whether
+or not `receipt.json` was written. Two rows of the Commit lane were stranded by
+reading an exit code as a refusal, and the codes used to be ambiguous: a
+no-data stop after the reservation exited 2, the same as a refusal.
+
+Which terminal transition retires the row is decided by the receipt, never by
+the stop's label:
+
+1. `classify_stop(receipt)` names the disposition. A stop before the first
+   Commit (invalid handoff, tokeninfo principal mismatch, project, database or
+   Auth baseline drift, or a probe preflight that failed in transport or did not
+   find the scope empty) is `aborted-no-data` when `mayHaveCreated` is false and
+   the route journal shows only ownership reads. A stop at a Commit's transport
+   deadline is `owner-escalation`, however few documents it may have left,
+   because the Commit may have applied while its answer was lost.
+2. For a no-data stop, `build_no_data_abort_record(<output>/receipt.json)`
+   derives the shared Ledger's `shared-no-data-abort-v1` record from the
+   receipt alone, generation included, and `Ledger.abort_no_data(ticket,
+   record)` retires the row as `aborted-no-data`. The Ledger reads the
+   registered Gate itself and accepts only when the Gate journal proves no
+   creating slot was dispatched, the receipt's management rows and route rows
+   reproduce the Gate's charged slots and data events one for one, and the
+   coordinator and job PIDs are gone. The allocation stays charged; only the
+   conflict locks and the concurrency slot are released.
+3. Otherwise the recovery owner removes any residue, collects a typed
+   `NOT_FOUND` for every owned resource, writes the owner attestation and calls
+   `Ledger.close_after_escalation`. The no-data abort refuses such a row and
+   the escalation close refuses a no-data row, so the two cannot be confused.
+
+`test_request_bytes_production.py` drives the real launcher to each of these
+stops against a temporary Ledger, in a forked child so its PIDs are genuinely
+gone, and retires the row through the real path.
+
 ## Published evidence
 
 `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json` is the

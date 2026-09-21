@@ -77,8 +77,26 @@ def _stop_point(snapshot, plan, ready):
     )
 
 
-def execute(*, capability, inputs, permission, credential_reader, ledger_root, output):
-    """Execute only the consumed capability's fixed transport; never accept one."""
+RESERVATION_MARKER_KIND = "request-bytes-reservation-marker-v1"
+
+
+def execute(
+    *,
+    capability,
+    inputs,
+    permission,
+    credential_reader,
+    ledger_root,
+    output,
+    reserved=None,
+):
+    """Execute only the consumed capability's fixed transport; never accept one.
+
+    `reserved`, when given, is called with the ticket the moment the shared
+    Ledger row exists, before any Gate, handoff or wire activity, so a caller
+    can tell a refusal that charged nothing from a stop that left a row held.
+    The same fact is persisted as `<output>/reservation.json`.
+    """
     if not admission.issued_capability(capability):
         raise ValueError("unissued O7 production capability")
     inputs, permission = copy.deepcopy(inputs), copy.deepcopy(permission)
@@ -109,6 +127,20 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
     _write_receipt(output / "inputs.json", inputs)
     ticket = ledger.reserve(
         _envelope(permission, claim), claim, gate_plan, generation=generation
+    )
+    if reserved is not None:
+        reserved(ticket)
+    # A row now exists whatever happens next. The marker names it durably so
+    # that an operator retiring this directory never has to infer from an exit
+    # code whether a reservation was taken.
+    _write_receipt(
+        output / "reservation.json",
+        {
+            "kind": RESERVATION_MARKER_KIND,
+            "ticket": ticket,
+            "claimDigest": digest(claim),
+            "gatePath": claim["gatePath"],
+        },
     )
     gates, rows = {}, []
     result = None

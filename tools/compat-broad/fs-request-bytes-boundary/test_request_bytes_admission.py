@@ -225,9 +225,7 @@ def owner_permission(plan, commit, artifact_digest, inputs, baseline):
         "credentialPrincipal": {
             "clientId": "offline-client",
             "subject": "offline-subject",
-            "requiredScopes": [
-                "https://www.googleapis.com/auth/cloud-platform"
-            ],
+            "requiredScopes": ["https://www.googleapis.com/auth/cloud-platform"],
         },
         "gateReservationSeconds": {
             "upload": 60.0,
@@ -243,7 +241,7 @@ def owner_permission(plan, commit, artifact_digest, inputs, baseline):
 class Admission:
     """A complete, locally built O7 artifact set for the request-byte campaign."""
 
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, *, nonce=NONCE, ledger=None):
         self.descriptor = campaign.descriptor()
         self.source = frozen_checkout(tmp_path)
         self.commit = subprocess.check_output(
@@ -251,7 +249,7 @@ class Admission:
         ).strip()
         self.artifact_path = tmp_path / "artifact"
         self.artifact_path.write_bytes(b"retained request-byte artifact")
-        self.plan = self.descriptor.plan_compiler(NONCE)
+        self.plan = self.descriptor.plan_compiler(nonce)
         self.execution_plan = campaign.execution_plan(self.plan)
         self.baseline = baseline_record(tmp_path)
         self.permission = owner_permission(
@@ -270,11 +268,16 @@ class Admission:
             artifact_path=self.artifact_path,
             baseline=self.baseline,
         )
-        self.ledger = tmp_path / "ledger"
-        self.ledger.mkdir()
-        (self.ledger / "state.json").write_text(
-            json.dumps({"kind": "shared-ledger", "envelopes": {}, "reservations": {}})
-        )
+        # A second campaign may share the Ledger of a first one; a fresh
+        # fixture otherwise gets a placeholder that `built` replaces.
+        self.ledger = tmp_path / "ledger" if ledger is None else Path(ledger)
+        if ledger is None:
+            self.ledger.mkdir()
+            (self.ledger / "state.json").write_text(
+                json.dumps(
+                    {"kind": "shared-ledger", "envelopes": {}, "reservations": {}}
+                )
+            )
         self.manifest = {
             "kind": campaign.MANIFEST_KIND,
             "inputsDigest": self.inputs["inputsDigest"],
@@ -863,8 +866,14 @@ def test_baselines_and_principal_are_refused_at_freeze_time_not_in_production(
         )
 
 
-def stopped_receipt(built, stop_point, **collection):
-    rows = [
+def stopped_receipt(built, stop_point, *, rows=2, may_have_created=False, **collection):
+    """A receipt shaped as the launcher persists one for a stopped run.
+
+    Two ownership reads were sent by default. The collection summary counts
+    requests, not documents, so `rowCount` follows the route journal; whether a
+    creating slot was dispatched is `mayHaveCreated`, read from the Gate.
+    """
+    routes = [
         {
             "phase": "observation",
             "index": index,
@@ -872,31 +881,40 @@ def stopped_receipt(built, stop_point, **collection):
             "status": 404,
             "responseDigest": digest({"index": index}),
         }
-        for index in range(2)
+        for index in range(rows)
     ]
-    result = {
-        "completed": False,
-        "rowCount": 0,
-        "recoveryRowCount": 0,
-        "cleanupComplete": True,
-        **collection,
-    }
+    result = (
+        None
+        if not routes
+        else {
+            "completed": False,
+            "rowCount": len(routes),
+            "recoveryRowCount": 0,
+            "cleanupComplete": False,
+            **collection,
+        }
+    )
     return admission.build_receipt(
         built.inputs,
         result,
         capability=None,
-        rows=rows,
+        rows=routes,
         generation=admission.abort_generation(built.inputs),
         failure="ValueError",
         stop_point=stop_point,
-    ) | {"productionExecuted": True}
+    ) | {"productionExecuted": bool(routes), "mayHaveCreated": may_have_created}
 
 
 @pytest.mark.parametrize("stop", admission.NO_DATA_STOP_POINTS)
-def test_every_no_data_stop_point_is_retirable(tmp_path, stop):
-    """The v10 lesson: a stop the retirement path cannot express strands a row."""
+@pytest.mark.parametrize("rows", [0, 2], ids=["no-route", "ownership-reads"])
+def test_every_no_data_stop_point_is_retirable(tmp_path, stop, rows):
+    """The v10 lesson: a stop the retirement path cannot express strands a row.
+
+    The launcher-driven counterpart, which retires a real held row through the
+    real Ledger, is in `test_request_bytes_production.py`.
+    """
     built = Admission(tmp_path)
-    receipt = stopped_receipt(built, stop)
+    receipt = stopped_receipt(built, stop, rows=rows)
     verdict = admission.validate_no_data_receipt(receipt)
     assert verdict["disposition"] == "aborted-no-data"
     assert verdict["retirableAsNoData"] is True
@@ -916,19 +934,44 @@ def test_a_transport_deadline_stop_is_never_retired_as_no_data(tmp_path, stop):
 
 
 @pytest.mark.parametrize(
-    "collection",
+    "damage",
     [
-        {"rowCount": 1},
-        {"uncertainCommit": True},
-        {"cleanupComplete": False},
-        {"untypedOverRefusal": True},
-        {"overRefusal": True},
+        {"may_have_created": True},
+        {"may_have_created": None},
+        {"recoveryRowCount": 1},
+        {"completed": True},
+        {"untypedOverRefusal": {"httpStatus": 413}},
+        {"overRefusal": {"httpStatus": 400}},
     ],
-    ids=["wrote-a-row", "uncertain", "residue", "untyped-refusal", "over-refusal"],
+    ids=[
+        "creating-slot-dispatched",
+        "creation-unknown",
+        "recovery-ran",
+        "collection-completed",
+        "untyped-refusal",
+        "over-refusal",
+    ],
 )
-def test_a_stop_that_may_have_written_is_never_retired_as_no_data(tmp_path, collection):
+def test_a_stop_that_may_have_written_is_never_retired_as_no_data(tmp_path, damage):
     built = Admission(tmp_path)
-    receipt = stopped_receipt(built, admission.NO_DATA_STOP_POINTS[0], **collection)
+    receipt = stopped_receipt(built, admission.NO_DATA_STOP_POINTS[0], **damage)
+    with pytest.raises(ValueError, match="not a no-data stop"):
+        admission.validate_no_data_receipt(receipt)
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        {"productionExecuted": False},
+        {"collection": None},
+        {"metadata": [], "routeDigest": digest([]), "productionExecuted": False},
+    ],
+    ids=["executed-flag-contradicts-routes", "collection-dropped", "routes-dropped"],
+)
+def test_a_receipt_whose_journal_contradicts_itself_is_not_no_data(tmp_path, damage):
+    """The route journal, the collection and the flag must tell one story."""
+    built = Admission(tmp_path)
+    receipt = {**stopped_receipt(built, admission.NO_DATA_STOP_POINTS[0]), **damage}
     with pytest.raises(ValueError, match="not a no-data stop"):
         admission.validate_no_data_receipt(receipt)
 
@@ -949,16 +992,10 @@ def test_a_no_data_receipt_must_carry_its_generation_and_route_journal(tmp_path)
     for damage in (
         {"generation": None},
         {"generation": {"sourceCommit": "0" * 40}},
-        {"metadata": []},
         {"routeDigest": "0" * 64},
     ):
-        damaged = {**receipt, **damage}
-        if "metadata" in damage:
-            damaged["routeDigest"] = digest([])
-            admission.validate_no_data_receipt(damaged)
-            continue
         with pytest.raises(ValueError):
-            admission.validate_no_data_receipt(damaged)
+            admission.validate_no_data_receipt({**receipt, **damage})
 
 
 def test_the_gate_plan_hosts_three_interleaved_probes(tmp_path):

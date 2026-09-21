@@ -1,33 +1,44 @@
-"""Bounded loopback-only collector for the partition/cursor observation plan.
+"""Bounded collector for the partition/cursor observation plan.
 
-The collector drives the compiled plan against an owned local artifact. It
-refuses any origin outside the declared loopback set before creating its output
-directory or sending a single request, so this module cannot be used as a
-production entry point. Cleanup deletions are bound to receipts recorded in the
-same run; an unproven version never authorizes a delete.
+The collector drives the compiled plan through one injected transport. Two
+closed entry points bind the target: `collect_local` refuses any origin outside
+the declared numeric loopback set, and `collect_production` refuses any origin
+other than the one fixed production host. Each refuses before creating its
+output directory or sending a single request, so neither can be steered at the
+other's target. The production entry point is only reachable through the O8
+launcher, which supplies a capability-bound transport; it grants no authority of
+its own. Cleanup deletions are bound to receipts recorded in the same run; an
+unproven version never authorizes a delete.
 """
 
 # ruff: noqa: BLE001 -- Keep recording, cleanup and publication after any transport failure.
 from __future__ import annotations
 
 import copy
-from datetime import datetime
 import hashlib
 import json
 import os
 import re
 import stat
 from collections.abc import Callable
+from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
 from partition_cursor_case import RECONSTRUCTION_SLOTS, validate_plan
-
-from partition_cursor_wire import same_json, validate_origin, validate_receipt
+from partition_cursor_wire import (
+    PRODUCTION_ORIGIN,
+    same_json,
+    validate_origin,
+    validate_production_origin,
+    validate_receipt,
+)
 
 LOOPBACK_ORIGINS = frozenset({"http://127.0.0.1:8080", "http://[::1]:8080"})
 DEFAULT_ORIGIN = "http://127.0.0.1:8080"
+LOCAL_TARGET = "owned-local-artifact"
+PRODUCTION_TARGET = "fixed-production-wire"
 MAX_RAW_BYTES = 65536
 BENIGN_SKIPS = frozenset({"no-page-token", "range-not-required"})
 _TIMESTAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z$")
@@ -465,6 +476,25 @@ def _reconstruction(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def publish_row(
+    directory_fd: int,
+    raw_fd: int,
+    row: dict[str, Any],
+    receipt: Any,
+    bindings: list[dict[str, Any]],
+    publication: dict[str, Any],
+) -> None:
+    """Retain one dispatched row outside the compiled plan with the same boundary.
+
+    The production recovery ladder issues per-document reads and deletes the
+    compiled plan does not carry. They are retained exactly like plan rows: a
+    raw sidecar when the transport supplied complete bytes, then an immutable
+    row file. Nothing here grants cleanup authority.
+    """
+    _retain_raw(receipt, row, raw_fd, bindings)
+    _record(publication, directory_fd, row)
+
+
 def collect_local(
     plan: dict[str, Any],
     transmit: Callable[[dict[str, Any]], Any],
@@ -475,6 +505,37 @@ def collect_local(
     """Drive the compiled plan against one owned loopback artifact."""
     validate_plan(plan)
     validate_origin(origin)
+    return _collect(plan, transmit, directory, origin=origin, target=LOCAL_TARGET)
+
+
+def collect_production(
+    plan: dict[str, Any],
+    transmit: Callable[[dict[str, Any]], Any],
+    directory: str | Path,
+    *,
+    origin: str = PRODUCTION_ORIGIN,
+) -> dict[str, Any]:
+    """Drive the compiled plan against the fixed production origin only.
+
+    A loopback origin is refused here. The transport is the caller's: the O8
+    launcher binds it to a consumed capability and to the shared Gate, and this
+    function adds no wire of its own.
+    """
+    validate_plan(plan)
+    validate_production_origin(origin)
+    return _collect(
+        plan, transmit, directory, origin=origin, target=PRODUCTION_TARGET
+    )
+
+
+def _collect(
+    plan: dict[str, Any],
+    transmit: Callable[[dict[str, Any]], Any],
+    directory: str | Path,
+    *,
+    origin: str,
+    target: str,
+) -> dict[str, Any]:
     plan = copy.deepcopy(plan)
     directory = Path(directory)
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -500,7 +561,9 @@ def collect_local(
         _run_recovery(
             plan, transmit, rows, cleanup, raw_fd, bindings, publication, directory_fd
         )
-        result = _result(plan, origin, rows, cleanup, bindings, publication, raw_fd)
+        result = _result(
+            plan, origin, rows, cleanup, bindings, publication, raw_fd, target
+        )
         try:
             _publish(raw_fd, "manifest.json", {"bindings": bindings})
         except Exception as error:
@@ -508,7 +571,9 @@ def collect_local(
             publication["failures"].append(
                 {"file": "raw/manifest.json", "error": type(error).__name__}
             )
-            result = _result(plan, origin, rows, cleanup, bindings, publication, raw_fd)
+            result = _result(
+                plan, origin, rows, cleanup, bindings, publication, raw_fd, target
+            )
         try:
             _publish(directory_fd, "collection.json", result)
         except Exception as error:
@@ -646,6 +711,7 @@ def _result(
     bindings: list[dict[str, Any]],
     publication: dict[str, Any],
     raw_fd: int,
+    target: str = LOCAL_TARGET,
 ) -> dict[str, Any]:
     dispatched = [row for row in rows + cleanup if row["status"] != "skipped"]
     verified = False
@@ -684,8 +750,10 @@ def _result(
         "ownedScope": plan["ownedScope"],
         "groupCollection": plan["groupCollection"],
         "origin": origin,
-        "target": "owned-local-artifact",
-        "productionExecuted": False,
+        "target": target,
+        # The flag states which wire the rows came from, never a verdict: a
+        # production bundle is still compared, never promoted, by the lane.
+        "productionExecuted": target == PRODUCTION_TARGET,
         "promotionReady": False,
         "status": "pass" if healthy else "incomplete",
         "rows": copy.deepcopy(rows),

@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import fcntl
+import hashlib
 import json
 import math
 import re
@@ -17,6 +18,7 @@ import secrets
 import sys
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import os
@@ -28,6 +30,7 @@ from shared_gate import (
     Gate,
     _save,
     abandoned_cleanup_complete,
+    canonical_body_bytes,
     non_creating_dispatches,
     typed_absence,
     unconfirmed_creates,
@@ -122,6 +125,7 @@ RECOVERY_INSPECTION_REQUESTS = 17
 RECOVERY_ABSENCE_REQUESTS = 51
 RECOVERY_DELETE_REQUESTS = 17
 RECOVERY_OPERATION_CLASS = "read-inspect-conditional-delete-v1"
+RECOVERY_GATE_JOB = "request-bytes-recovery-extension"
 RECOVERY_CHILD_FIELDS = {
     "kind", "version", "campaignId", "manifestDigest", "nonceDigest",
     "gatePath", "gatePlanDigest", "locks", "budget", "durationSeconds",
@@ -830,6 +834,100 @@ def _validate_recovery_gate_plan(parent_plan, child_plan, child):
         raise ValueError("recovery resources differ from canonical plan")
 
 
+def _validate_recovery_terminal_slots(gate, job_name, expected_fields):
+    """Bind every compiler recovery slot to its journal event or skip."""
+    job = gate["jobs"][job_name]
+    plan_job = gate["plan"]["jobs"][job_name]
+    if job.get("creationProofs") != {}:
+        raise ValueError("recovery child creation proofs must remain empty")
+    operations = plan_job["recovery"]
+    schedule = plan_job.get("schedule", [])
+    if len(operations) != RECOVERY_CHILD_REQUESTS or len(schedule) != len(operations):
+        raise ValueError("recovery schedule is not canonical")
+    events, skips = {}, {}
+    journal_events = gate.get("events", [])
+    for event in gate.get("events", []):
+        if event.get("job") == job_name and event.get("phase") == "recovery":
+            index = event.get("index")
+            if type(index) is not int or index in events:
+                raise ValueError("recovery journal index changed")
+            events[index] = event
+    for skip in gate.get("skips", []):
+        if skip.get("job") == job_name:
+            index = skip.get("index")
+            if type(index) is not int or index in skips:
+                raise ValueError("recovery skip index changed")
+            skips[index] = skip
+    for index, operation in enumerate(operations):
+        if schedule[index].get("phase") != "recovery" or schedule[index].get("index") != index or schedule[index].get("creates") is not False:
+            raise ValueError("recovery schedule slot changed")
+        event, skip = events.get(index), skips.get(index)
+        if operation["kind"] == "recovery-inspection-read":
+            if event is None or skip is not None or event.get("requestDigest") != digest(operation) or event.get("method") != "GET" or event.get("service") != operation["service"] or event.get("completed") is not True:
+                raise ValueError("recovery inspection journal differs")
+            status = event.get("status")
+            capture = job.get("captures", {}).get(str(index), {})
+            if status == 404:
+                if (
+                    capture.get("status") != 404
+                    or capture.get("name") is not None
+                    or capture.get("updateTime") is not None
+                    or capture.get("fieldsDigest") != digest(None)
+                ):
+                    raise ValueError("recovery inspection absence proof differs")
+                if re.fullmatch(r"[a-f0-9]{64}", capture.get("responseDigest", "")) is None or event.get("responseDigest") != capture["responseDigest"]:
+                    raise ValueError("recovery inspection response binding differs")
+            elif status == 200:
+                if (
+                    capture.get("status") != 200
+                    or capture.get("name") != operation["resource"]
+                    or not isinstance(capture.get("fieldsDigest"), str)
+                    or re.fullmatch(r"[a-f0-9]{64}", capture["fieldsDigest"]) is None
+                    or not isinstance(capture.get("updateTime"), str)
+                    or not capture["updateTime"]
+                ):
+                    raise ValueError("recovery inspection capture differs")
+                if capture["fieldsDigest"] != expected_fields.get(operation["resource"]):
+                    raise ValueError("recovery inspection fields binding differs")
+                if re.fullmatch(r"[a-f0-9]{64}", capture.get("responseDigest", "")) is None or event.get("responseDigest") != capture["responseDigest"]:
+                    raise ValueError("recovery inspection response binding differs")
+            else:
+                raise ValueError("recovery inspection status differs")
+        elif operation["kind"] == "recovery-conditional-delete":
+            source_index = next((position for position, candidate in enumerate(operations[:index]) if candidate.get("kind") == operation.get("versionFrom") and candidate.get("resource") == operation["resource"]), None)
+            if source_index is None:
+                raise ValueError("recovery delete source differs")
+            capture = job.get("captures", {}).get(str(source_index), {})
+            if capture.get("status") == 404:
+                if event is not None or skip is None or skip.get("reason") not in {"refused-create", "never-dispatched", "absent-or-unavailable-cleanup-read"}:
+                    raise ValueError("recovery delete skip differs")
+            elif capture.get("status") == 200:
+                if skip is not None or event is None or event.get("completed") is not True:
+                    raise ValueError("recovery delete event differs")
+                wire = dict(operation)
+                wire.pop("versionFrom", None)
+                wire["path"] += "?currentDocument.updateTime=" + quote(capture["updateTime"], safe="")
+                if event.get("requestDigest") != digest(wire) or event.get("method") != "DELETE" or event.get("service") != operation["service"]:
+                    raise ValueError("recovery delete binding differs")
+            else:
+                raise ValueError("recovery delete source status differs")
+        elif operation["kind"] == "recovery-absence-read":
+            proof = job.get("absenceProofs", {}).get(operation["resource"])
+            proof_event = (
+                journal_events[proof["eventIndex"]]
+                if isinstance(proof, dict)
+                and type(proof.get("eventIndex")) is int
+                and 0 <= proof["eventIndex"] < len(journal_events)
+                else None
+            )
+            if event is None or skip is not None or event.get("requestDigest") != digest(operation) or event.get("method") != "GET" or event.get("service") != operation["service"] or event.get("completed") is not True or event.get("status") != 404 or not isinstance(proof, dict) or proof_event is not event or not typed_absence(404, proof.get("body")):
+                raise ValueError("recovery absence journal differs")
+        else:
+            raise ValueError("unknown recovery operation kind")
+    if set(events) | set(skips) != set(range(len(operations))) or set(events) & set(skips):
+        raise ValueError("recovery journal does not cover every slot")
+
+
 class Ledger:
     def __init__(self, path):
         if Path(path).is_symlink():
@@ -931,17 +1029,22 @@ class Ledger:
                     "aborted-no-data",
                     "closed-after-escalation",
                     "closed-after-abandon",
+                    "closed-after-recovery-child",
                 }:
                     raise ValueError("reservation binding changed")
                 children = row.get("recoveryChildren", [])
-                if children and row["state"] != "held":
+                if children and row["state"] not in {"held", "closed-after-recovery-child"}:
                     raise ValueError("recovery child parent is not held")
                 for child in children:
                     _recovery_child_claim(child["claim"])
                     if child.get("parentClaimDigest") != row["claimDigest"] or child.get("claimDigest") != digest(child["claim"]):
                         raise ValueError("recovery child parent binding changed")
-                    if child.get("state") != "allocated" or child.get("envelopeDigest") not in state.get("recoveryEnvelopes", {}):
+                    if child.get("state") not in {"allocated", "settled"} or child.get("envelopeDigest") not in state.get("recoveryEnvelopes", {}):
                         raise ValueError("recovery child state changed")
+                    if child.get("state") == "settled":
+                        if not isinstance(child.get("receiptDigest"), str) or not 1 <= len(child["receiptDigest"]) <= 256:
+                            raise ValueError("recovery settlement receipt changed")
+                        _hash(child.get("finalGateDigest"))
                     _number(child.get("deadline"))
                     if child["deadline"] > child["claim"]["expiresAt"] or child["deadline"] > state["recoveryEnvelopes"][child["envelopeDigest"]]["envelope"]["expiresAt"]:
                         raise ValueError("recovery child deadline changed")
@@ -1179,6 +1282,28 @@ class Ledger:
         if creating_index is None:
             raise ValueError("selected parent create operation missing")
         expected_operation = selected_job["observation"][creating_index]
+        if expected_operation.get("bodyRef") is not None:
+            materialized = next(
+                (
+                    operation
+                    for operation in actual_parent_plan.get("observation", [])
+                    if operation.get("kind") == expected_operation.get("kind")
+                    and operation.get("probe") == expected_operation.get("probe")
+                    and operation.get("resource") == expected_operation.get("resource")
+                ),
+                None,
+            )
+            if not isinstance(materialized, dict) or not isinstance(materialized.get("body"), dict):
+                raise ValueError("authoritative parent operation body missing")
+            body = canonical_body_bytes(materialized["body"])
+            reference = expected_operation["bodyRef"]
+            if (
+                len(body) != reference.get("bytes")
+                or hashlib.sha256(body).hexdigest() != reference.get("sha256")
+            ):
+                raise ValueError("authoritative parent operation body reference differs")
+            expected_operation = copy.deepcopy(materialized)
+            expected_operation.pop("bodyRef", None)
         expected_event = next(
             (event for event in parent_gate.get("events", [])
              if event.get("phase") == "observation"
@@ -1385,6 +1510,236 @@ class Ledger:
                     "state": child["state"],
                 }
             )
+
+    def settle_recovery_child(self, child_ticket, *, receipt_digest, canonical_parent_plan, now=None):
+        """Settle one persisted child from its completed, registered Gate.
+
+        ``receipt_digest`` is only a bounded correlation value; the terminal
+        Gate journal and its compiler-bound plan are the authority. This
+        transition never checks the wall-clock expiry and never changes the
+        parent reservation.
+        """
+        if not isinstance(receipt_digest, str) or not 1 <= len(receipt_digest) <= 256:
+            raise ValueError("bounded recovery receipt correlation required")
+        if not isinstance(canonical_parent_plan, dict):
+            raise ValueError("canonical parent compiler plan required")  # noqa: TRY004
+        if not isinstance(child_ticket, dict) or set(child_ticket) != {
+            "ledgerPath", "ledgerIdentity", "reservation", "claimDigest",
+            "envelopeDigest", "parentReservation",
+        }:
+            raise ValueError("exact recovery child ticket required")
+        if (
+            child_ticket["ledgerPath"] != str(self.path)
+            or child_ticket["ledgerIdentity"] != self.identity
+            or not isinstance(child_ticket["reservation"], str)
+            or not isinstance(child_ticket["parentReservation"], str)
+        ):
+            raise ValueError("recovery child ticket ledger binding changed")
+        if now is not None:
+            _number(now)
+        with self._locked() as state:
+            parent = state["reservations"].get(
+                child_ticket.get("parentReservation")
+                if isinstance(child_ticket, dict)
+                else None
+            )
+            if parent is None:
+                raise ValueError("recovery child parent reservation missing")
+            child = next(
+                (
+                    value
+                    for value in parent.get("recoveryChildren", [])
+                    if value.get("ticket") == child_ticket
+                ),
+                None,
+            )
+            if child is None:
+                raise ValueError("exact persisted recovery child ticket required")
+            if child.get("state") == "settled":
+                if child.get("receiptDigest") != receipt_digest:
+                    raise ValueError("different recovery settlement receipt")
+            elif child.get("state") != "allocated":
+                raise ValueError("recovery child is not allocatable")
+            claim = copy.deepcopy(child["claim"])
+            child_digest = child["claimDigest"]
+            gate_path = claim["gatePath"]
+            expected_gate_digest = claim["gatePlanDigest"]
+            envelope_digest = child["envelopeDigest"]
+            parent_claim_digest = parent["claimDigest"]
+            parent_snapshot = copy.deepcopy(parent["claim"])
+            parent_plan_digest = claim["parentPlanDigest"]
+        try:
+            lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+            sys.path.insert(0, str(lane))
+            import request_bytes_compiler as request_compiler
+            actual_parent_plan = request_compiler.compile_request_bytes_plan(
+                canonical_parent_plan["project"],
+                canonical_parent_plan["database"],
+                canonical_parent_plan["nonce"],
+            )
+        except (ImportError, KeyError, TypeError, ValueError) as error:
+            raise ValueError("canonical parent compiler refused inputs") from error
+        if digest(actual_parent_plan) != digest(canonical_parent_plan) or digest(actual_parent_plan) != parent_plan_digest:
+            raise ValueError("canonical parent compiler plan differs")
+        expected_fields = {
+            write["update"]["name"]: digest(write["update"]["fields"])
+            for operation in actual_parent_plan.get("observation", [])
+            if isinstance(operation.get("body"), dict)
+            for write in operation["body"].get("writes", [])
+            if isinstance(write.get("update"), dict)
+            and isinstance(write["update"].get("fields"), dict)
+        }
+        if str(Path(gate_path).resolve()) != gate_path:
+            raise ValueError("registered recovery Gate path changed")
+        gate = Gate(gate_path, RECOVERY_GATE_JOB).snapshot()
+        if digest(gate.get("plan")) != expected_gate_digest or gate.get("planDigest") != expected_gate_digest:
+            raise ValueError("registered recovery Gate plan differs")
+        jobs = gate.get("jobs")
+        job_name = RECOVERY_GATE_JOB
+        job = jobs.get(job_name) if isinstance(jobs, dict) else None
+        plan_job = gate["plan"].get("jobs", {}).get(job_name)
+        if (
+            not isinstance(job, dict)
+            or not isinstance(plan_job, dict)
+            or gate.get("coordinatorInflight")
+            or gate.get("observation") != 0
+            or gate.get("recovery") != gate.get("total")
+            or type(gate.get("total")) is not int
+            or not 51 <= gate.get("total") <= RECOVERY_CHILD_REQUESTS
+            or gate.get("managementUsed") != []
+            or job.get("complete") is not True
+            or job.get("inflight")
+            or job.get("recovery") != len(plan_job.get("recovery", []))
+            or job.get("recovery") != RECOVERY_CHILD_REQUESTS
+            or set(job.get("absent", [])) != set(job.get("resources", []))
+            or len(job.get("absent", [])) != RECOVERY_ABSENCE_REQUESTS
+            or unconfirmed_creates(gate, job_name)
+        ):
+            raise ValueError("recovery Gate terminal evidence incomplete")
+        _validate_recovery_terminal_slots(gate, job_name, expected_fields)
+        try:
+            validate_absence_proofs(gate, job_name)
+        except Exception as error:
+            raise ValueError("recovery Gate typed absence evidence incomplete") from error
+        final_gate_digest = digest(gate)
+        with self._locked() as state:
+            parent = state["reservations"].get(child_ticket.get("parentReservation"))
+            child = next(
+                (
+                    value for value in (parent or {}).get("recoveryChildren", [])
+                    if value.get("ticket") == child_ticket
+                ),
+                None,
+            )
+            if (
+                parent is None
+                or child is None
+                or parent.get("claimDigest") != parent_claim_digest
+                or parent.get("claim") != parent_snapshot
+                or child.get("claimDigest") != child_digest
+                or child.get("envelopeDigest") != envelope_digest
+            ):
+                raise ValueError("recovery child changed during Gate settlement")
+            if child.get("state") == "settled":
+                if child.get("receiptDigest") != receipt_digest or child.get("finalGateDigest") != final_gate_digest:
+                    raise ValueError("different recovery settlement proof")
+                return copy.deepcopy(child["ticket"])
+            child["state"] = "settled"
+            child["receiptDigest"] = receipt_digest
+            child["finalGateDigest"] = final_gate_digest
+            self._save(state)
+            return copy.deepcopy(child["ticket"])
+
+    def close_after_recovery_child(
+        self,
+        parent_ticket,
+        child_ticket,
+        *,
+        receipt_digest,
+        canonical_parent_plan,
+        now=None,
+    ):
+        """Release only a held parent after its durable child has settled."""
+        if now is not None:
+            _number(now)
+        if not isinstance(parent_ticket, dict) or not isinstance(child_ticket, dict):
+            raise ValueError("exact recovery close tickets required")  # noqa: TRY004
+        with self._locked() as state:
+            parent = self._row(state, parent_ticket)
+            child = next(
+                (
+                    value for value in parent.get("recoveryChildren", [])
+                    if value.get("ticket") == child_ticket
+                ),
+                None,
+            )
+            if child is None or child_ticket.get("parentReservation") != parent_ticket.get("reservation"):
+                raise ValueError("recovery child is not nested under parent")
+            if parent["state"] not in {"held", "closed-after-recovery-child"} or child.get("state") != "settled":
+                raise ValueError("settled recovery child and held parent required")
+            parent_claim = copy.deepcopy(parent["claim"])
+            parent_claim_digest = parent["claimDigest"]
+            child_claim = copy.deepcopy(child["claim"])
+            child_final_gate_digest = child.get("finalGateDigest")
+        self.settle_recovery_child(
+            child_ticket,
+            receipt_digest=receipt_digest,
+            canonical_parent_plan=canonical_parent_plan,
+            now=now,
+        )
+        lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+        sys.path.insert(0, str(lane))
+        try:
+            import request_bytes_compiler as request_compiler
+            actual_parent = request_compiler.compile_request_bytes_plan(
+                canonical_parent_plan["project"],
+                canonical_parent_plan["database"],
+                canonical_parent_plan["nonce"],
+            )
+        except (ImportError, KeyError, TypeError, ValueError) as error:
+            raise ValueError("canonical parent compiler refused inputs") from error
+        if digest(actual_parent) != digest(canonical_parent_plan) or digest(actual_parent) != child_claim["parentPlanDigest"]:
+            raise ValueError("canonical parent compiler plan differs")
+        parent_gate = Gate(parent_claim["gatePath"], _gate_job(parent_claim)).snapshot()
+        if parent_gate.get("planDigest") != parent_claim["gatePlanDigest"] or parent_gate.get("coordinatorInflight") or any(job.get("inflight") for job in parent_gate.get("jobs", {}).values()):
+            raise ValueError("original parent Gate is not frozen")
+        if unconfirmed_creates(parent_gate, _gate_job(parent_claim)) != 1:
+            raise ValueError("original parent create is not uncertain")
+        if not any(
+            event.get("job") == _gate_job(parent_claim)
+            and event.get("phase") == "observation"
+            and event.get("completed") is False
+            and event.get("creationOutcome") in {"pending", "unknown"}
+            for event in parent_gate.get("events", [])
+        ):
+            raise ValueError("original parent unknown create event missing")
+        for pid in [parent_gate.get("coordinatorPid")] + [job.get("pid") for job in parent_gate.get("jobs", {}).values()]:
+            if pid is not None:
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    continue
+                raise ValueError("original parent worker is still alive")
+        with self._locked() as state:
+            parent = self._row(state, parent_ticket)
+            child = next((value for value in parent.get("recoveryChildren", []) if value.get("ticket") == child_ticket), None)
+            if parent["state"] == "closed-after-recovery-child":
+                if (
+                    parent.get("recoveryCloseReceiptDigest") != receipt_digest
+                    or parent.get("recoveryCloseChildTicketDigest") != digest(child_ticket)
+                    or parent.get("recoveryCloseChildClaimDigest") != child["claimDigest"]
+                ):
+                    raise ValueError("different recovery child close")
+                return copy.deepcopy(parent_ticket)
+            if parent["state"] != "held" or parent["claimDigest"] != parent_claim_digest or parent["claim"] != parent_claim or child is None or child.get("state") != "settled" or child.get("finalGateDigest") != child_final_gate_digest:
+                raise ValueError("recovery parent changed during close")
+            parent["state"] = "closed-after-recovery-child"
+            parent["recoveryCloseReceiptDigest"] = receipt_digest
+            parent["recoveryCloseChildTicketDigest"] = digest(child_ticket)
+            parent["recoveryCloseChildClaimDigest"] = child["claimDigest"]
+            parent["finalGateDigest"] = child_final_gate_digest
+            self._save(state)
+            return copy.deepcopy(parent_ticket)
 
     def validate(self, ticket, *, now=None, duration=13):
         if now is not None:

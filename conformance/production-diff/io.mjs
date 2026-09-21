@@ -108,7 +108,7 @@ export const publishJson = (path, value) => publish(path, JSON.stringify(value, 
 export async function runProcess(
   command,
   args,
-  { cwd, env, timeoutMs = 180000, maxLogBytes = 1024 * 1024 } = {},
+  { cwd, env, timeoutMs = 180000, maxLogBytes = 1024 * 1024, onSpawn = null } = {},
 ) {
   requireThat(process.platform !== "win32", "posix-supervision-required");
   requireThat(
@@ -123,6 +123,12 @@ export async function runProcess(
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let spawnReceiptError = null;
+    try {
+      onSpawn?.({ pid: child.pid ?? null, command, args: [...args] });
+    } catch {
+      spawnReceiptError = "spawn-receipt-failed";
+    }
     let reason = null,
       bytes = 0,
       exitCode = null,
@@ -200,6 +206,7 @@ export async function runProcess(
       pollTimer = setInterval(inspect, 25);
       inspect();
     };
+    if (spawnReceiptError) stop(spawnReceiptError);
     process.once("SIGINT", interrupt);
     process.once("SIGTERM", interrupt);
     child.once("error", () => {

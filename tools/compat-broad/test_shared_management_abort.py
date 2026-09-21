@@ -39,6 +39,38 @@ def make_gate(tmp_path):
     return Gate(path, "a")
 
 
+def cancellation_gate(tmp_path):
+    value = management_abort_plan()
+    value["wallSeconds"] = 600
+    value["recoverySeconds"] = 300
+    value["costMicrousd"] = 5000
+    value["permissionExpiresAt"] = time.time() + 1200
+    value["management"]["observation"] = [
+        {"id": "oauth-tokeninfo", "timeout": 13},
+        {"id": "project", "timeout": 13},
+        {"id": "database", "timeout": 13},
+        {"id": "index-exemption", "timeout": 13},
+        {"id": "auth", "timeout": 13},
+        {"id": "index-lifecycle-before", "timeout": 13},
+        {"id": "index-lifecycle-apply", "timeout": 13},
+        {"id": "index-lifecycle-poll", "timeout": 13},
+        {"id": "index-lifecycle-after", "timeout": 11},
+    ]
+    value["management"]["recovery"] = [
+        {"id": "project", "timeout": 13},
+        {"id": "database", "timeout": 13},
+        {"id": "index-exemption", "timeout": 13},
+        {"id": "auth", "timeout": 13},
+        {"id": "index-lifecycle-restore", "timeout": 13},
+        {"id": "index-lifecycle-poll-restore", "timeout": 13},
+        {"id": "index-lifecycle-restored", "timeout": 13},
+    ]
+    value["observationRequests"] = len(value["management"]["observation"])
+    path = tmp_path / "cancellation-gate"
+    create(path, value)
+    return Gate(path, "a")
+
+
 def reaped_unknown():
     return {
         "status": None,
@@ -46,6 +78,72 @@ def reaped_unknown():
         "workerReaped": True,
         "bodyKind": None,
         "body": None,
+    }
+
+
+def dispatch_before_apply(gate):
+    for slot in (
+        "oauth-tokeninfo",
+        "project",
+        "database",
+        "index-exemption",
+        "auth",
+        "index-lifecycle-before",
+    ):
+        gate.management_dispatch(
+            "observation",
+            slot,
+            lambda _deadline, slot=slot: (
+                {
+                    **receipt(),
+                    "body": {
+                        "kind": "request-byte-token-attestation-v1",
+                        "principalDigest": "a" * 64,
+                        "requiredScopeVerified": True,
+                        "identityMode": "subject",
+                        "identityVerified": True,
+                        "oauthClientVerified": True,
+                        "expiresInSeconds": 3600,
+                        "remainingSecondsAtVerification": 120,
+                        "requiredSeconds": 60,
+                        "complete": True,
+                        "workerReaped": True,
+                    },
+                }
+                if slot == "oauth-tokeninfo"
+                else receipt()
+            ),
+        )
+
+
+def assert_cancel_recovery_progress(gate):
+    operation = base_plan()["jobs"]["a"]["observation"][0]
+    for slot in ("project", "database", "index-exemption"):
+        gate.management_dispatch("recovery", slot, lambda _deadline: receipt())
+        state = gate.cancel_management_observation()
+        assert state["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
+        with pytest.raises(ValueError, match="cleanup incomplete"):
+            gate.finish()
+        with pytest.raises(ValueError):
+            gate.dispatch(operation, False, lambda: pytest.fail("data must stay closed"))
+
+
+def tokeninfo_receipt():
+    return {
+        **receipt(),
+        "body": {
+            "kind": "request-byte-token-attestation-v1",
+            "principalDigest": "a" * 64,
+            "requiredScopeVerified": True,
+            "identityMode": "subject",
+            "identityVerified": True,
+            "oauthClientVerified": True,
+            "expiresInSeconds": 3600,
+            "remainingSecondsAtVerification": 120,
+            "requiredSeconds": 60,
+            "complete": True,
+            "workerReaped": True,
+        },
     }
 
 
@@ -198,6 +296,15 @@ def _child_abort(path, result):
         result.put("accepted")
 
 
+def _child_cancel(path, result):
+    try:
+        Gate(path, "a").cancel_management_observation()
+    except ValueError as error:
+        result.put(str(error))
+    else:
+        result.put("accepted")
+
+
 def test_restarted_coordinator_cannot_apply_transition(tmp_path):
     gate = make_gate(tmp_path)
     gate.management_dispatch(
@@ -207,6 +314,146 @@ def test_restarted_coordinator_cannot_apply_transition(tmp_path):
     context = mp.get_context("spawn")
     result = context.Queue()
     child = context.Process(target=_child_abort, args=(gate.path, result))
+    child.start()
+    child.join(10)
+    assert child.exitcode == 0
+    assert result.get(timeout=2) == "management abort coordinator ownership mismatch"
+    assert gate.snapshot() == before
+
+
+def test_coordinator_cancel_preserves_completed_apply_and_skips_remaining_observation(
+    tmp_path,
+):
+    gate = cancellation_gate(tmp_path)
+    gate.claim()
+    dispatch_before_apply(gate)
+    first = gate.management_dispatch(
+        "observation", "index-lifecycle-apply", lambda _deadline: receipt()
+    )
+    second = gate.management_dispatch(
+        "observation", "index-lifecycle-poll", lambda _deadline: receipt()
+    )
+
+    after = gate.cancel_management_observation()
+
+    assert first["complete"] is True
+    assert second["complete"] is True
+    assert after["managementUsed"] == [
+        "observation:oauth-tokeninfo",
+        "observation:project",
+        "observation:database",
+        "observation:index-exemption",
+        "observation:auth",
+        "observation:index-lifecycle-before",
+        "observation:index-lifecycle-apply",
+        "observation:index-lifecycle-poll",
+    ]
+    assert after["managementSkipped"] == [
+        {
+            "id": "observation:index-lifecycle-after",
+            "phase": "observation",
+            "index": 8,
+            "reason": "management-not-run",
+        }
+    ]
+    assert after["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
+    assert after["managementAbort"]["recoveryPrerequisite"] is True
+    assert after["managementEvents"][6]["status"] == first["status"]
+    assert after["managementEvents"][7]["responseDigest"]
+    assert after["jobs"]["a"]["complete"] is False
+    assert gate.cancel_management_observation() == after
+
+    assert_cancel_recovery_progress(gate)
+
+
+def test_coordinator_cancel_before_declared_apply_is_unchanged(tmp_path):
+    gate = cancellation_gate(tmp_path)
+    gate.management_dispatch(
+        "observation", "oauth-tokeninfo", lambda _deadline: tokeninfo_receipt()
+    )
+    before = gate.snapshot()
+    with pytest.raises(ValueError, match="declared apply"):
+        gate.cancel_management_observation()
+    assert gate.snapshot() == before
+
+
+def test_coordinator_cancel_rejects_unreaped_or_foreign_data_state_unchanged(tmp_path):
+    gate = cancellation_gate(tmp_path)
+    gate.claim()
+    dispatch_before_apply(gate)
+    gate.management_dispatch(
+        "observation", "index-lifecycle-apply", lambda _deadline: receipt()
+    )
+    before = gate.snapshot()
+    with gate.locked() as state:
+        state["managementEvents"][6]["workerReaped"] = False
+        shared_gate._save(gate.path, state)
+    forged = gate.snapshot()
+    with pytest.raises(ValueError, match="admissible"):
+        gate.cancel_management_observation()
+    assert gate.snapshot() == forged
+
+    with gate.locked() as state:
+        state["managementEvents"][6]["workerReaped"] = True
+        state["jobs"]["a"]["pid"] = os.getpid() + 100000
+        shared_gate._save(gate.path, state)
+    foreign = gate.snapshot()
+    with pytest.raises(ValueError, match="admissible"):
+        gate.cancel_management_observation()
+    assert gate.snapshot() == foreign
+    assert before != forged
+
+
+def test_coordinator_cancel_accepts_reaped_semantic_error_and_preserves_receipt(
+    tmp_path,
+):
+    gate = cancellation_gate(tmp_path)
+    gate.claim()
+    dispatch_before_apply(gate)
+    response = gate.management_dispatch(
+        "observation", "index-lifecycle-apply", lambda _deadline: receipt(400)
+    )
+    gate.management_dispatch(
+        "observation", "index-lifecycle-poll", lambda _deadline: receipt()
+    )
+    # The terminal after slot remains the uncharged cancellation suffix.
+
+    state = gate.cancel_management_observation()
+
+    assert response["status"] == 400
+    assert state["managementEvents"][6]["status"] == 400
+    assert state["managementEvents"][6]["completed"] is True
+    assert state["managementEvents"][6]["workerReaped"] is True
+    assert_cancel_recovery_progress(gate)
+
+
+def test_coordinator_cancel_accepts_reaped_unknown_terminal_poll(tmp_path):
+    gate = cancellation_gate(tmp_path)
+    gate.claim()
+    dispatch_before_apply(gate)
+    gate.management_dispatch(
+        "observation", "index-lifecycle-apply", lambda _deadline: receipt()
+    )
+    gate.management_dispatch(
+        "observation", "index-lifecycle-poll", lambda _deadline: reaped_unknown()
+    )
+
+    state = gate.cancel_management_observation()
+
+    assert state["managementEvents"][6]["completed"] is True
+    assert state["managementEvents"][7]["completed"] is False
+    assert state["managementEvents"][7]["workerReaped"] is True
+    assert state["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
+    assert_cancel_recovery_progress(gate)
+
+
+def test_coordinator_cancel_rejects_foreign_coordinator_without_state_change(tmp_path):
+    gate = make_gate(tmp_path)
+    gate.management_dispatch("observation", "first", lambda _deadline: receipt())
+    before = gate.snapshot()
+    context = mp.get_context("spawn")
+    result = context.Queue()
+    child = context.Process(target=_child_cancel, args=(gate.path, result))
     child.start()
     child.join(10)
     assert child.exitcode == 0

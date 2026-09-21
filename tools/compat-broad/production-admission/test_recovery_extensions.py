@@ -28,6 +28,32 @@ ACTUAL_INPUTS = None
 ACTUAL_PERMISSION = None
 
 
+class EnrichedRecoveryGate(Gate):
+    """Test facade for the future recovery transport's response-bound capture."""
+
+    def _recovery_capture(self, operation, status, body):
+        capture = super()._recovery_capture(operation, status, body)
+        capture["responseDigest"] = digest(body)
+        return capture
+
+
+class MixedRecoveryGate(EnrichedRecoveryGate):
+    def __init__(self, path, job, expected_fields):
+        super().__init__(path, job)
+        self.expected_fields = expected_fields
+
+    def _validate_cleanup_ownership(self, operation, recovery, resource, source, job):
+        capture = job["captures"].get(str(source), {})
+        if (
+            not recovery
+            or capture.get("name") != resource
+            or capture.get("fieldsDigest") != self.expected_fields[resource]
+            or not isinstance(capture.get("updateTime"), str)
+            or not capture["updateTime"]
+        ):
+            raise ValueError("strict mixed cleanup ownership required")
+
+
 def _exit_immediately():
     return None
 
@@ -110,9 +136,18 @@ def _recovery_fixture(tmp_path):
         (index, operation) for index, operation in enumerate(job["observation"])
         if operation.get("kind") == "conditional-create-commit"
     )
+    event_operation = json.loads(json.dumps(create_operation))
+    if event_operation.get("bodyRef") is not None:
+        event_operation["body"] = next(
+            operation["body"]
+            for operation in parent_plan["observation"]
+            if operation.get("kind") == event_operation["kind"]
+            and operation.get("probe") == event_operation.get("probe")
+        )
+        event_operation.pop("bodyRef", None)
     gate_state["events"] = [{"job": job_name, "phase": "observation", "index": create_index,
                               "started": time.monotonic(), "ended": time.monotonic(),
-                              "requestDigest": digest(create_operation),
+                              "requestDigest": digest(event_operation),
                               "service": create_operation["service"], "method": create_operation["method"],
                               "completed": False, "creationOutcome": "unknown"}]
     gate_state["stopped"] = True
@@ -211,6 +246,151 @@ def test_bound_recovery_claim_rejects_forged_or_parent_ticket(tmp_path, mutation
         forged[mutation] = "forged"
     with pytest.raises(ValueError, match="recovery child|persisted|ledger binding"):
         ledger.bound_recovery_claim(forged)
+
+
+def test_settle_recovery_child_uses_completed_real_gate_and_is_idempotent(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_recovery_extension(
+        parent, child, envelope, parent_plan, child_plan, now=1100,
+        canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+    )
+    create_gate(child["gatePath"], child_plan)
+    gate = EnrichedRecoveryGate(child["gatePath"], reservations.RECOVERY_GATE_JOB)
+    gate.claim()
+    operations = child_plan["jobs"][reservations.RECOVERY_GATE_JOB]["recovery"]
+    for operation in operations:
+        wire_operation = dict(operation)
+        if operation["kind"] == "recovery-conditional-delete":
+            # The preceding typed-absent inspection makes this registered
+            # cleanup slot a real Gate skip; no parent proof is fabricated.
+            wire_operation.pop("versionFrom")
+        gate.dispatch(
+            wire_operation,
+            True,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
+    gate.finish()
+    gate_state_path = Path(child["gatePath"]) / "state.json"
+    gate_state = json.loads(gate_state_path.read_text())
+    gate_state["jobs"][reservations.RECOVERY_GATE_JOB]["creationProofs"] = {"foreign": {}}
+    _save(Path(child["gatePath"]), gate_state)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="creation proofs"):
+        ledger.settle_recovery_child(
+            child_ticket, receipt_digest="receipt-correlation",
+            canonical_parent_plan=parent_plan, now=10**12,
+        )
+    assert ledger.snapshot() == before
+    gate_state["jobs"][reservations.RECOVERY_GATE_JOB]["creationProofs"] = {}
+    _save(Path(child["gatePath"]), gate_state)
+    settled = ledger.settle_recovery_child(
+        child_ticket, receipt_digest="receipt-correlation", canonical_parent_plan=parent_plan, now=10**12
+    )
+    assert settled == child_ticket
+    child_row = ledger.snapshot()["reservations"][parent["reservation"]]["recoveryChildren"][0]
+    assert child_row["state"] == "settled"
+    assert ledger.settle_recovery_child(child_ticket, receipt_digest="receipt-correlation", canonical_parent_plan=parent_plan) == child_ticket
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="different recovery settlement"):
+        ledger.settle_recovery_child(child_ticket, receipt_digest="other-receipt", canonical_parent_plan=parent_plan)
+    assert ledger.snapshot() == before
+
+
+def test_settle_recovery_child_accepts_one_authoritative_200_delete_chain(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_recovery_extension(
+        parent, child, envelope, parent_plan, child_plan, now=1100,
+        canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+    )
+    expected_fields = {
+        write["update"]["name"]: digest(write["update"]["fields"])
+        for operation in parent_plan["observation"]
+        if isinstance(operation.get("body"), dict)
+        for write in operation["body"].get("writes", [])
+    }
+    create_gate(child["gatePath"], child_plan)
+    gate = MixedRecoveryGate(child["gatePath"], reservations.RECOVERY_GATE_JOB, expected_fields)
+    gate.claim()
+    for operation in child_plan["jobs"][reservations.RECOVERY_GATE_JOB]["recovery"]:
+        wire_operation = dict(operation)
+        resource = operation["resource"]
+        if operation["kind"] == "recovery-inspection-read" and resource.endswith("/control"):
+            fields = next(
+                write["update"]["fields"]
+                for parent_operation in parent_plan["observation"]
+                if isinstance(parent_operation.get("body"), dict)
+                for write in parent_operation["body"].get("writes", [])
+                if write["update"]["name"] == resource
+            )
+            response = (200, {"name": resource, "fields": fields, "updateTime": "2026-01-01T00:00:00.000000Z"})
+        elif operation["kind"] == "recovery-conditional-delete" and resource.endswith("/control"):
+            wire_operation.pop("versionFrom")
+            wire_operation["path"] += "?currentDocument.updateTime=2026-01-01T00%3A00%3A00.000000Z"
+            response = (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+        else:
+            if operation["kind"] == "recovery-conditional-delete":
+                wire_operation.pop("versionFrom")
+            response = (404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+        gate.dispatch(wire_operation, True, lambda response=response: response)
+    gate.finish()
+    assert ledger.settle_recovery_child(
+        child_ticket,
+        receipt_digest="mixed-receipt",
+        canonical_parent_plan=parent_plan,
+        now=10**12,
+    ) == child_ticket
+    before = ledger.snapshot()
+    gate_state_path = Path(child["gatePath"]) / "state.json"
+    gate_state = json.loads(gate_state_path.read_text())
+    gate_state["planDigest"] = "0" * 64
+    _save(Path(child["gatePath"]), gate_state)
+    with pytest.raises(ValueError):
+        ledger.settle_recovery_child(child_ticket, receipt_digest="mixed-receipt", canonical_parent_plan=parent_plan)
+    assert ledger.snapshot() == before
+
+
+def test_close_after_recovery_child_releases_only_parent_and_is_idempotent(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_recovery_extension(
+        parent, child, envelope, parent_plan, child_plan, now=1100,
+        canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+    )
+    create_gate(child["gatePath"], child_plan)
+    gate = EnrichedRecoveryGate(child["gatePath"], reservations.RECOVERY_GATE_JOB)
+    gate.claim()
+    for operation in child_plan["jobs"][reservations.RECOVERY_GATE_JOB]["recovery"]:
+        wire = dict(operation)
+        if operation["kind"] == "recovery-conditional-delete":
+            wire.pop("versionFrom")
+        gate.dispatch(wire, True, lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}))
+    gate.finish()
+    ledger.settle_recovery_child(child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan, now=10**12)
+    closed = ledger.close_after_recovery_child(
+        parent, child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan, now=10**12,
+    )
+    assert closed == parent
+    assert ledger.snapshot()["reservations"][parent["reservation"]]["state"] == "closed-after-recovery-child"
+    assert ledger.close_after_recovery_child(
+        parent, child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan,
+    ) == parent
+    before = ledger.snapshot()
+    parent_gate_path = Path(before["reservations"][parent["reservation"]]["claim"]["gatePath"])
+    parent_gate_state_path = parent_gate_path / "state.json"
+    parent_gate_state = json.loads(parent_gate_state_path.read_text())
+    parent_gate_state["planDigest"] = "0" * 64
+    _save(parent_gate_path, parent_gate_state)
+    with pytest.raises(ValueError):
+        ledger.close_after_recovery_child(
+            parent, child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan,
+        )
+    assert ledger.snapshot() == before
+    parent_gate_state["planDigest"] = digest(parent_gate_state["plan"])
+    _save(parent_gate_path, parent_gate_state)
+    with pytest.raises(ValueError, match="different recovery settlement receipt"):
+        ledger.close_after_recovery_child(
+            parent, child_ticket, receipt_digest="wrong", canonical_parent_plan=parent_plan,
+        )
+    assert ledger.snapshot() == before
 
 
 def test_recovery_extension_refuses_tariff_or_plan_count_mutation_without_save(tmp_path):

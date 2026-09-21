@@ -26,6 +26,7 @@ CAMPAIGN_ID = "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01"
 NONCE_TEMPLATE = "{freshNonce}"
 LOCAL_PROJECT = "demo-auth-action"
 EMAIL_DOMAIN = "example.invalid"
+_PROJECT = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
 
 # Values that must never be written to a receipt, a log line or a process
 # argument. The manifest may only reference them through a `$binding:` name.
@@ -606,10 +607,32 @@ def campaign_cases() -> list[dict[str, Any]]:
     ]
 
 
-def campaign_manifest(nonce: str = NONCE_TEMPLATE) -> dict[str, Any]:
+def _validate_project(project: Any) -> str:
+    if not isinstance(project, str) or _PROJECT.fullmatch(project) is None:
+        raise ValueError("canonical project required")
+    return project
+
+
+def compiled_methods(nonce: str = NONCE_TEMPLATE, *, project: str = LOCAL_PROJECT) -> tuple[str, ...]:
+    """Return the exact Auth methods used by every compiled campaign row."""
+    _validate_project(project)
+    if nonce != NONCE_TEMPLATE and not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        raise ValueError("fresh 32-character hexadecimal nonce required")
+    methods = []
+    for row in (*campaign_stages(), *campaign_recovery()):
+        method = row["path"].rsplit("accounts:", 1)[-1]
+        if method not in methods:
+            methods.append(method)
+    return tuple(methods)
+
+
+def campaign_manifest(
+    nonce: str = NONCE_TEMPLATE, *, project: str = LOCAL_PROJECT
+) -> dict[str, Any]:
     """Return the frozen campaign manifest for one fresh owned namespace."""
     if nonce != NONCE_TEMPLATE and not re.fullmatch(r"[0-9a-f]{32}", nonce):
         raise ValueError("fresh 32-character hexadecimal nonce required")
+    project = _validate_project(project)
     stages = campaign_stages()
     recovery = campaign_recovery()
     return {
@@ -618,7 +641,7 @@ def campaign_manifest(nonce: str = NONCE_TEMPLATE) -> dict[str, Any]:
         "nonce": nonce,
         "nonceStatus": "syntax-only; freshness and ownership unverified",
         "transport": "unbound",
-        "localProject": LOCAL_PROJECT,
+        "localProject": project,
         "sourceBinding": {"commit": None, "artifactSha256": None},
         "uniqueObligation": (
             "code ownership, consumption, reuse and post-transition validity for "
@@ -660,13 +683,9 @@ def campaign_manifest(nonce: str = NONCE_TEMPLATE) -> dict[str, Any]:
         "permissionEnvelope": {
             "role": "roles/firebaseauth.admin",
             "scope": "https://www.googleapis.com/auth/identitytoolkit",
+            "projectId": project,
             "projectScope": "the single approved project",
-            "methods": [
-                "accounts:sendOobCode",
-                "accounts:update",
-                "accounts:lookup",
-                "accounts:delete",
-            ],
+            "methods": [f"accounts:{method}" for method in compiled_methods(nonce, project=project)],
             "notRequired": [
                 "https://www.googleapis.com/auth/cloud-platform",
                 "organization or folder level access",

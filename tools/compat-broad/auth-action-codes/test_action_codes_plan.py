@@ -14,6 +14,7 @@ from action_codes_plan import (
     STAGE_IDS,
     campaign_cases,
     campaign_manifest,
+    compiled_methods,
     proposal,
     validate_proposal,
 )
@@ -46,6 +47,20 @@ def test_nonce_must_be_fresh_hexadecimal_and_names_every_owned_resource() -> Non
         assert account["email"].endswith("@example.invalid")
     # The template manifest keeps the placeholder instead of a usable namespace.
     assert campaign_manifest()["nonce"] == NONCE_TEMPLATE
+
+
+def test_authorized_project_is_an_explicit_canonical_plan_input() -> None:
+    authorized = campaign_manifest(NONCE, project="fireemu-authorized")
+    assert authorized["localProject"] == "fireemu-authorized"
+    assert authorized["permissionEnvelope"]["projectId"] == "fireemu-authorized"
+    assert campaign_manifest(NONCE)["localProject"] == "demo-auth-action"
+    assert authorized != campaign_manifest(NONCE)
+
+
+@pytest.mark.parametrize("project", ["", "bad project", "../escape", 42])
+def test_authorized_project_rejects_noncanonical_values(project) -> None:
+    with pytest.raises(ValueError, match="project"):
+        campaign_manifest(NONCE, project=project)
 
 
 def test_every_stage_is_ordered_typed_and_bounded() -> None:
@@ -193,12 +208,9 @@ def test_the_permission_envelope_names_a_least_privilege_role() -> None:
     assert permission["scope"] == "https://www.googleapis.com/auth/identitytoolkit"
     assert permission["projectScope"] == "the single approved project"
     assert any("cloud-platform" in row for row in permission["notRequired"])
-    assert set(permission["methods"]) == {
-        "accounts:sendOobCode",
-        "accounts:update",
-        "accounts:lookup",
-        "accounts:delete",
-    }
+    assert permission["methods"] == [
+        "accounts:" + method for method in compiled_methods(NONCE)
+    ]
     assert manifest["ownerInputs"]["credentialRole"] is None
 
 

@@ -12,11 +12,17 @@ import hashlib
 import math
 import os
 import re
+import stat
 from dataclasses import dataclass
 
 from local_assist.packet import InputSelection
 
 MAX_FILE_BYTES = 4 * 1024 * 1024
+_FD_READ_SUPPORTED = (
+    os.name == "posix"
+    and os.open in os.supports_dir_fd
+    and all(hasattr(os, flag) for flag in ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK"))
+)
 BYTES_PER_TOKEN = (
     3  # conservative: real tokenizers average 3.5-4 bytes per token on code
 )
@@ -251,15 +257,76 @@ def resolve_inside(real_root: str, path: str) -> str:
     return full
 
 
+def _file_version(info: os.stat_result) -> tuple[int, ...]:
+    # atime is omitted: our own read may update it. ctime catches same-size rewrites
+    # even when another writer restores mtime, and nlink catches unlink/replace.
+    return (
+        info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+        info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+    )
+
+
+def _read_regular_file(real_root: str, path: str) -> bytes:
+    """Read through no-follow directory descriptors, not a re-resolved pathname.
+
+    The earlier path checks provide policy and useful diagnostics, not a lock.
+    Every component (including repoRoot ancestors) must still be a directory
+    when opened. A rename after opening a directory cannot redirect its fd.
+    This is not an OS sandbox: hard links, hostile mounts, and a malicious
+    same-user process are outside the guarantee.
+    """
+    if not _FD_READ_SUPPORTED:
+        raise _refuse(path, "no-follow descriptor reads are unsupported")
+    if not os.path.isabs(real_root) or os.path.normpath(real_root) != real_root:
+        raise _refuse(path, "repoRoot must be resolved before reading")
+    check_relative_path(path)
+    directory = file_fd = None
+    try:
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        directory_flags |= getattr(os, "O_CLOEXEC", 0)
+        directory = os.open(os.sep, directory_flags)
+        components = [part for part in real_root.split(os.sep) if part]
+        components.extend(path.split("/")[:-1])
+        for component in components:
+            child = os.open(component, directory_flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        # O_NONBLOCK prevents a replaced FIFO from hanging before fstat can reject it.
+        file_fd = os.open(
+            path.split("/")[-1],
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=directory,
+        )
+        before = os.fstat(file_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise _refuse(path, "not a regular file")
+        if before.st_size > MAX_FILE_BYTES:
+            raise _refuse(path, f"file is larger than {MAX_FILE_BYTES} bytes")
+        data = bytearray()
+        while len(data) <= MAX_FILE_BYTES:
+            chunk = os.read(file_fd, min(65_536, MAX_FILE_BYTES + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if len(data) > MAX_FILE_BYTES:
+            raise _refuse(path, f"file is larger than {MAX_FILE_BYTES} bytes")
+        after = os.fstat(file_fd)
+        if _file_version(before) != _file_version(after) or len(data) != before.st_size:
+            raise _refuse(path, "file changed while reading; use a stable snapshot")
+        return bytes(data)
+    except OSError:
+        # Do not expose absolute destinations or filesystem exception contents.
+        raise _refuse(path, "path changed, contains a symlink, or cannot be read") from None
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if directory is not None:
+            os.close(directory)
+
+
 def read_selection(real_root: str, selection: InputSelection) -> ReadInput:
-    full = resolve_inside(real_root, selection.path)
-    size = os.path.getsize(full)
-    if size > MAX_FILE_BYTES:
-        raise _refuse(selection.path, f"file is larger than {MAX_FILE_BYTES} bytes")
-    with open(full, "rb") as handle:
-        data = handle.read(MAX_FILE_BYTES + 1)
-    if len(data) > MAX_FILE_BYTES:
-        raise _refuse(selection.path, f"file is larger than {MAX_FILE_BYTES} bytes")
+    resolve_inside(real_root, selection.path)
+    data = _read_regular_file(real_root, selection.path)
     if b"\x00" in data:
         raise _refuse(selection.path, "binary content (NUL byte)")
     try:

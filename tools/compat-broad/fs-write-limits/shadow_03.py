@@ -118,6 +118,7 @@ def _real_child(output: Path, nonce: str, part: str = "ALL") -> None:
     result: dict[str, Any] = {
         "campaignId": plan["campaignId"],
         "part": part,
+        "project": project,
         "productionExecuted": False,
         "formalCompatibilityClaim": False,
         "recordingComplete": recording,

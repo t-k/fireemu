@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -106,6 +106,44 @@ test("G0 process identity uses the OS-native exact argv of a real owned child", 
     child.kill("SIGTERM");
     await new Promise((resolve) => child.once("close", resolve));
   }
+});
+
+const nativeG0Environment = [
+  "G0_RETAINED_ARTIFACT",
+  "G0_BUILD_MANIFEST",
+  "G0_ARTIFACT_PROFILE",
+  "G0_PRIVATE_PRODUCTION_RESULT",
+  "G0_NATIVE_OUTPUT_ROOT",
+];
+const nativeG0Ready = nativeG0Environment.every((name) => typeof process.env[name] === "string" && process.env[name].startsWith("/"));
+
+test("G0 opt-in native handoff reaches the real worker and closes every recovery slot", { skip: !nativeG0Ready }, async () => {
+  const output = join(process.env.G0_NATIVE_OUTPUT_ROOT, `g0-native-${process.pid}-${Date.now()}`);
+  assert.equal(existsSync(output), false);
+  const pilot = spawn(
+    process.execPath,
+    [
+      resolve(process.cwd(), "conformance/production-diff/pilot.mjs"),
+      "replay",
+      "--case",
+      "fs.g0.saved-68012694.v1",
+      "--binary",
+      process.env.G0_RETAINED_ARTIFACT,
+      "--out",
+      output,
+      "--timeout",
+      "600",
+    ],
+    { cwd: process.cwd(), env: process.env, stdio: ["ignore", "ignore", "ignore"] },
+  );
+  const exitCode = await new Promise((resolveExit) => pilot.once("close", resolveExit));
+  assert.equal(exitCode, 0, `native G0 replay failed; retained output: ${output}`);
+  const batch = JSON.parse(readFileSync(join(output, "batch", "result.json"), "utf8"));
+  assert.equal(batch.completed, true);
+  const jobs = Object.values(batch.jobs);
+  assert.equal(jobs.reduce((total, result) => total + result.rows.length, 0), 12);
+  assert.equal(jobs.reduce((total, result) => total + result.cleanup.length, 0), 12);
+  assert.equal(new Set(Object.values(batch.gate.jobs).flatMap((job) => job.absent)).size, 4);
 });
 
 test("G0 session binds validated origins before the real Gate and Adapter are constructed", () => {

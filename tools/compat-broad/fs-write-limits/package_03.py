@@ -83,7 +83,14 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def validate_nx_local_shadow(shadow: dict) -> None:
+def validate_nx_local_shadow(
+    shadow: dict,
+    *,
+    expected_commit: str | None = None,
+    expected_artifact_sha256: str | None = None,
+    expected_runtime_inputs_digest: str | None = None,
+    expected_configuration_digest: str | None = None,
+) -> None:
     """Require complete, source-bound runtime evidence before clearing G1."""
     execution = shadow["execution"]["ALL"]["execution"]
     index = execution.get("indexConfiguration", {})
@@ -91,6 +98,13 @@ def validate_nx_local_shadow(shadow: dict) -> None:
         return
     if index.get("sha256") != campaign.INDEXES_SHA256_AFTER:
         raise ValueError("nx-local shadow index digest is not the declared after state")
+    if index.get("sourceCommit") is not None:
+        raise ValueError("nx-local shadow index source commit is not local")
+    execution_commit = execution.get("executionCommit")
+    if not isinstance(execution_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", execution_commit):
+        raise ValueError("nx-local shadow source commit identity is missing")
+    if expected_commit is not None and execution_commit != expected_commit:
+        raise ValueError("nx-local shadow source commit differs")
     if (
         execution.get("semanticMismatches")
         or execution.get("pendingDifferences")
@@ -106,14 +120,23 @@ def validate_nx_local_shadow(shadow: dict) -> None:
         or not isinstance(execution.get("configurationDigest"), str)
     ):
         raise ValueError("nx-local shadow is incomplete or mismatched")
-    if len(execution["configurationDigest"]) != 64:
+    if not re.fullmatch(r"[0-9a-f]{64}", execution["configurationDigest"]):
         raise ValueError("nx-local shadow configuration identity is missing")
     process = execution.get("ownedProcess", {})
     artifact = shadow["execution"]["ALL"].get("artifact", {})
     if process.get("stopped") is not True or process.get("listenersClosed") is not True:
         raise ValueError("nx-local shadow process cleanup is unverified")
-    if len(artifact.get("sha256", "")) != 64 or len(artifact.get("runtimeInputsDigest", "")) != 64:
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact.get("sha256", "")) or not re.fullmatch(
+        r"[0-9a-f]{64}", artifact.get("runtimeInputsDigest", "")
+    ):
         raise ValueError("nx-local shadow artifact identity is missing")
+    for actual, expected, label in (
+        (artifact["sha256"], expected_artifact_sha256, "artifact"),
+        (artifact["runtimeInputsDigest"], expected_runtime_inputs_digest, "runtime inputs"),
+        (execution["configurationDigest"], expected_configuration_digest, "configuration"),
+    ):
+        if expected is not None and actual != expected:
+            raise ValueError(f"nx-local shadow {label} identity differs")
 
 
 def head_commit() -> str:
@@ -262,6 +285,13 @@ def shadow_record(run: Path, commit: str) -> dict:
             }
         },
     }
+    validate_nx_local_shadow(
+        record,
+        expected_commit=commit,
+        expected_artifact_sha256=build["artifactSha256"],
+        expected_runtime_inputs_digest=digest(build["inputs"]),
+        expected_configuration_digest=supervisor["configurationDigest"],
+    )
     if _NONCE.search(json.dumps(record)):
         raise SystemExit("the shadow record must not publish a nonce")
     return record
@@ -330,7 +360,7 @@ def manifest(
     production_receipt: Path | None = None,
 ) -> dict:
     """The manifest, with every computed member recomputed over HEAD."""
-    validate_nx_local_shadow(shadow)
+    validate_nx_local_shadow(shadow, expected_commit=commit)
     value = _rebind_text(copy.deepcopy(previous), commit)
     figures = campaign.budget_figures()
     plan = campaign.figure_plan()

@@ -341,18 +341,47 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap() -> None:
         allOwnedResourcesAbsentAfterRecovery=True,
         supervisorStatus="completed",
         configurationDigest="a" * 64,
+        executionCommit=subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip(),
     )
     execution["ownedProcess"] = {"stopped": True, "listenersClosed": True}
     shadow["execution"]["ALL"]["artifact"] = {
         "sha256": "b" * 64,
         "runtimeInputsDigest": "c" * 64,
     }
-    package_03.validate_nx_local_shadow(shadow)
-    for key, value in (("pendingDifferences", [{"pending": True}]), ("completed", False)):
+    package_03.validate_nx_local_shadow(
+        shadow,
+        expected_commit=execution["executionCommit"],
+        expected_artifact_sha256="b" * 64,
+        expected_runtime_inputs_digest="c" * 64,
+        expected_configuration_digest="a" * 64,
+    )
+    mutations = [
+        ("pendingDifferences", [{"pending": True}]),
+        ("completed", False),
+        ("executionCommit", None),
+        ("executionCommit", "g" * 40),
+        ("executionCommit", "0" * 40),
+        ("artifactSha256", "d" * 64),
+        ("indexSourceCommit", "0" * 40),
+    ]
+    for key, value in mutations:
         mutated = copy.deepcopy(shadow)
-        mutated["execution"]["ALL"]["execution"][key] = value
+        if key == "artifactSha256":
+            mutated["execution"]["ALL"]["artifact"]["sha256"] = value
+        elif key == "indexSourceCommit":
+            mutated["execution"]["ALL"]["execution"]["indexConfiguration"]["sourceCommit"] = value
+        else:
+            mutated["execution"]["ALL"]["execution"][key] = value
         with pytest.raises(ValueError, match="nx-local shadow"):
-            package_03.validate_nx_local_shadow(mutated)
+            package_03.validate_nx_local_shadow(
+                mutated,
+                expected_commit=execution["executionCommit"],
+                expected_artifact_sha256="b" * 64,
+                expected_runtime_inputs_digest="c" * 64,
+                expected_configuration_digest="a" * 64,
+            )
 
 
 def test_the_document_name_figures_are_computed_not_written_by_hand() -> None:

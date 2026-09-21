@@ -1,0 +1,791 @@
+"""Closed, plan-bound O5 transport boundary.
+
+The module accepts only envelopes emitted by the collector. It intentionally
+does not implement restoration orchestration or campaign/descriptor wiring.
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote, urlsplit
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "o8-core"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from broad_contract import digest
+from o5_user_token_identity_proof import IdentityProof
+from o8_admission import authorize_transport
+
+CAMPAIGN = "FS-RULES-USER-TOKEN-MATRIX-01"
+PROJECT = "fireemu-35fe6"
+DATABASE = "(default)"
+LANE_DIRECTORY = "tools/compat-broad/fs-rules-publication"
+WORKER_ENTRY = f"{LANE_DIRECTORY}/o5_user_token_https_worker.py"
+FIRESTORE_ORIGIN = "https://firestore.googleapis.com"
+IDENTITY_ORIGIN = "https://identitytoolkit.googleapis.com"
+RULES_ORIGIN = "https://firebaserules.googleapis.com"
+MAX_SECONDS = 12.0
+MAX_ENVELOPE_BYTES = 1_048_576
+MAX_OUTPUT_BYTES = 2 * 1024 * 1024
+_NONCE = re.compile(r"^[0-9a-f]{32}$")
+_TENANT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{3,35}$")
+_DOCUMENT = re.compile(
+    r"^projects/([a-z][a-z0-9-]{4,28}[a-z0-9])/databases/\(default\)/documents/"
+    r"o5-user-token/n([0-9a-f]{32})/cases/([A-Za-z0-9_-]{1,128})$"
+)
+_WORKER_SHA256 = "34f14455daf28f4fc0cadcd3cd0cf19b5a69e7f84568736d5a1c9708ac703593"
+
+
+def _compact(value: Any) -> bytes:
+    return json.dumps(
+        value, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode()
+
+
+def worker_binding() -> tuple[bytes, str]:
+    source = Path(__file__).with_name("o5_user_token_https_worker.py").read_bytes()
+    return source, hashlib.sha256(source).hexdigest()
+
+
+def verify_worker_binding(binding: Any, binding_digest: Any, frozen: Any) -> None:
+    if not isinstance(binding, bytes) or not binding:
+        raise ValueError("reviewed worker source required")
+    observed = hashlib.sha256(binding).hexdigest()
+    if observed != binding_digest or observed != _WORKER_SHA256:
+        raise ValueError("worker source digest differs from reviewed transport")
+    if frozen is not None and frozen.get(WORKER_ENTRY) != observed:
+        raise ValueError("worker source digest differs from frozen inputs")
+
+
+def _plan_identity(plan: dict[str, Any]) -> tuple[str, str]:
+    if not isinstance(plan, dict) or plan.get("campaignId") != CAMPAIGN:
+        raise ValueError("campaign identity required")
+    if plan.get("project") != PROJECT or plan.get("database") != DATABASE:
+        raise ValueError("project binding differs")
+    nonce, tenant = plan.get("nonce"), plan.get("tenant")
+    if not isinstance(nonce, str) or _NONCE.fullmatch(nonce) is None:
+        raise ValueError("nonce binding required")
+    if not isinstance(tenant, str) or _TENANT.fullmatch(tenant) is None:
+        raise ValueError("tenant binding required")
+    return nonce, tenant
+
+
+def _frozen_inputs(plan: dict[str, Any], frozen: Any) -> dict[str, Any]:
+    if not isinstance(frozen, dict) or not isinstance(frozen.get("plan"), dict):
+        raise ValueError("complete frozen inputs required")  # noqa: TRY004
+    snapshot = copy.deepcopy(frozen)
+    if snapshot["plan"] != plan:
+        raise ValueError("frozen plan differs")
+    if snapshot.get("planDigest") != digest(snapshot["plan"]):
+        raise ValueError("frozen plan digest differs")
+    supplied = snapshot.pop("inputsDigest", None)
+    if not isinstance(supplied, str) or supplied != digest(snapshot):
+        raise ValueError("frozen inputs digest differs")
+    snapshot["inputsDigest"] = supplied
+    return snapshot
+
+
+def _credential(
+    credentials: dict[str, Any],
+    reference: str,
+    credential_class: str,
+    identity_proofs: dict[str, IdentityProof] | None = None,
+) -> str | None:
+    if credential_class == "absent":
+        return None
+    value = credentials.get(reference)
+    if (
+        not isinstance(value, str)
+        or len(value) > 8192
+        or any(char.isspace() for char in value)
+    ):
+        raise ValueError("bounded credential required")
+    if credential_class != "empty" and not value:
+        raise ValueError("bounded credential required")
+    if (
+        credential_class == "user-id-token"
+        and identity_proofs is not None
+        and "expired" not in reference
+    ):
+        proof = identity_proofs.get(reference)
+        if (
+            not isinstance(proof, IdentityProof)
+            or not proof.trusted()
+            or proof.token != value
+        ):
+            raise ValueError("trusted identity proof required")
+    return value
+
+
+def _resource(path: Any, *, nonce: str) -> str:
+    if not isinstance(path, str):
+        raise ValueError("resource path required")  # noqa: TRY004
+    match = _DOCUMENT.fullmatch(path)
+    if match is None:
+        raise ValueError("resource path binding differs")
+    if match.group(1) != PROJECT:
+        raise ValueError("project binding differs")
+    if match.group(2) != nonce:
+        raise ValueError("nonce binding differs")
+    return "/v1/" + path
+
+
+def _headers(token: str | None) -> dict[str, str]:
+    headers = {"x-goog-user-project": PROJECT}
+    if token is not None:
+        headers["Authorization"] = "Bearer " + token
+    return headers
+
+
+def _typed(value: Any, account_bindings: dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(value, dict) and set(value) == {"$principal"}:
+        ref = value["$principal"]
+        bound = (account_bindings or {}).get(ref)
+        if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
+            raise ValueError("principal UID binding required")
+        value = bound["uid"]
+    if value is None:
+        return {"nullValue": None}
+    if isinstance(value, bool):
+        return {"booleanValue": value}
+    if isinstance(value, int) and not isinstance(value, bool):
+        return {"integerValue": str(value)}
+    if isinstance(value, float):
+        return {"doubleValue": value}
+    if isinstance(value, str):
+        return {"stringValue": value}
+    if isinstance(value, dict):
+        return {
+            "mapValue": {
+                "fields": {
+                    key: _typed(nested, account_bindings)
+                    for key, nested in value.items()
+                }
+            }
+        }
+    if isinstance(value, list):
+        return {
+            "arrayValue": {
+                "values": [_typed(nested, account_bindings) for nested in value]
+            }
+        }
+    raise ValueError("unsupported Firestore field")
+
+
+def _has_principal(value: Any) -> bool:
+    if isinstance(value, dict):
+        return (set(value) == {"$principal"}) or any(
+            _has_principal(item) for item in value.values()
+        )
+    if isinstance(value, list):
+        return any(_has_principal(item) for item in value)
+    return False
+
+
+def _write_resource(document: Any, plan: dict[str, Any]) -> str:
+    if not isinstance(document, str):
+        raise ValueError("write document required")  # noqa: TRY004
+    for resource in plan.get("ownedResources", []):
+        if isinstance(resource, str) and resource.endswith("/cases/" + document):
+            return "/v1/" + resource
+    raise ValueError("write document outside owned namespace")
+
+
+def _commit_writes(
+    plan: dict[str, Any], writes: list[Any], account_bindings: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    converted = []
+    for write in writes:
+        if not isinstance(write, dict) or set(write) != {
+            "document",
+            "operation",
+            "fields",
+        }:
+            raise ValueError("pseudo-write shape refused")
+        operation = write["operation"]
+        fields = write["fields"]
+        if operation not in {"create", "update"} or not isinstance(fields, dict):
+            raise ValueError("pseudo-write operation refused")
+        entry: dict[str, Any] = {
+            "update": {
+                "name": _write_resource(write["document"], plan),
+                "fields": {
+                    key: _typed(value, account_bindings)
+                    for key, value in fields.items()
+                },
+            }
+        }
+        if operation == "create":
+            entry["currentDocument"] = {"exists": False}
+        else:
+            entry["updateMask"] = {"fieldPaths": sorted(fields)}
+            entry["currentDocument"] = {"exists": True}
+        converted.append(entry)
+    return converted
+
+
+def _check_observation(
+    expected: dict[str, Any], operation: dict[str, Any], *, nonce: str
+) -> tuple[str, str]:
+    if operation.get("method") not in {"get", "commit"}:
+        raise ValueError("operation shape refused")
+    resources = operation.get("resources")
+    if not isinstance(resources, list) or not resources:
+        raise ValueError("observation resources required")
+    for resource in resources:
+        _resource(resource, nonce=nonce)
+    credential = expected.get("credential")
+    if not isinstance(credential, dict):
+        raise ValueError("credential shape refused")  # noqa: TRY004
+    expected_values = {
+        "caseId": expected.get("caseId"),
+        "index": expected.get("index"),
+        "ruleset": expected.get("ruleset"),
+        "method": expected.get("method"),
+        "resources": expected.get("resources"),
+        "writes": expected.get("writes"),
+        "createdDocuments": expected.get("createdDocuments"),
+        "credentialRef": credential.get("ref"),
+        "credentialClass": credential.get("class"),
+        "credentialFingerprint": digest(
+            ["credential-ref", nonce, credential.get("ref")]
+        )[:16],
+    }
+    keys = tuple(expected_values)
+    for key in keys:
+        if operation.get(key) != expected_values[key]:
+            if key == "credentialClass":
+                raise ValueError("credential class differs from frozen plan")
+            if key == "credentialFingerprint":
+                raise ValueError("credential fingerprint differs from frozen plan")
+            raise ValueError("operation differs from frozen plan")
+    return operation["credentialRef"], operation["credentialClass"]
+
+
+def _observation(
+    plan: dict[str, Any],
+    operation: dict[str, Any],
+    credentials: dict[str, Any],
+    *,
+    nonce: str,
+    account_bindings: dict[str, Any] | None,
+    identity_proofs: dict[str, IdentityProof] | None,
+) -> dict[str, Any]:
+    index = operation.get("index")
+    observations = plan.get("observation")
+    if (
+        type(index) is not int
+        or not isinstance(observations, list)
+        or not 0 <= index < len(observations)
+    ):
+        raise ValueError("operation index outside plan")
+    if "credentialClass" not in operation:
+        raw = operation.get("credential")
+        if not isinstance(raw, dict) or not isinstance(raw.get("ref"), str):
+            raise ValueError("principal binding refused")
+        expected_credential = observations[index].get("credential", {})
+        if raw.get("ref") != expected_credential.get("ref"):
+            raise ValueError("principal binding refused")
+        operation = {
+            **operation,
+            "index": index,
+            "credentialRef": raw["ref"],
+            "credentialClass": raw.get("class"),
+            "credentialFingerprint": digest(["credential-ref", nonce, raw["ref"]])[:16],
+        }
+    reference, credential_class = _check_observation(
+        observations[index], operation, nonce=nonce
+    )
+    principal = observations[index].get("principal")
+    if account_bindings is not None and credential_class != "absent":
+        expected_account = next(
+            (
+                entry
+                for entry in plan.get("ownedAccounts", [])
+                if isinstance(entry, dict) and entry.get("ref") == principal
+            ),
+            None,
+        )
+        bound = account_bindings.get(principal) if isinstance(principal, str) else None
+        if (
+            identity_proofs is not None
+            and credential_class == "user-id-token"
+            and "expired" not in reference
+        ):
+            proof = identity_proofs.get(reference)
+            if (
+                not isinstance(proof, IdentityProof)
+                or not proof.trusted()
+                or proof.principal_ref != principal
+            ):
+                raise ValueError("trusted identity proof required")
+        if expected_account is None and (
+            reference in {"malformed-bearer", "empty-bearer", "expired-token"}
+            or "expired" in str(principal)
+        ):
+            expected_account = None
+        elif not isinstance(expected_account, dict) or not isinstance(bound, dict):
+            raise ValueError("credential principal binding required")
+        if expected_account is not None:
+            expected_provider = (
+                "anonymous"
+                if expected_account.get("kind") == "anonymous"
+                else "password"
+            )
+            if bound.get("provider") not in {None, expected_provider} or bound.get(
+                "tenant"
+            ) != expected_account.get("tenant"):
+                raise ValueError("credential scope binding differs")
+            expected_claims = digest(expected_account.get("claims", {}))
+            if bound.get("claimsDigest") not in {None, expected_claims}:
+                raise ValueError("credential claims scope differs")
+            if not isinstance(bound.get("uid"), str):
+                raise ValueError("credential UID binding required")
+    token = _credential(credentials, reference, credential_class, identity_proofs)
+    if (
+        credential_class == "user-id-token"
+        and ("expired" in reference or "expired" in str(principal))
+        and (operation["method"] == "commit" or _has_principal(operation.get("writes")))
+    ):
+        raise ValueError("expired credential cannot authorize writes")
+    path = _resource(operation["resources"][0], nonce=nonce)
+    headers = _headers(token)
+    if operation["method"] == "get":
+        return {
+            "service": "firestore",
+            "route": "observation-get",
+            "origin": FIRESTORE_ORIGIN,
+            "path": path,
+            "method": "GET",
+            "headers": headers,
+            "body": None,
+        }
+    return {
+        "service": "firestore",
+        "route": "observation-commit",
+        "origin": FIRESTORE_ORIGIN,
+        "path": f"/v1/projects/{PROJECT}/databases/(default)/documents:commit",
+        "method": "POST",
+        "headers": headers,
+        "body": {"writes": _commit_writes(plan, operation["writes"], account_bindings)},
+    }
+
+
+def _ruleset(
+    plan: dict[str, Any], operation: dict[str, Any], credentials: dict[str, Any]
+) -> dict[str, Any]:
+    required = {
+        "kind",
+        "phase",
+        "ruleset",
+        "sourceDigest",
+        "credentialRef",
+        "credentialClass",
+    }
+    if set(operation) != required or operation.get("phase") != "ruleset":
+        raise ValueError("ruleset release phase or shape refused")
+    label = operation["ruleset"]
+    rulesets = plan.get("rulesets")
+    source = (
+        rulesets.get(label, {}).get("source") if isinstance(rulesets, dict) else None
+    )
+    if (
+        label not in {"A", "B"}
+        or not isinstance(source, str)
+        or digest(source) != operation["sourceDigest"]
+    ):
+        raise ValueError("ruleset source binding differs")
+    if (
+        operation["credentialRef"] != "administrator"
+        or operation["credentialClass"] != "administrator"
+    ):
+        raise ValueError("ruleset credential binding refused")
+    token = _credential(credentials, "administrator", "administrator")
+    return {
+        "service": "rules",
+        "route": "ruleset-release",
+        "origin": RULES_ORIGIN,
+        "path": f"/v1/projects/{PROJECT}/rulesets",
+        "method": "POST",
+        "headers": _headers(token),
+        "body": {"source": {"files": [{"name": "firestore.rules", "content": source}]}},
+    }
+
+
+def _account_path(tenant: str | None, suffix: str) -> str:
+    prefix = f"/v1/projects/{PROJECT}"
+    if tenant is not None:
+        prefix += f"/tenants/{tenant}"
+    return f"{prefix}/accounts:{suffix}"
+
+
+def _principal(
+    plan: dict[str, Any],
+    operation: dict[str, Any],
+    credentials: dict[str, Any],
+    account_bindings: dict[str, Any] | None,
+    identity_proofs: dict[str, IdentityProof] | None = None,
+) -> dict[str, Any]:
+    required = {
+        "kind",
+        "phase",
+        "principalRef",
+        "action",
+        "credentialRef",
+        "credentialClass",
+    }
+    if (
+        set(operation) != required
+        or operation.get("phase") != "principal"
+        or operation["credentialRef"] != "administrator"
+        or operation["credentialClass"] != "administrator"
+    ):
+        raise ValueError("principal action phase or shape refused")
+    ref, action = operation["principalRef"], operation["action"]
+    if not any(
+        isinstance(entry, dict) and entry.get("ref") == ref
+        for entry in plan.get("ownedAccounts", [])
+    ) or action not in {"revoke", "disable", "delete"}:
+        raise ValueError("principal binding refused")
+    bound = (account_bindings or {}).get(ref)
+    account = next(
+        (
+            entry
+            for entry in plan.get("ownedAccounts", [])
+            if isinstance(entry, dict) and entry.get("ref") == ref
+        ),
+        None,
+    )
+    if (
+        not isinstance(bound, dict)
+        or not isinstance(account, dict)
+        or not isinstance(bound.get("uid"), str)
+        or bound.get("tenant") != account.get("tenant")
+    ):
+        raise ValueError("account binding required")
+    token = _credential(credentials, "administrator", "administrator")
+    body: dict[str, Any] = {"localId": bound["uid"]}
+    if action == "disable":
+        body["disableUser"] = True
+    if action == "revoke":
+        if type(bound.get("authTime")) is not int:
+            raise ValueError("account authTime binding required")
+        body["validSince"] = bound["authTime"] + 1
+    suffix = "delete" if action == "delete" else "update"
+    return {
+        "service": "identity",
+        "route": "principal-action",
+        "origin": IDENTITY_ORIGIN,
+        "path": _account_path(account.get("tenant"), suffix),
+        "method": "POST",
+        "headers": _headers(token),
+        "body": body,
+    }
+
+
+def _recovery(
+    plan: dict[str, Any],
+    operation: dict[str, Any],
+    credentials: dict[str, Any],
+    *,
+    nonce: str,
+    account_bindings: dict[str, Any] | None,
+) -> dict[str, Any]:
+    required = {
+        "kind",
+        "phase",
+        "resource",
+        "accountRef",
+        "credentialRef",
+        "credentialClass",
+        "precondition",
+    }
+    if (
+        set(operation) != required
+        or operation.get("phase") != "recovery"
+        or operation["credentialRef"] != "administrator"
+        or operation["credentialClass"] != "administrator"
+    ):
+        raise ValueError("recovery phase or shape refused")
+    token = _credential(credentials, "administrator", "administrator")
+    kind, precondition = operation["kind"], operation["precondition"]
+    if kind.startswith("account-"):
+        if operation.get("resource") is not None:
+            raise ValueError("account recovery resource must be null")
+        ref = operation.get("accountRef")
+        bound = (account_bindings or {}).get(ref)
+        account = next(
+            (
+                entry
+                for entry in plan.get("ownedAccounts", [])
+                if isinstance(entry, dict) and entry.get("ref") == ref
+            ),
+            None,
+        )
+        if (
+            not isinstance(bound, dict)
+            or not isinstance(account, dict)
+            or not isinstance(bound.get("uid"), str)
+            or bound.get("tenant") != account.get("tenant")
+        ):
+            raise ValueError("account binding required")
+        if kind == "account-delete":
+            if precondition != {"uid": bound["uid"]}:
+                raise ValueError("account UID precondition differs")
+            return {
+                "service": "identity",
+                "route": "account-recovery",
+                "origin": IDENTITY_ORIGIN,
+                "path": _account_path(account.get("tenant"), "delete"),
+                "method": "POST",
+                "headers": _headers(token),
+                "body": {"localId": bound["uid"]},
+            }
+        if kind in {"account-readback", "account-absence"}:
+            if precondition is not None:
+                raise ValueError("account recovery precondition must be null")
+            return {
+                "service": "identity",
+                "route": "account-recovery",
+                "origin": IDENTITY_ORIGIN,
+                "path": _account_path(account.get("tenant"), "lookup"),
+                "method": "POST",
+                "headers": _headers(token),
+                "body": {"localId": [bound["uid"]]},
+            }
+        raise ValueError("recovery operation shape refused")
+    path = _resource(operation.get("resource"), nonce=nonce)
+    if kind in {"readback", "absence"}:
+        if operation.get("accountRef") is not None or precondition is not None:
+            raise ValueError("document recovery precondition differs")
+        return {
+            "service": "firestore",
+            "route": "document-recovery-get",
+            "origin": FIRESTORE_ORIGIN,
+            "path": path,
+            "method": "GET",
+            "headers": _headers(token),
+            "body": None,
+        }
+    if kind == "delete":
+        if not isinstance(precondition, dict) or not isinstance(
+            precondition.get("updateTime"), str
+        ):
+            raise ValueError("document updateTime precondition required")
+        return {
+            "service": "firestore",
+            "route": "document-recovery-delete",
+            "origin": FIRESTORE_ORIGIN,
+            "path": path
+            + "?currentDocument.updateTime="
+            + quote(precondition["updateTime"], safe=""),
+            "method": "DELETE",
+            "headers": _headers(token),
+            "body": None,
+        }
+    raise ValueError("recovery operation shape refused")
+
+
+def prepare_request(
+    plan: dict[str, Any],
+    operation: dict[str, Any],
+    *,
+    credentials: dict[str, Any],
+    account_bindings: dict[str, Any] | None = None,
+    identity_proofs: dict[str, IdentityProof] | None = None,
+) -> dict[str, Any]:
+    nonce, _tenant = _plan_identity(plan)
+    if not isinstance(operation, dict):
+        raise ValueError("operation required")  # noqa: TRY004
+    if operation.get("kind") == "ruleset-release":
+        return _ruleset(plan, operation, credentials)
+    if operation.get("kind") == "principal-action":
+        return _principal(plan, operation, credentials, account_bindings)
+    if operation.get("phase") == "recovery":
+        return _recovery(
+            plan, operation, credentials, nonce=nonce, account_bindings=account_bindings
+        )
+    return _observation(
+        plan,
+        operation,
+        credentials,
+        nonce=nonce,
+        account_bindings=account_bindings,
+        identity_proofs=identity_proofs,
+    )
+
+
+def _run_worker(
+    envelope: dict[str, Any],
+    *,
+    binding: bytes,
+    binding_digest: str,
+    fixture_origin: str | None,
+) -> dict[str, Any]:
+    verify_worker_binding(binding, binding_digest, None)
+    payload = _compact(envelope)
+    if len(payload) > MAX_ENVELOPE_BYTES:
+        raise ValueError("worker envelope exceeds bound")
+    worker = Path(__file__).with_name("o5_user_token_https_worker.py")
+    argv = [sys.executable, "-I", "-S", "-B", str(worker)]
+    if fixture_origin is not None:
+        argv.extend(("--fixture-origin", fixture_origin))
+    try:
+        completed = subprocess.run(
+            argv,
+            input=payload,
+            capture_output=True,
+            timeout=float(envelope.get("seconds", MAX_SECONDS)),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise ValueError("worker walltime exceeded") from None
+    if completed.returncode != 0 or len(completed.stdout) > MAX_OUTPUT_BYTES:
+        raise ValueError("worker exchange refused")
+    try:
+        result = json.loads(completed.stdout)
+    except (TypeError, json.JSONDecodeError):
+        raise ValueError("worker response malformed") from None
+    if (
+        not isinstance(result, dict)
+        or set(result) != {"status", "body"}
+        or not isinstance(result["status"], int)
+        or not isinstance(result["body"], dict)
+    ):
+        raise ValueError("worker response malformed")
+    return result
+
+
+def run_worker(
+    envelope: dict[str, Any],
+    *,
+    binding: bytes,
+    binding_digest: str,
+    fixture_origin: str | None = None,
+) -> dict[str, Any]:
+    return _run_worker(
+        envelope,
+        binding=binding,
+        binding_digest=binding_digest,
+        fixture_origin=fixture_origin,
+    )
+
+
+def make_transport(
+    plan: dict[str, Any],
+    *,
+    credentials: dict[str, Any],
+    frozen_inputs: dict[str, Any] | None = None,
+    account_bindings: dict[str, Any] | None = None,
+    identity_proofs: dict[str, IdentityProof] | None = None,
+    fixture_origin: str | None = None,
+):
+    _plan_identity(plan)
+    frozen = copy.deepcopy(frozen_inputs)
+    trusted_bindings = copy.deepcopy(account_bindings or {})
+    if identity_proofs is not None:
+        for ref, proof in identity_proofs.items():
+            if (
+                not isinstance(proof, IdentityProof)
+                or not proof.trusted()
+                or proof.principal_ref != ref
+            ):
+                raise ValueError("trusted identity proof map required")
+            expected_mode = "fixture" if fixture_origin is not None else "production"
+            expected_origin = (
+                fixture_origin.rstrip("/")
+                if fixture_origin is not None
+                else "https://identitytoolkit.googleapis.com"
+            )
+            if (
+                proof.issuance_mode != expected_mode
+                or proof.issuance_origin != expected_origin
+            ):
+                raise ValueError("identity proof origin or mode differs")
+            current = trusted_bindings.get(ref, {})
+            if not isinstance(current, dict):
+                raise ValueError("account binding shape required")  # noqa: TRY004
+            supplied = {
+                "uid": proof.uid,
+                "provider": proof.provider,
+                "tenant": proof.tenant,
+                "claimsDigest": proof.claims_digest,
+            }
+            if any(
+                key in current and current[key] != value
+                for key, value in supplied.items()
+            ):
+                raise ValueError("identity proof conflicts with account binding")
+            trusted_bindings[ref] = {**current, **supplied}
+        required_refs = {entry["ref"] for entry in plan["ownedAccounts"]}
+        if set(identity_proofs) != required_refs:
+            raise ValueError("complete identity proof map required")
+    sequence = 0
+
+    def transmit(
+        value: dict[str, Any],
+        *,
+        binding: bytes,
+        binding_digest: str,
+        capability: Any = None,
+    ) -> dict[str, Any]:
+        nonlocal sequence
+        if capability is None:
+            raise ValueError("active O8 production capability required")
+        if identity_proofs is None:
+            raise ValueError("complete identity proof map required")
+        snapshot = _frozen_inputs(plan, frozen)
+        if getattr(capability, "inputs_digest", None) != snapshot["inputsDigest"]:
+            raise ValueError("capability inputs digest differs")
+        authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+        prepared = prepare_request(
+            plan,
+            copy.deepcopy(value),
+            credentials=credentials,
+            account_bindings=trusted_bindings,
+            identity_proofs=identity_proofs,
+        )
+        envelope = {
+            key: prepared[key]
+            for key in ("service", "route", "method", "path", "headers", "body")
+        }
+        envelope["seconds"] = MAX_SECONDS
+        result = _run_worker(
+            envelope,
+            binding=binding,
+            binding_digest=binding_digest,
+            fixture_origin=fixture_origin,
+        )
+        sequence += 1
+        origin = (
+            fixture_origin.rstrip("/")
+            if fixture_origin is not None
+            else prepared["origin"]
+        )
+        return {
+            **result["body"],
+            "endpoint": urlsplit(origin).netloc,
+            "wireSequence": sequence,
+        }
+
+    return transmit
+
+
+__all__ = [
+    "FIRESTORE_ORIGIN",
+    "IDENTITY_ORIGIN",
+    "RULES_ORIGIN",
+    "WORKER_ENTRY",
+    "make_transport",
+    "prepare_request",
+    "run_worker",
+    "verify_worker_binding",
+    "worker_binding",
+]

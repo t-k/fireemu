@@ -1,9 +1,12 @@
 # O4 PartitionQuery and cursor preparation
 
-This directory contains credential-free preparation for a bounded production
-observation of Firestore `PartitionQuery` and query cursors. Nothing here opens a
-production connection, reads a credential, mutates an index or Rules, or claims
-production compatibility. Production admission is closed and cannot be opened.
+This directory contains the preparation and the typed production path for a
+bounded production observation of Firestore `PartitionQuery` and query cursors.
+Nothing here claims production compatibility, mutates an index or Rules, or
+discovers a credential. The only way to the production wire is the O8 launcher
+described below, which takes an independently frozen owner permission, an
+approval minted outside the packet, a private credential handoff and a shared
+Ledger reservation; no test in this directory reaches it.
 
 ## Modules
 
@@ -19,10 +22,11 @@ isolation comes from the nonce-unique collection group rather than from a
 document parent. `partitionCount` bounds the number of split points, so a request
 for `n` may return `n` cursors and `n + 1` ranges.
 
-`partition_cursor_collector.py` drives the plan against a loopback origin. It
-refuses any other origin before creating its output directory or sending a single
-request, which is what keeps it from being usable as a production entry point.
-Two operations are bound at run time: the continuation request takes its
+`partition_cursor_collector.py` drives the plan through one injected transport.
+`collect_local` refuses any origin outside the numeric loopback set and
+`collect_production` refuses any origin other than the fixed production host,
+each before creating its output directory or sending a single request. Two
+operations are bound at run time: the continuation request takes its
 `pageToken` from the recorded paging response, and two reconstruction slots take
 their range cursors from the recorded single-split-point response. A response
 that would need more than two ranges sends nothing and records
@@ -57,6 +61,43 @@ It contains no transport and no credential handling.
 
 `partition_cursor_offline_fixture.py` is test support: an offline transport that
 answers the compiled plan without any socket.
+
+## Production path (O8)
+
+| Module | Role |
+| --- | --- |
+| `partition_cursor_wire.py` | one fixed child for both modes; the production mode addresses `https://firestore.googleapis.com` only, with the bearer on stdin, and a loopback origin is refused there |
+| `partition_cursor_gate.py` | projection of the 37 compiled slots onto one shared-Gate job with a frozen schedule; a Gate-native recovery ladder (read, version-bound delete, typed-absence read per owned document, 63 slots); two residual-scan slots; the `PartitionCursorGate` facade that maps each collector request onto its frozen slot after verifying run-time bound values (page token, partition cursors, delete versions) against this run's own journal |
+| `partition_cursor_preflight.py` | the request-byte lane's reviewed management preflight (tokeninfo, project, database, auth) driven for this campaign's Gate and Ledger ticket |
+| `partition_cursor_admission.py` | frozen inputs over a clean source snapshot, owner permission binding, Gate reservations, Ledger claim, stop-point classification |
+| `partition_cursor_production.py` | one admitted acquisition: reserve, claim, credential, preflight, collector through the Gate, ladder, residual scans, postflight, receipt, release; `verify_saved` re-validates the whole chain offline |
+| `partition_cursor_o8.py` | the launcher; exit 0 released, 1 held with a receipt naming the disposition, 2 refused before anything was created |
+| `../o8-core/o4_partition_cursor_descriptor.py` | every member the shared admission core requires, real |
+
+The shared Gate's closed scenario model is per-document, and the compiled
+plan's cleanup is one Commit of twenty deletes plus two absence queries. The
+projection keeps the plan as it is and adds the ladder so that every owned
+document ends with the typed absence the Ledger requires and so that a run that
+stops after the seed Commit still has an admissible way to delete what it
+created. On a completed run the ladder's deletes are consumed without a send
+because its reads find every document already absent. One run charges at most
+109 requests (37 plan slots, 63 ladder slots, 2 residual scans, 7 management);
+a completed run sends 88.
+
+Two facts a reviewer should read before an execution:
+
+- The Gate contract is `shared-local-v1`: the compiled documents carry no
+  `_sharedOwner` reference and no nonce field, so no ownership-marker
+  convention applies. Ownership is the plan's own
+  `conditional-create-plus-exact-fields` under the nonce-scoped owned path.
+- The shared Gate does not recognize `partitionQuery` as a read-only RPC, so
+  its eleven slots are declared as able to create. The facade settles their
+  creation outcome from the typed response. The one consequence is that the
+  page-token continuation slot, which the collector skips when the paged
+  response carried no token, cannot be consumed zero-wire; a production
+  response without a page token would end the observation at that slot and the
+  ladder would clean up. `creating_declaration_gap` names the slots, and the
+  fix is a shared-Gate change outside this lane.
 
 Run the focused checks with:
 
@@ -107,16 +148,15 @@ compatibility promotion.
 ## Current local shadow and integrity revision (offline v23)
 
 The old local-shadow record above is **historical**, not execution evidence for
-this revision. It is left byte-for-byte unchanged. The fresh native run is
-published at
-`spec/compatibility/broad-runs/fs-query-partition-cursor-current-v2-local-shadow.json`.
-It was generated from source commit `905ede564c6d40498b615183db9f4103756585ba`
-using `target/debug/fireemu`, retained all 37 raw sidecars, completed cleanup,
-proved zero residual documents and returned `MATCHED`. Its artifact SHA-256 is
-`3c486cee6cd842039f114bc5d154d71e2b242b18381960716f4e1433e134a9e5`.
-Current preparation also lives in
-`spec/compatibility/broad-runs/fs-query-partition-cursor-preparation-v2.json`;
-preparation is non-authorizing. Its source closure includes the fixed HTTP
+this revision. It is left byte-for-byte unchanged, as is the `current-v2` record
+(source commit `905ede564c6d40498b615183db9f4103756585ba`, artifact SHA-256
+`3c486cee6cd842039f114bc5d154d71e2b242b18381960716f4e1433e134a9e5`, `MATCHED`).
+The current native run is published at
+`spec/compatibility/broad-runs/fs-query-partition-cursor-current-v3-local-shadow.json`
+and binds the lane modules of the production path as well; its artifact
+commit and digest are in the record. Current preparation lives in
+`spec/compatibility/broad-runs/fs-query-partition-cursor-preparation-v3.json`
+(v2 is historical); preparation is non-authorizing. Its source closure includes the fixed HTTP
 worker and the shared `batch_wire.py` decoder.
 
 The collector now requires explicit-port numeric loopback origins, not DNS names

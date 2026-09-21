@@ -154,9 +154,14 @@ REQUEST_BYTES_RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
 # (credential slot items, management slot ids in `metadata`) under a kind of
 # its own, so it is held to the Commit contract by name, not by resemblance.
 TXN_EXPIRY_RECEIPT_KIND = "txn-expiry-acquisition-receipt-v1"
+PARTITION_CURSOR_RECEIPT_KIND = "partition-cursor-acquisition-receipt-v1"
 NO_DATA_RECEIPT_SCHEMAS = {
     DEFAULT_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
     TXN_EXPIRY_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
+    # The partition/cursor lane emits the Commit vocabulary verbatim: one
+    # tokeninfo credential item, management attestation rows in metadata,
+    # no collection and productionExecuted false on a preflight stop.
+    PARTITION_CURSOR_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
     REQUEST_BYTES_RECEIPT_KIND: REQUEST_BYTES_NO_DATA_SCHEMA,
 }
 TOKEN_ATTESTATION_KIND = "request-byte-token-attestation-v1"

@@ -1646,6 +1646,19 @@ def test_the_txn_expiry_kind_is_held_to_the_commit_contract_by_name(tmp_path):
     assert gate.snapshot()["stopped"] is True
 
 
+def test_the_partition_cursor_kind_is_held_to_the_commit_contract_by_name(tmp_path):
+    """The partition/cursor lane's receipt projects onto the Commit vocabulary."""
+    ledger, gate, ticket, record = _no_data_attempt(
+        tmp_path, kind="partition-cursor-acquisition-receipt-v1"
+    )
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )
+    assert gate.snapshot()["stopped"] is True
+
+
 def test_a_receipt_kind_outside_the_closed_schema_map_has_no_retirement(tmp_path):
     """An unfamiliar receipt shape is refused, never read as a known one."""
     ledger, gate, ticket, record = _readonly_attempt(tmp_path, kind="other-receipt-v9")

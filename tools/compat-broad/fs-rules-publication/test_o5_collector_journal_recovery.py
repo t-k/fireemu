@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 import o5_user_token_collector as module
-from test_o5_user_token_collector import case, Transport
+import pytest
+from test_o5_user_token_collector import Transport, case
 
 
 @pytest.mark.parametrize(

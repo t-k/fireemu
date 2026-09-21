@@ -3,8 +3,8 @@
 import json
 import urllib.parse
 
-import pytest
 import o5_user_token_local_run as module
+import pytest
 from o5_user_token_case import compile_case
 
 NONCE = "c" * 32

@@ -7,8 +7,8 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import pytest
 import o5_user_token_local_run as module
+import pytest
 from test_o5_user_token_collector import case
 
 

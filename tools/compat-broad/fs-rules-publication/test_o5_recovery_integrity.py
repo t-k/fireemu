@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import math
-
 import pytest
-
-from o5_user_token_collector import collect, ROLE_LOCAL_SHADOW
-from test_o5_user_token_collector import case, Transport
+from o5_user_token_collector import ROLE_LOCAL_SHADOW, collect
+from test_o5_user_token_collector import Transport, case
 
 
 def run(override):

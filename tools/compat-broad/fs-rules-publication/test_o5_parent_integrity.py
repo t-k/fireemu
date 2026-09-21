@@ -6,14 +6,12 @@ import errno
 import hashlib
 import json
 import os
-import signal
 import socket
 import subprocess
 import sys
-from pathlib import Path
 
-import pytest
 import o5_user_token_local_run as module
+import pytest
 
 
 def successful(nonce):

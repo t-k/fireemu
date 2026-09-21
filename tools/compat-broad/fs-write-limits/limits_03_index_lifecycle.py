@@ -1,234 +1,207 @@
-"""Closed, offline-plannable Firestore field-index lifecycle boundary.
-
-The production entrypoint is deliberately absent: this module can construct a
-bounded plan and exercise the same ordered effects against a loopback server,
-but it cannot mint credentials, reserve a Ledger row, or contact Firestore.
-"""
+"""Bounded Firestore Admin Field index lifecycle client."""
 
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
-import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+
+from limits_03_descriptor import REQUEST_COST_MICROUSD
 
 PROJECT = "fireemu-35fe6"
 DATABASE = "(default)"
 COLLECTION_GROUP = "nx"
 FIELD_PATH = "*"
-REQUEST_COST_MICROUSD = 100
+ANCESTOR_FIELD = "projects/fireemu-35fe6/databases/(default)/collectionGroups/__default__/fields/*"
 MIN_OPERATION_POLLS = 1
 MAX_OPERATION_POLLS = 9
+MAX_RESPONSE_BYTES = 64 * 1024
 
 
 def _field_name() -> str:
-    return (
-        f"projects/{PROJECT}/databases/{DATABASE}/collectionGroups/"
-        f"{COLLECTION_GROUP}/fields/{FIELD_PATH}"
-    )
+    return f"projects/{PROJECT}/databases/{DATABASE}/collectionGroups/{COLLECTION_GROUP}/fields/{FIELD_PATH}"
 
 
 def _digest(value: Any) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _validate_baseline(baseline: dict[str, Any]) -> None:
     if not isinstance(baseline, dict) or baseline.get("name") != _field_name():
         raise ValueError("actual nx field baseline required")
-    if "indexConfig" not in baseline:
-        raise ValueError("actual index configuration required")
-    if not isinstance(baseline["indexConfig"], dict):
-        raise ValueError("actual index configuration must be an object")
-    if not isinstance(baseline["indexConfig"].get("indexes"), list):
-        raise ValueError("actual index configuration indexes must be a list")
+    config = baseline.get("indexConfig")
+    if not isinstance(config, dict) or not isinstance(config.get("indexes"), list):
+        raise TypeError("actual index configuration required")
+    if config.get("indexes") != [] or config.get("usesAncestorConfig") is not True or config.get("ancestorField") != ANCESTOR_FIELD or config.get("reverting") is not False:
+        raise ValueError("only the verified inherited nx baseline is supported")
 
 
-def build_index_lifecycle_plan(
-    baseline: dict[str, Any], *, poll_limit: int = MAX_OPERATION_POLLS
-) -> dict[str, Any]:
-    """Build a finite plan from the observed field, preserving unrelated config."""
-    _validate_baseline(baseline)
-    if type(poll_limit) is not int or not MIN_OPERATION_POLLS <= poll_limit <= MAX_OPERATION_POLLS:
-        raise ValueError("finite operation poll limit required")
-    before = copy.deepcopy(baseline)
-    after_patch = copy.deepcopy(baseline)
-    after_patch["indexConfig"] = {"indexes": []}
-    restore_patch = copy.deepcopy(baseline)
-    restore_patch["indexConfig"] = {}
-    minimum_requests = 3 + 2 + 2 * MIN_OPERATION_POLLS
-    maximum_requests = 3 + 2 + 2 * poll_limit
+def _plan_payload(baseline: dict[str, Any], poll_limit: int) -> dict[str, Any]:
+    minimum_requests = 3 + 2 * MIN_OPERATION_POLLS + 2
+    maximum_requests = 3 + 2 * poll_limit + 2
     return {
-        "kind": "limits-03-index-lifecycle-plan-v1",
+        "kind": "limits-03-index-lifecycle-plan-v2",
         "project": PROJECT,
         "database": DATABASE,
         "fieldName": _field_name(),
-        "before": before,
-        "beforeDigest": _digest(before),
-        "afterPatch": after_patch,
-        "restorePatch": restore_patch,
+        "before": copy.deepcopy(baseline),
+        "beforeDigest": _digest(baseline),
+        "afterPatch": {"name": _field_name(), "indexConfig": {"indexes": []}},
+        # Firestore documents an unset indexConfig as the ancestor restore.
+        "restorePatch": {"name": _field_name()},
         "updateMask": "indexConfig",
         "operationPollLimit": poll_limit,
         "operationDeadlineSeconds": 12.0,
+        "recoveryDeadlineSeconds": 12.0,
+        "responseByteLimit": MAX_RESPONSE_BYTES,
         "budget": {
             "minimumRequests": minimum_requests,
             "maximumRequests": maximum_requests,
+            "primaryReserveRequests": 3 + poll_limit,
+            "recoveryReserveRequests": 2 + poll_limit,
             "requestCostMicrousd": REQUEST_COST_MICROUSD,
             "maximumCostMicrousd": maximum_requests * REQUEST_COST_MICROUSD,
         },
     }
 
 
-def execute_production(*_args: Any, **_kwargs: Any) -> None:
-    raise RuntimeError("production index lifecycle requires reviewed O8/Ledger integration")
+def build_index_lifecycle_plan(baseline: dict[str, Any], *, poll_limit: int = MAX_OPERATION_POLLS) -> dict[str, Any]:
+    _validate_baseline(baseline)
+    if type(poll_limit) is not int or not MIN_OPERATION_POLLS <= poll_limit <= MAX_OPERATION_POLLS:
+        raise ValueError("finite operation poll limit required")
+    payload = _plan_payload(baseline, poll_limit)
+    return {**payload, "planDigest": _digest(payload)}
 
 
-def run_loopback_index_lifecycle(
-    plan: dict[str, Any], *, operation_polls_before_done: int = 0
-) -> dict[str, Any]:
-    """Run the ordered lifecycle against a real loopback HTTP server.
+def _validate_plan(plan: dict[str, Any]) -> None:
+    if not isinstance(plan, dict) or not isinstance(plan.get("before"), dict):
+        raise TypeError("closed index lifecycle plan required")
+    rebuilt = build_index_lifecycle_plan(plan["before"], poll_limit=plan.get("operationPollLimit", -1))
+    if plan != rebuilt:
+        raise ValueError("index lifecycle plan was mutated after compilation")
 
-    This is a boundary exercise, not a production transport. The production
-    constructor remains refused; the server implements only the documented
-    Field GET/PATCH and long-running Operation GET semantics.
-    """
-    if type(operation_polls_before_done) is not int or operation_polls_before_done < 0:
-        raise ValueError("operation poll count must be non-negative")
+
+def _loopback_origin(origin: str) -> str:
+    parsed = urllib.parse.urlparse(origin)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.username is not None or parsed.password is not None or parsed.path not in ("", "/") or parsed.query or parsed.fragment or parsed.port is None:
+        raise ValueError("verified loopback origin required")
+    return origin.rstrip("/")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: Any, **_kwargs: Any):
+        raise ValueError("redirect refused")
+
+
+def _request(opener, origin: str, method: str, path: str, body: dict[str, Any] | None, deadline: float) -> dict[str, Any]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("request deadline exhausted")
+    data = None if body is None else json.dumps(body, sort_keys=True).encode()
+    request = urllib.request.Request(origin + path, data=data, method=method)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    with opener.open(request, timeout=remaining) as response:
+        length = response.headers.get("Content-Length")
+        if length is not None and int(length) > MAX_RESPONSE_BYTES:
+            raise ValueError("response exceeds bounded limit")
+        raw = response.read(MAX_RESPONSE_BYTES + 1)
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise ValueError("response exceeds bounded limit")
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise TypeError("bounded JSON object required")
+    return value
+
+
+def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str, Any]:
+    """Run against an independently owned verified loopback origin."""
+    _validate_plan(plan)
+    origin = _loopback_origin(origin)
     field_path = "/v1/" + plan["fieldName"]
-    state = copy.deepcopy(plan["before"])
-    operations: dict[str, dict[str, Any]] = {}
-    requests: list[dict[str, Any]] = []
-    lock = threading.Lock()
-
-    class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_args: Any) -> None:
-            return
-
-        def _reply(self, status: int, value: dict[str, Any]) -> None:
-            body = json.dumps(value, sort_keys=True).encode()
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            nonlocal state
-            with lock:
-                requests.append({"method": "GET", "path": self.path})
-                if self.path == field_path:
-                    self._reply(200, copy.deepcopy(state))
-                    return
-                if self.path.startswith("/v1/operations/"):
-                    operation = operations.get(self.path)
-                    if operation is None:
-                        self._reply(404, {"error": "unknown operation"})
-                        return
-                    operation["polls"] += 1
-                    self._reply(
-                        200,
-                        {
-                            "name": self.path.removeprefix("/v1/"),
-                            "done": operation["polls"] > operation_polls_before_done,
-                        },
-                    )
-                    return
-                self._reply(404, {"error": "unexpected path"})
-
-        def do_PATCH(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            nonlocal state
-            length = int(self.headers.get("Content-Length", "0"))
-            body = json.loads(self.rfile.read(length))
-            with lock:
-                requests.append({"method": "PATCH", "path": self.path, "body": body})
-                path, _, query = self.path.partition("?")
-                if path != field_path or query != "updateMask=indexConfig":
-                    self._reply(400, {"error": "exact indexConfig update mask required"})
-                    return
-                if body.get("name") != plan["fieldName"] or set(body) != {"name", "indexConfig"}:
-                    self._reply(400, {"error": "exact field patch required"})
-                    return
-                if body["indexConfig"] == {"indexes": []}:
-                    state = copy.deepcopy(plan["afterPatch"])
-                elif body["indexConfig"] == {}:
-                    state = copy.deepcopy(plan["before"])
-                else:
-                    self._reply(400, {"error": "unsupported index transition"})
-                    return
-                operation_path = f"/v1/operations/op-{len(operations) + 1}"
-                operations[operation_path] = {"polls": 0}
-                self._reply(200, {"name": operation_path.removeprefix("/v1/")})
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    opener = urllib.request.build_opener(_NoRedirect())
     events: list[dict[str, Any]] = []
     errors: list[str] = []
+    requests = 0
+    applied = False
+    restored = False
+    final_field: dict[str, Any] | None = None
     started = time.monotonic()
+
+    def call(method, path, body, deadline):
+        nonlocal requests
+        requests += 1
+        return _request(opener, origin, method, path, body, deadline)
+
+    def transition(kind, patch, deadline_seconds):
+        nonlocal applied
+        deadline = time.monotonic() + deadline_seconds
+        response = call("PATCH", field_path + "?updateMask=indexConfig", patch, deadline)
+        applied = applied or kind == "patch-after"
+        name = response.get("name")
+        prefix = f"projects/{PROJECT}/databases/{DATABASE}/operations/"
+        if not isinstance(name, str) or not name.startswith(prefix) or "/" in name.removeprefix(prefix):
+            raise ValueError("operation route is outside the bound project and database")
+        events.append({"kind": kind, "operation": name})
+        for _ in range(plan["operationPollLimit"]):
+            status = call("GET", "/v1/" + name, None, deadline)
+            if status.get("done") is True:
+                if status.get("error") is not None:
+                    raise ValueError("index operation reported an error")
+                events.append({"kind": kind.replace("patch-", "poll-"), "operation": name})
+                return
+        raise TimeoutError("bounded absolute operation deadline exhausted")
+
     try:
-        base_url = f"http://127.0.0.1:{server.server_port}"
-
-        def call(method: str, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
-            data = None if body is None else json.dumps(body).encode()
-            request = urllib.request.Request(base_url + path, data=data, method=method)
-            if data is not None:
-                request.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(request, timeout=plan["operationDeadlineSeconds"]) as response:
-                return json.loads(response.read())
-
-        before = call("GET", field_path)
+        before = call("GET", field_path, None, time.monotonic() + plan["operationDeadlineSeconds"])
         if before != plan["before"]:
-            raise ValueError("loopback before state differs")
+            raise ValueError("actual before state differs from compiled baseline")
         events.append({"kind": "read-before", "bodyDigest": _digest(before)})
-
-        def transition(kind: str, patch: dict[str, Any]) -> None:
-            response = call("PATCH", field_path + "?updateMask=indexConfig", patch)
-            operation = "/v1/" + response["name"]
-            events.append({"kind": kind, "operation": response["name"]})
-            for _ in range(plan["operationPollLimit"]):
-                status = call("GET", operation)
-                if status.get("done") is True:
-                    events.append({"kind": kind.replace("patch-", "poll-"), "operation": response["name"]})
-                    return
-            raise TimeoutError("bounded index operation poll limit exhausted")
-
-        transition("patch-after", {"name": plan["fieldName"], "indexConfig": {"indexes": []}})
-        after = call("GET", field_path)
-        if after.get("indexConfig") != {"indexes": []} or after.get("ttlConfig") != plan["before"].get("ttlConfig"):
-            raise ValueError("loopback after state differs")
+        transition("patch-after", plan["afterPatch"], plan["operationDeadlineSeconds"])
+        after = call("GET", field_path, None, time.monotonic() + plan["operationDeadlineSeconds"])
+        expected_after_config = {
+            "indexes": [],
+            "usesAncestorConfig": False,
+            "ancestorField": ANCESTOR_FIELD,
+            "reverting": False,
+        }
+        if after.get("indexConfig") != expected_after_config or after.get("ttlConfig") != plan["before"].get("ttlConfig"):
+            raise ValueError("after state differs or unrelated configuration changed")
         events.append({"kind": "read-after", "bodyDigest": _digest(after)})
-        transition("patch-restore", {"name": plan["fieldName"], "indexConfig": {}})
-        restored = call("GET", field_path)
-        if restored != plan["before"]:
-            raise ValueError("loopback restore differs from baseline")
-        events.append({"kind": "read-restored", "bodyDigest": _digest(restored)})
-        success = True
+        transition("patch-restore", plan["restorePatch"], plan["recoveryDeadlineSeconds"])
+        final_field = call("GET", field_path, None, time.monotonic() + plan["recoveryDeadlineSeconds"])
+        if final_field != plan["before"]:
+            raise ValueError("restored state differs from compiled baseline")
+        events.append({"kind": "read-restored", "bodyDigest": _digest(final_field)})
+        restored = True
     except (OSError, TimeoutError, ValueError, urllib.error.URLError) as error:
         errors.append(type(error).__name__ + ": " + str(error))
-        restored = copy.deepcopy(state)
-        success = False
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=2)
-    request_count = len(requests)
+        if applied and not restored:
+            try:
+                transition("patch-restore", plan["restorePatch"], plan["recoveryDeadlineSeconds"])
+                final_field = call("GET", field_path, None, time.monotonic() + plan["recoveryDeadlineSeconds"])
+                restored = final_field == plan["before"]
+                if restored:
+                    events.append({"kind": "read-restored", "bodyDigest": _digest(final_field)})
+                else:
+                    errors.append("ValueError: bounded restoration did not match baseline")
+            except (OSError, TimeoutError, ValueError, urllib.error.URLError) as recovery_error:
+                errors.append("recovery " + type(recovery_error).__name__ + ": " + str(recovery_error))
     return {
-        "success": success,
-        "restored": success and restored == plan["before"],
-        "finalField": restored,
+        "success": restored and not errors,
+        "restored": restored,
+        "finalField": final_field,
         "events": events,
-        "requests": requests,
         "errors": errors,
-        "budget": {
-            "requests": request_count,
-            "costMicrousd": request_count * REQUEST_COST_MICROUSD,
-            "elapsedSeconds": time.monotonic() - started,
-        },
-        "heldOnFailure": not success,
+        "budget": {"requests": requests, "costMicrousd": requests * REQUEST_COST_MICROUSD, "elapsedSeconds": time.monotonic() - started},
+        "heldOnFailure": not (restored and not errors),
     }
+
+
+def execute_production(*_args: Any, **_kwargs: Any) -> None:
+    raise RuntimeError("production index lifecycle requires reviewed O8/Ledger integration")

@@ -346,12 +346,17 @@ def _auth_uid_absence_operation_valid(operation, project, account_bindings=None)
 
 def _action_observation_delete_plan_allowed(plan, job, operation):
     """Recognize only the frozen AUTH-ACTION intentional delete slot."""
-    declared_resources = {
-        binding.get("resource")
+    candidates = [
+        candidate
         for candidate in plan.get("jobs", {}).values()
-        for binding in [candidate.get("accountBindings", {}).get("accountB", {})]
-        if isinstance(binding, dict)
-    }
+        if isinstance(candidate, dict)
+        and candidate.get("resources") == job.get("resources")
+    ]
+    if isinstance(job.get("accountBindings"), dict):
+        candidates = [job]
+    if len(candidates) != 1:
+        return False
+    declared = candidates[0].get("accountBindings", {}).get("accountB", {})
     return (
         plan.get("campaignId") == "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01"
         and plan.get("observationDeletePolicy") == "auth-action-account-b-delete-v1"
@@ -365,7 +370,9 @@ def _action_observation_delete_plan_allowed(plan, job, operation):
         and operation.get("uidBinding") == "accountBUid"
         and operation.get("body") == {"localId": "$binding:accountBUid"}
         and operation.get("resource") in set(job.get("resources", []))
-        and operation.get("resource") in declared_resources
+        and isinstance(declared, dict)
+        and operation.get("resource") == declared.get("resource")
+        and operation.get("uidBinding") == declared.get("uidBinding")
     )
 
 

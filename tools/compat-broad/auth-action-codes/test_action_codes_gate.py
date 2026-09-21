@@ -1,5 +1,6 @@
 import json
 import sys
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -72,6 +73,16 @@ def test_gate_rejects_foreign_resource_or_nonce(tmp_path):
     plan["jobs"][gate.JOB]["resources"][0] = "projects/foreign/auth/accounts/" + NONCE + "-a"
     with pytest.raises(ValueError):
         shared_gate.create(tmp_path / "gate", plan)
+
+
+def test_action_delete_predicate_does_not_union_invoking_job_bindings():
+    plan = gate.gate_plan(PROJECT, NONCE)
+    original = plan["jobs"][gate.JOB]
+    other = deepcopy(original)
+    other["accountBindings"]["accountB"]["resource"] = "projects/foreign/auth/accounts/foreign"
+    plan["jobs"]["other"] = other
+    operation = original["observation"][23]
+    assert not shared_gate._action_observation_delete_plan_allowed(plan, original, operation)
 
 
 def _dispatch_observation_prefix(handle, plan, stop=23):

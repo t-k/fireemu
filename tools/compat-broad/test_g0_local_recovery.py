@@ -15,7 +15,7 @@ from broad_contract import digest
 from shared_gate import _save, create
 from shared_production_pair import frozen_g0_manifest
 
-from g0_local_recovery import G0RecoveryGate, _expected_fields, _resources, _freshness_handshake, execute
+from g0_local_recovery import G0RecoveryGate, _expected_fields, _resources, _freshness_handshake, _owned_argv, execute
 from shared_cases import run_scenario
 
 
@@ -38,7 +38,10 @@ def _write_valid_launch_artifacts(output: Path, value: dict) -> None:
     (output / "fireemu").write_bytes(binary)
     (output / "fireemu.json").write_bytes(config)
     (output / "firestore.rules").write_bytes(rules)
-    child_pid = os.getppid()
+    python_pid = os.getppid()
+    child_pid = int(
+        subprocess.check_output(["ps", "-ww", "-p", str(python_pid), "-o", "ppid="], text=True).strip()
+    )
     parent_pid = int(
         subprocess.check_output(["ps", "-ww", "-p", str(child_pid), "-o", "ppid="], text=True).strip()
     )
@@ -87,6 +90,7 @@ def _write_valid_launch_artifacts(output: Path, value: dict) -> None:
                 "import": None,
                 "exportOnExit": None,
                 "origins": ORIGINS,
+                "pythonArgv": _owned_argv(python_pid),
             }
         )
     )
@@ -187,6 +191,12 @@ def test_freshness_handshake_rejects_mutated_program_and_child_identity(tmp_path
     (tmp_path / "program.json").write_text(json.dumps(changed))
     with pytest.raises(ValueError, match="g0-freshness-handshake-invalid"):
         _freshness_handshake(tmp_path, ORIGINS)
+    (tmp_path / "program.json").write_text(json.dumps(value))
+    handshake = json.loads((tmp_path / "freshness-handshake.json").read_text())
+    handshake["childPid"] = os.getpid()
+    (tmp_path / "freshness-handshake.json").write_text(json.dumps(handshake))
+    with pytest.raises(ValueError, match="g0-launch-chain-invalid"):
+        _freshness_handshake(tmp_path, ORIGINS)
 
 
 @pytest.mark.parametrize("mutation", ["path", "inode", "mode", "import", "argv", "pid", "source", "hash"])
@@ -230,12 +240,6 @@ def test_freshness_handshake_rejects_receipt_symlink_before_read(tmp_path: Path)
     receipt_path.unlink()
     receipt_path.symlink_to(target)
     with pytest.raises(ValueError, match="g0-launch-file-invalid"):
-        _freshness_handshake(tmp_path, ORIGINS)
-    (tmp_path / "program.json").write_text(json.dumps(value))
-    handshake = json.loads((tmp_path / "freshness-handshake.json").read_text())
-    handshake["childPid"] = os.getpid()
-    (tmp_path / "freshness-handshake.json").write_text(json.dumps(handshake))
-    with pytest.raises(ValueError, match="g0-freshness-handshake-invalid"):
         _freshness_handshake(tmp_path, ORIGINS)
 
 

@@ -62,6 +62,9 @@ requireThat(
   "g0-build-provenance-invalid",
 );
 const origins = validateG0Origins(process.env);
+const pythonCommand = execFileSync("which", ["uv"], { encoding: "utf8" }).trim();
+const python = g0SessionPythonSource();
+const pythonArgs = ["run", "--project", inventoryProject, "--locked", "--python", "3.12", "python", "-c", python, root, directory];
 const freshness = {
   schema: "fireemu-g0-freshness-v1",
   parentPid: receipt.pid,
@@ -79,25 +82,33 @@ const freshness = {
   origins,
   programDigest: canonicalProgramDigest,
   ...expectedProvenance,
+  pythonArgv: [pythonCommand, ...pythonArgs],
 };
 await publishJson(join(directory, "freshness-handshake.json"), freshness);
-const python = g0SessionPythonSource();
 const result = await new Promise((done) => {
   const child = spawn(
-    "uv",
-    ["run", "--project", inventoryProject, "--locked", "--python", "3.12", "python", "-c", python, root, directory],
+    pythonCommand,
+    pythonArgs,
     {
       cwd: root,
       env: { ...process.env, PYTHONUNBUFFERED: "1" },
       stdio: ["ignore", "ignore", "pipe"],
     },
   );
-  child.once("error", () => done({ code: null, error: "python-start-failed" }));
+  let stderrBytes = 0;
+  let stderrTruncated = false;
+  child.stderr.on("data", (chunk) => {
+    stderrBytes += chunk.length;
+    if (stderrBytes > 64 * 1024) stderrTruncated = true;
+  });
+  child.once("error", () => done({ code: null, error: "python-start-failed", stderrBytes, stderrTruncated }));
   child.once("close", (code) =>
     done({
       code,
       stage: "python-g0-execute",
       error: code === 0 ? null : "shared-g0-execution-failed",
+      stderrBytes,
+      stderrTruncated,
     }),
   );
 });
@@ -110,6 +121,9 @@ if (result.code !== 0) {
     completed: false,
     failure: result.error,
     failureStage: result.stage ?? "python-start",
+    failureCode: result.code === null ? "spawn-failed" : `exit-${result.code}`,
+    stderrBytes: result.stderrBytes ?? 0,
+    stderrTruncated: result.stderrTruncated === true,
     cleanup: { state: "unconfirmed", absent: [], requests: 0 },
     requests: [],
     requestCount: 0,

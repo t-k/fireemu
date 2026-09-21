@@ -14,6 +14,7 @@ import multiprocessing as mp
 import os
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 from urllib.parse import quote
@@ -95,6 +96,27 @@ def _pid_parent(pid: int) -> int:
         raise ValueError("g0-launch-chain-unavailable") from error
 
 
+def _owned_argv(pid: int) -> list[str]:
+    try:
+        if sys.platform.startswith("linux"):
+            return [item.decode() for item in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if item]
+        if sys.platform == "darwin":
+            script = "\n".join(
+                [
+                    "import ctypes, json, struct, sys",
+                    "pid=int(sys.argv[1]); libc=ctypes.CDLL(None); mib=(ctypes.c_int*3)(1,49,pid); size=ctypes.c_size_t(0)",
+                    "if libc.sysctl(mib,3,None,ctypes.byref(size),None,0)!=0: raise OSError()",
+                    "buffer=ctypes.create_string_buffer(size.value)",
+                    "if libc.sysctl(mib,3,buffer,ctypes.byref(size),None,0)!=0: raise OSError()",
+                    "argc=struct.unpack_from('i',buffer.raw)[0]; parts=buffer.raw[4:].split(b'\\0'); first=parts[0]; rest=parts[1:]; start=next(i for i,value in enumerate(rest) if value); start=start+1 if rest[start]==first else start; print(json.dumps([first.decode()]+[value.decode() for value in rest[start:start+argc-1]]))",
+                ]
+            )
+            return json.loads(subprocess.check_output(["python3", "-c", script, str(pid)], text=True, timeout=2))
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError("g0-process-argv-unavailable") from error
+    raise ValueError("g0-process-argv-unsupported")
+
+
 def _validate_launch_receipt(output: Path, handshake: dict) -> None:
     receipt_bytes, receipt_info = _bounded_regular_bytes(output / "launch-receipt.json", 128 * 1024)
     if receipt_info.st_mode & 0o077 != 0:
@@ -157,7 +179,12 @@ def _validate_launch_receipt(output: Path, handshake: dict) -> None:
     ):
         raise ValueError("g0-launch-receipt-invalid")
     child_pid = handshake.get("childPid")
-    if child_pid != os.getppid() or _pid_parent(child_pid) != parent_pid:
+    python_pid = os.getppid()
+    if (
+        child_pid != _pid_parent(python_pid)
+        or _pid_parent(child_pid) != parent_pid
+        or handshake.get("pythonArgv") != _owned_argv(python_pid)
+    ):
         raise ValueError("g0-launch-chain-invalid")
 
 
@@ -246,7 +273,7 @@ def _freshness_handshake(output: Path, origins: dict[str, str]) -> None:
         or handshake.get("programDigest") != expected_digest
         or not isinstance(handshake.get("receiptSha256"), str)
         or not isinstance(handshake.get("parentPid"), int)
-        or handshake.get("childPid") != os.getppid()
+        or not isinstance(handshake.get("childPid"), int)
         or not isinstance(handshake.get("argv"), list)
         or "--import" in handshake["argv"]
         or "--export-on-exit" in handshake["argv"]

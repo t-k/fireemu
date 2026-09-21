@@ -834,7 +834,7 @@ def _validate_recovery_gate_plan(parent_plan, child_plan, child):
         raise ValueError("recovery resources differ from canonical plan")
 
 
-def _validate_recovery_terminal_slots(gate, job_name):
+def _validate_recovery_terminal_slots(gate, job_name, expected_fields):
     """Bind every compiler recovery slot to its journal event or skip."""
     job = gate["jobs"][job_name]
     plan_job = gate["plan"]["jobs"][job_name]
@@ -885,8 +885,7 @@ def _validate_recovery_terminal_slots(gate, job_name):
                     or not capture["updateTime"]
                 ):
                     raise ValueError("recovery inspection capture differs")
-                proof = job.get("creationProofs", {}).get(operation["resource"])
-                if not isinstance(proof, dict) or capture["fieldsDigest"] != proof.get("fieldsDigest"):
+                if capture["fieldsDigest"] != expected_fields.get(operation["resource"]):
                     raise ValueError("recovery inspection fields binding differs")
                 if re.fullmatch(r"[a-f0-9]{64}", capture.get("responseDigest", "")) is None or event.get("responseDigest") != capture["responseDigest"]:
                     raise ValueError("recovery inspection response binding differs")
@@ -1509,7 +1508,7 @@ class Ledger:
                 }
             )
 
-    def settle_recovery_child(self, child_ticket, *, receipt_digest, now=None):
+    def settle_recovery_child(self, child_ticket, *, receipt_digest, canonical_parent_plan, now=None):
         """Settle one persisted child from its completed, registered Gate.
 
         ``receipt_digest`` is only a bounded correlation value; the terminal
@@ -1519,6 +1518,8 @@ class Ledger:
         """
         if not isinstance(receipt_digest, str) or not 1 <= len(receipt_digest) <= 256:
             raise ValueError("bounded recovery receipt correlation required")
+        if not isinstance(canonical_parent_plan, dict):
+            raise ValueError("canonical parent compiler plan required")
         if not isinstance(child_ticket, dict) or set(child_ticket) != {
             "ledgerPath", "ledgerIdentity", "reservation", "claimDigest",
             "envelopeDigest", "parentReservation",
@@ -1563,6 +1564,28 @@ class Ledger:
             envelope_digest = child["envelopeDigest"]
             parent_claim_digest = parent["claimDigest"]
             parent_snapshot = copy.deepcopy(parent["claim"])
+            parent_plan_digest = claim["parentPlanDigest"]
+        try:
+            lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+            sys.path.insert(0, str(lane))
+            import request_bytes_compiler as request_compiler
+            actual_parent_plan = request_compiler.compile_request_bytes_plan(
+                canonical_parent_plan["project"],
+                canonical_parent_plan["database"],
+                canonical_parent_plan["nonce"],
+            )
+        except (ImportError, KeyError, TypeError, ValueError) as error:
+            raise ValueError("canonical parent compiler refused inputs") from error
+        if digest(actual_parent_plan) != digest(canonical_parent_plan) or digest(actual_parent_plan) != parent_plan_digest:
+            raise ValueError("canonical parent compiler plan differs")
+        expected_fields = {
+            write["update"]["name"]: digest(write["update"]["fields"])
+            for operation in actual_parent_plan.get("observation", [])
+            if isinstance(operation.get("body"), dict)
+            for write in operation["body"].get("writes", [])
+            if isinstance(write.get("update"), dict)
+            and isinstance(write["update"].get("fields"), dict)
+        }
         if str(Path(gate_path).resolve()) != gate_path:
             raise ValueError("registered recovery Gate path changed")
         gate = Gate(gate_path, RECOVERY_GATE_JOB).snapshot()
@@ -1590,7 +1613,7 @@ class Ledger:
             or unconfirmed_creates(gate, job_name)
         ):
             raise ValueError("recovery Gate terminal evidence incomplete")
-        _validate_recovery_terminal_slots(gate, job_name)
+        _validate_recovery_terminal_slots(gate, job_name, expected_fields)
         try:
             validate_absence_proofs(gate, job_name)
         except Exception as error:

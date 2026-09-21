@@ -395,9 +395,7 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -
         }
         config_bytes = json.dumps(actual_config).encode()
         (run / "configuration.json").write_bytes(config_bytes)
-        supervisor["configurationDigest"] = hashlib.sha256(
-            (run / "configuration.json").read_bytes()
-        ).hexdigest()
+        supervisor["configurationDigest"] = package_03.digest(actual_config)
         supervisor["configuration"] = {
             **actual_config,
             "firestore": {
@@ -512,7 +510,10 @@ def test_the_shadow_index_configuration_is_cross_checked() -> None:
     """S1: the shadow did not run under the digest the manifest declares."""
     manifest, shadow = load(MANIFEST), load(SHADOW)
     configuration = manifest["indexConfiguration"]
-    assert configuration["shadowDifference"]
+    profile = shadow["execution"]["ALL"]["execution"]["indexConfiguration"].get(
+        "profile", "historical"
+    )
+    assert configuration["shadowDifference"] is (profile != "nx-local")
     for part in PARTS:
         declared = configuration["shadowRanUnder"][part]
         recorded = shadow["execution"][part]["execution"]["indexConfiguration"]

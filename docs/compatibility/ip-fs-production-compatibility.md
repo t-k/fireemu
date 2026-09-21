@@ -10,6 +10,8 @@ The target is application-facing Identity Platform and Firestore Standard/Native
 
 The exact REST/API-definition denominator is [version `ip-fs-standard-2026-09-14.v1`](../../spec/compatibility/denominators/ip-fs-standard-2026-09-14.v1.json). Its 2,713 surfaces comprise 2,592 targets, 119 Enterprise-only exclusions and 2 explicit Datastore-mode boundary surfaces. Endpoint and field counts are not semantic coverage percentages. SDK paths, Rules, transitions, equivalence classes and cross-product behavior are tracked below and in the capability, requirement and gap records.
 
+Current verification boundary: the fixed Rust result at `28e90c0b3` is 3,165 passed, 81 configured skips and passing Clippy; Rust-bound inputs are unchanged through `5fb29d0e`, but this does not establish a current-head full Python pass. The MFA result at `6a6cd7` has 592 passes and one stale source-provenance failure and remains security-rejected. The non-MFA full Python run remains pending. The synthetic G0 bridge at `f1ab436` is rejected for missing producer build provenance, the latest limits candidate at `3d24` is rejected for lost-apply recovery and missing actual transport-fixture coverage, and recovery candidate `23b` is independently rejected while its correction is developed. None of these results changes immutable historical evidence or the `COMPAT_VERIFIED 0 / 14` closure count.
+
 ## Acceptance classes
 
 | Class | Meaning | Current decision |

@@ -642,6 +642,20 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         failure = type(error).__name__
     finally:
         admission.revoke_production_capability(capability)
+        # Common teardown for both the normal and the abnormal exit: an
+        # exception between a journal's creation and its verification above
+        # (collector-start failure, residual-directory creation failure, ...)
+        # must not leave that journal unverified. `evidence_complete()` never
+        # raises -- verification failures are folded into its own False
+        # verdict -- so it is safe to call here for whichever journal the
+        # normal path above did not already verify; an unverifiable journal
+        # counts as incomplete, never as ready. The guard keeps the "called
+        # once" contract: a journal the normal path already verified is left
+        # alone rather than re-verified from closed-adjacent state.
+        if ladder is not None and ladder._evidence_complete is None:
+            ladder_evidence_complete = ladder.evidence_complete()
+        if residual is not None and residual._evidence_complete is None:
+            residual_evidence_complete = residual.evidence_complete()
         for journal in (ladder, residual):
             if journal is not None:
                 journal.close()

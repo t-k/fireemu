@@ -8,12 +8,27 @@ reference object consumed by ``commit_saved_recompare``.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+
 from transform_comparator import _validate_plan, compare_rows
-from owned_transform_runner import compare_bound_rows, compiler_for_profile, validate_bound_plan
+from broad_contract import digest
+from owned_transform_runner import (
+    CONFIGURATION,
+    PROFILES,
+    compare_bound_rows,
+    compiler_for_profile,
+    ROOT,
+    validate_bound_plan,
+    validate_copied_manifest,
+)
 
 _ROW_KEYS = frozenset(
     {
@@ -34,8 +49,75 @@ _ROW_KEYS = frozenset(
 
 
 def _load(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as stream:
-        return json.load(stream)
+    try:
+        with path.open("r", encoding="utf-8") as stream:
+            return json.load(stream)
+    except (OSError, ValueError) as error:
+        raise ValueError("local run record is unreadable") from error
+
+
+def _sha(path: Path) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("sealed run contains a non-regular file")
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def _validate_source_map(inputs: dict[str, Any]) -> None:
+    commit = inputs.get("collectorSourceCommit")
+    source_inputs = inputs.get("sourceInputs")
+    if not isinstance(commit, str) or not isinstance(source_inputs, dict) or not source_inputs:
+        raise ValueError("collector source binding is incomplete")
+    for relative, expected in source_inputs.items():
+        if not isinstance(relative, str) or not isinstance(expected, str):
+            raise ValueError("collector source binding is malformed")
+        try:
+            content = subprocess.check_output(["git", "show", f"{commit}:{relative}"], cwd=ROOT)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise ValueError("collector source binding differs") from error
+        if hashlib.sha256(content).hexdigest() != expected:
+            raise ValueError("collector source binding differs")
+
+
+def _validate_seal(run: Path, profile: dict[str, Any]) -> dict[str, Any]:
+    evidence = _load(run / "evidence.json")
+    inputs = _load(run / "run-inputs.json")
+    if not isinstance(evidence, dict) or not isinstance(inputs, dict):
+        raise ValueError("local run seal is incomplete")
+    if (
+        evidence.get("status") != "completed"
+        or evidence.get("sourceStable") is not True
+        or evidence.get("recordingComplete") is not True
+        or evidence.get("productionExecuted") is not False
+        or evidence.get("promotionReady") is not False
+        or evidence.get("ownedArtifactRemoved") is not True
+    ):
+        raise ValueError("local run seal is incomplete")
+    owned_process = evidence.get("ownedProcess")
+    if not isinstance(owned_process, dict) or owned_process.get("stopped") is not True or owned_process.get("listenersClosed") is not True:
+        raise ValueError("owned process cleanup is incomplete")
+    if evidence.get("binding") != digest(inputs):
+        raise ValueError("local run binding differs")
+    if inputs.get("artifactProfile") != profile["name"]:
+        raise ValueError("registered artifact profile differs")
+    if inputs.get("artifactSha256") != profile["artifactSha256"]:
+        raise ValueError("registered artifact binding differs")
+    artifact = inputs.get("ownedArtifact")
+    if not isinstance(artifact, dict) or artifact.get("sha256") != profile["artifactSha256"]:
+        raise ValueError("owned artifact binding differs")
+    if inputs.get("historicalCompilerSha256") != profile.get("historicalCompilerSha256"):
+        raise ValueError("historical compiler binding differs")
+    if _sha(run / "config.json") != inputs.get("configurationDigest") or _load(run / "config.json") != CONFIGURATION:
+        raise ValueError("configuration binding differs")
+    validate_copied_manifest(run, inputs, profile)
+    _validate_source_map(inputs)
+    files = evidence.get("files")
+    if not isinstance(files, dict) or not files:
+        raise ValueError("sealed file digest map is incomplete")
+    for relative, expected in files.items():
+        if not isinstance(relative, str) or not isinstance(expected, str) or _sha(run / relative) != expected:
+            raise ValueError("sealed file digest differs")
+    return inputs
 
 
 def _validate_rows(rows: Any) -> None:
@@ -51,11 +133,15 @@ def project_run(run: Path, historical_compiler: Path | None = None) -> dict[str,
     result = _load(run / "result.json")
     if not isinstance(plan, dict) or not isinstance(result, dict):
         raise ValueError("run records are not objects")
+    run_inputs = _load(run / "run-inputs.json")
+    profile_name = run_inputs.get("artifactProfile") if isinstance(run_inputs, dict) else None
+    if not isinstance(profile_name, str) or profile_name not in PROFILES:
+        raise ValueError("unknown artifact profile")
+    profile = PROFILES[profile_name]
+    _validate_seal(run, profile)
     if historical_compiler is None:
         _validate_plan(plan)
     else:
-        inputs = _load(run / "run-inputs.json")
-        profile = {"historicalCompilerSha256": inputs.get("historicalCompilerSha256")}
         historical_compiler = compiler_for_profile(historical_compiler, profile)
         validate_bound_plan(plan, historical_compiler)
     if result.get("recordingComplete") is not True or result.get("cleanupComplete") is not True:

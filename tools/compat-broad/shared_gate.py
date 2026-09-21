@@ -2112,7 +2112,10 @@ class Gate:
                 management.get("dispatchKind") != "closed-v1"
                 or not used
                 or used != identities[: len(used)]
-                or len(used) >= len(observation_declared)
+                or (
+                    mode == "may-have-landed"
+                    and len(used) >= len(observation_declared)
+                )
                 or any(not identity.startswith("observation:") for identity in used)
                 or state.get("managementSkipped")
                 or [event.get("id") for event in events] != used

@@ -37,9 +37,8 @@ from o5_user_token_campaign import (
     admitted_manifest_digest,
     manifest,
 )
-from o5_user_token_case import CAMPAIGN
-from o5_user_token_collector import ROLE_PRODUCTION
-from o5_user_token_collector import RulesManagementSession
+from o5_user_token_case import CAMPAIGN, compile_case
+from o5_user_token_collector import ROLE_LOCAL_SHADOW, ROLE_PRODUCTION, RulesManagementSession, collect
 from reservations import Ledger
 import shared_gate
 from o5_user_token_comparator_v2 import REFUSED
@@ -505,6 +504,38 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
         server.server_close()
         if reservation is not None:
             subprocess.run([sys.executable, portctl, "release", "--token", reservation["token"]], check=True)
+
+
+def test_preserved_local_runner_acquisition_remains_accepted_without_management_session() -> None:
+    raw_path = Path("/Users/tk/work/firebase-emulator/docs.local/runs/o5-rules-shadow-fd4.84Jpkk/local-shadow.json")
+    if not raw_path.is_file():
+        pytest.skip("preserved local runner receipt is unavailable")
+    raw = json.loads(raw_path.read_bytes())
+    recorded = raw["bundle"]["acquisition"]
+    acquisition = {key: recorded[key] for key in ("environment", "campaignManifestDigest", "nonceReservation", "ownerPermission", "artifact", "principals", "window")}
+    plan = compile_case("fireemu-35fe6", "(default)", raw["nonce"], raw["tenant"])
+    fingerprints = {
+        ref: value["uidFingerprint"]
+        for ref, value in acquisition["principals"].items()
+    }
+    transport = Transport(
+        plan,
+        endpoint="127.0.0.1:52879",
+        fingerprints=fingerprints,
+    )
+    bundle = collect(
+        plan,
+        transport,
+        role=ROLE_LOCAL_SHADOW,
+        deadline_seconds=600.0,
+        recovery_deadline_seconds=900.0,
+        run_id="preserved-local-runner-acquisition",
+        acquisition=acquisition,
+    )
+    assert bundle["recordingComplete"] is True
+    assert bundle["abort"] is None
+    assert len(bundle["rows"]) == 33
+    assert bundle["productionExecuted"] is False
 
 
 def test_a_local_shadow_bundle_fails_closed_as_production_evidence() -> None:

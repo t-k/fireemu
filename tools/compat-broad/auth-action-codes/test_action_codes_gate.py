@@ -82,7 +82,8 @@ def test_action_delete_predicate_does_not_union_invoking_job_bindings():
     other["accountBindings"]["accountB"]["resource"] = "projects/foreign/auth/accounts/foreign"
     plan["jobs"]["other"] = other
     operation = original["observation"][23]
-    assert not shared_gate._action_observation_delete_plan_allowed(plan, original, operation)
+    invoking = {"resources": list(original["resources"])}
+    assert not shared_gate._action_observation_delete_plan_allowed(plan, invoking, operation)
 
 
 def _dispatch_observation_prefix(handle, plan, stop=23):

@@ -86,7 +86,6 @@ export function buildExecArgs(
   project = CASE.project,
   services = "firestore",
 ) {
-  const withAuth = services.split(",").includes("auth");
   return {
     command: binary,
     args: [
@@ -97,7 +96,6 @@ export function buildExecArgs(
       project,
       "--only",
       services,
-      ...(withAuth ? ["--auth-port", "0"] : []),
       "--firestore-port",
       "0",
       "--http-port",

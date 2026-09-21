@@ -130,6 +130,22 @@ test("bounded process captures an ordinary completion", async () => {
   assert.equal(p.state, "stopped");
   assert.equal(p.log.toString().trim(), "ok");
 });
+test("bounded process exposes the actual owned PID before child completion", async () => {
+  let spawned;
+  const p = await runProcess(process.execPath, ["-e", "process.exit(0)"], {
+    env: cleanEnvironment("/tmp"),
+    timeoutMs: 2000,
+    onSpawn: (info) => {
+      spawned = info;
+    },
+  });
+  assert.equal(p.code, 0);
+  assert.equal(p.state, "stopped");
+  assert.equal(spawned.command, process.execPath);
+  assert.deepEqual(spawned.args, ["-e", "process.exit(0)"]);
+  assert.equal(p.pid, spawned.pid);
+  assert.ok(Number.isInteger(spawned.pid) && spawned.pid > 0);
+});
 test("process timeout is an error and the owned group is stopped", async () => {
   const p = await runProcess(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
     env: cleanEnvironment("/tmp"),

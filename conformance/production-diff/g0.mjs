@@ -26,7 +26,7 @@ export function g0SessionPythonSource() {
     "sys.path.insert(0, str(root/'tools/compat-broad'))",
     "from broad_contract import local_origin",
     "from batch_adapter import observer_digest",
-    "from shared_cases import execute",
+    "from g0_local_recovery import execute",
     "from shared_gate import create",
     "firestore=os.environ.get('FIRESTORE_EMULATOR_HOST'); auth=os.environ.get('FIREBASE_AUTH_EMULATOR_HOST')",
     "if not firestore or not auth: raise ValueError('g0-owned-origins-missing')",
@@ -42,6 +42,9 @@ const adapterFiles = ["g0-plan.mjs", "g0-session.mjs", "g0.mjs", "pilot.mjs", "r
 async function sourceDigests() {
   const output = {};
   for (const name of adapterFiles) output[name] = sha256(await readSource(HERE, name));
+  output["tools/compat-broad/g0_local_recovery.py"] = sha256(
+    await readSource(resolve(HERE, "../../tools/compat-broad"), "g0_local_recovery.py"),
+  );
   return output;
 }
 

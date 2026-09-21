@@ -12,8 +12,51 @@ const directory = process.env.PILOT_RUN_DIR;
 requireThat(typeof directory === "string", "missing-run-directory");
 const root = resolve(process.env.PILOT_REPO ?? resolve(dirname(fileURLToPath(import.meta.url)), "../.."));
 const inventoryProject = resolve(root, "tools/compat-inventory");
-validateG0Origins(process.env);
 const plan = JSON.parse(await fs.readFile(join(directory, "program.json"), "utf8"));
+const receiptPath = join(directory, "launch-receipt.json");
+const receiptInfo = await fs.lstat(receiptPath);
+requireThat(receiptInfo.isFile() && !receiptInfo.isSymbolicLink(), "g0-launch-receipt-type");
+const receiptBytes = await fs.readFile(receiptPath);
+const receipt = JSON.parse(receiptBytes);
+const runInfo = await fs.stat(directory);
+const binaryHash = createHash("sha256").update(await fs.readFile(join(directory, "fireemu"))).digest("hex");
+const configHash = createHash("sha256").update(await fs.readFile(join(directory, "fireemu.json"))).digest("hex");
+const rulesHash = createHash("sha256").update(await fs.readFile(join(directory, "firestore.rules"))).digest("hex");
+requireThat(
+  receipt.schema === "fireemu-g0-launch-v1" &&
+    receipt.pid === process.ppid &&
+    receipt.command === join(directory, "fireemu") &&
+    Array.isArray(receipt.args) &&
+    !receipt.args.includes("--import") &&
+    !receipt.args.includes("--export-on-exit") &&
+    receipt.binarySha256 === binaryHash &&
+    receipt.configSha256 === configHash &&
+    receipt.rulesSha256 === rulesHash &&
+    receipt.runDirectory?.path === directory &&
+    receipt.runDirectory?.dev === runInfo.dev &&
+    receipt.runDirectory?.ino === runInfo.ino &&
+    receipt.runDirectory?.mode === (runInfo.mode & 0o777) &&
+    receipt.import === null &&
+    receipt.exportOnExit === null,
+  "g0-launch-receipt-invalid",
+);
+const origins = validateG0Origins(process.env);
+const freshness = {
+  schema: "fireemu-g0-freshness-v1",
+  parentPid: receipt.pid,
+  childPid: process.pid,
+  receiptSha256: createHash("sha256").update(receiptBytes).digest("hex"),
+  binarySha256: receipt.binarySha256,
+  sourceCommit: receipt.sourceCommit,
+  configSha256: receipt.configSha256,
+  rulesSha256: receipt.rulesSha256,
+  environmentSha256: receipt.environmentSha256,
+  runDirectory: receipt.runDirectory,
+  import: null,
+  exportOnExit: null,
+  origins,
+};
+await publishJson(join(directory, "freshness-handshake.json"), freshness);
 const python = g0SessionPythonSource();
 const result = await new Promise((done) => {
   const child = spawn(

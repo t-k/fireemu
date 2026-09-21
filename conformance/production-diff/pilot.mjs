@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { statSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -203,15 +204,39 @@ async function replay(prepared, options, directory) {
     entry.project,
     entry.adapter === "g0" ? "auth,firestore" : "firestore",
   );
+  const cleanEnv = cleanEnvironment(directory);
   const processResult = await runProcess(command, args, {
     cwd: directory,
     env: {
-      ...cleanEnvironment(directory),
+      ...cleanEnv,
       PILOT_RUN_DIR: directory,
       PILOT_CASE_ID: entry.id,
       PILOT_REPO: options.repo,
     },
     timeoutMs: options.timeout * 1000,
+    onSpawn:
+      entry.adapter === "g0"
+        ? ({ pid }) => {
+            requireThat(Number.isInteger(pid) && pid > 0, "g0-spawn-pid-unavailable");
+            const info = statSync(directory);
+            const receipt = {
+              schema: "fireemu-g0-launch-v1",
+              pid,
+              command,
+              args: [...args],
+              binarySha256: artifact.sha256,
+              sourceCommit: prepared.state.head,
+              configSha256: sha256(Buffer.from(JSON.stringify(CONFIG, null, 2) + "\n")),
+              rulesSha256: sha256(RULES),
+              environmentSha256: digestJson(cleanEnv),
+              runDirectory: { path: directory, dev: info.dev, ino: info.ino, mode: info.mode & 0o777 },
+              import: null,
+              exportOnExit: null,
+            };
+            const bytes = Buffer.from(JSON.stringify(receipt) + "\n");
+            writeFileSync(join(directory, "launch-receipt.json"), bytes, { flag: "wx", mode: 0o600 });
+          }
+        : null,
   });
   await publish(join(directory, "process.log"), processResult.log);
   let session, localBytes;
@@ -259,6 +284,7 @@ async function replay(prepared, options, directory) {
       signal: processResult.signal,
       listenerClosed: portClosed,
     },
+    launchReceiptSha256: sha256(await readSource(directory, "launch-receipt.json", 128 * 1024)),
     cleanup: session.cleanup,
     artifact,
     sourceUnchanged: unchanged,

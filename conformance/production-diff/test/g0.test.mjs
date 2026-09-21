@@ -51,6 +51,7 @@ test("G0 origin binding requires both real loopback services", () => {
 
 test("G0 session bridge compiles as the exact Python source it will execute", () => {
   const source = g0SessionPythonSource();
+  assert.match(source, /from g0_local_recovery import execute/);
   execFileSync(
     "uv",
     ["run", "python", "-c", "compile(__import__('sys').stdin.read(), '<g0-session>', 'exec')"],

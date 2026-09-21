@@ -155,6 +155,18 @@ REQUEST_BYTES_RECEIPT_KIND = "request-bytes-acquisition-receipt-v1"
 # its own, so it is held to the Commit contract by name, not by resemblance.
 TXN_EXPIRY_RECEIPT_KIND = "txn-expiry-acquisition-receipt-v1"
 PARTITION_CURSOR_RECEIPT_KIND = "partition-cursor-acquisition-receipt-v1"
+# The limits-03 and auth-credential lanes both load
+# fs-request-bytes-boundary/request_bytes_preflight.py at runtime for their own
+# credential attestation (limits_03_preflight.py and credential_preflight.py
+# each `_load` it as SHARED_PREFLIGHT_MODULE/REQUEST_BYTES_PREFLIGHT), and
+# their receipts use the same field names the request-byte contract already
+# binds row for row: `metadata`/`routeDigest`, `managementEvidence` rows of
+# exactly {id, response, responseDigest}, `credentialEvidence` bodies of kind
+# request-byte-token-attestation-v1, and a single declared `oauth-tokeninfo`
+# credential id. They are not guessed into this contract: they run the same
+# code that produces it.
+LIMITS_03_RECEIPT_KIND = "limits-03-acquisition-receipt-v1"
+AUTH_CREDENTIAL_RECEIPT_KIND = "auth-credential-acquisition-receipt-v1"
 NO_DATA_RECEIPT_SCHEMAS = {
     DEFAULT_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
     TXN_EXPIRY_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
@@ -163,6 +175,8 @@ NO_DATA_RECEIPT_SCHEMAS = {
     # no collection and productionExecuted false on a preflight stop.
     PARTITION_CURSOR_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
     REQUEST_BYTES_RECEIPT_KIND: REQUEST_BYTES_NO_DATA_SCHEMA,
+    LIMITS_03_RECEIPT_KIND: REQUEST_BYTES_NO_DATA_SCHEMA,
+    AUTH_CREDENTIAL_RECEIPT_KIND: REQUEST_BYTES_NO_DATA_SCHEMA,
 }
 TOKEN_ATTESTATION_KIND = "request-byte-token-attestation-v1"
 TOKEN_ATTESTATION_FIELDS = {

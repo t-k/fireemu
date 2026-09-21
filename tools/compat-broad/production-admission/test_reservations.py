@@ -1326,7 +1326,7 @@ def request_bytes_receipt(snapshot, ticket, plan_digest, responses, **overrides)
     return receipt
 
 
-def campaign_plan(tmp_path):
+def campaign_plan(tmp_path, kind=CAMPAIGN_RECEIPT_KIND):
     op = lambda key: {
         "service": "firestore",
         "path": "/v1/" + key,
@@ -1364,7 +1364,7 @@ def campaign_plan(tmp_path):
         "intervalSeconds": 0.25,
         "requestSeconds": 2,
         "jobSlots": 3,
-        "receiptKind": CAMPAIGN_RECEIPT_KIND,
+        "receiptKind": kind,
         "collectorSourceDigest": COMMIT_COLLECTOR_SOURCE_DIGEST,
         "management": {
             "observation": [
@@ -1379,13 +1379,15 @@ def campaign_plan(tmp_path):
     }
 
 
-def _campaign_attempt(tmp_path, *, stop=1, mode="decision", dispatched=False):
+def _campaign_attempt(
+    tmp_path, *, stop=1, mode="decision", dispatched=False, kind=CAMPAIGN_RECEIPT_KIND
+):
     """A failed attempt by the three-probe campaign, stopped at preflight `stop`."""
     ledger = Ledger.create(tmp_path / "ledger")
     first = claim(tmp_path, "a")
     first["gatePath"] = str((tmp_path / "a" / "gate").resolve())
     first["gateJob"] = CAMPAIGN_PROBES[0]
-    frozen = campaign_plan(tmp_path)
+    frozen = campaign_plan(tmp_path, kind)
     first["gatePlanDigest"] = digest(frozen)
     first["budget"] = {
         "requests": 60,
@@ -1430,7 +1432,7 @@ def _campaign_attempt(tmp_path, *, stop=1, mode="decision", dispatched=False):
         _save(gate.path, state)
     snapshot = gate.snapshot()
     receipt = request_bytes_receipt(
-        snapshot, ticket, first["gatePlanDigest"], responses, gate=snapshot
+        snapshot, ticket, first["gatePlanDigest"], responses, gate=snapshot, kind=kind
     )
     path = tmp_path / "a" / "receipt.json"
     path.write_text(json.dumps(receipt))
@@ -1657,6 +1659,46 @@ def test_the_partition_cursor_kind_is_held_to_the_commit_contract_by_name(tmp_pa
         == "aborted-no-data"
     )
     assert gate.snapshot()["stopped"] is True
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "limits-03-acquisition-receipt-v1",
+        "auth-credential-acquisition-receipt-v1",
+    ],
+)
+def test_a_lane_that_reuses_the_request_byte_preflight_is_held_to_its_contract(
+    tmp_path, kind
+):
+    """limits-03 and auth-credential load request_bytes_preflight.py at runtime
+    for their credential attestation, so their receipts are held to the same
+    row-by-row Gate-bound contract, not the looser Commit shape."""
+    ledger, gate, ticket, record = _campaign_attempt(tmp_path, kind=kind)
+    ledger.abort_no_data(ticket, record)
+    assert (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+        == "aborted-no-data"
+    )
+    assert gate.snapshot()["stopped"] is True
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "limits-03-acquisition-receipt-v1",
+        "auth-credential-acquisition-receipt-v1",
+    ],
+)
+def test_the_commit_shape_is_refused_under_a_request_byte_preflight_kind(
+    tmp_path, kind
+):
+    """A Commit-shaped receipt does not satisfy a lane bound to the row-by-row
+    contract just because both are "no data" shapes."""
+    ledger, _gate, ticket, record = _no_data_attempt(tmp_path, kind=kind)
+    with pytest.raises(ValueError, match="no-data attempt"):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
 
 
 def test_a_receipt_kind_outside_the_closed_schema_map_has_no_retirement(tmp_path):

@@ -121,6 +121,16 @@ SHARED_SOURCES = (
     "tools/compat-broad/batch_wire.py",
     "tools/compat-broad/batch_contract.py",
 )
+# Management dispatch has two real worker paths: tokeninfo uses the private
+# credential worker, while the project/database/Auth reads use batch_adapter's
+# standalone batch_wire worker. Keep this explicit so the reservation
+# generation cannot silently omit either transport implementation.
+TRANSPORT_CLOSURE_SOURCES = (
+    PREFLIGHT_ENTRY,
+    "tools/compat-broad/fs-write-txn/credential_prep.py",
+    "tools/compat-broad/batch_adapter.py",
+    "tools/compat-broad/batch_wire.py",
+)
 # The closure a reservation records, so a later abort proves it runs the same
 # sources the acquisition ran.
 ABORT_CLOSURE_SOURCES = (
@@ -129,6 +139,7 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/o8-core/o8_admission.py",
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_admission.py",
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_descriptor.py",
+    *TRANSPORT_CLOSURE_SOURCES,
 )
 
 
@@ -704,6 +715,37 @@ def source_map() -> dict[str, str]:
     if any(name not in values for name in bound):
         raise ValueError("frozen source map omits a published bound source")
     return values
+
+
+def generation_source_digests(source_inputs: dict[str, str]) -> dict[str, str]:
+    """Project the full closure to the Ledger's legacy basename-key schema."""
+    if not isinstance(source_inputs, dict):
+        raise ValueError("frozen source map required")
+    names = [Path(name).name for name in ABORT_CLOSURE_SOURCES]
+    if len(names) != len(set(names)):
+        raise ValueError("source closure basename collision")
+    if any(name not in source_inputs for name in ABORT_CLOSURE_SOURCES):
+        raise ValueError("frozen acquisition source closure required")
+    return {
+        Path(name).name: source_inputs[name] for name in ABORT_CLOSURE_SOURCES
+    }
+
+
+def validate_generation(generation: dict, inputs: dict) -> None:
+    """Validate current generations while accepting historical omissions."""
+    if not isinstance(generation, dict) or not isinstance(inputs, dict):
+        raise ValueError("saved generation binding required")
+    source_digests = generation.get("sourceDigests")
+    if not isinstance(source_digests, dict):
+        raise ValueError("saved generation source closure required")
+    expected = generation_source_digests(inputs.get("sourceInputs"))
+    for name, value in source_digests.items():
+        if name in expected and value != expected[name]:
+            raise ValueError("saved generation source differs")
+    # A newly frozen packet has the current descriptor map. Historical inputs
+    # may legitimately predate this transport closure and remain readable.
+    if inputs.get("sourceInputs") == source_map() and source_digests != expected:
+        raise ValueError("saved generation source closure incomplete")
 
 
 def collector(gate, plan, output, *, transmit):

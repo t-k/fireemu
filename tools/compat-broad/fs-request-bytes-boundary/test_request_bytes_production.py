@@ -404,6 +404,8 @@ def test_receipt_publication_failure_never_reports_no_data_or_releases(
         "response",
         "rehashed-response",
         "rehashed-request",
+        "generation-missing",
+        "generation-tampered",
     ],
 )
 def test_saved_verifier_rejects_tampered_evidence(built, tmp_path, monkeypatch, target):
@@ -435,6 +437,17 @@ def test_saved_verifier_rejects_tampered_evidence(built, tmp_path, monkeypatch, 
             release = json.loads(release_path.read_bytes())
             release["receiptDigest"] = digest(receipt)
             release_path.write_text(json.dumps(release))
+    elif target.startswith("generation"):
+        receipt_path, release_path = output / "receipt.json", output / "release.json"
+        receipt = json.loads(receipt_path.read_bytes())
+        if target == "generation-missing":
+            del receipt["generation"]["sourceDigests"]["credential_prep.py"]
+        else:
+            receipt["generation"]["sourceDigests"]["credential_prep.py"] = "0" * 64
+        receipt_path.write_text(json.dumps(receipt))
+        release = json.loads(release_path.read_bytes())
+        release["receiptDigest"] = digest(receipt)
+        release_path.write_text(json.dumps(release))
     else:
         path = output / f"{target}.json"
         value = json.loads(path.read_bytes())

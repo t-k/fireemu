@@ -94,7 +94,11 @@ def validate_frozen_inputs(inputs) -> None:
 
 
 def abort_generation(inputs):
-    return o8_admission.abort_generation(descriptor(), inputs)
+    generation = o8_admission.abort_generation(descriptor(), inputs)
+    generation["sourceDigests"] = campaign.generation_source_digests(
+        inputs["sourceInputs"]
+    )
+    return generation
 
 
 def validate_o7_admission(**bindings):

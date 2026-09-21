@@ -383,7 +383,24 @@ def test_frozen_inputs_bind_the_plan_permission_and_source_snapshot(tmp_path):
         "o8_admission.py",
         "request_bytes_admission.py",
         "request_bytes_descriptor.py",
+        "request_bytes_preflight.py",
+        "credential_prep.py",
+        "batch_adapter.py",
+        "batch_wire.py",
     }
+    for path in campaign.TRANSPORT_CLOSURE_SOURCES:
+        assert generation["sourceDigests"][Path(path).name] == inputs["sourceInputs"][path]
+
+
+@pytest.mark.parametrize("path", campaign.TRANSPORT_CLOSURE_SOURCES)
+def test_transport_source_mutation_is_outside_frozen_generation(tmp_path, path):
+    built = Admission(tmp_path)
+    source = built.source / path
+    source.write_bytes(source.read_bytes() + b"\n# mutation")
+    with pytest.raises(ValueError):
+        admission._provenance(
+            built.source, built.commit, built.inputs["sourceInputs"]
+        )
 
 
 @pytest.mark.parametrize(

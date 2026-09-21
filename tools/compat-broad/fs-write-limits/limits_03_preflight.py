@@ -547,7 +547,8 @@ class ManagementSession:
             state["before"] = body
         elif slot == "index-lifecycle-apply":
             name = body.get("name") if isinstance(body, dict) else None
-            if not isinstance(name, str):
+            prefix = "projects/fireemu-35fe6/databases/(default)/operations/"
+            if not isinstance(name, str) or not name.startswith(prefix) or re.fullmatch(r"[A-Za-z0-9._~-]+", name.removeprefix(prefix)) is None:
                 self.lifecycle_failed = True
                 self._lifecycle = state
                 return
@@ -561,7 +562,8 @@ class ManagementSession:
             state["after"] = body
         elif slot == "index-lifecycle-restore":
             name = body.get("name") if isinstance(body, dict) else None
-            if not isinstance(name, str):
+            prefix = "projects/fireemu-35fe6/databases/(default)/operations/"
+            if not isinstance(name, str) or not name.startswith(prefix) or re.fullmatch(r"[A-Za-z0-9._~-]+", name.removeprefix(prefix)) is None:
                 self.lifecycle_failed = True
                 self._lifecycle = state
                 return
@@ -650,3 +652,24 @@ def validate_saved_management(receipt, snapshot, permission):
         ):
             raise ValueError("saved credential attestation differs")
         validate_principal(permission["credentialPrincipal"])
+
+    lifecycle = {row["id"]: row["response"].get("body") for row in rows if row["id"].split(":", 1)[1] in LIFECYCLE_SLOTS}
+    before = lifecycle.get("observation:index-lifecycle-before")
+    after = lifecycle.get("observation:index-lifecycle-after")
+    restored = lifecycle.get("recovery:index-lifecycle-restored")
+    for key in ("observation:index-lifecycle-poll", "recovery:index-lifecycle-poll-restore"):
+        poll = lifecycle.get(key)
+        if not isinstance(poll, dict) or poll.get("done") is not True or poll.get("error") is not None:
+            raise ValueError("saved lifecycle poll evidence differs")
+    if (
+        not isinstance(before, dict)
+        or not isinstance(after, dict)
+        or restored != before
+        or before.get("name") != LIFECYCLE_FIELD
+        or not isinstance(before.get("indexConfig"), dict)
+        or before["indexConfig"].get("usesAncestorConfig") is not True
+        or not isinstance(after.get("indexConfig"), dict)
+        or after["indexConfig"].get("indexes", []) != []
+        or after["indexConfig"].get("usesAncestorConfig", False) is not False
+    ):
+        raise ValueError("saved lifecycle projection evidence differs")

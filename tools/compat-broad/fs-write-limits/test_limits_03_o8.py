@@ -698,7 +698,7 @@ def test_a_full_run_finishes_the_gate_and_releases_the_temporary_ledger(
     assert receipt["releaseEligible"] is True
     assert receipt["postflightComplete"] is True
     assert receipt["indexExemption"]["verifiedAtPostflight"] is True
-    assert [row["id"] for row in receipt["managementEvidence"]][5:] == [
+    assert [row["id"] for row in receipt["managementEvidence"]][9:] == [
         "recovery:project",
         "recovery:database",
         "recovery:index-exemption",

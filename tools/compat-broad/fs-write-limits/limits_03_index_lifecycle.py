@@ -272,5 +272,17 @@ def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str,
     }
 
 
-def execute_production(*_args: Any, **_kwargs: Any) -> None:
-    raise RuntimeError("production index lifecycle requires reviewed O8/Ledger integration")
+def execute_production(*, management_session: Any, phase: str) -> dict[str, Any]:
+    """Run one capability-bound lifecycle phase through the existing Gate session."""
+    from limits_03_preflight import ManagementSession
+
+    if not isinstance(management_session, ManagementSession):
+        raise TypeError("existing capability-bound ManagementSession required")
+    if phase not in ("observation", "recovery"):
+        raise ValueError("closed lifecycle phase required")
+    management_session.run(phase)
+    return {
+        "phase": phase,
+        "events": [row for row in management_session.evidence if "index-lifecycle" in row["id"]],
+        "restored": phase == "recovery" and not management_session.lifecycle_failed,
+    }

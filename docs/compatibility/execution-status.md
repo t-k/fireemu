@@ -2,6 +2,21 @@
 
 Plan: [execution-plan.md](execution-plan.md). Scope: [emulator-scope.md](emulator-scope.md). This page records the latest verified checkpoint, what was executed, what was pushed and what remains. Counts are not compatibility percentages.
 
+## Continuation checkpoint (2026-09-22, pushed through `8654df660`)
+
+G1 and G2 remain incomplete, with `COMPAT_VERIFIED 0 / 14`. The following are independently reviewed, integrated and pushed local results, not new production observations:
+
+- Shared O8 partition tests now preserve non-creating read settlement and negative controls (237 integration tests passed). Query Gate response validation was repaired after finding that non-creating classification skipped malformed-response validation; the full partition-cursor lane passed 446 tests and its current local shadow was regenerated.
+- MFA's actual local campaign completed 33 rows and 178 requests with no disagreements, verified cleanup and restored configuration. Its record was pushed at `4f11e691a`. Final-runtime identity binding is a separate follow-up; the earlier local shadow is not proof of a final production comparison.
+- Limits' old Shared Gate assertions were corrected with ambiguous-create, typed-absence and semantic-mismatch controls. The two-file suite passed 136 tests; independent and integration checks passed five selected controls. The limits-03 shadow and package refreeze remain pending shared-source stabilization.
+- External LOCAL-CONTEXT-FD-014 was integrated with descriptor-based, bounded context reads and symlink/FIFO refusal. F99 log-parser corrections preserve unresolved ambiguous node IDs. The combined local-assist integration suite passed 360 tests with one skip and 38 passing subtests.
+
+The additional F99 transport repair is locally integrated at `b51e42a4c`, with 52 passing integration tests; affected current-record regeneration is pending before its next push. Request-byte transport provenance and Auth resource hosting remain under independent security review, with Must Fix findings blocking their integration and production use. No fresh production request, reservation or approval has been made in this continuation.
+
+Actual local SDK runs completed 18 Node cases and 18 browser cases in each of long-polling and streaming modes. Their retained-binary provenance is explicit; publication under the existing equal-source contract requires a matching-source rebuild and rerun, which is pending. AUTH-ACTION's local shadow completed and cleaned up, but the Admin unknown-email request differs from its local plan expectation. A saved end-user response does not establish the Admin result, which remains unobserved. Current-artifact Commit replay is still `INDETERMINATE`: the historical and current compilers emit different request bodies, so a source-bound historical-plan replay is required without altering historical evidence.
+
+At pushed source `66610ce82`, normal CI run `35627452622` succeeded only for its selected `pr` job; other normal workflow jobs were skipped by conditions. Inventory run `35627452639` was still in the offline-acquisition step, with subsequent steps not run. Neither this result nor the older workspace result below establishes a final current-source workspace or inventory pass.
+
 ## Resumption checkpoint (2026-09-22, source `f99a11c0a`)
 
 The integration checkout and fetched `origin/feat/compatibility-inventory` both resolve to `f99a11c0aab9c48964100a217cf83e32c86ba78e`; the checkout was clean at intake. Historical sections below describe their named sources and are not current execution claims. External deliverables 006–013 are already integrated and must not be reapplied.

@@ -171,6 +171,48 @@ def test_recovery_extension_persists_child_before_any_issuer(tmp_path):
     assert ledger.begin_recovery_extension(parent, child, envelope, parent_plan, child_plan, now=1100) == result
 
 
+def test_bound_recovery_claim_reads_nested_child_after_restart_without_expiry_gate(tmp_path, monkeypatch):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_recovery_extension(
+        parent, child, envelope, parent_plan, child_plan, now=1100,
+        canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+    )
+    # Inspection remains available for an expired row; authorization is a
+    # separate issuer responsibility.
+    monkeypatch.setattr(reservations.time, "time", lambda: 10**12)
+    restarted = reservations.Ledger(ledger.path)
+    before = restarted.snapshot()
+    bound = restarted.bound_recovery_claim(child_ticket)
+    assert bound["ticket"] == child_ticket
+    assert bound["childClaim"] == child
+    assert bound["newEnvelope"] == before["recoveryEnvelopes"][child_ticket["envelopeDigest"]]["envelope"]
+    assert bound["parentClaim"] == before["reservations"][parent["reservation"]]["claim"]
+    assert bound["parentIdentity"]["reservation"] == parent["reservation"]
+    assert bound["deadline"] == before["reservations"][parent["reservation"]]["recoveryChildren"][0]["deadline"]
+    assert bound["state"] == "allocated"
+    bound["childClaim"]["campaignId"] = "forged"
+    bound["newEnvelope"]["expiresAt"] = -1
+    bound["parentClaim"]["campaignId"] = "forged"
+    assert restarted.snapshot() == before
+
+
+@pytest.mark.parametrize("mutation", [
+    "ledgerPath", "ledgerIdentity", "reservation", "claimDigest",
+    "envelopeDigest", "parentReservation", "topLevelParent",
+])
+def test_bound_recovery_claim_rejects_forged_or_parent_ticket(tmp_path, mutation):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_recovery_extension(
+        parent, child, envelope, parent_plan, child_plan, now=1100,
+        canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+    )
+    forged = dict(parent if mutation == "topLevelParent" else child_ticket)
+    if mutation != "topLevelParent":
+        forged[mutation] = "forged"
+    with pytest.raises(ValueError, match="recovery child|persisted|ledger binding"):
+        ledger.bound_recovery_claim(forged)
+
+
 def test_recovery_extension_refuses_tariff_or_plan_count_mutation_without_save(tmp_path):
     ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
     before = ledger.snapshot()

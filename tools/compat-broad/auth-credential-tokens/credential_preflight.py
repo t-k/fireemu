@@ -63,6 +63,14 @@ SIGN_KINDS = {
 SIGNATURE_KIND = "custom-token-signature-v1"
 
 
+class CredentialRefused(ValueError):
+    """The bearer was refused by a privileged call; no later slot may present it."""
+
+
+class ApiKeyRefused(ValueError):
+    """A Web API key call was refused; the bearer is untouched and cleanup may run."""
+
+
 def validate_frozen_baseline(permission: Any) -> None:
     """The Auth config digest must be frozen before the slot that reads it is charged."""
     if not isinstance(permission, dict) or not isinstance(permission.get("authConfigDigest"), str):
@@ -245,14 +253,32 @@ class ManagementSession:
         else:
             self.postflight_complete = True
 
-    def observe_status(self, status: Any) -> None:
-        """Latch a refused bearer so no later slot, data or cleanup, is sent with it."""
-        if self.credential is not None:
-            shared_preflight.observe_status(self.credential, status)
+    def observe_status(self, declared: dict[str, Any], status: Any) -> None:
+        """Classify a refusal by the credential the slot presented.
+
+        Only an owner slot carries the bearer; a 401 or 403 there latches it, so no
+        later slot, data or cleanup, presents it again. Every other slot carries the
+        Web API key, and a refusal there is the key's: the observation stops, but the
+        bearer is untouched and the cleanup that needs it still runs.
+        """
+        if type(status) is not int or status not in (401, 403):
+            return
+        if declared.get("owner") is True:
+            if self.credential is not None:
+                shared_preflight.observe_status(self.credential, status)
+            raise CredentialRefused("privileged call refused; bearer latched")
+        raise ApiKeyRefused("API-key call refused; observation stopped")
+
+    def require_bearer(self, declared: dict[str, Any]) -> None:
+        """Refuse an owner slot before it is charged when the bearer is latched."""
+        if declared.get("owner") is True and (self.credential is None or self.credential.failed):
+            raise CredentialRefused("bearer latched; slot not attempted")
 
     def data_token(self, deadline: float) -> str:
         if not self.preflight_complete:
             raise ValueError("preflight must precede data")
+        if self.credential is None or self.credential.failed:
+            raise CredentialRefused("bearer latched; slot not attempted")
         return shared_preflight.require_usable(self.credential, deadline)
 
     def api_key(self) -> str:
@@ -336,6 +362,8 @@ def validate_saved_management(receipt: dict[str, Any], snapshot: dict[str, Any],
 
 
 __all__ = [
+    "ApiKeyRefused",
+    "CredentialRefused",
     "ManagementSession",
     "management_ids",
     "signature_attestation",

@@ -105,13 +105,14 @@ def production_environment(management: preflight.ManagementSession, *, signing: 
     }
 
 
-def collect_hosted(gate, gate_plan, output, *, transmit, environment, nonce, binding):
+def collect_hosted(gate, gate_plan, output, *, transmit, environment, nonce, binding, before=None, after=None):
     """Run every case and the cleanup through the facade, journaling each route.
 
-    `transmit(declared, body, timeout)` performs the bound wire call. The budget is
-    the lane's published one; its cost ceiling is the runaway guard, not a forecast.
-    The observation is abandoned on the Gate as soon as the runner stops, so the
-    cleanup slots behind the unreached observation slots become admissible.
+    `transmit(declared, body, timeout)` performs the bound wire call; `before` and
+    `after` are the poster's hooks (the credential latch). The budget is the lane's
+    published one; its cost ceiling is the runaway guard, not a forecast. The
+    observation is abandoned on the Gate as soon as the runner stops, so the cleanup
+    slots behind the unreached observation slots become admissible.
     """
     routes: list[dict] = []
 
@@ -129,7 +130,7 @@ def collect_hosted(gate, gate_plan, output, *, transmit, environment, nonce, bin
         entry.update(status=status, responseDigest=digest(response))
         return status, response
 
-    poster = gate_poster(gate, journaled)
+    poster = gate_poster(gate, journaled, before=before, after=after)
     budget = new_budget(
         BUDGET["maxRequests"],
         BUDGET["maxWallSeconds"],
@@ -165,6 +166,8 @@ def collect_hosted(gate, gate_plan, output, *, transmit, environment, nonce, bin
     return {
         "rows": rows,
         "failure": failure,
+        # The exception class that stopped the observation, for the stop point.
+        "stopCause": failure.split(":", 1)[0] if failure else None,
         "problems": problems,
         "tracker": tracker,
         "budget": budget,
@@ -172,22 +175,38 @@ def collect_hosted(gate, gate_plan, output, *, transmit, environment, nonce, bin
     }
 
 
-def _stop_point(snapshot, ready):
-    """Name where a stopped run stopped; a no-data stop is one with no data event."""
+STOP_CAUSES = {
+    "CredentialRefused": "credential-refused",
+    "ApiKeyRefused": "api-key-refused",
+}
+
+
+def _stop_point(snapshot, ready, cause=None):
+    """Name where a stopped run stopped; a no-data stop is one with no data event.
+
+    A sign-up or custom sign-in whose answer never settled is the one uncertain
+    stop: an account may exist that the run does not know. Any other unsettled
+    slot cannot have created an account, so it is not reported as that.
+    """
     if ready:
         return None
     if snapshot is None:
         return "schedule-not-started"
     if not snapshot.get("events"):
         return "preflight"
+    observation = snapshot["plan"]["jobs"][gate_module.JOB]["observation"]
     if any(
         event.get("creationOutcome") not in ("refused", "created")
+        and event.get("phase") == "observation"
+        and observation[event["index"]]["kind"] in gate_module.CREATING_KINDS
         for event in snapshot["events"]
         if "creationOutcome" in event
     ):
         return "sign-up-unsettled"
+    if cause in STOP_CAUSES:
+        return STOP_CAUSES[cause]
     job = snapshot["jobs"][gate_module.JOB]
-    return "cleanup-incomplete" if job["observation"] == len(snapshot["plan"]["jobs"][gate_module.JOB]["observation"]) else "observation-incomplete"
+    return "cleanup-incomplete" if job["observation"] == len(observation) else "observation-incomplete"
 
 
 def execute(*, capability, inputs, permission, credential_reader, ledger_root, output):
@@ -257,22 +276,26 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
 
         def transmit(declared, body, timeout):
             deadline = time.monotonic() + timeout
-            status, response = capability._transmit(
+            return capability._transmit(
                 {
                     "kind": "data",
                     "declared": declared,
                     "body": body,
+                    # An API-key slot still presents no bearer; the token is read
+                    # here only so a latched bearer refuses the slot before the wire.
                     "token": management.data_token(deadline),
                     "apiKey": management.api_key(),
                     "deadline": deadline,
                 }
             )
-            # A 401 or 403 latches the credential as refused: no further call, not
-            # even a cleanup delete, is attempted with it, and the receipt records
-            # the accounts that remain. This is the lane's privileged-call-refused
-            # rehearsal, not a retry.
-            management.observe_status(status)
-            return status, response
+
+        # A 401 or 403 on an owner slot latches the bearer: no further owner call,
+        # not even a cleanup delete, is attempted with it, and the receipt records
+        # the accounts that remain (the lane's privileged-call-refused rehearsal).
+        # A refusal on an API-key slot stops the observation only; cleanup still
+        # runs with the bearer under the recovery reserve.
+        def after(declared, status, _body):
+            management.observe_status(declared, status)
 
         environment = production_environment(management, signing=plan["signing"])
         secrets_held += [environment["password"], environment["resetPassword"]]
@@ -284,6 +307,8 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             environment=environment,
             nonce=plan["nonce"],
             binding={"inputsDigest": inputs["inputsDigest"], "sourceCommit": inputs["sourceCommit"]},
+            before=management.require_bearer,
+            after=after,
         )
         if (
             collected["failure"] is None
@@ -334,7 +359,12 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         if path.is_file():
             evidence[str(path.relative_to(output))] = hashlib.sha256(path.read_bytes()).hexdigest()
     receipt = admission.build_receipt(
-        inputs, result, rows=rows, generation=generation, failure=failure, stop_point=_stop_point(snapshot, ready)
+        inputs,
+        result,
+        rows=rows,
+        generation=generation,
+        failure=failure,
+        stop_point=_stop_point(snapshot, ready, collected["stopCause"] if collected else None),
     )
     receipt.update(
         ticket=ticket,

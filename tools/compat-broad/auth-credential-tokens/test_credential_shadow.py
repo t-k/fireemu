@@ -373,12 +373,15 @@ def _service(*, cookie_subject: str | None = None) -> dict:
         "sessions": {},
         "sent": [],
         "timeouts": [],
+        # Every credential the service ever issued, so a leak scan can look for all
+        # of them and not only the sessions that survived the run.
+        "issuedSecrets": [],
     }
 
     def issue(session: dict) -> str:
         account = state["accounts"][session["uid"]]
         claims = {**account["customAttributes"], **session["claims"]}
-        return shadow.unsigned_jwt(
+        state["issuedSecrets"].append(token := shadow.unsigned_jwt(
             {
                 "iss": TOKEN_ISSUER,
                 "sub": session["uid"],
@@ -387,11 +390,13 @@ def _service(*, cookie_subject: str | None = None) -> dict:
                 "exp": state["now"] + 3600,
                 **claims,
             }
-        )
+        ))
+        return token
 
     def start_session(uid: str, claims: dict | None = None) -> dict:
-        state["issued"] = state.get("issued", 0) + 1
-        refresh_token = f"refresh-{state['issued']}"
+        state["sessionCount"] = state.get("sessionCount", 0) + 1
+        refresh_token = f"refresh-{state['sessionCount']}"
+        state["issuedSecrets"].append(refresh_token)
         session = {
             "uid": uid,
             "authTime": state["now"],
@@ -484,6 +489,7 @@ def _service(*, cookie_subject: str | None = None) -> dict:
             if account["email"] == body["email"]:
                 code = f"oob-{len(state.setdefault('oob', {}))}"
                 state["oob"][code] = uid
+                state["issuedSecrets"].append(code)
                 return 200, {"kind": "identitytoolkit#GetOobConfirmationCodeResponse",
                              "email": body["email"], "oobCode": code}
         return _refused("EMAIL_NOT_FOUND")

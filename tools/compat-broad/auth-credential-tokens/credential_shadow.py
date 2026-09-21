@@ -385,16 +385,20 @@ def run_cases(
         # seconds after the newest session's own auth_time, then that session's refresh
         # token is exchanged; a fresh sign-in is exchanged once more as the control.
         _rest(budget, 2)
-        send(
+        explicit_second = later_shape["times"]["auth_time"] + 2
+        status, body = send(
             budget,
             admin,
             "/accounts:update",
-            {
-                "localId": revoked["localId"],
-                "validSince": str(later_shape["times"]["auth_time"] + 2),
-            },
+            {"localId": revoked["localId"], "validSince": str(explicit_second)},
             owner=True,
         )
+        # The row means nothing unless the update applied: a refused update leaves
+        # the session valid and the refresh below would be accepted for a reason that
+        # is not the finding. The applied second is recorded so review can see the
+        # two-second protocol was executed.
+        if status != 200:
+            raise ShadowError(f"explicit validSince update failed: {error_code(body)}")
         status, body = refresh(later["refreshToken"])
         rows["refresh-after-explicit-valid-since-rejected"] = row(
             "refresh-after-explicit-valid-since-rejected",
@@ -402,6 +406,10 @@ def run_cases(
             body,
             {},
             freshSessionRefresh=fresh_control(revoked_email),
+            diagnostics={
+                "authTime": later_shape["times"]["auth_time"],
+                "validSince": explicit_second,
+            },
         )
 
     # --- refresh -------------------------------------------------------------

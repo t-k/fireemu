@@ -197,9 +197,12 @@ def test_with_the_proposed_shared_extension_a_hosted_run_releases(tmp_path, monk
     assert len(report["rows"]) == 19 and report["parityEstablished"] is False
     assert report["reason"] in ("classified", "collector-binding-mismatch")
     assert receipt["signing"] is True and len(receipt["signatureEvidence"]) == 3
-    for path in output.rglob("*.json"):
+    scanned = [path for path in output.rglob("*") if path.is_file()]
+    assert any("responsibility" in path.parts for path in scanned)
+    assert service["issuedSecrets"]
+    for path in scanned:
         text = path.read_text()
-        for secret in (FIXTURE_TOKEN, FIXTURE_KEY, *service["sessions"]):
+        for secret in (FIXTURE_TOKEN, FIXTURE_KEY, *service["issuedSecrets"]):
             assert secret not in text, path
     production.verify_saved(output, expected_inputs_digest=built.inputs["inputsDigest"], ledger_root=built.ledger)
     final = reservations.Ledger(built.ledger).snapshot()["reservations"][result["ticket"]["reservation"]]
@@ -250,6 +253,7 @@ def test_a_privileged_call_refused_with_403_stops_every_later_bearer_use(tmp_pat
     monkeypatch.setattr(remote, "transmit", refusing)
     result = run(built, tmp_path)
     assert result["failure"] == "collection-incomplete"
+    assert result["stopPoint"] == "credential-refused"
     assert result["reservationReleased"] is False
     # Exactly one privileged call went out; the latch stopped the next data call and
     # every cleanup delete, so the accounts the run created are recorded as remaining.
@@ -259,6 +263,105 @@ def test_a_privileged_call_refused_with_403_stops_every_later_bearer_use(tmp_pat
     assert result["collection"]["cleanup"]["cleanupComplete"] is False
     assert len(service["accounts"]) == 2
     assert reservations.Ledger(built.ledger).snapshot()["reservations"][result["ticket"]["reservation"]]["state"] == "held"
+
+
+def test_a_refused_api_key_call_stops_observation_but_cleanup_still_runs(tmp_path, monkeypatch) -> None:
+    """The mirror of the bearer latch: the key was refused, the bearer never was."""
+    proposed_shared_extension(monkeypatch)
+    built = Admission(tmp_path)
+    calls, service = wire_fixture(monkeypatch)
+    real_transmit = remote.transmit
+
+    def refusing(declared, body, **kwargs):
+        # The client lookup after both sign-ups presents only the API key.
+        if not declared["owner"] and declared["kind"] == "lookup":
+            calls["data"].append("refused-" + declared["kind"])
+            return 403, {"error": {"code": 403, "message": "PERMISSION_DENIED", "status": "PERMISSION_DENIED"}}
+        return real_transmit(declared, body, **kwargs)
+
+    monkeypatch.setattr(remote, "transmit", refusing)
+    result = run(built, tmp_path)
+    assert result["failure"] == "collection-incomplete"
+    assert result["stopPoint"] == "api-key-refused"
+    assert calls["data"].count("refused-lookup") == 1
+    assert not any(kind.startswith("refused-") and kind != "refused-lookup" for kind in calls["data"])
+    # Both accounts created before the refusal are deleted with the bearer.
+    assert calls["data"][-6:] == ["delete", "uid-absence", "address-absence"] * 2
+    assert result["collection"]["cleanup"]["remainingAccounts"] == 0
+    assert result["collection"]["cleanup"]["cleanupComplete"] is True
+    assert service["accounts"] == {}
+    # The observation is incomplete, so the Gate cannot finish and the row stays held.
+    assert result["reservationReleased"] is False
+    assert reservations.Ledger(built.ledger).snapshot()["reservations"][result["ticket"]["reservation"]]["state"] == "held"
+
+
+def test_a_worker_timeout_on_a_refresh_is_observation_incomplete_not_unsettled(tmp_path, monkeypatch) -> None:
+    proposed_shared_extension(monkeypatch)
+    built = Admission(tmp_path)
+    wire_fixture(monkeypatch)
+    real_transmit = remote.transmit
+
+    def timing_out(declared, body, **kwargs):
+        if declared["kind"] == "refresh":
+            raise ValueError("credential request deadline exceeded")
+        return real_transmit(declared, body, **kwargs)
+
+    monkeypatch.setattr(remote, "transmit", timing_out)
+    result = run(built, tmp_path)
+    assert result["failure"] == "collection-incomplete"
+    assert result["stopPoint"] == "observation-incomplete"
+    snapshot = json.loads((tmp_path / "output" / "gate-snapshot.json").read_bytes())
+    assert shared_gate.unconfirmed_creates(snapshot, gate_module.JOB) == 0
+    failed = [event for event in snapshot["events"] if event.get("failure")]
+    assert len(failed) == 1 and failed[0]["authEvidence"]["settled"] == "failed-send-cannot-create"
+    # The account from the first sign-up is still cleaned up.
+    assert result["collection"]["cleanup"]["remainingAccounts"] == 0
+
+
+def test_charged_calls_after_a_latch_count_only_admitted_slots(tmp_path, monkeypatch) -> None:
+    proposed_shared_extension(monkeypatch)
+    built = Admission(tmp_path)
+    wire_fixture(monkeypatch)
+    real_transmit = remote.transmit
+
+    def refusing(declared, body, **kwargs):
+        if declared["owner"]:
+            return 403, {"error": {"code": 403, "message": "PERMISSION_DENIED", "status": "PERMISSION_DENIED"}}
+        return real_transmit(declared, body, **kwargs)
+
+    monkeypatch.setattr(remote, "transmit", refusing)
+    result = run(built, tmp_path)
+    assert result["stopPoint"] == "credential-refused"
+    snapshot = json.loads((tmp_path / "output" / "gate-snapshot.json").read_bytes())
+    routes = json.loads((tmp_path / "output" / "routes.json").read_bytes())["rows"]
+    sent = [row for row in routes if row["status"] is not None]
+    # A latched bearer refuses the cleanup deletes before the Gate charges them, so
+    # the Gate total is exactly the slots that reached the wire plus management.
+    assert len(sent) == len(routes)
+    assert result["chargedCalls"] == snapshot["total"] == len(sent) + len(snapshot["managementEvents"])
+
+
+def test_a_refused_explicit_valid_since_update_stops_the_run_without_a_row(tmp_path, monkeypatch) -> None:
+    proposed_shared_extension(monkeypatch)
+    built = Admission(tmp_path)
+    wire_fixture(monkeypatch)
+    real_transmit = remote.transmit
+    updates = []
+
+    def refusing(declared, body, **kwargs):
+        if declared["kind"] == "update":
+            updates.append(body)
+            if "validSince" in body and len(updates) == 4:
+                return 400, {"error": {"code": 400, "message": "INVALID_TIME", "status": "INVALID_ARGUMENT"}}
+        return real_transmit(declared, body, **kwargs)
+
+    monkeypatch.setattr(remote, "transmit", refusing)
+    result = run(built, tmp_path)
+    assert result["failure"] == "collection-incomplete"
+    rows = {row["caseId"]: row for row in result["collection"]["rows"]}
+    assert rows["refresh-after-explicit-valid-since-rejected"]["errorCode"] == "NOT_RUN"
+    assert rows["refresh-after-password-reset-rejected"]["errorCode"] == "INVALID_REFRESH_TOKEN"
+    assert result["collection"]["cleanup"]["cleanupComplete"] is True
 
 
 def test_a_secret_shaped_value_in_the_receipt_is_refused_not_redacted(tmp_path, monkeypatch) -> None:

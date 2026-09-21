@@ -240,7 +240,7 @@ def _ops_digest(plan: dict) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def plan_compiler(nonce: str, *, signing: bool = True) -> dict:
+def plan_compiler(nonce: str, *, signing: bool) -> dict:
     """The plan as the admission sees it: a reference derived from the nonce.
 
     Every field here is derived from the nonce and the signing flag by the reviewed

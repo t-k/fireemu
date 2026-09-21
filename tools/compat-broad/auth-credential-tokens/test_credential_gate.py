@@ -210,10 +210,7 @@ def test_a_hosted_run_reaches_every_case_cleans_up_and_finishes(tmp_path, monkey
 
 
 def _tokens_issued(service: dict) -> list[str]:
-    return [
-        *service["sessions"],
-        *(key for key in service.get("oob", {})),
-    ]
+    return list(service["issuedSecrets"])
 
 
 def test_a_run_without_a_signer_reaches_only_the_non_signing_cases(tmp_path, monkeypatch) -> None:

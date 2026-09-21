@@ -45,6 +45,7 @@ from broad_contract import digest
 from credential_cases import SIGNING_DEPENDENT_GROUPS, observation_cases
 from credential_collector import RECOVERY_PHASE, charge_elapsed, reserve_request
 from shared_gate import Gate as FrozenGate
+from shared_gate import _save as _save_state
 from shared_gate import create as frozen_create
 
 JOB = "auth-credential"
@@ -78,6 +79,8 @@ SECOND_BINDINGS = (
 )
 #: Binding names that identify an account; once bound they never change.
 IMMUTABLE_SUFFIXES = ("Uid",)
+#: The only slot kinds that can bring an account into existence.
+CREATING_KINDS = ("sign-up", "custom-sign-in")
 GATE_INTERVAL_SECONDS = 0.25
 REQUEST_COST_MICROUSD = 1
 #: The wire reservation per data slot: the lane's five-second worker deadline.
@@ -633,7 +636,39 @@ class CredentialGate(FrozenGate):
         if strip_api_key(path) != declared["path"] or bool(owner) != declared["owner"]:
             raise ValueError("request outside closed scenario")
         self._resolve(body, declared["body"])
-        return super().dispatch(declared, recovery, send)
+        try:
+            return super().dispatch(declared, recovery, send)
+        except Exception:
+            self._settle_failed_send(declared, recovery)
+            raise
+
+    def _settle_failed_send(self, declared: dict[str, Any], recovery: bool) -> None:
+        """A send that raised before a typed answer cannot have created an account
+        unless the slot was a sign-up; settle every other slot as no creation.
+
+        The base Gate leaves the slot pending, which is right for a document write
+        whose answer was lost. A refresh, a lookup or an update whose worker timed
+        out created nothing, and leaving it pending would count it as an
+        unconfirmed create for the rest of the run.
+        """
+        if recovery or declared["kind"] in CREATING_KINDS:
+            return
+        with self.locked() as state:
+            events = state["events"]
+            for event in reversed(events):
+                if event.get("job") != self.job or event.get("phase") != "observation":
+                    continue
+                if event.get("creationOutcome") == "pending" and event.get("failure") is not None:
+                    event["creationOutcome"] = "refused"
+                    event["authEvidence"] = {
+                        "kind": declared["kind"],
+                        "account": declared.get("account"),
+                        "status": None,
+                        "creationOutcome": "refused",
+                        "settled": "failed-send-cannot-create",
+                    }
+                    _save_state(self.path, state)
+                break
 
     # --- evidence ---
 
@@ -804,7 +839,7 @@ def gate_environment(project: str, *, signing: bool) -> dict[str, Any]:
     }
 
 
-def gate_poster(gate: CredentialGate, transmit: Any) -> Any:
+def gate_poster(gate: CredentialGate, transmit: Any, *, before: Any = None, after: Any = None) -> Any:
     """A runner poster that admits every request through the facade first.
 
     The phase is the budget's: the runner observes while the budget is in its run
@@ -813,16 +848,22 @@ def gate_poster(gate: CredentialGate, transmit: Any) -> Any:
     with the body already parsed; the Gate journals the status and the body digest.
     The budget is reserved before the Gate is asked, so an exhausted bound costs
     nothing, and the wall time is charged afterwards whatever the Gate answered.
+
+    `before(declared)` runs before the budget or the Gate is charged and may refuse
+    the slot (a latched credential); `after(declared, status, body)` runs once the
+    Gate has journaled the answer and may stop the run on what it saw.
     """
 
     def poster(budget, base, path, body, *, owner=False):
+        recovery = budget["phase"] == RECOVERY_PHASE
+        declared = gate.next_operation(recovery)
+        if before is not None:
+            before(declared)
         started = time.monotonic()
         allowance = reserve_request(budget, started)
         timeout = min(DATA_SLOT_SECONDS, allowance)
-        recovery = budget["phase"] == RECOVERY_PHASE
         try:
-            declared = gate.next_operation(recovery)
-            return gate.dispatch_runtime(
+            status, response = gate.dispatch_runtime(
                 strip_base(base, path),
                 body,
                 owner=owner,
@@ -831,6 +872,9 @@ def gate_poster(gate: CredentialGate, transmit: Any) -> Any:
             )
         finally:
             charge_elapsed(budget, time.monotonic() - started)
+        if after is not None:
+            after(declared, status, response)
+        return status, response
 
     return poster
 

@@ -8,7 +8,8 @@ claim.
 
 Exit 0 requires verified cleanup and Ledger release; exit 1 means the run started
 and did not complete, so the reservation is still held and `<output>/receipt.json`
-says where it stopped; exit 2 means admission refused the run before any wire call.
+says where it stopped; exit 2 means no data call was sent: admission refused the run,
+or the preflight stopped it (then the reservation is held and the receipt says so).
 """
 
 # ruff: noqa: TRY004 -- Public boundary collapses malformed private input to one refusal class.

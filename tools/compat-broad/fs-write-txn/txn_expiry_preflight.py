@@ -41,7 +41,9 @@ def _load(name, path):
     return module
 
 
-PREFLIGHT_ENTRY = "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py"
+PREFLIGHT_ENTRY = (
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py"
+)
 preflight = _load("_txn_expiry_request_bytes_preflight", ROOT / PREFLIGHT_ENTRY)
 
 SCOPE = preflight.SCOPE
@@ -97,7 +99,10 @@ def management_transport(value, *, capability, binding, binding_digest):
         "deadline",
     }:
         raise ValueError("closed management wire call required")
-    if value["kind"] != "management" or value["phase"] not in ("observation", "recovery"):
+    if value["kind"] != "management" or value["phase"] not in (
+        "observation",
+        "recovery",
+    ):
         raise ValueError("closed management wire call required")
     return preflight.management_transport(
         value["slot"],
@@ -195,7 +200,7 @@ class ManagementSession:
         an injected, production-unreachable callable in the credential-free
         rehearsal; the session never chooses between them."""
         if not callable(transmit):
-            raise ValueError("bound management transmit required")
+            raise ValueError("bound management transmit required")  # noqa: TRY004 -- admission boundary collapses malformed input to one refusal class
         self.gate, self.ledger, self.ticket = gate, ledger, ticket
         self.transmit, self.permission = transmit, permission
         self._token = token
@@ -267,11 +272,17 @@ class ManagementSession:
                 return preflight.metadata_attestation(slot, response, self.permission)
 
             response = self.gate.management_dispatch(phase, slot, send)
-            row = {"id": phase + ":" + slot, "response": response, "responseDigest": digest(response)}
+            row = {
+                "id": phase + ":" + slot,
+                "response": response,
+                "responseDigest": digest(response),
+            }
             self.evidence.append(row)
             event = self.gate.snapshot()["managementEvents"][-1]
             if event.get("id") != row["id"] or event.get("completed") is not True:
-                raise ValueError("management slot did not complete inside its reservation")
+                raise ValueError(
+                    "management slot did not complete inside its reservation"
+                )
             if slot == "oauth-tokeninfo":
                 if self.credential is None or response.get("complete") is not True:
                     raise ValueError("credential attestation failed")
@@ -329,7 +340,8 @@ def validate_saved_management(receipt, snapshot, permission):
             or response.get("workerReaped") is not True
             or response.get("bodyKind") != "json"
             or not isinstance(body, dict)
-            or body.get("principalDigest") != digest(permission.get("credentialPrincipal"))
+            or body.get("principalDigest")
+            != digest(permission.get("credentialPrincipal"))
             or body.get("requiredSeconds") != permission["wallSeconds"]
             or type(body.get("expiresInSeconds")) is not int
             or not 1 < body["expiresInSeconds"] <= 3600

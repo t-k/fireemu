@@ -32,8 +32,6 @@ sys.path.insert(0, str(HERE))
 
 import o8_admission
 import shared_gate
-import txn_expiry_descriptor as campaign
-import txn_expiry_preflight as preflight
 from broad_contract import digest
 from o8_admission import (
     ProductionWireCapability,
@@ -42,6 +40,9 @@ from o8_admission import (
     revoke_production_capability,
     validate_owner_identity,
 )
+
+import txn_expiry_descriptor as campaign
+import txn_expiry_preflight as preflight
 from txn_expiry_descriptor import commit_baseline
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
@@ -78,7 +79,9 @@ def descriptor():
 
 
 def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
-    return campaign.permission_bindings(plan, source_commit, artifact_digest, inputs, baseline)
+    return campaign.permission_bindings(
+        plan, source_commit, artifact_digest, inputs, baseline
+    )
 
 
 def validate_frozen_inputs(inputs) -> None:
@@ -101,7 +104,11 @@ def transport_call(request, token, *, deadline) -> dict:
     """The closed value one bound data wire call carries."""
     if not isinstance(request, dict) or not isinstance(token, str) or not token:
         raise ValueError("closed transaction expiry wire call required")
-    if type(deadline) not in (int, float) or isinstance(deadline, bool) or not math.isfinite(deadline):
+    if (
+        type(deadline) not in (int, float)
+        or isinstance(deadline, bool)
+        or not math.isfinite(deadline)
+    ):
         raise ValueError("finite absolute deadline required")
     return {"kind": "data", "request": request, "token": token, "deadline": deadline}
 
@@ -164,13 +171,19 @@ def _validate_owner_window(permission) -> None:
         or isinstance(issued, bool)
         or isinstance(expiry, bool)
         or not 0 <= now - issued <= 86400
-        or not now + campaign.campaign_seconds() + campaign.recovery_seconds() <= expiry <= issued + 86400
+        or not now + campaign.campaign_seconds() + campaign.recovery_seconds()
+        <= expiry
+        <= issued + 86400
     ):
         raise ValueError("owner permission expired or too short for recovery")
 
 
-def _approve(permission, plan, source_commit, artifact_digest, inputs, baseline=None) -> None:
-    required = permission_bindings(plan, source_commit, artifact_digest, inputs, baseline)
+def _approve(
+    permission, plan, source_commit, artifact_digest, inputs, baseline=None
+) -> None:
+    required = permission_bindings(
+        plan, source_commit, artifact_digest, inputs, baseline
+    )
     if digest({key: permission.get(key) for key in required}) != digest(required):
         raise ValueError("typed owner permission binding differs")
     if permission.get("timing") != "wall-clock":
@@ -200,7 +213,10 @@ def _approve(permission, plan, source_commit, artifact_digest, inputs, baseline=
         raise ValueError("owner-frozen credential principal required")
     preflight.validate_principal(principal)
     preflight.validate_frozen_baselines(permission)
-    if not isinstance(permission.get("permissionReference"), str) or not permission["permissionReference"].strip():
+    if (
+        not isinstance(permission.get("permissionReference"), str)
+        or not permission["permissionReference"].strip()
+    ):
         raise ValueError("owner supplied permissionReference required")
 
 
@@ -209,11 +225,15 @@ def freeze_inputs(permission_path, plan, *, source_root, artifact_path, baseline
     campaign.execution_plan(plan)
     permission = _read(permission_path)
     inputs = campaign.source_map()
-    commit = subprocess.check_output(["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True).strip()
+    commit = subprocess.check_output(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True
+    ).strip()
     artifact = _artifact(artifact_path)
     _provenance(source_root, commit, inputs)
     _approve(permission, plan, commit, artifact, inputs, baseline)
-    return o8_admission.freeze_inputs(descriptor(), permission, plan, source_commit=commit, artifact_sha256=artifact)
+    return o8_admission.freeze_inputs(
+        descriptor(), permission, plan, source_commit=commit, artifact_sha256=artifact
+    )
 
 
 def validate_fresh_admission(ledger_root, plan, permission) -> dict:
@@ -247,7 +267,10 @@ def reservation_claim(inputs, *, gate_path, gate_plan):
     """The shared Ledger claim for this campaign, with its Gate binding."""
     descriptor_ = descriptor()
     plan = inputs["plan"]
-    if digest(gate_plan.get("nonce")) != digest(plan["nonce"]) or gate_plan.get("campaignId") != descriptor_.campaign_id:
+    if (
+        digest(gate_plan.get("nonce")) != digest(plan["nonce"])
+        or gate_plan.get("campaignId") != descriptor_.campaign_id
+    ):
         raise ValueError("Gate plan belongs to another campaign or nonce")
     return {
         "campaignId": descriptor_.campaign_id,
@@ -271,7 +294,11 @@ def reservation_claim(inputs, *, gate_path, gate_plan):
 #: before any request, during the five ownership preflight reads, or at the
 #: first create's transport before it was dispatched. Anything later has sent
 #: a request that could create.
-NO_DATA_STOP_POINTS = ("schedule-not-started", "management-preflight", "ownership-preflight")
+NO_DATA_STOP_POINTS = (
+    "schedule-not-started",
+    "management-preflight",
+    "ownership-preflight",
+)
 ABANDONED_STOP_POINT = "abandoned-after-create"
 UNCERTAIN_STOP_POINT = "create-outcome-unknown"
 
@@ -303,7 +330,11 @@ def classify_stop(receipt) -> dict:
     if not isinstance(receipt, dict):
         raise ValueError("bounded receipt required")  # noqa: TRY004 -- refusal class, not a type report
     stop = receipt.get("stopPoint")
-    if stop == UNCERTAIN_STOP_POINT or receipt.get("mayHaveCreated") and stop in NO_DATA_STOP_POINTS:
+    if (
+        stop == UNCERTAIN_STOP_POINT
+        or receipt.get("mayHaveCreated")
+        and stop in NO_DATA_STOP_POINTS
+    ):
         return {
             "stopPoint": stop,
             "disposition": "owner-escalation",
@@ -311,7 +342,10 @@ def classify_stop(receipt) -> dict:
             "reason": "a create whose answer was lost may have been applied",
         }
     if stop in NO_DATA_STOP_POINTS:
-        if receipt.get("productionExecuted") is not False or receipt.get("collection") is not None:
+        if (
+            receipt.get("productionExecuted") is not False
+            or receipt.get("collection") is not None
+        ):
             return {
                 "stopPoint": stop,
                 "disposition": "owner-escalation",
@@ -326,7 +360,9 @@ def classify_stop(receipt) -> dict:
         }
     if stop == ABANDONED_STOP_POINT:
         collection = receipt.get("collection") or {}
-        recovered = not collection.get("unrecovered") and not collection.get("openTransactions")
+        recovered = not collection.get("unrecovered") and not collection.get(
+            "openTransactions"
+        )
         return {
             "stopPoint": stop,
             "disposition": "closed-after-abandon" if recovered else "owner-escalation",
@@ -346,11 +382,16 @@ def validate_no_data_receipt(receipt) -> dict:
     if not verdict["retirableAsNoData"]:
         raise ValueError(f"receipt is not a no-data stop: {verdict['reason']}")
     generation = receipt.get("generation")
-    if not isinstance(generation, dict) or set(generation) != {"sourceCommit", "collectorSourceDigest", "sourceDigests"}:
+    if not isinstance(generation, dict) or set(generation) != {
+        "sourceCommit",
+        "collectorSourceDigest",
+        "sourceDigests",
+    }:
         raise ValueError("receipt records no acquisition generation")
     metadata = receipt.get("metadata")
     if not isinstance(metadata, list) or any(
-        not isinstance(item, dict) or not isinstance(item.get("responseDigest"), str) for item in metadata
+        not isinstance(item, dict) or not isinstance(item.get("responseDigest"), str)
+        for item in metadata
     ):
         raise ValueError("receipt records no per-slot response digests")
     return verdict
@@ -407,7 +448,9 @@ def build_abandon_record(output) -> dict:
     }
 
 
-def build_receipt(inputs, result, *, rows, management, generation, failure=None, stop=None):
+def build_receipt(
+    inputs, result, *, rows, management, generation, failure=None, stop=None
+):
     """The campaign receipt, binding every request it sent by digest.
 
     `metadata` carries the charged management metadata slots, the vocabulary
@@ -430,11 +473,18 @@ def build_receipt(inputs, result, *, rows, management, generation, failure=None,
     ]
     evidence = list(management.evidence) if management is not None else []
     metadata = [
-        {"id": row["id"], "status": row["response"].get("status"), "responseDigest": row["responseDigest"]}
+        {
+            "id": row["id"],
+            "status": row["response"].get("status"),
+            "responseDigest": row["responseDigest"],
+        }
         for row in evidence
-        if not row["id"].endswith(":oauth-tokeninfo") and row["response"].get("complete") is True
+        if not row["id"].endswith(":oauth-tokeninfo")
+        and row["response"].get("complete") is True
     ]
-    attestations = list(management.credential_evidence) if management is not None else []
+    attestations = (
+        list(management.credential_evidence) if management is not None else []
+    )
     credential_evidence = [
         {
             "slot": "tokeninfo",
@@ -461,8 +511,12 @@ def build_receipt(inputs, result, *, rows, management, generation, failure=None,
         "managementEvidence": evidence,
         "credentialAttestations": attestations,
         "credentialEvidence": credential_evidence,
-        "preflightComplete": bool(management is not None and management.preflight_complete),
-        "postflightComplete": bool(management is not None and management.postflight_complete),
+        "preflightComplete": bool(
+            management is not None and management.preflight_complete
+        ),
+        "postflightComplete": bool(
+            management is not None and management.postflight_complete
+        ),
         "generation": copy.deepcopy(generation),
         "timing": "wall-clock",
         "workerSha256": inputs["sourceInputs"][campaign.WORKER_ENTRY],

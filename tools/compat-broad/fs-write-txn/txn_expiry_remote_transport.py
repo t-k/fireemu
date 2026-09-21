@@ -30,12 +30,13 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
-import txn_expiry_cases as cases
-import txn_expiry_collector as collector
-import txn_expiry_plan as plan_module
 from batch_contract import PROJECT
 from batch_wire import _decode_json_response
 from o8_admission import authorize_transport
+
+import txn_expiry_cases as cases
+import txn_expiry_collector as collector
+import txn_expiry_plan as plan_module
 
 ORIGIN = "https://firestore.googleapis.com"
 WORKER_ENTRY = "tools/compat-broad/fs-write-txn/txn_expiry_https_worker.py"
@@ -93,7 +94,8 @@ def _load(name, path):
 # here.
 _exchange_module = _load(
     "_txn_expiry_process_exchange",
-    ROOT / "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py",
+    ROOT
+    / "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py",
 )
 _run_process_exchange = _exchange_module._run_process_exchange
 
@@ -122,9 +124,9 @@ def build(request, *, project=PROJECT, database=plan_module.DATABASE):
     collection. Anything else is refused here, before a worker exists.
     """
     if not isinstance(request, dict):
-        raise ValueError("collector request required")
+        raise ValueError("collector request required")  # noqa: TRY004 -- admission boundary collapses malformed input to one refusal class
     rpc = request.get("rpc")
-    if rpc not in collector.RPCS:
+    if rpc not in cases.RPCS:
         raise ValueError("request outside the campaign rpc vocabulary")
     if (
         request.get("projectId") != project
@@ -279,9 +281,7 @@ def request(
     if exchange is None:
         if capability is None:
             raise ValueError("active O7 production capability required")
-        authorize_transport(
-            capability, binding=binding, binding_digest=binding_digest
-        )
+        authorize_transport(capability, binding=binding, binding_digest=binding_digest)
         if (
             not isinstance(binding, bytes)
             or hashlib.sha256(binding).hexdigest() != WORKER_SHA256
@@ -333,10 +333,12 @@ def request(
         "elapsedSeconds": elapsed,
     }
     if failure is not None or type(status) is not int or not 100 <= status <= 599:
-        result = _incomplete(status if type(status) is int else None, failure or "status-missing")
+        result = _incomplete(
+            status if type(status) is int else None, failure or "status-missing"
+        )
     elif 300 <= status < 400:
         result = _incomplete(status, "redirect")
-    elif not wire["contentType"].split(";", 1)[0].strip().lower() == "application/json":
+    elif wire["contentType"].split(";", 1)[0].strip().lower() != "application/json":
         result = _incomplete(status, "invalid-media-type")
     else:
         result = normalize(status, raw, inner)

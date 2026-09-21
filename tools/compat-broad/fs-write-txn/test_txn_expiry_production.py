@@ -24,6 +24,8 @@ sys.path.insert(0, str(HERE))
 
 import reservations
 import shared_gate
+from broad_contract import digest
+
 import txn_expiry_admission as admission
 import txn_expiry_cases as cases
 import txn_expiry_comparison as comparison
@@ -34,7 +36,6 @@ import txn_expiry_offline_backend as offline
 import txn_expiry_preflight
 import txn_expiry_production as production
 import txn_expiry_remote_transport as remote
-from broad_contract import digest
 from test_txn_expiry_admission import Admission
 
 
@@ -70,7 +71,9 @@ def _rehearse(built, tmp_path, backend, **extra):
     )
 
 
-def test_the_rehearsal_reaches_all_thirteen_cases_and_releases_the_temporary_ledger(built, tmp_path):
+def test_the_rehearsal_reaches_all_thirteen_cases_and_releases_the_temporary_ledger(
+    built, tmp_path
+):
     backend = offline.Backend()
     seen = {}
 
@@ -79,10 +82,16 @@ def test_the_rehearsal_reaches_all_thirteen_cases_and_releases_the_temporary_led
         seen["rows"] = len(state["reservations"])
         row = next(iter(state["reservations"].values()))
         seen["state"] = row["state"]
-        seen["claimed"] = shared_gate.Gate(tmp_path / "output/gate", gate_module.JOB).snapshot()["jobs"][gate_module.JOB]["pid"]
+        seen["claimed"] = shared_gate.Gate(
+            tmp_path / "output/gate", gate_module.JOB
+        ).snapshot()["jobs"][gate_module.JOB]["pid"]
 
     result = _rehearse(
-        built, tmp_path, backend, rehearsal=production.Rehearsal(sleep_scale=0.001), after_reservation=after_reservation
+        built,
+        tmp_path,
+        backend,
+        rehearsal=production.Rehearsal(sleep_scale=0.001),
+        after_reservation=after_reservation,
     )
     # The reservation and the Gate claim precede the credential.
     assert seen == {"rows": 1, "state": "held", "claimed": os.getpid()}
@@ -97,7 +106,8 @@ def test_the_rehearsal_reaches_all_thirteen_cases_and_releases_the_temporary_led
     assert result["productionExecuted"] is True
     assert backend.documents == {}
     assert backend.management_calls == [
-        ("observation", slot) for slot in ("oauth-tokeninfo", "project", "database", "auth")
+        ("observation", slot)
+        for slot in ("oauth-tokeninfo", "project", "database", "auth")
     ] + [("recovery", slot) for slot in ("project", "database", "auth")]
     output = tmp_path / "output"
     receipt = json.loads((output / "receipt.json").read_bytes())
@@ -110,17 +120,29 @@ def test_the_rehearsal_reaches_all_thirteen_cases_and_releases_the_temporary_led
     assert shared_gate.unconfirmed_creates(gate, gate_module.JOB) == 0
     assert gate["total"] == len(receipt["dataRoutes"]) + 7
     assert receipt["chargedCalls"] == gate["total"]
-    assert receipt["dataRequestsSent"] == collection["requestCount"] == len(backend.calls)
+    assert (
+        receipt["dataRequestsSent"] == collection["requestCount"] == len(backend.calls)
+    )
     # The two transactions whose case refused their commit and rollback (a and
     # b) were still open at cleanup and were rolled back there; the twelve
     # other release slots were consumed without a wire call.
-    skips = [skip for skip in gate.get("skips", []) if skip.get("note") == "transaction-not-open-at-cleanup"]
-    assert sorted(entry["transaction"] for entry in collection["transactionReleases"]) == ["a", "b"]
+    skips = [
+        skip
+        for skip in gate.get("skips", [])
+        if skip.get("note") == "transaction-not-open-at-cleanup"
+    ]
+    assert sorted(
+        entry["transaction"] for entry in collection["transactionReleases"]
+    ) == ["a", "b"]
     assert all(entry["released"] for entry in collection["transactionReleases"])
     assert len(skips) == 14 - 2
-    assert [skip["reason"] for skip in gate["skips"]] == [shared_gate.ZERO_WIRE_REASON] * len(gate["skips"])
+    assert [skip["reason"] for skip in gate["skips"]] == [
+        shared_gate.ZERO_WIRE_REASON
+    ] * len(gate["skips"])
     assert release["receiptDigest"] == digest(receipt)
-    final = reservations.Ledger(built.ledger).snapshot()["reservations"][receipt["ticket"]["reservation"]]
+    final = reservations.Ledger(built.ledger).snapshot()["reservations"][
+        receipt["ticket"]["reservation"]
+    ]
     assert final["state"] == "released"
     assert final["finalGateDigest"] == receipt["gateDigest"]
     assert offline.TOKEN not in (output / "receipt.json").read_text()
@@ -128,15 +150,24 @@ def test_the_rehearsal_reaches_all_thirteen_cases_and_releases_the_temporary_led
     # The rehearsal waited real, shortened seconds: the receipt records them and
     # the comparator refuses the receipt on exactly that.
     waited = [row["waited"] for row in collection["rows"] if row["waited"]]
-    assert waited and all(0 < entry["measuredSeconds"] < entry["requestedSeconds"] for entry in waited)
-    assert comparison.local_self_contract(collection)["classification"] == comparison.INDETERMINATE
+    assert waited and all(
+        0 < entry["measuredSeconds"] < entry["requestedSeconds"] for entry in waited
+    )
+    assert (
+        comparison.local_self_contract(collection)["classification"]
+        == comparison.INDETERMINATE
+    )
     verdict = campaign.comparator(collection)
     assert verdict["classification"] == comparison.INDETERMINATE
     codes = {reason["code"] for reason in verdict["comparison"]["reasons"]}
     assert "wait-shorter-than-requested" in codes
     assert verdict["formalCompatibilityClaim"] is False
     with pytest.raises(ValueError, match="saved acquisition binding differs"):
-        production.verify_saved(output, expected_inputs_digest=built.inputs["inputsDigest"], ledger_root=built.ledger)
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
 
 
 def test_the_rehearsal_switch_is_refused_on_the_production_wire(built, tmp_path):
@@ -145,11 +176,16 @@ def test_the_rehearsal_switch_is_refused_on_the_production_wire(built, tmp_path)
     gate = gate_module.TxnGate(tmp_path / "gate", gate_module.JOB)
 
     def production_wire(request, deadline):
-        return remote.request({"request": request, "token": offline.TOKEN}, deadline=deadline)
+        return remote.request(
+            {"request": request, "token": offline.TOKEN}, deadline=deadline
+        )
 
     with pytest.raises(ValueError, match="must not reach the production wire"):
         production.run_collection(
-            gate, built.execution_plan, tmp_path / "collection", transmit=production_wire,
+            gate,
+            built.execution_plan,
+            tmp_path / "collection",
+            transmit=production_wire,
             rehearsal=production.Rehearsal(sleep_scale=0.01),
         )
     with pytest.raises(ValueError):
@@ -158,9 +194,13 @@ def test_the_rehearsal_switch_is_refused_on_the_production_wire(built, tmp_path)
         production.Rehearsal(sleep_scale=2)
     with pytest.raises(ValueError, match="production wire"):
         production.rehearse(
-            inputs=built.inputs, permission=built.permission, ledger_root=built.ledger,
-            output=tmp_path / "output", transport=production_wire,
-            management_transport=offline.Backend().management, token=offline.TOKEN,
+            inputs=built.inputs,
+            permission=built.permission,
+            ledger_root=built.ledger,
+            output=tmp_path / "output",
+            transport=production_wire,
+            management_transport=offline.Backend().management,
+            token=offline.TOKEN,
         )
     # The collector options a production run uses can only be wall-clock.
     options = campaign.collector_options(built.execution_plan)
@@ -168,7 +208,9 @@ def test_the_rehearsal_switch_is_refused_on_the_production_wire(built, tmp_path)
     import txn_expiry_collector as collector
 
     with pytest.raises(ValueError, match="cannot be simulated"):
-        collector.validate_collector_options({**options, "timing": collector.CONTROL_CLOCK})
+        collector.validate_collector_options(
+            {**options, "timing": collector.CONTROL_CLOCK}
+        )
 
 
 def _patched_production(monkeypatch, mode):
@@ -178,10 +220,20 @@ def _patched_production(monkeypatch, mode):
         return backend.transport(value["request"], value["token"], float(deadline))
 
     def management_transport(slot, token, *, deadline, **_kwargs):
-        return backend.management({"kind": "management", "phase": "patched", "slot": slot, "token": token, "deadline": deadline})
+        return backend.management(
+            {
+                "kind": "management",
+                "phase": "patched",
+                "slot": slot,
+                "token": token,
+                "deadline": deadline,
+            }
+        )
 
     monkeypatch.setattr(remote, "request", request)
-    monkeypatch.setattr(txn_expiry_preflight.preflight, "management_transport", management_transport)
+    monkeypatch.setattr(
+        txn_expiry_preflight.preflight, "management_transport", management_transport
+    )
     return backend
 
 
@@ -197,7 +249,9 @@ def test_a_credential_refusal_stops_before_any_data_call(built, tmp_path, monkey
     assert receipt["dataRequestsSent"] == 0
     gate = json.loads((tmp_path / "output/gate-snapshot.json").read_bytes())
     assert gate["credentialRejected"] is True and gate["events"] == []
-    row = next(iter(reservations.Ledger(built.ledger).snapshot()["reservations"].values()))
+    row = next(
+        iter(reservations.Ledger(built.ledger).snapshot()["reservations"].values())
+    )
     assert row["state"] == "held"
 
 
@@ -212,16 +266,27 @@ def test_a_binding_change_is_refused_before_any_wire(built, tmp_path, monkeypatc
     assert reservations.Ledger(built.ledger).snapshot()["reservations"] == {}
 
 
-def test_a_foreign_handoff_is_refused_after_the_reservation_with_nothing_sent(built, tmp_path, monkeypatch):
+def test_a_foreign_handoff_is_refused_after_the_reservation_with_nothing_sent(
+    built, tmp_path, monkeypatch
+):
     backend = _patched_production(monkeypatch, "complete")
     built.handoff_path.write_text(
-        json.dumps({"kind": launcher.HANDOFF_KIND, "permissionDigest": "0" * 64, "token": offline.TOKEN})
+        json.dumps(
+            {
+                "kind": launcher.HANDOFF_KIND,
+                "permissionDigest": "0" * 64,
+                "token": offline.TOKEN,
+            }
+        )
     )
     code = launcher.main(built.argv(tmp_path))
     assert code == 1
     assert backend.calls == [] and backend.management_calls == []
     receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
-    assert receipt["failure"] == "ValueError" and receipt["stopPoint"] == "management-preflight"
+    assert (
+        receipt["failure"] == "ValueError"
+        and receipt["stopPoint"] == "management-preflight"
+    )
     assert admission.classify_stop(receipt)["retirableAsNoData"] is True
 
 
@@ -261,7 +326,10 @@ def test_an_early_stop_before_any_create_retires_as_no_data(built, tmp_path):
     before = ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]
     assert before["state"] == "held"
     with pytest.raises(ProcessLookupError):
-        os.kill(json.loads((output / "gate-snapshot.json").read_bytes())["coordinatorPid"], 0)
+        os.kill(
+            json.loads((output / "gate-snapshot.json").read_bytes())["coordinatorPid"],
+            0,
+        )
     record = admission.build_abort_record(output)
     ledger.abort_no_data(receipt["ticket"], record)
     after = ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]
@@ -282,7 +350,9 @@ def test_a_stop_after_the_first_case_recovers_the_created_documents(built, tmp_p
     assert observed == ["idle-expiry/lock-held-before-idle"]
     assert collection["failure"] == "incomplete-response"
     assert collection["unrecovered"] == [] and collection["openTransactions"] == []
-    assert sorted(entry["transaction"] for entry in collection["transactionReleases"]) == ["a", "b", "c", "d"]
+    assert sorted(
+        entry["transaction"] for entry in collection["transactionReleases"]
+    ) == ["a", "b", "c", "d"]
     assert all(entry["released"] for entry in collection["transactionReleases"])
     gate = json.loads((output / "gate-snapshot.json").read_bytes())
     job = gate["jobs"][gate_module.JOB]
@@ -295,21 +365,32 @@ def test_a_stop_after_the_first_case_recovers_the_created_documents(built, tmp_p
     with pytest.raises(ValueError):
         admission.build_abort_record(output)
     ledger = reservations.Ledger(built.ledger)
-    ledger.close_after_abandon(receipt["ticket"], admission.build_abandon_record(output))
+    ledger.close_after_abandon(
+        receipt["ticket"], admission.build_abandon_record(output)
+    )
     final = ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]
     assert final["state"] == "closed-after-abandon"
 
 
 def test_a_rehearsal_receipt_is_never_production_evidence(built, tmp_path):
-    result = _rehearse(built, tmp_path, offline.Backend(), rehearsal=production.Rehearsal(sleep_scale=0.001))
+    result = _rehearse(
+        built,
+        tmp_path,
+        offline.Backend(),
+        rehearsal=production.Rehearsal(sleep_scale=0.001),
+    )
     assert result["reservationReleased"] is True
     receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
     assert receipt["executionKind"] == production.INJECTED_EXECUTION
     with pytest.raises(ValueError):
         production.verify_saved(
-            tmp_path / "output", expected_inputs_digest=built.inputs["inputsDigest"], ledger_root=built.ledger
+            tmp_path / "output",
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
         )
     with pytest.raises(ValueError):
         production.recover_release(
-            tmp_path / "output", expected_inputs_digest=built.inputs["inputsDigest"], ledger_root=built.ledger
+            tmp_path / "output",
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
         )

@@ -34,9 +34,10 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
+from broad_contract import digest
+
 import txn_expiry_admission as admission
 import txn_expiry_descriptor as campaign
-from broad_contract import digest
 
 MAX_HANDOFF_BYTES = 16 * 1024
 HANDOFF_KIND = campaign.HANDOFF_KIND
@@ -60,7 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _read_json(path: Path, *, limit: int = 8 * 1024 * 1024, private: bool = False) -> tuple[dict, bytes]:
+def _read_json(
+    path: Path, *, limit: int = 8 * 1024 * 1024, private: bool = False
+) -> tuple[dict, bytes]:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
         raise ValueError("bounded regular input file required")
     info = path.stat()
@@ -77,7 +80,9 @@ def _read_private_fd(fd: int) -> dict:
     if type(fd) is not int or fd < 0:
         raise ValueError("private credential descriptor required")
     info = os.fstat(fd)
-    if stat.S_ISREG(info.st_mode) and (info.st_uid != os.getuid() or info.st_mode & 0o077):
+    if stat.S_ISREG(info.st_mode) and (
+        info.st_uid != os.getuid() or info.st_mode & 0o077
+    ):
         raise ValueError("private credential descriptor required")
     raw = bytearray()
     deadline = time.monotonic() + 5
@@ -196,7 +201,9 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:  # noqa: BLE001 -- public output must be secret-free.
         uncertain = getattr(args, "execution_may_have_started", False)
         state = "interrupted; reservation may remain held" if uncertain else "refused"
-        print(f"Transaction expiry O8 {state} ({type(error).__name__}).", file=sys.stderr)
+        print(
+            f"Transaction expiry O8 {state} ({type(error).__name__}).", file=sys.stderr
+        )
         return 1 if uncertain else 2
     if result.get("reservationReleased") and result.get("failure") is None:
         return 0

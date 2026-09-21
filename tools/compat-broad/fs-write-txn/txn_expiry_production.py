@@ -46,14 +46,14 @@ sys.path.insert(0, str(HERE))
 
 import reservations
 import shared_gate
+from broad_contract import digest
+from o8_admission import reject_production_transport
+
 import txn_expiry_admission as admission
 import txn_expiry_collector as collector
 import txn_expiry_descriptor as campaign
 import txn_expiry_gate as gate_module
-import txn_expiry_plan as plan_module
 import txn_expiry_preflight as preflight
-from broad_contract import digest
-from o8_admission import reject_production_transport
 
 PRODUCTION_EXECUTION = "fixed-production-wire"
 INJECTED_EXECUTION = "injected-transport"
@@ -74,7 +74,11 @@ class Rehearsal:
 
     def __post_init__(self):
         scale = self.sleep_scale
-        if type(scale) not in (int, float) or isinstance(scale, bool) or not math.isfinite(scale):
+        if (
+            type(scale) not in (int, float)
+            or isinstance(scale, bool)
+            or not math.isfinite(scale)
+        ):
             raise ValueError("finite rehearsal sleep scale required")
         if not 0 < scale <= 1:
             raise ValueError("rehearsal sleep scale must be in (0, 1]")
@@ -103,7 +107,9 @@ def _envelope(permission: dict, claim: dict) -> dict:
 
 
 def _write_receipt(path: Path, receipt: dict) -> None:
-    encoded = json.dumps(receipt, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    encoded = json.dumps(
+        receipt, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
     if len(encoded) > reservations.MAX_BYTES:
         raise ValueError("bounded immutable production evidence required")
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -147,10 +153,14 @@ class GateAdapter:
         self.job = gate_plan["jobs"][gate_module.JOB]
         self.schedule = gate_plan["jobs"][gate_module.JOB]["schedule"]
         self.slot_seconds = {
-            (entry["phase"], entry["index"]): entry["seconds"] for entry in self.schedule
+            (entry["phase"], entry["index"]): entry["seconds"]
+            for entry in self.schedule
         }
         self.sites = {
-            phase: {operation["site"]: index for index, operation in enumerate(self.job[phase])}
+            phase: {
+                operation["site"]: index
+                for index, operation in enumerate(self.job[phase])
+            }
             for phase in ("observation", "recovery")
         }
         self.wire = wire
@@ -161,10 +171,16 @@ class GateAdapter:
         self.stopped = None
 
     def _incomplete(self, reason):
-        return {"complete": False, "code": None, "status": None, "message": None, "blocked": reason}
+        return {
+            "complete": False,
+            "code": None,
+            "status": None,
+            "message": None,
+            "blocked": reason,
+        }
 
     def _locate(self, site):
-        if isinstance(site, str) and (site.startswith("release/") or site.startswith("cleanup/")):
+        if isinstance(site, str) and site.startswith(("release/", "cleanup/")):
             phase = "recovery"
         else:
             phase = "observation"
@@ -191,8 +207,12 @@ class GateAdapter:
         self.recovery_begun = True
         state = self.gate.snapshot()["jobs"][gate_module.JOB]
         if state["observation"] < len(self.job["observation"]):
-            failure = getattr(self.collection, "failure", None) or "observation-incomplete"
-            self.gate.abandon_observation(_bounded_reason(f"collector-stopped:{failure}"))
+            failure = (
+                getattr(self.collection, "failure", None) or "observation-incomplete"
+            )
+            self.gate.abandon_observation(
+                _bounded_reason(f"collector-stopped:{failure}")
+            )
 
     def _skip_until(self, target):
         """Consume the recovery slots before `target` without a wire call."""
@@ -261,7 +281,11 @@ class GateAdapter:
                 gateFailure=type(error).__name__,
             )
             self._record_wire(entry, response)
-            return {**response, "complete": False, "incomplete": response.get("message") or "gate-refused"}
+            return {
+                **response,
+                "complete": False,
+                "incomplete": response.get("message") or "gate-refused",
+            }
         response = answer["response"]
         entry.update(status=status, responseDigest=digest(body))
         self._record_wire(entry, response)
@@ -285,7 +309,9 @@ class GateAdapter:
             self.gate.bind(binds, observed)
 
 
-def run_collection(gate, plan, output, *, transmit, rehearsal=None, clock=time.monotonic, rows=None):
+def run_collection(
+    gate, plan, output, *, transmit, rehearsal=None, clock=time.monotonic, rows=None
+):
     """Drive the reviewed collector through the Gate facade, wall-clock only.
 
     `transmit(request, deadline)` is the wire. A `rehearsal` is admitted only
@@ -294,7 +320,7 @@ def run_collection(gate, plan, output, *, transmit, rehearsal=None, clock=time.m
     """
     if rehearsal is not None:
         if not isinstance(rehearsal, Rehearsal):
-            raise ValueError("rehearsal must be a Rehearsal")  # noqa: TRY004 -- refusal class
+            raise ValueError("rehearsal must be a Rehearsal")
         reject_production_transport(campaign.descriptor(), transmit)
         sleeper = rehearsal.sleeper()
     else:
@@ -304,7 +330,13 @@ def run_collection(gate, plan, output, *, transmit, rehearsal=None, clock=time.m
     rows = [] if rows is None else rows
     adapter = GateAdapter(gate, gate_plan, transmit, rows=rows, clock=clock)
     collection = collector.Collection(
-        options, plan, adapter, sleeper=sleeper, advance=None, monotonic=clock, wall=time.time
+        options,
+        plan,
+        adapter,
+        sleeper=sleeper,
+        advance=None,
+        monotonic=clock,
+        wall=time.time,
     )
     adapter.collection = collection
     receipt = collection.run()
@@ -345,11 +377,15 @@ def _run(
         permissionDigest=digest(permission),
         collectorSourceDigest=generation["collectorSourceDigest"],
     )
-    claim = admission.reservation_claim(inputs, gate_path=output / "gate", gate_plan=gate_plan)
+    claim = admission.reservation_claim(
+        inputs, gate_path=output / "gate", gate_plan=gate_plan
+    )
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     output = output.resolve()
     _write_receipt(output / "inputs.json", inputs)
-    ticket = ledger.reserve(_envelope(permission, claim), claim, gate_plan, generation=generation)
+    ticket = ledger.reserve(
+        _envelope(permission, claim), claim, gate_plan, generation=generation
+    )
     gate = None
     rows = []
     result = None
@@ -377,11 +413,18 @@ def _run(
 
         def transmit(request, deadline):
             response = data_wire(request, management.data_token(deadline), deadline)
-            preflight.preflight.observe_status(management.credential, response.get("httpStatus"))
+            preflight.preflight.observe_status(
+                management.credential, response.get("httpStatus")
+            )
             return response
 
         result = run_collection(
-            gate, plan, output / "collection", transmit=transmit, rehearsal=rehearsal, rows=rows
+            gate,
+            plan,
+            output / "collection",
+            transmit=transmit,
+            rehearsal=rehearsal,
+            rows=rows,
         )
         if result.get("complete"):
             management.run("recovery")
@@ -404,7 +447,9 @@ def _run(
         *sorted((output / "collection").glob("*")),
     ]:
         if path.is_file():
-            evidence[str(path.relative_to(output))] = hashlib.sha256(path.read_bytes()).hexdigest()
+            evidence[str(path.relative_to(output))] = hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
     stop = admission.stop_point(snapshot, ready)
     creating = bool(
         snapshot and shared_gate.creating_outcome(snapshot, gate_module.JOB) != "none"
@@ -446,13 +491,29 @@ def _run(
             "receiptDigest": digest(receipt),
             "ticket": ticket,
             "failure": failure,
-            "reservationFinal": ledger.snapshot()["reservations"][ticket["reservation"]],
+            "reservationFinal": ledger.snapshot()["reservations"][
+                ticket["reservation"]
+            ],
         }
         _write_receipt(output / "release.json", release)
-    return {**receipt, "failure": failure, "reservationReleased": released, "release": release}
+    return {
+        **receipt,
+        "failure": failure,
+        "reservationReleased": released,
+        "release": release,
+    }
 
 
-def execute(*, capability, inputs, permission, credential_reader, ledger_root, output, after_reservation=None):
+def execute(
+    *,
+    capability,
+    inputs,
+    permission,
+    credential_reader,
+    ledger_root,
+    output,
+    after_reservation=None,
+):
     """Execute only the consumed capability's fixed transport; never accept one."""
     if not admission.issued_capability(capability):
         raise ValueError("unissued O7 production capability")
@@ -467,7 +528,9 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         )
 
     def data_wire(request, token, deadline):
-        return capability._transmit(admission.transport_call(request, token, deadline=deadline))
+        return capability._transmit(
+            admission.transport_call(request, token, deadline=deadline)
+        )
 
     def management_wire(value):
         return capability._transmit(value)
@@ -536,7 +599,11 @@ def rehearse(
 
 
 def _read_saved(path):
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > reservations.MAX_BYTES:
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size > reservations.MAX_BYTES
+    ):
         raise ValueError("bounded regular saved evidence required")
     return json.loads(path.read_bytes())
 
@@ -560,7 +627,10 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
     snapshot = _read_saved(output / "gate-snapshot.json")
     if (
         inputs.get("inputsDigest") != expected_inputs_digest
-        or digest({key: value for key, value in inputs.items() if key != "inputsDigest"}) != expected_inputs_digest
+        or digest(
+            {key: value for key, value in inputs.items() if key != "inputsDigest"}
+        )
+        != expected_inputs_digest
         or receipt.get("inputsDigest") != expected_inputs_digest
         or receipt.get("permissionDigest") != digest(inputs["permission"])
         or receipt.get("campaignPlanDigest") != inputs["planDigest"]
@@ -596,12 +666,16 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
     ):
         raise ValueError("saved Ledger release binding differs")
     evidence = receipt.get("evidenceFiles")
-    if not isinstance(evidence, dict) or not {
-        "inputs.json",
-        "routes.json",
-        "gate-snapshot.json",
-        "collection/result.json",
-    } <= evidence.keys():
+    if (
+        not isinstance(evidence, dict)
+        or not {
+            "inputs.json",
+            "routes.json",
+            "gate-snapshot.json",
+            "collection/result.json",
+        }
+        <= evidence.keys()
+    ):
         raise ValueError("saved evidence inventory incomplete")
     for name, expected in evidence.items():
         relative = Path(name)
@@ -662,7 +736,9 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
 
 def verify_saved(output, *, expected_inputs_digest, ledger_root):
     """Require a persisted release record and verify its complete evidence chain."""
-    return _verify_saved(output, expected_inputs_digest=expected_inputs_digest, ledger_root=ledger_root)
+    return _verify_saved(
+        output, expected_inputs_digest=expected_inputs_digest, ledger_root=ledger_root
+    )
 
 
 def recover_release(output, *, expected_inputs_digest, ledger_root):
@@ -677,7 +753,17 @@ def recover_release(output, *, expected_inputs_digest, ledger_root):
     ledger = reservations.Ledger(ledger_root)
     ledger.bound_claim(receipt["ticket"])
     final = ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]
-    release = {"receiptDigest": digest(receipt), "ticket": receipt["ticket"], "failure": None, "reservationFinal": final}
-    _verify_saved(output, expected_inputs_digest=expected_inputs_digest, ledger_root=ledger_root, release=release)
+    release = {
+        "receiptDigest": digest(receipt),
+        "ticket": receipt["ticket"],
+        "failure": None,
+        "reservationFinal": final,
+    }
+    _verify_saved(
+        output,
+        expected_inputs_digest=expected_inputs_digest,
+        ledger_root=ledger_root,
+        release=release,
+    )
     _write_receipt(release_path, release)
     return release

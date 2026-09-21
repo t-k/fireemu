@@ -23,13 +23,14 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
+from batch_contract import database_evidence
+from broad_contract import digest
+from o8_campaign import CAMPAIGN_APPROVAL_FIELDS
+
 import txn_expiry_admission as admission
 import txn_expiry_descriptor as campaign
 import txn_expiry_o8
 import txn_expiry_plan as plan_module
-from batch_contract import database_evidence
-from broad_contract import digest
-from o8_campaign import CAMPAIGN_APPROVAL_FIELDS
 
 commit_baseline = campaign.commit_baseline
 
@@ -110,7 +111,12 @@ def test_the_plan_reference_names_exactly_one_compiled_plan():
 
 def test_the_source_map_names_every_campaign_entry():
     sources = campaign.source_map()
-    for entry in (campaign.COLLECTOR_ENTRY, campaign.COMPARATOR_ENTRY, campaign.WORKER_ENTRY, campaign.GATE_ENTRY):
+    for entry in (
+        campaign.COLLECTOR_ENTRY,
+        campaign.COMPARATOR_ENTRY,
+        campaign.WORKER_ENTRY,
+        campaign.GATE_ENTRY,
+    ):
         assert sources[entry] == hashlib.sha256((ROOT / entry).read_bytes()).hexdigest()
     assert any(Path(name).name.startswith("test_") for name in sources)
     import txn_expiry_remote_transport as remote
@@ -128,7 +134,15 @@ def frozen_checkout(tmp_path):
     for args in (
         ["init", "-q"],
         ["add", "-A"],
-        ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"],
+        [
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
     ):
         subprocess.run(["git", "-C", str(source), *args], check=True)
     return source
@@ -149,7 +163,9 @@ def owner_permission(plan, commit, artifact_digest, inputs):
             "subject": "offline-subject",
             "requiredScopes": ["https://www.googleapis.com/auth/cloud-platform"],
         },
-        "databaseProjectionDigest": database_evidence(DATABASE_BODY)["projectionDigest"],
+        "databaseProjectionDigest": database_evidence(DATABASE_BODY)[
+            "projectionDigest"
+        ],
         "authConfigDigest": digest(AUTH_BODY),
         "baselineProvenance": provenance,
         "issuedAt": time.time() - 1,
@@ -189,7 +205,10 @@ class Admission:
         (self.ledger / "state.json").write_text(
             json.dumps({"kind": "shared-ledger", "envelopes": {}, "reservations": {}})
         )
-        self.manifest = {"kind": campaign.MANIFEST_KIND, "inputsDigest": self.inputs["inputsDigest"]}
+        self.manifest = {
+            "kind": campaign.MANIFEST_KIND,
+            "inputsDigest": self.inputs["inputsDigest"],
+        }
         self.manifest_bytes = json.dumps(self.manifest).encode()
         self.manifest_path = tmp_path / "manifest.json"
         self.manifest_path.write_bytes(self.manifest_bytes)
@@ -201,7 +220,13 @@ class Admission:
         self.approval_path.chmod(0o600)
         self.handoff_path = tmp_path / "handoff.json"
         self.handoff_path.write_text(
-            json.dumps({"kind": txn_expiry_o8.HANDOFF_KIND, "permissionDigest": digest(self.permission), "token": TOKEN})
+            json.dumps(
+                {
+                    "kind": txn_expiry_o8.HANDOFF_KIND,
+                    "permissionDigest": digest(self.permission),
+                    "token": TOKEN,
+                }
+            )
         )
         self.handoff_path.chmod(0o600)
 
@@ -219,7 +244,9 @@ class Admission:
             "planDigest": self.inputs["planDigest"],
             "nonceDigest": digest(self.plan["nonce"]),
             "ledgerRoot": str(self.ledger.resolve(strict=False)),
-            "launcherSha256": hashlib.sha256(self.launcher_path.read_bytes()).hexdigest(),
+            "launcherSha256": hashlib.sha256(
+                self.launcher_path.read_bytes()
+            ).hexdigest(),
             "artifactProfile": campaign.artifact_profile(),
             "campaignId": CAMPAIGN_ID,
             "windowStartsAt": now - 1,
@@ -246,15 +273,24 @@ class Admission:
         inputs_path = tmp_path / "inputs.json"
         inputs_path.write_text(json.dumps(self.inputs))
         return [
-            "--inputs", str(inputs_path),
-            "--approval", str(self.approval_path),
-            "--manifest", str(self.manifest_path),
-            "--permission", str(self.permission_path),
-            "--source", str(self.source),
-            "--artifact", str(self.artifact_path),
-            "--ledger", str(self.ledger),
-            "--output", str(tmp_path / "output"),
-            "--credential-file", str(self.handoff_path),
+            "--inputs",
+            str(inputs_path),
+            "--approval",
+            str(self.approval_path),
+            "--manifest",
+            str(self.manifest_path),
+            "--permission",
+            str(self.permission_path),
+            "--source",
+            str(self.source),
+            "--artifact",
+            str(self.artifact_path),
+            "--ledger",
+            str(self.ledger),
+            "--output",
+            str(tmp_path / "output"),
+            "--credential-file",
+            str(self.handoff_path),
         ]
 
 
@@ -317,7 +353,10 @@ def test_a_permission_that_does_not_bind_the_campaign_is_refused(tmp_path, damag
     built.permission_path.write_text(json.dumps({**built.permission, **damage}))
     with pytest.raises(ValueError):
         admission.freeze_inputs(
-            built.permission_path, built.plan, source_root=built.source, artifact_path=built.artifact_path
+            built.permission_path,
+            built.plan,
+            source_root=built.source,
+            artifact_path=built.artifact_path,
         )
 
 
@@ -345,12 +384,21 @@ def test_another_campaigns_approval_is_refused(tmp_path):
         {"windowExpiresAt": time.time() + 60},
         {"executionHost": {"platform": "linux", "machine": "x86_64"}},
     ],
-    ids=["not-approved", "wrong-profile", "wrong-ledger", "wrong-launcher", "short-window", "wrong-host"],
+    ids=[
+        "not-approved",
+        "wrong-profile",
+        "wrong-ledger",
+        "wrong-launcher",
+        "short-window",
+        "wrong-host",
+    ],
 )
 def test_an_approval_binding_that_differs_is_refused(tmp_path, damage):
     built = Admission(tmp_path)
     with pytest.raises(ValueError):
-        admission.validate_o7_admission(**built.bindings(approval={**built.approval, **damage}))
+        admission.validate_o7_admission(
+            **built.bindings(approval={**built.approval, **damage})
+        )
 
 
 def test_a_drifted_source_is_refused_before_any_wire(tmp_path):
@@ -370,7 +418,9 @@ def test_fresh_admission_refuses_a_reserved_nonce_or_spent_permission(tmp_path):
     with pytest.raises(ValueError, match="nonce already reserved"):
         admission.validate_fresh_admission(built.ledger, built.plan, built.permission)
     state["reservations"] = {}
-    state["envelopes"]["e"] = {"envelope": {"permissionDigest": digest(built.permission)}}
+    state["envelopes"]["e"] = {
+        "envelope": {"permissionDigest": digest(built.permission)}
+    }
     (built.ledger / "state.json").write_text(json.dumps(state))
     with pytest.raises(ValueError, match="permission already spent"):
         admission.validate_fresh_admission(built.ledger, built.plan, built.permission)
@@ -389,7 +439,9 @@ def test_the_gate_plan_fits_the_shared_gate_and_the_ledger_claim(tmp_path):
     assert gate_plan["recoverySeconds"] == 240
     assert sum(1 for entry in job["schedule"] if entry.get("creates") is False) == 27
     shared_gate.create(tmp_path / "gate", gate_plan)
-    claim = admission.reservation_claim(built.inputs, gate_path=tmp_path / "claimed-gate", gate_plan=gate_plan)
+    claim = admission.reservation_claim(
+        built.inputs, gate_path=tmp_path / "claimed-gate", gate_plan=gate_plan
+    )
     assert claim["durationSeconds"] == 1200
     assert claim["gateJob"] == campaign.JOB
     reservations._claim(claim)
@@ -397,14 +449,28 @@ def test_the_gate_plan_fits_the_shared_gate_and_the_ledger_claim(tmp_path):
 
 def test_the_handoff_must_bind_the_permission(tmp_path):
     built = Admission(tmp_path)
-    assert txn_expiry_o8.validate_handoff(json.loads(built.handoff_path.read_text()), built.permission) == TOKEN
+    assert (
+        txn_expiry_o8.validate_handoff(
+            json.loads(built.handoff_path.read_text()), built.permission
+        )
+        == TOKEN
+    )
     with pytest.raises(ValueError):
         txn_expiry_o8.validate_handoff(
-            {"kind": txn_expiry_o8.HANDOFF_KIND, "permissionDigest": "0" * 64, "token": TOKEN}, built.permission
+            {
+                "kind": txn_expiry_o8.HANDOFF_KIND,
+                "permissionDigest": "0" * 64,
+                "token": TOKEN,
+            },
+            built.permission,
         )
     with pytest.raises(ValueError):
         txn_expiry_o8.validate_handoff(
-            {"kind": "request-bytes-bearer-token-v1", "permissionDigest": digest(built.permission), "token": TOKEN},
+            {
+                "kind": "request-bytes-bearer-token-v1",
+                "permissionDigest": digest(built.permission),
+                "token": TOKEN,
+            },
             built.permission,
         )
 

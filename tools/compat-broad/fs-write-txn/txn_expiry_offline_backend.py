@@ -27,8 +27,9 @@ ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(HERE))
 
-import txn_expiry_cases as cases
 from broad_contract import digest
+
+import txn_expiry_cases as cases
 from txn_expiry_remote_transport import normalize
 
 TOKEN = "offline-fixture-token"
@@ -84,7 +85,9 @@ class Backend:
 
     def _error(self, code, message):
         status = HTTP[code]
-        return status, {"error": {"code": status, "status": cases.CODES[code], "message": message}}
+        return status, {
+            "error": {"code": status, "status": cases.CODES[code], "message": message}
+        }
 
     def answer(self, request):
         """(status, body) for one collector request."""
@@ -108,22 +111,45 @@ class Backend:
                     current = self.documents.get(write["delete"])
                     if current is None:
                         return self._error(5, "No document to update")
-                    if write.get("currentDocument", {}).get("updateTime") != current["updateTime"]:
-                        return 400, {"error": {"code": 400, "status": "FAILED_PRECONDITION", "message": "stale"}}
+                    if (
+                        write.get("currentDocument", {}).get("updateTime")
+                        != current["updateTime"]
+                    ):
+                        return 400, {
+                            "error": {
+                                "code": 400,
+                                "status": "FAILED_PRECONDITION",
+                                "message": "stale",
+                            }
+                        }
                     del self.documents[write["delete"]]
                     results.append({})
                     continue
                 name = write["update"]["name"]
-                if write.get("currentDocument") == {"exists": False} and name in self.documents:
-                    return 409, {"error": {"code": 409, "status": "ALREADY_EXISTS", "message": "exists"}}
+                if (
+                    write.get("currentDocument") == {"exists": False}
+                    and name in self.documents
+                ):
+                    return 409, {
+                        "error": {
+                            "code": 409,
+                            "status": "ALREADY_EXISTS",
+                            "message": "exists",
+                        }
+                    }
                 version = self._version()
-                self.documents[name] = {"fields": write["update"]["fields"], "updateTime": version}
+                self.documents[name] = {
+                    "fields": write["update"]["fields"],
+                    "updateTime": version,
+                }
                 results.append({"updateTime": version})
             return 200, {"writeResults": results, "commitTime": VERSION}
         if rpc == "GetDocument":
             document = self.documents.get(request["name"])
             if document is None:
-                return 404, {"error": {"code": 404, "status": "NOT_FOUND", "message": "missing"}}
+                return 404, {
+                    "error": {"code": 404, "status": "NOT_FOUND", "message": "missing"}
+                }
             return 200, {
                 "name": request["name"],
                 "fields": document["fields"],
@@ -177,18 +203,41 @@ class Backend:
         slot = value["slot"]
         if slot == "oauth-tokeninfo":
             if self.mode == "tokeninfo-401":
-                return {"status": 401, "complete": True, "workerReaped": True, "bodyKind": "json", "body": {"error": "invalid_token"}}
-            body = {"issued_to": CLIENT_ID, "user_id": SUBJECT, "scope": SCOPE, "expires_in": 3600}
+                return {
+                    "status": 401,
+                    "complete": True,
+                    "workerReaped": True,
+                    "bodyKind": "json",
+                    "body": {"error": "invalid_token"},
+                }
+            body = {
+                "issued_to": CLIENT_ID,
+                "user_id": SUBJECT,
+                "scope": SCOPE,
+                "expires_in": 3600,
+            }
         else:
-            body = {"project": PROJECT_BODY, "database": DATABASE_BODY, "auth": AUTH_BODY}[slot]
-        return {"status": 200, "complete": True, "workerReaped": True, "bodyKind": "json", "body": body}
+            body = {
+                "project": PROJECT_BODY,
+                "database": DATABASE_BODY,
+                "auth": AUTH_BODY,
+            }[slot]
+        return {
+            "status": 200,
+            "complete": True,
+            "workerReaped": True,
+            "bodyKind": "json",
+            "body": body,
+        }
 
 
 def permission_baselines():
     from batch_contract import database_evidence
 
     return {
-        "databaseProjectionDigest": database_evidence(DATABASE_BODY)["projectionDigest"],
+        "databaseProjectionDigest": database_evidence(DATABASE_BODY)[
+            "projectionDigest"
+        ],
         "authConfigDigest": digest(AUTH_BODY),
     }
 
@@ -212,7 +261,15 @@ def install(mode="complete"):
     def management_transport(slot, token, *, deadline, **_kwargs):
         # The phase is not part of the reviewed transport's signature; the
         # backend only needs the slot.
-        return backend.management({"kind": "management", "phase": "patched", "slot": slot, "token": token, "deadline": deadline})
+        return backend.management(
+            {
+                "kind": "management",
+                "phase": "patched",
+                "slot": slot,
+                "token": token,
+                "deadline": deadline,
+            }
+        )
 
     remote.request = request
     txn_expiry_preflight.preflight.management_transport = management_transport

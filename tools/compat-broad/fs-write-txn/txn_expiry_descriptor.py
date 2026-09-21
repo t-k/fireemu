@@ -39,6 +39,11 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
+from batch_contract import NUMBER, PROJECT
+from broad_contract import digest
+from o8_admission import authorize_transport
+from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
+
 import txn_expiry_cases as cases
 import txn_expiry_collector as collector
 import txn_expiry_comparison as comparison
@@ -46,10 +51,6 @@ import txn_expiry_gate as gate_module
 import txn_expiry_plan as plan_module
 import txn_expiry_preflight as preflight
 import txn_expiry_remote_transport as remote
-from batch_contract import NUMBER, PROJECT
-from broad_contract import digest
-from o8_admission import authorize_transport
-from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
 
 
 def _load(name: str, path: Path):
@@ -79,7 +80,9 @@ APPROVAL_KIND = "txn-expiry-o8-approval-v1"
 MANIFEST_KIND = "txn-expiry-o8-manifest-v1"
 RECEIPT_KIND = "txn-expiry-acquisition-receipt-v1"
 HANDOFF_KIND = "txn-expiry-bearer-token-v1"
-SHADOW_RECORD = "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json"
+SHADOW_RECORD = (
+    "spec/compatibility/broad-runs/fs-transaction-expiry-retry-04-local-shadow-v3.json"
+)
 PRINCIPAL_SCOPE = preflight.SCOPE
 
 LANE_DIRECTORY = "tools/compat-broad/fs-write-txn"
@@ -159,7 +162,9 @@ def owner_id_for(nonce: str) -> str:
     """
     if not isinstance(nonce, str) or _NONCE.fullmatch(nonce) is None:
         raise ValueError("32-character lowercase hex nonce required")
-    return hashlib.sha256(f"{plan_module.CAMPAIGN_SEGMENT}:{nonce}".encode()).hexdigest()[:32]
+    return hashlib.sha256(
+        f"{plan_module.CAMPAIGN_SEGMENT}:{nonce}".encode()
+    ).hexdigest()[:32]
 
 
 def owned_scope(nonce: str) -> str:
@@ -170,7 +175,9 @@ def owned_scope(nonce: str) -> str:
 
 
 def resource_name(nonce: str, role: str) -> str:
-    return collector.document_name(PROJECT, DATABASE, f"{plan_module.document_prefix(nonce)}/{role}")
+    return collector.document_name(
+        PROJECT, DATABASE, f"{plan_module.document_prefix(nonce)}/{role}"
+    )
 
 
 _PLAN_CACHE: dict[str, tuple[dict, str]] = {}
@@ -292,8 +299,12 @@ def frozen_bounds() -> dict:
         "distinctResources": int(plan["budget"]["resources"]),
         "maxRequestBytes": int(plan["bounds"]["maxRequestBytes"]),
         "maxResponseBytes": int(plan["bounds"]["maxResponseBytes"]),
-        "defaultRequestTimeoutSeconds": int(plan["bounds"]["defaultRequestTimeoutSeconds"]),
-        "contendedRequestTimeoutSeconds": int(plan_module.CONTENDED_REQUEST_TIMEOUT_SECONDS),
+        "defaultRequestTimeoutSeconds": int(
+            plan["bounds"]["defaultRequestTimeoutSeconds"]
+        ),
+        "contendedRequestTimeoutSeconds": int(
+            plan_module.CONTENDED_REQUEST_TIMEOUT_SECONDS
+        ),
         "worstCaseSeconds": int(plan["bounds"]["worstCaseSeconds"]),
         "observationDeadlineSeconds": OBSERVATION_DEADLINE_SECONDS,
         "gateWallSeconds": GATE_WALL_SECONDS,
@@ -341,7 +352,9 @@ def _marker(plan: dict, role: str, state: str) -> dict:
 
 
 def _name(plan: dict, role: str) -> str:
-    return collector.document_name(plan["projectId"], plan["database"], f"{plan['documentPrefix']}/{role}")
+    return collector.document_name(
+        plan["projectId"], plan["database"], f"{plan['documentPrefix']}/{role}"
+    )
 
 
 def _rpc_path(plan: dict, rpc: str) -> str:
@@ -379,18 +392,37 @@ def _post(plan: dict, step: dict, *, kind: str, body: dict, **extra) -> dict:
 
 
 def _begin(plan: dict, step: dict, options: dict) -> dict:
-    return _post(plan, step, kind="begin", body={"options": options}, binds=f"txn:{_tag_of(step)}")
+    return _post(
+        plan,
+        step,
+        kind="begin",
+        body={"options": options},
+        binds=f"txn:{_tag_of(step)}",
+    )
 
 
 def _rollback(plan: dict, step: dict, tag: str) -> dict:
-    return _post(plan, step, kind="rollback", body={"transaction": _placeholder(f"txn:{tag}")})
+    return _post(
+        plan, step, kind="rollback", body={"transaction": _placeholder(f"txn:{tag}")}
+    )
 
 
 def _update(plan: dict, step: dict, role: str, state: str, tag: str | None) -> dict:
-    body = {"writes": [{"update": {"name": _name(plan, role), "fields": _marker(plan, role, state)}}]}
+    body = {
+        "writes": [
+            {
+                "update": {
+                    "name": _name(plan, role),
+                    "fields": _marker(plan, role, state),
+                }
+            }
+        ]
+    }
     if tag is not None:
         body["transaction"] = _placeholder(f"txn:{tag}")
-    return _post(plan, step, kind="commit-update", body=body, resource=_name(plan, role))
+    return _post(
+        plan, step, kind="commit-update", body=body, resource=_name(plan, role)
+    )
 
 
 def _observation_operation(plan: dict, step: dict) -> dict:
@@ -409,7 +441,10 @@ def _observation_operation(plan: dict, step: dict) -> dict:
         body = {
             "writes": [
                 {
-                    "update": {"name": _name(plan, role), "fields": _marker(plan, role, "created")},
+                    "update": {
+                        "name": _name(plan, role),
+                        "fields": _marker(plan, role, "created"),
+                    },
                     "currentDocument": {"exists": False},
                 }
             ]
@@ -444,11 +479,17 @@ def _observation_operation(plan: dict, step: dict) -> dict:
     if slot.startswith(("finished/commit/", "retry/commit/")):
         return _update(plan, step, step["role"], f"finished-{tag}", tag)
     if slot == "retry/rolled-back-previous":
-        return _begin(plan, step, {"readWrite": {"retryTransaction": _placeholder("txn:g")}})
+        return _begin(
+            plan, step, {"readWrite": {"retryTransaction": _placeholder("txn:g")}}
+        )
     if slot == "retry/committed-previous":
-        return _begin(plan, step, {"readWrite": {"retryTransaction": _placeholder("txn:i")}})
+        return _begin(
+            plan, step, {"readWrite": {"retryTransaction": _placeholder("txn:i")}}
+        )
     if slot == "retry/read-only-previous":
-        return _begin(plan, step, {"readWrite": {"retryTransaction": _placeholder("txn:j")}})
+        return _begin(
+            plan, step, {"readWrite": {"retryTransaction": _placeholder("txn:j")}}
+        )
     if slot == "retry/unissued-previous":
         token = _b64(plan_module.unissued_retry_token(plan["nonce"]))
         return _begin(plan, step, {"readWrite": {"retryTransaction": token}})
@@ -554,9 +595,17 @@ def gate_plan(plan: dict, *, wall_seconds: int | None = None) -> dict:
     recovery = _recovery_operations(plan)
     schedule = []
     for index, (step, operation) in enumerate(
-        zip([s for s in plan["operations"] if s["phase"] != "cleanup"], observation, strict=True)
+        zip(
+            [s for s in plan["operations"] if s["phase"] != "cleanup"],
+            observation,
+            strict=True,
+        )
     ):
-        entry = {"phase": "observation", "index": index, "seconds": step["timeoutSeconds"]}
+        entry = {
+            "phase": "observation",
+            "index": index,
+            "seconds": step["timeoutSeconds"],
+        }
         if operation["method"] == "GET":
             entry["creates"] = False
         schedule.append(entry)
@@ -572,17 +621,27 @@ def gate_plan(plan: dict, *, wall_seconds: int | None = None) -> dict:
         recovery_window=GATE_RECOVERY_SECONDS,
     )
     observation_time = math.ceil(
-        sum(entry["seconds"] + GATE_INTERVAL_SECONDS for entry in schedule if entry["phase"] == "observation")
+        sum(
+            entry["seconds"] + GATE_INTERVAL_SECONDS
+            for entry in schedule
+            if entry["phase"] == "observation"
+        )
     )
     recovery_time = math.ceil(
-        sum(entry["seconds"] + GATE_INTERVAL_SECONDS for entry in schedule if entry["phase"] == "recovery")
+        sum(
+            entry["seconds"] + GATE_INTERVAL_SECONDS
+            for entry in schedule
+            if entry["phase"] == "recovery"
+        )
         + management["phaseSeconds"]["recovery"]
     )
     if (
         not 0 < GATE_RECOVERY_SECONDS < wall
         or recovery_time > GATE_RECOVERY_SECONDS
-        or observation_time + management["phaseSeconds"]["observation"] > wall - GATE_RECOVERY_SECONDS
-        or OBSERVATION_DEADLINE_SECONDS + MANAGEMENT_PREFLIGHT_ALLOWANCE_SECONDS > wall - GATE_RECOVERY_SECONDS
+        or observation_time + management["phaseSeconds"]["observation"]
+        > wall - GATE_RECOVERY_SECONDS
+        or OBSERVATION_DEADLINE_SECONDS + MANAGEMENT_PREFLIGHT_ALLOWANCE_SECONDS
+        > wall - GATE_RECOVERY_SECONDS
         or plan["bounds"]["recoverySeconds"] > GATE_RECOVERY_SECONDS
     ):
         raise ValueError(
@@ -604,7 +663,8 @@ def gate_plan(plan: dict, *, wall_seconds: int | None = None) -> dict:
         "intervalSeconds": GATE_INTERVAL_SECONDS,
         "observationRequests": len(observation) + len(preflight.OBSERVATION_SLOTS),
         "dataRequests": len(observation) + len(recovery),
-        "managementRequests": len(preflight.OBSERVATION_SLOTS) + len(preflight.RECOVERY_SLOTS),
+        "managementRequests": len(preflight.OBSERVATION_SLOTS)
+        + len(preflight.RECOVERY_SLOTS),
         "requestCostMicrousd": REQUEST_COST_MICROUSD,
         "fixedCostMicrousd": int(plan["budget"]["networkMicrousd"]),
         "costMicrousd": int(plan["budget"]["costMicrousd"]),
@@ -628,7 +688,9 @@ def gate_plan(plan: dict, *, wall_seconds: int | None = None) -> dict:
 
 def lane_sources() -> tuple[str, ...]:
     directory = ROOT / LANE_DIRECTORY
-    return tuple(sorted(f"{LANE_DIRECTORY}/{path.name}" for path in directory.glob("*.py")))
+    return tuple(
+        sorted(f"{LANE_DIRECTORY}/{path.name}" for path in directory.glob("*.py"))
+    )
 
 
 def source_map() -> dict[str, str]:
@@ -707,7 +769,10 @@ def retained_artifact_validator(artifact_path, manifest_path, profile):
     if profile != artifact_profile():
         raise ValueError("retained artifact profile differs")
     values = {}
-    for key, path in (("artifactSha256", artifact_path), ("retainedManifestSha256", manifest_path)):
+    for key, path in (
+        ("artifactSha256", artifact_path),
+        ("retainedManifestSha256", manifest_path),
+    ):
         path = Path(path)
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
             raise ValueError("retained regular artifact required")
@@ -742,7 +807,7 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
     require the admitted capability and the reviewed worker binding.
     """
     if not isinstance(value, dict):
-        raise ValueError("closed transaction expiry wire call required")
+        raise ValueError("closed transaction expiry wire call required")  # noqa: TRY004 -- admission boundary collapses malformed input to one refusal class
     if capability is None:
         raise ValueError("active O7 production capability required")
     authorize_transport(capability, binding=binding, binding_digest=binding_digest)
@@ -751,10 +816,17 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
         return preflight.management_transport(
             value, capability=capability, binding=binding, binding_digest=binding_digest
         )
-    if set(value) != {"kind", "request", "token", "deadline"} or value["kind"] != "data":
+    if (
+        set(value) != {"kind", "request", "token", "deadline"}
+        or value["kind"] != "data"
+    ):
         raise ValueError("closed transaction expiry wire call required")
     deadline = value["deadline"]
-    if type(deadline) not in (int, float) or isinstance(deadline, bool) or not math.isfinite(deadline):
+    if (
+        type(deadline) not in (int, float)
+        or isinstance(deadline, bool)
+        or not math.isfinite(deadline)
+    ):
         raise ValueError("finite absolute deadline required")
     return remote.request(
         {"request": value["request"], "token": value["token"]},
@@ -770,7 +842,9 @@ def forbidden_transports():
     return (remote, remote.request, remote._run_process_exchange, transport_bound)
 
 
-def collector_options(plan: dict, *, target: str = "production", host: str | None = None, port=None) -> dict:
+def collector_options(
+    plan: dict, *, target: str = "production", host: str | None = None, port=None
+) -> dict:
     """The collector options one execution runs under. Wall-clock timing only."""
     return {
         "target": target,
@@ -908,7 +982,12 @@ def descriptor() -> CampaignDescriptor:
         recovery_seconds=recovery_seconds(),
         source_map=source_map,
         abort_closure_sources=ABORT_CLOSURE_SOURCES,
-        required_source_entries=(COLLECTOR_ENTRY, COMPARATOR_ENTRY, WORKER_ENTRY, GATE_ENTRY),
+        required_source_entries=(
+            COLLECTOR_ENTRY,
+            COMPARATOR_ENTRY,
+            WORKER_ENTRY,
+            GATE_ENTRY,
+        ),
         frozen_bounds=frozen_bounds(),
         budget=budget(),
         plan_compiler=plan_compiler,

@@ -39,11 +39,12 @@ sys.path.insert(0, str(HERE.parents[0]))
 sys.path.insert(0, str(HERE))
 
 import shared_gate
+from broad_contract import digest
+from shared_gate import ZERO_WIRE_REASON, _save, job_schedule, unconfirmed_creates
+
 import txn_expiry_cases as cases
 import txn_expiry_collector as collector
 import txn_expiry_plan as plan_module
-from broad_contract import digest
-from shared_gate import ZERO_WIRE_REASON, _save, job_schedule, unconfirmed_creates
 
 JOB = "txn-expiry-04"
 PLACEHOLDER = "$binding:"
@@ -119,7 +120,10 @@ def validate_plan(plan):
     job = plan["jobs"][JOB]
     if job_schedule(job) is None:
         raise ValueError("a declared schedule is required")
-    for phase, kinds in (("observation", OBSERVATION_KINDS), ("recovery", RECOVERY_KINDS)):
+    for phase, kinds in (
+        ("observation", OBSERVATION_KINDS),
+        ("recovery", RECOVERY_KINDS),
+    ):
         for operation in job[phase]:
             if (
                 not isinstance(operation, dict)
@@ -183,13 +187,27 @@ class TxnGate(shared_gate.Gate):
         """
         if isinstance(declared, str) and declared.startswith(PLACEHOLDER):
             name = declared.removeprefix(PLACEHOLDER)
-            if name not in self.bindings or type(value) is not str or value != self.bindings[name]:
+            if (
+                name not in self.bindings
+                or type(value) is not str
+                or value != self.bindings[name]
+            ):
                 raise ValueError("runtime binding differs from the frozen slot")
             return declared
         if isinstance(value, dict) and isinstance(declared, dict):
-            return {key: self._template(item, declared.get(key)) for key, item in value.items()}
-        if isinstance(value, list) and isinstance(declared, list) and len(value) == len(declared):
-            return [self._template(item, expected) for item, expected in zip(value, declared, strict=True)]
+            return {
+                key: self._template(item, declared.get(key))
+                for key, item in value.items()
+            }
+        if (
+            isinstance(value, list)
+            and isinstance(declared, list)
+            and len(value) == len(declared)
+        ):
+            return [
+                self._template(item, expected)
+                for item, expected in zip(value, declared, strict=True)
+            ]
         return copy.deepcopy(value)
 
     # -- admission -----------------------------------------------------------
@@ -206,7 +224,7 @@ class TxnGate(shared_gate.Gate):
 
     def dispatch(self, operation, recovery, send):
         if not isinstance(operation, dict):
-            raise ValueError("closed request operation required")
+            raise ValueError("closed request operation required")  # noqa: TRY004 -- admission boundary collapses malformed input to one refusal class
         _index, declared = self.declared_slot(recovery)
         normalized = self._template(operation, declared)
         if recovery and declared["kind"] in RPC_RECOVERY_KINDS:
@@ -249,11 +267,13 @@ class TxnGate(shared_gate.Gate):
             management = plan.get("management", {})
             if management.get("dispatchKind") == "closed-v1":
                 expected_management = [
-                    "observation:" + entry["id"] for entry in management.get("observation", [])
+                    "observation:" + entry["id"]
+                    for entry in management.get("observation", [])
                 ]
                 events = state["managementEvents"][: len(expected_management)]
                 if (
-                    state["managementUsed"][: len(expected_management)] != expected_management
+                    state["managementUsed"][: len(expected_management)]
+                    != expected_management
                     or len(events) != len(expected_management)
                     or any(
                         event.get("completed") is not True
@@ -261,9 +281,14 @@ class TxnGate(shared_gate.Gate):
                         or not 200 <= event["status"] < 300
                         for event in events
                     )
-                    or any(identity.startswith("recovery:") for identity in state["managementUsed"])
+                    or any(
+                        identity.startswith("recovery:")
+                        for identity in state["managementUsed"]
+                    )
                 ):
-                    raise ValueError("closed management preflight incomplete or postflight begun")
+                    raise ValueError(
+                        "closed management preflight incomplete or postflight begun"
+                    )
             operations = plan["jobs"][self.job]["recovery"]
             index = job["recovery"]
             if index >= len(operations):
@@ -271,7 +296,10 @@ class TxnGate(shared_gate.Gate):
             schedule = job_schedule(plan["jobs"][self.job])
             cursor = job["scheduleDone"]
             if job.get("stopReason") is not None:
-                while cursor < len(schedule) and schedule[cursor]["phase"] == "observation":
+                while (
+                    cursor < len(schedule)
+                    and schedule[cursor]["phase"] == "observation"
+                ):
                     cursor += 1
                     job["skippedByStop"] += 1
                 job["scheduleDone"] = cursor
@@ -279,7 +307,9 @@ class TxnGate(shared_gate.Gate):
             if slot is None or slot["phase"] != "recovery" or slot["index"] != index:
                 raise ValueError("dispatch outside the frozen execution schedule")
             expected = operations[index]
-            if expected.get("kind") not in RPC_RECOVERY_KINDS or digest(operation) != digest(expected):
+            if expected.get("kind") not in RPC_RECOVERY_KINDS or digest(
+                operation
+            ) != digest(expected):
                 raise ValueError("request outside closed scenario")
             seconds = shared_gate.slot_seconds(slot, shared_gate.request_seconds(plan))
             now = time.monotonic()
@@ -315,7 +345,9 @@ class TxnGate(shared_gate.Gate):
                 "completed": False,
             }
             state["events"].append(event)
-            _save(self.path, state)  # crash spends capacity and retains uncertain ownership
+            _save(
+                self.path, state
+            )  # crash spends capacity and retains uncertain ownership
             try:
                 result = send()
             except Exception as error:
@@ -329,11 +361,15 @@ class TxnGate(shared_gate.Gate):
                     job["stopped"] = True
                     raise ValueError("typed HTTP status required")
                 self._record_response(state, operation, True, event, status, body)
-                job["captures"][str(index)] = self._recovery_capture(operation, status, body)
+                job["captures"][str(index)] = self._recovery_capture(
+                    operation, status, body
+                )
                 return result
             finally:
                 interruption = sys.exc_info()[0]
-                job["inflight"] = interruption is not None and not issubclass(interruption, Exception)
+                job["inflight"] = interruption is not None and not issubclass(
+                    interruption, Exception
+                )
                 event["ended"] = time.monotonic()
                 state["lastSent"] = event["ended"]
                 _save(self.path, state)
@@ -373,7 +409,10 @@ class TxnGate(shared_gate.Gate):
         the slot is the next one in the frozen order, the same facts the
         shared skip checks.
         """
-        if not isinstance(reason, str) or not 0 < len(reason) <= shared_gate.MAX_STOP_REASON:
+        if (
+            not isinstance(reason, str)
+            or not 0 < len(reason) <= shared_gate.MAX_STOP_REASON
+        ):
             raise ValueError("bounded skip reason required")
         with self.locked() as state:
             job, plan = state["jobs"][self.job], state["plan"]
@@ -390,7 +429,10 @@ class TxnGate(shared_gate.Gate):
             index = job["recovery"]
             cursor = job["scheduleDone"]
             if job.get("stopReason") is not None:
-                while cursor < len(schedule) and schedule[cursor]["phase"] == "observation":
+                while (
+                    cursor < len(schedule)
+                    and schedule[cursor]["phase"] == "observation"
+                ):
                     cursor += 1
                     job["skippedByStop"] += 1
                 job["scheduleDone"] = cursor
@@ -412,7 +454,12 @@ class TxnGate(shared_gate.Gate):
             job["recovery"] += 1
             state["reservedRecovery"] -= 1
             state.setdefault("skips", []).append(
-                {"job": self.job, "index": index, "reason": ZERO_WIRE_REASON, "note": reason}
+                {
+                    "job": self.job,
+                    "index": index,
+                    "reason": ZERO_WIRE_REASON,
+                    "note": reason,
+                }
             )
             _save(self.path, state)
             return (None, {"skipped": ZERO_WIRE_REASON})
@@ -422,7 +469,9 @@ class TxnGate(shared_gate.Gate):
     def _recovery_capture(self, operation, status, body):
         capture = super()._recovery_capture(operation, status, body)
         if operation.get("kind") == "owned-read":
-            capture["owned"] = owned_document(body, self.plan, operation.get("resource"))
+            capture["owned"] = owned_document(
+                body, self.plan, operation.get("resource")
+            )
         return capture
 
     def _record_response(self, state, operation, recovery, event, status, body):
@@ -454,11 +503,19 @@ class TxnGate(shared_gate.Gate):
         applied to a document the run already owns and will delete.
         """
         if _error_envelope(status, body):
-            return "refused" if kind in ("begin", "rollback", "commit-update", "create") else None
+            return (
+                "refused"
+                if kind in ("begin", "rollback", "commit-update", "create")
+                else None
+            )
         if status != 200 or not isinstance(body, dict) or "error" in body:
             return None
         if kind == "begin":
-            return "refused" if canonical_token(body.get("transaction")) is not None else None
+            return (
+                "refused"
+                if canonical_token(body.get("transaction")) is not None
+                else None
+            )
         if kind == "rollback":
             return "refused" if body == {} else None
         if kind == "commit-update":

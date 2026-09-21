@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -170,6 +171,7 @@ def gate_plan(project: str, nonce: str) -> dict:
         "ownershipMarker": {"field": "resource", "binding": "resource-name"},
         "observationDeletePolicy": "auth-action-account-b-delete-v1",
         "publishedAllocation": {"wallSeconds": 300, "recoverySeconds": 180},
+        "permissionExpiresAt": time.time() + 600,
         "jobs": {
             JOB: {
                 "resources": resources,

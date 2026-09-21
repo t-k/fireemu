@@ -107,6 +107,7 @@ def execute(
     verify_handoff,
     fixture_origin: str | None = None,
     production: bool = False,
+    permission_expires_at: float | None = None,
 ) -> dict:
     """Run all 26 observation and 6 recovery slots through one O8 capability."""
     if not o8_admission.issued_capability(capability):
@@ -125,7 +126,7 @@ def execute(
     nonce = plan.get("nonce")
     gate_plan = gate_module.gate_plan(project, nonce)
     gate_plan["permissionDigest"] = digest(permission)
-    gate_plan["permissionExpiresAt"] = permission.get("expiresAt")
+    gate_plan["permissionExpiresAt"] = permission_expires_at or time.time() + 600
     claim = _claim(inputs, plan, gate_plan, output)
     now = time.time()
     envelope = _envelope(permission, claim, now)

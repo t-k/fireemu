@@ -17,6 +17,31 @@ NONCE = "a" * 32
 PROJECT = "fireemu-35fe6"
 
 
+def _claim(handle):
+    def receipt(slot):
+        if slot == "oauth-tokeninfo":
+            body = {
+                "kind": "request-byte-token-attestation-v1",
+                "principalDigest": "0" * 64,
+                "requiredScopeVerified": True,
+                "identityMode": "verified-email",
+                "identityVerified": True,
+                "oauthClientVerified": True,
+                "expiresInSeconds": 480,
+                "remainingSecondsAtVerification": 480,
+                "requiredSeconds": 480,
+                "complete": True,
+                "workerReaped": True,
+            }
+        else:
+            body = {"kind": "auth-project-readback-v1", "projectId": PROJECT, "authorized": True}
+        return {"status": 200, "complete": True, "workerReaped": True, "bodyKind": "json", "body": body}
+
+    handle.management_dispatch("observation", "oauth-tokeninfo", lambda _: receipt("oauth-tokeninfo"))
+    handle.management_dispatch("observation", "auth-project-readback", lambda _: receipt("auth-project-readback"))
+    handle.claim()
+
+
 def test_gate_plan_is_full_action_matrix_and_two_nonce_resources():
     plan = gate.gate_plan(PROJECT, NONCE)
     job = plan["jobs"][gate.JOB]
@@ -46,7 +71,7 @@ def test_registered_signup_uids_admit_only_the_intentional_observation_delete(tm
     path = tmp_path / "gate"
     gate.create(path, plan)
     handle = gate.ActionGate(path, gate.JOB)
-    handle.claim()
+    _claim(handle)
     operations = plan["jobs"][gate.JOB]["observation"]
     for index, operation in enumerate(operations[:24]):
         if operation["kind"] == "sign-up":
@@ -83,7 +108,7 @@ def test_incomplete_signup_is_unknown_held_and_not_refused(tmp_path):
     path = tmp_path / "gate"
     gate.create(path, plan)
     handle = gate.ActionGate(path, gate.JOB)
-    handle.claim()
+    _claim(handle)
     signup = plan["jobs"][gate.JOB]["observation"][0]
     handle.dispatch(signup, False, lambda: (200, {"localId": "uid-a"}))
     state = json.loads((path / "state.json").read_bytes())
@@ -125,7 +150,7 @@ def test_action_delete_requires_declared_account_binding_and_signup_digest(tmp_p
     path = tmp_path / "gate"
     gate.create(path, plan)
     handle = gate.ActionGate(path, gate.JOB)
-    handle.claim()
+    _claim(handle)
     _dispatch_observation_prefix(handle, plan)
     state = json.loads((path / "state.json").read_bytes())
     operation = plan["jobs"][gate.JOB]["observation"][23]
@@ -141,7 +166,7 @@ def test_action_delete_reordered_or_replayed_is_rejected(tmp_path):
     path = tmp_path / "gate"
     gate.create(path, plan)
     handle = gate.ActionGate(path, gate.JOB)
-    handle.claim()
+    _claim(handle)
     with pytest.raises(ValueError, match="closed scenario|execution schedule"):
         handle.dispatch(plan["jobs"][gate.JOB]["observation"][23], False, lambda: (200, {}))
 
@@ -157,7 +182,7 @@ def test_action_delete_400_is_terminal_error_not_absence(tmp_path):
     path = tmp_path / "gate"
     gate.create(path, plan)
     handle = gate.ActionGate(path, gate.JOB)
-    handle.claim()
+    _claim(handle)
     _dispatch_observation_prefix(handle, plan)
     delete = plan["jobs"][gate.JOB]["observation"][23]
     handle.dispatch(delete, False, lambda: (400, {"error": {"message": "permission denied"}}))

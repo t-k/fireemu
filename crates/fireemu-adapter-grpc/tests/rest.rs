@@ -38,6 +38,26 @@ fn state_with(rules: Option<&str>, acceptance: TokenAcceptance) -> RestState {
     state_with_clock(rules, acceptance).0
 }
 
+/// A REST surface under one compatibility profile: `strict` enforces the Standard limits with
+/// production's index policy and verified tokens, `emulator` observes the limits with the
+/// official emulator's index policy and mock tokens.
+fn state_with_profile(strict: bool) -> RestState {
+    let gateway = Gateway {
+        enforce_limits: strict,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: if strict {
+                IndexValidationPolicy::Production
+            } else {
+                IndexValidationPolicy::Emulator
+            },
+        },
+        indexes: IndexSet::default(),
+    };
+    state_with_gateway(gateway, None, TokenAcceptance::Verified).0
+}
+
 fn state_with_clock(
     rules: Option<&str>,
     acceptance: TokenAcceptance,
@@ -51,6 +71,14 @@ fn state_with_clock(
         },
         indexes: IndexSet::default(),
     };
+    state_with_gateway(gateway, rules, acceptance)
+}
+
+fn state_with_gateway(
+    gateway: Gateway,
+    rules: Option<&str>,
+    acceptance: TokenAcceptance,
+) -> (RestState, Arc<Mutex<VirtualClock>>) {
     let clock = Arc::new(Mutex::new(VirtualClock::new(
         LogicalInstant::from_unix_seconds(1_788_004_860),
     )));
@@ -1078,6 +1106,89 @@ fn batch_write_rest_reports_lock_contention_per_item_and_recovers_after_rollback
     );
     assert_eq!(status, 200, "{recovered}");
     assert_eq!(recovered["fields"]["v"]["integerValue"], "5");
+}
+
+/// Production's refusal of a BatchWrite that names one document twice
+/// (`conformance/firestore-production-matrix.json`, `writes/batch-write` step
+/// `non-atomic-batch`, 2026-09-07 live corpus: HTTP 400 INVALID_ARGUMENT, no status array,
+/// readbacks proving nothing landed).
+const BATCH_WRITE_REPEATED_DOCUMENT: &str =
+    "the same document cannot be written more than once in a single request";
+
+/// FS-WRITE-002. A REST `:batchWrite` that writes one document twice is refused as a whole
+/// request with production's exact wording under both profiles: no `status` array, no
+/// `writeResults`, and neither the repeated document nor its distinct siblings change. A
+/// batch of distinct documents keeps its per-item results.
+#[test]
+fn batch_write_rest_refuses_a_repeated_document_as_a_whole_with_production_wording() {
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let existing = "projects/demo-app/databases/(default)/documents/batch-repeat/existing";
+        let sibling = "projects/demo-app/databases/(default)/documents/batch-repeat/sibling";
+        let suffix = "projects/demo-app/databases/(default)/documents/batch-repeat/suffix";
+        let (status, seeded) = call(
+            &s,
+            "PATCH",
+            &format!("{DOCS}/batch-repeat/existing"),
+            json!({"fields": {"v": {"integerValue": "0"}}}),
+        );
+        assert_eq!(status, 200, "{seeded}");
+        let before_time = seeded["updateTime"].as_str().unwrap().to_owned();
+
+        // The repeated document sits between distinct siblings and its second occurrence is a
+        // different operation (delete after update), as in the production observation.
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchWrite"),
+            json!({
+                "writes": [
+                    {"update": {"name": sibling, "fields": {"v": {"integerValue": "1"}}}},
+                    {"update": {"name": existing, "fields": {"v": {"integerValue": "1"}}}},
+                    {"delete": existing},
+                    {"update": {"name": suffix, "fields": {"v": {"integerValue": "2"}}}}
+                ]
+            }),
+        );
+        assert_eq!(status, 400, "strict={strict} {body}");
+        assert_eq!(body["error"]["code"], 400, "strict={strict} {body}");
+        assert_eq!(
+            body["error"]["status"], "INVALID_ARGUMENT",
+            "strict={strict} {body}"
+        );
+        assert_eq!(
+            body["error"]["message"], BATCH_WRITE_REPEATED_DOCUMENT,
+            "strict={strict} {body}"
+        );
+        assert!(body.get("status").is_none(), "strict={strict} {body}");
+        assert!(body.get("writeResults").is_none(), "strict={strict} {body}");
+
+        for absent in [sibling, suffix] {
+            let (status, missing) = call(&s, "GET", &format!("/v1/{absent}"), Value::Null);
+            assert_eq!(status, 404, "strict={strict} {missing}");
+        }
+        let (status, unchanged) = call(&s, "GET", &format!("/v1/{existing}"), Value::Null);
+        assert_eq!(status, 200, "strict={strict} {unchanged}");
+        assert_eq!(unchanged["fields"]["v"]["integerValue"], "0");
+        assert_eq!(unchanged["updateTime"], before_time, "strict={strict}");
+
+        // Distinct documents: every write is its own commit with its own result.
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchWrite"),
+            json!({
+                "writes": [
+                    {"update": {"name": format!("{}/batch-repeat/a", &DOCS[4..]), "fields": {"v": {"integerValue": "1"}}}},
+                    {"update": {"name": format!("{}/batch-repeat/b", &DOCS[4..]), "fields": {"v": {"integerValue": "2"}}}}
+                ]
+            }),
+        );
+        assert_eq!(status, 200, "strict={strict} {body}");
+        assert_eq!(body["status"], json!([{}, {}]), "strict={strict} {body}");
+        assert!(body["writeResults"][0]["updateTime"].is_string());
+        assert!(body["writeResults"][1]["updateTime"].is_string());
+    }
 }
 
 #[test]

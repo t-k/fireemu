@@ -8206,3 +8206,147 @@ async fn grpc_refuses_query_and_transaction_calls_on_a_database_that_was_never_c
 
     handle.abort();
 }
+
+/// A server under one compatibility profile: `strict` enforces the Standard limits with
+/// production's index policy, `emulator` observes them with the official emulator's. The
+/// write-path refusals below are the same under both.
+async fn start_with_profile(
+    strict: bool,
+) -> (
+    FirestoreClient<tonic::transport::Channel>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let gateway = Gateway {
+        enforce_limits: strict,
+        ctx: PlanningContext {
+            edition: FirestoreEdition::Standard,
+            api_mode: FirestoreApiMode::Native,
+            policy: if strict {
+                IndexValidationPolicy::Production
+            } else {
+                IndexValidationPolicy::Emulator
+            },
+        },
+        indexes: IndexSet::default(),
+    };
+    let clock = Arc::new(Mutex::new(VirtualClock::new(
+        LogicalInstant::from_unix_seconds(1_788_004_860),
+    )));
+    let backend = Arc::new(LocalBackend::new(gateway.clone(), clock, 7));
+    let svc = FirestoreServer::new(GatewayService::local(gateway, backend));
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(svc)
+            .serve_with_incoming(TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    (FirestoreClient::new(channel), handle)
+}
+
+/// Production's refusal of a BatchWrite that names one document twice
+/// (`conformance/firestore-production-matrix.json`, `writes/batch-write` step
+/// `non-atomic-batch`, 2026-09-07 live corpus).
+const BATCH_WRITE_REPEATED_DOCUMENT: &str =
+    "the same document cannot be written more than once in a single request";
+
+/// FS-WRITE-002. A BatchWrite that writes one document twice is refused as a whole request,
+/// not per item: INVALID_ARGUMENT with production's exact wording, no status array, and none
+/// of its writes land, the distinct sibling included (production readbacks in the matrix row
+/// prove nothing landed). The refusal does not depend on the profile. A batch of distinct
+/// documents keeps its per-item results.
+#[tokio::test]
+async fn batch_write_refuses_a_repeated_document_as_a_whole_with_production_wording() {
+    for strict in [true, false] {
+        let (mut client, handle) = start_with_profile(strict).await;
+        let existing = "batch-repeat/existing";
+        let before = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![update_write(existing, &[("v", i(0))])],
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let before_time = before.write_results[0].update_time;
+        assert!(before_time.is_some());
+
+        // The repeated document is neither the first nor the last write, and the second
+        // occurrence is a different operation (delete after update), as in the production
+        // observation.
+        let err = client
+            .batch_write(pb::BatchWriteRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write("batch-repeat/sibling", &[("v", i(1))]),
+                    update_write(existing, &[("v", i(1))]),
+                    delete_write(existing),
+                    update_write("batch-repeat/suffix", &[("v", i(2))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument, "strict={strict}");
+        assert_eq!(
+            err.message(),
+            BATCH_WRITE_REPEATED_DOCUMENT,
+            "strict={strict}"
+        );
+
+        // Nothing landed: siblings absent, the repeated document unchanged (same version).
+        for absent in ["batch-repeat/sibling", "batch-repeat/suffix"] {
+            let missing = client
+                .get_document(pb::GetDocumentRequest {
+                    name: format!("{DOCS}/{absent}"),
+                    ..Default::default()
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(
+                missing.code(),
+                tonic::Code::NotFound,
+                "strict={strict} {absent}"
+            );
+        }
+        let unchanged = client
+            .get_document(pb::GetDocumentRequest {
+                name: format!("{DOCS}/{existing}"),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(unchanged.fields, [("v".to_owned(), i(0))].into());
+        assert_eq!(unchanged.update_time, before_time, "strict={strict}");
+
+        // Distinct documents: every write is its own commit with its own result.
+        let response = client
+            .batch_write(pb::BatchWriteRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write("batch-repeat/a", &[("v", i(1))]),
+                    update_write("batch-repeat/b", &[("v", i(2))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.status.len(), 2);
+        assert!(response.status.iter().all(|status| status.code == 0));
+        assert!(response
+            .write_results
+            .iter()
+            .all(|result| result.update_time.is_some()));
+        handle.abort();
+    }
+}

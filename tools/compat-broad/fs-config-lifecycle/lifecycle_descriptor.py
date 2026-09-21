@@ -59,7 +59,7 @@ APPROVAL_KIND = "fs-config-lifecycle-o8-approval-v1"
 MANIFEST_KIND = "fs-config-lifecycle-o8-manifest-v1"
 RECEIPT_KIND = "fs-config-lifecycle-acquisition-receipt-v1"
 LOCAL_RECORD = (
-    "spec/compatibility/broad-runs/fs-config-lifecycle-local-rehearsal-v5.json"
+    "spec/compatibility/broad-runs/fs-config-lifecycle-local-rehearsal-v7.json"
 )
 PRINCIPAL_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 HANDOFF_KIND = "fs-config-lifecycle-bearer-token-v1"

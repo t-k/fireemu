@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -108,6 +109,63 @@ def _case_ids(campaign: Any) -> list[str]:
     return [case.get("id") for case in campaign["cases"] if isinstance(case, dict)]
 
 
+def _runtime_identity_problems(
+    local: Any, expected: Any | None
+) -> list[str]:
+    """Validate local runtime bytes against an independently retained anchor.
+
+    A receipt may self-report a well-formed digest, but that is not evidence that the
+    executable which answered the requests had those bytes. The caller must supply the
+    retained artifact/configuration anchor for a new final-artifact comparison.
+    """
+    identity = local.get("runtimeIdentity") if isinstance(local, dict) else None
+    if not isinstance(identity, dict):
+        return ["local runtime identity unavailable"]
+    required = {"artifactSha256", "executionCommit", "configurationDigest", "runId"}
+    if set(identity) != required:
+        return ["local runtime identity shape is invalid"]
+
+    def valid(value: Any, length: int) -> bool:
+        return isinstance(value, str) and re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is not None
+
+    if (
+        not valid(identity["artifactSha256"], 64)
+        or not valid(identity["executionCommit"], 40)
+        or not valid(identity["configurationDigest"], 64)
+        or not isinstance(identity["runId"], str)
+        or not identity["runId"]
+    ):
+        return ["local runtime identity digest is invalid"]
+    if expected is None:
+        return ["independent local runtime anchor required"]
+    if not isinstance(expected, dict) or set(expected) != required:
+        return ["independent local runtime anchor is invalid"]
+    if (
+        not valid(expected.get("artifactSha256"), 64)
+        or not valid(expected.get("executionCommit"), 40)
+        or not valid(expected.get("configurationDigest"), 64)
+        or not isinstance(expected.get("runId"), str)
+        or not expected["runId"]
+    ):
+        return ["independent local runtime anchor is invalid"]
+    if identity != expected:
+        return ["local runtime identity differs from independent anchor"]
+    worktree = local.get("worktree")
+    provenance = local.get("provenance")
+    if not isinstance(worktree, dict) or identity["executionCommit"] != worktree.get("commit"):
+        return ["local runtime source commit is not bound to worktree"]
+    if not isinstance(provenance, dict) or not isinstance(provenance.get("digest"), str):
+        return ["local source-input provenance unavailable"]
+    recovery = local.get("recovery")
+    if (
+        not isinstance(recovery, dict)
+        or not isinstance(recovery.get("runId"), str)
+        or recovery.get("runId") != identity["runId"]
+    ):
+        return ["local runtime cleanup identity unavailable"]
+    return []
+
+
 def _without_owner(campaign: dict) -> dict:
     """The manifest minus the per-run owner block, which each side holds separately."""
     return {name: value for name, value in campaign.items() if name != "owner"}
@@ -180,7 +238,13 @@ def _receipt_problems(record: Any, side: str, root: Path) -> list[str]:
     return problems
 
 
-def compare(local: Any, production: Any, root: Path | None = None) -> dict[str, Any]:
+def compare(
+    local: Any,
+    production: Any,
+    root: Path | None = None,
+    *,
+    runtime_anchor: Any | None = None,
+) -> dict[str, Any]:
     """Classify a local and a production receipt for this campaign."""
     root = repository_root() if root is None else Path(root)
     local_problems = _receipt_problems(local, "local", root)
@@ -205,6 +269,14 @@ def compare(local: Any, production: Any, root: Path | None = None) -> dict[str, 
         result["reason"] = "at least one receipt is incomplete or unbound"
         result["normalizedDigest"] = _digest([_project(local), _project(production)])
         return result
+    if result["productionExecuted"]:
+        runtime_problems = _runtime_identity_problems(local, runtime_anchor)
+        if runtime_problems:
+            result["runtimeProblems"] = runtime_problems
+            result["classification"] = "INDETERMINATE"
+            result["reason"] = "local runtime artifact is not independently bound"
+            result["normalizedDigest"] = _digest([_project(local), _project(production)])
+            return result
     if local["provenance"] != production["provenance"]:
         result["classification"] = "INDETERMINATE"
         result["reason"] = "the two sides were recorded from different bound inputs"

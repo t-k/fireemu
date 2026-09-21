@@ -24,6 +24,12 @@ from mfa_manifest import compile_campaign, validate_campaign
 from mfa_provenance import compute_provenance, repository_root
 
 NONCE = "0123456789abcdef0123456789abcdef"
+RUNTIME_ANCHOR = {
+    "artifactSha256": "a" * 64,
+    "executionCommit": "a" * 40,
+    "configurationDigest": "b" * 64,
+    "runId": "campaign-run-1",
+}
 
 
 def test_the_blocking_conditions_each_have_cases() -> None:
@@ -187,6 +193,7 @@ def receipt(side: str, root: Path | None = None) -> dict:
         "productionExecuted": False,
         "provenance": compute_provenance(root or repository_root()),
         "worktree": {"commit": "a" * 40, "clean": True, "resolved": True},
+        "runtimeIdentity": dict(RUNTIME_ANCHOR),
         "rows": [
             {"id": identifier, "status": 200, "errorCode": None, "outcome": "observed"}
             for identifier in CASE_IDS
@@ -195,6 +202,7 @@ def receipt(side: str, root: Path | None = None) -> dict:
             "cleanupVerified": True,
             "remainingOwnedResources": 0,
             "configurationRestored": True,
+            "runId": RUNTIME_ANCHOR["runId"],
         },
     }
 
@@ -247,7 +255,7 @@ def test_a_real_row_difference_is_reported_only_for_an_executed_production_side(
     production["rows"][2].update(status=400, errorCode="INVALID_MFA_PENDING_CREDENTIAL")
     assert compare(local, production)["classification"] == "PREPARATION_ONLY"
     approved(production)
-    result = compare(local, production)
+    result = compare(local, production, runtime_anchor=dict(RUNTIME_ANCHOR))
     assert result["classification"] == "DIFF"
     assert [row["id"] for row in result["rowDifferences"]] == [CASE_IDS[2]]
 
@@ -262,7 +270,7 @@ def test_dynamic_and_secret_values_never_create_a_difference() -> None:
         record["rows"][1]["verificationCode"] = f"{index}23456"
         record["rows"][1]["idToken"] = f"TOKEN_{index}"
         record["rows"][1]["pendingAgeSeconds"] = 300.0 + index
-    result = compare(local, production)
+    result = compare(local, production, runtime_anchor=dict(RUNTIME_ANCHOR))
     assert result["classification"] == "EXPECTED_NONDETERMINISM"
     assert result["rowDifferences"] == []
     assert result["nondeterministicRows"] == [CASE_IDS[1]]
@@ -285,7 +293,11 @@ def approved(record: dict) -> dict:
 
 
 def test_identical_executed_and_approved_receipts_reach_agreement() -> None:
-    result = compare(receipt("local"), approved(receipt("production")))
+    result = compare(
+        receipt("local"),
+        approved(receipt("production")),
+        runtime_anchor=dict(RUNTIME_ANCHOR),
+    )
     assert result["classification"] == "MATCH"
     assert result["rowDifferences"] == [] and result["nondeterministicRows"] == []
 
@@ -347,7 +359,14 @@ def test_a_different_nonce_alone_does_not_block_a_comparison() -> None:
         for case in production["campaign"]["cases"]
     ]
     approved(production)
-    assert compare(receipt("local"), production)["classification"] == "MATCH"
+    assert (
+        compare(
+            receipt("local"),
+            production,
+            runtime_anchor=dict(RUNTIME_ANCHOR),
+        )["classification"]
+        == "MATCH"
+    )
 
 
 def test_a_differing_error_code_alone_is_a_real_difference() -> None:
@@ -355,7 +374,7 @@ def test_a_differing_error_code_alone_is_a_real_difference() -> None:
     production = approved(receipt("production"))
     production["rows"][3].update(status=400, errorCode="SESSION_EXPIRED")
     local["rows"][3].update(status=400, errorCode="INVALID_SESSION_INFO")
-    result = compare(local, production)
+    result = compare(local, production, runtime_anchor=dict(RUNTIME_ANCHOR))
     assert result["classification"] == "DIFF"
     assert result["rowDifferences"][0]["local"]["errorCode"] == "INVALID_SESSION_INFO"
     assert result["rowDifferences"][0]["production"]["errorCode"] == "SESSION_EXPIRED"
@@ -368,7 +387,7 @@ def test_a_differing_error_message_is_a_difference_not_nondeterminism() -> None:
         record["rows"][4]["message"] = f"prose variant {index}"
         record["rows"][4]["stage"] = f"stage-{index}"
         record["rows"][4]["usage"] = f"usage-{index}"
-    result = compare(local, production)
+    result = compare(local, production, runtime_anchor=dict(RUNTIME_ANCHOR))
     assert result["classification"] == "DIFF"
     assert [row["id"] for row in result["rowDifferences"]] == [CASE_IDS[4]]
 

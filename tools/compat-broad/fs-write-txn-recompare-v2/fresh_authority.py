@@ -53,10 +53,14 @@ def source_closure(root: Path, expected_commit: str) -> dict[str, str]:
         raise ValueError("reviewed authority commit is unavailable")
     if git(root, "status", "--porcelain", "--untracked-files=all"):
         raise ValueError("authority checkout is dirty")
+    v2_root = root / "tools/compat-broad/fs-write-txn-recompare-v2"
+    v2_paths = sorted(v2_root.glob("*.mjs"))
+    if not v2_paths:
+        raise ValueError("reviewed V2 source closure is empty")
     paths = [
         Path(__file__).resolve().relative_to(root),
         Path("tools/compat-broad/fs-write-txn/stream_comparison.mjs"),
-        *sorted(Path("tools/compat-broad/fs-write-txn-recompare-v2").glob("*.mjs")),
+        *(path.relative_to(root) for path in v2_paths),
     ]
     result: dict[str, str] = {}
     for path in paths:

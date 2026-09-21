@@ -41,6 +41,7 @@ def copy_fixture_root(tmp_path: Path, root: Path) -> Path:
 def run_authority(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(AUTHORITY), "--root", str(tmp_path), "--runtime-source", str(tmp_path), "--authority-commit", REVIEWED_COMMIT, "--output", str(tmp_path / "out.json"), *extra],
+        cwd=tmp_path,
         text=True,
         capture_output=True,
         check=False,
@@ -100,6 +101,7 @@ def test_mutated_receipt_refuses_before_output(tmp_path: Path) -> None:
             "--output",
             str(tmp_path / "out.json"),
         ],
+        cwd=tmp_path,
         text=True,
         capture_output=True,
         check=False,
@@ -135,6 +137,7 @@ def test_receipt_symlink_refuses_before_comparison(tmp_path: Path) -> None:
             "--output",
             str(tmp_path / "out.json"),
         ],
+        cwd=tmp_path,
         text=True,
         capture_output=True,
         check=False,

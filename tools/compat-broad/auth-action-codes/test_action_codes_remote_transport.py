@@ -98,6 +98,14 @@ def _frozen_inputs():
     permission = {
         "projectId": PROJECT,
         "permissionReference": "fixture-owner-permission",
+        "logicalAccounts": {
+            "accountA": {
+                "resource": f"projects/{PROJECT}/auth/accounts/o1-oob-{NONCE}-a"
+            },
+            "accountB": {
+                "resource": f"projects/{PROJECT}/auth/accounts/o1-oob-{NONCE}-b"
+            },
+        },
         "credentialPrincipal": {
             "subject": "owner@example.test",
             "requiredScopes": [action_remote.IDENTITY_SCOPE],
@@ -129,6 +137,11 @@ def _bindings():
             for item in value.values():
                 found.update(names(item))
             return found
+        if isinstance(value, list):
+            found = set()
+            for item in value:
+                found.update(names(item))
+            return found
         return set()
 
     for stage in plan["stages"]:
@@ -139,6 +152,15 @@ def _bindings():
                 values[name] = f"o1-oob-{NONCE}-{suffix}@example.invalid"
             else:
                 values[name] = "declared-" + name.replace(".", "-") + "-" + NONCE[:8]
+        result[stage["id"]] = values
+    for stage in plan["recovery"]:
+        values = {}
+        for name in names(stage["body"]):
+            if name.endswith(".email"):
+                suffix = name.removesuffix(".email")[-1].lower()
+                values[name] = f"o1-oob-{NONCE}-{suffix}@example.invalid"
+            elif name.endswith(".localId"):
+                values[name] = "uid-" + name.split(".", 1)[0]
         result[stage["id"]] = values
     return result
 
@@ -365,19 +387,65 @@ def test_dynamic_binding_and_credential_scope_or_principal_mutations_are_rejecte
             )
 
 
-def test_recovery_is_refused_until_the_six_row_plan_is_frozen():
-    inputs, transport = _action_transport()
+def test_six_recovery_operations_use_exact_wire_shapes(fixture_origin):
+    origin, _server = fixture_origin
+    inputs, transport = _action_transport(origin)
+    bindings = _bindings()
     capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
-    with pytest.raises(ValueError, match="recovery.*not wired"):
-        action_remote.send(
+    plan = inputs["plan"]
+    for stage in plan["recovery"]:
+        body = {}
+        for key, value in stage["body"].items():
+            if isinstance(value, list):
+                body[key] = [bindings[stage["id"]][item.removeprefix("$binding:")] for item in value]
+            else:
+                body[key] = bindings[stage["id"]][value.removeprefix("$binding:")]
+        status, _response = action_remote.send(
             capability,
-            stage_id="recover-uid-absence-accountA",
+            stage_id=stage["id"],
             project=PROJECT,
             nonce=NONCE,
-            body={"localId": ["uid"]},
+            body=body,
             deadline=time.monotonic() + 10,
             binding=source,
             binding_digest=source_digest,
+        )
+        assert status == 200
+    assert [request["path"] for request in _Echo.requests] == [
+        f"/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:lookup",
+        f"/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:delete",
+        f"/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:delete",
+        f"/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:lookup",
+        f"/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:lookup",
+        f"/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:lookup",
+    ]
+
+
+def test_unknown_recovery_uid_is_held_before_wire():
+    inputs = _frozen_inputs()
+    bindings = _bindings()
+    del bindings["recover-delete-accountA"]["accountA.localId"]
+    with pytest.raises(ValueError, match="recovery binding"):
+        action_remote.make_transport(
+            frozen_inputs=inputs,
+            declared_bindings=bindings,
+            credential_handoff=_handoff(inputs["permission"]),
+            verify_handoff=_verify_fixture_handoff,
+        )
+
+
+def test_self_consistent_mutated_plan_is_rejected_by_canonical_compiler():
+    inputs = _frozen_inputs()
+    inputs["plan"]["stages"][0]["body"]["returnSecureToken"] = False
+    inputs["planDigest"] = digest(inputs["plan"])
+    unsigned = {key: item for key, item in inputs.items() if key != "inputsDigest"}
+    inputs["inputsDigest"] = digest(unsigned)
+    with pytest.raises(ValueError, match="canonical compiler"):
+        action_remote.make_transport(
+            frozen_inputs=inputs,
+            declared_bindings=_bindings(),
+            credential_handoff=_handoff(inputs["permission"]),
+            verify_handoff=_verify_fixture_handoff,
         )
 
 

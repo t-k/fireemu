@@ -4,7 +4,8 @@ The preparation collector remains loopback-only. This module accepts only an
 O7-frozen plan, an independently maintained dynamic-binding map and a private
 credential handoff already verified by the Auth hosting owner. It reuses the
 existing credential worker envelope without changing that worker or transport.
-Recovery is deliberately refused until the six-row recovery plan is frozen.
+The production host remains unavailable in this lane; this wrapper only proves
+the six-row request contract through the existing closed credential worker.
 """
 
 from __future__ import annotations
@@ -22,11 +23,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "auth-credential-tokens"))
 
 import credential_remote_transport as credential_remote
-from action_codes_plan import CAMPAIGN_ID
+from action_codes_plan import CAMPAIGN_ID, campaign_manifest
 from broad_contract import digest
 
 NONCE = re.compile(r"^[0-9a-f]{32}$")
 EMAIL = re.compile(r"^o1-oob-([0-9a-f]{32})-(?:a|b|absent)@example\.invalid$")
+UID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 SERVICE_PREFIX = "/identitytoolkit.googleapis.com/v1/"
 IDENTITY_SCOPE = "https://www.googleapis.com/auth/identitytoolkit"
 ENVELOPE_FIELDS = frozenset({"stageId", "project", "nonce", "body", "deadline"})
@@ -68,12 +70,23 @@ def _placeholders(value: Any) -> set[str]:
 
 
 def _stage(plan: dict | MappingProxyType, stage_id: str):
-    for stage in plan["stages"]:
+    for stage in (*plan["stages"], *plan["recovery"]):
         if stage["id"] == stage_id:
             return stage
-    if stage_id.startswith("recover-"):
-        raise ValueError("recovery stage not wired until six-row plan is frozen")
     raise ValueError("unknown Action stage")
+
+
+def _canonical_plan(project: str, nonce: str) -> dict[str, Any]:
+    plan = campaign_manifest(nonce)
+    plan["ownerInputs"]["projectId"] = project
+    return plan
+
+
+def _resource_map(project: str, nonce: str) -> dict[str, dict[str, str]]:
+    return {
+        name: {"resource": f"projects/{project}/auth/accounts/o1-oob-{nonce}-{suffix}"}
+        for name, suffix in (("accountA", "a"), ("accountB", "b"))
+    }
 
 
 def _check_value(expected: Any, actual: Any, bindings: MappingProxyType, nonce: str) -> None:
@@ -94,7 +107,7 @@ def _check_value(expected: Any, actual: Any, bindings: MappingProxyType, nonce: 
         for key, item in expected.items():
             _check_value(item, actual[key], bindings, nonce)
         return
-    if isinstance(expected, list):
+    if isinstance(expected, (list, tuple)):
         if not isinstance(actual, list) or len(actual) != len(expected):
             raise ValueError("body shape differs")
         for left, right in zip(expected, actual, strict=True):
@@ -118,6 +131,30 @@ def _validate_handoff(handoff: dict, permission: dict) -> None:
         raise ValueError("credential handoff metadata differs")
 
 
+def _validate_recovery_bindings(
+    plan: MappingProxyType,
+    bindings: MappingProxyType,
+) -> None:
+    for account in ("accountA", "accountB"):
+        delete_id = "recover-delete-" + account
+        absence_id = "recover-uid-absence-" + account
+        delete_uid = bindings[delete_id].get(account + ".localId")
+        absence_uid = bindings[absence_id].get(account + ".localId")
+        if (
+            not isinstance(delete_uid, str)
+            or not UID.fullmatch(delete_uid)
+            or delete_uid != absence_uid
+        ):
+            raise ValueError("immutable recovery UID binding required")
+    for stage_id in ("recover-discover", "recover-absence"):
+        expected = {
+            "accountA.email",
+            "accountB.email",
+        }
+        if set(bindings[stage_id]) != expected:
+            raise ValueError("declared Action recovery binding map differs")
+
+
 def _validate_inputs(value: dict):
     raw = copy.deepcopy(value)
     if not isinstance(raw, dict) or not isinstance(raw.get("plan"), dict) or not isinstance(raw.get("permission"), dict):
@@ -133,6 +170,10 @@ def _validate_inputs(value: dict):
     nonce = plan.get("nonce")
     if not isinstance(project, str) or not project or not isinstance(nonce, str) or NONCE.fullmatch(nonce) is None:
         raise ValueError("frozen Action project or nonce required")
+    if plan != _canonical_plan(project, nonce):
+        raise ValueError("frozen Action plan is not the canonical compiler output")
+    if permission.get("logicalAccounts") != _resource_map(project, nonce):
+        raise ValueError("frozen Action logical account resources differ")
     return raw, plan, _freeze(plan), _freeze(permission), project, nonce
 
 
@@ -166,6 +207,14 @@ def make_transport(
             raise ValueError("declared Action binding map differs")
         if any(not _private(value) for value in stage_bindings.values()):
             raise ValueError("declared Action binding value is not private")
+    for stage in plan["recovery"]:
+        stage_bindings = binding_maps.get(stage["id"])
+        names = _placeholders(stage["body"])
+        if not isinstance(stage_bindings, MappingProxyType) or set(stage_bindings) != names:
+            raise ValueError("declared Action recovery binding map differs")
+        if any(not _private(value) for value in stage_bindings.values()):
+            raise ValueError("declared Action recovery binding value is not private")
+    _validate_recovery_bindings(frozen_plan, binding_maps)
 
     def transport(value, *, binding, binding_digest, capability):
         if capability.inputs_digest != expected_inputs_digest:
@@ -187,11 +236,15 @@ def make_transport(
         if not path.startswith(SERVICE_PREFIX) or "?" in path:
             raise ValueError("Action route differs")
         declared = {
-            "kind": "action-stage",
+            "kind": "action-recovery" if stage_id.startswith("recover-") else "action-stage",
             "path": path.lstrip("/"),
             "body": value["body"],
             "owner": stage["routeClass"] == "admin",
         }
+        if stage_id.startswith("recover-"):
+            account = stage.get("account")
+            if account is not None:
+                declared["resource"] = frozen_permission["logicalAccounts"][account]["resource"]
         return credential_remote.transmit(
             declared,
             value["body"],

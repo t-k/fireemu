@@ -1145,11 +1145,24 @@ def build() -> tuple[Path, dict[str, Any]]:
     }
 
 
+def _validated_child_python() -> str:
+    """Use the same absolute Python 3.12 interpreter for the child driver."""
+    executable = Path(sys.executable)
+    if (
+        not executable.is_absolute()
+        or not executable.is_file()
+        or sys.version_info[:2] != (3, 12)
+    ):
+        raise Refused("python-3.12-child-runtime-required")
+    return str(executable)
+
+
 def run_parent(output: Path) -> int:
     if output.exists() or output.is_symlink():
         raise Refused("fresh-parent-output-required")
     output = output.resolve()
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    python_executable = _validated_child_python()
     nonce = uuid.uuid4().hex
     environment = {
         key: os.environ[key] for key in ENVIRONMENT_ALLOWLIST if key in os.environ
@@ -1206,7 +1219,7 @@ def run_parent(output: Path) -> int:
                 "--log-verbosity",
                 "silent",
                 "--",
-                sys.executable,
+                python_executable,
                 str(Path(__file__).resolve()),
                 "--child",
                 str(output),
@@ -1217,6 +1230,8 @@ def run_parent(output: Path) -> int:
                 output / "launch.json",
                 {
                     "artifact": artifact,
+                    "pythonExecutable": python_executable,
+                    "pythonVersion": "3.12",
                     "environment": sorted(environment),
                     "privateExecutable": "fireemu",
                     "newProcessGroup": True,

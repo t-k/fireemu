@@ -11,7 +11,7 @@
       "page": "listener-lifecycle",
       "passed": true,
       "status": "passed",
-      "elapsedMs": 938,
+      "elapsedMs": 934,
       "result": {
         "passed": true,
         "maximumConnectedForms": 1,
@@ -489,16 +489,16 @@
       "pageErrors": [],
       "webchannel": {
         "summary": {
-          "requests": 81,
-          "listen": 32,
+          "requests": 80,
+          "listen": 31,
           "write": 49,
           "handshakes": 11,
           "forward": 21,
-          "backchannel": 38,
+          "backchannel": 37,
           "terminate": 11,
           "backchannelCi": {
             "streamed": 0,
-            "longPolled": 38
+            "longPolled": 37
           }
         },
         "columns": [
@@ -510,654 +510,86 @@
           "status"
         ],
         "rows": [
-          [
-            581,
-            "Listen",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            585,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            587,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            590,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            591,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            593,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            596,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            597,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            612,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            614,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            614,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            620,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            621,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            622,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            624,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            637,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            639,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            640,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            640,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            641,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            642,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            645,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            654,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            656,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            657,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            657,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            659,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            659,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            663,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            676,
-            "Listen",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            676,
-            "Listen",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            677,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            678,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            679,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            680,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            681,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            681,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            682,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            695,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            697,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            698,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            699,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            702,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            702,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            704,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            712,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            714,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            716,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            716,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            718,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            719,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            720,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            729,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            731,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            731,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            732,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            733,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            733,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            735,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            746,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            748,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            749,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            749,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            755,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            758,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            758,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            759,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            769,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            772,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            772,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            773,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            774,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            775,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            778,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            778,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            779,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            780,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            782,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1031,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            null
-          ],
-          [
-            1033,
-            "Listen",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            1033,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ]
+          "374 Listen POST handshake - 200",
+          "378 Listen GET backchannel 1 200",
+          "379 Listen GET backchannel 1 200",
+          "381 Write POST handshake - 200",
+          "382 Write GET backchannel 1 200",
+          "385 Write POST forward - 200",
+          "385 Write GET backchannel 1 200",
+          "386 Write POST terminate - 200",
+          "401 Listen POST forward - 200",
+          "402 Listen GET backchannel 1 200",
+          "403 Write POST handshake - 200",
+          "403 Write GET backchannel 1 200",
+          "404 Write POST forward - 200",
+          "404 Write GET backchannel 1 200",
+          "404 Write POST terminate - 200",
+          "417 Listen POST forward - 200",
+          "418 Listen GET backchannel 1 200",
+          "419 Write POST handshake - 200",
+          "420 Write GET backchannel 1 200",
+          "420 Write POST forward - 200",
+          "420 Write GET backchannel 1 200",
+          "421 Write POST terminate - 200",
+          "434 Listen POST forward - 200",
+          "435 Listen GET backchannel 1 200",
+          "435 Write POST handshake - 200",
+          "436 Write GET backchannel 1 200",
+          "436 Write POST forward - 200",
+          "436 Write GET backchannel 1 200",
+          "437 Write POST terminate - 200",
+          "455 Listen POST terminate - 200",
+          "456 Listen POST handshake - 200",
+          "456 Listen GET backchannel 1 200",
+          "457 Listen GET backchannel 1 200",
+          "457 Write POST handshake - 200",
+          "458 Write GET backchannel 1 200",
+          "458 Write POST forward - 200",
+          "458 Write GET backchannel 1 200",
+          "459 Write POST terminate - 200",
+          "478 Listen POST forward - 200",
+          "479 Listen GET backchannel 1 200",
+          "480 Write POST handshake - 200",
+          "480 Write GET backchannel 1 200",
+          "481 Write POST forward - 200",
+          "481 Write GET backchannel 1 200",
+          "482 Write POST terminate - 200",
+          "493 Listen POST forward - 200",
+          "494 Listen GET backchannel 1 200",
+          "494 Write POST handshake - 200",
+          "495 Write GET backchannel 1 200",
+          "495 Write POST forward - 200",
+          "496 Write GET backchannel 1 200",
+          "496 Write POST terminate - 200",
+          "509 Listen POST forward - 200",
+          "510 Listen GET backchannel 1 200",
+          "510 Write POST handshake - 200",
+          "511 Write GET backchannel 1 200",
+          "512 Write POST forward - 200",
+          "512 Write GET backchannel 1 200",
+          "513 Write POST terminate - 200",
+          "526 Write POST handshake - 200",
+          "527 Write GET backchannel 1 200",
+          "528 Write POST forward - 200",
+          "528 Write GET backchannel 1 200",
+          "530 Write GET backchannel 1 200",
+          "532 Write GET backchannel 1 200",
+          "533 Listen POST forward - 200",
+          "533 Listen POST forward - 200",
+          "534 Listen GET backchannel 1 200",
+          "535 Listen GET backchannel 1 200",
+          "536 Listen GET backchannel 1 200",
+          "537 Listen POST forward - 200",
+          "537 Write POST forward - 200",
+          "538 Listen GET backchannel 1 200",
+          "538 Listen POST forward - 200",
+          "539 Write GET backchannel 1 200",
+          "539 Listen GET backchannel 1 200",
+          "540 Listen GET backchannel 1 200",
+          "791 Listen POST forward - -",
+          "792 Listen POST terminate - 200",
+          "792 Write POST terminate - 200"
         ]
       }
     },
@@ -1165,7 +597,7 @@
       "page": "listen-reconnect",
       "passed": true,
       "status": "passed",
-      "elapsedMs": 430,
+      "elapsedMs": 371,
       "result": {
         "passed": true,
         "transport": "browser-webchannel",
@@ -1319,238 +751,35 @@
           "status"
         ],
         "rows": [
-          [
-            1584,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            1587,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1588,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            1588,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1598,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1599,
-            "Listen",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            1601,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1605,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1607,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            1607,
-            "Listen",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            1634,
-            "Write",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            1635,
-            "Listen",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            1636,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1636,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1637,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            1637,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1638,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1639,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1641,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1668,
-            "Listen",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            1668,
-            "Write",
-            "POST",
-            "forward",
-            null,
-            200
-          ],
-          [
-            1671,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1672,
-            "Write",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1777,
-            "Write",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            1777,
-            "Listen",
-            "POST",
-            "terminate",
-            null,
-            200
-          ],
-          [
-            1777,
-            "Listen",
-            "POST",
-            "handshake",
-            null,
-            200
-          ],
-          [
-            1779,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            200
-          ],
-          [
-            1780,
-            "Listen",
-            "GET",
-            "backchannel",
-            1,
-            null
-          ],
-          [
-            1781,
-            "Listen",
-            "POST",
-            "terminate",
-            null,
-            200
-          ]
+          "1289 Write POST handshake - 200",
+          "1291 Write GET backchannel 1 200",
+          "1292 Write POST forward - 200",
+          "1292 Write GET backchannel 1 200",
+          "1295 Write GET backchannel 1 200",
+          "1295 Listen POST handshake - 200",
+          "1296 Listen GET backchannel 1 200",
+          "1297 Listen GET backchannel 1 200",
+          "1298 Write POST terminate - 200",
+          "1298 Listen POST terminate - 200",
+          "1326 Write POST handshake - 200",
+          "1326 Listen POST handshake - 200",
+          "1327 Write GET backchannel 1 200",
+          "1327 Listen GET backchannel 1 200",
+          "1328 Write POST forward - 200",
+          "1329 Write GET backchannel 1 200",
+          "1329 Listen GET backchannel 1 200",
+          "1329 Write GET backchannel 1 200",
+          "1330 Listen GET backchannel 1 200",
+          "1357 Listen POST forward - 200",
+          "1357 Write POST forward - 200",
+          "1358 Listen GET backchannel 1 200",
+          "1358 Write GET backchannel 1 200",
+          "1462 Write POST terminate - 200",
+          "1462 Listen POST terminate - 200",
+          "1463 Listen POST handshake - 200",
+          "1464 Listen GET backchannel 1 200",
+          "1464 Listen GET backchannel 1 -",
+          "1464 Listen POST terminate - 200"
         ]
       }
     }

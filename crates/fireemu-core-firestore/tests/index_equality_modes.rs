@@ -3,8 +3,8 @@
 
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::index::{
-    decide, validate_aggregation_query, IndexDecision, IndexDefinition, IndexField,
-    IndexFieldMode, IndexQueryScope, IndexSet, IndexValidationPolicy, PlanningContext,
+    decide, validate_aggregation_query, IndexDecision, IndexDefinition, IndexField, IndexFieldMode,
+    IndexQueryScope, IndexSet, IndexValidationPolicy, PlanningContext,
 };
 use fireemu_core_firestore::query::{
     DistanceMeasure, FieldOp, FilterExpr, FindNearest, Query, QueryScope,
@@ -99,10 +99,17 @@ fn prefiltered_vector_index_does_not_serve_equality_on_its_vector_field() {
         let mut indexes = no_automatic_indexes();
         indexes.add_composite(index(
             scope,
-            &[("category", IndexFieldMode::Ascending), ("embedding", VECTOR)],
+            &[
+                ("category", IndexFieldMode::Ascending),
+                ("embedding", VECTOR),
+            ],
         ));
         assert!(matches!(
-            decide(&query(scope, &["category", "embedding"]), &indexes, &context()),
+            decide(
+                &query(scope, &["category", "embedding"]),
+                &indexes,
+                &context()
+            ),
             IndexDecision::MissingRequired { .. }
         ));
     }
@@ -114,7 +121,10 @@ fn an_index_merge_cannot_cover_an_equality_field_with_vector_mode() {
         let mut indexes = no_automatic_indexes();
         indexes.add_composite(index(
             scope,
-            &[("category", IndexFieldMode::Ascending), ("embedding", VECTOR)],
+            &[
+                ("category", IndexFieldMode::Ascending),
+                ("embedding", VECTOR),
+            ],
         ));
         indexes.set_single_field_indexes(
             &collection(),
@@ -176,7 +186,10 @@ fn a_vector_candidate_does_not_hide_a_later_valid_scalar_index() {
         let mut indexes = no_automatic_indexes();
         indexes.add_composite(index(
             scope,
-            &[("category", IndexFieldMode::Ascending), ("embedding", VECTOR)],
+            &[
+                ("category", IndexFieldMode::Ascending),
+                ("embedding", VECTOR),
+            ],
         ));
         let scalar = index(
             scope,
@@ -186,7 +199,11 @@ fn a_vector_candidate_does_not_hide_a_later_valid_scalar_index() {
             ],
         );
         indexes.add_composite(scalar.clone());
-        let decision = decide(&query(scope, &["category", "embedding"]), &indexes, &context());
+        let decision = decide(
+            &query(scope, &["category", "embedding"]),
+            &indexes,
+            &context(),
+        );
         assert!(matches!(decision, IndexDecision::UseIndex { index } if index == scalar));
     }
 }
@@ -203,13 +220,20 @@ fn scalar_index_merging_still_works_beside_an_unrelated_vector_index() {
                 vec![(scope, IndexFieldMode::Ascending)],
             );
         }
-        let decision = decide(&query(scope, &["category", "embedding"]), &indexes, &context());
+        let decision = decide(
+            &query(scope, &["category", "embedding"]),
+            &indexes,
+            &context(),
+        );
         let IndexDecision::MergeIndexes { indexes } = decision else {
             panic!("expected scalar index merging, got {decision:?}");
         };
         assert_eq!(indexes.len(), 2);
         assert!(indexes.iter().flat_map(|i| &i.fields).all(|f| {
-            matches!(f.mode, IndexFieldMode::Ascending | IndexFieldMode::Descending)
+            matches!(
+                f.mode,
+                IndexFieldMode::Ascending | IndexFieldMode::Descending
+            )
         }));
     }
 }
@@ -220,7 +244,10 @@ fn vector_nearest_planning_is_unchanged_with_and_without_a_scalar_prefilter() {
         for prefiltered in [false, true] {
             let mut indexes = no_automatic_indexes();
             let fields = if prefiltered {
-                vec![("category", IndexFieldMode::Ascending), ("embedding", VECTOR)]
+                vec![
+                    ("category", IndexFieldMode::Ascending),
+                    ("embedding", VECTOR),
+                ]
             } else {
                 vec![("embedding", VECTOR)]
             };

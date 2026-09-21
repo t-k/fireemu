@@ -1,5 +1,5 @@
 //! Generated index suggestions must retain collection and field identities through JSON.
-//! Uses serde_json already present in this adapter; the std-only core gains no dependency.
+//! Uses `serde_json` already present in this adapter; the std-only core gains no dependency.
 
 use fireemu_adapter_grpc::gateway::{Gateway, Rejection};
 use fireemu_core_firestore::field_path::FieldPath;
@@ -120,7 +120,13 @@ fn valid_special_names_roundtrip_without_double_decoding() {
 
 #[test]
 fn json_looking_collection_escapes_remain_literal_identifiers() {
-    for name in [r"items\u0041", r"items\n", r"items\b", r"items\t", r"items\\tail"] {
+    for name in [
+        r"items\u0041",
+        r"items\n",
+        r"items\b",
+        r"items\t",
+        r"items\\tail",
+    ] {
         let index = definition(name, IndexQueryScope::Collection, fp(&["field"]));
         let parsed: Json = serde_json::from_str(&index.indexes_json_fragment()).unwrap();
         assert_eq!(parsed["collectionGroup"].as_str(), Some(name));
@@ -165,7 +171,10 @@ fn a_literal_dotted_field_is_not_changed_into_a_nested_field() {
     let literal = definition("tasks", IndexQueryScope::Collection, fp(&["a.b"]));
     let nested = definition("tasks", IndexQueryScope::Collection, fp(&["a", "b"]));
     assert_ne!(literal.fields[0].path, nested.fields[0].path);
-    assert_eq!(decoded_definition(&literal.indexes_json_fragment()), literal);
+    assert_eq!(
+        decoded_definition(&literal.indexes_json_fragment()),
+        literal
+    );
     assert_eq!(decoded_definition(&nested.indexes_json_fragment()), nested);
 }
 
@@ -203,7 +212,12 @@ fn suggestion(rejection: &Rejection) -> &str {
     let status = rejection.to_status();
     assert_eq!(status.code(), tonic::Code::FailedPrecondition);
     assert_eq!(
-        status.metadata().get("fireemu-reason").unwrap().to_str().unwrap(),
+        status
+            .metadata()
+            .get("fireemu-reason")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         "FS_GW_MISSING_INDEX"
     );
     assert!(status.message().ends_with(fragment.as_str()));
@@ -240,7 +254,9 @@ fn the_strict_gateway_does_not_treat_a_vector_index_as_scalar_equality_support()
         let collection = CollectionId::try_new("vector-gateway").unwrap();
         let field = fp(&["embedding"]);
         let mut gateway = gateway();
-        gateway.indexes.set_default_single_field_indexes(&collection, vec![]);
+        gateway
+            .indexes
+            .set_default_single_field_indexes(&collection, vec![]);
         gateway.indexes.add_composite(IndexDefinition {
             collection_group: collection.clone(),
             query_scope: scope,

@@ -1,24 +1,20 @@
 """Acquisition comparator: a positive path that only fully bound bundles reach.
 
-Every bundle here is synthetic. It is collected through the scripted transport
-of the collector tests and then bound the way a bound collection run binds it.
-No test opens a socket, holds a credential or touches production.
+Every bundle here is collected by the real collector in bound mode through the
+scripted transport of the collector tests, then one binding at a time is
+mutated. No test opens a socket, holds a credential or touches production.
 """
 
 from __future__ import annotations
 
 import copy
-import time
 
 import pytest
-from o5_user_token_campaign import manifest, source_digests
 from o5_user_token_case import compile_case, digest
 from o5_user_token_collector import (
     COLLECTOR_CONTRACT,
-    ENVIRONMENT_LOCAL,
     ENVIRONMENT_PRODUCTION,
     READBACK_PUBLISH_ECHO,
-    READBACK_RELEASE_GET,
     ROLE_LOCAL_SHADOW,
     ROLE_PRODUCTION,
     collect,
@@ -33,161 +29,47 @@ from o5_user_token_comparator_v2 import (
     compare,
 )
 from test_o5_user_token_collector import Transport
+from test_o5_user_token_collector_bound import (
+    LOCAL_ENDPOINT,
+    LOCAL_TENANT,
+    PRODUCTION_ENDPOINT,
+    acquisition_for,
+)
 
 PROJECT = "fireemu-35fe6"
-NONCE = "e" * 32
+NONCE = "a" * 32
 PRODUCTION_TENANT = "o5-user-token-tenant"
-LOCAL_TENANT = "fireemu-00000000000000000001"
-PRODUCTION_ENDPOINT = "firestore.googleapis.com:443"
-LOCAL_ENDPOINT = "127.0.0.1:52879"
 
 
 def production_plan() -> dict:
     return compile_case(PROJECT, "(default)", NONCE, PRODUCTION_TENANT)
 
 
-def local_plan() -> dict:
-    return compile_case(PROJECT, "(default)", NONCE, LOCAL_TENANT)
+def local_plan(nonce: str = NONCE) -> dict:
+    return compile_case(PROJECT, "(default)", nonce, LOCAL_TENANT)
 
 
-def _bind(bundle: dict, plan: dict, *, side: str, endpoint: str, uid_salt: str) -> dict:
-    """Bind a collected bundle the way a bound collection run does.
-
-    This mirrors the bound collector output field for field. The collector
-    tests prove the real collector produces it; this helper lets each negative
-    below mutate exactly one binding.
-    """
-    bundle = copy.deepcopy(bundle)
-    bundle["contract"] = COLLECTOR_CONTRACT
-    bundle["provenance"]["case"] = {
-        key: plan[key] for key in ("project", "database", "nonce", "tenant")
-    }
-    sequence = 0
-    clock = 10.0
-    releases = []
-    for index, row in enumerate(bundle["rows"]):
-        label = row["ruleset"]
-        if not releases or releases[-1]["label"] != label:
-            sequence += 1
-            clock += 0.5
-            releases.append(
-                {
-                    "label": label,
-                    "sourceDigest": digest(plan["rulesets"][label]["source"]),
-                    "releaseName": f"{side}-release-{label}",
-                    "readback": {
-                        "kind": READBACK_RELEASE_GET
-                        if side == "production"
-                        else READBACK_PUBLISH_ECHO,
-                        "digest": digest(plan["rulesets"][label]["source"]),
-                    },
-                    "endpoint": endpoint,
-                    "beforeIndex": index,
-                    "activeFrom": clock,
-                    "wireSequence": sequence,
-                }
-            )
-        sequence += 1
-        clock += 0.5
-        row["at"] = clock
-        row["endpoint"] = endpoint
-        row["wireSequence"] = sequence
-    observation_finished = clock + 0.1
-    for key in ("documentSteps", "accountSteps"):
-        for step in bundle["cleanup"][key]:
-            sequence += 1
-            clock += 0.5
-            step["at"] = clock
-            step["endpoint"] = endpoint
-            step["wireSequence"] = sequence
-    finished = clock + 0.1
-    bundle["budget"]["rulesetCeiling"] = len(releases)
-    bundle["budget"]["rulesetSpent"] = len(releases)
-    sources = source_digests()
-    bundle["observer"] = {
-        "contract": COLLECTOR_CONTRACT,
-        "sourceDigests": sources,
-        "observerDigest": digest(sources),
-    }
-    now = time.time()
-    bundle["transport"] = {
-        "endpoints": [endpoint],
-        "receipts": sequence,
-        "sequencedReceipts": sequence,
-        "firstSequence": 1,
-        "lastSequence": sequence,
-        "sequenceMonotonic": True,
-        "rulesetReleases": releases,
-        "clock": {
-            "started": 10.0,
-            "observationFinished": observation_finished,
-            "finished": finished,
-        },
-        "wallClock": {"startedAt": now, "finishedAt": now + (finished - 10.0)},
-    }
-    principals = {
-        entry["ref"]: {
-            "uidFingerprint": digest(["uid", NONCE, uid_salt, entry["ref"]])[:16],
-            "provider": "anonymous" if entry["kind"] == "anonymous" else "password",
-            "tenant": entry["tenant"],
-            "claimsDigest": digest(entry["claims"]),
-        }
-        for entry in plan["ownedAccounts"]
-    }
-    manifest_digest = manifest(PROJECT, "(default)", NONCE, PRODUCTION_TENANT)[
-        "manifestDigest"
-    ]
-    if side == "production":
-        bundle["acquisition"] = {
-            "environment": {"kind": ENVIRONMENT_PRODUCTION},
-            "campaignManifestDigest": manifest_digest,
-            "nonceReservation": {
-                "reservationId": "reservation-1",
-                "campaignId": plan["campaignId"],
-                "nonceDigest": digest(NONCE),
-            },
-            "ownerPermission": {
-                "kind": "owner-permission",
-                "permissionDigest": "a" * 64,
-            },
-            "artifact": None,
-            "principals": principals,
-            "window": {"startsAt": now - 60, "expiresAt": now + 3600},
-        }
-        bundle["productionExecuted"] = True
-    else:
-        bundle["acquisition"] = {
-            "environment": {"kind": ENVIRONMENT_LOCAL},
-            "campaignManifestDigest": manifest_digest,
-            "nonceReservation": None,
-            "ownerPermission": None,
-            "artifact": {"artifactSha256": "b" * 64, "sourceCommit": "c" * 40},
-            "principals": principals,
-            "window": None,
-        }
-        bundle["productionExecuted"] = False
-    return bundle
+def bound_local(plan: dict, run_id: str = "local-1") -> dict:
+    return collect(
+        plan,
+        Transport(plan, endpoint=LOCAL_ENDPOINT),
+        role=ROLE_LOCAL_SHADOW,
+        run_id=run_id,
+        acquisition=acquisition_for(plan, ROLE_LOCAL_SHADOW),
+    )
 
 
 def bound_pair() -> tuple[dict, dict, dict]:
     """Two fully bound, agreeing bundles and the production plan."""
     plan = production_plan()
-    shadow = local_plan()
-    production = _bind(
-        collect(plan, Transport(plan), role=ROLE_PRODUCTION, run_id="production-1"),
+    production = collect(
         plan,
-        side="production",
-        endpoint=PRODUCTION_ENDPOINT,
-        uid_salt="production",
+        Transport(plan, endpoint=PRODUCTION_ENDPOINT),
+        role=ROLE_PRODUCTION,
+        run_id="production-1",
+        acquisition=acquisition_for(plan, ROLE_PRODUCTION),
     )
-    local = _bind(
-        collect(shadow, Transport(shadow), role=ROLE_LOCAL_SHADOW, run_id="local-1"),
-        shadow,
-        side="local",
-        endpoint=LOCAL_ENDPOINT,
-        uid_salt="local",
-    )
-    return production, local, plan
+    return production, bound_local(local_plan()), plan
 
 
 def errors_of(result: dict) -> str:
@@ -594,8 +476,9 @@ def test_a_row_outside_the_observation_span_or_deadline_is_named() -> None:
     assert result["classification"] == INDETERMINATE
     assert "production:time-contradiction:rows-outside-observation" in result["errors"]
     production, local, plan = bound_pair()
-    production["transport"]["clock"]["observationFinished"] = 10.0 + 601.0
-    production["transport"]["clock"]["finished"] = 10.0 + 601.0
+    clock = production["transport"]["clock"]
+    clock["observationFinished"] = clock["started"] + 601.0
+    clock["finished"] = clock["observationFinished"]
     production["transport"]["wallClock"]["finishedAt"] = (
         production["transport"]["wallClock"]["startedAt"] + 601.0
     )
@@ -672,11 +555,8 @@ def test_a_bundle_claiming_authority_is_refused(flag) -> None:
 def test_a_production_bundle_without_acquisition_bindings_is_indeterminate() -> None:
     plan = production_plan()
     production = collect(plan, Transport(plan), role=ROLE_PRODUCTION, run_id="p")
-    production["contract"] = COLLECTOR_CONTRACT
+    assert production["contract"] == COLLECTOR_CONTRACT
     production["productionExecuted"] = True
-    production["provenance"]["case"] = {
-        key: plan[key] for key in ("project", "database", "nonce", "tenant")
-    }
     _, local, _ = bound_pair()
     result = compare(production, local, plan)
     assert result["classification"] in (INDETERMINATE, REFUSED)
@@ -771,7 +651,7 @@ def test_a_wrong_role_and_a_wrong_contract_are_refused() -> None:
     assert result["classification"] == REFUSED
     assert "local:role-mismatch" in result["errors"]
     production, local, plan = bound_pair()
-    production["contract"] = "fs-rules-user-token-collector-v1"
+    production["contract"] = "fs-rules-user-token-collector-v2"
     result = compare(production, local, plan)
     assert result["classification"] == REFUSED
     assert "production:collector-contract-drift" in result["errors"]
@@ -779,14 +659,7 @@ def test_a_wrong_role_and_a_wrong_contract_are_refused() -> None:
 
 def test_a_local_shadow_of_another_nonce_is_refused() -> None:
     production, _, plan = bound_pair()
-    other = compile_case(PROJECT, "(default)", "f" * 32, LOCAL_TENANT)
-    local = _bind(
-        collect(other, Transport(other), role=ROLE_LOCAL_SHADOW, run_id="local-2"),
-        other,
-        side="local",
-        endpoint=LOCAL_ENDPOINT,
-        uid_salt="local",
-    )
+    local = bound_local(local_plan("f" * 32), run_id="local-2")
     result = compare(production, local, plan)
     assert result["classification"] == REFUSED
     assert "local:campaign-identity-drift" in result["errors"]

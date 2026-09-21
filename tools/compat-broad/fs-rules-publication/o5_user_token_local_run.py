@@ -21,15 +21,14 @@ from __future__ import annotations
 import argparse
 import errno
 import hashlib
-import stat
 import json
 import math
 import os
 import re
-from datetime import datetime
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -38,6 +37,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,15 +45,21 @@ from typing import Any
 # entry point is imported or invoked by this local transport.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from batch_wire import NoRedirect, _read_bounded_response
-
+from o5_user_token_campaign import manifest
 from o5_user_token_case import (
     PRINCIPAL_EMPTY,
     PRINCIPAL_EXPIRED,
     PRINCIPAL_MALFORMED,
     PRINCIPAL_UNAUTHENTICATED,
     compile_case,
+    digest,
 )
-from o5_user_token_collector import ROLE_LOCAL_SHADOW, collect
+from o5_user_token_collector import (
+    ENVIRONMENT_LOCAL,
+    READBACK_PUBLISH_ECHO,
+    ROLE_LOCAL_SHADOW,
+    collect,
+)
 from o5_user_token_shadow import (
     ENVIRONMENT_ALLOWLIST,
     launch_specification,
@@ -77,6 +83,13 @@ STATUS_BY_HTTP = {
 
 class Refused(RuntimeError):
     pass
+
+
+# What this process's transport records about every HTTP request it makes:
+# a running count, and the numeric loopback host and port the last request
+# was opened against. A receipt carries these as its wire facts. They are
+# written by ``_request`` after its loopback check, never by the caller.
+_WIRE = {"sequence": 0, "endpoint": None}
 
 
 # --------------------------------------------------------------------------
@@ -104,6 +117,8 @@ def _request(
             headers["Authorization"] = "Bearer " + credential
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
+        _WIRE["sequence"] += 1
+        _WIRE["endpoint"] = f"{parsed.hostname}:{parsed.port}"
         try:
             response = opener.open(request, timeout=REQUEST_TIMEOUT)
         except urllib.error.HTTPError as error:
@@ -115,7 +130,7 @@ def _request(
             # Empty or unparsable error bodies are not fabricated as {}.
             parsed_body = json.loads(raw)
             if not isinstance(parsed_body, dict):
-                raise ValueError("object response required")
+                raise ValueError("object response required")  # noqa: TRY004 -- refused like every other malformed response
             return response.status, parsed_body
     except (ValueError, OSError, urllib.error.URLError) as error:
         # Never include URLs, request headers, assertions or raw error bodies.
@@ -182,6 +197,7 @@ class LocalShadow:
         self.tenant: str | None = None
         self.tenant_attempted = False
         self.wire_requests = 0
+        self.releases = 0
         self.setup_accounts: list[str] = []
         self.setup_documents: dict[str, dict[str, Any]] = {}
         self.setup_journal: Path | None = None
@@ -333,10 +349,46 @@ class LocalShadow:
         return self.tokens[ref]
 
     def execute(self, request: dict[str, Any]) -> dict[str, Any]:
-        """The injected transport the collector calls. Resolves refs to tokens."""
+        """The injected transport the collector calls. Resolves refs to tokens.
+
+        Every receipt carries the wire facts ``_request`` recorded for the
+        last HTTP request it made: the loopback host and port reached and the
+        process-wide request counter.
+        """
         self.wire_requests += 1
+        receipt = self._execute(request)
+        receipt["endpoint"] = _WIRE["endpoint"]
+        receipt["wireSequence"] = _WIRE["sequence"]
+        return receipt
+
+    def _release(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Publish the requested Ruleset and echo what was published.
+
+        The local runtime answers a publication with an empty issue list and has
+        no route that reads the active release back, so the readback is the
+        digest of the bytes this transport sent, labelled as such. The
+        collector checks it against the plan; the acquisition comparator
+        accepts a publish echo on the local side only.
+        """
+        label = request["ruleset"]
+        source = self.plan["rulesets"][label]["source"]
+        if digest(source) != request.get("sourceDigest"):
+            return {"complete": False, "failure": "ruleset-source-drift"}
+        self.publish(label)
+        self.releases += 1
+        return {
+            "complete": True,
+            "status": "OK",
+            "releaseName": f"local-{label}-{self.releases}",
+            "readbackKind": READBACK_PUBLISH_ECHO,
+            "readbackDigest": digest(source),
+        }
+
+    def _execute(self, request: dict[str, Any]) -> dict[str, Any]:
         if request.get("phase") == "recovery":
             return self._recover(request)
+        if request.get("phase") == "ruleset":
+            return self._release(request)
         if request["ruleset"] != self.active_ruleset:
             self.publish(request["ruleset"])
         credential = self.credential_for(request["credentialRef"])
@@ -595,6 +647,48 @@ class LocalShadow:
         return deleted and absent
 
 
+def _local_acquisition(output: Path, shadow: LocalShadow) -> dict[str, Any]:
+    """The bindings a local shadow run carries into its bundle.
+
+    The environment is local, there is no reservation and no owner permission,
+    the artifact is what the parent recorded in ``launch.json`` before it
+    started this child, and each principal is fingerprinted from the nonce and
+    the uid the local Auth emulator assigned. No uid and no token is bound.
+    """
+    plan = shadow.plan
+    artifact = None
+    launch = output / "launch.json"
+    if launch.is_file() and not launch.is_symlink():
+        recorded = json.loads(launch.read_bytes()).get("artifact")
+        if isinstance(recorded, dict):
+            artifact = {
+                "artifactSha256": recorded.get("artifactSha256"),
+                "sourceCommit": recorded.get("sourceCommit"),
+            }
+    principals = {}
+    for entry in plan["ownedAccounts"]:
+        uid = shadow.uids.get(entry["ref"])
+        if not isinstance(uid, str) or not uid:
+            continue
+        principals[entry["ref"]] = {
+            "uidFingerprint": digest(["uid", plan["nonce"], uid])[:16],
+            "provider": "anonymous" if entry["kind"] == "anonymous" else "password",
+            "tenant": entry["tenant"],
+            "claimsDigest": digest(entry["claims"]),
+        }
+    return {
+        "environment": {"kind": ENVIRONMENT_LOCAL},
+        "campaignManifestDigest": manifest(
+            plan["project"], plan["database"], plan["nonce"], plan["tenant"]
+        )["manifestDigest"],
+        "nonceReservation": None,
+        "ownerPermission": None,
+        "artifact": artifact,
+        "principals": principals,
+        "window": None,
+    }
+
+
 def run_child(output: Path, nonce: str) -> int:
     firestore = "http://" + os.environ["FIRESTORE_EMULATOR_HOST"]
     auth = "http://" + os.environ["FIREBASE_AUTH_EMULATOR_HOST"]
@@ -636,6 +730,7 @@ def run_child(output: Path, nonce: str) -> int:
             deadline_seconds=300.0,
             recovery_deadline_seconds=600.0,
             journal_path=output / "journal.jsonl",
+            acquisition=_local_acquisition(output, shadow),
         )
         # Deviations are computed against the real uids, then everything that
         # gets written out is reduced to principal labels. The raw uids stay in
@@ -651,6 +746,7 @@ def run_child(output: Path, nonce: str) -> int:
             and bundle["cleanup"].get("cleanupComplete") is True
         )
         record["wireRequests"] = shadow.wire_requests
+        record["httpRequests"] = _WIRE["sequence"]
         record["launchSpecification"] = launch_specification(shadow.plan)
     except Refused as error:
         record["failure"] = str(error).split(":", 1)[0]

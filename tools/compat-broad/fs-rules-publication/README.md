@@ -48,7 +48,7 @@ for, because an administrator bypasses Rules evaluation.
 | Module | Responsibility |
 | --- | --- |
 | `o5_user_token_case.py` | Compiles the 26-row matrix, both Ruleset sources, the owned documents and accounts, every frozen payload and the expected result of every row |
-| `o5_user_token_collector.py` | Runs the matrix through an injected transport under an enforced request ceiling, separate observation and recovery deadlines, an fsynced journal and version-bound cleanup of documents and accounts |
+| `o5_user_token_collector.py` | Runs the matrix through an injected transport under an enforced request ceiling, separate observation and recovery deadlines, an fsynced journal and version-bound cleanup of documents and accounts; in a bound run it also releases each Ruleset through a checked step and records the endpoint, wire sequence, clocks, observer digests and launcher bindings the acquisition comparator verifies |
 | `o5_user_token_campaign.py` | Freezes the inputs, the budget estimate, the permission envelope and the owner preconditions; admission always raises |
 | `o5_user_token_comparator.py` | Names why a pair of bundles is not an acquisition; it has no positive classification |
 | `o5_user_token_comparator_v2.py` | The acquisition comparator: reaches `MATCH`, `SEMANTIC_MISMATCH`, `INDETERMINATE` or `REFUSED`, and reaches a positive classification only when every binding below is present on both sides and verified |
@@ -71,6 +71,36 @@ recursively: a credential-shaped key or a token-shaped value at any depth
 aborts the run, and observation and recovery receipts share one allowlist. A
 row is bound to its principal by a per-nonce fingerprint derived from the
 label, not from any secret. Nothing is passed on a command line.
+
+### Bound collection
+
+`collect(..., acquisition=...)` runs the matrix as an acquisition attempt
+rather than a recording. The launcher supplies the environment kind, the
+campaign manifest digest, the nonce reservation or the artifact, the principal
+fingerprints and the approval window; the collector validates their shape,
+scans them for credential-shaped content, refuses an environment that
+contradicts the role, and records a copy. During the run every receipt must
+carry `endpoint` (the host and port the transport connected to) and
+`wireSequence` (the transport's own request counter); a receipt without them,
+an endpoint outside the declared environment's allowlist, or a sequence that
+regresses aborts observation and is refused again during recovery, so no
+deletion is authorized on the strength of a foreign endpoint. Before the first
+row of each Ruleset the collector issues an explicit `ruleset-release` request
+carrying the plan's source digest, and accepts the release only when the
+transport's readback digest equals it. The bundle records `observer` (the lane
+source digests, read from disk), `transport` (endpoints, receipt and sequence
+counts, the releases, the monotonic and wall clocks) and `acquisition`, and
+derives `productionExecuted` from the endpoints reached rather than from any
+label. An unbound run behaves as before: no release step, no acquisition, and
+the wire keys are optional. Structural redaction is unchanged in both modes.
+
+The local runner is the lane's only bound transport. Its `_request` records
+the loopback host and port and the process-wide request counter after its
+loopback check, and every receipt it returns carries them. Its Ruleset
+readback is a publish echo, labelled `publish-echo`, because the local runtime
+has no route that reads the active release back; the acquisition comparator
+accepts that on the local side only and requires a `release-get` on the
+production side.
 
 ### What this package does not do
 

@@ -6,6 +6,8 @@ import pytest
 from o5_user_token_case import compile_case
 from o5_user_token_collector import (
     COLLECTOR_CONTRACT,
+    READBACK_PUBLISH_ECHO,
+    READBACK_RELEASE_GET,
     ROLE_LOCAL_SHADOW,
     ROLE_PRODUCTION,
     collect,
@@ -20,7 +22,12 @@ def case() -> dict:
 
 
 class Transport:
-    """A scripted transport. It never opens a socket and holds no credential."""
+    """A scripted transport. It never opens a socket and holds no credential.
+
+    With ``endpoint`` it behaves as a bound transport: every receipt names the
+    host it reached and its own request counter, and a Ruleset release request
+    is answered with a named release and a readback digest.
+    """
 
     def __init__(
         self,
@@ -31,6 +38,8 @@ class Transport:
         token_value: bool = False,
         incomplete_at: int | None = None,
         account_delete_fails: bool = False,
+        endpoint: str | None = None,
+        readback_kind: str | None = None,
     ):
         self.plan = plan
         self.leak = leak
@@ -38,14 +47,39 @@ class Transport:
         self.token_value = token_value
         self.incomplete_at = incomplete_at
         self.account_delete_fails = account_delete_fails
+        self.endpoint = endpoint
+        self.readback_kind = readback_kind or (
+            READBACK_RELEASE_GET
+            if endpoint and not endpoint.startswith("127.")
+            else READBACK_PUBLISH_ECHO
+        )
         self.requests: list[dict] = []
+        self.wire = 0
+        self.releases = 0
         self.present = {resource: True for resource in plan["ownedResources"]}
         self.accounts = {entry["ref"]: True for entry in plan["ownedAccounts"]}
 
     def __call__(self, request: dict) -> dict:
         self.requests.append(request)
+        self.wire += 1
+        receipt = self._answer(request)
+        if self.endpoint is not None:
+            receipt["endpoint"] = self.endpoint
+            receipt["wireSequence"] = self.wire
+        return receipt
+
+    def _answer(self, request: dict) -> dict:
         if request.get("phase") == "recovery":
             return self._recovery(request)
+        if request.get("phase") == "ruleset":
+            self.releases += 1
+            return {
+                "complete": True,
+                "status": "OK",
+                "releaseName": f"scripted-{request['ruleset']}-{self.releases}",
+                "readbackKind": self.readback_kind,
+                "readbackDigest": request["sourceDigest"],
+            }
         index = request["index"]
         if self.incomplete_at == index:
             return {"complete": False, "failure": "transport-timeout"}

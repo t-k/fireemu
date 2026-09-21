@@ -958,6 +958,7 @@ def test_known_action_stage_readback_is_noncreating():
         "kind": "action-stage",
         "id": "account-a-readback",
         "service": "auth",
+        "project": "fireemu-35fe6",
         "method": "POST",
         "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
         "resource": "projects/fireemu-35fe6/auth/accounts/o1-oob-" + ("a" * 32) + "-a",

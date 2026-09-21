@@ -186,9 +186,24 @@ export const captureWebChannel = (page, firestorePort, now = () => Math.trunc(pe
 /** Column order of the compact request rows a receipt stores. */
 export const REQUEST_ROW_COLUMNS = Object.freeze(["atMs", "stream", "method", "role", "ci", "status"]);
 
-/** Compact rows for a receipt: one small array per request, no session data. */
+/**
+ * Compact rows for a receipt: one space-separated line per request in column
+ * order (`-` for an absent value), so a receipt with hundreds of requests stays
+ * small. No session data is included.
+ */
 export const compactWebChannelRows = (rows, limit = 4000) =>
-  rows.slice(0, limit).map((row) => REQUEST_ROW_COLUMNS.map((column) => row[column] ?? null));
+  rows.slice(0, limit).map((row) =>
+    REQUEST_ROW_COLUMNS.map((column) => (row[column] === null || row[column] === undefined ? "-" : String(row[column]))).join(" "),
+  );
+
+/** Inverse of `compactWebChannelRows` for one line. */
+export const parseWebChannelRow = (line) => {
+  const parts = String(line).split(" ");
+  if (parts.length !== REQUEST_ROW_COLUMNS.length) throw new Error("malformed request row");
+  const numeric = new Set(["atMs", "ci", "status"]);
+  return Object.fromEntries(REQUEST_ROW_COLUMNS.map((column, index) => [column,
+    parts[index] === "-" ? null : numeric.has(column) ? Number(parts[index]) : parts[index]]));
+};
 
 export const summarizeWebChannel = (rows) => {
   const count = (predicate) => rows.filter(predicate).length;

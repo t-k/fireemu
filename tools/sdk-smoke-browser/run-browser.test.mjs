@@ -18,6 +18,7 @@ import {
   closeAll,
   compactWebChannelRows,
   launchChromium,
+  parseWebChannelRow,
   resolveMounted,
   serveStatic,
   summarizeWebChannel,
@@ -146,9 +147,14 @@ test("the request summary separates long-polled from streamed backchannels", () 
     backchannelCi: { streamed: 1, longPolled: 1 },
   });
   assert.deepEqual(compactWebChannelRows(rows, 2), [
-    [1, "Listen", "POST", "handshake", null, 200],
-    [2, "Listen", "GET", "backchannel", 1, 200],
+    "1 Listen POST handshake - 200",
+    "2 Listen GET backchannel 1 200",
   ]);
+  assert.deepEqual(parseWebChannelRow("5 Write POST terminate - -"),
+    { atMs: 5, stream: "Write", method: "POST", role: "terminate", ci: null, status: null });
+  assert.deepEqual(compactWebChannelRows(rows).map(parseWebChannelRow),
+    rows.map(({ atMs, stream, method, role, ci, status }) => ({ atMs, stream, method, role, ci, status })));
+  assert.throws(() => parseWebChannelRow("too short"), /malformed/);
 });
 
 test("runner arguments require loopback endpoints, a demo project and known pages", () => {

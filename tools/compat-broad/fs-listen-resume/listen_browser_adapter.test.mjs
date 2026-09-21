@@ -106,7 +106,7 @@ test('the browser receipt keeps the Node receipt shape and adds the transport ev
   assert.equal(receipt.permission, null);
   assert.deepEqual(receipt.sdkResolved, { firebase: '12.18.0' });
   assert.deepEqual(receipt.webchannel.columns, ['atMs', 'stream', 'method', 'role', 'ci', 'status']);
-  assert.deepEqual(receipt.webchannel.rows, [[1, 'Listen', 'POST', 'handshake', null, 200], [2, 'Listen', 'GET', 'backchannel', 1, 200]]);
+  assert.deepEqual(receipt.webchannel.rows, ['1 Listen POST handshake - 200', '2 Listen GET backchannel 1 200']);
   assert.deepEqual(receipt.transportTimeline.map(entry => entry.caseId), ['FS-LISTEN-SDK-101', 'FS-LISTEN-SDK-101C']);
   for (const relative of BROWSER_BOUND_SOURCES) assert.match(receipt.sourceDigests[relative], /^[0-9a-f]{64}$/, relative);
   assert.equal(receipt.lifecycle.complete, true);

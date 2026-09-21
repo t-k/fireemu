@@ -160,10 +160,12 @@ def test_each_mode_exercised_the_webchannel_variant_it_claims():
         assert columns == ["atMs", "stream", "method", "role", "ci", "status"]
         rows = receipt["webchannel"]["rows"]
         assert len(rows) == summary["requests"]
-        for row in rows:
+        for line in rows:
+            row = line.split(" ")
             assert len(row) == len(columns)
             assert row[1] in {"Listen", "Write"}
             assert row[3] in {"handshake", "forward", "backchannel", "terminate"}
+            assert row[4] in {"-", "0", "1"}
     long_polling = receipts["long-polling"]["webchannel"]["summary"]["backchannelCi"]
     streaming = receipts["streaming"]["webchannel"]["summary"]["backchannelCi"]
     assert long_polling["longPolled"] > 0 and long_polling["streamed"] == 0

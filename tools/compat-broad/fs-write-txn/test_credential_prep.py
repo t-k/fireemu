@@ -139,6 +139,8 @@ def oauth_server():
                 self.send_response(200)
             if state["scenario"] == "oversize":
                 raw = b"x" * 16385
+            elif state["scenario"] == "malformed-json":
+                raw = b'{"unterminated": tru'
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             try:
@@ -147,6 +149,20 @@ def oauth_server():
                         self.wfile.write(bytes([byte]))
                         self.wfile.flush()
                         time.sleep(0.1)
+                elif state["scenario"] == "truncated":
+                    # Declares the full length but only ever writes half the
+                    # body, then returns; the handler's default HTTP/1.0
+                    # protocol closes the connection right after, matching
+                    # the production observation: 200 + Content-Length, then
+                    # the connection torn down before the body completes.
+                    half = raw[: len(raw) // 2]
+                    self.wfile.write(half)
+                    self.wfile.flush()
+                elif state["scenario"] == "stall":
+                    # Declares the full length, writes nothing at all, and
+                    # blocks well past any test-side socket timeout so the
+                    # client's own read times out instead of hitting EOF.
+                    time.sleep(2.0)
                 else:
                     self.wfile.write(raw)
             except (BrokenPipeError, ConnectionResetError):
@@ -156,6 +172,7 @@ def oauth_server():
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
     state["origin"] = f"http://127.0.0.1:{server.server_port}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -212,6 +229,150 @@ def test_private_worker_is_bounded_and_never_retries(oauth_server, scenario):
         assert "synthetic" not in json.dumps(
             {k: v for k, v in result.items() if k != "body"}
         )
+
+
+@pytest.mark.parametrize("scenario", ["success", "redirect", "oversize", "trickle"])
+def test_private_worker_tokeninfo_slot_is_bounded_and_never_retries(
+    oauth_server, scenario
+):
+    """The refresh slot above has this coverage; tokeninfo (the slot the
+    2026-09-21 production stop actually charged) previously had none at all
+    in this bounded-worker parametrization."""
+    import time
+
+    module = prep()
+    oauth_server["scenario"] = scenario
+    started = time.monotonic()
+    result = module._private_request(
+        "tokeninfo",
+        "synthetic-access-secret",
+        fixture_origin=oauth_server["origin"],
+        deadline=0.5 if scenario == "trickle" else 3,
+    )
+    assert time.monotonic() - started < 4
+    assert oauth_server["requests"] == [("POST", "/oauth2/v1/tokeninfo")]
+    assert result["workerReaped"] is True
+    if scenario == "success":
+        assert (
+            result["status"] == 200 and result["body"]["audience"] == ADC["client_id"]
+        )
+    else:
+        assert result["complete"] is False
+        assert "synthetic" not in json.dumps(
+            {k: v for k, v in result.items() if k != "body"}
+        )
+
+
+@pytest.mark.parametrize(
+    "scenario, expected_failure",
+    [
+        ("truncated", "body-truncated"),
+        ("oversize", "body-oversize"),
+        ("malformed-json", "json-invalid"),
+    ],
+)
+def test_http_request_failure_taxonomy_carries_diagnostics(
+    oauth_server, scenario, expected_failure
+):
+    """Regression for the 2026-09-21 production stop: a 200 + Content-Length
+    response whose connection closes before the declared body arrives used
+    to collapse into the same generic 'response-limit'/'transport-or-json'
+    failure as an oversize body or a JSON decode error, so operators could
+    not tell them apart from the receipt alone."""
+    module = prep()
+    oauth_server["scenario"] = scenario
+    result = module._http_request(
+        "tokeninfo", "synthetic-access-secret", fixture_origin=oauth_server["origin"]
+    )
+    assert result["complete"] is False
+    assert result["status"] == 200
+    assert result["failure"] == expected_failure
+    assert result["elapsedSeconds"] >= 0
+    if scenario == "truncated":
+        assert result["declaredLength"] is not None
+        assert 0 < result["receivedBytes"] < result["declaredLength"]
+    assert "synthetic" not in json.dumps(
+        {k: v for k, v in result.items() if k != "body"}
+    )
+
+
+def test_http_request_read_timeout_reports_effective_socket_timeout(oauth_server):
+    module = prep()
+    oauth_server["scenario"] = "stall"
+    result = module._http_request(
+        "tokeninfo",
+        "synthetic-access-secret",
+        fixture_origin=oauth_server["origin"],
+        timeout=0.3,
+    )
+    assert result["complete"] is False
+    assert result["failure"] == "read-timeout"
+    assert result["socketTimeoutSeconds"] == 0.3
+    assert result["elapsedSeconds"] >= 0.3
+    assert result["exceptionClass"]
+    assert "synthetic" not in json.dumps(
+        {k: v for k, v in result.items() if k != "body"}
+    )
+
+
+def test_http_request_reports_connect_failed_with_exception_class():
+    import socket
+
+    module = prep()
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    result = module._http_request(
+        "tokeninfo",
+        "synthetic-access-secret",
+        fixture_origin=f"http://127.0.0.1:{port}",
+        timeout=1,
+    )
+    assert result["complete"] is False
+    assert result["status"] is None
+    assert result["failure"] == "connect-failed"
+    assert result["exceptionClass"] == "ConnectionRefusedError"
+
+
+def test_bounded_socket_timeout_stays_below_kill_deadline_with_a_floor():
+    module = prep()
+    # Typical management-slot deadline (~12s, capped by REQUEST_SECONDS):
+    # the socket timeout must be strictly below what `_private_request`
+    # hands to `worker.communicate(timeout=...)`, with enough margin for
+    # interpreter startup and result serialization.
+    cleanup_margin = min(0.25, 12.0 / 4)
+    bounded = module._bounded_socket_timeout(12.0, cleanup_margin)
+    assert bounded < 12.0 - cleanup_margin
+    assert bounded == pytest.approx(12.0 - cleanup_margin - 0.5)
+    # A very short deadline still gets a usable, non-zero socket timeout.
+    assert module._bounded_socket_timeout(0.1, 0.025) == 1.0
+
+
+def test_private_worker_tokeninfo_stall_times_out_before_kill(oauth_server):
+    """The socket-level timeout used to be a hardcoded REQUEST_SECONDS (12s)
+    regardless of the deadline handed to `_private_request`, and that
+    deadline can never exceed REQUEST_SECONDS -- so the coordinator's own
+    SIGKILL always won the race and the worker's graceful, labeled
+    read-timeout path was unreachable in production. This proves the fixed
+    per-call socket timeout now fires first."""
+    module = prep()
+    oauth_server["scenario"] = "stall"
+    result = module._private_request(
+        "tokeninfo",
+        "synthetic-access-secret",
+        fixture_origin=oauth_server["origin"],
+        deadline=2.0,
+    )
+    assert result["workerReaped"] is True
+    assert result["complete"] is False
+    assert result["failure"] == "read-timeout"
+    expected = module._bounded_socket_timeout(2.0, min(0.25, 2.0 / 4))
+    assert result["socketTimeoutSeconds"] == pytest.approx(expected)
+    assert result["elapsedSeconds"] < 2.0
+    assert "synthetic" not in json.dumps(
+        {k: v for k, v in result.items() if k != "body"}
+    )
 
 
 @pytest.mark.parametrize(
@@ -452,7 +613,10 @@ def test_private_worker_uses_isolated_stdlib_interpreter(oauth_server, monkeypat
 
     monkeypatch.setattr(subprocess, "Popen", start)
     result = prep()._private_request(
-        "refresh", ADC, fixture_origin=oauth_server["origin"], deadline=3,
+        "refresh",
+        ADC,
+        fixture_origin=oauth_server["origin"],
+        deadline=3,
     )
     assert len(calls) == 1
     assert calls[0][0][1:4] == ["-I", "-S", "-B"]

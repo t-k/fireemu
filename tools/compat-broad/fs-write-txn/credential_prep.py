@@ -21,6 +21,26 @@ OUTER_COST_MICROUSD = 1_303_500
 SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 ADC_FIELDS = {"type", "client_id", "client_secret", "refresh_token"}
 
+# The read-only HTTP layer's own socket timeout is kept below the deadline
+# the coordinator (`_private_request`) will use to SIGKILL the worker, so a
+# stalled connection surfaces as a labeled "read-timeout" failure carrying
+# diagnostics instead of an opaque kill with no signal at all. See
+# `_bounded_socket_timeout`.
+SOCKET_TIMEOUT_FLOOR_SECONDS = 1.0
+WORKER_STARTUP_MARGIN_SECONDS = 0.5
+
+
+def _bounded_socket_timeout(deadline, cleanup_margin):
+    """HTTP-layer timeout for one private-worker call, strictly below the
+    coordinator's own kill deadline (`deadline - cleanup_margin`) by a fixed
+    margin that covers interpreter startup and result serialization, and
+    never below a small floor so a very short deadline still gets a usable
+    (if short) socket timeout rather than zero."""
+    return max(
+        SOCKET_TIMEOUT_FLOOR_SECONDS,
+        deadline - cleanup_margin - WORKER_STARTUP_MARGIN_SECONDS,
+    )
+
 
 def contract():
     return {
@@ -157,9 +177,18 @@ def build_request(slot, secret):
     return {"method": "POST", "host": host, "path": path, "body": body}
 
 
-def _http_request(slot, secret, fixture_origin=None):
+def _http_request(slot, secret, fixture_origin=None, *, timeout=REQUEST_SECONDS):
+    """Bounded single-shot HTTP call with a diagnosable, non-credential-bearing
+    failure taxonomy: body-truncated, body-oversize, read-timeout,
+    connect-failed, transport-error (other OSError/http exceptions, tagged
+    with the exception class name) and json-invalid. Every failure carries
+    receivedBytes, declaredLength (when known) and elapsedSeconds; timeouts
+    also carry the effective socketTimeoutSeconds. None of these fields can
+    contain response or credential bytes -- they are counts, a header value
+    already bounded to MAX_BYTES, and exception type names."""
     import http.client
     import ssl
+    import time
     from urllib.parse import urlsplit
 
     from broad_contract import local_origin
@@ -168,48 +197,84 @@ def _http_request(slot, secret, fixture_origin=None):
     if fixture_origin is None:
         connection = http.client.HTTPSConnection(
             request["host"],
-            timeout=REQUEST_SECONDS,
+            timeout=timeout,
             context=ssl.create_default_context(),
         )
     else:
         local_origin(fixture_origin)
         target = urlsplit(fixture_origin)
         connection = http.client.HTTPConnection(
-            target.hostname, target.port, timeout=REQUEST_SECONDS
+            target.hostname, target.port, timeout=timeout
         )
+    started = time.monotonic()
     summary = {
         "complete": False,
         "status": None,
         "receivedBytes": 0,
         "requestBytes": len(request["body"]) + len(request["path"].encode()),
+        "declaredLength": None,
+        "elapsedSeconds": 0.0,
+        "socketTimeoutSeconds": timeout,
     }
+
+    def stamped(**fields):
+        summary["elapsedSeconds"] = time.monotonic() - started
+        return {**summary, **fields}
+
     try:
-        connection.request(
-            "POST",
-            request["path"],
-            body=request["body"],
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-            },
-        )
-        response = connection.getresponse()
+        try:
+            connection.request(
+                "POST",
+                request["path"],
+                body=request["body"],
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                },
+            )
+            response = connection.getresponse()
+        except TimeoutError as error:
+            return stamped(failure="read-timeout", exceptionClass=type(error).__name__)
+        except OSError as error:
+            return stamped(
+                failure="connect-failed", exceptionClass=type(error).__name__
+            )
         summary["status"] = response.status
         if response.status != 200:
-            return {**summary, "failure": "http-status"}
+            return stamped(failure="http-status")
         length = response.getheader("Content-Length")
-        if length is not None and (not length.isdigit() or int(length) > MAX_BYTES):
-            return {**summary, "failure": "response-limit"}
-        raw = response.read(MAX_BYTES + 1)
+        declared = None
+        if length is not None:
+            if not length.isdigit():
+                return stamped(
+                    failure="transport-error", exceptionClass="InvalidContentLength"
+                )
+            declared = int(length)
+            summary["declaredLength"] = declared
+            if declared > MAX_BYTES:
+                return stamped(failure="body-oversize")
+        try:
+            raw = response.read(MAX_BYTES + 1)
+        except TimeoutError as error:
+            return stamped(failure="read-timeout", exceptionClass=type(error).__name__)
+        except Exception as error:  # noqa: BLE001 -- exception class name only.
+            return stamped(
+                failure="transport-error", exceptionClass=type(error).__name__
+            )
         summary["receivedBytes"] = len(raw)
-        if len(raw) > MAX_BYTES or (length is not None and len(raw) != int(length)):
-            return {**summary, "failure": "response-limit"}
-        body = decode_json(raw)
-        if not isinstance(body, dict):
-            raise TypeError("credential response object required")
-        return {**summary, "complete": True, "body": body}
-    except Exception:  # noqa: BLE001 -- Never return credential-bearing exception text.
-        return {**summary, "failure": "transport-or-json"}
+        if len(raw) > MAX_BYTES:
+            return stamped(failure="body-oversize")
+        if declared is not None and len(raw) != declared:
+            return stamped(failure="body-truncated")
+        try:
+            body = decode_json(raw)
+            if not isinstance(body, dict):
+                raise TypeError("credential response object required")
+        except Exception:  # noqa: BLE001 -- Never return credential-bearing text.
+            return stamped(failure="json-invalid")
+        return stamped(complete=True, body=body)
+    except Exception as error:  # noqa: BLE001 -- Never return credential-bearing text.
+        return stamped(failure="transport-error", exceptionClass=type(error).__name__)
     finally:
         connection.close()
 
@@ -224,7 +289,16 @@ def _private_request(slot, secret, *, fixture_origin=None, deadline=REQUEST_SECO
     build_request(slot, secret)
     if not 0 < deadline <= REQUEST_SECONDS:
         raise ValueError("bounded credential deadline required")
-    payload = {"slot": slot, "secret": secret}
+    cleanup_margin = min(0.25, deadline / 4)
+    payload = {
+        "slot": slot,
+        "secret": secret,
+        # The worker's own HTTP-layer timeout, kept below this call's kill
+        # deadline so a stall is diagnosed as "read-timeout" by the worker
+        # instead of only ever observed as an opaque SIGKILL. See
+        # `_bounded_socket_timeout`.
+        "socketTimeoutSeconds": _bounded_socket_timeout(deadline, cleanup_margin),
+    }
     flag = "--worker"
     if fixture_origin is not None:
         local_origin(fixture_origin)
@@ -234,7 +308,6 @@ def _private_request(slot, secret, *, fixture_origin=None, deadline=REQUEST_SECO
     if len(raw) > 65536:
         raise ValueError("bounded private credential request required")
     deadline_at = time.monotonic() + deadline
-    cleanup_margin = min(0.25, deadline / 4)
     worker = subprocess.Popen(
         # This worker uses only stdlib and explicit repository imports. Do not
         # run site hooks or inherit interpreter search-path configuration.
@@ -283,12 +356,21 @@ def _worker():
     if len(raw) > 65536:
         return 2
     value = decode_json(raw)
-    fields = {"slot", "secret"} | (
+    fields = {"slot", "secret", "socketTimeoutSeconds"} | (
         {"fixtureOrigin"} if sys.argv[1] == "--fixture-worker" else set()
     )
     if not isinstance(value, dict) or set(value) != fields:
         return 2
-    result = _http_request(value["slot"], value["secret"], value.get("fixtureOrigin"))
+    timeout = value["socketTimeoutSeconds"]
+    if (
+        type(timeout) not in (int, float)
+        or isinstance(timeout, bool)
+        or not 0 < timeout <= REQUEST_SECONDS
+    ):
+        return 2
+    result = _http_request(
+        value["slot"], value["secret"], value.get("fixtureOrigin"), timeout=timeout
+    )
     sys.stdout.write(json.dumps(result, allow_nan=False))
     return 0
 

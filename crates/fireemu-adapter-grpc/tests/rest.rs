@@ -1108,9 +1108,9 @@ fn batch_write_rest_reports_lock_contention_per_item_and_recovers_after_rollback
     assert_eq!(recovered["fields"]["v"]["integerValue"], "5");
 }
 
-/// Production's refusal of a BatchWrite that names one document twice
+/// Production's refusal of a `BatchWrite` that names one document twice
 /// (`conformance/firestore-production-matrix.json`, `writes/batch-write` step
-/// `non-atomic-batch`, 2026-09-07 live corpus: HTTP 400 INVALID_ARGUMENT, no status array,
+/// `non-atomic-batch`, 2026-09-07 live corpus: HTTP 400 `INVALID_ARGUMENT`, no status array,
 /// readbacks proving nothing landed).
 const BATCH_WRITE_REPEATED_DOCUMENT: &str =
     "the same document cannot be written more than once in a single request";

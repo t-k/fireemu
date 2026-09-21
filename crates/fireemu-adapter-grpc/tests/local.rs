@@ -8251,14 +8251,14 @@ async fn start_with_profile(
     (FirestoreClient::new(channel), handle)
 }
 
-/// Production's refusal of a BatchWrite that names one document twice
+/// Production's refusal of a `BatchWrite` that names one document twice
 /// (`conformance/firestore-production-matrix.json`, `writes/batch-write` step
 /// `non-atomic-batch`, 2026-09-07 live corpus).
 const BATCH_WRITE_REPEATED_DOCUMENT: &str =
     "the same document cannot be written more than once in a single request";
 
-/// FS-WRITE-002. A BatchWrite that writes one document twice is refused as a whole request,
-/// not per item: INVALID_ARGUMENT with production's exact wording, no status array, and none
+/// FS-WRITE-002. A `BatchWrite` that writes one document twice is refused as a whole request,
+/// not per item: `INVALID_ARGUMENT` with production's exact wording, no status array, and none
 /// of its writes land, the distinct sibling included (production readbacks in the matrix row
 /// prove nothing landed). The refusal does not depend on the profile. A batch of distinct
 /// documents keeps its per-item results.
@@ -8396,7 +8396,7 @@ async fn start_with_rest_surface() -> (
     (FirestoreClient::new(channel), rest, handle)
 }
 
-/// How a BatchWrite answered: refused as a whole request, or answered per item.
+/// How a `BatchWrite` answered: refused as a whole request, or answered per item.
 #[derive(Debug, PartialEq, Eq)]
 enum BatchWriteAnswer {
     /// `(code, message)` of the whole-request refusal; no position got a status.
@@ -8405,7 +8405,7 @@ enum BatchWriteAnswer {
     PerItem(Vec<(i32, String)>),
 }
 
-/// The transport-independent outcome of one BatchWrite: the answer and which of the named
+/// The transport-independent outcome of one `BatchWrite`: the answer and which of the named
 /// documents exist afterwards, with their `v` field.
 #[derive(Debug, PartialEq, Eq)]
 struct BatchWriteOutcome {
@@ -8413,7 +8413,7 @@ struct BatchWriteOutcome {
     present: Vec<Option<i64>>,
 }
 
-/// `google.rpc.Code` of a REST error body's `status` name (the ones a BatchWrite can answer).
+/// `google.rpc.Code` of a REST error body's `status` name (the ones a `BatchWrite` can answer).
 fn rpc_code_of_status_name(name: &str) -> i32 {
     match name {
         "INVALID_ARGUMENT" => 3,
@@ -8452,7 +8452,7 @@ async fn read_v_of(
     present
 }
 
-/// FS-WRITE-006. The three BatchWrite item shapes whose classification (per position or
+/// FS-WRITE-006. The three `BatchWrite` item shapes whose classification (per position or
 /// whole request) is not yet production-observed for a malformed middle item
 /// (`spec/compatibility/broad-runs/fs-write-limits-03.json`, cases `batch-malformed-middle`
 /// and `batch-undecodable-value`, pending) answer identically on REST and gRPC today, with
@@ -8468,10 +8468,11 @@ async fn read_v_of(
 ///   `writes/batch-write#non-atomic-batch`).
 ///
 /// The per-position classification of the first two shapes, and the wording of their item
-/// statuses, is fireemu's current reading of section 11 of the mission document, not a
-/// production observation; the test fails if the two transports diverge, whichever way
-/// production turns out to answer.
+/// statuses, is fireemu's current reading of the malformed-item versus precondition-failure
+/// distinction, not a production observation; the test fails if the two transports diverge,
+/// whichever way production turns out to answer.
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
     struct Shape {
         name: &'static str,

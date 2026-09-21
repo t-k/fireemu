@@ -94,12 +94,18 @@ def _local_plan(plan):
         if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise ValueError("local observer digest required")
         expected["observerSha256"] = value
-    projected = _project_auth_plan(plan)
-    expected = _project_auth_plan(expected)
+    expected_legacy = expected
+    expected_canonical = _project_auth_plan(expected_legacy)
+    if digest(plan) == digest(expected_legacy):
+        projected = expected_canonical
+    elif digest(plan) == digest(expected_canonical):
+        projected = copy.deepcopy(plan)
+    else:
+        # Compare before projection so an untrusted resource or binding cannot
+        # be silently normalized into an owned account.
+        raise ValueError("closed local Auth-list contract drift")
     # In particular: no production permission, Ledger binding, extra operations,
     # changed project, omitted account, relaxed schedule or enlarged budget.
-    if digest(projected) != digest(expected):
-        raise ValueError("closed local Auth-list contract drift")
     return projected
 
 
@@ -107,13 +113,34 @@ def _canonical_auth_resource(project, account):
     return f"projects/{project}/auth/accounts/{account}"
 
 
-def _project_auth_operation(operation, project):
+def _project_auth_operation(operation, project, expected=None):
     if operation.get("service") != "auth":
         return copy.deepcopy(operation)
     projected = copy.deepcopy(operation)
     account = projected.get("account", projected.get("resource"))
     if not isinstance(account, str) or not account:
         raise ValueError("Auth account binding required")
+    if expected is not None:
+        expected_account = expected.get("account", expected.get("resource"))
+        if account != expected_account:
+            raise ValueError("Auth account binding differs from frozen slot")
+        if projected.get("resource") not in {
+            account,
+            _canonical_auth_resource(project, account),
+        }:
+            raise ValueError("Auth resource differs from frozen slot")
+        supplied_provenance = projected.get("provenance")
+        supplied_uid = (
+            supplied_provenance.get("uid")
+            if isinstance(supplied_provenance, dict)
+            else None
+        )
+        if (
+            isinstance(supplied_uid, str)
+            and supplied_uid.startswith("$binding:")
+            and supplied_uid != "$binding:" + account + "Uid"
+        ):
+            raise ValueError("Auth UID binding differs from frozen account")
     projected["account"] = account
     projected["resource"] = _canonical_auth_resource(project, account)
     provenance = projected.get("provenance")
@@ -140,8 +167,8 @@ def _project_auth_plan(plan):
     from campaign_auth_list import PROJECT
 
     project = projected.setdefault("project", PROJECT)
-    accounts = []
     for job in projected.get("jobs", {}).values():
+        accounts = []
         for phase in ("observation", "recovery"):
             for operation in job.get(phase, []):
                 if operation.get("service") != "auth":
@@ -153,14 +180,17 @@ def _project_auth_plan(plan):
                 operation.clear()
                 operation.update(_project_auth_operation(original, project))
         resources = job.get("resources", [])
-        auth_resources = {
+        auth_resources = [
             _canonical_auth_resource(project, account) for account in accounts
-        }
-        job["resources"] = [
+        ]
+        resources = [
             resource
             for resource in resources
             if not (isinstance(resource, str) and "/accounts:" in resource)
-        ] + [resource for resource in auth_resources if resource not in resources]
+        ]
+        job["resources"] = resources + [
+            resource for resource in sorted(auth_resources) if resource not in resources
+        ]
     return projected
 
 
@@ -237,14 +267,14 @@ class CampaignGate(FrozenGate):
     def dispatch(self, operation, recovery, send):
         state = self.snapshot()
         plan = _local_plan(state["plan"])
-        operation = _project_auth_operation(operation, plan["project"])
-        validate(operation)
         phase = "recovery" if recovery else "observation"
         index = state["jobs"][self.job][phase]
         operations = plan["jobs"][self.job][phase]
         if index >= len(operations):
             raise ValueError("scenario request capacity")
         declared = operations[index]
+        operation = _project_auth_operation(operation, plan["project"], declared)
+        validate(operation)
         normalized = self._template(operation, declared)
         if operation.get("service") == "auth" and operation.get("operationType") != "auth-sign-up":
             account = state["jobs"][self.job].get("authAccounts", {}).get(operation["account"])
@@ -455,7 +485,9 @@ class CampaignGate(FrozenGate):
         extra = getattr(adapter, "campaign_operation", {})
         merged = {**operation, **extra}
         plan = _local_plan(self.snapshot()["plan"])
-        merged = _project_auth_operation(merged, plan["project"])
+        index = self.snapshot()["jobs"][self.job]["observation"]
+        declared = plan["jobs"][self.job]["observation"][index]
+        merged = _project_auth_operation(merged, plan["project"], declared)
         validate(merged)
         return super().adapter_request(adapter, merged, send)
 

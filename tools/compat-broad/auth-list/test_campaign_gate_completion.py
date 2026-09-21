@@ -505,6 +505,27 @@ def test_plain_gate_does_not_invent_auth_creation_proofs(tmp_path, monkeypatch):
         generic.finish()
 
 
+@pytest.mark.parametrize("mutation", ["foreign-resource", "cross-uid-binding"])
+def test_facade_rejects_runtime_auth_projection_tampering_before_send(
+    tmp_path, monkeypatch, mutation
+):
+    scenario = Scenario(tmp_path, monkeypatch)
+    scenario.observations(6)
+    operation = scenario.operation("observation", 6)
+    if mutation == "foreign-resource":
+        operation["resource"] = "foreign-account"
+    else:
+        operation["provenance"]["uid"] = "$binding:reference-" + scenario.plan["nonce"] + "Uid"
+    sent = []
+    with pytest.raises(ValueError, match="Auth (account binding|resource|UID binding)"):
+        scenario.gate.dispatch(
+            operation,
+            False,
+            lambda: sent.append(True),
+        )
+    assert sent == []
+
+
 def test_uid_equal_to_a_frozen_literal_does_not_rewrite_literal_metadata(tmp_path, monkeypatch):
     scenario = Scenario(tmp_path, monkeypatch)
     scenario.backend.uid_mode = "resource"

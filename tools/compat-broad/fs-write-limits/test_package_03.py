@@ -395,9 +395,7 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -
         }
         config_bytes = json.dumps(actual_config).encode()
         (run / "configuration.json").write_bytes(config_bytes)
-        supervisor["configurationDigest"] = hashlib.sha256(
-            (run / "configuration.json").read_bytes()
-        ).hexdigest()
+        supervisor["configurationDigest"] = package_03.digest(actual_config)
         supervisor["configuration"] = {
             **actual_config,
             "firestore": {

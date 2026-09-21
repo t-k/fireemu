@@ -232,7 +232,7 @@ def shadow_record(run: Path, commit: str) -> dict:
     if _sha(retained_artifact) != build.get("artifactSha256"):
         raise SystemExit("the retained artifact differs from the build identity")
     actual_config = _load(retained_configuration)
-    if _sha(retained_configuration) != supervisor.get("configurationDigest"):
+    if digest(actual_config) != supervisor.get("configurationDigest"):
         raise SystemExit("the retained configuration differs from its digest")
     expected_config = copy.deepcopy(supervisor.get("configuration"))
     if not isinstance(expected_config, dict):

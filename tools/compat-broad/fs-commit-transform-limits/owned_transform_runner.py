@@ -95,6 +95,35 @@ def compile_bound_plan(compiler_path: Path | None, project: str, database: str, 
     return module.compile_plan(project, database, nonce)
 
 
+def compare_bound_rows(
+    compiler_path: Path | None,
+    plan: dict,
+    rows: list[dict],
+    cleanup: list[dict],
+) -> dict:
+    if compiler_path is None:
+        return compare_rows(plan, rows, plan, rows, left_recovery=cleanup, right_recovery=cleanup)
+    compiler_spec = importlib.util.spec_from_file_location("bound_transform_compiler", compiler_path)
+    if compiler_spec is None or compiler_spec.loader is None:
+        raise ValueError("historical compiler source binding differs")
+    compiler = importlib.util.module_from_spec(compiler_spec)
+    compiler_spec.loader.exec_module(compiler)
+    comparator_spec = importlib.util.spec_from_file_location("bound_transform_comparator", HERE / "transform_comparator.py")
+    if comparator_spec is None or comparator_spec.loader is None:
+        raise ValueError("comparator source binding differs")
+    previous = sys.modules.get("transform_compiler")
+    sys.modules["transform_compiler"] = compiler
+    try:
+        comparator = importlib.util.module_from_spec(comparator_spec)
+        comparator_spec.loader.exec_module(comparator)
+        return comparator.compare_rows(plan, rows, plan, rows, left_recovery=cleanup, right_recovery=cleanup)
+    finally:
+        if previous is None:
+            sys.modules.pop("transform_compiler", None)
+        else:
+            sys.modules["transform_compiler"] = previous
+
+
 def resolve_profile(profile: dict | str = DEFAULT_PROFILE) -> dict:
     if isinstance(profile, str):
         try:
@@ -306,14 +335,7 @@ def child(output: Path, nonce: str, profile_name: str, compiler_path: Path | Non
     )
     save_new(output / "result.json", result)
     count = verify_wire_journal(plan, result, output / "wire", binding)
-    contract = compare_rows(
-        plan,
-        result["rows"],
-        plan,
-        result["rows"],
-        left_recovery=result["cleanup"],
-        right_recovery=result["cleanup"],
-    )
+    contract = compare_bound_rows(compiler_path, plan, result["rows"], result["cleanup"])
     save_new(
         output / "local-contract.json",
         {

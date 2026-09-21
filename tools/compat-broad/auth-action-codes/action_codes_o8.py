@@ -9,9 +9,9 @@ fields. A loopback origin is deliberately unavailable in production mode.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
+import select
 import secrets
 import stat
 import sys
@@ -62,7 +62,12 @@ def read_private_fd(fd: int) -> dict:
     if stat.S_ISREG(info.st_mode) and (info.st_uid != os.getuid() or info.st_mode & 0o077):
         raise ValueError("private credential descriptor required")
     raw = bytearray()
+    deadline = time.monotonic() + 5
     while len(raw) <= MAX_HANDOFF_BYTES:
+        if not stat.S_ISREG(info.st_mode):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not select.select([fd], [], [], remaining)[0]:
+                raise ValueError("private credential handoff deadline")
         chunk = os.read(fd, MAX_HANDOFF_BYTES + 1 - len(raw))
         if not chunk:
             break
@@ -113,6 +118,8 @@ def bindings_for(plan: dict) -> dict[str, dict[str, str]]:
 
 
 def execute(args: argparse.Namespace) -> dict:
+    if Path(args.source).resolve() != ROOT.resolve():
+        raise ValueError("frozen Action source root required")
     inputs, _ = _read_json(args.inputs)
     manifest, manifest_bytes = _read_json(args.manifest, private=True)
     approval, _ = _read_json(args.approval, private=True)

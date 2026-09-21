@@ -40,6 +40,14 @@ setup and teardown failures) are counted apart from `failed`, and when
 be reported alongside the same test's pass or fail and there is no way to
 derive a unique executed-test count from the summary line alone.
 
+Each pytest failure carries `idResolved` (default `true`). pytest does not
+escape `[`/`]` inside a parametrize id, so a raised message containing its
+own `[...] - ...` can make a short-summary line's id/message boundary
+genuinely ambiguous from the line's text alone; when that happens (and no
+detail block or verbose progress line names the real id), `idResolved` is
+`false`, `name` is the raw, unsplit short-summary line, and `message` is
+empty rather than a guess.
+
 Standard library only. Tests:
 
 ```sh

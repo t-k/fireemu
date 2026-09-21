@@ -228,12 +228,16 @@ def make_transport(
     credential_handoff: dict,
     verify_handoff: Callable[[dict, dict], None],
     fixture_origin: str | None = None,
+    production: bool = False,
 ):
-    """Build the fixture-only Action transport; production hosting is unwired."""
+    """Build the Action transport for either an explicit fixture or production HTTPS."""
     raw, plan, frozen_plan, frozen_permission, project, nonce = _validate_inputs(frozen_inputs)
-    if fixture_origin is None:
+    if production and fixture_origin is not None:
+        raise ValueError("production Action transport cannot use a fixture origin")
+    if not production and fixture_origin is None:
         raise ValueError("trusted Action production hosting is unavailable")
-    fixture_origin = _verified_fixture_origin(fixture_origin)
+    if fixture_origin is not None:
+        fixture_origin = _verified_fixture_origin(fixture_origin)
     binding_maps = _freeze(copy.deepcopy(declared_bindings))
     if not isinstance(binding_maps, MappingProxyType):
         raise ValueError("declared Action bindings required")

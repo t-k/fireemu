@@ -99,7 +99,8 @@ def execute(
     bindings: dict[str, dict[str, str]],
     credential_handoff: dict,
     verify_handoff,
-    fixture_origin: str,
+    fixture_origin: str | None = None,
+    production: bool = False,
 ) -> dict:
     """Run all 26 observation and 6 recovery slots through one O8 capability."""
     if not o8_admission.issued_capability(capability):
@@ -143,6 +144,7 @@ def execute(
         credential_handoff=credential_handoff,
         verify_handoff=verify_handoff,
         fixture_origin=fixture_origin,
+        production=production,
     )
     binding = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
     binding_digest = hashlib.sha256(binding).hexdigest()

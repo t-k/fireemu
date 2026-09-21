@@ -27,6 +27,19 @@ python3 tools/local-assist/main.py parse-log --format nextest \
 python3 tools/local-assist/main.py --reset-lock --state-dir /abs/private/state
 ```
 
+`parse-log` never guesses a terminal verdict. When the log carries a nextest
+or pytest final summary, `summary.{run,passed,failed,skipped}` are the
+summary's own counts. When there is no final summary (a truncated log, or
+`-q`/`--tb=no` output cut before the footer), `summary.failed` and the other
+counts are `null` rather than the number of failure blocks the parser
+happened to see; `summary.observedFailureBlocks` carries that block count
+separately, so a caller can't mistake "the parser found this many failure
+blocks" for "the run failed this many tests". pytest's `errors` (collection,
+setup and teardown failures) are counted apart from `failed`, and when
+`errors` is present `summary.run` is `null` too, since a teardown error can
+be reported alongside the same test's pass or fail and there is no way to
+derive a unique executed-test count from the summary line alone.
+
 Standard library only. Tests:
 
 ```sh

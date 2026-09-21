@@ -65,6 +65,27 @@ def test_manifest_has_exact_five_cases_and_fixed_local_entry():
     assert child.endswith("/parent/children/doc")
 
 
+def test_facade_projects_legacy_auth_slots_to_canonical_account_resources(tmp_path):
+    from campaign_gate import create
+
+    plan = campaign_manifest("a" * 32)
+    create(tmp_path / "gate", plan)
+    state = json.loads((tmp_path / "gate" / "state.json").read_bytes())
+    auth_operations = [
+        operation
+        for operation in state["plan"]["jobs"]["auth-list"]["observation"]
+        if operation["service"] == "auth"
+    ]
+    assert auth_operations
+    assert all(operation["resource"].startswith("projects/demo-firestore-probe/auth/accounts/") for operation in auth_operations)
+    assert all(operation["account"] for operation in auth_operations)
+    assert all(
+        operation["provenance"]["uid"] == "$binding:" + operation["account"] + "Uid"
+        for operation in auth_operations
+        if operation["operationType"] != "auth-sign-up"
+    )
+
+
 def test_fresh_nonce_and_external_origin_fail_closed():
     with pytest.raises(ValueError, match="fresh hexadecimal"):
         campaign_manifest("old")
@@ -751,7 +772,8 @@ def test_gate_rejects_lookup_only_plan_without_account_ownership(tmp_path):
     # The constructor must reject the same plan even if a generic Gate was
     # written directly, without this facade's create-time admission.
     from shared_gate import create as create_generic_gate
-    create_generic_gate(tmp_path / "gate", plan)
+    from campaign_gate import _project_auth_plan
+    create_generic_gate(tmp_path / "gate", _project_auth_plan(plan))
     with pytest.raises(ValueError, match="closed local Auth-list contract drift"):
         CampaignGate(tmp_path / "gate", "auth-list")
     state = json.loads((tmp_path / "gate/state.json").read_bytes())

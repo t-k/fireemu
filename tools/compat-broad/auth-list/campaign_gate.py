@@ -94,16 +94,78 @@ def _local_plan(plan):
         if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
             raise ValueError("local observer digest required")
         expected["observerSha256"] = value
+    projected = _project_auth_plan(plan)
+    expected = _project_auth_plan(expected)
     # In particular: no production permission, Ledger binding, extra operations,
     # changed project, omitted account, relaxed schedule or enlarged budget.
-    if digest(plan) != digest(expected):
+    if digest(projected) != digest(expected):
         raise ValueError("closed local Auth-list contract drift")
-    return expected
+    return projected
+
+
+def _canonical_auth_resource(project, account):
+    return f"projects/{project}/auth/accounts/{account}"
+
+
+def _project_auth_operation(operation, project):
+    if operation.get("service") != "auth":
+        return copy.deepcopy(operation)
+    projected = copy.deepcopy(operation)
+    account = projected.get("account", projected.get("resource"))
+    if not isinstance(account, str) or not account:
+        raise ValueError("Auth account binding required")
+    projected["account"] = account
+    projected["resource"] = _canonical_auth_resource(project, account)
+    provenance = projected.get("provenance")
+    if not isinstance(provenance, dict):
+        raise ValueError("Auth provenance required")
+    if (
+        projected.get("operationType") != "auth-sign-up"
+        and isinstance(provenance.get("uid"), str)
+        and provenance["uid"].startswith("$binding:")
+    ):
+        provenance["uid"] = "$binding:" + account + "Uid"
+    if projected.get("operationType") == "auth-lookup" and projected.get("method") == "POST":
+        projected["kind"] = "uid-absence"
+        if isinstance(projected.get("body"), dict) and "localId" in projected["body"]:
+            local_id = projected["body"]["localId"]
+            projected["body"]["localId"] = (
+                local_id if isinstance(local_id, list) else [local_id]
+            )
+    return projected
+
+
+def _project_auth_plan(plan):
+    projected = copy.deepcopy(plan)
+    from campaign_auth_list import PROJECT
+
+    project = projected.setdefault("project", PROJECT)
+    accounts = []
+    for job in projected.get("jobs", {}).values():
+        for phase in ("observation", "recovery"):
+            for operation in job.get(phase, []):
+                if operation.get("service") != "auth":
+                    continue
+                account = operation.get("account", operation.get("resource"))
+                if account not in accounts:
+                    accounts.append(account)
+                original = copy.deepcopy(operation)
+                operation.clear()
+                operation.update(_project_auth_operation(original, project))
+        resources = job.get("resources", [])
+        auth_resources = {
+            _canonical_auth_resource(project, account) for account in accounts
+        }
+        job["resources"] = [
+            resource
+            for resource in resources
+            if not (isinstance(resource, str) and "/accounts:" in resource)
+        ] + [resource for resource in auth_resources if resource not in resources]
+    return projected
 
 
 def create(path, plan):
-    _local_plan(plan)
-    return frozen_create(path, plan)
+    return frozen_create(path, _local_plan(plan))
 
 
 def _text(value):
@@ -173,9 +235,10 @@ class CampaignGate(FrozenGate):
         return copy.deepcopy(value)
 
     def dispatch(self, operation, recovery, send):
-        validate(operation)
         state = self.snapshot()
         plan = _local_plan(state["plan"])
+        operation = _project_auth_operation(operation, plan["project"])
+        validate(operation)
         phase = "recovery" if recovery else "observation"
         index = state["jobs"][self.job][phase]
         operations = plan["jobs"][self.job][phase]
@@ -184,10 +247,15 @@ class CampaignGate(FrozenGate):
         declared = operations[index]
         normalized = self._template(operation, declared)
         if operation.get("service") == "auth" and operation.get("operationType") != "auth-sign-up":
-            account = state["jobs"][self.job].get("authAccounts", {}).get(operation["resource"])
+            account = state["jobs"][self.job].get("authAccounts", {}).get(operation["account"])
             if not account or operation["provenance"].get("uid") != account["uid"]:
                 raise ValueError("Auth operation requires this run's created account")
-            if recovery and operation["body"].get("localId") != account["uid"]:
+            expected_local_id = (
+                [account["uid"]]
+                if operation.get("operationType") == "auth-lookup"
+                else account["uid"]
+            )
+            if recovery and operation["body"].get("localId") != expected_local_id:
                 raise ValueError("Auth cleanup identity differs")
         # The base class rechecks the slot, PID, stop state and budgets under its
         # lock. Recording below runs inside that SAME lock, not after dispatch.
@@ -214,7 +282,7 @@ class CampaignGate(FrozenGate):
             return
         job = state["jobs"][self.job]
         accounts = job.setdefault("authAccounts", {})
-        key = operation["resource"]
+        key = operation.get("account", operation["resource"])
         position = len(state["events"]) - 1
         if kind == "auth-sign-up":
             uid = body.get("localId") if isinstance(body, dict) else None
@@ -225,7 +293,11 @@ class CampaignGate(FrozenGate):
                 or "error" in body
             ):
                 raise ValueError("same-run account creation acknowledgement required")
-            accounts[key] = {"uid": uid, "createEvent": position}
+            accounts[key] = {
+                "uid": uid,
+                "resource": operation["resource"],
+                "createEvent": position,
+            }
             self._observed_bindings[key + "Uid"] = uid
             self._observed_bindings[key + "Principal"] = "owned-account:" + uid
             event["creationOutcome"] = "created"
@@ -272,6 +344,8 @@ class CampaignGate(FrozenGate):
             "kind": kind, "account": key, "uid": uid,
             "responseDigest": event["responseDigest"],
         }
+        if kind == "auth-sign-up":
+            evidence["creationOutcome"] = "created"
         if recovery:
             # Delete and absence bodies contain no credentials and can be
             # independently checked against their original response digest.
@@ -280,15 +354,22 @@ class CampaignGate(FrozenGate):
         # Route sentinels do NOT represent an individual account. Both accounts
         # must have a delete AND a final lookup; one success cannot hide another.
         expected_accounts = {
-            op["resource"] for op in state["plan"]["jobs"][self.job]["observation"]
+            op.get("account", op["resource"])
+            for op in state["plan"]["jobs"][self.job]["observation"]
             if op.get("operationType") == "auth-sign-up"
         }
         if set(accounts) == expected_accounts and all(
             "deleteEvent" in account and "absenceEvent" in account
             for account in accounts.values()
         ):
+            owned_auth_resources = {
+                account["resource"] for account in accounts.values()
+            }
             for resource in job["resources"]:
-                if resource.startswith("identitytoolkit.googleapis.com/") and resource not in job["absent"]:
+                if (
+                    resource.startswith("identitytoolkit.googleapis.com/")
+                    or resource in owned_auth_resources
+                ) and resource not in job["absent"]:
                     job["absent"].append(resource)
 
     def _validate_finish_evidence(self, state):
@@ -299,14 +380,14 @@ class CampaignGate(FrozenGate):
             raise ValueError("local campaign observations incomplete")
         accounts = job.get("authAccounts", {})
         expected_accounts = {
-            op["resource"] for op in recipe["observation"]
+            op.get("account", op["resource"]) for op in recipe["observation"]
             if op.get("operationType") == "auth-sign-up"
         }
         if (
             not isinstance(accounts, dict) or set(accounts) != expected_accounts
             or any(
                 not isinstance(item, dict)
-                or set(item) != {"uid", "createEvent", "deleteEvent", "absenceEvent"}
+                or set(item) != {"uid", "resource", "createEvent", "deleteEvent", "absenceEvent"}
                 or not _text(item["uid"])
                 or any(type(item[field]) is not int for field in ("createEvent", "deleteEvent", "absenceEvent"))
                 for item in accounts.values()
@@ -325,10 +406,13 @@ class CampaignGate(FrozenGate):
                 if len(matches) != 1:
                     raise ValueError("account response event missing or duplicated")
                 position, event = matches[0]
-                kind, key = operation["operationType"], operation["resource"]
+                kind = operation["operationType"]
+                key = operation.get("account", operation["resource"])
                 account = accounts[key]
                 evidence = event.get("authEvidence", {})
                 fields = {"kind", "account", "uid", "responseDigest"}
+                if kind == "auth-sign-up":
+                    fields.add("creationOutcome")
                 if phase == "recovery":
                     fields.add("body")
                 if (
@@ -370,6 +454,8 @@ class CampaignGate(FrozenGate):
     def adapter_request(self, adapter, operation, send):
         extra = getattr(adapter, "campaign_operation", {})
         merged = {**operation, **extra}
+        plan = _local_plan(self.snapshot()["plan"])
+        merged = _project_auth_operation(merged, plan["project"])
         validate(merged)
         return super().adapter_request(adapter, merged, send)
 

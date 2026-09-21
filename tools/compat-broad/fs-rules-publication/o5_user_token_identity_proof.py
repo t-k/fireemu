@@ -53,6 +53,8 @@ class IdentityProof:
     auth_time: int
     expires_at: int
     request_digest: str
+    issuance_origin: str
+    issuance_mode: str
     _seal: object
 
     def __init__(self, *_args: Any, **_kwargs: Any):
@@ -322,6 +324,8 @@ def issue_proof(
             claims["auth_time"],
             claims["exp"],
             request["requestDigest"],
+            _origin(fixture_origin),
+            "fixture" if fixture_origin is not None else "production",
             _SEAL,
         )
     )

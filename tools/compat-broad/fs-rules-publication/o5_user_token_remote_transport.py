@@ -691,9 +691,6 @@ def make_transport(
     frozen = copy.deepcopy(frozen_inputs)
     trusted_bindings = copy.deepcopy(account_bindings or {})
     if identity_proofs is not None:
-        required_refs = {entry["ref"] for entry in plan["ownedAccounts"]}
-        if set(identity_proofs) != required_refs:
-            raise ValueError("complete identity proof map required")
         for ref, proof in identity_proofs.items():
             if (
                 not isinstance(proof, IdentityProof)
@@ -701,6 +698,17 @@ def make_transport(
                 or proof.principal_ref != ref
             ):
                 raise ValueError("trusted identity proof map required")
+            expected_mode = "fixture" if fixture_origin is not None else "production"
+            expected_origin = (
+                fixture_origin.rstrip("/")
+                if fixture_origin is not None
+                else "https://identitytoolkit.googleapis.com"
+            )
+            if (
+                proof.issuance_mode != expected_mode
+                or proof.issuance_origin != expected_origin
+            ):
+                raise ValueError("identity proof origin or mode differs")
             current = trusted_bindings.get(ref, {})
             if not isinstance(current, dict):
                 raise ValueError("account binding shape required")  # noqa: TRY004
@@ -716,6 +724,9 @@ def make_transport(
             ):
                 raise ValueError("identity proof conflicts with account binding")
             trusted_bindings[ref] = {**current, **supplied}
+        required_refs = {entry["ref"] for entry in plan["ownedAccounts"]}
+        if set(identity_proofs) != required_refs:
+            raise ValueError("complete identity proof map required")
     sequence = 0
 
     def transmit(

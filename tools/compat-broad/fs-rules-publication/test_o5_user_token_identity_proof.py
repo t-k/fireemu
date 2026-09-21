@@ -236,3 +236,34 @@ def test_issuance_proof_binds_the_same_token_before_firestore(fixture_origin):
             account_bindings=bindings,
             identity_proofs={"owner-a": issued},
         )
+
+
+def test_fixture_proof_cannot_cross_fixture_or_production_origin(fixture_origin):
+    token = _token(uid="uid-owner-a", custom={"o5role": "editor"})
+    _Handler.body = {"localId": "uid-owner-a", "idToken": token}
+    request = proof.build_request(
+        "signin",
+        api_key="fixture-key",
+        email="a@example.invalid",
+        password="pw",
+        tenant=None,
+    )
+    issued = proof.issue_proof(
+        "owner-a",
+        request,
+        expected_provider="password",
+        expected_tenant=None,
+        expected_claims={"o5role": "editor"},
+        fixture_origin=fixture_origin,
+        now=int(time.time()),
+    )
+    plan = compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant1234")
+    with pytest.raises(ValueError, match="origin or mode"):
+        remote.make_transport(
+            plan,
+            credentials={},
+            identity_proofs={"owner-a": issued},
+            fixture_origin="http://127.0.0.1:19999",
+        )
+    with pytest.raises(ValueError, match="origin or mode"):
+        remote.make_transport(plan, credentials={}, identity_proofs={"owner-a": issued})

@@ -39,7 +39,7 @@ _DOCUMENT = re.compile(
     r"^projects/([a-z][a-z0-9-]{4,28}[a-z0-9])/databases/\(default\)/documents/"
     r"o5-user-token/n([0-9a-f]{32})/cases/([A-Za-z0-9_-]{1,128})$"
 )
-_WORKER_SHA256 = "8ed27e6f71fce3dd3b10755d0f481ef145bec6a952e674f8115200f1483e28fd"
+_WORKER_SHA256 = "34f14455daf28f4fc0cadcd3cd0cf19b5a69e7f84568736d5a1c9708ac703593"
 
 
 def _compact(value: Any) -> bytes:
@@ -128,6 +128,83 @@ def _headers(token: str | None) -> dict[str, str]:
     return headers
 
 
+def _typed(value: Any, account_bindings: dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(value, dict) and set(value) == {"$principal"}:
+        ref = value["$principal"]
+        bound = (account_bindings or {}).get(ref)
+        if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
+            raise ValueError("principal UID binding required")
+        value = bound["uid"]
+    if value is None:
+        return {"nullValue": None}
+    if isinstance(value, bool):
+        return {"booleanValue": value}
+    if isinstance(value, int) and not isinstance(value, bool):
+        return {"integerValue": str(value)}
+    if isinstance(value, float):
+        return {"doubleValue": value}
+    if isinstance(value, str):
+        return {"stringValue": value}
+    if isinstance(value, dict):
+        return {
+            "mapValue": {
+                "fields": {
+                    key: _typed(nested, account_bindings)
+                    for key, nested in value.items()
+                }
+            }
+        }
+    if isinstance(value, list):
+        return {
+            "arrayValue": {
+                "values": [_typed(nested, account_bindings) for nested in value]
+            }
+        }
+    raise ValueError("unsupported Firestore field")
+
+
+def _write_resource(document: Any, plan: dict[str, Any]) -> str:
+    if not isinstance(document, str):
+        raise ValueError("write document required")  # noqa: TRY004
+    for resource in plan.get("ownedResources", []):
+        if isinstance(resource, str) and resource.endswith("/cases/" + document):
+            return "/v1/" + resource
+    raise ValueError("write document outside owned namespace")
+
+
+def _commit_writes(
+    plan: dict[str, Any], writes: list[Any], account_bindings: dict[str, Any] | None
+) -> list[dict[str, Any]]:
+    converted = []
+    for write in writes:
+        if not isinstance(write, dict) or set(write) != {
+            "document",
+            "operation",
+            "fields",
+        }:
+            raise ValueError("pseudo-write shape refused")
+        operation = write["operation"]
+        fields = write["fields"]
+        if operation not in {"create", "update"} or not isinstance(fields, dict):
+            raise ValueError("pseudo-write operation refused")
+        entry: dict[str, Any] = {
+            "update": {
+                "name": _write_resource(write["document"], plan),
+                "fields": {
+                    key: _typed(value, account_bindings)
+                    for key, value in fields.items()
+                },
+            }
+        }
+        if operation == "create":
+            entry["currentDocument"] = {"exists": False}
+        else:
+            entry["updateMask"] = {"fieldPaths": sorted(fields)}
+            entry["currentDocument"] = {"exists": True}
+        converted.append(entry)
+    return converted
+
+
 def _check_observation(
     expected: dict[str, Any], operation: dict[str, Any], *, nonce: str
 ) -> tuple[str, str]:
@@ -172,6 +249,7 @@ def _observation(
     credentials: dict[str, Any],
     *,
     nonce: str,
+    account_bindings: dict[str, Any] | None,
 ) -> dict[str, Any]:
     index = operation.get("index")
     observations = plan.get("observation")
@@ -198,6 +276,39 @@ def _observation(
     reference, credential_class = _check_observation(
         observations[index], operation, nonce=nonce
     )
+    principal = observations[index].get("principal")
+    if account_bindings is not None and credential_class != "absent":
+        expected_account = next(
+            (
+                entry
+                for entry in plan.get("ownedAccounts", [])
+                if isinstance(entry, dict) and entry.get("ref") == principal
+            ),
+            None,
+        )
+        bound = account_bindings.get(principal) if isinstance(principal, str) else None
+        if expected_account is None and (
+            reference in {"malformed-bearer", "empty-bearer", "expired-token"}
+            or "expired" in str(principal)
+        ):
+            expected_account = None
+        elif not isinstance(expected_account, dict) or not isinstance(bound, dict):
+            raise ValueError("credential principal binding required")
+        if expected_account is not None:
+            expected_provider = (
+                "anonymous"
+                if expected_account.get("kind") == "anonymous"
+                else "password"
+            )
+            if bound.get("provider") not in {None, expected_provider} or bound.get(
+                "tenant"
+            ) != expected_account.get("tenant"):
+                raise ValueError("credential scope binding differs")
+            expected_claims = digest(expected_account.get("claims", {}))
+            if bound.get("claimsDigest") not in {None, expected_claims}:
+                raise ValueError("credential claims scope differs")
+            if not isinstance(bound.get("uid"), str):
+                raise ValueError("credential UID binding required")
     token = _credential(credentials, reference, credential_class)
     path = _resource(operation["resources"][0], nonce=nonce)
     headers = _headers(token)
@@ -218,7 +329,7 @@ def _observation(
         "path": f"/v1/projects/{PROJECT}/databases/(default)/documents:commit",
         "method": "POST",
         "headers": headers,
-        "body": {"writes": operation["writes"]},
+        "body": {"writes": _commit_writes(plan, operation["writes"], account_bindings)},
     }
 
 
@@ -263,8 +374,11 @@ def _ruleset(
     }
 
 
-def _account_path(tenant: str, suffix: str) -> str:
-    return f"/v1/projects/{PROJECT}/tenants/{tenant}/accounts:{suffix}"
+def _account_path(tenant: str | None, suffix: str) -> str:
+    prefix = f"/v1/projects/{PROJECT}"
+    if tenant is not None:
+        prefix += f"/tenants/{tenant}"
+    return f"{prefix}/accounts:{suffix}"
 
 
 def _principal(
@@ -295,10 +409,19 @@ def _principal(
     ) or action not in {"revoke", "disable", "delete"}:
         raise ValueError("principal binding refused")
     bound = (account_bindings or {}).get(ref)
+    account = next(
+        (
+            entry
+            for entry in plan.get("ownedAccounts", [])
+            if isinstance(entry, dict) and entry.get("ref") == ref
+        ),
+        None,
+    )
     if (
         not isinstance(bound, dict)
+        or not isinstance(account, dict)
         or not isinstance(bound.get("uid"), str)
-        or bound.get("tenant") != plan["tenant"]
+        or bound.get("tenant") != account.get("tenant")
     ):
         raise ValueError("account binding required")
     token = _credential(credentials, "administrator", "administrator")
@@ -314,7 +437,7 @@ def _principal(
         "service": "identity",
         "route": "principal-action",
         "origin": IDENTITY_ORIGIN,
-        "path": _account_path(plan["tenant"], suffix),
+        "path": _account_path(account.get("tenant"), suffix),
         "method": "POST",
         "headers": _headers(token),
         "body": body,
@@ -348,30 +471,45 @@ def _recovery(
     token = _credential(credentials, "administrator", "administrator")
     kind, precondition = operation["kind"], operation["precondition"]
     if kind.startswith("account-"):
+        if operation.get("resource") is not None:
+            raise ValueError("account recovery resource must be null")
         ref = operation.get("accountRef")
         bound = (account_bindings or {}).get(ref)
+        account = next(
+            (
+                entry
+                for entry in plan.get("ownedAccounts", [])
+                if isinstance(entry, dict) and entry.get("ref") == ref
+            ),
+            None,
+        )
         if (
             not isinstance(bound, dict)
+            or not isinstance(account, dict)
             or not isinstance(bound.get("uid"), str)
-            or bound.get("tenant") != plan["tenant"]
+            or bound.get("tenant") != account.get("tenant")
         ):
             raise ValueError("account binding required")
         if kind == "account-delete":
+            if precondition != {"uid": bound["uid"]}:
+                raise ValueError("account UID precondition differs")
             return {
                 "service": "identity",
                 "route": "account-recovery",
                 "origin": IDENTITY_ORIGIN,
-                "path": _account_path(plan["tenant"], "delete"),
+                "path": _account_path(account.get("tenant"), "delete"),
                 "method": "POST",
                 "headers": _headers(token),
                 "body": {"localId": bound["uid"]},
             }
         if kind in {"account-readback", "account-absence"}:
+            if precondition is not None:
+                raise ValueError("account recovery precondition must be null")
             return {
                 "service": "identity",
                 "route": "account-recovery",
                 "origin": IDENTITY_ORIGIN,
-                "path": _account_path(plan["tenant"], "lookup"),
+                "path": _account_path(account.get("tenant"), "lookup"),
                 "method": "POST",
                 "headers": _headers(token),
                 "body": {"localId": [bound["uid"]]},
@@ -379,6 +517,8 @@ def _recovery(
         raise ValueError("recovery operation shape refused")
     path = _resource(operation.get("resource"), nonce=nonce)
     if kind in {"readback", "absence"}:
+        if operation.get("accountRef") is not None or precondition is not None:
+            raise ValueError("document recovery precondition differs")
         return {
             "service": "firestore",
             "route": "document-recovery-get",
@@ -425,7 +565,9 @@ def prepare_request(
         return _recovery(
             plan, operation, credentials, nonce=nonce, account_bindings=account_bindings
         )
-    return _observation(plan, operation, credentials, nonce=nonce)
+    return _observation(
+        plan, operation, credentials, nonce=nonce, account_bindings=account_bindings
+    )
 
 
 def _run_worker(

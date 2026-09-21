@@ -29,7 +29,7 @@ _DOCUMENT = re.compile(
 _COMMIT = "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit"
 _RULESET = "/v1/projects/fireemu-35fe6/rulesets"
 _ACCOUNT = re.compile(
-    r"^/v1/projects/fireemu-35fe6/tenants/[A-Za-z0-9][A-Za-z0-9_-]{3,35}/accounts:(lookup|update|delete)$"
+    r"^/v1/projects/fireemu-35fe6(?:/tenants/[A-Za-z0-9][A-Za-z0-9_-]{3,35})?/accounts:(lookup|update|delete)$"
 )
 
 

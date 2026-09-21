@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 import o5_user_token_remote_transport as remote
 import pytest
+from broad_contract import digest
 from o5_user_token_case import compile_case
 from o5_user_token_collector import _request
 
@@ -111,6 +112,18 @@ def collector_request(plan, index):
     return _request(plan["observation"][index], plan["nonce"])
 
 
+def account_bindings(plan):
+    return {
+        account["ref"]: {
+            "uid": "uid-" + account["ref"],
+            "provider": "anonymous" if account["kind"] == "anonymous" else "password",
+            "tenant": account["tenant"],
+            "claimsDigest": digest(account["claims"]),
+        }
+        for account in plan["ownedAccounts"]
+    }
+
+
 def ruleset_request(plan, label):
     from o5_user_token_collector import digest as collector_digest
 
@@ -145,7 +158,10 @@ def test_prepare_accepts_every_actual_collector_observation(plan):
     )
     for index in range(33):
         prepared = remote.prepare_request(
-            plan, collector_request(plan, index), credentials=credentials
+            plan,
+            collector_request(plan, index),
+            credentials=credentials,
+            account_bindings=account_bindings(plan),
         )
         assert prepared["service"] == "firestore"
         assert prepared["route"] in {"observation-get", "observation-commit"}
@@ -200,10 +216,46 @@ def test_prepare_accepts_actual_multi_resource_commit_rows(plan):
             plan,
             collector_request(plan, index),
             credentials={"owner-a": "fixture"},
+            account_bindings=account_bindings(plan),
         )
         assert prepared["method"] == "POST"
         assert prepared["path"].endswith("/documents:commit")
         assert len(prepared["body"]["writes"]) == count
+        assert all(
+            "$principal" not in json.dumps(write)
+            for write in prepared["body"]["writes"]
+        )
+        for write in prepared["body"]["writes"]:
+            assert write["update"]["name"].startswith("/v1/projects/fireemu-35fe6/")
+            assert "currentDocument" in write
+
+
+def test_prepare_rejects_unknown_pseudo_write_and_mismatched_cleanup_precondition(plan):
+    operation = collector_request(plan, 16)
+    operation["writes"][0]["operation"] = "merge"
+    with pytest.raises(ValueError, match="operation differs"):
+        remote.prepare_request(
+            plan,
+            operation,
+            credentials={"owner-a": "fixture"},
+            account_bindings=account_bindings(plan),
+        )
+    request = {
+        "kind": "account-delete",
+        "phase": "recovery",
+        "resource": None,
+        "accountRef": "owner-a",
+        "credentialRef": "administrator",
+        "credentialClass": "administrator",
+        "precondition": {"uid": "wrong"},
+    }
+    with pytest.raises(ValueError, match="UID precondition"):
+        remote.prepare_request(
+            plan,
+            request,
+            credentials={"administrator": "fixture"},
+            account_bindings=account_bindings(plan),
+        )
 
 
 def test_prepare_checks_credential_class_and_fingerprint(plan):
@@ -230,6 +282,7 @@ def test_prepare_covers_absent_malformed_and_empty_credential_classes(plan):
             plan,
             operation,
             credentials={ref: "" if credential_class == "empty" else "malformed"},
+            account_bindings=account_bindings(plan),
         )
         assert prepared["method"] == "GET"
 
@@ -281,7 +334,7 @@ def test_prepare_requires_bound_uid_for_account_recovery(plan):
         plan,
         request,
         credentials={"administrator": "fixture"},
-        account_bindings={"owner-a": {"uid": "uid-a", "tenant": plan["tenant"]}},
+        account_bindings={"owner-a": {"uid": "uid-a", "tenant": None}},
     )
     assert prepared["method"] == "POST"
     assert prepared["body"] == {"localId": "uid-a"}

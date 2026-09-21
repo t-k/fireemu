@@ -162,7 +162,7 @@ def prepared_fixture(tmp_path, metadata_server, stale=None):
         "scopes": locks,
     }
     claim = {
-        "campaignId": permission["nonce"],
+        "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
         "manifestDigest": digest(plan),
         "nonceDigest": digest(permission["nonce"]),
         "gatePath": str((tmp_path / "gate").resolve()),
@@ -669,7 +669,7 @@ def test_actual_ledger_retains_configuration_reads_across_independent_campaigns(
         "scopes": locks,
     }
     claim = {
-        "campaignId": "independent-stream",
+        "campaignId": "FS-TRANSACTION-EXPIRY-RETRY-04",
         "manifestDigest": digest(plan),
         "nonceDigest": digest(plan["nonce"]),
         "gatePath": str((tmp_path / "other-gate").resolve()),

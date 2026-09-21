@@ -2358,6 +2358,7 @@ def test_every_lane_descriptor_campaign_id_is_catalogued():
         ("fs-commit-transform-limits/commit_acquisition.py", "CAMPAIGN_ID"),
         ("fs-request-bytes-boundary/request_bytes_compiler.py", "CAMPAIGN"),
         ("fs-write-limits/compiler.py", "CAMPAIGN"),
+        ("fs-write-limits/compiler_03.py", "CAMPAIGN"),
         ("fs-query-in-boundary/query_in_compiler.py", "CAMPAIGN"),
         ("fs-query-partition-cursor/partition_cursor_case.py", "CAMPAIGN"),
         ("fs-write-txn/txn_expiry_cases.py", "CAMPAIGN"),

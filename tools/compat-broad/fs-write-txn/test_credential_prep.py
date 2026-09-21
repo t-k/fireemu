@@ -302,7 +302,7 @@ def reserved_fixture(tmp_path):
         "scopes": locks,
     }
     claim = {
-        "campaignId": plan["nonce"],
+        "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
         "manifestDigest": digest(plan),
         "nonceDigest": digest(plan["nonce"]),
         "gatePath": str((output / "gate").resolve()),

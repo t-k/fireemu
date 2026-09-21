@@ -286,7 +286,7 @@ def child(output, nonce):
             "scopes": locks,
         }
         claim = {
-            "campaignId": nonce,
+            "campaignId": "FS-WRITE-TXN-PRECEDENCE-01",
             "manifestDigest": digest(plan),
             "nonceDigest": digest(nonce),
             "gatePath": str(execution / "gate"),

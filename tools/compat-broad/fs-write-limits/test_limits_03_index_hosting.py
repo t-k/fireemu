@@ -245,8 +245,9 @@ def test_lifecycle_transport_reaches_real_loopback_batch_wire() -> None:
     assert seen[5][1].endswith("/operations/op-restore")
 
 
+@pytest.mark.parametrize("lost_apply", [False, True])
 def test_management_session_runs_real_gate_lifecycle_over_loopback(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, lost_apply
 ):
     """The real Gate and temporary Ledger charge all lifecycle calls through batch_wire."""
     built = o8_fixture.Admission(tmp_path)
@@ -298,15 +299,21 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
                         and "/collectionGroups/nx/fields/" in entry[1]
                     ]
                 )
-                expected_state = {
-                    1: "before",
-                    2: "before",
-                    3: "after",
-                    4: "after",
-                    5: "before",
-                }[field_reads]
+                expected_states = (
+                    {1: "before", 2: "before", 3: "after", 4: "before"}
+                    if lost_apply
+                    else {
+                        1: "before",
+                        2: "before",
+                        3: "after",
+                        4: "after",
+                        5: "before",
+                    }
+                )
+                expected_state = expected_states[field_reads]
                 assert state["field"] == expected_state
-                if field_reads in (1, 4):
+                exempt_reads = (1, 3) if lost_apply else (1, 4)
+                if field_reads in exempt_reads:
                     self._respond(
                         {
                             "name": preflight.INDEX_FIELD,
@@ -420,6 +427,7 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
     real_wire = batch_adapter.wire
 
     def loopback_wire(url, method, body, headers, *, timeout=12, receipt=False):
+        nonlocal lost_apply_response
         parsed = urlsplit(url)
         assert parsed.scheme == "https"
         assert parsed.hostname in {
@@ -428,7 +436,7 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
             "identitytoolkit.googleapis.com",
         }
         path = parsed.path + ("?" + parsed.query if parsed.query else "")
-        return real_wire(
+        result = real_wire(
             origin + path,
             method,
             body,
@@ -437,6 +445,18 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
             timeout=timeout,
             receipt=receipt,
         )
+        if (
+            lost_apply
+            and not lost_apply_response
+            and method == "PATCH"
+            and path.endswith("?updateMask=indexConfig")
+        ):
+            lost_apply_response = True
+            return {
+                "http": {"complete": False, "bodyKind": None, "status": None},
+                "body": None,
+            }
+        return result
 
     original_private_request = credential_prep._private_request
 
@@ -447,7 +467,10 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
 
     wire_observations = []
 
+    lost_apply_response = False
+
     def loopback_exchange(url, method, body, headers, deadline, response_cap):
+        nonlocal lost_apply_response
         parsed = urlsplit(url)
         assert parsed.hostname == "firestore.googleapis.com"
         loopback_host = server.server_address[0]
@@ -496,25 +519,42 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
     output = tmp_path / "output"
     receipt = json.loads((output / "receipt.json").read_bytes())
     gate = json.loads((output / "gate-snapshot.json").read_bytes())
-    assert result["failure"] is None
-    assert result["reservationReleased"] is True
-    assert len(gate["managementEvents"]) == 16
     lifecycle_paths = [
         path
         for _, path, _, _ in seen
         if "/collectionGroups/nx/fields/" in path or "/operations/" in path
     ]
-    assert len(lifecycle_paths) == 9
-    assert lifecycle_paths[2].endswith("?updateMask=indexConfig")
-    assert lifecycle_paths[3].endswith("/operations/op-apply")
-    assert lifecycle_paths[6].endswith("?updateMask=indexConfig")
-    assert lifecycle_paths[7].endswith("/operations/op-restore")
+    if lost_apply:
+        assert result["failure"] == "management-observation-aborted"
+        assert result["reservationReleased"] is False
+        assert receipt["releaseEligible"] is False
+        assert gate["managementAbort"]["applyOutcome"] == "may-have-landed"
+        assert len(wire_observations) == 0
+        assert len(lifecycle_paths) == 7
+        assert lifecycle_paths[0].endswith("/collectionGroups/nx/fields/*")
+        assert lifecycle_paths[1].endswith("/collectionGroups/nx/fields/*")
+        assert lifecycle_paths[2].endswith("?updateMask=indexConfig")
+        assert lifecycle_paths[3].endswith("/collectionGroups/nx/fields/*")
+        assert lifecycle_paths[4].endswith("?updateMask=indexConfig")
+        assert lifecycle_paths[5].endswith("/operations/op-restore")
+        assert lifecycle_paths[6].endswith("/collectionGroups/nx/fields/*")
+        assert state["field"] == "before"
+    else:
+        assert result["failure"] is None
+        assert result["reservationReleased"] is True
+        assert len(gate["managementEvents"]) == 16
+        assert len(lifecycle_paths) == 9
+        assert lifecycle_paths[2].endswith("?updateMask=indexConfig")
+        assert lifecycle_paths[3].endswith("/operations/op-apply")
+        assert lifecycle_paths[6].endswith("?updateMask=indexConfig")
+        assert lifecycle_paths[7].endswith("/operations/op-restore")
     firestore_requests = [entry for entry in seen if entry[1].startswith("/v1/")]
     assert firestore_requests
     assert all(
         entry[2] == "Bearer " + o8_fixture.TOKEN for entry in firestore_requests
     ), [(entry[1], entry[2]) for entry in firestore_requests]
-    assert wire_observations
     assert all(deadline > 0 for _, _, deadline, _ in wire_observations)
-    assert receipt["collection"]["cleanupComplete"] is True
+    if not lost_apply:
+        assert wire_observations
+        assert receipt["collection"]["cleanupComplete"] is True
     assert responder.documents == {}

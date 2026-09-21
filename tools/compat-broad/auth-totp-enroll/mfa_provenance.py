@@ -29,17 +29,30 @@ _PACKAGE = "tools/compat-broad/auth-totp-enroll"
 # the case list without the recorder would prove which observations were planned while
 # leaving the program that made them free to differ.
 BOUND_PATHS: tuple[str, ...] = (
+    f"{_PACKAGE}/mfa_admission.py",
     f"{_PACKAGE}/mfa_cases.py",
     f"{_PACKAGE}/mfa_collector.py",
     f"{_PACKAGE}/mfa_comparator.py",
+    f"{_PACKAGE}/mfa_config_lock.py",
+    f"{_PACKAGE}/mfa_descriptor.py",
     f"{_PACKAGE}/mfa_local_shadow.py",
     f"{_PACKAGE}/mfa_manifest.py",
+    f"{_PACKAGE}/mfa_o8.py",
+    f"{_PACKAGE}/mfa_production.py",
+    f"{_PACKAGE}/mfa_production_transport.py",
     f"{_PACKAGE}/mfa_provenance.py",
+    f"{_PACKAGE}/mfa_timing.py",
     f"{_PACKAGE}/mfa_totp.py",
+    f"{_PACKAGE}/mfa_walk.py",
     f"{_PACKAGE}/mfa_wire.py",
     f"{_PACKAGE}/mfa_persistence.py",
     f"{_PACKAGE}/mfa_request_budget.py",
     "tools/compat-broad/batch_wire.py",
+    # The production session spawns the shared wire worker through this adapter and
+    # verifies the bearer through this credential module; both decide which bytes
+    # reach the service, so both are bound.
+    "tools/compat-broad/batch_adapter.py",
+    "tools/compat-broad/fs-write-txn/credential_prep.py",
     "tools/compat-inventory/pyproject.toml",
     "tools/compat-inventory/uv.lock",
 )

@@ -1,0 +1,360 @@
+"""The project configuration change this campaign makes, modelled as a locked step.
+
+The campaign needs multi-factor authentication enabled with TOTP and phone factors, a
+test phone number so no SMS is sent, and an SMS region policy that admits the test
+number. That is a production write to `projects/{project}/config`, so it is treated
+like every other production write: the pre-value is saved before the change is
+attempted, the change is applied only inside the reservation envelope, the readback is
+verified, and the pre-value is restored and verified again at the end of the run and on
+every path that stops it early.
+
+Nothing here performs transport. The lock is driven by a caller that supplies two
+callables, one that reads the configuration and one that patches it, and the lock
+records what it saw as digests. The configuration body itself stays in the private
+run directory: the receipt carries the digests and a redacted reference, which names
+the top-level fields and the byte length, never the values.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import re
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from mfa_collector import digest
+
+PROJECT = "fireemu-35fe6"
+PROJECT_NUMBER = "592603257417"
+CONFIG_PATH = f"/admin/v2/projects/{PROJECT}/config"
+# The fields the campaign changes, and therefore the only fields it may restore. A
+# restore that wrote back more than it changed would itself be an unreviewed write.
+UPDATE_MASK = "mfa,signIn.phoneNumber,smsRegionConfig"
+TEST_PHONE = "+15555550100"
+TEST_CODE = "135790"
+# One adjacent interval either side is the acceptance window the local policy uses
+# and the value the campaign's replay row assumes; it is declared here so a reviewer
+# reads it in the code that sends it.
+TOTP_ADJACENT_INTERVALS = 1
+CAMPAIGN_MFA = {
+    "state": "ENABLED",
+    "enabledProviders": ["PHONE_SMS"],
+    "providerConfigs": [
+        {
+            "state": "ENABLED",
+            "totpProviderConfig": {"adjacentIntervals": TOTP_ADJACENT_INTERVALS},
+        }
+    ],
+}
+CAMPAIGN_PHONE = {"enabled": True, "testPhoneNumbers": {TEST_PHONE: TEST_CODE}}
+# The oracle project blocks SMS in every region; test numbers still pass the region
+# check, and the earlier production recorder found that an allowlist of one region was
+# refused. Allow-by-default with no disallowed region is what that run used and
+# restored from. It is restored to whatever was read, never to a constant.
+CAMPAIGN_SMS_REGIONS = {"allowByDefault": {"disallowedRegions": []}}
+
+RESTORE_STATUSES = (
+    "not-attempted",
+    "restored-verified",
+    "restore-readback-differs",
+    "restore-failed",
+)
+LOCK_FILE = "config-lock.json"
+BASELINE_FILE = "config-baseline.json"
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+
+
+class ConfigLockError(RuntimeError):
+    """The configuration step could not be taken, verified or restored."""
+
+
+def config_digest(body: Any) -> str:
+    """The whole-configuration digest the restore proof compares against."""
+    if not isinstance(body, dict) or "error" in body:
+        raise ConfigLockError("configuration readback is not a configuration")
+    return digest(body)
+
+
+def redacted_reference(body: dict) -> dict:
+    """What a receipt may say about a configuration body: shape and size, no values."""
+    config_digest(body)
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    return {
+        "sha256": digest(body),
+        "bytes": len(encoded),
+        "topLevelFields": sorted(body),
+        "valuesRetained": False,
+    }
+
+
+def validate_configuration(body: Any, *, project_number: str = PROJECT_NUMBER) -> dict:
+    """A production configuration names the project it belongs to."""
+    if not isinstance(body, dict) or "error" in body:
+        raise ConfigLockError("configuration readback is not a configuration")
+    if body.get("name") != f"projects/{project_number}/config":
+        raise ConfigLockError("configuration belongs to another project")
+    return body
+
+
+def campaign_patch() -> dict:
+    """The change the campaign applies, exactly, in PATCH shape."""
+    return {
+        "mfa": copy.deepcopy(CAMPAIGN_MFA),
+        "signIn": {"phoneNumber": copy.deepcopy(CAMPAIGN_PHONE)},
+        "smsRegionConfig": copy.deepcopy(CAMPAIGN_SMS_REGIONS),
+    }
+
+
+def restore_patch(baseline: dict) -> dict:
+    """The configuration to write back: what was read, projected onto the mask.
+
+    A field the baseline did not carry is written back as its disabled shape, which is
+    what the earlier production recorder observed the service reads back for an absent
+    value; the whole-configuration digest check afterwards decides whether that was
+    exact, and a difference is reported rather than assumed away.
+    """
+    validate_configuration(baseline)
+    phone = (baseline.get("signIn") or {}).get("phoneNumber") or {
+        "enabled": False,
+        "testPhoneNumbers": {},
+    }
+    return {
+        "mfa": copy.deepcopy(baseline.get("mfa") or {"state": "DISABLED"}),
+        "signIn": {"phoneNumber": copy.deepcopy(phone)},
+        "smsRegionConfig": copy.deepcopy(baseline.get("smsRegionConfig") or {}),
+    }
+
+
+def applied(readback: dict) -> bool:
+    """Whether a readback carries the campaign configuration in the masked fields."""
+    validate_configuration(readback)
+    phone = (readback.get("signIn") or {}).get("phoneNumber") or {}
+    return (
+        readback.get("mfa") == CAMPAIGN_MFA
+        and phone.get("enabled") is True
+        and phone.get("testPhoneNumbers") == CAMPAIGN_PHONE["testPhoneNumbers"]
+        and "allowByDefault" in (readback.get("smsRegionConfig") or {})
+    )
+
+
+def differing_fields(readback: dict, baseline: dict) -> list[str]:
+    """Top-level field names whose values differ, for a restore that did not verify."""
+    names = sorted(set(readback) | set(baseline))
+    return [name for name in names if readback.get(name) != baseline.get(name)]
+
+
+def _private_write(path: Path, value: Any) -> None:
+    encoded = json.dumps(value, sort_keys=True, indent=2).encode() + b"\n"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def _private_read(path: Path) -> Any:
+    if path.is_symlink() or not path.is_file():
+        raise ConfigLockError("private lock record missing")
+    info = path.stat()
+    if info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise ConfigLockError("private lock record required")
+    return json.loads(path.read_bytes())
+
+
+class ConfigLock:
+    """One run's configuration change, from frozen baseline to verified restore.
+
+    The lock persists itself in the private run directory so a resumed process knows
+    whether a change was attempted, and the baseline body it must restore. The record
+    is private state, not authority: a resumed process still has to read the live
+    configuration back and compare it before it may proceed.
+    """
+
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        read: Callable[[], tuple[int, Any]],
+        patch: Callable[[dict, str], tuple[int, Any]],
+        frozen_baseline_digest: str,
+    ) -> None:
+        if not isinstance(frozen_baseline_digest, str) or not _HEX64.fullmatch(
+            frozen_baseline_digest
+        ):
+            raise ConfigLockError("frozen Auth configuration baseline digest required")
+        self.directory = Path(directory)
+        self._read = read
+        self._patch = patch
+        self.frozen_baseline_digest = frozen_baseline_digest
+        self.record: dict[str, Any] = {
+            "frozenBaselineDigest": frozen_baseline_digest,
+            "preflightReadbackDigest": None,
+            "baselineReference": None,
+            "changeAttempted": False,
+            "appliedReadbackDigest": None,
+            "applied": False,
+            "restoreAttempts": 0,
+            "restoreReadbackDigest": None,
+            "restoreStatus": "not-attempted",
+            "restoreDifferingFields": None,
+        }
+
+    # -- persistence ---------------------------------------------------------------
+    def save(self) -> None:
+        _private_write(self.directory / LOCK_FILE, self.record)
+
+    @classmethod
+    def resume(
+        cls,
+        directory: Path,
+        *,
+        read: Callable[[], tuple[int, Any]],
+        patch: Callable[[dict, str], tuple[int, Any]],
+        frozen_baseline_digest: str,
+    ) -> ConfigLock:
+        lock = cls(
+            directory,
+            read=read,
+            patch=patch,
+            frozen_baseline_digest=frozen_baseline_digest,
+        )
+        record = _private_read(lock.directory / LOCK_FILE)
+        if (
+            not isinstance(record, dict)
+            or set(record) != set(lock.record)
+            or record["frozenBaselineDigest"] != frozen_baseline_digest
+        ):
+            raise ConfigLockError("private lock record does not bind this run")
+        lock.record = record
+        return lock
+
+    def _baseline_body(self) -> dict:
+        body = _private_read(self.directory / BASELINE_FILE)
+        if config_digest(body) != self.frozen_baseline_digest:
+            raise ConfigLockError("saved baseline differs from the frozen digest")
+        return body
+
+    # -- steps ---------------------------------------------------------------------
+    def preflight(self) -> str:
+        """Read the live configuration; refuse to start unless it is the frozen baseline.
+
+        The frozen digest came from the owner's baseline observation. A different live
+        configuration means the project changed since the permission was written, and
+        a restore would then write back a configuration nobody reviewed.
+        """
+        status, body = self._read()
+        if status != 200:
+            raise ConfigLockError(f"configuration preflight answered {status}")
+        validate_configuration(body)
+        observed = config_digest(body)
+        self.record["preflightReadbackDigest"] = observed
+        if observed != self.frozen_baseline_digest:
+            self.save()
+            raise ConfigLockError(
+                "Auth configuration readback differs from the frozen baseline digest"
+            )
+        # The pre-value is saved before the change can be attempted, under the private
+        # directory, so a change that reaches the server without a readable response
+        # can still be restored by a later process.
+        _private_write(self.directory / BASELINE_FILE, body)
+        self.record["baselineReference"] = redacted_reference(body)
+        self.save()
+        return observed
+
+    def apply(self) -> str:
+        """Apply the campaign configuration and verify it by readback."""
+        if self.record["baselineReference"] is None:
+            raise ConfigLockError("configuration preflight required before apply")
+        self.record["changeAttempted"] = True
+        self.save()
+        status, body = self._patch(campaign_patch(), UPDATE_MASK)
+        if status != 200 or not isinstance(body, dict) or "error" in body:
+            raise ConfigLockError(f"configuration change answered {status}")
+        status, readback = self._read()
+        if status != 200:
+            raise ConfigLockError(f"configuration readback answered {status}")
+        if not applied(readback):
+            raise ConfigLockError("configuration readback does not carry the change")
+        self.record["appliedReadbackDigest"] = config_digest(readback)
+        self.record["applied"] = True
+        self.save()
+        return self.record["appliedReadbackDigest"]
+
+    def restore(self) -> str:
+        """Write the pre-value back and verify whole-configuration digest equality.
+
+        Idempotent: a restore that already verified is not repeated, and a restore
+        after a change that was never attempted verifies the live configuration is
+        still the baseline without writing anything.
+        """
+        if self.record["restoreStatus"] == "restored-verified":
+            return self.record["restoreReadbackDigest"]
+        self.record["restoreAttempts"] += 1
+        try:
+            if self.record["changeAttempted"]:
+                baseline = self._baseline_body()
+                status, body = self._patch(restore_patch(baseline), UPDATE_MASK)
+                if status != 200 or not isinstance(body, dict) or "error" in body:
+                    raise ConfigLockError(f"configuration restore answered {status}")
+            status, readback = self._read()
+            if status != 200:
+                raise ConfigLockError(f"restore readback answered {status}")
+            validate_configuration(readback)
+            observed = config_digest(readback)
+            self.record["restoreReadbackDigest"] = observed
+            if observed != self.frozen_baseline_digest:
+                self.record["restoreStatus"] = "restore-readback-differs"
+                if self.record["changeAttempted"]:
+                    self.record["restoreDifferingFields"] = differing_fields(
+                        readback, self._baseline_body()
+                    )
+                raise ConfigLockError(
+                    "restored configuration digest differs from the frozen baseline"
+                )
+            self.record["restoreStatus"] = "restored-verified"
+            self.record["restoreDifferingFields"] = []
+            return observed
+        except ConfigLockError:
+            if self.record["restoreStatus"] != "restore-readback-differs":
+                self.record["restoreStatus"] = "restore-failed"
+            raise
+        finally:
+            self.save()
+
+    def evidence(self) -> dict:
+        """The secret-free summary a receipt carries."""
+        return copy.deepcopy(self.record)
+
+
+def validate_evidence(value: Any, *, frozen_baseline_digest: str) -> bool:
+    """Whether a receipt's configuration evidence proves a verified restore."""
+    if not isinstance(value, dict):
+        return False
+    try:
+        return (
+            value["frozenBaselineDigest"] == frozen_baseline_digest
+            and value["preflightReadbackDigest"] == frozen_baseline_digest
+            and value["restoreStatus"] == "restored-verified"
+            and value["restoreReadbackDigest"] == frozen_baseline_digest
+            and value["restoreDifferingFields"] == []
+            and isinstance(value["baselineReference"], dict)
+            and value["baselineReference"].get("valuesRetained") is False
+            and (
+                value["changeAttempted"] is False
+                or (
+                    value["applied"] is True
+                    and isinstance(value["appliedReadbackDigest"], str)
+                    and _HEX64.fullmatch(value["appliedReadbackDigest"]) is not None
+                )
+            )
+        )
+    except (KeyError, TypeError):
+        return False

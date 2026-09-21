@@ -238,8 +238,8 @@ RULES_MANAGEMENT_RECOVERY = (
     "delete-b",
     "delete-b-absence",
 )
-_RULESET_RESOURCE = re.compile(r"^projects/firemu-35fe6/rulesets/[A-Za-z0-9_-]{1,128}$")
-_RELEASE_RESOURCE = re.compile(r"^projects/firemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$")
+_RULESET_RESOURCE = re.compile(r"^projects/fireemu-35fe6/rulesets/[A-Za-z0-9_-]{1,128}$")
+_RELEASE_RESOURCE = re.compile(r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$")
 
 
 class RulesManagementSession:
@@ -812,6 +812,7 @@ def collect(
     journal_path: str | os.PathLike[str] | None = None,
     acquisition: Mapping[str, Any] | None = None,
     wall_clock: Callable[[], float] = time.time,
+    management_session: RulesManagementSession | None = None,
 ) -> dict[str, Any]:
     """Run the compiled matrix through ``execute`` under enforced bounds.
 
@@ -890,8 +891,13 @@ def collect(
     worker_reaped: bool | None = None
     worker_state = {"unreaped": False}
     active_ruleset: str | None = None
+    rules_management: dict[str, Any] | None = None
 
     try:
+        if management_session is not None:
+            if bindings is None or role != ROLE_PRODUCTION:
+                raise ValueError("Rules management requires bound production acquisition")
+            rules_management = management_session.run_observation()
         for operation in operations:
             if journal.failures:
                 abort = "journal-failure"
@@ -982,6 +988,12 @@ def collect(
                 )
                 if worker_state["unreaped"]:
                     cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
+            if management_session is not None and rules_management is not None and not worker_state["unreaped"]:
+                try:
+                    rules_management["recovery"] = management_session.run_recovery()
+                except Exception as error:  # noqa: BLE001 - retain ownership on uncertainty
+                    failures.append("rules-management-recovery:" + type(error).__name__)
+                    abort = abort or "rules-management-recovery"
         finally:
             journal.close()
     finished = budget.stamp()
@@ -1008,6 +1020,7 @@ def collect(
         "rulesetReleases": releases,
         "principalActions": actions,
         "workerReaped": worker_reaped,
+        "rulesManagement": rules_management,
         "clock": {
             "started": budget.started,
             "observationFinished": observation_finished,

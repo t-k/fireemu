@@ -86,6 +86,8 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/production-admission/reservations.py",
     "tools/compat-broad/o8-core/o8_admission.py",
     COLLECTOR_ENTRY,
+    f"{LANE_DIRECTORY}/o5_user_token_remote_transport.py",
+    f"{LANE_DIRECTORY}/o5_user_token_https_worker.py",
     COMPARATOR_ENTRY,
     DESCRIPTOR_ENTRY,
 )

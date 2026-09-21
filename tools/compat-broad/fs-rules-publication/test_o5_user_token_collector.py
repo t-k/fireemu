@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import copy
+import sys
+from pathlib import Path
 
 import pytest
 from o5_user_token_case import compile_case
@@ -11,7 +14,14 @@ from o5_user_token_collector import (
     ROLE_LOCAL_SHADOW,
     ROLE_PRODUCTION,
     collect,
+    RulesManagementSession,
 )
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fs-write-limits"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import limits_03_descriptor
+import compiler_03
+import shared_gate
 
 PROJECT = "fireemu-35fe6"
 NONCE = "b" * 32
@@ -497,3 +507,52 @@ def test_a_malformed_case_is_rejected_before_any_request() -> None:
     with pytest.raises(ValueError):
         collect(plan, transport, role=ROLE_PRODUCTION, run_id="run-1")
     assert transport.requests == []
+
+
+def test_rules_management_baseline_and_dynamic_bindings_use_real_gate(tmp_path) -> None:
+    """The producer must derive A/B names from bounded response readbacks."""
+    plan = case()
+    gate_plan = limits_03_descriptor.gate_plan(
+        compiler_03.compile_limits_plan("fireemu-35fe6", "(default)", "a" * 32)
+    )
+    gate_plan = copy.deepcopy(gate_plan)
+    gate_plan["management"]["observation"] = [
+        {"id": slot, "timeout": 8.0}
+        for slot in ("baseline-release-get", "baseline-ruleset-get", "baseline-executable-get", "create-a", "create-a-get", "patch-a", "patch-a-get", "patch-a-executable", "create-b", "create-b-get", "patch-b", "patch-b-get", "patch-b-executable")
+    ]
+    gate_plan["management"]["recovery"] = []
+    gate_plan["observationRequests"] = len(gate_plan["management"]["observation"])
+    gate_plan["permissionExpiresAt"] = 4_000_000_000.0
+    shared_gate.create(tmp_path / "gate", gate_plan)
+    gate = shared_gate.Gate(tmp_path / "gate", gate_plan["campaignId"])
+
+    names = {"A": "projects/fireemu-35fe6/rulesets/server-a", "B": "projects/fireemu-35fe6/rulesets/server-b"}
+    baseline = "projects/fireemu-35fe6/rulesets/pre-existing"
+    source = {label: plan["rulesets"][label]["source"] for label in ("A", "B")}
+
+    def execute(operation, **_kwargs):
+        action = operation["action"]
+        if action == "release-get":
+            target = execute.active
+            return {"status": 200, "body": {"name": operation["releaseName"], "rulesetName": target}}
+        if action == "release-get-executable":
+            target = execute.active
+            return {"status": 200, "body": {"rulesetName": target}}
+        if action == "create":
+            return {"status": 200, "body": {"name": names[operation["label"]]}}
+        if action == "get":
+            label = "A" if operation["rulesetName"] == names["A"] else "B"
+            return {"status": 200, "body": {"name": operation["rulesetName"], "source": {"files": [{"name": "firestore.rules", "content": source[label]}]}}}
+        if action == "release-patch":
+            execute.active = operation["rulesetName"]
+            return {"status": 200, "body": {"name": operation["releaseName"], "rulesetName": execute.active}}
+        raise AssertionError(action)
+
+    execute.active = baseline
+    session = RulesManagementSession(gate=gate, ledger=None, ticket=None, execute=execute, plan=plan)
+    result = session.run_observation()
+    assert result["created"] == names
+    assert result["active"] == names
+    assert gate.snapshot()["managementUsed"] == [
+        "observation:" + slot["id"] for slot in gate_plan["management"]["observation"]
+    ]

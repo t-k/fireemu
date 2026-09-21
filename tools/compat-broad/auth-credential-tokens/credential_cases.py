@@ -18,6 +18,7 @@ CASE_GROUPS = (
     "session-cookie",
     "custom-token",
     "claim-precedence",
+    "refresh-refusal",
 )
 CASE_KINDS = ("observation", "control", "negative")
 
@@ -82,6 +83,21 @@ SIGNING_DEPENDENT_GROUPS = ("session-cookie", "custom-token", "claim-precedence"
 #: Stated here so the doc and the owner preconditions cannot drift from the list.
 SIGNING_DEPENDENT_CASE_COUNT = 11
 
+#: The total the campaign declares: seventeen original cases plus the two refresh
+#: refusal-class rows folded in from TP-AUTH-C-02.
+CASE_COUNT = 19
+
+#: A fresh control is a second observation inside a refusal row: after the stale
+#: refresh token is refused, a fresh sign-in on the same account is exchanged and must
+#: be accepted, so the refusal is shown to be about the stale credential rather than
+#: about the account. It is recorded on the row as `freshSessionRefresh` and compared
+#: as data; it is not an assertion, because a refused row asserts nothing.
+FRESH_CONTROL_OPERATION = "secure-token.refresh"
+
+#: Claim names the local runtime adds to an ID token and production never issues.
+#: Every claim-set comparison strips them first; see `credential_comparator`.
+LOCAL_ONLY_CLAIMS = (("firebase", "fireemu_session_epoch"),)
+
 _SESSION_V2 = "docs/compatibility/auth-session-v2.md"
 _SESSION_TOKEN = "docs/compatibility/auth-session-token.md"
 
@@ -92,6 +108,10 @@ def _accepted(*assertions: str, **fields: Any) -> dict[str, Any]:
 
 def _refused(error_code: str) -> dict[str, Any]:
     return {"status": 400, "errorCode": error_code, "assertions": []}
+
+
+def _fresh_control() -> dict[str, str]:
+    return {"operation": FRESH_CONTROL_OPERATION, "requires": "accepted"}
 
 
 def _case(
@@ -106,6 +126,7 @@ def _case(
     nondeterminism: str = "NONE",
     covered_elsewhere: tuple[str, ...] = (),
     boundary_controls: dict[str, dict[str, str]] | None = None,
+    fresh_control: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     case: dict[str, Any] = {
         "id": case_id,
@@ -127,6 +148,10 @@ def _case(
         case["boundaryControls"] = {
             position: dict(control) for position, control in boundary_controls.items()
         }
+    if fresh_control is not None:
+        if fresh_control["requires"] not in CONTROL_OUTCOMES:
+            raise ValueError(f"a control must require one of {CONTROL_OUTCOMES}")
+        case["freshControl"] = dict(fresh_control)
     return case
 
 
@@ -336,7 +361,48 @@ def observation_cases() -> list[dict[str, Any]]:
             ),
             inputs={"developerClaimName": "role", "accountOnlyClaimName": "tier"},
         ),
+        # --- refresh refusal class (TP-AUTH-C-02) --------------------------------------
+        # Which refusal a stale refresh token receives after the account's credentials
+        # change is unobserved in production. The local strict runtime removes the
+        # session on a password reset and on an explicit `validSince` update, so it
+        # answers INVALID_REFRESH_TOKEN for both; production is expected to answer
+        # TOKEN_EXPIRED (a validSince bump) and a DIFFERENT row here is the finding.
+        _case(
+            "refresh-after-password-reset-rejected",
+            "refresh-refusal",
+            "negative",
+            "secure-token.refresh",
+            "After an out-of-band password reset, the pre-reset refresh token is refused; a fresh sign-in on the same account still exchanges.",
+            _refused("INVALID_REFRESH_TOKEN"),
+            inputs={"credentialChange": "resetPassword"},
+            fresh_control=_fresh_control(),
+        ),
+        _case(
+            "refresh-after-explicit-valid-since-rejected",
+            "refresh-refusal",
+            "negative",
+            "secure-token.refresh",
+            "After an explicit administrative validSince update two seconds after sign-in, the earlier refresh token is refused; a fresh sign-in on the same account still exchanges.",
+            _refused("INVALID_REFRESH_TOKEN"),
+            inputs={"credentialChange": "validSince", "validSinceMinusAuthTimeSeconds": 2},
+            fresh_control=_fresh_control(),
+        ),
     ]
+
+
+def control_members(case: dict[str, Any]) -> dict[str, Any]:
+    """The row members a case's declared controls add when they hold as required.
+
+    A refusal row with a fresh control records `freshSessionRefresh`; a test or a
+    reviewer building the expected row from the case list gets the member from here
+    rather than restating the control's shape.
+    """
+    fresh = case.get("freshControl")
+    if fresh is None:
+        return {}
+    if fresh["requires"] == "accepted":
+        return {"freshSessionRefresh": {"status": 200, "errorCode": None}}
+    return {"freshSessionRefresh": {"status": 400, "errorCode": "TOKEN_EXPIRED"}}
 
 
 def revocation_refusal_codes(operation: str) -> tuple[str, ...]:

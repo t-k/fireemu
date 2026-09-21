@@ -19,6 +19,10 @@ Three rules carry most of the weight:
   below has to be the expiry the endpoint documents: a 401, a 403, a rate limit or an
   INVALID_ID_TOKEN refuses the call for a reason that has nothing to do with how old the
   session is, and is compared as data without placing anything.
+* A claim set is compared after the local-only claims are stripped. The local runtime
+  may add `firebase.fireemu_session_epoch` to an ID token; production never issues it,
+  so its presence on one side is not a difference. Every other claim name or type that
+  differs is a semantic mismatch.
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ from typing import Any
 
 from credential_cases import (
     CAMPAIGN_ID,
+    LOCAL_ONLY_CLAIMS,
     REVOCATION_REFUSAL_STATUS,
     case_by_id,
     observation_cases,
@@ -53,6 +58,59 @@ TRUST_MEMBERS = ("trustRoot", "algorithm")
 #: Row members that record absolute server-reported values. Two services never agree on
 #: a wall-clock second, so these are retained for review and excluded from equality.
 DIAGNOSTIC_MEMBERS = ("diagnostics", "boundarySeconds")
+
+#: The two outcomes of a claim-set comparison. Neither is a compatibility claim.
+CLAIM_SET_MATCH = "MATCH"
+CLAIM_SET_MISMATCH = "SEMANTIC_MISMATCH"
+
+#: The row member a claim set is recorded under. It carries names and types only.
+CLAIMS_MEMBER = "claims"
+
+
+def strip_local_only_claims(claims: Any) -> Any:
+    """Remove the claims only the local runtime issues, wherever they are recorded.
+
+    A claim set is recorded as claim names and claim types, at the top level and
+    under `firebase`. `firebase.fireemu_session_epoch` is a private local session
+    marker that never appears in a production token, so it is dropped from both the
+    names and the types before equality is judged. Nothing else is touched: a claim
+    present on one side only remains a difference.
+    """
+    if not isinstance(claims, dict):
+        return claims
+    result = copy.deepcopy(claims)
+    for path in LOCAL_ONLY_CLAIMS:
+        node: Any = result
+        for segment in path[:-1]:
+            node = node.get(segment) if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            continue
+        name = path[-1]
+        names = node.get("claimNames")
+        if isinstance(names, list):
+            node["claimNames"] = [item for item in names if item != name]
+        types = node.get("claimTypes")
+        if isinstance(types, dict):
+            types.pop(name, None)
+    return result
+
+
+def compare_claim_sets(local: Any, production: Any) -> str:
+    """Classify two recorded claim sets, ignoring the local-only claims.
+
+    Both inputs are the `claims` member a row records: claim names and types, with a
+    nested `firebase` block of the same shape. The local-only claims are stripped from
+    both sides, so a local token carrying `firebase.fireemu_session_epoch` and a
+    production token without it still compare equal on everything else. A malformed
+    claim set on either side is a mismatch, never a match by default.
+    """
+    if not isinstance(local, dict) or not isinstance(production, dict):
+        return CLAIM_SET_MISMATCH
+    if not _json_value(local) or not _json_value(production):
+        return CLAIM_SET_MISMATCH
+    if _same_json(strip_local_only_claims(local), strip_local_only_claims(production)):
+        return CLAIM_SET_MATCH
+    return CLAIM_SET_MISMATCH
 
 
 def _json_value(value: Any, depth: int = 0, active: set[int] | None = None) -> bool:
@@ -233,9 +291,36 @@ def _boundary_is_placed(
 
 
 def _semantic(row: dict[str, Any]) -> dict[str, Any]:
-    """The part of a row that is compared: everything but trust and pinning members."""
+    """The part of a row that is compared: everything but trust and pinning members.
+
+    A recorded claim set is compared with the local-only claims stripped, so the
+    private local session marker never counts as a difference while every other claim
+    name or type still does.
+    """
     dropped = {*TRUST_MEMBERS, *DIAGNOSTIC_MEMBERS, "boundaryPinned"}
-    return {k: v for k, v in row.items() if k not in dropped}
+    semantic = {k: v for k, v in row.items() if k not in dropped}
+    if CLAIMS_MEMBER in semantic:
+        semantic[CLAIMS_MEMBER] = strip_local_only_claims(semantic[CLAIMS_MEMBER])
+    return semantic
+
+
+def _fresh_control_holds(row: dict[str, Any], requires: str) -> bool:
+    """Whether the fresh-session control recorded on a refusal row did what it must.
+
+    The control is a second exchange on the same account with a freshly issued
+    refresh token. Only an accepted exchange shows the refusal above it was about the
+    stale credential rather than the account, so a row whose control did not hold is
+    not a refusal-class observation, however well the two sides agreed on the code.
+    """
+    control = row.get("freshSessionRefresh")
+    if not isinstance(control, dict):
+        return False
+    status = control.get("status")
+    if isinstance(status, bool) or not isinstance(status, int):
+        return False
+    if requires == "accepted":
+        return status == 200 and control.get("errorCode") is None
+    return status == REVOCATION_REFUSAL_STATUS and isinstance(control.get("errorCode"), str)
 
 
 def _trust_roots(receipt: dict[str, Any]) -> list[str]:
@@ -280,6 +365,12 @@ def compare(local: Any, production: Any) -> dict[str, Any]:
             classes[case_id] = "INDETERMINATE"
             continue
         agree = _same_json(_semantic(left[case_id]), _semantic(right[case_id]))
+        fresh = case.get("freshControl")
+        if fresh is not None and not all(
+            _fresh_control_holds(side[case_id], fresh["requires"]) for side in (left, right)
+        ):
+            classes[case_id] = "INDETERMINATE"
+            continue
         if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
             if not _boundary_is_placed(case, left, right):
                 classes[case_id] = "INDETERMINATE"
@@ -344,4 +435,12 @@ def _report(
     }
 
 
-__all__ = ["CLASSIFICATIONS", "CONTRACT", "compare"]
+__all__ = [
+    "CLAIM_SET_MATCH",
+    "CLAIM_SET_MISMATCH",
+    "CLASSIFICATIONS",
+    "CONTRACT",
+    "compare",
+    "compare_claim_sets",
+    "strip_local_only_claims",
+]

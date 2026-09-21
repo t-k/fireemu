@@ -15,6 +15,7 @@ import credential_cases as cases
 from credential_cases import (
     ASSERTION_NAMES,
     CAMPAIGN_ID,
+    CASE_COUNT,
     CASE_GROUPS,
     CASE_KINDS,
     SAME_SECOND_CASE_ID,
@@ -186,7 +187,32 @@ def test_the_signing_dependent_set_is_exactly_the_groups_built_on_a_custom_token
         case["id"] for case in observation_cases() if case["group"] in expected_groups
     }
     assert len(dependent) == SIGNING_DEPENDENT_CASE_COUNT == 11
-    assert len(observation_cases()) - len(dependent) == 6
+    assert len(observation_cases()) == CASE_COUNT == 19
+    # The refresh, revocation and refresh-refusal groups run without signing.
+    assert len(observation_cases()) - len(dependent) == 8
+
+
+def test_the_refresh_refusal_rows_carry_a_fresh_control_and_no_assertion() -> None:
+    folded = [case for case in observation_cases() if case["group"] == "refresh-refusal"]
+    assert [case["id"] for case in folded] == [
+        "refresh-after-password-reset-rejected",
+        "refresh-after-explicit-valid-since-rejected",
+    ]
+    for case in folded:
+        assert case["kind"] == "negative"
+        assert case["operation"] == "secure-token.refresh"
+        assert case["requiresSigning"] is False
+        assert case["expectedLocal"]["assertions"] == []
+        assert case["freshControl"] == {
+            "operation": "secure-token.refresh",
+            "requires": "accepted",
+        }
+    # Every other case declares no fresh control, so the member is not assumed.
+    assert all(
+        "freshControl" not in case
+        for case in observation_cases()
+        if case["group"] != "refresh-refusal"
+    )
 
 
 def test_the_boundary_row_asserts_pinning_rather_than_a_timestamp_comparison() -> None:

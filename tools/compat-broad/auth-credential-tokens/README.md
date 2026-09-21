@@ -12,11 +12,18 @@ This lane prepares a bounded production observation of the `AUTH-CREDENTIAL` con
 | `credential_collector.py` | Redaction, subject comparison, owned-resource tracking, cleanup accounting, the reserved budget and receipt assembly. Imports no network client, so it cannot make a request. |
 | `credential_comparator.py` | The `auth-credential-tokens-v1` comparison contract. Fail-closed, and it never claims parity. |
 | `credential_plan.py` | The inert campaign manifest: frozen inputs, budget, permission envelope, owner preconditions, cleanup contract and failure rehearsal. |
-| `credential_shadow.py` | The local shadow. It owns a `fireemu` process, runs every case against it and records what the local runtime does. Local evidence only. |
+| `credential_shadow.py` | The case runner and the local shadow. The runner takes an environment (project, API key, passwords, custom-token signer, endpoints) so a production transport drives the same code; the shadow owns a `fireemu` process, runs every case against it and records what the local runtime does. Local evidence only. |
+| `credential_gate.py` | The shared-Gate plan (every request in order, with `$binding:` placeholders) and `CredentialGate`, the facade that resolves placeholders from this run's responses and records account creation and absence evidence. |
+| `credential_descriptor.py` | The O8 `CampaignDescriptor`: kinds, window, budget, lock scopes, source map, plan compiler, permission bindings and the bound transport adapter. |
+| `credential_admission.py` | Frozen inputs, provenance, the owner permission, the handoff shape and the Ledger claim. |
+| `credential_preflight.py` | The charged management slots: bearer attestation, project and Auth-config readbacks, and the signBlob slots that mint the custom tokens. |
+| `credential_remote_transport.py`, `credential_https_worker.py` | The digest-pinned HTTPS worker and the capability-bound transport (identitytoolkit, securetoken, iamcredentials only). |
+| `credential_production.py` | One admitted execution: reserve, Gate, preflight, cases, cleanup, receipt, release. |
+| `credential_o8.py` | The launcher. Exit 0 released, 1 held with a receipt, 2 refused before any wire call. |
 
 ## Signing dependence
 
-Eleven of the seventeen cases carry `requiresSigning`. Production custom tokens must be RS256-signed by a service account while local ones are unsigned, and the session-cookie group derives its cookie from the custom-token session, so it depends on signing too. A run without signing access can only cover the refresh and revocation groups.
+Eleven of the nineteen cases carry `requiresSigning`. Production custom tokens must be RS256-signed by a service account while local ones are unsigned, and the session-cookie group derives its cookie from the custom-token session, so it depends on signing too. A run without signing access can only cover the refresh and revocation groups.
 
 ## Three rules that carry the weight
 
@@ -50,6 +57,10 @@ It starts one strict Auth-only daemon on an OS-assigned port, refuses any non-lo
 ## What this package does not do
 
 It performs no production request and acquires no credential. A nonce checked here is syntax only. A well-formed owner permission validated by `credential_plan.validate_permission` is still not permission granted by this repository, and the prepared package is never itself the permission.
+
+## Shared Gate and Ledger on the current tree
+
+The shared Ledger's reservation admits only Firestore document resources (`reservations._firestore_resource_scope`), the shared Gate requires at least one resource per job and derives a cleanup target from the request path, and its absence proof is a Firestore typed 404 (`shared_gate.validate_absence_proofs`). The campaign therefore names its two cleanup routes as Gate resources, tracks the accounts in the facade's own evidence, and is refused by `Ledger.reserve` with `canonical Firestore resource required` on this tree. `test_credential_production.py` pins that refusal and, separately, demonstrates the proposed two-function extension of the shared modules in the test process only. See `docs/compatibility/auth-credential-tokens-campaign-preparation.md`, section "O8 launch path".
 
 ## Bounded local runtime (offline continuation)
 

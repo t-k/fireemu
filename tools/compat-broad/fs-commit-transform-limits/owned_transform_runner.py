@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -57,6 +58,7 @@ CURRENT_PROFILE = {
     "runtimeCommit": "4f11e691a739b1659d2b95aaf3faeb081842b239",
     "manifestCommitField": "executionCommit",
     "requireTopLevelArtifactSha": False,
+    "historicalCompilerSha256": "eab79d565e2ab28c2be0c46d2d3dfcef193aee808bf570a484e9121f3c7c7d53",
 }
 PROFILES = {item["name"]: item for item in (DEFAULT_PROFILE, REPAIRED_PROFILE, CURRENT_PROFILE)}
 PROJECT = "demo-firestore-probe"
@@ -71,6 +73,26 @@ CONFIGURATION = {
 def sha_file(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def compiler_for_profile(path: Path | None, profile: dict) -> Path | None:
+    expected = profile.get("historicalCompilerSha256")
+    if expected is None:
+        return None
+    if path is None or path.is_symlink() or not path.is_file() or sha_file(path) != expected:
+        raise ValueError("historical compiler source binding differs")
+    return path
+
+
+def compile_bound_plan(compiler_path: Path | None, project: str, database: str, nonce: str) -> dict:
+    if compiler_path is None:
+        return compile_plan(project, database, nonce)
+    module_spec = importlib.util.spec_from_file_location("bound_transform_compiler", compiler_path)
+    if module_spec is None or module_spec.loader is None:
+        raise ValueError("historical compiler source binding differs")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    return module.compile_plan(project, database, nonce)
 
 
 def resolve_profile(profile: dict | str = DEFAULT_PROFILE) -> dict:
@@ -223,11 +245,12 @@ def validate_copied_manifest(output: Path, inputs: dict, profile: dict | str) ->
     return runtime
 
 
-def child(output: Path, nonce: str, profile_name: str) -> None:
+def child(output: Path, nonce: str, profile_name: str, compiler_path: Path | None) -> None:
     inputs = json.loads((output / "run-inputs.json").read_bytes())
     profile = resolve_profile(profile_name)
+    compiler_path = compiler_for_profile(compiler_path, profile)
     validate_copied_manifest(output, inputs, profile)
-    plan = compile_plan(PROJECT, "(default)", nonce)
+    plan = compile_bound_plan(compiler_path, PROJECT, "(default)", nonce)
     if (
         inputs["nonce"] != nonce
         or inputs["artifactProfile"] != profile["name"]
@@ -341,13 +364,15 @@ def run(
     artifact: Path,
     retained_manifest: Path,
     profile: dict | str = DEFAULT_PROFILE,
+    historical_compiler: Path | None = None,
 ) -> dict:
     """Own the verified executable copy, child, and all OS-assigned listeners."""
     profile = resolve_profile(profile)
+    compiler_path = compiler_for_profile(historical_compiler, profile)
     runtime = validate_retained_artifact(artifact, retained_manifest, profile)
     with owned_artifact(artifact, profile["artifactSha256"]) as (executable, identity):
         sealed = _run_pinned(
-            output, executable, retained_manifest, runtime, identity, profile
+            output, executable, retained_manifest, runtime, identity, profile, compiler_path
         )
     sealed["ownedArtifactRemoved"] = not executable.exists()
     if not sealed["ownedArtifactRemoved"]:
@@ -363,6 +388,7 @@ def _run_pinned(
     runtime: dict,
     identity: dict,
     profile: dict,
+    compiler_path: Path | None,
 ) -> dict:
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise ValueError("freeze the collector checkout before execution")
@@ -376,7 +402,7 @@ def _run_pinned(
     if sha_file(copied_manifest) != runtime["retainedManifestSha256"]:
         raise ValueError("retained manifest copy changed")
     nonce = uuid.uuid4().hex
-    plan = compile_plan(PROJECT, "(default)", nonce)
+    plan = compile_bound_plan(compiler_path, PROJECT, "(default)", nonce)
     save_new(output / "plan.json", plan)
     save_new(output / "config.json", CONFIGURATION)
     inputs = {
@@ -393,6 +419,7 @@ def _run_pinned(
         "dataRequestUpperBound": 17,
         "identityControlRequests": 2,
         "productionExecuted": False,
+        "historicalCompilerSha256": profile.get("historicalCompilerSha256"),
     }
     save_new(output / "run-inputs.json", inputs)
     command = [
@@ -426,6 +453,8 @@ def _run_pinned(
         "--profile",
         profile["name"],
     ]
+    if compiler_path is not None:
+        command.extend(["--historical-compiler", str(compiler_path)])
     save_new(output / "command.json", {"argv": command, "binding": digest(inputs)})
     report = {
         **runtime,
@@ -475,6 +504,7 @@ def main() -> int:
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--retained-manifest", type=Path)
     parser.add_argument("--nonce")
+    parser.add_argument("--historical-compiler", type=Path)
     parser.add_argument(
         "--profile", choices=sorted(PROFILES), default=DEFAULT_PROFILE["name"]
     )
@@ -487,7 +517,7 @@ def main() -> int:
             or args.retained_manifest
         ):
             parser.error("child requires --nonce and --profile")
-        child(args.child.resolve(), args.nonce, args.profile)
+        child(args.child.resolve(), args.nonce, args.profile, args.historical_compiler)
         return 0
     if (
         not args.artifact
@@ -501,6 +531,7 @@ def main() -> int:
         args.artifact.absolute(),
         args.retained_manifest.absolute(),
         profile=args.profile,
+        historical_compiler=args.historical_compiler.absolute() if args.historical_compiler else None,
     )
     print(
         json.dumps({"status": result["status"], "ownedProcess": result["ownedProcess"]})

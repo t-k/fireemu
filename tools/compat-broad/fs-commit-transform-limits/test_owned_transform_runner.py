@@ -23,6 +23,7 @@ def test_current_profile_is_bound_to_the_locked_build_identity():
         "runtimeCommit": "4f11e691a739b1659d2b95aaf3faeb081842b239",
         "manifestCommitField": "executionCommit",
         "requireTopLevelArtifactSha": False,
+        "historicalCompilerSha256": "eab79d565e2ab28c2be0c46d2d3dfcef193aee808bf570a484e9121f3c7c7d53",
     }
     assert BUILD_COMMAND == [
         "cargo",

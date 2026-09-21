@@ -1098,6 +1098,8 @@ class Ledger:
         canonical_child_gate_plan,
         *,
         now=None,
+        canonical_parent_inputs=None,
+        parent_permission=None,
     ):
         """Persist one recovery child before an issuer or any wire activity.
 
@@ -1121,6 +1123,18 @@ class Ledger:
             initial_gate_path = initial_claim["gatePath"]
             initial_gate_job = _gate_job(initial_claim)
         parent_gate = Gate(initial_gate_path, initial_gate_job).snapshot()
+        if canonical_parent_inputs is not None or parent_permission is not None:
+            if not isinstance(canonical_parent_inputs, dict) or not isinstance(parent_permission, dict):
+                raise ValueError("canonical parent producer inputs required")
+            lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+            sys.path.insert(0, str(lane))
+            try:
+                import request_bytes_admission as request_admission
+                expected_parent_gate = request_admission.gate_plan_for(canonical_parent_inputs, parent_permission)
+            except (ImportError, KeyError, TypeError, ValueError) as error:
+                raise ValueError("canonical parent producer refused inputs") from error
+            if digest(expected_parent_gate) != digest(parent_gate.get("plan")):
+                raise ValueError("registered parent Gate plan differs")
         if (
             digest(parent_gate.get("plan")) != initial_claim["gatePlanDigest"]
             or parent_gate.get("plan", {}).get("campaignId") != canonical_parent_plan.get("campaignId")
@@ -1139,6 +1153,31 @@ class Ledger:
         operation_key = lambda operation: (operation.get("kind"), operation.get("method"), operation.get("path"), operation.get("resource"), operation.get("probe"))
         if sorted(map(operation_key, registered_operations), key=repr) != sorted(map(operation_key, parent_operations), key=repr):
             raise ValueError("registered parent operations differ")
+        selected_probe = child_claim["selectedProbe"]
+        selected_job = parent_gate.get("plan", {}).get("jobs", {}).get(initial_gate_job, {})
+        creating_index = next(
+            (index for index, operation in enumerate(selected_job.get("observation", []))
+             if operation.get("probe") == selected_probe and operation.get("kind") == "conditional-create-commit"),
+            None,
+        )
+        if creating_index is None:
+            raise ValueError("selected parent create operation missing")
+        expected_operation = selected_job["observation"][creating_index]
+        expected_event = next(
+            (event for event in parent_gate.get("events", [])
+             if event.get("phase") == "observation"
+             and event.get("index") == creating_index
+             and event.get("requestDigest") == digest(expected_operation)),
+            None,
+        )
+        if (
+            not isinstance(expected_event, dict)
+            or expected_event.get("completed") is not False
+            or expected_event.get("creationOutcome") not in {"pending", "unknown"}
+            or type(expected_event.get("ended")) not in (int, float)
+            or unconfirmed_creates(parent_gate, initial_gate_job) != 1
+        ):
+            raise ValueError("selected parent create predecessor is not uncertain")
         for pid in [parent_gate.get("coordinatorPid")] + [job.get("pid") for job in parent_gate.get("jobs", {}).values()]:
             if pid is None:
                 continue

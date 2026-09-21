@@ -25,6 +25,9 @@ import request_bytes_production
 import request_bytes_recovery_campaign
 from test_request_bytes_admission import Admission
 
+ACTUAL_INPUTS = None
+ACTUAL_PERMISSION = None
+
 
 def _exit_immediately():
     return None
@@ -79,7 +82,9 @@ def test_bounded_evidence_reader_rejects_changed_file_after_read(tmp_path, monke
 
 
 def _recovery_fixture(tmp_path):
+    global ACTUAL_INPUTS, ACTUAL_PERMISSION
     fixture = Admission(tmp_path)
+    ACTUAL_INPUTS, ACTUAL_PERMISSION = fixture.inputs, fixture.permission
     import shutil
     shutil.rmtree(fixture.ledger)
     reservations.Ledger.create(fixture.ledger)
@@ -99,8 +104,18 @@ def _recovery_fixture(tmp_path):
     gate_state = json.loads((parent_path / "state.json").read_text())
     dead = _dead_pid()
     gate_state["coordinatorPid"] = dead
-    gate_state["jobs"][request_bytes_descriptor.gate_job_name("probe-u01")]["pid"] = dead
-    gate_state["events"] = [{"phase": "observation", "index": 0, "completed": False, "failure": "TimeoutError"}]
+    job_name = request_bytes_descriptor.gate_job_name("probe-u01")
+    gate_state["jobs"][job_name]["pid"] = dead
+    job = gate_state["plan"]["jobs"][job_name]
+    create_index, create_operation = next(
+        (index, operation) for index, operation in enumerate(job["observation"])
+        if operation.get("kind") == "conditional-create-commit"
+    )
+    gate_state["events"] = [{"job": job_name, "phase": "observation", "index": create_index,
+                              "started": time.monotonic(), "ended": time.monotonic(),
+                              "requestDigest": digest(create_operation),
+                              "service": create_operation["service"], "method": create_operation["method"],
+                              "completed": False, "creationOutcome": "unknown"}]
     gate_state["stopped"] = True
     _save(parent_path, gate_state)
     recovery_nonce = "fedcba9876543210fedcba9876543210"
@@ -137,7 +152,9 @@ def _recovery_fixture(tmp_path):
 def test_recovery_extension_persists_child_before_any_issuer(tmp_path):
     ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
     before = ledger.snapshot()
-    result = ledger.begin_recovery_extension(parent, child, envelope, parent_plan, child_plan, now=1100)
+    result = ledger.begin_recovery_extension(parent, child, envelope, parent_plan, child_plan, now=1100,
+                                             canonical_parent_inputs=ACTUAL_INPUTS,
+                                             parent_permission=ACTUAL_PERMISSION)
     assert result["claimDigest"] == digest(child)
     state = ledger.snapshot()
     row = state["reservations"][parent["reservation"]]
@@ -239,4 +256,57 @@ def test_recovery_extension_rejects_child_locks_that_miss_owned_resources(tmp_pa
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="resource locks|permission scope"):
         ledger.begin_recovery_extension(parent, altered, envelope, parent_plan, child_plan, now=1100)
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("mutation", ["bodyRef", "precondition", "privileged", "form", "order"])
+def test_recovery_extension_requires_full_registered_parent_gate_digest(tmp_path, mutation):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    gate_path = Path(ledger.snapshot()["reservations"][parent["reservation"]]["claim"]["gatePath"])
+    state = json.loads((gate_path / "state.json").read_text())
+    job_name = request_bytes_descriptor.gate_job_name("probe-u01")
+    operations = state["plan"]["jobs"][job_name]["observation"]
+    if mutation == "order":
+        operations[0], operations[1] = operations[1], operations[0]
+    else:
+        operation = operations[0]
+        if mutation == "bodyRef":
+            operation["bodyRef"] = "foreign"
+        elif mutation == "precondition":
+            operation["expect"] = {"foreign": True}
+        elif mutation == "privileged":
+            operation["privileged"] = not operation["privileged"]
+        else:
+            operation["form"] = not operation.get("form", False)
+    state["planDigest"] = digest(state["plan"])
+    _save(gate_path, state)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="registered parent Gate plan differs"):
+        ledger.begin_recovery_extension(
+            parent, child, envelope, parent_plan, child_plan, now=1100,
+            canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+        )
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("outcome", ["created", "refused", None])
+def test_recovery_extension_requires_uncertain_selected_create_event(tmp_path, outcome):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    gate_path = Path(ledger.snapshot()["reservations"][parent["reservation"]]["claim"]["gatePath"])
+    state = json.loads((gate_path / "state.json").read_text())
+    event = state["events"][0]
+    if outcome is None:
+        event["completed"] = True
+        event.pop("creationOutcome", None)
+    else:
+        event["completed"] = True
+        event["creationOutcome"] = outcome
+    state["planDigest"] = digest(state["plan"])
+    _save(gate_path, state)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="uncertain"):
+        ledger.begin_recovery_extension(
+            parent, child, envelope, parent_plan, child_plan, now=1100,
+            canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+        )
     assert ledger.snapshot() == before

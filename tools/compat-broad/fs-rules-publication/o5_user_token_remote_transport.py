@@ -711,9 +711,16 @@ def _run_worker(
     _OWNED_CHILDREN.add(child.pid)
     reaped = False
     try:
-        io_timeout = max(
-            0.001, deadline - time.monotonic() - _REAP_RESERVE_SECONDS
-        )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise WorkerExchangeError(
+                "worker walltime exceeded", worker_reaped=False
+            )
+        io_timeout = remaining - _REAP_RESERVE_SECONDS
+        if io_timeout <= 0:
+            raise WorkerExchangeError(
+                "worker reap reserve exhausted", worker_reaped=False
+            )
         stdout, _stderr = child.communicate(input=payload, timeout=io_timeout)
         reaped = child.poll() is not None
         if time.monotonic() > deadline:

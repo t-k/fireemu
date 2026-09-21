@@ -1019,7 +1019,7 @@ def _read_wall_clock(wall_clock: Callable[[], float]) -> float | None:
 def _note_worker_failure(
     worker_state: dict[str, bool] | None, error: BaseException
 ) -> None:
-    if worker_state is not None and getattr(error, "worker_reaped", None) is False:
+    if worker_state is not None and getattr(error, "worker_reaped", None) is not True:
         worker_state["unreaped"] = True
 
 

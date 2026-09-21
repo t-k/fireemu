@@ -39,6 +39,40 @@ def test_unreaped_worker_failure_blocks_recovery_and_preserves_evidence():
     assert calls and all(request.get("phase") != "recovery" for request in calls)
 
 
+@pytest.mark.parametrize(
+    ("attribute", "allows_recovery"),
+    [(None, False), (1, False), (False, False), (True, True)],
+)
+def test_worker_failure_status_requires_exact_true(attribute, allows_recovery):
+    plan = case()
+    calls = []
+
+    class WorkerFailure(ValueError):
+        pass
+
+    if attribute is not None:
+        WorkerFailure.worker_reaped = attribute
+
+    def execute(request):
+        calls.append(request)
+        raise WorkerFailure("worker status is not proven")
+
+    result = module.collect(
+        plan,
+        execute,
+        role=module.ROLE_LOCAL_SHADOW,
+        run_id="unknown-worker-status",
+    )
+
+    assert result["transport"]["workerReaped"] is (True if allows_recovery else False)
+    if allows_recovery:
+        assert len(calls) > 1
+        assert "blockedReason" not in result["cleanup"]
+    else:
+        assert result["cleanup"]["blockedReason"] == "worker-reap-unconfirmed"
+        assert len(calls) == 1
+
+
 @pytest.mark.parametrize("failure_phase", ["ruleset", "principal", "recovery"])
 def test_unreaped_worker_failure_is_sticky_across_collector_helpers(failure_phase):
     plan = case()

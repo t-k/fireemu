@@ -566,7 +566,7 @@ def test_timeout_reports_reaped_owned_worker_without_success_receipt(fixture_ori
             binding_digest=hashlib.sha256(source).hexdigest(),
             fixture_origin=fixture_origin,
         )
-    assert raised.value.worker_reaped is True
+    assert raised.value.worker_reaped is False
 
 
 def test_reap_owned_kills_only_its_new_process_group():

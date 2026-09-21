@@ -73,7 +73,8 @@ pub fn base64url_decode(text: &str) -> Result<Vec<u8>, JwtError> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TokenAcceptance {
     /// The `strict` profile: every token is an ID token of this session's Auth store, with
-    /// its issuer, audience, expiry on the virtual clock, subject and revocation checked.
+    /// its issuer, audience, expiry, issued-at and authentication times on the virtual
+    /// clock, subject and revocation checked.
     #[default]
     Verified,
     /// The `emulator` profile: a token this store cannot verify is still accepted when it is
@@ -382,8 +383,8 @@ pub struct TokenVerification {
     pub second_factor: Option<String>,
 }
 
-/// Verifies an unsigned token against the store: issuer, audience, expiry, subject existence,
-/// revocation (`tokens_valid_after`) and disabled users.
+/// Verifies an ID token against the store: signature mode, issuer, audience, expiry,
+/// issued-at and authentication times, subject existence, revocation and disabled users.
 pub fn verify_id_token(
     token: &str,
     store: &AuthStore,
@@ -520,6 +521,17 @@ pub fn verify_id_token_decoded(
     if now_secs >= exp {
         return Err(JwtError::Expired);
     }
+    // Firebase's ID-token contract requires both iat and auth_time not to be in
+    // the future. Claims use whole seconds on this store's logical clock: a
+    // token issued in the current second must remain immediately usable.
+    let issued_at = decoded
+        .payload
+        .get("iat")
+        .and_then(JsonValue::as_i64)
+        .ok_or(JwtError::Malformed)?;
+    if issued_at > now_secs {
+        return Err(JwtError::Malformed);
+    }
     let sub = decoded.sub().ok_or(JwtError::Malformed)?;
     let user = store.user_by_id(sub).ok_or(JwtError::UnknownUser)?;
     let auth_time = decoded
@@ -527,6 +539,9 @@ pub fn verify_id_token_decoded(
         .get("auth_time")
         .and_then(JsonValue::as_i64)
         .ok_or(JwtError::Malformed)?;
+    if auth_time > now_secs {
+        return Err(JwtError::Malformed);
+    }
     if user.disabled {
         return Err(JwtError::UserDisabled);
     }

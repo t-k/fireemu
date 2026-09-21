@@ -121,6 +121,10 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
         "projectId": AUTHORIZED_PROJECT,
+        "logicalAccounts": {
+            account: {"resource": f"projects/{AUTHORIZED_PROJECT}/auth/accounts/o1-oob-{plan['nonce']}-{'a' if account == 'accountA' else 'b'}"}
+            for account in ("accountA", "accountB")
+        },
         "role": plan["permissionEnvelope"]["role"],
         "scope": plan["permissionEnvelope"]["scope"],
         "credentialPrincipal": {
@@ -147,6 +151,10 @@ def validate_permission(permission, plan, *, source_inputs=None, source_commit=N
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
         "projectId": AUTHORIZED_PROJECT,
+        "logicalAccounts": {
+            account: {"resource": f"projects/{AUTHORIZED_PROJECT}/auth/accounts/o1-oob-{plan['nonce']}-{'a' if account == 'accountA' else 'b'}"}
+            for account in ("accountA", "accountB")
+        },
         "role": envelope["role"],
         "scope": envelope["scope"],
         "credentialPrincipal": {

@@ -62,9 +62,9 @@ def test_recovery_plan_has_distinct_identity_and_exact_85_slot_shape():
     assert {op["resource"] for op in plan["operations"][:34]} == set(
         parent_plan()["probes"][0]["resources"]
     )
-    assert {op["resource"] for op in plan["operations"][34:]} == set(
+    assert {op["resource"] for op in plan["operations"][34:]} == {
         resource for probe in parent_plan()["probes"] for resource in probe["resources"]
-    )
+    }
 
 
 def test_recovery_plan_rejects_parent_nonce_reuse_and_unknown_probe():

@@ -14,12 +14,12 @@ import math
 import re
 from typing import Any
 
-import shared_gate
 import request_bytes_campaign as parent_campaign
 import request_bytes_compiler as parent_compiler
 import request_bytes_descriptor as parent_descriptor
-from request_bytes_collector import owned_document, typed_not_found
+import shared_gate
 from broad_contract import digest as canonical_digest
+from request_bytes_collector import owned_document, typed_not_found
 
 RECOVERY_JOB = "request-bytes-recovery-extension"
 PROJECT = parent_descriptor.PROJECT

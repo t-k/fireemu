@@ -38,7 +38,7 @@ def principals_for(plan: dict, salt: str) -> dict:
     return {
         entry["ref"]: {
             "uidFingerprint": digest(["uid", plan["nonce"], salt, entry["ref"]])[:16],
-            "provider": "anonymous" if entry["kind"] == "anonymous" else "password",
+            "provider": "anonymous" if entry["kind"] == "anonymous" else "email",
             "tenant": entry["tenant"],
             "claimsDigest": digest(entry["claims"]),
         }

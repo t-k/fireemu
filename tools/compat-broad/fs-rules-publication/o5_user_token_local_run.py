@@ -754,7 +754,7 @@ def _local_acquisition(output: Path, shadow: LocalShadow) -> dict[str, Any]:
             continue
         principals[entry["ref"]] = {
             "uidFingerprint": digest(["uid", plan["nonce"], uid])[:16],
-            "provider": "anonymous" if entry["kind"] == "anonymous" else "password",
+            "provider": "anonymous" if entry["kind"] == "anonymous" else "email",
             "tenant": entry["tenant"],
             "claimsDigest": digest(entry["claims"]),
         }

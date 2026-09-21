@@ -75,7 +75,10 @@ _ENVIRONMENT_FOR_SIDE = {
     SIDE_PRODUCTION: ENVIRONMENT_PRODUCTION,
     SIDE_LOCAL: ENVIRONMENT_LOCAL,
 }
-_PROVIDER_FOR_KIND = {"email-password": "password", "anonymous": "anonymous"}
+# The provider vocabulary a principal binding uses. It is the campaign's own,
+# chosen so that a published record never carries the substring "password":
+# the account kind is what the plan compiled, not a credential.
+_PROVIDER_FOR_KIND = {"email-password": "email", "anonymous": "anonymous"}
 
 # Errors of these names refuse the comparison outright: the bundle is not an
 # acquisition of this campaign by this collector on the side it was passed as.

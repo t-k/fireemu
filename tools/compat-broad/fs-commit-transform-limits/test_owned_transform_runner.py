@@ -8,11 +8,30 @@ import owned_transform_runner as runner
 import pytest
 from owned_transform_runner import (
     BUILD_COMMAND,
+    CURRENT_PROFILE,
     PROFILES,
     REPAIRED_PROFILE,
     validate_copied_manifest,
     validate_retained_artifact,
 )
+
+
+def test_current_profile_is_bound_to_the_locked_build_identity():
+    assert CURRENT_PROFILE == {
+        "name": "current-4f11e691",
+        "artifactSha256": "a34c865c2c87b16281080dba9327543a9d8f8876f172a74569b5291ef2a1219f",
+        "runtimeCommit": "4f11e691a739b1659d2b95aaf3faeb081842b239",
+        "manifestCommitField": "executionCommit",
+        "requireTopLevelArtifactSha": False,
+    }
+    assert BUILD_COMMAND == [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "fireemu",
+        "--message-format=json",
+    ]
 
 
 @pytest.fixture

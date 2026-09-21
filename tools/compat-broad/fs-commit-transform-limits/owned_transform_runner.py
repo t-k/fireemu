@@ -51,7 +51,14 @@ REPAIRED_PROFILE = {
     "manifestCommitField": "executionCommit",
     "requireTopLevelArtifactSha": False,
 }
-PROFILES = {item["name"]: item for item in (DEFAULT_PROFILE, REPAIRED_PROFILE)}
+CURRENT_PROFILE = {
+    "name": "current-4f11e691",
+    "artifactSha256": "a34c865c2c87b16281080dba9327543a9d8f8876f172a74569b5291ef2a1219f",
+    "runtimeCommit": "4f11e691a739b1659d2b95aaf3faeb081842b239",
+    "manifestCommitField": "executionCommit",
+    "requireTopLevelArtifactSha": False,
+}
+PROFILES = {item["name"]: item for item in (DEFAULT_PROFILE, REPAIRED_PROFILE, CURRENT_PROFILE)}
 PROJECT = "demo-firestore-probe"
 CONFIGURATION = {
     "schemaVersion": 1,

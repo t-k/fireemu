@@ -25,10 +25,6 @@ from o5_user_token_shadow import unredacted_identifiers
 
 ROOT = Path(__file__).resolve().parents[3]
 SPEC_DIRECTORY = ROOT / "spec" / "compatibility"
-# How far behind HEAD the shadow's source commit may be before the record is
-# stale by construction. The observer digest check below is the strict one;
-# this bounds drift in files it does not cover.
-MAXIMUM_COMMITS_BEHIND_HEAD = 50
 MATRIX = SPEC_DIRECTORY / "fs-rules-user-token-matrix.json"
 SHADOW = SPEC_DIRECTORY / "fs-rules-user-token-local-shadow.json"
 
@@ -111,8 +107,8 @@ def test_the_shadow_record_was_produced_by_the_lane_sources_on_disk() -> None:
 
 def test_the_shadow_source_commit_is_head_or_a_recent_ancestor() -> None:
     """A length check accepted any 40 characters. The recorded commit has to
-    exist here, be HEAD or an ancestor of it, and lie within a bounded number
-    of commits behind it, so a stale record is detected rather than carried."""
+    exist here, be HEAD or an ancestor of it, and no runtime input or lane file may
+    have changed since it, so a stale record is detected rather than carried."""
     commit = shadow()["artifact"]["sourceCommit"]
 
     def git(*args: str) -> subprocess.CompletedProcess[str]:
@@ -131,10 +127,25 @@ def test_the_shadow_source_commit_is_head_or_a_recent_ancestor() -> None:
     assert git("merge-base", "--is-ancestor", commit, "HEAD").returncode == 0, (
         f"the recorded source commit {commit} is not HEAD or an ancestor of it"
     )
-    behind = git("rev-list", "--count", f"{commit}..HEAD")
-    assert behind.returncode == 0
-    assert int(behind.stdout.strip()) <= MAXIMUM_COMMITS_BEHIND_HEAD, (
-        f"the shadow is {behind.stdout.strip()} commits behind HEAD; re-run it"
+    # Staleness is decided by what changed, not by how many unrelated commits landed:
+    # the record is stale when any runtime input of the fireemu artifact or any file of
+    # this lane changed between the recorded commit and HEAD. Unrelated commits on a
+    # busy integration branch must not invalidate a record whose inputs are unchanged.
+    changed = git(
+        "diff",
+        "--name-only",
+        f"{commit}..HEAD",
+        "--",
+        "crates",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo",
+        "tools/compat-broad/fs-rules-publication",
+    )
+    assert changed.returncode == 0
+    assert changed.stdout.strip() == "", (
+        "the shadow predates changes to its inputs; re-run it:\n" + changed.stdout
     )
 
 

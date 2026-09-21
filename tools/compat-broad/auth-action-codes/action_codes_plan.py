@@ -491,11 +491,12 @@ def _address_lookup(identifier: str, requires: str) -> dict[str, Any]:
 
 
 def campaign_recovery() -> list[dict[str, Any]]:
-    """Discover owned accounts by address, delete them, then prove absence.
+    """Recover only identities owned by immutable create events.
 
-    The address is the ownership key. A runtime identifier only exists when a
-    create response was both received and parsed, so a lost response would hide
-    a real account from a recovery keyed on `localId`.
+    Email discovery is batched because it can recover a UID that was already
+    learned by a create response, but an address alone never authorizes a
+    delete. The two UID absence checks are separate typed proofs from the final
+    batched address absence check.
     """
     rows: list[dict[str, Any]] = [
         _address_lookup("recover-discover", "the owned identifiers, however they arose")
@@ -512,7 +513,21 @@ def campaign_recovery() -> list[dict[str, Any]]:
                 "path": _ADMIN.format(project="{project}", method="delete"),
                 "body": {"localId": "$binding:" + account + ".localId"},
                 "tolerates": "already absent",
-                "identifierSource": "the discovery readback, or the create response",
+                "identifierSource": "the immutable create event, confirmed by discovery",
+            }
+        )
+    for account in ("accountA", "accountB"):
+        rows.append(
+            {
+                "id": "recover-uid-absence-" + account,
+                "account": account,
+                "operationType": "auth-lookup",
+                "selector": "localId",
+                "routeClass": "admin",
+                "method": "POST",
+                "path": _ADMIN.format(project="{project}", method="lookup"),
+                "body": {"localId": "$binding:" + account + ".localId"},
+                "requires": "typed users[] absence for the immutable UID",
             }
         )
     rows.append(_address_lookup("recover-absence", "typed absence of both addresses"))

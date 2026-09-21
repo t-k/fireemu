@@ -172,10 +172,15 @@ class FakeService:
                     }
                     for a in found
                 ]
+            else:
+                answer["users"] = []
             return 200, answer
         account = self.accounts.get(body["localId"])
         if account is None:
-            return 200, {"kind": "identitytoolkit#GetAccountInfoResponse"}
+            return 200, {
+                "kind": "identitytoolkit#GetAccountInfoResponse",
+                "users": [],
+            }
         return 200, {
             "kind": "identitytoolkit#GetAccountInfoResponse",
             "users": [
@@ -218,6 +223,19 @@ def test_a_complete_run_records_every_stage_in_order() -> None:
     assert receipt["productionExecuted"] is False
     assert receipt["manifestDigest"] == receipt["manifestDigest"].lower()
     assert len(receipt["manifestDigest"]) == 64
+    assert [row["id"] for row in receipt["recovery"]] == [
+        "recover-discover",
+        "recover-delete-accountA",
+        "recover-delete-accountB",
+        "recover-uid-absence-accountA",
+        "recover-uid-absence-accountB",
+        "recover-absence",
+    ]
+    assert all(
+        row.get("uidAbsent") is True
+        for row in receipt["recovery"]
+        if row["id"].startswith("recover-uid-absence-")
+    )
 
 
 def test_observed_stage_results_match_the_planned_local_expectations() -> None:
@@ -397,7 +415,7 @@ def test_a_violated_bound_still_deletes_every_owned_account() -> None:
     assert receipt["cleanupComplete"] is True
     assert receipt["remainingAccounts"] == 0
     assert service.accounts == {}
-    assert receipt["recoveryRequests"] <= 4
+    assert receipt["recoveryRequests"] <= 6
 
 
 def test_recovery_has_its_own_reserve_and_is_not_starved_by_observation() -> None:
@@ -475,8 +493,8 @@ def test_an_unmodelled_error_shape_is_kept_redacted() -> None:
     assert "leaked" not in json.dumps(receipt)
 
 
-def test_an_account_created_behind_a_lost_response_is_still_recovered() -> None:
-    """The reviewer's reproduction: the server stores the account, we lose the answer."""
+def test_an_account_created_behind_a_lost_response_is_held_without_owned_uid() -> None:
+    """An address discovery cannot authorize deletion without create ownership."""
 
     class LostAnswer(FakeService):
         def _signUp(self, body: dict):
@@ -490,12 +508,13 @@ def test_an_account_created_behind_a_lost_response_is_still_recovered() -> None:
     assert receipt["stopReason"] == "stage-failed:account-b-create"
     # The account exists on the server and its identifier never reached us.
     assert receipt["ownedAccounts"].get("accountB") is None
-    assert service.accounts == {}
-    assert receipt["cleanupComplete"] is True
-    assert receipt["remainingAccounts"] == 0
+    assert len(service.accounts) == 2
+    assert receipt["cleanupComplete"] is False
+    assert receipt["remainingAccounts"] == 2
+    assert any(row.get("failure") == "invalid-owned-address-lookup" for row in receipt["recovery"])
     discovered = receipt["recovery"][0]
     assert discovered["id"] == "recover-discover"
-    assert discovered["presentAddresses"] == 2
+    assert "presentAddresses" not in discovered
 
 
 def test_an_address_still_present_after_recovery_fails_cleanup() -> None:
@@ -516,6 +535,21 @@ def test_a_failed_absence_lookup_can_never_report_proven_cleanup() -> None:
     assert receipt["cleanupComplete"] is False
     assert receipt["recovery"][-1]["status"] == 503
     assert receipt["absenceProven"] is False
+
+
+def test_a_failed_uid_absence_lookup_can_never_report_proven_cleanup() -> None:
+    class Service(FakeService):
+        def _lookup(self, request):
+            if "localId" in request:
+                return 200, {"kind": "identitytoolkit#GetAccountInfoResponse"}
+            return super()._lookup(request)
+
+    _, receipt = run(Service())
+    assert receipt["cleanupComplete"] is False
+    assert any(
+        row.get("failure") == "uid-still-present-or-invalid-absence"
+        for row in receipt["recovery"]
+    )
 
 
 def test_a_create_refused_by_the_address_domain_stops_and_owns_nothing() -> None:

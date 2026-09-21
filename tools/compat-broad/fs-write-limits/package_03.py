@@ -59,27 +59,14 @@ LANE = "tools/compat-broad/fs-write-limits"
 
 OPEN_GATE_DEFECTS = [
     (
-        "shared_gate._creation_outcome settles a BatchWrite as an unknown create "
-        "as soon as one item is not a create-shaped write, so the R3 batch that "
-        "carries an empty item leaves one create unconfirmed and the normal "
-        "close is refused although every owned document is proven absent. The "
-        "proposed rule, applied in the lane tests as a fixture, accounts an "
-        "empty item only when production refused it per item with "
-        "INVALID_ARGUMENT and the empty result slot."
+        "Ambiguous or lost create responses remain owner-escalation: only a "
+        "typed refusal or a complete creation proof can settle ownership, and "
+        "the production lane must retain that fail-closed disposition."
     ),
     (
-        "shared_gate.abandoned_cleanup_complete compares the creation proofs, not "
-        "only the absence proofs, against every declared resource. This campaign "
-        "declares resources it expects production to refuse, so a run that "
-        "created and then abandoned can never reach the abandoned close even "
-        "with absence proven for the whole assignment."
-    ),
-    (
-        "After an abandon the collector still walks the recovery schedule and "
-        "the Gate consumes each slot of an uncreated resource as a zero-wire "
-        "skip, so a stop inside the typed-absence preflight leaves a non-zero "
-        "recovery count and shared_gate.non_creating_dispatches no longer holds; "
-        "the lane classifies the stop as no-data from the journal instead."
+        "Production still requires the declared nx field exemption readback and "
+        "the bound restore evidence; local Gate completion does not establish "
+        "those production configuration obligations."
     ),
 ]
 
@@ -140,11 +127,8 @@ def shadow_record(run: Path, commit: str) -> dict:
         or result.get("campaignId") != CAMPAIGN
     ):
         raise SystemExit("a fully recorded, source-bound shadow run is required")
-    # A run whose schedule and cleanup completed but whose Gate close was
-    # refused is published as what it is: recorded, every owned document
-    # proven absent, and not closed. HEAD's shared Gate refuses the close of
-    # this campaign, see OPEN_GATE_DEFECTS, so the record says so rather than
-    # being withheld until the Gate changes.
+    # Preserve the distinction between a fully closed local run and a recorded
+    # run whose terminal close was refused for an infrastructure reason.
     completed = result.get("completed") is True and supervisor.get("status") == (
         "completed"
     )
@@ -218,9 +202,8 @@ def shadow_record(run: Path, commit: str) -> dict:
             if completed
             else " The schedule and the cleanup ran to the end and every owned "
             "document was proven absent, but HEAD's shared Gate refused the "
-            "terminal close: it settles the R3 BatchWrite that carries an empty "
-            "item as an unknown create. The record is published as recorded, "
-            "not completed."
+            "terminal close did not complete; the private Gate journal and "
+            "receipt retain the exact stop disposition."
         ),
         "execution": {
             "ALL": {
@@ -427,9 +410,9 @@ def manifest(
         "status": "local-only",
         "technicalBlocker": (
             "The O8 launcher exists and drives collector_03 through the shared "
-            "Gate, but HEAD's shared_gate settles the R3 malformed-item BatchWrite "
-            "as an unknown create, so a production run could not reach its normal "
-            "close until the proposed accounting rule lands."
+            "Gate. Production admission remains unavailable until the owner "
+            "envelope, release artifact, index exemption readback, and saved "
+            "receipt/restore evidence are independently bound."
         ),
     }
     value["comparatorBinding"] = {
@@ -502,7 +485,6 @@ def manifest(
     value["promotion"] = {
         **previous["promotion"],
         "remaining": [
-            "land the shared-Gate accounting rule for the R3 malformed-item batch",
             "freeze artifact, collector and comparator bindings",
             "obtain the owner envelope fields and tariff acceptance",
             "deploy the declared index exemption and verify the field readback",
@@ -529,8 +511,8 @@ def binding(previous: dict, manifest_value: dict, shadow: dict, commit: str) -> 
         "no production release artifact SHA-256 is bound",
         "no fresh production nonce is reserved",
         "the declared index exemption is not deployed",
-        "shared_gate settles the R3 malformed-item BatchWrite as an unknown create",
-        "shared_gate's abandoned close requires a creation proof for every declared resource",
+        "ambiguous or lost creates remain owner-escalation until resolved",
+        "the production nx exemption and restore evidence are not verified",
     ]
     value["collector"] = {
         **value["collector"],

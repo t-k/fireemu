@@ -122,9 +122,11 @@ def test_the_package_states_how_an_early_stop_is_handled() -> None:
     assert "no-data abort" in allocation["earlyStop"]
     assert "abandon transition" in allocation["earlyStop"]
     assert "verified absent" in allocation["earlyStop"]
-    # The one thing still open in the Gate is named rather than glossed.
-    assert "absence proof" in allocation["openGateDefect"]
-    assert "unknown create" in allocation["openGateDefect"]
+    # Ambiguous ownership is still fail-closed; the retired Gate defects are
+    # not allowed to remain as package blockers.
+    assert "ambiguous" in allocation["openGateDefect"]
+    assert "owner-escalation" in allocation["openGateDefect"]
+    assert "unknown create" not in allocation["openGateDefect"]
     assert allocation["gateWallCapSeconds"] == 1200
 
 
@@ -255,37 +257,27 @@ def test_binding_and_source_digests_resolve_at_the_declared_commit() -> None:
 
 
 def test_the_recorded_shadow_ran_to_the_end_and_reclaimed_everything() -> None:
-    """The schedule and the cleanup completed; only the Gate close was refused.
-
-    HEAD's shared Gate settles the R3 BatchWrite carrying an empty item as an
-    unknown create, so `Gate.finish` refuses the terminal close of a run that
-    has deleted and proven absent every owned document. The record publishes
-    that state rather than a completion it cannot claim. When the proposed
-    accounting rule lands, the shadow must be rerun and this test must expect
-    `completed-local-only` again.
-    """
+    """The schedule, cleanup, and Gate close all completed locally."""
     shadow = load(SHADOW)
-    assert shadow["status"] == "recorded-local-only-gate-close-refused"
+    assert shadow["status"] == "completed-local-only"
     for part in PARTS:
         execution = shadow["execution"][part]["execution"]
         assert execution["semanticMismatches"] == []
-        assert execution["infrastructureFailures"] == [
-            {"phase": "finish", "failure": "ValueError"}
-        ]
+        assert execution["infrastructureFailures"] == []
         for key in (
             "recordingComplete",
             "stateValidation",
             "allOwnedResourcesAbsentAfterRecovery",
-            "gateCloseRefused",
         ):
             assert execution[key] is True, (part, key)
+        assert execution["gateCloseRefused"] is False
         for key in (
             "cleanupComplete",
             "cleanupValidated",
             "receiptValidated",
             "completed",
         ):
-            assert execution[key] is False, (part, key)
+            assert execution[key] is True, (part, key)
         assert execution["ownedProcess"]["stopped"] is True
         assert execution["ownedProcess"]["listenersClosed"] is True
         plan = compile_limits_plan("demo-firestore-probe", "(default)", "0" * 32, part)

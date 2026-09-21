@@ -671,3 +671,50 @@ def test_the_cache_key_separates_response_formats(tmp_path, server, repo, state_
     assert second["cache"]["hit"] is False
     assert second["cache"]["key"] != first["cache"]["key"]
     assert len(server.posts()) == 2
+
+
+def test_a_key_protected_server_needs_the_configured_key_file(
+    tmp_path, repo, state_dir, capsys
+):
+    protected = FakeLlamaServer(api_key="local-secret-key-123").start()
+    try:
+        packet = write_packet(tmp_path, protected, repo)
+        code, result, _ = run(tmp_path, packet, state_dir, name="nokey.json")
+        assert code == 6
+        assert (
+            result["reason"]
+            == "model probe failed: server refused the credential (HTTP 401)"
+        )
+        key_file = tmp_path / "api-key.txt"
+        key_file.write_text("local-secret-key-123\n")
+        config = tmp_path / "config.json"
+        config.write_text(json.dumps({"apiKeyFile": str(key_file)}))
+        protected.replies.append(GOOD_FINDINGS)
+        code, result, output = run(
+            tmp_path,
+            packet,
+            state_dir,
+            name="withkey.json",
+            extra_args=("--config", str(config)),
+        )
+        assert code == 0
+        assert len(result["findings"]) == 2
+        captured = capsys.readouterr()
+        assert "local-secret-key-123" not in captured.out + captured.err
+        assert "local-secret-key-123" not in output.read_text()
+    finally:
+        protected.stop()
+
+
+def test_an_unusable_key_file_is_a_config_error(
+    tmp_path, server, repo, state_dir, capsys
+):
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"apiKeyFile": str(tmp_path / "missing.txt")}))
+    packet = write_packet(tmp_path, server, repo)
+    code, result, _ = run(
+        tmp_path, packet, state_dir, extra_args=("--config", str(config))
+    )
+    assert code == 1 and result is None
+    assert "apiKeyFile" in capsys.readouterr().err
+    assert server.requests == []

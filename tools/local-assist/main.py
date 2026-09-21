@@ -12,6 +12,7 @@ non-loopback host. See docs/compatibility/local-assist.md.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import sys
 import time
@@ -79,6 +80,7 @@ def load_config(path: Path | None) -> dict:
         "stateDir",
         "modelId",
         "quant",
+        "apiKeyFile",
     }
     unknown = sorted(set(raw) - known)
     if unknown:
@@ -93,10 +95,31 @@ def load_config(path: Path | None) -> dict:
         raise ConfigError("config contextTokens must be an integer >= 1024")
     if raw.get("responseFormat", "json_schema") not in ("json_schema", "prompt"):
         raise ConfigError("config responseFormat must be json_schema or prompt")
-    for key in ("alias", "stateDir", "modelId", "quant"):
+    for key in ("alias", "stateDir", "modelId", "quant", "apiKeyFile"):
         if key in raw and (not isinstance(raw[key], str) or not raw[key]):
             raise ConfigError(f"config {key} must be a non-empty string")
     return raw
+
+
+def load_api_key(config: dict) -> str | None:
+    """Read the bearer key for the local server from the configured file."""
+    path = config.get("apiKeyFile")
+    if not path:
+        return None
+    key_path = Path(path)
+    if not key_path.is_absolute():
+        raise ConfigError("config apiKeyFile must be an absolute path")
+    try:
+        key = key_path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise ConfigError(f"config apiKeyFile: {type(error).__name__}")
+    if (
+        not key
+        or len(key) > 512
+        or any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in key)
+    ):
+        raise ConfigError("config apiKeyFile must hold one printable token")
+    return key
 
 
 def _stderr(message: str) -> None:
@@ -168,11 +191,14 @@ def run_task(args: argparse.Namespace, transport: Transport) -> int:
     try:
         packet = parse_packet(json.loads(packet_path.read_text(encoding="utf-8")))
         config = load_config(Path(args.config) if args.config else None)
+        api_key = load_api_key(config)
         output = check_new_output_path(args.output)
     except (OSError, ValueError) as error:
         _stderr(f"refused: {error}")
         return EXIT_USAGE
     state_dir = Path(args.state_dir or config.get("stateDir") or DEFAULT_STATE_DIR)
+    if api_key and transport is http_json:
+        transport = functools.partial(http_json, api_key=api_key)
     endpoint = packet.endpoint or config.get("endpoint") or DEFAULT_ENDPOINT
     try:
         inputs = read_inputs(packet.repoRoot, packet.inputs)

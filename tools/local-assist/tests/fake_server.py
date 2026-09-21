@@ -16,8 +16,11 @@ class FakeLlamaServer:
     key describing status/body/delay behavior.
     """
 
-    def __init__(self, model_id: str = "fireemu-local-Q4_K_M.gguf"):
+    def __init__(
+        self, model_id: str = "fireemu-local-Q4_K_M.gguf", api_key: str | None = None
+    ):
         self.model_id = model_id
+        self.api_key = api_key
         self.replies: list[object] = []
         self.requests: list[dict] = []
         self.abandoned = 0
@@ -37,8 +40,18 @@ class FakeLlamaServer:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _authorized(self) -> bool:
+                if outer.api_key is None:
+                    return True
+                if self.headers.get("Authorization") == f"Bearer {outer.api_key}":
+                    return True
+                self._send(401, b'{"error": {"message": "Invalid API Key"}}')
+                return False
+
             def do_GET(self):
                 outer.requests.append({"method": "GET", "path": self.path})
+                if not self._authorized():
+                    return
                 if self.path == "/v1/models":
                     body = {
                         "data": [
@@ -67,6 +80,8 @@ class FakeLlamaServer:
                 outer.requests.append(
                     {"method": "POST", "path": self.path, "body": payload}
                 )
+                if not self._authorized():
+                    return
                 if self.path != "/v1/chat/completions":
                     self._send(404, b"{}")
                     return

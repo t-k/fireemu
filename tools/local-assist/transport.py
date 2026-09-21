@@ -61,8 +61,17 @@ def _read_body(sock: socket.socket, response, deadline: float) -> bytes:
     return b"".join(chunks)
 
 
-def http_json(method: str, url: str, body: dict | None, timeout: float) -> dict:
-    """Send one request to a loopback URL and decode the JSON reply."""
+def http_json(
+    method: str,
+    url: str,
+    body: dict | None,
+    timeout: float,
+    api_key: str | None = None,
+) -> dict:
+    """Send one request to a loopback URL and decode the JSON reply.
+
+    `api_key`, when given, is sent as a bearer token; it is never logged.
+    """
     validate_loopback_url(url)
     parts = urlsplit(url)
     host, port = parts.hostname, parts.port or 80
@@ -74,6 +83,8 @@ def http_json(method: str, url: str, body: dict | None, timeout: float) -> dict:
         ("Accept", "application/json"),
         ("User-Agent", USER_AGENT),
     ]
+    if api_key:
+        headers.append(("Authorization", f"Bearer {api_key}"))
     if body is not None:
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         headers.append(("Content-Type", "application/json"))
@@ -96,6 +107,11 @@ def http_json(method: str, url: str, body: dict | None, timeout: float) -> dict:
         if 300 <= response.status < 400:
             raise TransportError(
                 "server-error", f"redirect refused (HTTP {response.status})"
+            )
+        if response.status in (401, 403):
+            raise TransportError(
+                "server-error",
+                f"server refused the credential (HTTP {response.status})",
             )
         if response.status in (429, 503):
             raise TransportError("busy", f"server reported HTTP {response.status}")

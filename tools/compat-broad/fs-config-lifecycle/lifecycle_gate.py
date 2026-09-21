@@ -39,6 +39,7 @@ from .manifest import (
 from .surface_matrix import CASE_ID, digest
 
 PLAN_KIND = "fs-config-lifecycle-gate-plan-v1"
+LEDGER_JOB = "configuration"
 PHASES = ("observation", "recovery")
 MAX_RECEIPT_BYTES = 256 * 1024
 LOCK_WAIT_SECONDS = 15
@@ -97,6 +98,13 @@ def gate_plan(
             for step in locked_steps(nonce)
         ],
         "baselineProjectionDigest": baseline_projection_digest,
+        # The shared Ledger reads a Gate-shaped projection when it reserves: one job
+        # that owns no document and dispatches no data slot, the request ceiling as
+        # the observation allowance, and the admission cost. These keys make the one
+        # plan the Ledger binds and the plan this gate journals the same bytes.
+        "jobs": {LEDGER_JOB: {"resources": [], "observation": [], "recovery": []}},
+        "observationRequests": MAX_REQUESTS,
+        "costMicrousd": MAX_REQUESTS * REQUEST_ALLOWANCE_MICROUSD,
     }
     if permission_expires_at is not None:
         plan["permissionExpiresAt"] = permission_expires_at
@@ -132,6 +140,9 @@ def validate_plan(plan) -> None:
         "executionOrder",
         "steps",
         "baselineProjectionDigest",
+        "jobs",
+        "observationRequests",
+        "costMicrousd",
     }
     if not required <= set(plan) or set(plan) - required - {"permissionExpiresAt"}:
         raise ValueError("configuration gate plan required")
@@ -156,6 +167,10 @@ def validate_plan(plan) -> None:
         or type(plan["costCeilingMicrousd"]) is not int
         or plan["maxRequests"] * plan["requestCostMicrousd"]
         > plan["costCeilingMicrousd"]
+        or plan["jobs"]
+        != {LEDGER_JOB: {"resources": [], "observation": [], "recovery": []}}
+        or plan["observationRequests"] != plan["maxRequests"]
+        or plan["costMicrousd"] != plan["maxRequests"] * plan["requestCostMicrousd"]
         or plan["executionOrder"] != list(EXECUTION_ORDER)
         or not isinstance(plan["steps"], list)
         or not plan["steps"]

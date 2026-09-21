@@ -68,7 +68,8 @@ def test_the_gate_charges_before_send_and_refuses_beyond_the_request_bound(
     tmp_path: Path,
 ) -> None:
     plan = gate_plan(NONCE, baseline_projection_digest=BASELINE)
-    plan["maxRequests"] = 2
+    plan["maxRequests"] = plan["observationRequests"] = 2
+    plan["costMicrousd"] = 2 * plan["requestCostMicrousd"]
     gate = _gate(tmp_path, plan)
     request = {"case": "OC-01", "role": "case", "method": "GET", "path": "/v1/x"}
     seen = []

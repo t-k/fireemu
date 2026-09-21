@@ -14,6 +14,7 @@ import copy
 import re
 import sys
 import time
+import urllib.parse
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -23,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "auth-credential-tokens"))
 
 import credential_remote_transport as credential_remote
-from action_codes_plan import CAMPAIGN_ID, campaign_manifest
+from action_codes_plan import CAMPAIGN_ID, LOCAL_PROJECT, campaign_manifest
 from broad_contract import digest
 
 NONCE = re.compile(r"^[0-9a-f]{32}$")
@@ -87,6 +88,23 @@ def _resource_map(project: str, nonce: str) -> dict[str, dict[str, str]]:
         name: {"resource": f"projects/{project}/auth/accounts/o1-oob-{nonce}-{suffix}"}
         for name, suffix in (("accountA", "a"), ("accountB", "b"))
     }
+
+
+def _verified_fixture_origin(value: str) -> str:
+    parsed = urllib.parse.urlsplit(value)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "::1"}
+        or parsed.port is None
+        or parsed.port == 0
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("verified loopback fixture origin required")
+    return value
 
 
 def _check_value(expected: Any, actual: Any, bindings: MappingProxyType, nonce: str) -> None:
@@ -170,6 +188,10 @@ def _validate_inputs(value: dict):
     nonce = plan.get("nonce")
     if not isinstance(project, str) or not project or not isinstance(nonce, str) or NONCE.fullmatch(nonce) is None:
         raise ValueError("frozen Action project or nonce required")
+    if project != LOCAL_PROJECT:
+        raise ValueError("noncanonical Action project refused")
+    if raw.get("permissionDigest") != digest(permission):
+        raise ValueError("frozen Action permission digest differs")
     if plan != _canonical_plan(project, nonce):
         raise ValueError("frozen Action plan is not the canonical compiler output")
     if permission.get("logicalAccounts") != _resource_map(project, nonce):
@@ -185,8 +207,11 @@ def make_transport(
     verify_handoff: Callable[[dict, dict], None],
     fixture_origin: str | None = None,
 ):
-    """Build the Action transport from immutable O7 inputs and trusted handoff."""
+    """Build the fixture-only Action transport; production hosting is unwired."""
     raw, plan, frozen_plan, frozen_permission, project, nonce = _validate_inputs(frozen_inputs)
+    if fixture_origin is None:
+        raise ValueError("trusted Action production hosting is unavailable")
+    fixture_origin = _verified_fixture_origin(fixture_origin)
     binding_maps = _freeze(copy.deepcopy(declared_bindings))
     if not isinstance(binding_maps, MappingProxyType):
         raise ValueError("declared Action bindings required")

@@ -27,6 +27,7 @@ from broad_contract import digest
 
 NONCE = "0123456789abcdef0123456789abcdef"
 PROJECT = "demo-auth-action"
+UNUSED_FIXTURE_ORIGIN = "http://127.0.0.1:65535"
 
 
 class _Echo(BaseHTTPRequestHandler):
@@ -180,7 +181,7 @@ def _verify_fixture_handoff(handoff, permission):
         raise ValueError("fixture credential handoff verification failed")
 
 
-def _action_transport(fixture_origin=None):
+def _action_transport(fixture_origin=UNUSED_FIXTURE_ORIGIN):
     inputs = _frozen_inputs()
     transport = action_remote.make_transport(
         frozen_inputs=inputs,
@@ -301,24 +302,55 @@ def test_mutated_source_binding_is_rejected_before_wire(fixture_origin):
 
 
 def test_production_transport_does_not_accept_a_loopback_origin_without_fixture():
-    inputs, transport = _action_transport()
-    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
-    with pytest.raises(ValueError, match="loopback fixture is test-only"):
-        transport(
-            {
-                "fixtureOrigin": "http://127.0.0.1:1234",
-                "stageId": "link-generate-unknown-email",
-                "project": PROJECT,
-                "nonce": NONCE,
-                "body": {
-                    "requestType": "PASSWORD_RESET",
-                    "email": f"o1-oob-{NONCE}-absent@example.invalid",
-                    "returnOobLink": True,
-                },
-            },
-            binding=source,
-            binding_digest=source_digest,
-            capability=capability,
+    called = False
+
+    def verifier(_handoff, _permission):
+        nonlocal called
+        called = True
+
+    with pytest.raises(ValueError, match="production hosting is unavailable"):
+        action_remote.make_transport(
+            frozen_inputs=_frozen_inputs(),
+            declared_bindings=_bindings(),
+            credential_handoff=_handoff(_frozen_inputs()["permission"]),
+            verify_handoff=verifier,
+        )
+    assert called is False
+
+
+def test_noncanonical_project_is_rejected_before_fixture_constructor():
+    inputs = _frozen_inputs()
+    inputs["permission"]["projectId"] = "foreign-project"
+    inputs["plan"]["ownerInputs"]["projectId"] = "foreign-project"
+    inputs["permissionDigest"] = digest(inputs["permission"])
+    inputs["planDigest"] = digest(inputs["plan"])
+    unsigned = {key: item for key, item in inputs.items() if key != "inputsDigest"}
+    inputs["inputsDigest"] = digest(unsigned)
+    with pytest.raises(ValueError, match="noncanonical Action project"):
+        action_remote.make_transport(
+            frozen_inputs=inputs,
+            declared_bindings=_bindings(),
+            credential_handoff=_handoff(inputs["permission"]),
+            verify_handoff=_verify_fixture_handoff,
+            fixture_origin=UNUSED_FIXTURE_ORIGIN,
+        )
+
+
+def test_rehashed_permission_digest_does_not_authorize_mutated_permission():
+    inputs = _frozen_inputs()
+    inputs["permission"]["projectId"] = PROJECT
+    inputs["permission"]["credentialPrincipal"]["subject"] = "other@example.test"
+    # Keep the original permissionDigest to model a caller that only rehashes
+    # the outer frozen inputs after changing the permission object.
+    unsigned = {key: item for key, item in inputs.items() if key != "inputsDigest"}
+    inputs["inputsDigest"] = digest(unsigned)
+    with pytest.raises(ValueError, match="permission digest"):
+        action_remote.make_transport(
+            frozen_inputs=inputs,
+            declared_bindings=_bindings(),
+            credential_handoff=_handoff(inputs["permission"]),
+            verify_handoff=_verify_fixture_handoff,
+            fixture_origin=UNUSED_FIXTURE_ORIGIN,
         )
 
 
@@ -384,6 +416,7 @@ def test_dynamic_binding_and_credential_scope_or_principal_mutations_are_rejecte
                 declared_bindings=_bindings(),
                 credential_handoff=handoff,
                 verify_handoff=_verify_fixture_handoff,
+                fixture_origin=UNUSED_FIXTURE_ORIGIN,
             )
 
 
@@ -431,6 +464,7 @@ def test_unknown_recovery_uid_is_held_before_wire():
             declared_bindings=bindings,
             credential_handoff=_handoff(inputs["permission"]),
             verify_handoff=_verify_fixture_handoff,
+            fixture_origin=UNUSED_FIXTURE_ORIGIN,
         )
 
 

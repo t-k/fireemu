@@ -119,11 +119,6 @@ def _runtime_identity_problems(
     retained artifact/configuration anchor for a new final-artifact comparison.
     """
     identity = local.get("runtimeIdentity") if isinstance(local, dict) else None
-    if identity is None and expected is None and local.get("productionExecuted") is not True:
-        # Historical preparation receipts predate runtime identity and retain their
-        # existing classification behavior. New records carry the field and therefore
-        # enter the fail-closed path below when no independent anchor is supplied.
-        return []
     if not isinstance(identity, dict):
         return ["local runtime identity unavailable"]
     required = {"artifactSha256", "executionCommit", "configurationDigest", "runId"}

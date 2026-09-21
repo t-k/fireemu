@@ -93,6 +93,28 @@ def test_downgraded_final_record_without_identity_cannot_match() -> None:
     assert compare(local, production)["classification"] == "INDETERMINATE"
 
 
+def test_local_preparation_without_identity_cannot_match_approved_production() -> None:
+    local = receipt("local")
+    production = approved(receipt("production"))
+    local.pop("runtimeIdentity")
+    local["recovery"].pop("runId")
+
+    result = compare(local, production)
+
+    assert result["classification"] == "INDETERMINATE"
+    assert result["runtimeProblems"] == ["local runtime identity unavailable"]
+
+
+def test_preparation_pair_keeps_preparation_only_classification() -> None:
+    local = receipt("local")
+    preparation = receipt("production")
+    preparation["productionExecuted"] = False
+
+    result = compare(local, preparation)
+
+    assert result["classification"] == "PREPARATION_ONLY"
+
+
 @pytest.mark.parametrize("malformed", [None, {}, {"artifactSha256": "A" * 64}])
 def test_malformed_independent_anchor_is_indeterminate(malformed) -> None:
     local = receipt("local")

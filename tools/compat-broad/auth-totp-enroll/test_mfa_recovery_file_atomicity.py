@@ -1,16 +1,19 @@
 """Owner review 95c5b994a item 1: the private recovery files never observe a
 partial write.
 
-`config-lock.json` (`mfa_config_lock._private_write`) and `run-state.json`
-(`mfa_production._write_private`) were each rewritten with a truncate-then-write
+`config-lock.json` (`mfa_config_lock._private_write`), `run-state.json`
+(`mfa_production._write_private`) and the Gate's bindings file
+(`mfa_gate.MfaGate._save_bindings`) were each rewritten with a truncate-then-write
 in place. A stop between the truncate and the write left a zero-byte file, and
 `--resume` / `--abandon` read each of these whole before anything else, so
-recovery failed before it started. Both now write a freshly created, uniquely
-named temporary file in the same directory, fsync it, and rename it onto the
-target with `os.replace`; a reader of the target only ever sees the previous
-complete record or the new one, never neither.
+recovery failed before it started. All three now write a freshly created,
+uniquely named temporary file in the same directory, fsync it, and rename it onto
+the target with `os.replace`; a reader of the target only ever sees the previous
+complete record or the new one, never neither. `_save_bindings` was not one of
+the review's cited lines, but it is the same private run directory and the same
+defect class, so it is fixed the same way here.
 
-These are unit-level fault injections against the two write helpers directly,
+These are unit-level fault injections against the three write helpers directly,
 matching the idiom `test_mfa_durable_responsibility.py` already uses for the
 local-shadow checkpoint. No network, no credential, no production access.
 """
@@ -38,6 +41,7 @@ for entry in (
         sys.path.insert(0, str(entry))
 
 import mfa_config_lock
+import mfa_gate
 import mfa_production
 
 BEFORE = {"synthetic": True, "changeAttempted": True, "ticket": "local-fixture"}
@@ -157,3 +161,33 @@ def test_a_leftover_temp_file_from_an_interrupted_write_is_ignored_on_resume(
     assert read(path) == AFTER
     assert stray.read_bytes() == b"{}"
     assert stray.exists()
+
+
+def test_the_gate_bindings_file_is_written_the_same_atomic_way(tmp_path, monkeypatch):
+    """`MfaGate._save_bindings` shares the shape; exercise its own write path."""
+    path = tmp_path / mfa_gate.BINDINGS_FILE
+
+    class Bindings:
+        def __init__(self):
+            self._bindings_path = path
+            self.bindings = {"password": "seed"}
+            self._observed = {"pendingControlUid": "uid-one"}
+
+        _save_bindings = mfa_gate.MfaGate._save_bindings
+
+    record = Bindings()
+    record._save_bindings()
+    old = path.read_bytes()
+    assert json.loads(old) == {
+        "bindings": {"password": "seed"},
+        "observed": {"pendingControlUid": "uid-one"},
+    }
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    monkeypatch.setattr(
+        os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("rename failed"))
+    )
+    record.bindings["password"] = "changed"
+    with pytest.raises(OSError):
+        record._save_bindings()
+    assert path.read_bytes() == old

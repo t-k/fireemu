@@ -34,6 +34,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -720,18 +721,41 @@ class MfaGate(FrozenGate):
         self._observed = dict(loaded["observed"])
 
     def _save_bindings(self) -> None:
+        """Write the private bindings file so a reader never observes a partial one.
+
+        Same shape and reason as `mfa_config_lock._private_write` and
+        `mfa_production._write_private`: a truncate-then-write in place leaves a
+        zero-byte file for a stop between the truncate and the write, and
+        `_load_bindings` reads this file whole to resume the run's observed and
+        minted values. A freshly created, uniquely named temporary file in the
+        same directory, fsynced and renamed onto the target, keeps a reader from
+        ever observing anything but the previous or the new complete record.
+        """
         encoded = json.dumps(
             {"bindings": self.bindings, "observed": self._observed}, sort_keys=True
         ).encode()
-        fd = os.open(
-            self._bindings_path,
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
-            0o600,
+        fd, temporary = tempfile.mkstemp(
+            prefix=f".{self._bindings_path.name}.", dir=self._bindings_path.parent
         )
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(encoded)
-            stream.flush()
-            os.fsync(stream.fileno())
+        replaced = False
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(encoded)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self._bindings_path)
+            replaced = True
+        finally:
+            if not replaced:
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
+        directory = os.open(self._bindings_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
 
     # --- adoption across processes ---
 

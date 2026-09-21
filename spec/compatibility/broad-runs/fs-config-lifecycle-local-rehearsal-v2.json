@@ -1,0 +1,1097 @@
+{
+  "baseline": {
+    "equal": false,
+    "localProjectionDigest": "4eb4a25c7d6cb1aa3f2517c33cde16a5c9c9c8b3c88362e4531171c22b072452",
+    "localProjectionShape": [
+      "appEngineIntegrationMode",
+      "concurrencyMode",
+      "createTime",
+      "databaseEdition",
+      "deleteProtectionState",
+      "enhancedTextSearchQueryMode",
+      "freeTier",
+      "locationId",
+      "name",
+      "pointInTimeRecoveryEnablement",
+      "realtimeUpdatesMode",
+      "type",
+      "uid",
+      "updateTime",
+      "versionRetentionPeriod"
+    ],
+    "productionFixtureProjectionDigest": "31957f98b7ec76e9c2e7a04803772f7270763a8ed62037fbdefa74c2c8f71d33",
+    "productionProjectionShape": [
+      "appEngineIntegrationMode",
+      "concurrencyMode",
+      "createTime",
+      "databaseEdition",
+      "deleteProtectionState",
+      "enhancedTextSearchQueryMode",
+      "freeTier",
+      "locationId",
+      "name",
+      "pointInTimeRecoveryEnablement",
+      "realtimeUpdatesMode",
+      "type",
+      "uid",
+      "updateTime",
+      "versionRetentionPeriod"
+    ],
+    "source": "local-preflight-read"
+  },
+  "campaignId": "FS-CONFIG-LIFECYCLE-01",
+  "collection": {
+    "campaignId": "FS-CONFIG-LIFECYCLE-01",
+    "chargedMicrousd": 17,
+    "chargedRequests": 17,
+    "cleanupComplete": true,
+    "completed": false,
+    "credentialPreflight": null,
+    "deviations": [
+      {
+        "case": "OC-18",
+        "error": {
+          "code": 501,
+          "status": "UNIMPLEMENTED"
+        },
+        "kind": "apply-refused"
+      }
+    ],
+    "failure": null,
+    "kind": "fs-config-lifecycle-collection-v1",
+    "mutationAttempted": true,
+    "nonceDigest": "0bded456ce876e18772bcc5b50394a2021384b8bd149f3af9eb16021bb3a8905",
+    "observedCases": [
+      "OC-01",
+      "OC-02",
+      "OC-13",
+      "OC-14",
+      "OC-15",
+      "OC-16",
+      "OC-17",
+      "OC-18",
+      "OC-21",
+      "OC-22"
+    ],
+    "reconciliation": {
+      "enumeration": {
+        "after": [
+          "projects/fireemu-35fe6/databases/(default)"
+        ],
+        "before": [
+          "projects/fireemu-35fe6/databases/(default)"
+        ],
+        "equal": true
+      },
+      "fieldListings": {
+        "exemption:indexConfig": {
+          "nonDefaultFields": 0,
+          "status": 200
+        },
+        "exemption:ttlConfig": {
+          "nonDefaultFields": 0,
+          "status": 200
+        },
+        "ttl:indexConfig": {
+          "nonDefaultFields": 0,
+          "status": 200
+        },
+        "ttl:ttlConfig": {
+          "nonDefaultFields": 0,
+          "status": 200
+        }
+      },
+      "ok": true
+    },
+    "recoveryFailures": [],
+    "refusedApplies": [
+      "OC-18"
+    ],
+    "restoreVerified": true,
+    "rowCount": 17,
+    "rows": [
+      {
+        "bodyDigest": "9521dff4190fe7549a90f781fe2ebe2d8c92d81b039da01345c7a567603b08ec",
+        "case": "OC-01",
+        "complete": true,
+        "failure": null,
+        "index": 0,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)",
+        "phase": "observation",
+        "requestDigest": "b5116e8de931e0474a3a9b3c9930da6134f1b9ee2d89802882f11bb6d7eba556",
+        "role": "case",
+        "shape": {
+          "appEngineIntegrationMode": {
+            "enum": "DISABLED"
+          },
+          "concurrencyMode": {
+            "enum": "PESSIMISTIC"
+          },
+          "createTime": "string",
+          "databaseEdition": {
+            "enum": "STANDARD"
+          },
+          "deleteProtectionState": {
+            "enum": "DELETE_PROTECTION_DISABLED"
+          },
+          "earliestVersionTime": "string",
+          "enhancedTextSearchQueryMode": {
+            "enum": "ENHANCED_QUERY_MODE_ENABLED"
+          },
+          "etag": "string",
+          "freeTier": "boolean",
+          "locationId": "string",
+          "name": "string",
+          "pointInTimeRecoveryEnablement": {
+            "enum": "POINT_IN_TIME_RECOVERY_DISABLED"
+          },
+          "realtimeUpdatesMode": {
+            "enum": "REALTIME_UPDATES_MODE_ENABLED"
+          },
+          "type": {
+            "enum": "FIRESTORE_NATIVE"
+          },
+          "uid": "string",
+          "updateTime": "string",
+          "versionRetentionPeriod": "string"
+        },
+        "status": 200,
+        "step": null,
+        "typedError": null
+      },
+      {
+        "bodyDigest": "5ac56cfd963b76e2a7c54377bf86a6681d8d9511734feb1a1d23648edcf90b4a",
+        "case": "OC-02",
+        "complete": true,
+        "failure": null,
+        "index": 1,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases?showDeleted=false",
+        "phase": "observation",
+        "requestDigest": "2ef1a16822d622d52a7758e956c903c2db8e38e9188607a5a4b6cb733e4546c1",
+        "role": "case",
+        "shape": {
+          "databases": [
+            {
+              "appEngineIntegrationMode": {
+                "enum": "DISABLED"
+              },
+              "concurrencyMode": {
+                "enum": "PESSIMISTIC"
+              },
+              "createTime": "string",
+              "databaseEdition": {
+                "enum": "STANDARD"
+              },
+              "deleteProtectionState": {
+                "enum": "DELETE_PROTECTION_DISABLED"
+              },
+              "earliestVersionTime": "string",
+              "enhancedTextSearchQueryMode": {
+                "enum": "ENHANCED_QUERY_MODE_ENABLED"
+              },
+              "etag": "string",
+              "freeTier": "boolean",
+              "locationId": "string",
+              "name": "string",
+              "pointInTimeRecoveryEnablement": {
+                "enum": "POINT_IN_TIME_RECOVERY_DISABLED"
+              },
+              "realtimeUpdatesMode": {
+                "enum": "REALTIME_UPDATES_MODE_ENABLED"
+              },
+              "type": {
+                "enum": "FIRESTORE_NATIVE"
+              },
+              "uid": "string",
+              "updateTime": "string",
+              "versionRetentionPeriod": "string"
+            }
+          ],
+          "unreachable": []
+        },
+        "status": 200,
+        "step": null,
+        "typedError": null
+      },
+      {
+        "bodyDigest": "cf47d71eac151e42d74b79f116aa65167a507ad27c657b2aeb07fec54a1404b0",
+        "case": "OC-13",
+        "complete": true,
+        "failure": null,
+        "index": 2,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_ttl_cf6c16ae1229/fields/expiresAt",
+        "phase": "observation",
+        "requestDigest": "21275f9c55621e40846c47e5808a58d65c2247c71edc6cb174827848ecc258b0",
+        "role": "case",
+        "shape": {
+          "indexConfig": {
+            "ancestorField": "string",
+            "indexes": [
+              {
+                "fields": [
+                  {
+                    "fieldPath": "string",
+                    "order": {
+                      "enum": "ASCENDING"
+                    }
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              },
+              {
+                "fields": [
+                  {
+                    "fieldPath": "string",
+                    "order": {
+                      "enum": "DESCENDING"
+                    }
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              },
+              {
+                "fields": [
+                  {
+                    "arrayConfig": {
+                      "enum": "CONTAINS"
+                    },
+                    "fieldPath": "string"
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              }
+            ],
+            "usesAncestorConfig": "boolean"
+          },
+          "name": "string"
+        },
+        "status": 200,
+        "step": "ttl",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "4944e605e0684a2ca23a4907525adeca56fb86a774f60e225ec06ffd1cc6368a",
+        "case": "OC-14",
+        "complete": true,
+        "failure": null,
+        "index": 3,
+        "method": "PATCH",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_ttl_cf6c16ae1229/fields/expiresAt?updateMask=ttlConfig",
+        "phase": "observation",
+        "requestDigest": "5efe2e0dbb59e10b2a40120d4049239ceee8740925646fa20d5643db496d5c3f",
+        "role": "case",
+        "shape": {
+          "done": "boolean",
+          "metadata": {
+            "@type": "string",
+            "endTime": "string",
+            "field": "string",
+            "startTime": "string",
+            "state": {
+              "enum": "SUCCESSFUL"
+            }
+          },
+          "name": "string",
+          "response": {
+            "@type": "string",
+            "indexConfig": {
+              "ancestorField": "string",
+              "indexes": [
+                {
+                  "fields": [
+                    {
+                      "fieldPath": "string",
+                      "order": {
+                        "enum": "ASCENDING"
+                      }
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                },
+                {
+                  "fields": [
+                    {
+                      "fieldPath": "string",
+                      "order": {
+                        "enum": "DESCENDING"
+                      }
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                },
+                {
+                  "fields": [
+                    {
+                      "arrayConfig": {
+                        "enum": "CONTAINS"
+                      },
+                      "fieldPath": "string"
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                }
+              ],
+              "usesAncestorConfig": "boolean"
+            },
+            "name": "string",
+            "ttlConfig": {
+              "state": {
+                "enum": "ACTIVE"
+              }
+            }
+          }
+        },
+        "status": 200,
+        "step": "ttl",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "4944e605e0684a2ca23a4907525adeca56fb86a774f60e225ec06ffd1cc6368a",
+        "case": "OC-22",
+        "complete": true,
+        "failure": null,
+        "index": 4,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/operations/9b734d7f9b810c65e15cdd90",
+        "phase": "observation",
+        "requestDigest": "ed57c7f7627e9ab66edacff377282bb05c92fda7c4e39d8fa65132341faf94a1",
+        "role": "case",
+        "shape": {
+          "done": "boolean",
+          "metadata": {
+            "@type": "string",
+            "endTime": "string",
+            "field": "string",
+            "startTime": "string",
+            "state": {
+              "enum": "SUCCESSFUL"
+            }
+          },
+          "name": "string",
+          "response": {
+            "@type": "string",
+            "indexConfig": {
+              "ancestorField": "string",
+              "indexes": [
+                {
+                  "fields": [
+                    {
+                      "fieldPath": "string",
+                      "order": {
+                        "enum": "ASCENDING"
+                      }
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                },
+                {
+                  "fields": [
+                    {
+                      "fieldPath": "string",
+                      "order": {
+                        "enum": "DESCENDING"
+                      }
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                },
+                {
+                  "fields": [
+                    {
+                      "arrayConfig": {
+                        "enum": "CONTAINS"
+                      },
+                      "fieldPath": "string"
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                }
+              ],
+              "usesAncestorConfig": "boolean"
+            },
+            "name": "string",
+            "ttlConfig": {
+              "state": {
+                "enum": "ACTIVE"
+              }
+            }
+          }
+        },
+        "status": 200,
+        "step": "ttl",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "0cbd19ab14d89025f4bea1456769c715caaa5d8ce9d549935e148a9d295c064a",
+        "case": "OC-15",
+        "complete": true,
+        "failure": null,
+        "index": 5,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_ttl_cf6c16ae1229/fields/expiresAt",
+        "phase": "observation",
+        "requestDigest": "f22d709a1b5e609d63061610af3af428823bddcf73114c50386beab149b44018",
+        "role": "case",
+        "shape": {
+          "indexConfig": {
+            "ancestorField": "string",
+            "indexes": [
+              {
+                "fields": [
+                  {
+                    "fieldPath": "string",
+                    "order": {
+                      "enum": "ASCENDING"
+                    }
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              },
+              {
+                "fields": [
+                  {
+                    "fieldPath": "string",
+                    "order": {
+                      "enum": "DESCENDING"
+                    }
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              },
+              {
+                "fields": [
+                  {
+                    "arrayConfig": {
+                      "enum": "CONTAINS"
+                    },
+                    "fieldPath": "string"
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              }
+            ],
+            "usesAncestorConfig": "boolean"
+          },
+          "name": "string",
+          "ttlConfig": {
+            "state": {
+              "enum": "ACTIVE"
+            }
+          }
+        },
+        "status": 200,
+        "step": "ttl",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "25827a350a4c0b3c4adc4cff13167a761d2aa9b7d7c7fef4faddc45561cf6798",
+        "case": "OC-16",
+        "complete": true,
+        "failure": null,
+        "index": 6,
+        "method": "PATCH",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_ttl_cf6c16ae1229/fields/expiresAt?updateMask=ttlConfig",
+        "phase": "observation",
+        "requestDigest": "4298c82c599f58bf3e85812e98c58ca09752221800d3ca7df21fae381786c1ea",
+        "role": "case",
+        "shape": {
+          "done": "boolean",
+          "metadata": {
+            "@type": "string",
+            "endTime": "string",
+            "field": "string",
+            "startTime": "string",
+            "state": {
+              "enum": "SUCCESSFUL"
+            }
+          },
+          "name": "string",
+          "response": {
+            "@type": "string",
+            "indexConfig": {
+              "ancestorField": "string",
+              "indexes": [
+                {
+                  "fields": [
+                    {
+                      "fieldPath": "string",
+                      "order": {
+                        "enum": "ASCENDING"
+                      }
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                },
+                {
+                  "fields": [
+                    {
+                      "fieldPath": "string",
+                      "order": {
+                        "enum": "DESCENDING"
+                      }
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                },
+                {
+                  "fields": [
+                    {
+                      "arrayConfig": {
+                        "enum": "CONTAINS"
+                      },
+                      "fieldPath": "string"
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                }
+              ],
+              "usesAncestorConfig": "boolean"
+            },
+            "name": "string"
+          }
+        },
+        "status": 200,
+        "step": "ttl",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "25827a350a4c0b3c4adc4cff13167a761d2aa9b7d7c7fef4faddc45561cf6798",
+        "case": "OC-22",
+        "complete": true,
+        "failure": null,
+        "index": 7,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/operations/c1a206c3f8429a95a4ed07f2",
+        "phase": "observation",
+        "requestDigest": "5a644e8d42725ebb8b0e58df02ca5708d53712aa540cb8d880c4750973bd6662",
+        "role": "poll",
+        "shape": {
+          "done": "boolean",
+          "metadata": {
+            "@type": "string",
+            "endTime": "string",
+            "field": "string",
+            "startTime": "string",
+            "state": {
+              "enum": "SUCCESSFUL"
+            }
+          },
+          "name": "string",
+          "response": {
+            "@type": "string",
+            "indexConfig": {
+              "ancestorField": "string",
+              "indexes": [
+                {
+                  "fields": [
+                    {
+                      "fieldPath": "string",
+                      "order": {
+                        "enum": "ASCENDING"
+                      }
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                },
+                {
+                  "fields": [
+                    {
+                      "fieldPath": "string",
+                      "order": {
+                        "enum": "DESCENDING"
+                      }
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                },
+                {
+                  "fields": [
+                    {
+                      "arrayConfig": {
+                        "enum": "CONTAINS"
+                      },
+                      "fieldPath": "string"
+                    }
+                  ],
+                  "name": "string",
+                  "queryScope": {
+                    "enum": "COLLECTION"
+                  }
+                }
+              ],
+              "usesAncestorConfig": "boolean"
+            },
+            "name": "string"
+          }
+        },
+        "status": 200,
+        "step": "ttl",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "cf47d71eac151e42d74b79f116aa65167a507ad27c657b2aeb07fec54a1404b0",
+        "case": "OC-13",
+        "complete": true,
+        "failure": null,
+        "index": 8,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_ttl_cf6c16ae1229/fields/expiresAt",
+        "phase": "observation",
+        "requestDigest": "8af539e7dc3043246bc4a83d014057d0258f8a80f552dc76b74a12bcd31dcbf3",
+        "role": "verify",
+        "shape": {
+          "indexConfig": {
+            "ancestorField": "string",
+            "indexes": [
+              {
+                "fields": [
+                  {
+                    "fieldPath": "string",
+                    "order": {
+                      "enum": "ASCENDING"
+                    }
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              },
+              {
+                "fields": [
+                  {
+                    "fieldPath": "string",
+                    "order": {
+                      "enum": "DESCENDING"
+                    }
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              },
+              {
+                "fields": [
+                  {
+                    "arrayConfig": {
+                      "enum": "CONTAINS"
+                    },
+                    "fieldPath": "string"
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              }
+            ],
+            "usesAncestorConfig": "boolean"
+          },
+          "name": "string"
+        },
+        "status": 200,
+        "step": "ttl",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "8017d2b5151f08ce6c760e2fe50ac94c6aee14e8fa6d8cb0248a2a062a4aef0c",
+        "case": "OC-17",
+        "complete": true,
+        "failure": null,
+        "index": 9,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_exempt_cf6c16ae1229/fields/payload",
+        "phase": "observation",
+        "requestDigest": "d878304eca4f6e42d767d910f2ecdd6ae218d74fbae2acbda0af5e18c3edae9a",
+        "role": "case",
+        "shape": {
+          "indexConfig": {
+            "ancestorField": "string",
+            "indexes": [
+              {
+                "fields": [
+                  {
+                    "fieldPath": "string",
+                    "order": {
+                      "enum": "ASCENDING"
+                    }
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              },
+              {
+                "fields": [
+                  {
+                    "fieldPath": "string",
+                    "order": {
+                      "enum": "DESCENDING"
+                    }
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              },
+              {
+                "fields": [
+                  {
+                    "arrayConfig": {
+                      "enum": "CONTAINS"
+                    },
+                    "fieldPath": "string"
+                  }
+                ],
+                "name": "string",
+                "queryScope": {
+                  "enum": "COLLECTION"
+                }
+              }
+            ],
+            "usesAncestorConfig": "boolean"
+          },
+          "name": "string"
+        },
+        "status": 200,
+        "step": "exemption",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "995818ad29b76630e2cef2093f1bb1c7d4bd5c735051bdb175a5f6c09f68ead8",
+        "case": "OC-18",
+        "complete": true,
+        "failure": null,
+        "index": 10,
+        "method": "PATCH",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_exempt_cf6c16ae1229/fields/payload?updateMask=indexConfig",
+        "phase": "observation",
+        "requestDigest": "0e1817988ffc153f56d91080ea5fd1046aeb8b79bcf9bb5323dbe21d5c76978b",
+        "role": "case",
+        "shape": {
+          "error": {
+            "code": "number",
+            "message": "string",
+            "status": {
+              "enum": "UNIMPLEMENTED"
+            }
+          }
+        },
+        "status": 501,
+        "step": "exemption",
+        "typedError": {
+          "code": 501,
+          "status": "UNIMPLEMENTED"
+        }
+      },
+      {
+        "bodyDigest": "01f2f9c28aa1d4d36a81ff042620b6677d25bf07c2bf4acc37b58658778a4fca",
+        "case": "OC-21",
+        "complete": true,
+        "failure": null,
+        "index": 11,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_exempt_cf6c16ae1229/fields?filter=indexConfig.usesAncestorConfig%3Afalse&pageSize=20",
+        "phase": "observation",
+        "requestDigest": "abbb4e5603ecece4e267afa08549a3fde265ea66c3b58286d12a5c7411748ed1",
+        "role": "case",
+        "shape": {
+          "fields": []
+        },
+        "status": 200,
+        "step": null,
+        "typedError": null
+      },
+      {
+        "bodyDigest": "01f2f9c28aa1d4d36a81ff042620b6677d25bf07c2bf4acc37b58658778a4fca",
+        "case": "OC-21",
+        "complete": true,
+        "failure": null,
+        "index": 12,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_ttl_cf6c16ae1229/fields?filter=indexConfig.usesAncestorConfig%3Afalse&pageSize=20",
+        "phase": "recovery",
+        "requestDigest": "f9dc2d68b10197018f25548b157cc9df1cf47ecb9883711f430d1dd74f166d70",
+        "role": "reconcile",
+        "shape": {
+          "fields": []
+        },
+        "status": 200,
+        "step": "ttl",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "01f2f9c28aa1d4d36a81ff042620b6677d25bf07c2bf4acc37b58658778a4fca",
+        "case": "OC-21",
+        "complete": true,
+        "failure": null,
+        "index": 13,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_ttl_cf6c16ae1229/fields?filter=ttlConfig%3A%2A&pageSize=20",
+        "phase": "recovery",
+        "requestDigest": "3fb7b01bff8639ad734e06360236ac5bf19fed40f4bbf6ff3c12e8b18032f4a3",
+        "role": "reconcile",
+        "shape": {
+          "fields": []
+        },
+        "status": 200,
+        "step": "ttl",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "01f2f9c28aa1d4d36a81ff042620b6677d25bf07c2bf4acc37b58658778a4fca",
+        "case": "OC-21",
+        "complete": true,
+        "failure": null,
+        "index": 14,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_exempt_cf6c16ae1229/fields?filter=indexConfig.usesAncestorConfig%3Afalse&pageSize=20",
+        "phase": "recovery",
+        "requestDigest": "0306da8b5503c25f637599fc90878f4242993150988f9c10f2081ce38317bc04",
+        "role": "reconcile",
+        "shape": {
+          "fields": []
+        },
+        "status": 200,
+        "step": "exemption",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "01f2f9c28aa1d4d36a81ff042620b6677d25bf07c2bf4acc37b58658778a4fca",
+        "case": "OC-21",
+        "complete": true,
+        "failure": null,
+        "index": 15,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_exempt_cf6c16ae1229/fields?filter=ttlConfig%3A%2A&pageSize=20",
+        "phase": "recovery",
+        "requestDigest": "ab97ca70bc55ea132493fa8c8516857a182ff82ec0775034b85edbc5571800c6",
+        "role": "reconcile",
+        "shape": {
+          "fields": []
+        },
+        "status": 200,
+        "step": "exemption",
+        "typedError": null
+      },
+      {
+        "bodyDigest": "5ac56cfd963b76e2a7c54377bf86a6681d8d9511734feb1a1d23648edcf90b4a",
+        "case": "OC-02",
+        "complete": true,
+        "failure": null,
+        "index": 16,
+        "method": "GET",
+        "path": "/v1/projects/fireemu-35fe6/databases?showDeleted=false",
+        "phase": "recovery",
+        "requestDigest": "012daa34910746eeb012c5be60cedea2c469d0e3fd468620c26f4e8f2d3f505d",
+        "role": "reconcile",
+        "shape": {
+          "databases": [
+            {
+              "appEngineIntegrationMode": {
+                "enum": "DISABLED"
+              },
+              "concurrencyMode": {
+                "enum": "PESSIMISTIC"
+              },
+              "createTime": "string",
+              "databaseEdition": {
+                "enum": "STANDARD"
+              },
+              "deleteProtectionState": {
+                "enum": "DELETE_PROTECTION_DISABLED"
+              },
+              "earliestVersionTime": "string",
+              "enhancedTextSearchQueryMode": {
+                "enum": "ENHANCED_QUERY_MODE_ENABLED"
+              },
+              "etag": "string",
+              "freeTier": "boolean",
+              "locationId": "string",
+              "name": "string",
+              "pointInTimeRecoveryEnablement": {
+                "enum": "POINT_IN_TIME_RECOVERY_DISABLED"
+              },
+              "realtimeUpdatesMode": {
+                "enum": "REALTIME_UPDATES_MODE_ENABLED"
+              },
+              "type": {
+                "enum": "FIRESTORE_NATIVE"
+              },
+              "uid": "string",
+              "updateTime": "string",
+              "versionRetentionPeriod": "string"
+            }
+          ],
+          "unreachable": []
+        },
+        "status": 200,
+        "step": null,
+        "typedError": null
+      }
+    ],
+    "steps": {
+      "exemption": {
+        "appliedOperation": null,
+        "postDigest": null,
+        "preBodyRef": {
+          "bytes": 915,
+          "file": "response-009.body",
+          "sha256": "8017d2b5151f08ce6c760e2fe50ac94c6aee14e8fa6d8cb0248a2a062a4aef0c"
+        },
+        "preDigest": "8017d2b5151f08ce6c760e2fe50ac94c6aee14e8fa6d8cb0248a2a062a4aef0c",
+        "refusal": {
+          "code": 501,
+          "status": "UNIMPLEMENTED"
+        },
+        "resource": "projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_exempt_cf6c16ae1229/fields/payload",
+        "restore": "apply-refused",
+        "revertAttempts": 0,
+        "revertOperation": null,
+        "verifyDigest": null
+      },
+      "ttl": {
+        "appliedOperation": "projects/fireemu-35fe6/databases/(default)/operations/9b734d7f9b810c65e15cdd90",
+        "postDigest": "0cbd19ab14d89025f4bea1456769c715caaa5d8ce9d549935e148a9d295c064a",
+        "preBodyRef": {
+          "bytes": 911,
+          "file": "response-002.body",
+          "sha256": "cf47d71eac151e42d74b79f116aa65167a507ad27c657b2aeb07fec54a1404b0"
+        },
+        "preDigest": "cf47d71eac151e42d74b79f116aa65167a507ad27c657b2aeb07fec54a1404b0",
+        "refusal": null,
+        "resource": "projects/fireemu-35fe6/databases/(default)/collectionGroups/fsconfig_ttl_cf6c16ae1229/fields/expiresAt",
+        "restore": "restored",
+        "revertAttempts": 1,
+        "revertOperation": "projects/fireemu-35fe6/databases/(default)/operations/c1a206c3f8429a95a4ed07f2",
+        "verifyDigest": "cf47d71eac151e42d74b79f116aa65167a507ad27c657b2aeb07fec54a1404b0"
+      }
+    },
+    "stopPoint": null,
+    "unrecovered": []
+  },
+  "executionKind": "injected-local-transport",
+  "exitCode": 0,
+  "expectedLocalDeviations": [
+    {
+      "case": "OC-18",
+      "observed": {
+        "code": 501,
+        "status": "UNIMPLEMENTED"
+      },
+      "reason": "the local runtime refuses a fields.patch naming indexConfig with UNIMPLEMENTED: single-field exemptions are taken from the project's index configuration and have no runtime transition (FS-CONFIG-RT-004)"
+    },
+    {
+      "case": "OC-20",
+      "observed": null,
+      "reason": "the local runtime refuses a fields.patch naming indexConfig with UNIMPLEMENTED: single-field exemptions are taken from the project's index configuration and have no runtime transition (FS-CONFIG-RT-004)"
+    }
+  ],
+  "formalCompatibilityClaim": false,
+  "gatePlanDigest": "3d7ea0c6570a491e5f06fd91b4505ffd7f1b8bdf9415150332154e43819a349b",
+  "kind": "fs-config-lifecycle-local-rehearsal-v1",
+  "ownedProcess": {
+    "firestoreListenerClosed": true,
+    "pid": 78683,
+    "stopped": true
+  },
+  "productionExecuted": false,
+  "runtime": {
+    "artifactPath": "target/agent/fs-life-002/normal/debug/fireemu",
+    "artifactSha256": "82a6b29359f2457c4693d23b3bb0b1fd239cdbbebb0dcc5b346b742bec03f74c",
+    "nonce": "cf6c16ae12294effbe38424fcaf7d3c9",
+    "sourceCommit": "32683afc143ab3c21fb953fae9b9f5c3d7491ac7",
+    "transport": "loopback"
+  },
+  "sourceInputs": {
+    "tools/compat-broad/fs-config-lifecycle/cases.py": "50ea3bd754a5733478a4ea8ee1d65fca9753490ff32eb1af48acc8f80b3e548e",
+    "tools/compat-broad/fs-config-lifecycle/comparator.py": "21ae8c2a1a7ce89db782f8cca2c6fccc553f330f4e3a3ed8bd90113b43e23d26",
+    "tools/compat-broad/fs-config-lifecycle/lifecycle_collector.py": "432056f43f2313995b0f3298ec094a27830fdb20c52d8be86bd7920e30552194",
+    "tools/compat-broad/fs-config-lifecycle/lifecycle_gate.py": "585e3801352cbf9df0b72e8fcba4e509d97d2a3ccd562c631dffd2a48da09013",
+    "tools/compat-broad/fs-config-lifecycle/lifecycle_local.py": "1168f257bb9018a6b09e46489043414f9b65ad98dbbe3942dfacbf33853ce612",
+    "tools/compat-broad/fs-config-lifecycle/manifest.py": "8e033af4382952f0318f18743832c5082055c496a9890ac52320f2842376619a"
+  },
+  "status": "completed",
+  "stopReason": "child-completed",
+  "summary": {
+    "chargedRequests": 17,
+    "cleanupComplete": true,
+    "observedCases": [
+      "OC-01",
+      "OC-02",
+      "OC-13",
+      "OC-14",
+      "OC-15",
+      "OC-16",
+      "OC-17",
+      "OC-18",
+      "OC-21",
+      "OC-22"
+    ],
+    "refusedApplies": [
+      "OC-18"
+    ],
+    "restore": {
+      "exemption": "apply-refused",
+      "ttl": "restored"
+    },
+    "stopPoint": null
+  }
+}

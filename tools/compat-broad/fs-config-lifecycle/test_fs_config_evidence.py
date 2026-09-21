@@ -76,7 +76,7 @@ def test_the_rehearsal_restored_the_ttl_field_and_recorded_the_exemption_deviati
         "OC-18",
         "OC-20",
     ]
-    assert collection["chargedRequests"] == collection["rowCount"] == 15
+    assert collection["chargedRequests"] == collection["rowCount"] == 17
     assert collection["chargedRequests"] <= 128
 
 

@@ -7,6 +7,7 @@ checks; this bridge never creates credentials or manufactures identity proof.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from typing import Any
@@ -94,13 +95,19 @@ def run_bound_collection(
     execute: Callable[..., dict[str, Any]],
     acquisition: dict[str, Any],
     run_id: str,
+    permission_expires_at: float | None = None,
     journal_path: Any = None,
 ) -> dict[str, Any]:
     """Run the existing collector through real Gate/Ledger ownership."""
     if plan.get("campaignId") != CAMPAIGN:
         raise ValueError("Rules campaign identity differs")
+    if permission_expires_at is not None and (
+        type(permission_expires_at) not in (int, float)
+        or not math.isfinite(permission_expires_at)
+    ):
+        raise ValueError("Rules Gate expiry differs")
     validate_compiled_accounting(plan)
-    frozen_gate = gate_plan(plan)
+    frozen_gate = gate_plan(plan, permission_expires_at=permission_expires_at)
     if gate.snapshot().get("planDigest") != digest(frozen_gate):
         raise ValueError("Rules Gate plan differs")
     session = RulesManagementSession(

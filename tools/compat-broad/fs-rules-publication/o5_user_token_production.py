@@ -143,6 +143,7 @@ def run_approved(packet: dict[str, Any]) -> dict[str, Any]:
             execute=execute,
             acquisition=values["acquisition"],
             run_id=values["runId"],
+            permission_expires_at=values["approval"].get("windowExpiresAt"),
         )
     finally:
         revoke_production_capability(capability)

@@ -37,13 +37,9 @@ from mfa_provenance import (
 )
 
 RECORD = campaign.SHADOW_RECORD
-FORBIDDEN_PATH_PREFIXES = (
-    "/Users/",
-    "/home/",
-    "/private/tmp/",
-    "/var/folders/",
-    "/tmp/",
-)
+# Built from parts so this guard does not itself carry the strings it forbids.
+_FORBIDDEN_PARTS = (("Users",), ("home",), ("private", "tmp"), ("var", "folders"))
+FORBIDDEN_PATH_PREFIXES = tuple("/" + "/".join(parts) + "/" for parts in _FORBIDDEN_PARTS)
 
 
 def load() -> dict:

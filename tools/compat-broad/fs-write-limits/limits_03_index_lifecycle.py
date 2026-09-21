@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import multiprocessing
 import time
 import urllib.error
 import urllib.parse
@@ -119,12 +120,57 @@ def _request(opener, origin: str, method: str, path: str, body: dict[str, Any] |
     return value
 
 
+def _request_worker(connection, origin: str, method: str, path: str, body: dict[str, Any] | None, deadline: float) -> None:
+    try:
+        opener = urllib.request.build_opener(_NoRedirect())
+        connection.send(("ok", _request(opener, origin, method, path, body, deadline)))
+    except (OSError, TimeoutError, ValueError, urllib.error.URLError) as error:
+        connection.send(("error", type(error).__name__, str(error)))
+    finally:
+        connection.close()
+
+
+def _request_bounded(origin: str, method: str, path: str, body: dict[str, Any] | None, deadline: float) -> dict[str, Any]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("request deadline exhausted")
+    context = multiprocessing.get_context("spawn")
+    parent, child = context.Pipe(duplex=False)
+    process = context.Process(target=_request_worker, args=(child, origin, method, path, body, deadline))
+    process.start()
+    child.close()
+    try:
+        if not parent.poll(remaining):
+            process.terminate()
+            process.join(timeout=1)
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=1)
+            raise TimeoutError("request absolute deadline exhausted")
+        try:
+            result = parent.recv()
+        except EOFError as error:
+            raise OSError("bounded request worker exited without a result") from error
+    finally:
+        parent.close()
+        if process.is_alive():
+            process.terminate()
+        process.join(timeout=1)
+    if not result or result[0] != "ok":
+        error_type, message = result[1], result[2]
+        if error_type == "TimeoutError":
+            raise TimeoutError(message)
+        if error_type == "ValueError":
+            raise ValueError(message)
+        raise OSError(f"bounded request failed: {error_type}: {message}")
+    return result[1]
+
+
 def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str, Any]:
     """Run against an independently owned verified loopback origin."""
     _validate_plan(plan)
     origin = _loopback_origin(origin)
     field_path = "/v1/" + plan["fieldName"]
-    opener = urllib.request.build_opener(_NoRedirect())
     events: list[dict[str, Any]] = []
     errors: list[str] = []
     requests = 0
@@ -132,17 +178,22 @@ def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str,
     restored = False
     final_field: dict[str, Any] | None = None
     started = time.monotonic()
+    observation_deadline = started + plan["operationDeadlineSeconds"]
+    recovery_deadline: float | None = None
+    restore_attempted = False
 
     def call(method, path, body, deadline):
         nonlocal requests
         requests += 1
-        return _request(opener, origin, method, path, body, deadline)
+        return _request_bounded(origin, method, path, body, deadline)
 
-    def transition(kind, patch, deadline_seconds):
-        nonlocal applied
-        deadline = time.monotonic() + deadline_seconds
+    def transition(kind, patch, deadline):
+        nonlocal applied, restore_attempted
+        if kind == "patch-restore":
+            restore_attempted = True
+        if kind == "patch-after":
+            applied = True
         response = call("PATCH", field_path + "?updateMask=indexConfig", patch, deadline)
-        applied = applied or kind == "patch-after"
         name = response.get("name")
         prefix = f"projects/{PROJECT}/databases/{DATABASE}/operations/"
         if not isinstance(name, str) or not name.startswith(prefix) or "/" in name.removeprefix(prefix):
@@ -158,12 +209,12 @@ def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str,
         raise TimeoutError("bounded absolute operation deadline exhausted")
 
     try:
-        before = call("GET", field_path, None, time.monotonic() + plan["operationDeadlineSeconds"])
+        before = call("GET", field_path, None, observation_deadline)
         if before != plan["before"]:
             raise ValueError("actual before state differs from compiled baseline")
         events.append({"kind": "read-before", "bodyDigest": _digest(before)})
-        transition("patch-after", plan["afterPatch"], plan["operationDeadlineSeconds"])
-        after = call("GET", field_path, None, time.monotonic() + plan["operationDeadlineSeconds"])
+        transition("patch-after", plan["afterPatch"], observation_deadline)
+        after = call("GET", field_path, None, observation_deadline)
         expected_after_config = {
             "indexes": [],
             "usesAncestorConfig": False,
@@ -173,18 +224,20 @@ def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str,
         if after.get("indexConfig") != expected_after_config or after.get("ttlConfig") != plan["before"].get("ttlConfig"):
             raise ValueError("after state differs or unrelated configuration changed")
         events.append({"kind": "read-after", "bodyDigest": _digest(after)})
-        transition("patch-restore", plan["restorePatch"], plan["recoveryDeadlineSeconds"])
-        final_field = call("GET", field_path, None, time.monotonic() + plan["recoveryDeadlineSeconds"])
+        recovery_deadline = time.monotonic() + plan["recoveryDeadlineSeconds"]
+        transition("patch-restore", plan["restorePatch"], recovery_deadline)
+        final_field = call("GET", field_path, None, recovery_deadline)
         if final_field != plan["before"]:
             raise ValueError("restored state differs from compiled baseline")
         events.append({"kind": "read-restored", "bodyDigest": _digest(final_field)})
         restored = True
     except (OSError, TimeoutError, ValueError, urllib.error.URLError) as error:
         errors.append(type(error).__name__ + ": " + str(error))
-        if applied and not restored:
+        if applied and not restored and not restore_attempted:
             try:
-                transition("patch-restore", plan["restorePatch"], plan["recoveryDeadlineSeconds"])
-                final_field = call("GET", field_path, None, time.monotonic() + plan["recoveryDeadlineSeconds"])
+                recovery_deadline = time.monotonic() + plan["recoveryDeadlineSeconds"]
+                transition("patch-restore", plan["restorePatch"], recovery_deadline)
+                final_field = call("GET", field_path, None, recovery_deadline)
                 restored = final_field == plan["before"]
                 if restored:
                     events.append({"kind": "read-restored", "bodyDigest": _digest(final_field)})

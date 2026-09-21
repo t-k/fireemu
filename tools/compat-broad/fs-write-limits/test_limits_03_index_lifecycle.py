@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import copy
 import json
+import multiprocessing
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import limits_03_index_lifecycle as lifecycle
 import pytest
 from limits_03_descriptor import REQUEST_COST_MICROUSD
 from limits_03_index_lifecycle import (
@@ -33,12 +36,14 @@ def inherited_baseline() -> dict:
 class LoopbackFieldServer:
     """Independent test fixture for the real urllib client."""
 
-    def __init__(self, baseline: dict, *, operation_error: bool = False, foreign_operation: bool = False, polls_before_done: int = 0):
+    def __init__(self, baseline: dict, *, operation_error: bool = False, foreign_operation: bool = False, polls_before_done: int = 0, drop_patch_response: bool = False, trickle_field_response: bool = False):
         self.state = copy.deepcopy(baseline)
         self.baseline = copy.deepcopy(baseline)
         self.operation_error = operation_error
         self.foreign_operation = foreign_operation
         self.polls_before_done = polls_before_done
+        self.drop_patch_response = drop_patch_response
+        self.trickle_field_response = trickle_field_response
         self.requests: list[dict] = []
         self.operations: dict[str, int] = {}
         state = self
@@ -58,7 +63,17 @@ class LoopbackFieldServer:
             def do_GET(self):
                 state.requests.append({"method": "GET", "path": self.path})
                 if self.path == "/v1/" + FIELD:
-                    self.reply(200, copy.deepcopy(state.state))
+                    if state.trickle_field_response:
+                        raw = json.dumps(copy.deepcopy(state.state), sort_keys=True).encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(raw)))
+                        self.end_headers()
+                        self.wfile.write(raw[:1])
+                        self.wfile.flush()
+                        threading.Event().wait(2)
+                    else:
+                        self.reply(200, copy.deepcopy(state.state))
                     return
                 if self.path.startswith("/v1/projects/fireemu-35fe6/databases/(default)/operations/"):
                     if self.path not in state.operations:
@@ -92,6 +107,9 @@ class LoopbackFieldServer:
                     self.reply(400, {"error": "transition"})
                     return
                 name = "projects/other/databases/(default)/operations/foreign" if state.foreign_operation else operation.removeprefix("/v1/")
+                if state.drop_patch_response and len([request for request in state.requests if request["method"] == "PATCH"]) == 1:
+                    self.connection.close()
+                    return
                 self.reply(200, {"name": name})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -213,3 +231,32 @@ def test_operation_error_or_foreign_route_attempts_bounded_restore(server_kwargs
     assert receipt["heldOnFailure"] is True
     assert [request["method"] for request in server.requests].count("PATCH") == 2
     assert receipt["budget"]["requests"] >= 3
+
+
+def test_lost_patch_response_marks_apply_and_restores_once() -> None:
+    baseline = inherited_baseline()
+    server = LoopbackFieldServer(baseline, drop_patch_response=True)
+    try:
+        receipt = run_loopback_index_lifecycle(build_index_lifecycle_plan(baseline), server.origin)
+    finally:
+        server.close()
+
+    assert receipt["success"] is False
+    assert receipt["restored"] is True
+    assert receipt["heldOnFailure"] is True
+    assert [request["method"] for request in server.requests].count("PATCH") == 2
+    assert not [process for process in multiprocessing.active_children() if process.is_alive()]
+
+
+def test_trickled_response_has_hard_deadline_and_reaps_worker() -> None:
+    baseline = inherited_baseline()
+    server = LoopbackFieldServer(baseline, trickle_field_response=True)
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError, match="timed out|deadline"):
+            lifecycle._request_bounded(server.origin, "GET", "/v1/" + FIELD, None, started + 0.2)
+    finally:
+        server.close()
+
+    assert time.monotonic() - started < 1.5
+    assert not [process for process in multiprocessing.active_children() if process.is_alive()]

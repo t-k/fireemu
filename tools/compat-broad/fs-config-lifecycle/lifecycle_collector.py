@@ -43,12 +43,21 @@ from .lifecycle_gate import (
     RESTORED,
     REVERT_NOT_ATTEMPTED,
     REVERT_REFUSED,
+    REVERT_UNCERTAIN,
     UNVERIFIED,
     ConfigurationGate,
 )
 from .surface_matrix import CASE_ID, digest
 
 RESULT_KIND = "fs-config-lifecycle-collection-v1"
+PREFLIGHT_CASE = "PRE-01"
+# Refusal codes that prove a second attempt cannot succeed with this credential or
+# this resource; every other refused revert gets one attempt under the reserve.
+PERMANENT_REFUSALS = frozenset({401, 403, 404})
+RECONCILIATION_FILTERS = (
+    ("indexConfig", "indexConfig.usesAncestorConfig:false"),
+    ("ttlConfig", "ttlConfig:*"),
+)
 UNRECOVERED_KIND = "fs-config-lifecycle-unrecovered-v1"
 _M = "firestore.projects."
 # Fields whose value is never compared: they advance on their own or identify one
@@ -151,6 +160,21 @@ def shape(value: Any) -> Any:
     raise TypeError("JSON value required")
 
 
+def _proves_not_applied(status: Any, typed_error: dict | None) -> bool:
+    """Whether a typed answer proves the patch was not applied.
+
+    Every typed 4xx does: the request was refused before it changed anything. Of the
+    5xx answers only a typed UNIMPLEMENTED does, because it says the method is not
+    served at all; INTERNAL, UNAVAILABLE and DEADLINE_EXCEEDED can all follow a
+    server-side apply whose acknowledgement was lost, so they leave the step owned.
+    """
+    if typed_error is None or type(status) is not int:
+        return False
+    if 400 <= status < 500:
+        return True
+    return status == 501 and typed_error.get("status") == "UNIMPLEMENTED"
+
+
 def _typed_error(body: Any) -> dict | None:
     if not isinstance(body, dict) or set(body) != {"error"}:
         return None
@@ -169,8 +193,11 @@ def _write_private(path: Path, data: bytes) -> None:
 
 
 class _Run:
-    def __init__(self, nonce, transmit, output, gate, sleeper) -> None:
+    def __init__(
+        self, nonce, transmit, output, gate, sleeper, credential_preflight=None
+    ) -> None:
         self.nonce = nonce
+        self.credential_preflight = credential_preflight
         self.transmit = transmit
         self.output = Path(output)
         self.gate = gate
@@ -180,12 +207,15 @@ class _Run:
         self.rows: list[dict] = []
         self.deviations: list[dict] = []
         self.refused_applies: list[str] = []
+        self.recovery_failures: list[dict] = []
         self.enumeration: list[str] | None = None
         self.stop_point: str | None = None
 
     # -- one charged request -------------------------------------------------
 
-    def send(self, phase, request, *, step=None) -> dict:
+    def send(self, phase, request, *, step=None, via=None) -> dict:
+        """One charged request; `via` replaces the campaign transport for one call."""
+        transmit = self.transmit if via is None else via
         index = len(self.rows)
         row = {
             "index": index,
@@ -207,9 +237,7 @@ class _Run:
         self.rows.append(row)
         try:
             receipt = self.gate.charge(
-                phase,
-                request,
-                lambda deadline: self.transmit(request, deadline=deadline),
+                phase, request, lambda deadline: transmit(request, deadline=deadline)
             )
         except Exception as error:
             row["failure"] = type(error).__name__
@@ -242,6 +270,18 @@ class _Run:
             json.dumps(row, sort_keys=True, indent=1).encode(),
         )
 
+    def journaled(self, request) -> bool:
+        """Whether the gate journaled a wire attempt for this request.
+
+        A bound refusal raises before the event is appended; a transport failure
+        raises after. The difference decides whether a patch may have reached the
+        server, so it is read from the journal rather than inferred from the error.
+        """
+        wanted = digest(request)
+        return any(
+            event["requestDigest"] == wanted for event in self.gate.snapshot()["events"]
+        )
+
     @staticmethod
     def _ok(receipt) -> bool:
         status = receipt["status"]
@@ -256,6 +296,25 @@ class _Run:
 
     def observe(self) -> None:
         plan = self.gate.plan
+        if self.credential_preflight is not None:
+            request = {
+                "case": PREFLIGHT_CASE,
+                "role": "preflight",
+                "method": "GET",
+                "path": "/oauth2/v1/tokeninfo",
+                "query": {},
+                "body": None,
+            }
+            attested = self.send(
+                "observation",
+                request,
+                via=lambda _request, *, deadline: self.credential_preflight(deadline),
+            )
+            if not self._ok(attested) or not (
+                isinstance(attested["body"], dict)
+                and attested["body"].get("verified") is True
+            ):
+                return self.stop("credential-preflight-refused")
         projection = self.send("observation", self.case_request("OC-01"))
         if not self._ok(projection):
             return self.stop("projection-unavailable")
@@ -305,13 +364,33 @@ class _Run:
                 "bytes": baseline["row"]["responseBytes"],
             },
         )
-        applied = self.send("observation", self.case_request(step["apply"]), step=sid)
+        # Ownership is journaled before the patch leaves: from here until a complete
+        # answer proves otherwise the field is owned and recovery will revert it.
+        self.gate.record_step(sid, restore=APPLY_UNCERTAIN)
+        apply_request = self.case_request(step["apply"])
+        try:
+            applied = self.send("observation", apply_request, step=sid)
+        except Exception:
+            if not self.journaled(apply_request):
+                # The gate refused before the wire; nothing can have reached the server.
+                self.gate.record_step(sid, restore=NOT_APPLIED)
+            raise
+        operation = None
         if self._ok(applied):
-            operation = _operation_name(applied["body"])
+            try:
+                operation = _operation_name(applied["body"])
+            except ValueError:
+                # Accepted, but the answer names no owned operation: the patch is
+                # applied for all this run knows, and stays owned until reverted.
+                self.stop(f"{sid}-apply-unparsed")
+                return False
             self.gate.record_step(sid, restore=APPLIED, appliedOperation=operation)
-        elif applied["complete"] and applied["row"]["typedError"] is not None:
-            # A typed refusal changed nothing: the step needs no revert. Locally this
-            # is the expected UNIMPLEMENTED answer for the indexConfig patch.
+        elif applied["complete"] and _proves_not_applied(
+            applied["status"], applied["row"]["typedError"]
+        ):
+            # A typed refusal that proves nothing changed: the step needs no revert.
+            # Locally this is the expected UNIMPLEMENTED answer for the indexConfig
+            # patch.
             refusal = applied["row"]["typedError"]
             self.gate.record_step(sid, restore=APPLY_REFUSED, refusal=refusal)
             self.refused_applies.append(step["apply"])
@@ -320,12 +399,13 @@ class _Run:
             )
             return True
         else:
-            # No typed answer: the patch may have been applied. It is owned until a
-            # revert proves otherwise.
-            self.gate.record_step(sid, restore=APPLY_UNCERTAIN)
+            # A 5xx, an untyped or an incomplete answer does not prove the patch was
+            # not applied. It stays owned until a revert proves otherwise.
             self.stop(f"{sid}-apply-uncertain")
             return False
-        if operation is not None and not self.poll(step, operation, "observation"):
+        if operation is not None and not self.poll(
+            step, operation, "observation", declared=step["poll"] is not None
+        ):
             self.stop(f"{sid}-operation-deadline")
             return False
         readback = self.send(
@@ -337,8 +417,12 @@ class _Run:
         self.gate.record_step(sid, postDigest=digest(readback["body"]))
         return self.revert(step, "observation")
 
-    def poll(self, step, operation, phase) -> bool:
-        """Poll one operation until done, bounded by attempts and the poll deadline."""
+    def poll(self, step, operation, phase, *, declared=False) -> bool:
+        """Poll one operation until done, bounded by attempts and the poll deadline.
+
+        Only the first poll of the step's declared poll case is a case row; every
+        other poll, including the polls of a revert's operation, is a `poll` row.
+        """
         plan = self.gate.plan
         self.gate.count_operation()
         poll_case = step["poll"] or "OC-22"
@@ -347,10 +431,9 @@ class _Run:
         for attempt in range(plan["pollAttempts"]):
             request = self.case_request(
                 poll_case,
-                role="poll" if step["poll"] is None else "case",
+                role="case" if declared and attempt == 0 else "poll",
                 operation_name=operation,
             )
-            request["role"] = "poll" if attempt else request["role"]
             polled = self.send(phase, request, step=step["id"])
             if not self._ok(polled):
                 return False
@@ -363,17 +446,33 @@ class _Run:
         return False
 
     def revert(self, step, phase) -> bool:
-        """Revert one applied step and verify the readback equals the baseline."""
+        """Revert one owned step and verify the readback equals the baseline."""
         sid = step["id"]
         state = self.gate.snapshot()["steps"][sid]
-        reverted = self.send(phase, self.case_request(step["revert"]), step=sid)
+        revert_request = self.case_request(step["revert"])
+        self.gate.record_step(sid, revertAttempts=state["revertAttempts"] + 1)
+        try:
+            reverted = self.send(phase, revert_request, step=sid)
+        except Exception:
+            self.gate.record_step(
+                sid,
+                restore=REVERT_NOT_ATTEMPTED
+                if not self.journaled(revert_request)
+                else REVERT_UNCERTAIN,
+            )
+            raise
         if not self._ok(reverted):
             self.gate.record_step(
                 sid, restore=REVERT_REFUSED, refusal=reverted["row"]["typedError"]
             )
             self.stop(f"{sid}-revert-refused")
             return False
-        operation = _operation_name(reverted["body"])
+        try:
+            operation = _operation_name(reverted["body"])
+        except ValueError:
+            self.gate.record_step(sid, restore=UNVERIFIED)
+            self.stop(f"{sid}-revert-unparsed")
+            return False
         self.gate.record_step(sid, revertOperation=operation)
         if operation is not None and not self.poll(step, operation, phase):
             self.gate.record_step(sid, restore=UNVERIFIED)
@@ -396,44 +495,57 @@ class _Run:
     # -- recovery -------------------------------------------------------------
 
     def recover(self) -> None:
+        """Revert every step still owned, in reverse order, under the recovery reserve.
+
+        Owned means applied, uncertain, unverified, or refused by an answer that does
+        not prove the refusal is permanent: a 401, 403 or 404 is not retried, any
+        other refusal gets exactly one recovery attempt.
+        """
         self.gate.begin_recovery()
         for step in reversed(self.steps):
             state = self.gate.snapshot()["steps"][step["id"]]
-            if (
-                state["restore"] in FINISHED_STATES
-                or state["restore"] == REVERT_REFUSED
+            if state["restore"] in FINISHED_STATES:
+                continue
+            if state["restore"] == REVERT_REFUSED and (
+                state["revertAttempts"] >= 2
+                or (state["refusal"] or {}).get("code") in PERMANENT_REFUSALS
             ):
                 continue
             try:
                 self.revert(step, "recovery")
-            except Exception:  # noqa: BLE001 -- the gate journaled the stop
-                self.gate.record_step(step["id"], restore=REVERT_NOT_ATTEMPTED)
+            except Exception as error:  # noqa: BLE001 -- the gate journaled the stop
+                self.recovery_failures.append(
+                    {"step": step["id"], "failure": type(error).__name__}
+                )
         self.reconcile()
 
     def reconcile(self) -> None:
         record: dict[str, Any] = {"ok": False, "fieldListings": {}, "enumeration": None}
         try:
+            # Production lists a field under the index filter only when its index
+            # configuration is overridden; a field whose only override is a TTL
+            # policy keeps usesAncestorConfig and is listed under `ttlConfig:*`.
+            # Both listings run for every owned group, so a stray policy or
+            # exemption in either is visible.
             for step in self.steps:
                 parent = step["resource"].rsplit("/fields/", 1)[0]
-                request = {
-                    "case": "OC-21",
-                    "role": "reconcile",
-                    "method": "GET",
-                    "path": f"/v1/{parent}/fields",
-                    "query": {
-                        "filter": "indexConfig.usesAncestorConfig:false",
-                        "pageSize": "20",
-                    },
-                    "body": None,
-                }
-                listing = self.send("recovery", request, step=step["id"])
-                entries = (
-                    listing["body"].get("fields", []) if self._ok(listing) else None
-                )
-                record["fieldListings"][step["id"]] = {
-                    "status": listing["status"],
-                    "nonDefaultFields": None if entries is None else len(entries),
-                }
+                for label, filter_ in RECONCILIATION_FILTERS:
+                    request = {
+                        "case": "OC-21",
+                        "role": "reconcile",
+                        "method": "GET",
+                        "path": f"/v1/{parent}/fields",
+                        "query": {"filter": filter_, "pageSize": "20"},
+                        "body": None,
+                    }
+                    listing = self.send("recovery", request, step=step["id"])
+                    entries = (
+                        listing["body"].get("fields", []) if self._ok(listing) else None
+                    )
+                    record["fieldListings"][f"{step['id']}:{label}"] = {
+                        "status": listing["status"],
+                        "nonDefaultFields": None if entries is None else len(entries),
+                    }
             request = self.case_request("OC-02", role="reconcile")
             after = self.send("recovery", request)
             names = _database_names(after["body"]) if self._ok(after) else None
@@ -492,13 +604,19 @@ def collect(
     *,
     gate: ConfigurationGate,
     sleeper: Callable[[float], None] = time.sleep,
+    credential_preflight: Callable[[float], dict] | None = None,
 ) -> dict:
-    """Run the twelve cases behind the gate; always run recovery; never release."""
+    """Run the twelve cases behind the gate; always run recovery; never release.
+
+    `credential_preflight(deadline)` is the production token attestation: it is
+    charged as the first request and must answer a complete receipt whose body says
+    `verified: true`, or the run stops before OC-01 with nothing patched.
+    """
     output = Path(output)
     if output.exists() or output.is_symlink():
         raise ValueError("fresh collection output required")
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
-    run = _Run(nonce, transmit, output, gate, sleeper)
+    run = _Run(nonce, transmit, output, gate, sleeper, credential_preflight)
     failure = None
     try:
         run.observe()
@@ -524,8 +642,11 @@ def collect(
         if step["restore"] not in FINISHED_STATES
     ]
     restore_verified = not unrecovered and all(
-        step["restore"] in (RESTORED, NOT_APPLIED, APPLY_REFUSED)
-        for step in steps.values()
+        step["restore"] in FINISHED_STATES for step in steps.values()
+    )
+    preflight_rows = [row for row in run.rows if row["role"] == "preflight"]
+    mutation_attempted = any(
+        row["role"] == "case" and row["method"] == "PATCH" for row in run.rows
     )
     reconciliation = snapshot["reconciliation"] or {"ok": False}
     cleanup_complete = restore_verified and reconciliation.get("ok") is True
@@ -543,6 +664,14 @@ def collect(
         "nonceDigest": digest(nonce),
         "completed": completed,
         "cleanupComplete": cleanup_complete,
+        "mutationAttempted": mutation_attempted,
+        "credentialPreflight": None
+        if not preflight_rows
+        else {
+            "status": preflight_rows[0]["status"],
+            "complete": preflight_rows[0]["complete"],
+            "attestationDigest": preflight_rows[0]["bodyDigest"],
+        },
         "restoreVerified": restore_verified,
         "stopPoint": run.stop_point,
         "failure": failure,
@@ -551,6 +680,7 @@ def collect(
         "chargedMicrousd": snapshot["costMicrousd"],
         "observedCases": sorted(observed),
         "refusedApplies": run.refused_applies,
+        "recoveryFailures": run.recovery_failures,
         "deviations": run.deviations,
         "steps": {
             name: {key: value for key, value in step.items() if key != "preBodyRef"}

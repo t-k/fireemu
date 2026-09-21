@@ -63,9 +63,11 @@ def test_the_budget_is_enforced_and_re_derived_from_the_request_bound() -> None:
     )
     assert budget["reservedMicrousd"] < budget["hardCeilingMicrousd"]
     assert budget["basis"]
-    # Derivation: 2 controls + 2 steps x 5 + 1 listing + 4 operations x 16 polls
-    # + 3 reconciliation reads, rounded up to a power of two.
-    derived = 2 + 2 * 5 + 1 + 4 * POLL_ATTEMPTS + 3
+    # Derivation: 1 preflight + 2 controls + 2 steps x 5 + 1 listing + 6 operations
+    # x 16 polls + 2 recovery reverts and verifies + 5 reconciliation reads.
+    derived = 1 + 2 + 2 * 5 + 1 + budget["maxOperations"] * POLL_ATTEMPTS + 4 + 5
+    assert budget["maxOperations"] == 6
+    assert budget["maxAccounts"] == 1
     assert derived <= budget["maxRequests"] == MAX_REQUESTS
     assert budget["maxRequests"] >= len(compile_cases(NONCE))
     assert budget["maxWallSeconds"] <= 1200
@@ -158,7 +160,7 @@ def test_the_operation_poll_is_bounded_and_resumable() -> None:
     assert poll["maxAttemptsPerOperation"] >= 1
     assert poll["deadlineSeconds"] <= 900
     assert poll["initialBackoffSeconds"] < poll["maxBackoffSeconds"]
-    assert poll["maxOperations"] == 4
+    assert poll["maxOperations"] == 6
     assert poll["onDeadline"] == "abort-and-run-recovery"
     checkpoint = poll["checkpoint"]
     assert checkpoint["writtenAfterEveryPoll"] is True

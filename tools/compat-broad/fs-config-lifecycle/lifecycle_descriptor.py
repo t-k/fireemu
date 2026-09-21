@@ -154,7 +154,7 @@ def ledger_budget() -> dict:
     published = budget()
     return {
         "requests": int(published["maxRequests"]),
-        "accounts": 1,
+        "accounts": int(published["maxAccounts"]),
         "resources": 0,
         "costMicrousd": int(published["reservedMicrousd"]),
     }

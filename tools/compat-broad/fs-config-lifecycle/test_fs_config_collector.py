@@ -349,8 +349,14 @@ def test_a_refused_revert_is_unrecovered_with_a_typed_record(tmp_path: Path) -> 
     assert record["resources"][0]["refusal"]["status"] == "FAILED_PRECONDITION"
     assert result["steps"]["ttl"]["preBodyRef"]["file"].startswith("response-")
     assert gate.snapshot()["complete"] is False
-    # Recovery does not retry a refused revert and still reconciles.
-    assert result["reconciliation"]["fieldListings"]["ttl"]["nonDefaultFields"] == 1
+    # A non-permanent refusal gets exactly one recovery attempt, then reconciliation
+    # sees the policy under the TTL filter, not under the index filter.
+    assert result["steps"]["ttl"]["revertAttempts"] == 2
+    reverts = [row for row in result["rows"] if row["case"] == "OC-16"]
+    assert [row["phase"] for row in reverts] == ["observation", "recovery"]
+    listings = result["reconciliation"]["fieldListings"]
+    assert listings["ttl:ttlConfig"]["nonDefaultFields"] == 1
+    assert listings["ttl:indexConfig"]["nonDefaultFields"] == 0
     assert result["reconciliation"]["ok"] is False
 
 
@@ -449,3 +455,186 @@ def test_the_collector_refuses_a_reused_output_directory(tmp_path: Path) -> None
     (tmp_path / "run").mkdir()
     with pytest.raises(ValueError, match="fresh collection output"):
         collect(NONCE, FakeAdmin().transmit, tmp_path / "run", gate=_gate(tmp_path))
+
+
+# -- ownership is journaled before the patch leaves (review Must Fix 1) ----------
+
+
+def _ttl_field(admin: FakeAdmin) -> dict:
+    name = next(name for name in admin.fields if "fsconfig_ttl_" in name)
+    return admin.fields[name]
+
+
+def test_a_patch_whose_answer_raised_is_owned_and_reverted_in_recovery(
+    tmp_path: Path,
+) -> None:
+    admin = FakeAdmin(raise_after_apply={"OC-14"})
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    assert result["failure"] == "ConnectionResetError"
+    assert result["steps"]["ttl"]["restore"] == RESTORED
+    assert [m for _n, m, _b in admin.patches] == ["ttlConfig", "ttlConfig"]
+    assert "ttlConfig" not in _ttl_field(admin)
+    reverts = [row for row in result["rows"] if row["case"] == "OC-16"]
+    assert [row["phase"] for row in reverts] == ["recovery"]
+    assert result["cleanupComplete"] is True
+
+
+def test_a_2xx_patch_answer_without_an_owned_operation_is_owned_not_ignored(
+    tmp_path: Path,
+) -> None:
+    admin = FakeAdmin(answer_without_operation={"OC-14"})
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    assert result["stopPoint"] == "ttl-apply-unparsed"
+    assert result["steps"]["ttl"]["restore"] == RESTORED
+    assert "ttlConfig" not in _ttl_field(admin)
+    assert result["steps"]["exemption"]["restore"] == NOT_APPLIED
+    assert not any(row["case"] == "OC-18" for row in result["rows"])
+
+
+def test_a_5xx_typed_answer_to_a_patch_is_apply_uncertain_not_apply_refused(
+    tmp_path: Path,
+) -> None:
+    admin = FakeAdmin(answer_5xx={"OC-14"})
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    assert result["stopPoint"] == "ttl-apply-uncertain"
+    assert result["refusedApplies"] == []
+    assert result["steps"]["ttl"]["restore"] == RESTORED
+    assert "ttlConfig" not in _ttl_field(admin)
+
+
+def test_a_typed_unimplemented_answer_still_proves_the_patch_was_not_applied(
+    tmp_path: Path,
+) -> None:
+    """501 UNIMPLEMENTED says the method is not served; 500/503/504 do not."""
+    admin = FakeAdmin(refuse_apply={"OC-18"})
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    assert result["steps"]["exemption"]["restore"] == APPLY_REFUSED
+    assert not any(row["case"] == "OC-20" for row in result["rows"])
+
+
+def test_a_gate_refusal_before_the_wire_leaves_the_step_not_applied(
+    tmp_path: Path,
+) -> None:
+    plan = gate_plan(NONCE, baseline_projection_digest=BASELINE)
+    # Two controls and the baseline read fit; the TTL patch itself is refused by
+    # the request bound before it is sent, so nothing is owned.
+    plan["maxRequests"] = plan["observationRequests"] = 3
+    plan["costMicrousd"] = 3 * plan["requestCostMicrousd"]
+    admin = FakeAdmin()
+    gate = _gate(tmp_path, plan)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    assert result["stopPoint"] == "request-bound"
+    assert result["steps"]["ttl"]["restore"] == NOT_APPLIED
+    assert admin.patches == []
+    assert result["restoreVerified"] is True
+
+
+def test_a_revert_acknowledged_but_not_applied_is_unverified_and_holds(
+    tmp_path: Path,
+) -> None:
+    """Kills the mutants that drop the verify read or its digest comparison."""
+    admin = FakeAdmin(ignore_revert={"OC-16"})
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    assert result["steps"]["ttl"]["restore"] == "unverified"
+    assert result["steps"]["ttl"]["verifyDigest"] != result["steps"]["ttl"]["preDigest"]
+    assert [item["step"] for item in result["unrecovered"]] == ["ttl"]
+    assert result["cleanupComplete"] is False
+    assert gate.snapshot()["complete"] is False
+    assert "ttlConfig" in _ttl_field(admin)
+    # The recovery re-revert of an unverified step fits inside the operation bound.
+    assert result["steps"]["ttl"]["revertAttempts"] == 2
+    assert gate.snapshot()["operationsSeen"] <= gate.plan["maxOperations"]
+    assert result["recoveryFailures"] == []
+
+
+def test_a_revert_that_raised_after_the_wire_is_revert_uncertain_then_retried(
+    tmp_path: Path,
+) -> None:
+    admin = FakeAdmin(fail_at={"OC-16": "raise"})
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    # Both the observation-phase and the recovery-phase revert raise, so the step
+    # ends revert-uncertain with two journaled attempts and stays owned.
+    assert result["steps"]["ttl"]["restore"] == "revert-uncertain"
+    assert result["steps"]["ttl"]["revertAttempts"] == 2
+    assert result["recoveryFailures"] == [
+        {"step": "ttl", "failure": "ConnectionResetError"}
+    ]
+    assert result["cleanupComplete"] is False
+
+
+def test_a_permanent_refusal_of_a_revert_is_not_retried(tmp_path: Path) -> None:
+    admin = FakeAdmin(credential_refuse_at="OC-16")
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    assert result["steps"]["ttl"]["restore"] == REVERT_REFUSED
+    assert result["steps"]["ttl"]["refusal"]["code"] == 401
+    assert result["steps"]["ttl"]["revertAttempts"] == 1
+    assert result["cleanupComplete"] is False
+
+
+def test_reconciliation_lists_ttl_overrides_with_the_ttl_filter(tmp_path: Path) -> None:
+    admin = FakeAdmin(ignore_revert={"OC-16"})
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    listings = result["reconciliation"]["fieldListings"]
+    assert set(listings) == {
+        "ttl:indexConfig",
+        "ttl:ttlConfig",
+        "exemption:indexConfig",
+        "exemption:ttlConfig",
+    }
+    assert listings["ttl:ttlConfig"]["nonDefaultFields"] == 1
+    assert listings["ttl:indexConfig"]["nonDefaultFields"] == 0
+    assert result["reconciliation"]["ok"] is False
+
+
+def test_every_poll_after_the_declared_one_is_labelled_a_poll_row(
+    tmp_path: Path,
+) -> None:
+    admin = FakeAdmin(poll_rounds=2)
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    polls = [row for row in result["rows"] if row["case"] == "OC-22"]
+    assert [row["role"] for row in polls][:1] == ["case"]
+    assert all(row["role"] == "poll" for row in polls[1:])
+    assert len(polls) == 8
+
+
+def test_a_recovery_re_revert_after_both_steps_ran_fits_the_operation_bound(
+    tmp_path: Path,
+) -> None:
+    admin = FakeAdmin(ignore_revert={"OC-20"})
+    gate = _gate(tmp_path)
+    result = collect(
+        NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
+    )
+    assert result["steps"]["exemption"]["revertAttempts"] == 2
+    assert result["steps"]["exemption"]["restore"] == "unverified"
+    assert result["recoveryFailures"] == []
+    assert gate.snapshot()["operationsSeen"] == 5 <= gate.plan["maxOperations"]

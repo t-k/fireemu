@@ -54,6 +54,7 @@ APPLY_UNCERTAIN = "apply-uncertain"
 UNVERIFIED = "unverified"
 REVERT_REFUSED = "revert-refused"
 REVERT_NOT_ATTEMPTED = "revert-not-attempted"
+REVERT_UNCERTAIN = "revert-uncertain"
 RESTORE_STATES = (
     NOT_APPLIED,
     APPLY_REFUSED,
@@ -63,6 +64,7 @@ RESTORE_STATES = (
     UNVERIFIED,
     REVERT_REFUSED,
     REVERT_NOT_ATTEMPTED,
+    REVERT_UNCERTAIN,
 )
 FINISHED_STATES = frozenset({NOT_APPLIED, APPLY_REFUSED, RESTORED})
 
@@ -234,6 +236,7 @@ def create(path, plan) -> None:
                 "appliedOperation": None,
                 "postDigest": None,
                 "revertOperation": None,
+                "revertAttempts": 0,
                 "verifyDigest": None,
                 "refusal": None,
             }

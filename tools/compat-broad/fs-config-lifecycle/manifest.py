@@ -68,10 +68,12 @@ FORBIDDEN_PERMISSIONS = (
 )
 
 # Every figure below is an upper bound the gate enforces. The request count is derived
-# from the execution order: two controls, two locked steps of baseline, patch, readback,
-# revert and verify (five requests each), the field listing, then at most sixteen polls
-# for each of the four operations a patch or revert returns, and the three closing
-# reconciliation reads. 2 + 10 + 1 + 64 + 3 = 80, rounded up to a power of two.
+# from the execution order: one credential preflight, two controls, two locked steps
+# of baseline, patch, readback, revert and verify (five requests each), the field
+# listing, at most sixteen polls for each of the six operations a patch, a revert or
+# the one recovery re-revert per step may return, one recovery revert and verify per
+# step, and the five closing reconciliation reads (two filters per owned group plus
+# the enumeration). 1 + 2 + 10 + 1 + 96 + 4 + 5 = 119, rounded up to a power of two.
 MAX_REQUESTS = 128
 MAX_WALL_SECONDS = 900
 RECOVERY_RESERVE_SECONDS = 360
@@ -79,7 +81,12 @@ REQUEST_SLOT_SECONDS = 6.0
 POLL_ATTEMPTS = 16
 POLL_DEADLINE_SECONDS = 120
 POLL_BACKOFF_SECONDS = (2, 15)
-MAX_OPERATIONS = 4
+# Two patches, two reverts, and one recovery re-revert per step for a revert that
+# was acknowledged but not verified.
+MAX_OPERATIONS = 6
+# One authorized principal's quota is spent; no account is created. The figure is
+# the Ledger's `accounts` dimension, published here so the claim has a basis.
+MAX_ACCOUNTS = 1
 # Firestore Admin calls carry no tariff. One micro-USD per request is the admission
 # allowance the shared Ledger charges for every call this campaign may make, so the
 # reservation is never zero-cost on paper while the estimated tariff stays zero.
@@ -172,13 +179,17 @@ _RECONCILIATION = {
     "comparesAgainst": "OC-02",
     "method": "firestore.projects.databases.list",
     "fieldListings": "firestore.projects.databases.collectionGroups.fields.list",
+    "fieldListingFilters": ["indexConfig.usesAncestorConfig:false", "ttlConfig:*"],
     "failsClosed": True,
     "rule": (
-        "After every revert, enumerate the databases again and compare with the "
-        "enumeration OC-02 captured before the run; any difference fails the run. Then "
-        "list the non-default field configurations of both nonce-owned collection "
-        "groups; any entry fails the run even if a ledger entry claims the field was "
-        "restored."
+        "After every revert, list both nonce-owned collection groups twice: under "
+        "indexConfig.usesAncestorConfig:false, which shows an overridden index "
+        "configuration, and under ttlConfig:*, which shows a time-to-live policy "
+        "(a field whose only override is a policy keeps usesAncestorConfig and is "
+        "invisible under the first filter). Any entry fails the run even if a ledger "
+        "entry claims the field was restored. Then enumerate the databases again and "
+        "compare with the enumeration OC-02 captured before the run; any difference "
+        "fails the run."
     ),
     "coversCasesOutsideTheLedger": (
         "A configuration the campaign never declared under an owned collection group, "
@@ -190,7 +201,8 @@ _RECONCILIATION = {
 _CLEANUP_COMPLETION = (
     "Every ledger entry is marked recovered.",
     "Every reverted field configuration matches the baseline captured before its patch.",
-    "Both owned collection groups list no non-default field configuration.",
+    "Both owned collection groups list no overridden index configuration and no "
+    "time-to-live policy.",
     "The post-run database enumeration matches the one captured before the run.",
     "A run with any unrecovered resource exits non-zero and is not a valid observation.",
 )
@@ -241,6 +253,7 @@ def budget() -> dict[str, Any]:
         "recoveryReserveSeconds": RECOVERY_RESERVE_SECONDS,
         "requestSlotSeconds": REQUEST_SLOT_SECONDS,
         "maxCreatedDatabases": 0,
+        "maxAccounts": MAX_ACCOUNTS,
         "maxPatchedFieldConfigurations": 2,
         "maxOperations": MAX_OPERATIONS,
         "maxDocumentOperations": 0,

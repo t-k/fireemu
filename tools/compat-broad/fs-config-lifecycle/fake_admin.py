@@ -50,6 +50,10 @@ class FakeAdmin:
         fail_at: dict[str, str] | None = None,
         credential_refuse_at: str | None = None,
         never_done: set[str] | None = None,
+        ignore_revert: set[str] | None = None,
+        answer_without_operation: set[str] | None = None,
+        answer_5xx: set[str] | None = None,
+        raise_after_apply: set[str] | None = None,
         projection: dict[str, Any] | None = None,
         databases: list[str] | None = None,
         drift_enumeration_after: int | None = None,
@@ -64,6 +68,10 @@ class FakeAdmin:
         self.fail_at = fail_at or {}
         self.credential_refuse_at = credential_refuse_at
         self.never_done = never_done or set()
+        self.ignore_revert = ignore_revert or set()
+        self.answer_without_operation = answer_without_operation or set()
+        self.answer_5xx = answer_5xx or set()
+        self.raise_after_apply = raise_after_apply or set()
         self.drift_enumeration_after = drift_enumeration_after
         self.fields: dict[str, dict[str, Any]] = {}
         self.operations: dict[str, dict[str, Any]] = {}
@@ -177,15 +185,25 @@ class FakeAdmin:
                 operation["metadata"]["state"] = "SUCCESSFUL"
             return _ok({k: v for k, v in operation.items() if not k.startswith("_")})
         if method == "GET" and path.endswith("/fields"):
+            # Production semantics: the index filter lists fields whose index
+            # configuration is overridden; a TTL-only override keeps
+            # usesAncestorConfig and is visible only under `ttlConfig:*`.
             parent = path.removeprefix("/v1/").removesuffix("/fields")
+            filter_ = request["query"].get("filter")
+            if filter_ == "indexConfig.usesAncestorConfig:false":
+
+                def selected(field):
+                    return field["indexConfig"].get("usesAncestorConfig") is False
+            elif filter_ == "ttlConfig:*":
+
+                def selected(field):
+                    return "ttlConfig" in field
+            else:
+                return _error(400, "INVALID_ARGUMENT", "unsupported filter")
             listed = [
                 copy.deepcopy(field)
                 for name, field in self.fields.items()
-                if name.startswith(parent + "/fields/")
-                and (
-                    field["indexConfig"].get("usesAncestorConfig") is False
-                    or "ttlConfig" in field
-                )
+                if name.startswith(parent + "/fields/") and selected(field)
             ]
             return _ok({"fields": listed} if listed else {})
         if "/fields/" in path and method == "GET":
@@ -212,18 +230,38 @@ class FakeAdmin:
                     "UNIMPLEMENTED",
                     "single-field exemptions have no runtime transition",
                 )
-            if mask == "ttlConfig":
-                if reverting:
-                    field.pop("ttlConfig", None)
-                else:
-                    field["ttlConfig"] = {"state": "ACTIVE"}
-            elif mask == "indexConfig":
-                if reverting:
-                    self.fields.pop(name)
-                    self.field(name)
-                else:
-                    field["indexConfig"] = {"indexes": [], "usesAncestorConfig": False}
-            else:
-                return _error(400, "INVALID_ARGUMENT", "unknown update mask")
+            if reverting and case in self.ignore_revert:
+                # Acknowledged with a done operation, but the field is left as is.
+                return _ok(self._operation(name, mask))
+            if not reverting and case in self.answer_without_operation:
+                self._apply(field, name, mask, body, reverting=False)
+                return _ok({"metadata": {"field": name, "state": "PROCESSING"}})
+            if not reverting and case in self.answer_5xx:
+                self._apply(field, name, mask, body, reverting=False)
+                return _error(503, "UNAVAILABLE", "injected 5xx after apply")
+            if not reverting and case in self.raise_after_apply:
+                self._apply(field, name, mask, body, reverting=False)
+                raise ConnectionResetError(
+                    "injected failure after the patch was applied"
+                )
+            outcome = self._apply(field, name, mask, body, reverting)
+            if outcome is not None:
+                return outcome
             return _ok(self._operation(name, mask))
         return _error(404, "NOT_FOUND", f"no route for {method} {path}")
+
+    def _apply(self, field, name, mask, body, reverting):
+        if mask == "ttlConfig":
+            if reverting:
+                field.pop("ttlConfig", None)
+            else:
+                field["ttlConfig"] = {"state": "ACTIVE"}
+        elif mask == "indexConfig":
+            if reverting:
+                self.fields.pop(name)
+                self.field(name)
+            else:
+                field["indexConfig"] = {"indexes": [], "usesAncestorConfig": False}
+        else:
+            return _error(400, "INVALID_ARGUMENT", "unknown update mask")
+        return None

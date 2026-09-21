@@ -1,6 +1,6 @@
 # Emulator scope for the Identity Platform / Firestore compatibility program
 
-Version: `compat-scope-2026-09-21.v2`
+Version: `compat-scope-2026-09-21.v3` (v3 adds the production-first ordering of oracles)
 
 This page fixes the application-facing scope used by the 2026-09-21 execution of the compatibility program. It does not replace the [acceptance table](ip-fs-production-compatibility.md): the fourteen parent feature groups and their denominators stay as they are. It maps each parent to the finite conditions this execution works on, records what is deliberately replaced by a lightweight local mechanism, and records what is excluded and why. Scope changes are dated and attributed; nothing here rewrites an earlier owner decision.
 
@@ -10,9 +10,20 @@ The standard is zero application-visible gap with production Firebase for the pi
 
 Owner authorization in force: production observations on the dedicated oracle project may be executed autonomously while the cumulative cost of every observation in this program stays at or below US$10 (owner statement of 2026-09-21, superseding per-campaign approvals; it is one cumulative frame, not a per-campaign or per-session allowance). Every campaign still passes the frozen-manifest, fresh-nonce, budget, lock, cleanup and independent-review gates. See [execution-status.md](execution-status.md) for the running budget.
 
+## Production first (2026-09-21)
+
+The ordering of oracles is fixed by the owner: (1) production observation on the dedicated oracle project and applicable saved production evidence, (2) the official specification with its version and applicability stated. The official Local Emulator Suite is an auxiliary oracle for cheap candidate exploration, fixture reuse and difference triage; it is not a substitute for production and matching it is not a product goal of this program. Consequences:
+
+- A production mismatch is never left in place because the official emulator behaves the same way, and a result that differs only from the official emulator is not a regression for the production path and does not block G1/G2.
+- New work whose only purpose is to reproduce an official-emulator bug, lax authorization, unchecked limit or peculiar error is stopped; the general invariants, positive controls and real-SDK assets already built on that path are reused.
+- The `strict` profile is the production-compatibility path and the subject of G1/G2. The `emulator` profile stays available as a legacy/testing profile; keeping its expectations is never a reason to refuse a production-gap fix. When a production-driven change alters a legacy expectation, the change is recorded with its evidence, scope and user impact and published as a versioned update; historical production evidence stays untouched and tests are not deleted to go green.
+- Profile consolidation, default-profile changes and setting renames are separate small changes, each with its own impact check.
+- Declared local replacements (local signing trust root, mail/SMS sinks, controllable clock) stay explicit and do not require byte identity with Google's infrastructure.
+- The exclusions above (PITR, managed backups, billing and regional infrastructure, the full management API) stay; unimplemented in-scope behaviour is not reclassified as out of scope.
+
 ## Profiles and SDKs
 
-- Profiles: `strict` (production shape) and `emulator` (official-emulator shape). Both are in scope; their existing contract differences are kept distinct and never unified silently. A defensive local ceiling is never presented as a Google limit.
+- Profiles: `strict` (production shape, the G1/G2 subject) and `emulator` (official-emulator shape, legacy/testing). Their existing contract differences are kept distinct and never unified silently. A defensive local ceiling is never presented as a Google limit.
 - Required SDK matrix, from the locked `tools/sdk-smoke` versions: firebase 12.18.0 (Web SDK in Node and in a real browser over WebChannel), firebase-admin 14.3.0, firebase-functions 7.3.2, @firebase/rules-unit-testing 5.0.2. Loaded versions are recorded per run. Mobile SDKs are not declared and stay out of scope; they are not substituted by Node results.
 
 ## In scope: application-facing contracts

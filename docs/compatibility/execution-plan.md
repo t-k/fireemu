@@ -1,6 +1,6 @@
 # Execution plan: compatibility program, 2026-09-21
 
-Scope version: [`compat-scope-2026-09-21.v2`](emulator-scope.md). Status: [execution-status.md](execution-status.md). Base commit of this execution: `2dd6d9d9ddfc4f8408cae149caf92514a68e645c`.
+Scope version: [`compat-scope-2026-09-21.v3`](emulator-scope.md) (production first; the official emulator is an auxiliary oracle). Status: [execution-status.md](execution-status.md). Base commit of this execution: `2dd6d9d9ddfc4f8408cae149caf92514a68e645c`.
 
 Every task below is a finite packet: an owner lane, owned files, dependencies and acceptance conditions. A task removes a named remaining condition of a parent group in the [acceptance table](ip-fs-production-compatibility.md) or fixes a reachable mismatch; tasks that do neither are hygiene and say so. Production observations run only from frozen packets through the O7/O8 gates and the shared Ledger, under a US$10 frame per observation task (campaign id), covering that task's preparation, attempts, retries and recovery; independent tasks do not share a frame.
 
@@ -49,5 +49,7 @@ Shared files (`store.rs`, `identity_toolkit.rs`, `local.rs`, `service.rs`, `stre
 | FS-LIFE-002 | K | FS-CONFIG-LIFECYCLE | campaign includes out-of-scope database create/delete | none | 12 in-scope cases, typed collector | queued |
 | TP-AUTH-B-03 | D | AUTH-ACTION | 26 stages unobserved | shared Auth-scope lane | shadow rebind, descriptor | queued |
 | FS-EVID-001 | R | FS-DATA-WRITE | no saved-reference replay on the current artifact | G1 checkpoint | first46, second45, G0, limits-02, write-txn, Commit replays bound to the final artifact | at G1 |
+| SCOPE-PROD-FIRST-001 | A | all | official-emulator parity treated as a co-equal goal | none | scope v3 recorded; CI required/advisory classification and case-registry labels follow as separate small changes | scope recorded this commit; CI/registry follow-up queued |
+| LOCAL-ASSIST-001 | A | (token economy) | none | none | read-only `tools/local-assist` CLI against a loopback llama-server, one inference at a time, evaluated on real tasks before adoption; never a wait condition for other lanes | in progress |
 
 Production runs are executed by the integrator from frozen packets, in this order, one at a time: request bytes (US$0.50 ceiling), limits-03 (after the `nx` exemption is deployed and its projection digest bound), transaction expiry, Rules user token, then the Auth campaigns once the shared Auth scopes exist. Each run records the campaign, counts, reservation, the task's conservative allocation to date, recovery reserve and the task's remaining frame in the status page; the program-wide total is reported but is not a stop condition.

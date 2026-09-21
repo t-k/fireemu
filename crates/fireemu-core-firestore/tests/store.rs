@@ -2427,3 +2427,148 @@ fn verify_observes_staged_writes_and_preserves_atomic_validation() {
         .commit(&[verify(Some(Precondition::Exists(true)))], None, t(6))
         .is_err());
 }
+
+/// FS-TXN-002 (a). `FS-LIMIT-TRANSACTION-TOTAL-TIME` is 270 s from the transaction's start on
+/// the virtual clock, whatever the activity in between: a read-write transaction whose idle
+/// window is kept open commits its write at 269 s total and is refused at 271 s total with
+/// `ABORTED` and the expiry wording, its write unpublished and its lock released.
+#[test]
+fn a_transaction_commits_at_269_s_total_and_is_refused_at_271_s_total() {
+    for (elapsed, commits) in [(269, true), (271, false)] {
+        let mut s = FirestoreState::new();
+        s.commit(&[set("total/doc", &[("v", Value::Integer(0))])], None, t(0))
+            .unwrap();
+        let txn = s.begin_transaction(false, t(0)).unwrap();
+        assert!(s
+            .get_in_transaction(&txn, &path("total/doc"))
+            .unwrap()
+            .is_some());
+        // Activity every 59 s keeps the 60 s idle window open up to t(236); both commit
+        // instants are then inside the idle window, so only the total budget decides.
+        for step in 1..=4 {
+            s.touch_transaction(&txn, t(step * 59)).unwrap();
+        }
+        let outcome = s.commit(
+            &[set("total/doc", &[("v", Value::Integer(1))])],
+            Some(&txn),
+            t(elapsed),
+        );
+        if commits {
+            outcome.unwrap_or_else(|error| panic!("commit at {elapsed} s: {error}"));
+            assert_eq!(
+                s.get(&path("total/doc")).unwrap().fields.get("v"),
+                Some(&Value::Integer(1))
+            );
+        } else {
+            assert!(
+                matches!(
+                    &outcome,
+                    Err(FirestoreError::Aborted(message))
+                        if message == "The referenced transaction has expired or is no longer valid."
+                ),
+                "commit at {elapsed} s: {outcome:?}"
+            );
+            assert_eq!(
+                s.get(&path("total/doc")).unwrap().fields.get("v"),
+                Some(&Value::Integer(0)),
+                "nothing of the expired transaction is published"
+            );
+            assert!(!s.transaction_is_active(&txn));
+            // The expired transaction holds no lock: an out-of-band write goes through.
+            s.commit(
+                &[set("total/doc", &[("v", Value::Integer(2))])],
+                None,
+                t(elapsed),
+            )
+            .unwrap();
+        }
+    }
+}
+
+/// FS-TXN-002 (b). A transactional query locks its whole scope, not only the documents its
+/// filter selected: an out-of-band write to a document inside the queried collection but
+/// outside the query's filter is refused `ABORTED` with the contention wording while the
+/// transaction is active, exactly like a write to a document the query returned.
+///
+/// Local-stricter hypothesis, production unobserved (compat-v2 Firestore scout report of
+/// 2026-09-21, section 4, hypothesis 1; `FS-TRANSACTION` in
+/// `docs/compatibility/ip-fs-production-compatibility.md`). Production documents that a
+/// transaction locks the documents it read and, for queries, the index range; whether a
+/// document the filter excluded is part of that range has not been measured. Local is at
+/// worst stricter (more `ABORTED`), never lossy. This test pins the current answer so a
+/// change to `check_contention` is deliberate; it is not a production claim.
+#[test]
+fn a_transactional_query_currently_locks_documents_its_filter_excluded() {
+    use fireemu_core_firestore::query::{FieldOp, FilterExpr, Query, QueryScope};
+    use fireemu_core_types::ids::CollectionId;
+    let mut s = FirestoreState::new();
+    s.commit(
+        &[
+            set("qf/selected", &[("v", Value::Integer(1))]),
+            set("qf/excluded", &[("v", Value::Integer(2))]),
+        ],
+        None,
+        t(0),
+    )
+    .unwrap();
+    let query = Query::new(QueryScope::collection(
+        None,
+        CollectionId::try_new("qf").unwrap(),
+    ))
+    .with_filter(FilterExpr::Field {
+        field: FieldPath::parse("v").unwrap(),
+        op: FieldOp::Equal,
+        value: Value::Integer(1),
+    })
+    .canonicalize()
+    .unwrap();
+    let txn = s.begin_transaction(false, t(1)).unwrap();
+    let selected = s.run_query_in_transaction(&txn, &query).unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].path, path("qf/selected"));
+
+    // A document the query returned is locked (production-documented).
+    let refused = s
+        .commit(
+            &[set("qf/selected", &[("v", Value::Integer(3))])],
+            None,
+            t(2),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{refused}"
+    );
+    // A document the filter excluded, inside the same collection, is locked too: the local
+    // reading of the query's range. Production unobserved.
+    let refused = s
+        .commit(
+            &[set("qf/excluded", &[("v", Value::Integer(3))])],
+            None,
+            t(2),
+        )
+        .unwrap_err();
+    assert!(
+        matches!(&refused, FirestoreError::Aborted(m) if m == TOO_MUCH_CONTENTION),
+        "{refused}"
+    );
+    assert_eq!(
+        s.get(&path("qf/excluded")).unwrap().fields.get("v"),
+        Some(&Value::Integer(2))
+    );
+    // Outside the queried collection nothing is locked.
+    s.commit(&[set("elsewhere/doc", &[])], None, t(2)).unwrap();
+
+    // Rollback releases the range and the excluded document accepts the write.
+    s.rollback(&txn).unwrap();
+    s.commit(
+        &[set("qf/excluded", &[("v", Value::Integer(3))])],
+        None,
+        t(3),
+    )
+    .unwrap();
+    assert_eq!(
+        s.get(&path("qf/excluded")).unwrap().fields.get("v"),
+        Some(&Value::Integer(3))
+    );
+}

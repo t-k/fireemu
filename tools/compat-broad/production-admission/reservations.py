@@ -1675,15 +1675,7 @@ class Ledger:
             )
             if child is None or child_ticket.get("parentReservation") != parent_ticket.get("reservation"):
                 raise ValueError("recovery child is not nested under parent")
-            if parent["state"] == "closed-after-recovery-child":
-                if (
-                    parent.get("recoveryCloseReceiptDigest") != receipt_digest
-                    or parent.get("recoveryCloseChildTicketDigest") != digest(child_ticket)
-                    or parent.get("recoveryCloseChildClaimDigest") != child["claimDigest"]
-                ):
-                    raise ValueError("different recovery child close")
-                return copy.deepcopy(parent_ticket)
-            if parent["state"] != "held" or child.get("state") != "settled":
+            if parent["state"] not in {"held", "closed-after-recovery-child"} or child.get("state") != "settled":
                 raise ValueError("settled recovery child and held parent required")
             parent_claim = copy.deepcopy(parent["claim"])
             parent_claim_digest = parent["claimDigest"]
@@ -1731,6 +1723,14 @@ class Ledger:
         with self._locked() as state:
             parent = self._row(state, parent_ticket)
             child = next((value for value in parent.get("recoveryChildren", []) if value.get("ticket") == child_ticket), None)
+            if parent["state"] == "closed-after-recovery-child":
+                if (
+                    parent.get("recoveryCloseReceiptDigest") != receipt_digest
+                    or parent.get("recoveryCloseChildTicketDigest") != digest(child_ticket)
+                    or parent.get("recoveryCloseChildClaimDigest") != child["claimDigest"]
+                ):
+                    raise ValueError("different recovery child close")
+                return copy.deepcopy(parent_ticket)
             if parent["state"] != "held" or parent["claimDigest"] != parent_claim_digest or parent["claim"] != parent_claim or child is None or child.get("state") != "settled" or child.get("finalGateDigest") != child_final_gate_digest:
                 raise ValueError("recovery parent changed during close")
             parent["state"] = "closed-after-recovery-child"

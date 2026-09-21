@@ -374,7 +374,19 @@ def test_close_after_recovery_child_releases_only_parent_and_is_idempotent(tmp_p
         parent, child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan,
     ) == parent
     before = ledger.snapshot()
-    with pytest.raises(ValueError, match="different recovery child close"):
+    parent_gate_path = Path(before["reservations"][parent["reservation"]]["claim"]["gatePath"])
+    parent_gate_state_path = parent_gate_path / "state.json"
+    parent_gate_state = json.loads(parent_gate_state_path.read_text())
+    parent_gate_state["planDigest"] = "0" * 64
+    _save(parent_gate_path, parent_gate_state)
+    with pytest.raises(ValueError):
+        ledger.close_after_recovery_child(
+            parent, child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan,
+        )
+    assert ledger.snapshot() == before
+    parent_gate_state["planDigest"] = digest(parent_gate_state["plan"])
+    _save(parent_gate_path, parent_gate_state)
+    with pytest.raises(ValueError, match="different recovery settlement receipt"):
         ledger.close_after_recovery_child(
             parent, child_ticket, receipt_digest="wrong", canonical_parent_plan=parent_plan,
         )

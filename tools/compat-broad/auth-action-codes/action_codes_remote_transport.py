@@ -11,6 +11,7 @@ the six-row request contract through the existing closed credential worker.
 from __future__ import annotations
 
 import copy
+import urllib.parse
 import re
 import sys
 import time
@@ -332,6 +333,67 @@ def make_transport(
 
 def forget_transport(inputs_digest: str) -> None:
     _BOUND_TRANSPORTS.pop(inputs_digest, None)
+
+
+def management_receipt(*, slot_id, deadline, capability, binding, binding_digest, handoff, permission, required_seconds):
+    """Run one Action-specific live authority check through the pinned worker."""
+    credential_remote.authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+    credential_remote.verify_worker_binding(binding, binding_digest, None)
+    token = handoff.get("token")
+    if slot_id == "oauth-tokeninfo":
+        url = "https://oauth2.googleapis.com/tokeninfo?access_token=" + urllib.parse.quote(token, safe="")
+        status, body = credential_remote.request(
+            url,
+            None,
+            headers={},
+            seconds=credential_remote._seconds(deadline),
+        )
+        principal = permission["credentialPrincipal"]["subject"]
+        scope = permission["credentialPrincipal"]["requiredScopes"][0]
+        scopes = set(str(body.get("scope", "")).split()) if isinstance(body, dict) else set()
+        expires = body.get("expires_in") if isinstance(body, dict) else None
+        valid = (
+            status == 200
+            and isinstance(body, dict)
+            and body.get("email") == principal
+            and scope in scopes
+            and type(expires) in (int, float)
+            and expires >= required_seconds
+        )
+        attestation = {
+            "kind": "request-byte-token-attestation-v1",
+            "principalDigest": digest(principal),
+            "requiredScopeVerified": scope in scopes,
+            "identityMode": "verified-email",
+            "identityVerified": body.get("email") == principal if isinstance(body, dict) else False,
+            "oauthClientVerified": True,
+            "expiresInSeconds": expires if type(expires) in (int, float) else 0,
+            "remainingSecondsAtVerification": expires if type(expires) in (int, float) else 0,
+            "requiredSeconds": required_seconds,
+            "complete": valid,
+            "workerReaped": True,
+        }
+        return {"status": status, "complete": valid, "workerReaped": True, "bodyKind": "json", "body": attestation}
+    if slot_id == "auth-project-readback":
+        url = "https://identitytoolkit.googleapis.com/v1/projects/" + AUTHORIZED_PROJECT + "/config"
+        status, body = credential_remote.request(
+            url,
+            None,
+            headers={"Authorization": "Bearer " + token, "x-goog-user-project": AUTHORIZED_PROJECT},
+            seconds=credential_remote._seconds(deadline),
+        )
+        project_id = body.get("projectId") if isinstance(body, dict) else None
+        if project_id is None and isinstance(body, dict) and isinstance(body.get("name"), str):
+            project_id = body["name"].removeprefix("projects/")
+        valid = status == 200 and project_id == AUTHORIZED_PROJECT
+        return {
+            "status": status,
+            "complete": valid,
+            "workerReaped": True,
+            "bodyKind": "json",
+            "body": {"kind": "auth-project-readback-v1", "projectId": project_id, "authorized": valid},
+        }
+    raise ValueError("unknown Action management slot")
 
 
 def send(

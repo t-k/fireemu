@@ -168,8 +168,8 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
         verify_handoff=_verify_handoff,
         fixture_origin=fixture_origin,
     )
-    assert result["requests"] == 32
-    assert result["observation"] == 26
+    assert result["requests"] == 34
+    assert result["observation"] == 28
     assert result["recovery"] == 6
     assert result["reservation"] == "released"
     assert len(_ActionFixture.calls) == 32

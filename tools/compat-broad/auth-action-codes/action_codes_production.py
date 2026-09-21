@@ -58,7 +58,13 @@ def _envelope(permission: dict, claim: dict, now: float) -> dict:
 def _claim(inputs: dict, plan: dict, gate_plan: dict, output: Path) -> dict:
     job = gate_plan["jobs"][gate_module.JOB]
     resources = len(job["resources"])
-    requests = len(job["observation"]) + len(job["recovery"])
+    management = gate_plan.get("management", {})
+    requests = (
+        len(job["observation"])
+        + len(job["recovery"])
+        + len(management.get("observation", []))
+        + len(management.get("recovery", []))
+    )
     return {
         "campaignId": descriptor.CAMPAIGN,
         "manifestDigest": inputs["planDigest"],
@@ -119,6 +125,7 @@ def execute(
     nonce = plan.get("nonce")
     gate_plan = gate_module.gate_plan(project, nonce)
     gate_plan["permissionDigest"] = digest(permission)
+    gate_plan["permissionExpiresAt"] = permission.get("expiresAt")
     claim = _claim(inputs, plan, gate_plan, output)
     now = time.time()
     envelope = _envelope(permission, claim, now)
@@ -159,6 +166,45 @@ def execute(
     observations = gate_plan["jobs"][gate_module.JOB]["observation"]
     recovery = gate_plan["jobs"][gate_module.JOB]["recovery"]
     run_started = time.monotonic()
+
+    if production:
+        def management(slot_id, deadline):
+            return remote.management_receipt(
+                slot_id=slot_id,
+                deadline=deadline,
+                capability=capability,
+                binding=binding,
+                binding_digest=binding_digest,
+                handoff=credential_handoff,
+                permission=permission,
+                required_seconds=gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
+            )
+    else:
+        def management(slot_id, deadline):
+            if slot_id == "oauth-tokeninfo":
+                body = {
+                    "kind": "request-byte-token-attestation-v1",
+                    "principalDigest": digest(permission["credentialPrincipal"]["subject"]),
+                    "requiredScopeVerified": True,
+                    "identityMode": "verified-email",
+                    "identityVerified": True,
+                    "oauthClientVerified": True,
+                    "expiresInSeconds": gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
+                    "remainingSecondsAtVerification": gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
+                    "requiredSeconds": gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
+                    "complete": True,
+                    "workerReaped": True,
+                }
+            else:
+                body = {"kind": "auth-project-readback-v1", "projectId": project, "authorized": True}
+            return {"status": 200, "complete": True, "workerReaped": True, "bodyKind": "json", "body": body}
+
+    handle.management_dispatch(
+        "observation", "oauth-tokeninfo", lambda deadline: management("oauth-tokeninfo", deadline)
+    )
+    handle.management_dispatch(
+        "observation", "auth-project-readback", lambda deadline: management("auth-project-readback", deadline)
+    )
 
     def dispatch_one(operation, is_recovery):
         body = _wire_body(plan, operation, runtime)

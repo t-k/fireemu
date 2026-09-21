@@ -25,8 +25,11 @@ def test_gate_plan_is_full_action_matrix_and_two_nonce_resources():
     assert len(job["resources"]) == 2
     assert all(f"projects/{PROJECT}/auth/accounts/" in item for item in job["resources"])
     assert all(NONCE in item for item in job["resources"])
-    assert plan["observationRequests"] == 26
+    assert plan["observationRequests"] == 28
     assert plan["dataRequests"] == 32
+    assert [slot["id"] for slot in plan["management"]["observation"]] == [
+        "oauth-tokeninfo", "auth-project-readback"
+    ]
 
 
 def test_shared_gate_accepts_typed_action_plan_in_temporary_directory(tmp_path):

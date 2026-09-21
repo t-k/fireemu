@@ -35,11 +35,20 @@ class _ActionFixture(BaseHTTPRequestHandler):
     calls: list[dict] = []
     recovery_status: int = 200
     recovery_body: dict = {"users": []}
+    fail_first_response = False
 
     def do_POST(self):  # noqa: N802 - stdlib handler API
         size = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(size))
         self.__class__.calls.append({"path": self.path, "body": body})
+        if self.__class__.fail_first_response and len(self.__class__.calls) == 1:
+            encoded = b"not-json"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            return
         route = self.path.split("?", 1)[0]
         if route.endswith("accounts:signUp"):
             suffix = "a" if body["email"].endswith("-a@example.invalid") else "b"
@@ -118,6 +127,7 @@ def fixture_origin():
     _ActionFixture.calls = []
     _ActionFixture.recovery_status = 200
     _ActionFixture.recovery_body = {"users": []}
+    _ActionFixture.fail_first_response = False
     server = HTTPServer(("127.0.0.1", 0), _ActionFixture)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -193,3 +203,37 @@ def test_recovery_error_is_not_typed_absence(tmp_path, fixture_origin, status, b
     state = reservations.Ledger(ledger_root).snapshot()
     rows = list(state["reservations"].values())
     assert len(rows) == 1 and rows[0]["state"] == "held"
+
+
+def test_observation_failure_attempts_all_known_cleanup_and_holds_unknown_signup(
+    tmp_path, fixture_origin
+):
+    _ActionFixture.fail_first_response = True
+    descriptor_, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = _artifacts(tmp_path)
+    ledger_root = tmp_path / "ledger"
+    reservations.Ledger.create(ledger_root)
+    worker = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
+    capability = admission.issue_production_capability(
+        inputs=inputs, approval=approval, manifest=manifest,
+        manifest_bytes=manifest_bytes, manifest_path=manifest_path,
+        permission=permission, ledger_root=ledger_root,
+        artifact_path=artifact, launcher_path=launcher,
+        binding=worker, binding_digest=hashlib.sha256(worker).hexdigest(),
+    )
+    with pytest.raises(ValueError):
+        production.execute(
+            capability=capability, inputs=inputs, permission=permission,
+            ledger_root=ledger_root, output=tmp_path / "output",
+            bindings=_bindings(), credential_handoff=_handoff(permission),
+            verify_handoff=_verify_handoff, fixture_origin=fixture_origin,
+        )
+    state = reservations.Ledger(ledger_root).snapshot()
+    rows = list(state["reservations"].values())
+    assert len(rows) == 1 and rows[0]["state"] == "held"
+    assert len(_ActionFixture.calls) == 4
+    assert [call["path"].split("?", 1)[0] for call in _ActionFixture.calls] == [
+        "identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "identitytoolkit.googleapis.com/v1/accounts:lookup",
+        "identitytoolkit.googleapis.com/v1/accounts:lookup",
+        "identitytoolkit.googleapis.com/v1/accounts:lookup",
+    ]

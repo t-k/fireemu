@@ -220,9 +220,9 @@ class ActionGate(shared_gate.Gate):
         if recovery and operation.get("kind") == "delete":
             state = self.snapshot()
             record = state["jobs"][self.job].get("authAccounts", {}).get(operation.get("account"))
-            if not isinstance(record, dict) or not self._allow_observation_auth_delete(
-                state, state["jobs"][self.job], operation, 23
-            ) and not shared_gate._auth_creation_ownership(state, state["jobs"][self.job], operation):
+            if not isinstance(record, dict) or not shared_gate._auth_creation_ownership(
+                state, state["jobs"][self.job], operation
+            ):
                 return self._skip_unowned_recovery_delete(operation, state["jobs"][self.job]["recovery"])
         return super().dispatch(operation, recovery, send)
 

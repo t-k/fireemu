@@ -940,6 +940,30 @@ def test_transform_without_exists_precondition_remains_a_potential_create():
     assert can_create(operation) is True
 
 
+def test_action_stage_creation_cannot_be_relabelled_as_noncreating():
+    signup = {
+        "kind": "action-stage",
+        "id": "signup-relabelled-readback",
+        "service": "auth",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "body": {"email": "owner@example.invalid"},
+    }
+    assert can_create(signup) is True
+
+
+def test_known_action_stage_readback_is_noncreating():
+    readback = {
+        "kind": "action-stage",
+        "id": "account-a-readback",
+        "service": "auth",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/accounts:lookup",
+        "body": {"localId": "uid-a"},
+    }
+    assert can_create(readback) is False
+
+
 def commit_plan(marker="shared", writes=2, alias=True):
     """A campaign that creates its documents with one conditional POST :commit."""
     scope = "projects/p/databases/(default)/documents/owned/" + NONCE

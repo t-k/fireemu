@@ -1160,8 +1160,19 @@ def can_create(operation):
     path = path if isinstance(path, str) else ""
     method = operation.get("method")
     body = operation.get("body")
+    action_noncreating_ids = {
+        "reset-link-generate", "reset-code-lookup", "reset-weak-password",
+        "reset-weak-password-retry", "reset-consume", "reset-reuse",
+        "reset-wrong-code", "reset-link-generate-second", "admin-password-update",
+        "reset-after-password-change", "account-a-readback", "verify-link-generate",
+        "verify-apply", "verify-reuse", "verify-wrong-code", "email-link-generate",
+        "email-link-signin", "email-link-reuse", "email-link-generate-second",
+        "email-link-mismatched-email", "deleted-user-link-generate", "account-b-delete",
+        "reset-after-delete", "link-generate-unknown-email",
+    }
     if (
         operation.get("kind") == "action-stage"
+        and operation.get("id") in action_noncreating_ids
         and operation.get("service") == "auth"
         and method == "POST"
         and path.startswith("identitytoolkit.googleapis.com/v1/")

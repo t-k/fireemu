@@ -192,6 +192,15 @@ def _validate_index_precondition(permission) -> None:
         raise ValueError("owner acknowledgement of the deployed exemption required")
 
 
+def _validate_index_lifecycle_contract(permission) -> None:
+    declared = permission.get("indexLifecycleContract")
+    expected = campaign.lifecycle_contract()
+    if not isinstance(declared, dict) or digest(declared) != digest(expected):
+        raise ValueError("declared index lifecycle contract differs")
+    if declared.get("pollLimit") != 1 or declared.get("observationSlots") != 4 or declared.get("recoverySlots") != 3:
+        raise ValueError("one-poll lifecycle reservation required")
+
+
 def _approve(permission, plan, source_commit, artifact_digest, inputs) -> None:
     required = permission_bindings(plan, source_commit, artifact_digest, inputs)
     if digest({key: permission.get(key) for key in required}) != digest(required):
@@ -219,6 +228,7 @@ def _approve(permission, plan, source_commit, artifact_digest, inputs) -> None:
     preflight.validate_principal(principal)
     preflight.validate_frozen_baselines(permission)
     _validate_index_precondition(permission)
+    _validate_index_lifecycle_contract(permission)
     if (
         not isinstance(permission.get("permissionReference"), str)
         or not permission["permissionReference"].strip()

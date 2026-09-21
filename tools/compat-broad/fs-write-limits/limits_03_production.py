@@ -182,8 +182,40 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             permission=permission,
             token=token,
         )
-        management.run("observation")
-        token = None
+        try:
+            management.run("observation")
+        except Exception as error:
+            event = gate.snapshot()["managementEvents"][-1]
+            lifecycle_events = gate.snapshot()["managementEvents"]
+            lifecycle_ids = {
+                "observation:index-lifecycle-apply",
+                "observation:index-lifecycle-poll",
+                "observation:index-lifecycle-after",
+            }
+            if event.get("id") not in lifecycle_ids or event.get("workerReaped") is not True:
+                raise
+            cancel = event.get("completed") is True
+            failure = type(error).__name__
+            try:
+                if cancel:
+                    if not any(
+                        row.get("id") == "observation:index-lifecycle-apply"
+                        and row.get("completed") is True
+                        and row.get("workerReaped") is True
+                        for row in lifecycle_events
+                    ):
+                        raise ValueError("completed lifecycle apply evidence required")
+                    gate.cancel_management_observation()
+                else:
+                    gate.abort_management_observation()
+                management.run("recovery")
+            except Exception as recovery_error:  # noqa: BLE001 -- retain the reservation.
+                failure = type(recovery_error).__name__
+            else:
+                failure = "management-observation-aborted"
+            token = None
+        else:
+            token = None
 
         def execute_wire(operation, recovery, index, request_index):
             phase = "recovery" if recovery else "observation"
@@ -211,7 +243,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
                 )
             )
             if not isinstance(receipt, dict):
-                raise ValueError("bounded transport receipt required")
+                raise TypeError("bounded transport receipt required")
             preflight.observe_status(management.credential, receipt.get("status"))
             complete = (
                 receipt.get("complete") is True and receipt.get("failure") is None
@@ -224,12 +256,13 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             )
             return receipt
 
-        result = collect(gate, collector_plan, output / "collection", execute_wire)
-        if result.get("collectionComplete") and result.get("cleanupComplete"):
-            management.run("recovery")
-            ready = True
-        else:
-            failure = "collection-incomplete"
+        if failure is None:
+            result = collect(gate, collector_plan, output / "collection", execute_wire)
+            if result.get("collectionComplete") and result.get("cleanupComplete"):
+                management.run("recovery")
+                ready = not management.lifecycle_failed
+            else:
+                failure = "collection-incomplete"
     except Exception as error:  # noqa: BLE001 -- preserve only a secret-free failure class.
         failure = type(error).__name__
     finally:

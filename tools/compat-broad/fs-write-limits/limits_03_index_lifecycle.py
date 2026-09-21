@@ -39,7 +39,7 @@ def _validate_baseline(baseline: dict[str, Any]) -> None:
     config = baseline.get("indexConfig")
     if not isinstance(config, dict) or not isinstance(config.get("indexes"), list):
         raise TypeError("actual index configuration required")
-    if config.get("indexes") != [] or config.get("usesAncestorConfig") is not True or config.get("ancestorField") != ANCESTOR_FIELD or config.get("reverting") is not False:
+    if config.get("usesAncestorConfig") is not True or config.get("ancestorField") != ANCESTOR_FIELD or config.get("reverting", False) is not False:
         raise ValueError("only the verified inherited nx baseline is supported")
 
 
@@ -230,7 +230,14 @@ def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str,
             "ancestorField": ANCESTOR_FIELD,
             "reverting": False,
         }
-        if after.get("indexConfig") != expected_after_config or after.get("ttlConfig") != plan["before"].get("ttlConfig"):
+        after_config = after.get("indexConfig")
+        normalized_after = {
+            "indexes": after_config.get("indexes", []) if isinstance(after_config, dict) else None,
+            "usesAncestorConfig": after_config.get("usesAncestorConfig", False) if isinstance(after_config, dict) else None,
+            "ancestorField": after_config.get("ancestorField") if isinstance(after_config, dict) else None,
+            "reverting": after_config.get("reverting", False) if isinstance(after_config, dict) else None,
+        }
+        if normalized_after != expected_after_config or after.get("ttlConfig") != plan["before"].get("ttlConfig"):
             raise ValueError("after state differs or unrelated configuration changed")
         events.append({"kind": "read-after", "bodyDigest": _digest(after)})
         recovery_deadline = time.monotonic() + plan["recoveryDeadlineSeconds"]
@@ -265,5 +272,17 @@ def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str,
     }
 
 
-def execute_production(*_args: Any, **_kwargs: Any) -> None:
-    raise RuntimeError("production index lifecycle requires reviewed O8/Ledger integration")
+def execute_production(*, management_session: Any, phase: str) -> dict[str, Any]:
+    """Run one capability-bound lifecycle phase through the existing Gate session."""
+    from limits_03_preflight import ManagementSession
+
+    if not isinstance(management_session, ManagementSession):
+        raise TypeError("existing capability-bound ManagementSession required")
+    if phase not in ("observation", "recovery"):
+        raise ValueError("closed lifecycle phase required")
+    management_session.run(phase)
+    return {
+        "phase": phase,
+        "events": [row for row in management_session.evidence if "index-lifecycle" in row["id"]],
+        "restored": phase == "recovery" and not management_session.lifecycle_failed,
+    }

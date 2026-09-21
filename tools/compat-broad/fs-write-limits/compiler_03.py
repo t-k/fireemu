@@ -1425,8 +1425,20 @@ MANAGEMENT_OBSERVATION_IDS = (
     "database",
     "index-exemption",
     "auth",
+    "index-lifecycle-before",
+    "index-lifecycle-apply",
+    "index-lifecycle-poll",
+    "index-lifecycle-after",
 )
-MANAGEMENT_RECOVERY_IDS = ("project", "database", "index-exemption", "auth")
+MANAGEMENT_RECOVERY_IDS = (
+    "project",
+    "database",
+    "index-exemption",
+    "auth",
+    "index-lifecycle-restore",
+    "index-lifecycle-poll-restore",
+    "index-lifecycle-restored",
+)
 MANAGEMENT_REQUEST_COST_MICROUSD = 100
 
 

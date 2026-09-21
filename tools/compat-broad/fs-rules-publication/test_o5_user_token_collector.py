@@ -446,6 +446,75 @@ def test_an_already_absent_resource_is_not_deleted() -> None:
     assert bundle["cleanup"]["cleanupComplete"] is True
 
 
+def test_bound_local_acquisition_keeps_local_rules_publication_without_management_session() -> None:
+    plan = case()
+    principals = {
+        entry["ref"]: {
+            "uidFingerprint": "a" * 16,
+            "provider": "email",
+            "tenant": entry["tenant"],
+            "claimsDigest": digest(entry["claims"]),
+        }
+        for entry in plan["ownedAccounts"]
+    }
+    acquisition = {
+        "environment": {"kind": "local-fireemu"},
+        "campaignManifestDigest": "b" * 64,
+        "nonceReservation": None,
+        "ownerPermission": None,
+        "artifact": {"artifactSha256": "c" * 64, "sourceCommit": "d" * 40},
+        "principals": principals,
+        "window": None,
+    }
+    transport = Transport(plan, endpoint="127.0.0.1:52879", fingerprints={ref: value["uidFingerprint"] for ref, value in principals.items()})
+    bundle = collect(
+        plan,
+        transport,
+        role=ROLE_LOCAL_SHADOW,
+        run_id="local-bound-rules-publication",
+        acquisition=acquisition,
+    )
+    assert bundle["recordingComplete"] is True
+    assert bundle["abort"] is None
+    assert len(bundle["rows"]) == 33
+    assert [release["label"] for release in bundle["transport"]["rulesetReleases"]] == ["A", "B"]
+    assert bundle["productionExecuted"] is False
+
+
+def test_bound_production_still_refuses_without_rules_management_session() -> None:
+    plan = case()
+    principals = {
+        entry["ref"]: {
+            "uidFingerprint": "e" * 16,
+            "provider": "email",
+            "tenant": entry["tenant"],
+            "claimsDigest": digest(entry["claims"]),
+        }
+        for entry in plan["ownedAccounts"]
+    }
+    acquisition = {
+        "environment": {"kind": "production-oracle"},
+        "campaignManifestDigest": "f" * 64,
+        "nonceReservation": {"reservationId": "r", "campaignId": plan["campaignId"], "nonceDigest": digest(plan["nonce"])},
+        "ownerPermission": {"kind": "owner", "permissionDigest": "1" * 64},
+        "artifact": None,
+        "principals": principals,
+        "window": {"startsAt": time.time() - 1, "expiresAt": time.time() + 3600},
+    }
+    transport = Transport(plan, endpoint="firestore.googleapis.com:443", fingerprints={ref: value["uidFingerprint"] for ref, value in principals.items()})
+    bundle = collect(
+        plan,
+        transport,
+        role=ROLE_PRODUCTION,
+        run_id="production-without-rules-session",
+        acquisition=acquisition,
+    )
+    assert bundle["recordingComplete"] is False
+    assert bundle["abort"] == "collector:ValueError"
+    assert transport.requests
+    assert all(request.get("phase") == "recovery" for request in transport.requests)
+
+
 def test_attempted_creates_are_owned_even_when_the_response_is_lost() -> None:
     plan = case()
     transport = Transport(plan)

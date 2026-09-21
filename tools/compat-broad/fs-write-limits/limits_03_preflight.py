@@ -61,6 +61,20 @@ PROJECT = shared.PROJECT
 NUMBER = shared.NUMBER
 DATABASE = shared.DATABASE
 INDEX_EXEMPTION_SLOT = "index-exemption"
+LIFECYCLE_OBSERVATION_SLOTS = (
+    "index-lifecycle-before",
+    "index-lifecycle-apply",
+    "index-lifecycle-poll",
+    "index-lifecycle-after",
+)
+LIFECYCLE_RECOVERY_SLOTS = (
+    "index-lifecycle-restore",
+    "index-lifecycle-poll-restore",
+    "index-lifecycle-restored",
+)
+LIFECYCLE_SLOTS = LIFECYCLE_OBSERVATION_SLOTS + LIFECYCLE_RECOVERY_SLOTS
+LIFECYCLE_FIELD = "projects/fireemu-35fe6/databases/(default)/collectionGroups/nx/fields/*"
+LIFECYCLE_ROUTE = "https://firestore.googleapis.com/v1/" + LIFECYCLE_FIELD
 INDEX_FIELD = f"{DATABASE}/collectionGroups/{EXEMPT_COLLECTION}/fields/*"
 INDEX_FIELD_ROUTE = f"https://firestore.googleapis.com/v1/{INDEX_FIELD}"
 # The field every collection group inherits its single-field configuration
@@ -117,10 +131,10 @@ def _field_readback(body, field=INDEX_FIELD):
         raise ValueError("typed index field readback required")
     configuration = body.get("indexConfig", {})
     if not isinstance(configuration, dict):
-        raise ValueError("typed index field readback required")
+        raise ValueError("typed index field readback required")  # noqa: TRY004
     indexes = configuration.get("indexes", [])
     if not isinstance(indexes, list):
-        raise ValueError("typed index field readback required")
+        raise ValueError("typed index field readback required")  # noqa: TRY004
     uses_ancestor = configuration.get("usesAncestorConfig", False)
     if uses_ancestor is not True and uses_ancestor is not False:
         raise ValueError("typed index field readback required")
@@ -202,8 +216,40 @@ def validate_frozen_baselines(permission):
         raise ValueError("index exemption digest is not the declared after state")
 
 
-def management_transport(slot, token, *, deadline, capability, binding, binding_digest):
+def management_transport(slot, token, *, deadline, capability, binding, binding_digest, operation=None):
     """One charged fixed management operation, with a whole-worker deadline."""
+    if slot in LIFECYCLE_SLOTS:
+        if not isinstance(operation, dict) or set(operation) != {"method", "route", "body"}:
+            raise ValueError("bound lifecycle operation required")
+        from batch_adapter import wire
+        from o8_admission import authorize_transport
+
+        authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+        if not private_string(token, 8192):
+            raise ValueError("bounded credential required")
+        duration = min(12.0, deadline - time.monotonic())
+        if duration <= 0:
+            raise ValueError("management phase deadline")
+        if operation["route"] not in (LIFECYCLE_ROUTE, LIFECYCLE_ROUTE + "?updateMask=indexConfig"):
+            prefix = "https://firestore.googleapis.com/v1/projects/fireemu-35fe6/databases/(default)/operations/"
+            if not operation["route"].startswith(prefix):
+                raise ValueError("lifecycle route differs from bound project")
+        response = wire(
+            operation["route"],
+            operation["method"],
+            operation["body"],
+            {"Authorization": "Bearer " + token, "x-goog-user-project": PROJECT},
+            timeout=duration,
+            receipt=True,
+        )
+        http = response.get("http", {}) if isinstance(response, dict) else {}
+        return {
+            "complete": http.get("complete") is True and http.get("bodyKind") == "json",
+            "workerReaped": True,
+            "status": http.get("status"),
+            "body": response.get("body") if isinstance(response, dict) else None,
+            "bodyKind": http.get("bodyKind"),
+        }
     if slot != INDEX_EXEMPTION_SLOT:
         return shared.management_transport(
             slot,
@@ -324,7 +370,7 @@ def attestation(slot, response, permission):
     return shared.metadata_attestation(slot, response, permission)
 
 
-def management_call(inputs, phase, slot_id, secret, *, deadline):
+def management_call(inputs, phase, slot_id, secret, *, deadline, operation=None):
     """Build one closed management value for a Gate-charged dispatch.
 
     Validation only: it performs no transport, debits nothing and accepts no
@@ -348,13 +394,18 @@ def management_call(inputs, phase, slot_id, secret, *, deadline):
         or not math.isfinite(deadline)
     ):
         raise ValueError("finite management deadline required")
-    return {
+    value = {
         "kind": "management",
         "phase": phase,
         "slot": slot_id,
         "token": secret,
         "deadline": deadline,
     }
+    if slot_id in LIFECYCLE_SLOTS:
+        if not isinstance(operation, dict) or set(operation) != {"method", "route", "body"}:
+            raise ValueError("bound lifecycle operation required")
+        value["operation"] = operation
+    return value
 
 
 class ManagementSession:
@@ -367,6 +418,8 @@ class ManagementSession:
         self.credential = None
         self.evidence = []
         self.credential_evidence = []
+        self._lifecycle = {}
+        self.lifecycle_failed = False
         self.preflight_complete = False
         self.postflight_complete = False
         validate_principal(permission.get("credentialPrincipal"))
@@ -375,6 +428,8 @@ class ManagementSession:
     def run(self, phase):
         if phase not in ("observation", "recovery"):
             raise ValueError("closed management phase required")
+        if phase == "recovery":
+            self.lifecycle_failed = False
         slots = (
             MANAGEMENT_OBSERVATION_IDS
             if phase == "observation"
@@ -396,8 +451,9 @@ class ManagementSession:
                     else require_usable(self.credential, deadline)
                 )
                 sent = time.monotonic()
+                operation = self._lifecycle_operation(phase, slot)
                 response = self.capability._transmit(
-                    management_call(self.inputs, phase, slot, token, deadline=deadline)
+                    management_call(self.inputs, phase, slot, token, deadline=deadline, operation=operation)
                 )
                 if self.credential is not None:
                     observe_status(self.credential, response.get("status"))
@@ -433,6 +489,8 @@ class ManagementSession:
                     return public
                 # Baseline comparison happens before the Gate records the slot,
                 # so a drift is durable in the Gate state, not only in memory.
+                if slot in LIFECYCLE_SLOTS:
+                    return self._lifecycle_attestation(slot, response)
                 return attestation(slot, response, self.permission)
 
             response = self.gate.management_dispatch(phase, slot, send)
@@ -450,12 +508,100 @@ class ManagementSession:
             if slot == "oauth-tokeninfo":
                 if self.credential is None or response.get("complete") is not True:
                     raise ValueError("credential attestation failed")
+            elif slot in LIFECYCLE_SLOTS:
+                self._accept_lifecycle_response(slot, response)
+                if self.lifecycle_failed:
+                    raise ValueError("lifecycle semantic validation failed")
             else:
                 validate_attestation(slot, response, self.permission)
         if phase == "observation":
             self.preflight_complete = True
         else:
             self.postflight_complete = True
+
+    def _lifecycle_operation(self, phase, slot):
+        state = getattr(self, "_lifecycle", {})
+        if slot == "index-lifecycle-before":
+            return {"method": "GET", "route": LIFECYCLE_ROUTE, "body": None}
+        if slot == "index-lifecycle-apply":
+            return {"method": "PATCH", "route": LIFECYCLE_ROUTE + "?updateMask=indexConfig", "body": {"name": LIFECYCLE_FIELD, "indexConfig": {"indexes": []}}}
+        if slot == "index-lifecycle-poll":
+            return {"method": "GET", "route": state.get("applyOperation"), "body": None}
+        if slot == "index-lifecycle-after":
+            return {"method": "GET", "route": LIFECYCLE_ROUTE, "body": None}
+        if slot == "index-lifecycle-restore":
+            return {"method": "PATCH", "route": LIFECYCLE_ROUTE + "?updateMask=indexConfig", "body": {"name": LIFECYCLE_FIELD}}
+        if slot == "index-lifecycle-poll-restore":
+            return {"method": "GET", "route": state.get("restoreOperation"), "body": None}
+        if slot == "index-lifecycle-restored":
+            return {"method": "GET", "route": LIFECYCLE_ROUTE, "body": None}
+        return None
+
+    def _lifecycle_attestation(self, slot, response):
+        return {key: response.get(key) for key in ("complete", "workerReaped", "status", "bodyKind", "body")}
+
+    def _accept_lifecycle_response(self, slot, response):
+        if response.get("complete") is not True or response.get("workerReaped") is not True or response.get("status") != 200:
+            raise ValueError("lifecycle management response incomplete")
+        body = response.get("body")
+        state = getattr(self, "_lifecycle", {})
+        if slot == "index-lifecycle-before":
+            config = body.get("indexConfig") if isinstance(body, dict) else None
+            if (
+                not isinstance(body, dict)
+                or body.get("name") != LIFECYCLE_FIELD
+                or not isinstance(config, dict)
+                or not isinstance(config.get("indexes", []), list)
+                or config.get("usesAncestorConfig") is not True
+                or config.get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+                or config.get("reverting", False) is not False
+            ):
+                raise ValueError("lifecycle baseline is not the bound inherited field")
+            state["before"] = body
+        elif slot == "index-lifecycle-apply":
+            name = body.get("name") if isinstance(body, dict) else None
+            prefix = "projects/fireemu-35fe6/databases/(default)/operations/"
+            if not isinstance(name, str) or not name.startswith(prefix) or re.fullmatch(r"[A-Za-z0-9._~-]+", name.removeprefix(prefix)) is None:
+                self.lifecycle_failed = True
+                self._lifecycle = state
+                return
+            state["applyOperation"] = "https://firestore.googleapis.com/v1/" + name
+        elif slot == "index-lifecycle-poll":
+            expected = state.get("applyOperation", "").removeprefix("https://firestore.googleapis.com/v1/")
+            if not isinstance(body, dict) or body.get("name") != expected or body.get("done") is not True or body.get("error") is not None:
+                raise ValueError("one-poll lifecycle apply identity or completion differs")
+        elif slot == "index-lifecycle-after":
+            config = body.get("indexConfig") if isinstance(body, dict) else None
+            before = state.get("before", {})
+            if (
+                not isinstance(body, dict)
+                or body.get("name") != LIFECYCLE_FIELD
+                or not isinstance(config, dict)
+                or config.get("indexes", []) != []
+                or config.get("usesAncestorConfig", False) is not False
+                or config.get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+                or config.get("reverting", False) is not False
+                or body.get("ttlConfig") != before.get("ttlConfig")
+            ):
+                raise ValueError("lifecycle after projection or unrelated configuration differs")
+            state["after"] = body
+        elif slot == "index-lifecycle-restore":
+            name = body.get("name") if isinstance(body, dict) else None
+            prefix = "projects/fireemu-35fe6/databases/(default)/operations/"
+            if not isinstance(name, str) or not name.startswith(prefix) or re.fullmatch(r"[A-Za-z0-9._~-]+", name.removeprefix(prefix)) is None:
+                self.lifecycle_failed = True
+                self._lifecycle = state
+                return
+            state["restoreOperation"] = "https://firestore.googleapis.com/v1/" + name
+        elif slot == "index-lifecycle-poll-restore":
+            expected = state.get("restoreOperation", "").removeprefix("https://firestore.googleapis.com/v1/")
+            if not isinstance(body, dict) or body.get("name") != expected or body.get("done") is not True or body.get("error") is not None:
+                raise ValueError("one-poll lifecycle restore identity or completion differs")
+        elif slot == "index-lifecycle-restored":
+            if body != state.get("before"):
+                self.lifecycle_failed = True
+            state["restored"] = body
+        self._lifecycle = state
 
     def data_token(self, deadline):
         if not self.preflight_complete:
@@ -497,6 +643,16 @@ def validate_saved_management(receipt, snapshot, permission):
         ):
             raise ValueError("management response binding differs")
         slot = row["id"].split(":", 1)[1]
+        if slot in LIFECYCLE_SLOTS:
+            if (
+                response.get("status") != 200
+                or response.get("complete") is not True
+                or response.get("workerReaped") is not True
+                or response.get("bodyKind") != "json"
+                or not isinstance(response.get("body"), dict)
+            ):
+                raise ValueError("saved lifecycle response differs")
+            continue
         if slot != "oauth-tokeninfo":
             validate_attestation(slot, response, permission)
             continue
@@ -522,3 +678,29 @@ def validate_saved_management(receipt, snapshot, permission):
         ):
             raise ValueError("saved credential attestation differs")
         validate_principal(permission["credentialPrincipal"])
+
+    lifecycle = {row["id"]: row["response"].get("body") for row in rows if row["id"].split(":", 1)[1] in LIFECYCLE_SLOTS}
+    before = lifecycle.get("observation:index-lifecycle-before")
+    after = lifecycle.get("observation:index-lifecycle-after")
+    restored = lifecycle.get("recovery:index-lifecycle-restored")
+    for key in ("observation:index-lifecycle-poll", "recovery:index-lifecycle-poll-restore"):
+        poll = lifecycle.get(key)
+        if not isinstance(poll, dict) or poll.get("done") is not True or poll.get("error") is not None:
+            raise ValueError("saved lifecycle poll evidence differs")
+    if (
+        not isinstance(before, dict)
+        or not isinstance(after, dict)
+        or restored != before
+        or before.get("name") != LIFECYCLE_FIELD
+        or not isinstance(before.get("indexConfig"), dict)
+        or before["indexConfig"].get("usesAncestorConfig") is not True
+        or before["indexConfig"].get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+        or before["indexConfig"].get("reverting", False) is not False
+        or not isinstance(after.get("indexConfig"), dict)
+        or after["indexConfig"].get("indexes", []) != []
+        or after["indexConfig"].get("usesAncestorConfig", False) is not False
+        or after["indexConfig"].get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+        or after["indexConfig"].get("reverting", False) is not False
+        or after.get("ttlConfig") != before.get("ttlConfig")
+    ):
+        raise ValueError("saved lifecycle projection evidence differs")

@@ -108,9 +108,7 @@ def test_every_citation_points_at_code_and_not_at_whitespace() -> None:
     rows = matrix["methods"] + matrix["localSurfaces"] + matrix["databaseFields"]
     checked = 0
     for row in rows + matrix["repairTickets"]:
-        citations = (
-            row["local"]["citations"] if "local" in row else row["citations"]
-        )
+        citations = row["local"]["citations"] if "local" in row else row["citations"]
         for citation in citations:
             path_text, _, line_text = citation.rpartition(":")
             lines = (repo_root() / path_text).read_text(encoding="utf-8").splitlines()
@@ -124,9 +122,7 @@ def test_every_citation_points_at_code_and_not_at_whitespace() -> None:
                 f"{citation} is a bare delimiter"
             )
             enclosing = [
-                above
-                for above in lines[: index + 1]
-                if declaration.match(above)
+                above for above in lines[: index + 1] if declaration.match(above)
             ]
             assert enclosing, f"{citation} sits inside no named symbol"
             checked += 1

@@ -21,6 +21,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / "tools/compat-broad"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
+sys.path.insert(0, str(HERE))
 
 from o8_admission import authorize_transport
 
@@ -79,7 +80,10 @@ def request(
     binding_digest: str,
 ) -> dict[str, Any]:
     """Send one bounded Admin API request; return a gate receipt, never raise on wire."""
-    from lifecycle_collector import request_url_path
+    import _lane
+
+    _lane.ensure_package()
+    from fs_config_lifecycle.lifecycle_collector import request_url_path
 
     authorize_transport(capability, binding=binding, binding_digest=binding_digest)
     if not isinstance(token, str) or _TOKEN.fullmatch(token) is None:

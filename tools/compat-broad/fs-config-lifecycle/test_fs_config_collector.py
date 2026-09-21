@@ -270,7 +270,7 @@ def test_raw_bodies_stay_in_the_private_run_directory_and_out_of_the_result(
     result = collect(
         NONCE, admin.transmit, tmp_path / "run", gate=gate, sleeper=_no_sleep
     )
-    collection = tmp_path / "run" / "collection"
+    collection = tmp_path / "run"
     assert (collection / "result.json").stat().st_mode & 0o077 == 0
     bodies = sorted(collection.glob("response-*.body"))
     assert len(bodies) == result["rowCount"]

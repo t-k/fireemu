@@ -72,6 +72,7 @@ _IDS = "crates/fireemu-core-types/src/ids.rs"
 _FIELDS = "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs"
 _TTL = "crates/fireemu-core-firestore/src/ttl.rs"
 
+
 def _at(path: str, anchor: str) -> str:
     """`file:line` of the one line of `path` containing `anchor`.
 
@@ -110,7 +111,10 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         _PARTIAL,
         (
             _at(_REST, "fn admin_inventory_route("),
-            _at(_REST, '"Project \'{project}\' or database \'{database}\' does not exist."'),
+            _at(
+                _REST,
+                "\"Project '{project}' or database '{database}' does not exist.\"",
+            ),
             _at(_REST, "fn admin_database_json("),
         ),
     ),
@@ -198,7 +202,11 @@ _METHODS: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "read and write what the official tooling produces, which is already covered by "
         "local format evidence.",
         _EXTENSION,
-        (_at(_IMPORT_EXPORT, "pub fn export("), f"{_EXPORT_FS}:480", f"{_METADATA}:142"),
+        (
+            _at(_IMPORT_EXPORT, "pub fn export("),
+            f"{_EXPORT_FS}:480",
+            f"{_METADATA}:142",
+        ),
     ),
     _row(
         "databases.importDocuments",
@@ -566,7 +574,11 @@ _LOCAL_SURFACES: tuple[tuple[str, str, str, str, str, tuple[str, ...]], ...] = (
         "The on-disk format must match what official tooling writes, otherwise a real "
         "export cannot be loaded locally.",
         _IMPLEMENTED,
-        (_at(_IMPORT_EXPORT, "pub fn export("), f"{_IMPORT_EXPORT}:353", f"{_METADATA}:142"),
+        (
+            _at(_IMPORT_EXPORT, "pub fn export("),
+            f"{_IMPORT_EXPORT}:353",
+            f"{_METADATA}:142",
+        ),
     ),
     _row(
         "cli.namedDatabaseExportExtension",
@@ -933,7 +945,10 @@ _REPAIR_TICKETS: tuple[dict[str, Any], ...] = (
         "projects/{project}/databases/Invalid_Id/documents/c/d and observe NOT_FOUND "
         "with the message naming the database.",
         (
-            _at("crates/fireemu-adapter-grpc/src/decode.rs", "DecodeError::UnknownDatabase {"),
+            _at(
+                "crates/fireemu-adapter-grpc/src/decode.rs",
+                "DecodeError::UnknownDatabase {",
+            ),
             f"{_IDS}:183",
         ),
         DATA_PLANE,

@@ -232,8 +232,7 @@ class _Run:
         return {**receipt, "row": row}
 
     def _persist_row(self, row, raw) -> None:
-        collection = self.output / "collection"
-        collection.mkdir(mode=0o700, exist_ok=True)
+        collection = self.output
         if raw is not None:
             _write_private(collection / row["responseBodyFile"], raw)
             row["responseBytes"] = len(raw)
@@ -466,7 +465,11 @@ def _database_names(body) -> list[str] | None:
 
 
 def _operation_name(body) -> str | None:
-    """The operation a patch returned, refused unless it is under the owned database."""
+    """The operation a patch returned, refused unless it is under the owned database.
+
+    A returned name is polled at least once even when the answer already says done,
+    so the operation projection (OC-22) is observed on every side that names one.
+    """
     if not isinstance(body, dict):
         return None
     name = body.get("name")
@@ -476,7 +479,7 @@ def _operation_name(body) -> str | None:
         and name.startswith(prefix)
         and "/" not in name[len(prefix) :]
     ):
-        return None if body.get("done") is True else name
+        return name
     if body.get("done") is True:
         return None
     raise ValueError("owned patch answered without an owned operation name")
@@ -593,7 +596,7 @@ def collect(
             ),
         }
     _write_private(
-        output / "collection" / "result.json",
+        output / "result.json",
         json.dumps(result, sort_keys=True, indent=1).encode(),
     )
     return result

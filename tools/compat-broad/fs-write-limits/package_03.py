@@ -247,12 +247,21 @@ def shadow_record(run: Path, commit: str) -> dict:
     return record
 
 
-def restore_binding(record_path: Path | None) -> dict:
+def restore_binding(
+    record_path: Path | None,
+    *,
+    root: Path = ROOT,
+    production_receipt: Path | None = None,
+) -> dict:
     """How the package binds the restore evidence, or says it is still owed.
 
     The restore is verified by a field readback after the run, never by the
     deploy's exit status, and the campaign does not close until this member
-    names a verified record.
+    names a verified record bound to the production receipt it restores. When
+    `production_receipt` is given, the record's binding is cross-checked
+    against that receipt and a record produced from a different run is
+    refused; `root` is the base a record's published path is relative to
+    (tests may pass a scratch directory so no write touches the tracked tree).
     """
     value = {
         "required": True,
@@ -260,26 +269,45 @@ def restore_binding(record_path: Path | None) -> dict:
         "record": None,
         "recordKind": campaign.RESTORE_RECORD_KIND,
         "expectedProjectionDigest": preflight.expected_index_restored_digest(),
-        "closureRequires": "a verified restore record bound here",
+        "closureRequires": "a verified restore record bound to the production "
+        "receipt it restores",
     }
     if record_path is None:
         return value
     record = _load(record_path)
     limits_03_indexes.validate_restore_record(record)
+    if production_receipt is not None:
+        receipt = _load(production_receipt)
+        ticket = receipt.get("ticket")
+        reservation = ticket.get("reservation") if isinstance(ticket, dict) else None
+        if (
+            record["receiptDigest"] != digest(receipt)
+            or record["reservationTicket"] != reservation
+        ):
+            raise ValueError(
+                "restore record is not bound to the given production receipt"
+            )
     value.update(
         verified=True,
         record={
-            "path": str(record_path.resolve().relative_to(ROOT)),
+            "path": str(record_path.resolve().relative_to(root)),
             "sha256": _sha(record_path),
             "projectionDigest": record["projectionDigest"],
             "readbackSha256": record["readbackSha256"],
+            "receiptDigest": record["receiptDigest"],
+            "reservationTicket": record["reservationTicket"],
         },
     )
     return value
 
 
 def manifest(
-    previous: dict, shadow: dict, commit: str, *, restore_record: Path | None = None
+    previous: dict,
+    shadow: dict,
+    commit: str,
+    *,
+    restore_record: Path | None = None,
+    production_receipt: Path | None = None,
 ) -> dict:
     """The manifest, with every computed member recomputed over HEAD."""
     value = _rebind_text(copy.deepcopy(previous), commit)
@@ -369,7 +397,9 @@ def manifest(
             "input and is checked out again before admission; the committed file "
             "stays at the before digest, which is also what the restore deploys."
         ),
-        "restore": restore_binding(restore_record),
+        "restore": restore_binding(
+            restore_record, production_receipt=production_receipt
+        ),
         "shadowRanUnder": {
             "ALL": shadow["execution"]["ALL"]["execution"]["indexConfiguration"]
         },
@@ -540,7 +570,11 @@ def binding(previous: dict, manifest_value: dict, shadow: dict, commit: str) -> 
     return value
 
 
-def freeze(shadow_run: Path | None, restore_record: Path | None = None) -> None:
+def freeze(
+    shadow_run: Path | None,
+    restore_record: Path | None = None,
+    production_receipt: Path | None = None,
+) -> None:
     commit = head_commit()
     previous_manifest, previous_binding = _load(MANIFEST), _load(BINDING)
     if shadow_run is not None:
@@ -550,7 +584,13 @@ def freeze(shadow_run: Path | None, restore_record: Path | None = None) -> None:
         raise SystemExit("the shadow record was frozen at another commit; rerun it")
     _write(
         MANIFEST,
-        manifest(previous_manifest, shadow, commit, restore_record=restore_record),
+        manifest(
+            previous_manifest,
+            shadow,
+            commit,
+            restore_record=restore_record,
+            production_receipt=production_receipt,
+        ),
     )
     _write(BINDING, binding(previous_binding, _load(MANIFEST), shadow, commit))
     for path in (SHADOW, MANIFEST, BINDING):
@@ -570,8 +610,14 @@ def main(argv: list[str] | None = None) -> int:
         help="bind a verified index-exemption restore record written by "
         "limits_03_indexes.py --verify-restored",
     )
+    freeze_parser.add_argument(
+        "--production-receipt",
+        type=Path,
+        help="cross-check --restore-record against this production "
+        "receipt.json; refuses a record bound to a different run",
+    )
     args = parser.parse_args(argv)
-    freeze(args.shadow_run, args.restore_record)
+    freeze(args.shadow_run, args.restore_record, args.production_receipt)
     return 0
 
 

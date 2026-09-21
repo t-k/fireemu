@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import multiprocessing
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -166,6 +167,16 @@ def _request_bounded(origin: str, method: str, path: str, body: dict[str, Any] |
     return result[1]
 
 
+def _validate_operation_name(name: Any) -> str:
+    prefix = f"projects/{PROJECT}/databases/{DATABASE}/operations/"
+    if not isinstance(name, str) or not name.startswith(prefix):
+        raise ValueError("operation route is outside the bound project and database")
+    operation_id = name.removeprefix(prefix)
+    if re.fullmatch(r"[A-Za-z0-9._~-]+", operation_id) is None:
+        raise ValueError("operation route is outside the bound project and database")
+    return name
+
+
 def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str, Any]:
     """Run against an independently owned verified loopback origin."""
     _validate_plan(plan)
@@ -195,15 +206,13 @@ def run_loopback_index_lifecycle(plan: dict[str, Any], origin: str) -> dict[str,
             applied = True
         response = call("PATCH", field_path + "?updateMask=indexConfig", patch, deadline)
         name = response.get("name")
-        prefix = f"projects/{PROJECT}/databases/{DATABASE}/operations/"
-        if not isinstance(name, str) or not name.startswith(prefix) or "/" in name.removeprefix(prefix):
-            raise ValueError("operation route is outside the bound project and database")
+        name = _validate_operation_name(name)
         events.append({"kind": kind, "operation": name})
         for _ in range(plan["operationPollLimit"]):
             status = call("GET", "/v1/" + name, None, deadline)
+            if status.get("error") is not None:
+                raise ValueError("index operation reported an error")
             if status.get("done") is True:
-                if status.get("error") is not None:
-                    raise ValueError("index operation reported an error")
                 events.append({"kind": kind.replace("patch-", "poll-"), "operation": name})
                 return
         raise TimeoutError("bounded absolute operation deadline exhausted")

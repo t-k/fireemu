@@ -36,11 +36,13 @@ def inherited_baseline() -> dict:
 class LoopbackFieldServer:
     """Independent test fixture for the real urllib client."""
 
-    def __init__(self, baseline: dict, *, operation_error: bool = False, foreign_operation: bool = False, polls_before_done: int = 0, drop_patch_response: bool = False, trickle_field_response: bool = False):
+    def __init__(self, baseline: dict, *, operation_error: bool = False, pending_operation_error: bool = False, foreign_operation: bool = False, operation_suffix: str | None = None, polls_before_done: int = 0, drop_patch_response: bool = False, trickle_field_response: bool = False):
         self.state = copy.deepcopy(baseline)
         self.baseline = copy.deepcopy(baseline)
         self.operation_error = operation_error
+        self.pending_operation_error = pending_operation_error
         self.foreign_operation = foreign_operation
+        self.operation_suffix = operation_suffix
         self.polls_before_done = polls_before_done
         self.drop_patch_response = drop_patch_response
         self.trickle_field_response = trickle_field_response
@@ -80,8 +82,8 @@ class LoopbackFieldServer:
                         self.reply(404, {"error": {"status": "NOT_FOUND"}})
                         return
                     state.operations[self.path] += 1
-                    if state.operation_error and len(state.operations) == 1:
-                        self.reply(200, {"name": self.path.removeprefix("/v1/"), "done": True, "error": {"status": "FAILED_PRECONDITION"}})
+                    if (state.operation_error or state.pending_operation_error) and len(state.operations) == 1:
+                        self.reply(200, {"name": self.path.removeprefix("/v1/"), "done": not state.pending_operation_error, "error": {"status": "FAILED_PRECONDITION"}})
                     elif state.operations[self.path] <= state.polls_before_done:
                         self.reply(200, {"name": self.path.removeprefix("/v1/"), "done": False})
                     else:
@@ -107,6 +109,8 @@ class LoopbackFieldServer:
                     self.reply(400, {"error": "transition"})
                     return
                 name = "projects/other/databases/(default)/operations/foreign" if state.foreign_operation else operation.removeprefix("/v1/")
+                if state.operation_suffix is not None:
+                    name = "projects/fireemu-35fe6/databases/(default)/operations/" + state.operation_suffix
                 if state.drop_patch_response and len([request for request in state.requests if request["method"] == "PATCH"]) == 1:
                     self.connection.close()
                     return
@@ -218,7 +222,7 @@ def test_mutated_compiled_plan_is_rejected_before_any_wire() -> None:
         run_loopback_index_lifecycle(plan, "http://127.0.0.1:1")
 
 
-@pytest.mark.parametrize("server_kwargs", [{"operation_error": True}, {"foreign_operation": True}])
+@pytest.mark.parametrize("server_kwargs", [{"operation_error": True}, {"pending_operation_error": True}, {"foreign_operation": True}])
 def test_operation_error_or_foreign_route_attempts_bounded_restore(server_kwargs) -> None:
     baseline = inherited_baseline()
     server = LoopbackFieldServer(baseline, **server_kwargs)
@@ -231,6 +235,20 @@ def test_operation_error_or_foreign_route_attempts_bounded_restore(server_kwargs
     assert receipt["heldOnFailure"] is True
     assert [request["method"] for request in server.requests].count("PATCH") == 2
     assert receipt["budget"]["requests"] >= 3
+
+
+@pytest.mark.parametrize("operation_suffix", ["", "op-1?fragment", "op-1#fragment"])
+def test_empty_or_ambiguous_operation_suffix_is_rejected(operation_suffix) -> None:
+    baseline = inherited_baseline()
+    server = LoopbackFieldServer(baseline, operation_suffix=operation_suffix)
+    try:
+        receipt = run_loopback_index_lifecycle(build_index_lifecycle_plan(baseline), server.origin)
+    finally:
+        server.close()
+
+    assert receipt["success"] is False
+    assert receipt["heldOnFailure"] is True
+    assert receipt["budget"]["requests"] == 3
 
 
 def test_lost_patch_response_marks_apply_and_restores_once() -> None:

@@ -21,6 +21,8 @@ sys.path.insert(0, str(HERE.parent / "o8-core"))
 import action_codes_remote_transport as action_remote
 import credential_remote_transport as credential_remote
 import o8_admission
+from action_codes_plan import campaign_manifest
+from broad_contract import digest
 
 
 NONCE = "0123456789abcdef0123456789abcdef"
@@ -66,7 +68,7 @@ def fixture_origin():
         thread.join(timeout=5)
 
 
-def _capability(transport):
+def _capability(transport, inputs_digest):
     source, source_digest = credential_remote.worker_binding()
     now = time.time()
     capability = o8_admission.ProductionWireCapability(
@@ -75,7 +77,7 @@ def _capability(transport):
         binding_digest=source_digest,
         campaign_id=action_remote.CAMPAIGN_ID,
         window_seconds=30,
-        inputs_digest="a" * 64,
+        inputs_digest=inputs_digest,
         ledger_root=str(Path("/tmp/action-test-ledger").resolve()),
         window_starts_at=now - 1,
         window_expires_at=now + 60,
@@ -84,16 +86,94 @@ def _capability(transport):
     )
     capability._consume(
         campaign_id=action_remote.CAMPAIGN_ID,
-        inputs_digest="a" * 64,
+        inputs_digest=inputs_digest,
         ledger_root=str(Path("/tmp/action-test-ledger").resolve()),
     )
     return capability, source, source_digest
 
 
+def _frozen_inputs():
+    plan = campaign_manifest(NONCE)
+    plan["ownerInputs"]["projectId"] = PROJECT
+    permission = {
+        "projectId": PROJECT,
+        "permissionReference": "fixture-owner-permission",
+        "credentialPrincipal": {
+            "subject": "owner@example.test",
+            "requiredScopes": [action_remote.IDENTITY_SCOPE],
+        },
+    }
+    value = {
+        "kind": "fixture-frozen-inputs",
+        "permission": permission,
+        "permissionDigest": digest(permission),
+        "plan": plan,
+        "planDigest": digest(plan),
+        "sourceCommit": "a" * 40,
+        "sourceInputs": {"action_codes_remote_transport.py": "b" * 64},
+        "artifactSha256": "c" * 64,
+    }
+    value["inputsDigest"] = digest(value)
+    return value
+
+
+def _bindings():
+    plan = campaign_manifest(NONCE)
+    result = {}
+
+    def names(value):
+        if isinstance(value, str) and value.startswith("$binding:"):
+            return {value.removeprefix("$binding:")}
+        if isinstance(value, dict):
+            found = set()
+            for item in value.values():
+                found.update(names(item))
+            return found
+        return set()
+
+    for stage in plan["stages"]:
+        values = {}
+        for name in names(stage["body"]):
+            if name.endswith(".email") or name.endswith("Email"):
+                suffix = "absent" if name == "unknownEmail" else name.removesuffix(".email")[-1].lower()
+                values[name] = f"o1-oob-{NONCE}-{suffix}@example.invalid"
+            else:
+                values[name] = "declared-" + name.replace(".", "-") + "-" + NONCE[:8]
+        result[stage["id"]] = values
+    return result
+
+
+def _handoff(permission):
+    return {
+        "token": "owner-token",
+        "apiKey": "web-key",
+        "permissionDigest": digest(permission),
+        "principal": "owner@example.test",
+        "scope": action_remote.IDENTITY_SCOPE,
+    }
+
+
+def _verify_fixture_handoff(handoff, permission):
+    if handoff != _handoff(permission):
+        raise ValueError("fixture credential handoff verification failed")
+
+
+def _action_transport(fixture_origin=None):
+    inputs = _frozen_inputs()
+    transport = action_remote.make_transport(
+        frozen_inputs=inputs,
+        declared_bindings=_bindings(),
+        credential_handoff=_handoff(inputs["permission"]),
+        verify_handoff=_verify_fixture_handoff,
+        fixture_origin=fixture_origin,
+    )
+    return inputs, transport
+
+
 def test_admin_action_slot_reaches_loopback_fixture_with_exact_shape(fixture_origin):
     origin, _server = fixture_origin
-    transport = action_remote.make_transport(fixture_origin=origin)
-    capability, source, source_digest = _capability(transport)
+    inputs, transport = _action_transport(origin)
+    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
     body = {
         "requestType": "PASSWORD_RESET",
         "email": f"o1-oob-{NONCE}-absent@example.invalid",
@@ -106,8 +186,6 @@ def test_admin_action_slot_reaches_loopback_fixture_with_exact_shape(fixture_ori
         project=PROJECT,
         nonce=NONCE,
         body=body,
-        token="owner-token",
-        api_key="web-key",
         deadline=time.monotonic() + 10,
         binding=source,
         binding_digest=source_digest,
@@ -115,14 +193,13 @@ def test_admin_action_slot_reaches_loopback_fixture_with_exact_shape(fixture_ori
 
     assert status == 200
     assert response["kind"] == "fixture"
-    request = _Echo.requests == [
+    assert _Echo.requests == [
         {
             "path": f"/identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:sendOobCode",
             "body": body,
             "authorization": "Bearer owner-token",
         }
     ]
-    assert request
 
 
 @pytest.mark.parametrize(
@@ -134,8 +211,8 @@ def test_admin_action_slot_reaches_loopback_fixture_with_exact_shape(fixture_ori
     ],
 )
 def test_malformed_action_slot_is_rejected_before_wire(field, value, message):
-    transport = action_remote.make_transport()
-    capability, source, source_digest = _capability(transport)
+    inputs, transport = _action_transport()
+    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
     kwargs = {
         "stage_id": "link-generate-unknown-email",
         "project": PROJECT,
@@ -145,8 +222,6 @@ def test_malformed_action_slot_is_rejected_before_wire(field, value, message):
             "email": f"o1-oob-{NONCE}-absent@example.invalid",
             "returnOobLink": True,
         },
-        "token": "owner-token",
-        "api_key": "web-key",
         "deadline": time.monotonic() + 10,
         "binding": source,
         "binding_digest": source_digest,
@@ -158,8 +233,8 @@ def test_malformed_action_slot_is_rejected_before_wire(field, value, message):
 
 def test_extra_operation_is_rejected_before_wire(fixture_origin):
     origin, _server = fixture_origin
-    transport = action_remote.make_transport(fixture_origin=origin)
-    capability, source, source_digest = _capability(transport)
+    inputs, transport = _action_transport(origin)
+    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
     body = {
         "requestType": "PASSWORD_RESET",
         "email": f"o1-oob-{NONCE}-absent@example.invalid",
@@ -173,18 +248,17 @@ def test_extra_operation_is_rejected_before_wire(fixture_origin):
             project=PROJECT,
             nonce=NONCE,
             body=body,
-            token="owner-token",
-            api_key="web-key",
             deadline=time.monotonic() + 10,
             binding=source,
             binding_digest=source_digest,
         )
+    assert _Echo.requests == []
 
 
 def test_mutated_source_binding_is_rejected_before_wire(fixture_origin):
     origin, _server = fixture_origin
-    transport = action_remote.make_transport(fixture_origin=origin)
-    capability, source, source_digest = _capability(transport)
+    inputs, transport = _action_transport(origin)
+    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
     body = {
         "requestType": "PASSWORD_RESET",
         "email": f"o1-oob-{NONCE}-absent@example.invalid",
@@ -197,15 +271,160 @@ def test_mutated_source_binding_is_rejected_before_wire(fixture_origin):
             project=PROJECT,
             nonce=NONCE,
             body=body,
-            token="owner-token",
-            api_key="web-key",
             deadline=time.monotonic() + 10,
             binding=source,
             binding_digest=hashlib.sha256(source + b"mutated").hexdigest(),
         )
+    assert _Echo.requests == []
 
 
 def test_production_transport_does_not_accept_a_loopback_origin_without_fixture():
-    transport = action_remote.make_transport()
+    inputs, transport = _action_transport()
+    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
     with pytest.raises(ValueError, match="loopback fixture is test-only"):
-        transport({"fixtureOrigin": "http://127.0.0.1:1234"}, binding=b"x", binding_digest="x", capability=object())
+        transport(
+            {
+                "fixtureOrigin": "http://127.0.0.1:1234",
+                "stageId": "link-generate-unknown-email",
+                "project": PROJECT,
+                "nonce": NONCE,
+                "body": {
+                    "requestType": "PASSWORD_RESET",
+                    "email": f"o1-oob-{NONCE}-absent@example.invalid",
+                    "returnOobLink": True,
+                },
+            },
+            binding=source,
+            binding_digest=source_digest,
+            capability=capability,
+        )
+
+
+def test_valid_foreign_project_and_nonce_are_rejected():
+    inputs, transport = _action_transport()
+    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
+    body = {
+        "requestType": "PASSWORD_RESET",
+        "email": f"o1-oob-{NONCE}-absent@example.invalid",
+        "returnOobLink": True,
+    }
+    for project, nonce in (("another-project", NONCE), (PROJECT, "f" * 32)):
+        with pytest.raises(ValueError, match="frozen|differs"):
+            action_remote.send(
+                capability,
+                stage_id="link-generate-unknown-email",
+                project=project,
+                nonce=nonce,
+                body=body,
+                deadline=time.monotonic() + 10,
+                binding=source,
+                binding_digest=source_digest,
+            )
+
+
+def test_dynamic_binding_and_credential_scope_or_principal_mutations_are_rejected():
+    inputs, transport = _action_transport()
+    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
+    body = {
+        "requestType": "PASSWORD_RESET",
+        "email": f"o1-oob-{NONCE}-absent@example.invalid",
+        "returnOobLink": True,
+    }
+    with pytest.raises(ValueError, match="binding"):
+        action_remote.send(
+            capability,
+            stage_id="link-generate-unknown-email",
+            project=PROJECT,
+            nonce=NONCE,
+            body={**body, "email": f"o1-oob-{NONCE}-a@example.invalid"},
+            deadline=time.monotonic() + 10,
+            binding=source,
+            binding_digest=source_digest,
+        )
+    reset_body = {"oobCode": "not-the-declared-code"}
+    with pytest.raises(ValueError, match="binding"):
+        action_remote.send(
+            capability,
+            stage_id="reset-code-lookup",
+            project=PROJECT,
+            nonce=NONCE,
+            body=reset_body,
+            deadline=time.monotonic() + 10,
+            binding=source,
+            binding_digest=source_digest,
+        )
+    for field, value in (("scope", "wrong-scope"), ("principal", "other@example.test")):
+        handoff = _handoff(inputs["permission"])
+        handoff[field] = value
+        with pytest.raises(ValueError, match="credential handoff"):
+            action_remote.make_transport(
+                frozen_inputs=inputs,
+                declared_bindings=_bindings(),
+                credential_handoff=handoff,
+                verify_handoff=_verify_fixture_handoff,
+            )
+
+
+def test_recovery_is_refused_until_the_six_row_plan_is_frozen():
+    inputs, transport = _action_transport()
+    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
+    with pytest.raises(ValueError, match="recovery.*not wired"):
+        action_remote.send(
+            capability,
+            stage_id="recover-uid-absence-accountA",
+            project=PROJECT,
+            nonce=NONCE,
+            body={"localId": ["uid"]},
+            deadline=time.monotonic() + 10,
+            binding=source,
+            binding_digest=source_digest,
+        )
+
+
+def test_mutating_original_inputs_bindings_and_handoff_after_construction_cannot_change_authorization(fixture_origin):
+    origin, _server = fixture_origin
+    inputs = _frozen_inputs()
+    bindings = _bindings()
+    handoff = _handoff(inputs["permission"])
+    transport = action_remote.make_transport(
+        frozen_inputs=inputs,
+        declared_bindings=bindings,
+        credential_handoff=handoff,
+        verify_handoff=_verify_fixture_handoff,
+        fixture_origin=origin,
+    )
+    capability, source, source_digest = _capability(transport, inputs["inputsDigest"])
+    inputs["permission"]["projectId"] = "foreign-project"
+    inputs["plan"]["nonce"] = "f" * 32
+    bindings["link-generate-unknown-email"]["unknownEmail"] = "o1-oob-" + NONCE + "-a@example.invalid"
+    handoff["scope"] = "wrong-scope"
+    with pytest.raises(ValueError, match="project differs"):
+        action_remote.send(
+            capability,
+            stage_id="link-generate-unknown-email",
+            project="foreign-project",
+            nonce="f" * 32,
+            body={
+                "requestType": "PASSWORD_RESET",
+                "email": "o1-oob-" + NONCE + "-a@example.invalid",
+                "returnOobLink": True,
+            },
+            deadline=time.monotonic() + 10,
+            binding=source,
+            binding_digest=source_digest,
+        )
+    status, _response = action_remote.send(
+        capability,
+        stage_id="link-generate-unknown-email",
+        project=PROJECT,
+        nonce=NONCE,
+        body={
+            "requestType": "PASSWORD_RESET",
+            "email": "o1-oob-" + NONCE + "-absent@example.invalid",
+            "returnOobLink": True,
+        },
+        deadline=time.monotonic() + 10,
+        binding=source,
+        binding_digest=source_digest,
+    )
+    assert status == 200

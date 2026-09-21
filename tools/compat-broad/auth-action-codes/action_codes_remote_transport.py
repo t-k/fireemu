@@ -1,29 +1,44 @@
-"""Closed production-wire wrapper for the AUTH-ACTION stage matrix.
+"""Closed production-wire wrapper for frozen AUTH-ACTION observations.
 
-This module does not open production from the preparation collector. It maps one
-already admitted Action stage to the existing credential worker envelope and
-requires the caller to present the same live O8 capability binding on every send.
-The shared worker and credential transport remain unchanged.
+The preparation collector remains loopback-only. This module accepts only an
+O7-frozen plan, an independently maintained dynamic-binding map and a private
+credential handoff already verified by the Auth hosting owner. It reuses the
+existing credential worker envelope without changing that worker or transport.
+Recovery is deliberately refused until the six-row recovery plan is frozen.
 """
 
 from __future__ import annotations
 
+import copy
 import re
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Callable
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "auth-credential-tokens"))
 
 import credential_remote_transport as credential_remote
-from action_codes_plan import CAMPAIGN_ID, campaign_stages
+from action_codes_plan import CAMPAIGN_ID
+from broad_contract import digest
 
 NONCE = re.compile(r"^[0-9a-f]{32}$")
 EMAIL = re.compile(r"^o1-oob-([0-9a-f]{32})-(?:a|b|absent)@example\.invalid$")
 SERVICE_PREFIX = "/identitytoolkit.googleapis.com/v1/"
-ENVELOPE_FIELDS = frozenset({"stageId", "project", "nonce", "body", "token", "apiKey", "deadline"})
+IDENTITY_SCOPE = "https://www.googleapis.com/auth/identitytoolkit"
+ENVELOPE_FIELDS = frozenset({"stageId", "project", "nonce", "body", "deadline"})
+HANDOFF_FIELDS = frozenset({"token", "apiKey", "permissionDigest", "principal", "scope"})
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    return value
 
 
 def _private(value: Any) -> bool:
@@ -36,86 +51,152 @@ def _private(value: Any) -> bool:
     )
 
 
-def _expected_stage(stage_id: str) -> dict[str, Any]:
-    for stage in campaign_stages():
+def _placeholders(value: Any) -> set[str]:
+    if isinstance(value, str) and value.startswith("$binding:"):
+        return {value.removeprefix("$binding:")}
+    if isinstance(value, dict):
+        result: set[str] = set()
+        for item in value.values():
+            result.update(_placeholders(item))
+        return result
+    if isinstance(value, list):
+        result: set[str] = set()
+        for item in value:
+            result.update(_placeholders(item))
+        return result
+    return set()
+
+
+def _stage(plan: dict | MappingProxyType, stage_id: str):
+    for stage in plan["stages"]:
         if stage["id"] == stage_id:
             return stage
+    if stage_id.startswith("recover-"):
+        raise ValueError("recovery stage not wired until six-row plan is frozen")
     raise ValueError("unknown Action stage")
 
 
-def _check_value(expected: Any, actual: Any, nonce: str) -> None:
+def _check_value(expected: Any, actual: Any, bindings: MappingProxyType, nonce: str) -> None:
     if isinstance(expected, str) and expected.startswith("$binding:"):
-        if expected.endswith(".email"):
+        name = expected.removeprefix("$binding:")
+        if name not in bindings or actual != bindings[name]:
+            raise ValueError("declared dynamic binding differs")
+        if name.endswith(".email"):
             if not isinstance(actual, str):
-                raise ValueError("email binding required")
+                raise ValueError("declared email binding required")
             match = EMAIL.fullmatch(actual)
             if match is None or match.group(1) != nonce:
-                raise ValueError("email binding differs from nonce")
-        elif not _private(actual):
-            raise ValueError("private binding required")
+                raise ValueError("declared email binding differs from nonce")
         return
-    if isinstance(expected, dict):
+    if isinstance(expected, Mapping):
         if not isinstance(actual, dict) or set(actual) != set(expected):
             raise ValueError("body shape differs")
         for key, item in expected.items():
-            _check_value(item, actual[key], nonce)
+            _check_value(item, actual[key], bindings, nonce)
         return
     if isinstance(expected, list):
         if not isinstance(actual, list) or len(actual) != len(expected):
             raise ValueError("body shape differs")
         for left, right in zip(expected, actual, strict=True):
-            _check_value(left, right, nonce)
+            _check_value(left, right, bindings, nonce)
         return
     if actual != expected or type(actual) is not type(expected):
         raise ValueError("body shape differs")
 
 
-def _validate(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != ENVELOPE_FIELDS:
-        raise ValueError("closed Action transport envelope required")
-    stage_id, project, nonce = value["stageId"], value["project"], value["nonce"]
-    if not isinstance(stage_id, str):
-        raise ValueError("unknown Action stage")
-    stage = _expected_stage(stage_id)
-    if not isinstance(project, str) or not project or "/" in project or "?" in project:
-        raise ValueError("project differs")
-    if not isinstance(nonce, str) or NONCE.fullmatch(nonce) is None:
-        raise ValueError("fresh 32-hex nonce required")
-    expected_path = stage["path"].format(project=project)
-    if not expected_path.startswith(SERVICE_PREFIX) or "?" in expected_path:
-        raise ValueError("Action route differs")
-    if stage["routeClass"] not in ("admin", "end-user"):
-        raise ValueError("Action route differs")
-    if not isinstance(value["body"], dict):
-        raise ValueError("body shape differs")
-    _check_value(stage["body"], value["body"], nonce)
-    if not _private(value["token"]) or not _private(value["apiKey"]):
+def _validate_handoff(handoff: dict, permission: dict) -> None:
+    if set(handoff) != HANDOFF_FIELDS or any(not _private(handoff[key]) for key in ("token", "apiKey")):
         raise ValueError("private credential handoff required")
-    deadline = value["deadline"]
-    if type(deadline) not in (int, float) or isinstance(deadline, bool) or deadline <= time.monotonic():
-        raise ValueError("bounded deadline required")
-    return {
-        "kind": "action-stage",
-        # The Action manifest uses an HTTP path; the reviewed credential worker
-        # contract deliberately carries a host/path without the leading slash.
-        "path": expected_path.lstrip("/"),
-        "body": value["body"],
-        "owner": stage["routeClass"] == "admin",
-    }
+    principal = permission.get("credentialPrincipal")
+    if (
+        not isinstance(principal, dict)
+        or principal.get("subject") != handoff["principal"]
+        or principal.get("requiredScopes") != [IDENTITY_SCOPE]
+        or handoff["scope"] != IDENTITY_SCOPE
+        or handoff["permissionDigest"] != digest(permission)
+    ):
+        raise ValueError("credential handoff metadata differs")
 
 
-def make_transport(*, fixture_origin: str | None = None):
-    """Build the capability transport; fixture origin is test-only and explicit."""
+def _validate_inputs(value: dict):
+    raw = copy.deepcopy(value)
+    if not isinstance(raw, dict) or not isinstance(raw.get("plan"), dict) or not isinstance(raw.get("permission"), dict):
+        raise ValueError("frozen Action inputs required")
+    unsigned = {key: item for key, item in raw.items() if key != "inputsDigest"}
+    if raw.get("inputsDigest") != digest(unsigned):
+        raise ValueError("frozen Action inputs digest differs")
+    plan = raw["plan"]
+    permission = raw["permission"]
+    if plan.get("campaignId") != CAMPAIGN_ID or raw.get("planDigest") != digest(plan):
+        raise ValueError("frozen Action plan differs")
+    project = permission.get("projectId")
+    nonce = plan.get("nonce")
+    if not isinstance(project, str) or not project or not isinstance(nonce, str) or NONCE.fullmatch(nonce) is None:
+        raise ValueError("frozen Action project or nonce required")
+    return raw, plan, _freeze(plan), _freeze(permission), project, nonce
+
+
+def make_transport(
+    *,
+    frozen_inputs: dict,
+    declared_bindings: dict[str, dict[str, str]],
+    credential_handoff: dict,
+    verify_handoff: Callable[[dict, dict], None],
+    fixture_origin: str | None = None,
+):
+    """Build the Action transport from immutable O7 inputs and trusted handoff."""
+    raw, plan, frozen_plan, frozen_permission, project, nonce = _validate_inputs(frozen_inputs)
+    binding_maps = _freeze(copy.deepcopy(declared_bindings))
+    if not isinstance(binding_maps, MappingProxyType):
+        raise ValueError("declared Action bindings required")
+    handoff = copy.deepcopy(credential_handoff)
+    if not callable(verify_handoff):
+        raise ValueError("trusted credential handoff verifier required")
+    _validate_handoff(handoff, raw["permission"])
+    try:
+        verify_handoff(copy.deepcopy(handoff), copy.deepcopy(raw["permission"]))
+    except Exception as error:  # noqa: BLE001 -- hosting owns verification.
+        raise ValueError("credential handoff verification failed") from error
+    expected_inputs_digest = raw["inputsDigest"]
+
+    for stage in plan["stages"]:
+        stage_bindings = binding_maps.get(stage["id"])
+        names = _placeholders(stage["body"])
+        if not isinstance(stage_bindings, MappingProxyType) or set(stage_bindings) != names:
+            raise ValueError("declared Action binding map differs")
+        if any(not _private(value) for value in stage_bindings.values()):
+            raise ValueError("declared Action binding value is not private")
 
     def transport(value, *, binding, binding_digest, capability):
+        if capability.inputs_digest != expected_inputs_digest:
+            raise ValueError("production capability frozen inputs differ")
         if fixture_origin is None and isinstance(value, dict) and value.get("fixtureOrigin") is not None:
             raise ValueError("loopback fixture is test-only")
-        declared = _validate(value)
+        if not isinstance(value, dict) or set(value) != ENVELOPE_FIELDS:
+            raise ValueError("closed Action transport envelope required")
+        stage_id, call_project, call_nonce = value["stageId"], value["project"], value["nonce"]
+        if call_project != project:
+            raise ValueError("project differs from frozen permission")
+        if call_nonce != nonce:
+            raise ValueError("nonce differs from frozen plan")
+        stage = _stage(frozen_plan, stage_id)
+        if not isinstance(value["body"], dict):
+            raise ValueError("body shape differs")
+        _check_value(stage["body"], value["body"], binding_maps[stage_id], nonce)
+        path = stage["path"].format(project=project)
+        if not path.startswith(SERVICE_PREFIX) or "?" in path:
+            raise ValueError("Action route differs")
+        declared = {
+            "kind": "action-stage",
+            "path": path.lstrip("/"),
+            "body": value["body"],
+            "owner": stage["routeClass"] == "admin",
+        }
         return credential_remote.transmit(
             declared,
             value["body"],
-            token=value["token"],
-            api_key=value["apiKey"],
+            token=handoff["token"],
+            api_key=handoff["apiKey"],
             deadline=value["deadline"],
             capability=capability,
             binding=binding,
@@ -133,13 +214,11 @@ def send(
     project: str,
     nonce: str,
     body: dict[str, Any],
-    token: str,
-    api_key: str,
     deadline: float,
     binding: bytes,
     binding_digest: str,
 ) -> tuple[int, dict[str, Any]]:
-    """Send one Action slot through a consumed capability and frozen binding."""
+    """Send one ordinary observation through one consumed O8 capability."""
     if not hasattr(capability, "_transmit"):
         raise ValueError("O8 capability required")
     if binding != capability._binding or binding_digest != capability.binding_digest:
@@ -150,11 +229,9 @@ def send(
             "project": project,
             "nonce": nonce,
             "body": body,
-            "token": token,
-            "apiKey": api_key,
             "deadline": deadline,
         }
     )
 
 
-__all__ = ["CAMPAIGN_ID", "make_transport", "send"]
+__all__ = ["CAMPAIGN_ID", "IDENTITY_SCOPE", "make_transport", "send"]

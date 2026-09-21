@@ -26,6 +26,7 @@ TOTAL_REQUESTS = 146
 RULES_REQUESTS = 23
 OBSERVATION_REQUESTS = 33
 RECOVERY_REQUESTS = 63
+WORKER_TIMEOUT_SECONDS = 8.0
 
 
 def validate_compiled_accounting(plan: dict[str, Any]) -> dict[str, int]:
@@ -69,9 +70,11 @@ def bound_execute(
     )
 
     def execute(operation: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining < WORKER_TIMEOUT_SECONDS:
+                raise TimeoutError("Rules worker cannot fit within Gate deadline")
         authorize_transport(capability, binding=binding, binding_digest=binding_digest)
-        if deadline is not None and time.monotonic() >= deadline:
-            raise TimeoutError("Rules worker deadline expired")
         return transport(
             operation,
             binding=binding,

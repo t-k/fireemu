@@ -36,6 +36,10 @@ IDENTITY_SCOPE = "https://www.googleapis.com/auth/identitytoolkit"
 ENVELOPE_FIELDS = frozenset({"stageId", "project", "nonce", "body", "deadline"})
 HANDOFF_FIELDS = frozenset({"token", "apiKey", "permissionDigest", "principal", "scope"})
 _BOUND_TRANSPORTS: dict[str, Callable[..., tuple[int, dict[str, Any]]]] = {}
+GENERATED_BINDINGS = frozenset({
+    "resetCode", "resetCodeSecond", "verifyCode", "emailLinkCode",
+    "emailLinkCodeSecond", "deletedUserCode", "accountA.localId", "accountB.localId",
+})
 
 
 def _freeze(value: Any) -> Any:
@@ -107,9 +111,17 @@ def _verified_fixture_origin(value: str) -> str:
     return value
 
 
-def _check_value(expected: Any, actual: Any, bindings: MappingProxyType, nonce: str) -> None:
+def _check_value(expected: Any, actual: Any, bindings: MappingProxyType, nonce: str, observed: dict[str, str]) -> None:
     if isinstance(expected, str) and expected.startswith("$binding:"):
         name = expected.removeprefix("$binding:")
+        if name in observed:
+            if actual != observed[name]:
+                raise ValueError("observed dynamic binding differs")
+            return
+        if name in GENERATED_BINDINGS:
+            if not _private(actual):
+                raise ValueError("generated dynamic binding required")
+            return
         if name not in bindings or actual != bindings[name]:
             raise ValueError("declared dynamic binding differs")
         if name.endswith(".email"):
@@ -123,13 +135,13 @@ def _check_value(expected: Any, actual: Any, bindings: MappingProxyType, nonce: 
         if not isinstance(actual, dict) or set(actual) != set(expected):
             raise ValueError("body shape differs")
         for key, item in expected.items():
-            _check_value(item, actual[key], bindings, nonce)
+            _check_value(item, actual[key], bindings, nonce, observed)
         return
     if isinstance(expected, (list, tuple)):
         if not isinstance(actual, list) or len(actual) != len(expected):
             raise ValueError("body shape differs")
         for left, right in zip(expected, actual, strict=True):
-            _check_value(left, right, bindings, nonce)
+            _check_value(left, right, bindings, nonce, observed)
         return
     if actual != expected or type(actual) is not type(expected):
         raise ValueError("body shape differs")
@@ -224,6 +236,7 @@ def make_transport(
     except Exception as error:  # noqa: BLE001 -- hosting owns verification.
         raise ValueError("credential handoff verification failed") from error
     expected_inputs_digest = raw["inputsDigest"]
+    observed: dict[str, str] = {}
 
     for stage in plan["stages"]:
         stage_bindings = binding_maps.get(stage["id"])
@@ -256,7 +269,7 @@ def make_transport(
         stage = _stage(frozen_plan, stage_id)
         if not isinstance(value["body"], dict):
             raise ValueError("body shape differs")
-        _check_value(stage["body"], value["body"], binding_maps[stage_id], nonce)
+        _check_value(stage["body"], value["body"], binding_maps[stage_id], nonce, observed)
         path = stage["path"].format(project=project)
         if not path.startswith(SERVICE_PREFIX) or "?" in path:
             raise ValueError("Action route differs")
@@ -270,7 +283,7 @@ def make_transport(
             account = stage.get("account")
             if account is not None:
                 declared["resource"] = frozen_permission["logicalAccounts"][account]["resource"]
-        return credential_remote.transmit(
+        result = credential_remote.transmit(
             declared,
             value["body"],
             token=handoff["token"],
@@ -281,6 +294,23 @@ def make_transport(
             binding_digest=binding_digest,
             fixture_origin=fixture_origin,
         )
+        status, response = result
+        if status == 200 and isinstance(response, dict):
+            if stage_id == "account-a-create" and isinstance(response.get("localId"), str):
+                observed["accountA.localId"] = response["localId"]
+            elif stage_id == "account-b-create" and isinstance(response.get("localId"), str):
+                observed["accountB.localId"] = response["localId"]
+            code_binding = {
+                "reset-link-generate": "resetCode",
+                "reset-link-generate-second": "resetCodeSecond",
+                "verify-link-generate": "verifyCode",
+                "email-link-generate": "emailLinkCode",
+                "email-link-generate-second": "emailLinkCodeSecond",
+                "deleted-user-link-generate": "deletedUserCode",
+            }.get(stage_id)
+            if code_binding and isinstance(response.get("oobCode"), str):
+                observed[code_binding] = response["oobCode"]
+        return result
 
     _BOUND_TRANSPORTS[expected_inputs_digest] = transport
     return transport

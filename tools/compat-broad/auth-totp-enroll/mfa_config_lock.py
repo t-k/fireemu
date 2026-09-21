@@ -21,6 +21,7 @@ import copy
 import json
 import os
 import re
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -185,12 +186,36 @@ def differing_fields(readback: dict, baseline: dict) -> list[str]:
 
 
 def _private_write(path: Path, value: Any) -> None:
+    """Write the private lock record so a reader never observes a partial file.
+
+    A truncate-then-write in place (the earlier shape) leaves a zero-byte file
+    for any stop between the truncate and the write; `ConfigLock.resume()` reads
+    the file whole and a truncated one refuses recovery outright. This writes a
+    freshly created, uniquely named temporary file in the same directory, fsyncs
+    it, and only then renames it onto the target: a stop at any point up to the
+    rename leaves the previous record exactly as it was, and a stop after the
+    rename leaves the new one complete. `os.replace` is a single filesystem
+    rename, so no reader of `path` ever observes a partial write either way. A
+    temporary file a stop left behind before the rename is simply an unreferenced
+    file beside it; the next write picks its own fresh unique name and the reader
+    only ever opens `path` by its exact name.
+    """
     encoded = json.dumps(value, sort_keys=True, indent=2).encode() + b"\n"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(encoded)
-        stream.flush()
-        os.fsync(stream.fileno())
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    replaced = False
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        replaced = True
+    finally:
+        if not replaced:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
     directory = os.open(path.parent, os.O_RDONLY)
     try:
         os.fsync(directory)

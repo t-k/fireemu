@@ -78,12 +78,38 @@ def _write_immutable(path: Path, value: dict) -> None:
 
 
 def _write_private(path: Path, value: dict) -> None:
+    """Write the private run record so a reader never observes a partial file.
+
+    Same shape as `mfa_config_lock._private_write` and for the same reason: a
+    truncate-then-write in place leaves a zero-byte `run-state.json` for any stop
+    between the truncate and the write, and `--resume` / `--abandon` read this
+    file whole before anything else. A freshly created, uniquely named temporary
+    file in the same directory, fsynced and then renamed onto the target, means a
+    stop anywhere up to the rename leaves the previous record intact and a stop
+    after it leaves the new one complete; a temporary file a stop left behind is
+    just an unreferenced file beside `path`, never read by its exact name.
+    """
     encoded = json.dumps(value, sort_keys=True, indent=2).encode() + b"\n"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(encoded)
-        stream.flush()
-        os.fsync(stream.fileno())
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    replaced = False
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        replaced = True
+    finally:
+        if not replaced:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def _read_private(path: Path) -> dict:

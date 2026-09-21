@@ -9,9 +9,11 @@ import pytest
 from owned_transform_runner import (
     BUILD_COMMAND,
     CURRENT_PROFILE,
+    G0_CURRENT_PROFILE,
     PROFILES,
     REPAIRED_PROFILE,
     validate_copied_manifest,
+    validate_current_g0_artifact,
     validate_retained_artifact,
 )
 
@@ -33,6 +35,16 @@ def test_current_profile_is_bound_to_the_locked_build_identity():
         "fireemu",
         "--message-format=json",
     ]
+
+
+def test_g0_profile_is_closed_to_the_retained_build_identity():
+    assert G0_CURRENT_PROFILE == {
+        "name": "current-8f129b10",
+        "artifactSha256": "bf713deb0952db610c840d6233b9c343496df5b69b9c4e934a4054c27f765897",
+        "runtimeCommit": "8f129b10aac6cf9a875fbf67fd8775a746daec40",
+        "manifestCommitField": "executionCommit",
+        "requireTopLevelArtifactSha": False,
+    }
 
 
 @pytest.fixture
@@ -90,6 +102,77 @@ def test_generated_artifact_is_rejected_by_pinned_repaired_profile(
 
     with pytest.raises(ValueError, match="retained artifact/build/source binding"):
         validate_retained_artifact(artifact, pinned_path, profile=REPAIRED_PROFILE)
+
+
+def test_current_g0_binding_accepts_ancestor_source_with_identical_runtime_inputs(
+    generated_repaired_fixture,
+):
+    artifact, manifest, repaired = generated_repaired_fixture
+    profile = {
+        **repaired,
+        "name": "test-generated-current",
+        "runtimeCommit": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=runner.ROOT, text=True
+        ).strip(),
+    }
+    runner.PROFILES[profile["name"]] = profile
+    payload = json.loads(manifest.read_text())
+    payload["executionCommit"] = profile["runtimeCommit"]
+    payload["build"]["inputs"] = runner.runtime_inputs_at_commit(
+        profile["runtimeCommit"], runner.ROOT
+    )
+    manifest.write_text(json.dumps(payload))
+    result = validate_current_g0_artifact(
+        artifact, manifest, profile=profile, repo=runner.ROOT
+    )
+    assert result["artifactSha256"] == profile["artifactSha256"]
+    assert result["runtimeSourceCommit"] == profile["runtimeCommit"]
+    assert result["currentSourceCommit"] == subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=runner.ROOT, text=True
+    ).strip()
+
+
+@pytest.mark.parametrize("mutation", ["artifact", "source", "inputs"])
+def test_current_g0_binding_rejects_provenance_mutations(
+    generated_repaired_fixture, tmp_path, mutation
+):
+    artifact, original, profile = generated_repaired_fixture
+    if mutation == "artifact":
+        artifact.chmod(0o600)
+        artifact.write_bytes(b"mutated")
+        with pytest.raises(ValueError):
+            validate_current_g0_artifact(artifact, original, profile=profile, repo=runner.ROOT)
+        return
+    manifest = json.loads(original.read_text())
+    if mutation == "source":
+        manifest[profile["manifestCommitField"]] = "f" * 40
+    else:
+        manifest["build"]["inputs"]["Cargo.toml"] = "0" * 64
+    mutated = tmp_path / "run-manifest.json"
+    mutated.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        validate_current_g0_artifact(artifact, mutated, profile=profile, repo=runner.ROOT)
+
+
+def test_current_g0_binding_rejects_a_valid_but_nonancestor_source(
+    generated_repaired_fixture,
+):
+    artifact, manifest, repaired = generated_repaired_fixture
+    source = subprocess.check_output(
+        ["git", "rev-list", "--all", "--not", "HEAD"], cwd=runner.ROOT, text=True
+    ).splitlines()[0]
+    profile = {
+        **repaired,
+        "name": "test-generated-nonancestor",
+        "runtimeCommit": source,
+    }
+    runner.PROFILES[profile["name"]] = profile
+    payload = json.loads(manifest.read_text())
+    payload["executionCommit"] = source
+    payload["build"]["inputs"] = runner.runtime_inputs_at_commit(source, runner.ROOT)
+    manifest.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="ancestor"):
+        validate_current_g0_artifact(artifact, manifest, profile=profile, repo=runner.ROOT)
 
 
 def test_generated_manifest_contains_independently_verified_git_tree_digest(

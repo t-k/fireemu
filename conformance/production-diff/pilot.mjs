@@ -20,6 +20,7 @@ import {
   commitTransformSourceUnchanged,
   compareCommitTransform,
 } from "./commit-transform.mjs";
+import { prepareG0, compareG0, g0SourceUnchanged } from "./g0.mjs";
 import {
   cleanEnvironment,
   newPrivateDirectory,
@@ -83,7 +84,9 @@ export function buildExecArgs(
   sessionEntry,
   node = process.execPath,
   project = CASE.project,
+  services = "firestore",
 ) {
+  const withAuth = services.split(",").includes("auth");
   return {
     command: binary,
     args: [
@@ -93,7 +96,8 @@ export function buildExecArgs(
       "--project",
       project,
       "--only",
-      "firestore",
+      services,
+      ...(withAuth ? ["--auth-port", "0"] : []),
       "--firestore-port",
       "0",
       "--http-port",
@@ -187,6 +191,11 @@ async function replay(prepared, options, directory) {
   await publish(join(directory, "firestore.rules"), RULES);
   const binaryPath = join(directory, "fireemu");
   const artifact = await snapshotBinary(options.binary, binaryPath);
+  if (entry.adapter === "g0")
+    requireThat(
+      prepared.provenance.implementation.build?.artifactSha256 === artifact.sha256,
+      "g0-artifact-snapshot-mismatch",
+    );
   const startedAt = new Date().toISOString();
   const { command, args } = buildExecArgs(
     binaryPath,
@@ -194,10 +203,16 @@ async function replay(prepared, options, directory) {
     join(HERE, entry.sessionScript ?? "local-session.mjs"),
     process.execPath,
     entry.project,
+    entry.adapter === "g0" ? "auth,firestore" : "firestore",
   );
   const processResult = await runProcess(command, args, {
     cwd: directory,
-    env: { ...cleanEnvironment(directory), PILOT_RUN_DIR: directory, PILOT_CASE_ID: entry.id },
+    env: {
+      ...cleanEnvironment(directory),
+      PILOT_RUN_DIR: directory,
+      PILOT_CASE_ID: entry.id,
+      PILOT_REPO: options.repo,
+    },
     timeoutMs: options.timeout * 1000,
   });
   await publish(join(directory, "process.log"), processResult.log);
@@ -218,12 +233,18 @@ async function replay(prepared, options, directory) {
           prepared.state,
           prepared.provenance.implementation.adapterSha256,
         )
-      : await commitTransformSourceUnchanged(
+      : entry.adapter === "commit-transform"
+        ? await commitTransformSourceUnchanged(
           options.repo,
           prepared.entry,
           prepared.state,
           prepared.provenance.implementation.adapterSha256,
-        );
+        )
+        : await g0SourceUnchanged(
+            options.repo,
+            prepared.state,
+            prepared.provenance.implementation.adapterSha256,
+          );
   const execution = {
     origin: "new-local-process",
     freshLocalExecution: true,
@@ -338,7 +359,14 @@ export async function main(argv = process.argv.slice(2)) {
     const prepared =
       entry.adapter === "batch-write"
         ? await prepare(options.repo, entry)
-        : await prepareCommitTransform(options.repo, entry);
+        : entry.adapter === "commit-transform"
+          ? await prepareCommitTransform(options.repo, entry)
+          : await prepareG0(
+              options.repo,
+              entry,
+              options.binary ?? null,
+              options.mode === "replay" || options.mode === "compare",
+            );
     if (options.mode === "plan") {
       console.log(
         JSON.stringify(
@@ -348,7 +376,12 @@ export async function main(argv = process.argv.slice(2)) {
             operations:
               entry.adapter === "batch-write"
                 ? prepared.program.steps.length
-                : prepared.program.observation.length + prepared.program.recovery.length,
+                : entry.adapter === "commit-transform"
+                  ? prepared.program.observation.length + prepared.program.recovery.length
+                  : Object.values(prepared.program.jobs).reduce(
+                      (total, job) => total + job.observation.length,
+                      0,
+                    ),
             source: prepared.state,
             evidenceKind: entry.evidenceKind,
             oracleKind: entry.oracleKind,
@@ -372,7 +405,15 @@ export async function main(argv = process.argv.slice(2)) {
     const comparison =
       entry.adapter === "batch-write"
         ? compareRecords({ ...prepared, actual: run.actual })
-        : compareCommitTransform({ ...prepared, actual: run.actual });
+        : entry.adapter === "commit-transform"
+          ? compareCommitTransform({ ...prepared, actual: run.actual })
+          : compareG0({
+              ...prepared,
+              actual: run.actual,
+              repo: options.repo,
+              execution: run.execution,
+              build: prepared.provenance.implementation.build,
+            });
     const result = resultEnvelope({
       entry,
       comparison,

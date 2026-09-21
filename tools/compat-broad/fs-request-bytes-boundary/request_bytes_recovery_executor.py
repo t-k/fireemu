@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 from urllib.error import HTTPError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 HERE = Path(__file__).resolve().parent
@@ -25,6 +25,28 @@ import shared_gate
 from broad_contract import digest
 
 RECOVERY_JOB = recovery_campaign.RECOVERY_JOB
+
+
+def _validate_loopback_url(base_url: str) -> None:
+    if not isinstance(base_url, str) or any(ord(char) < 0x20 or ord(char) == 0x7F for char in base_url):
+        raise ValueError("loopback transport endpoint required")
+    try:
+        parsed = urlsplit(base_url)
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("loopback transport endpoint required") from error
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname != "127.0.0.1"
+        or port is None
+        or not 1 <= port <= 65535
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("loopback transport endpoint required")
 
 
 class _RecoveryGate(shared_gate.Gate):
@@ -85,8 +107,7 @@ def execute_recovery(
     base_url: str,
 ) -> dict:
     """Run the exact persisted 85-slot child against a bounded loopback server."""
-    if not str(base_url).startswith("http://127.0.0.1:"):
-        raise ValueError("loopback transport endpoint required")
+    _validate_loopback_url(base_url)
     if not o8_admission.issued_capability(capability):
         raise ValueError("active O7 production capability required")
     o8_admission.validate_frozen_inputs(recovery_admission.descriptor(), inputs)

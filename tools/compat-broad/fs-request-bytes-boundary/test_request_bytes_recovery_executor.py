@@ -139,11 +139,24 @@ def test_real_executor_runs_85_slots_and_settles_child(tmp_path, owned_count):
     assert sum(operations_by_index[event["index"]]["kind"] == "recovery-absence-read" and event["status"] == 404 for event in events) == 51
 
 
-def test_executor_rejects_non_loopback_without_ledger_change(tmp_path):
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://example.invalid:1234",
+        "http://127.0.0.1:1234@remote.invalid",
+        "http://127.0.0.1%401234@remote.invalid:80",
+        "http://127.0.0.2:1234",
+        "http://127.0.0.1:not-a-port",
+        "http://127.0.0.1:1234/unexpected",
+        "http://127.0.0.1:1234/?foreign=1",
+        "http://127.0.0.1:1234/#foreign",
+    ],
+)
+def test_executor_rejects_non_loopback_without_ledger_change(tmp_path, base_url):
     _o7, ledger, child_ticket, parent_plan, child_gate_plan, _permission = _actual_child(tmp_path)
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="loopback"):
-        executor.execute_recovery(ledger=ledger, child_ticket=child_ticket, canonical_parent_plan=parent_plan, child_gate_plan=child_gate_plan, capability=None, inputs={}, permission={}, gate_path=tmp_path / "child-gate", base_url="https://example.invalid")
+        executor.execute_recovery(ledger=ledger, child_ticket=child_ticket, canonical_parent_plan=parent_plan, child_gate_plan=child_gate_plan, capability=None, inputs={}, permission={}, gate_path=tmp_path / "child-gate", base_url=base_url)
     assert ledger.snapshot() == before
 
 

@@ -33,6 +33,9 @@ from o5_user_token_campaign import (
 )
 from o5_user_token_case import CAMPAIGN
 from o5_user_token_collector import ROLE_PRODUCTION
+from o5_user_token_collector import RulesManagementSession
+from reservations import Ledger
+import shared_gate
 from o5_user_token_comparator_v2 import REFUSED
 from o8_campaign import REQUIRED_MEMBERS, CampaignDescriptor
 from test_o5_user_token_collector import Transport
@@ -373,6 +376,55 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
     # intentionally stale and must remain refused until refreshed separately.
     assert result["classification"] == REFUSED
     assert "production:recording-incomplete" in result["errors"]
+
+
+def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_ledger(tmp_path) -> None:
+    plan = lane.plan_compiler(NONCE)
+    gate_plan = lane.gate_plan(plan, permission_expires_at=time.time() + 3600)
+    gate_path = tmp_path / "gate"
+    ledger = Ledger.create(tmp_path / "ledger")
+    now = time.time()
+    permission = {"kind": "o5-test"}
+    envelope = {"permissionDigest": digest(permission), "issuedAt": now - 1, "expiresAt": now + 3600, "limits": {"requests": 56, "accounts": 0, "resources": 1, "costMicrousd": 23}, "concurrency": 1, "scopes": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}]}
+    claim = {"campaignId": CAMPAIGN, "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str(gate_path.resolve()), "gatePlanDigest": digest(gate_plan), "locks": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}], "budget": dict(envelope["limits"]), "durationSeconds": 600}
+    ticket = ledger.reserve(envelope, claim, gate_plan)
+    shared_gate.create(gate_path, gate_plan)
+    gate = shared_gate.Gate(gate_path, CAMPAIGN)
+    acquisition = acquisition_for(plan, ROLE_PRODUCTION)
+    data = Transport(plan, endpoint="firestore.googleapis.com:443", fingerprints={ref: value["uidFingerprint"] for ref, value in acquisition["principals"].items()})
+    names = {"A": "projects/fireemu-35fe6/rulesets/server-a", "B": "projects/fireemu-35fe6/rulesets/server-b"}
+    baseline = "projects/fireemu-35fe6/rulesets/pre-existing"
+    active = baseline
+    wire = 0
+
+    def execute(operation, **_kwargs):
+        nonlocal active, wire
+        if operation.get("kind") != "rules-lifecycle":
+            wire += 1
+            return data(operation)
+        action = operation["action"]
+        if action in {"release-get", "release-get-executable"}:
+            body = {"name": operation["releaseName"], "rulesetName": active} if action == "release-get" else {"rulesetName": active}
+            return {"status": 200, "body": body}
+        if action == "create":
+            return {"status": 200, "body": {"name": names[operation["label"]]}}
+        if action == "get":
+            if operation["rulesetName"] not in names.values():
+                return {"status": 200, "body": {"name": operation["rulesetName"], "source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"]["A"]["source"]}]}}}
+            label = "A" if operation["rulesetName"] == names["A"] else "B"
+            return {"status": 200, "body": {"name": operation["rulesetName"], "source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"][label]["source"]}]}}}
+        if action == "release-patch":
+            active = operation["rulesetName"]
+            return {"status": 200, "body": {"name": operation["releaseName"], "rulesetName": active}}
+        if action == "delete":
+            return {"status": 200, "body": {}}
+        raise AssertionError(action)
+
+    session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=plan)
+    bundle = lane.collector(plan, execute, run_id="real-o5", acquisition=acquisition, management_session=session)
+    assert bundle["recordingComplete"] is True, (bundle["abort"], bundle["infrastructureFailures"], bundle["transport"].get("rulesManagement"))
+    assert bundle["transport"]["rulesManagement"]["recovery"]["restored"] is True
+    assert len(gate.snapshot()["managementUsed"]) == 23
 
 
 def test_a_local_shadow_bundle_fails_closed_as_production_evidence() -> None:

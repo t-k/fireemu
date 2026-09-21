@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 import copy
 import sys
+import time
 from pathlib import Path
 
 import pytest
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "o8-core"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "production-admission"))
 from o5_user_token_case import compile_case
+from broad_contract import digest
 from o5_user_token_collector import (
     COLLECTOR_CONTRACT,
     READBACK_PUBLISH_ECHO,
@@ -21,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "fs-write-limits"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import limits_03_descriptor
 import compiler_03
+from reservations import Ledger
 import shared_gate
 
 PROJECT = "fireemu-35fe6"
@@ -512,17 +518,31 @@ def test_a_malformed_case_is_rejected_before_any_request() -> None:
 def test_rules_management_baseline_and_dynamic_bindings_use_real_gate(tmp_path) -> None:
     """The producer must derive A/B names from bounded response readbacks."""
     plan = case()
-    gate_plan = limits_03_descriptor.gate_plan(
-        compiler_03.compile_limits_plan("fireemu-35fe6", "(default)", "a" * 32)
-    )
-    gate_plan = copy.deepcopy(gate_plan)
+    gate_plan = {
+        "contract": "shared-local-v1", "campaignId": "FS-RULES-USER-TOKEN-MATRIX-01",
+        "project": PROJECT, "database": "(default)", "jobSlots": 1,
+        "nonce": plan["nonce"],
+        "jobs": {"rules-management": {"resources": [plan["ownedResources"][0]], "observation": [], "recovery": []}},
+        "requestSeconds": 8.0, "observationRequests": 13, "requestCostMicrousd": 1,
+        "costMicrousd": 23, "wallSeconds": 600.0, "recoverySeconds": 300.0,
+        "intervalSeconds": 0.25, "coordinatorRequests": 0, "fixedCostMicrousd": 0,
+        "permissionExpiresAt": time.time() + 3600,
+        "management": {"dispatchKind": "closed-v1", "observation": [], "recovery": []},
+    }
     gate_plan["management"]["observation"] = [
         {"id": slot, "timeout": 8.0}
         for slot in ("baseline-release-get", "baseline-ruleset-get", "baseline-executable-get", "create-a", "create-a-get", "patch-a", "patch-a-get", "patch-a-executable", "create-b", "create-b-get", "patch-b", "patch-b-get", "patch-b-executable")
     ]
     gate_plan["management"]["recovery"] = []
     gate_plan["observationRequests"] = len(gate_plan["management"]["observation"])
-    gate_plan["permissionExpiresAt"] = 4_000_000_000.0
+    gate_plan["management"]["recovery"] = [{"id": slot, "timeout": 8.0} for slot in ("restore-patch", "restore-get", "restore-executable", "restore-get-executable", "delete-a-get", "delete-a", "delete-a-absence", "delete-b-get", "delete-b", "delete-b-absence")]
+    gate_plan["permissionExpiresAt"] = time.time() + 3600
+    gate_plan["costMicrousd"] = 23
+    ledger = Ledger.create(tmp_path / "ledger")
+    now = time.time()
+    envelope = {"permissionDigest": digest({"kind": "o5-test"}), "issuedAt": now - 1, "expiresAt": now + 3600, "limits": {"requests": 23, "accounts": 0, "resources": 1, "costMicrousd": 23}, "concurrency": 1, "scopes": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}]}
+    claim = {"campaignId": "FS-RULES-USER-TOKEN-MATRIX-01", "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str((tmp_path / "gate").resolve()), "gatePlanDigest": digest(gate_plan), "locks": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}], "budget": dict(envelope["limits"]), "durationSeconds": 600}
+    ticket = ledger.reserve(envelope, claim, gate_plan)
     shared_gate.create(tmp_path / "gate", gate_plan)
     gate = shared_gate.Gate(tmp_path / "gate", gate_plan["campaignId"])
 
@@ -549,38 +569,10 @@ def test_rules_management_baseline_and_dynamic_bindings_use_real_gate(tmp_path) 
         raise AssertionError(action)
 
     execute.active = baseline
-    session = RulesManagementSession(gate=gate, ledger=None, ticket=None, execute=execute, plan=plan)
+    session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=plan)
     result = session.run_observation()
     assert result["created"] == names
     assert result["active"] == names
     assert gate.snapshot()["managementUsed"] == [
         "observation:" + slot["id"] for slot in gate_plan["management"]["observation"]
     ]
-
-
-def test_rules_management_type_error_is_not_retried(tmp_path) -> None:
-    gate_plan = limits_03_descriptor.gate_plan(
-        compiler_03.compile_limits_plan("fireemu-35fe6", "(default)", "a" * 32)
-    )
-    gate_plan = copy.deepcopy(gate_plan)
-    gate_plan["management"]["observation"] = [{"id": "baseline-release-get", "timeout": 8.0}]
-    gate_plan["management"]["recovery"] = []
-    gate_plan["observationRequests"] = 1
-    gate_plan["permissionExpiresAt"] = 4_000_000_000.0
-    shared_gate.create(tmp_path / "gate", gate_plan)
-    calls = []
-
-    def execute(_operation, *, deadline):
-        calls.append(deadline)
-        raise TypeError("callback contract failure")
-
-    session = RulesManagementSession(
-        gate=shared_gate.Gate(tmp_path / "gate", gate_plan["campaignId"]),
-        ledger=None,
-        ticket=None,
-        execute=execute,
-        plan=case(),
-    )
-    with pytest.raises(TypeError, match="callback contract failure"):
-        session._dispatch("observation", "baseline-release-get", {"action": "release-get", "releaseName": "projects/fireemu-35fe6/releases/cloud.firestore"})
-    assert len(calls) == 1

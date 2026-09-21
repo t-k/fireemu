@@ -253,6 +253,18 @@ class RulesManagementSession:
     """
 
     def __init__(self, *, gate, ledger, ticket, execute, plan):
+        if gate is None or ledger is None or not isinstance(ticket, dict):
+            raise ValueError("Rules management requires real Gate and Ledger ownership")
+        gate_plan = gate.snapshot().get("plan", {})
+        management = gate_plan.get("management", {})
+        if (
+            gate_plan.get("campaignId") != CAMPAIGN
+            or gate_plan.get("project") != plan.get("project")
+            or gate_plan.get("database") != plan.get("database")
+            or [entry.get("id") for entry in management.get("observation", [])] != list(RULES_MANAGEMENT_OBSERVATION)
+            or [entry.get("id") for entry in management.get("recovery", [])] != list(RULES_MANAGEMENT_RECOVERY)
+        ):
+            raise ValueError("Rules management Gate plan binding differs")
         self.gate = gate
         self.ledger = ledger
         self.ticket = ticket

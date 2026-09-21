@@ -263,6 +263,87 @@ def test_final_result_publication_failure_never_returns_success(tmp_path, monkey
     assert (tmp_path / "new/launch.json").exists()
 
 
+def fake_shim(tmp_path, name="volta-shim"):
+    """An executable that records its own invocation; the launcher must never run it."""
+    shim = tmp_path / "shim" / name
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    shim.write_text("#!/bin/sh\ntouch \"$(dirname \"$0\")/SPAWNED\"\nexit 0\n")
+    shim.chmod(0o700)
+    return shim
+
+
+def shim_on_path(tmp_path):
+    """PATH whose first `node` is a symlink to a volta-shim, like `~/.volta/bin/node`."""
+    link = tmp_path / "shim-bin"
+    link.mkdir()
+    (link / "node").symlink_to(fake_shim(tmp_path))
+    return f"{link}{os.pathsep}{os.environ['PATH']}"
+
+
+def test_fireemu_node_is_honoured_before_path(tmp_path):
+    real = tmp_path / "real-node"
+    real.write_text("#!/bin/sh\nexit 0\n"); real.chmod(0o700)
+    env = {"PATH": shim_on_path(tmp_path), "FIREEMU_NODE": str(real)}
+    assert m._resolve_node(env) == str(real)
+    assert not (tmp_path / "shim/SPAWNED").exists()
+
+
+@pytest.mark.parametrize("via", ["FIREEMU_NODE", "PATH"])
+def test_volta_shim_is_refused_by_name_and_never_spawned(tmp_path, via):
+    env = {"PATH": os.defpath, "VOLTA_HOME": str(tmp_path / "no-volta")}
+    if via == "FIREEMU_NODE":
+        env["FIREEMU_NODE"] = str(fake_shim(tmp_path))
+    else:
+        env["PATH"] = shim_on_path(tmp_path)
+    with pytest.raises(m.Refused, match="volta-shim-refused"):
+        m._resolve_node(env)
+    assert not (tmp_path / "shim/SPAWNED").exists()
+
+
+def test_shim_on_path_is_replaced_by_the_pinned_volta_image(tmp_path):
+    volta = tmp_path / "volta"
+    image = volta / "tools/image/node/9.9.9/bin"
+    image.mkdir(parents=True)
+    (image / "node").write_text("#!/bin/sh\nexit 0\n"); (image / "node").chmod(0o700)
+    (volta / "tools/user").mkdir(parents=True)
+    (volta / "tools/user/platform.json").write_text(json.dumps({"node": {"runtime": "9.9.9"}}))
+    env = {"PATH": shim_on_path(tmp_path), "VOLTA_HOME": str(volta)}
+    assert m._resolve_node(env) == str(image / "node")
+    assert not (tmp_path / "shim/SPAWNED").exists()
+
+
+def test_shim_without_platform_pin_falls_back_to_the_newest_image(tmp_path):
+    volta = tmp_path / "volta"
+    for version in ("9.10.0", "9.9.1", "10.0.0"):
+        image = volta / "tools/image/node" / version / "bin"
+        image.mkdir(parents=True)
+        (image / "node").write_text("#!/bin/sh\nexit 0\n"); (image / "node").chmod(0o700)
+    env = {"PATH": shim_on_path(tmp_path), "VOLTA_HOME": str(volta)}
+    assert m._resolve_node(env) == str(volta / "tools/image/node/10.0.0/bin/node")
+
+
+@pytest.mark.parametrize("missing", ["absent", "directory", "not-executable"])
+def test_fireemu_node_must_be_an_executable_file(tmp_path, missing):
+    target = tmp_path / "candidate"
+    if missing == "directory":
+        target.mkdir()
+    elif missing == "not-executable":
+        target.write_text("")
+    with pytest.raises(m.Refused, match="node-not-found"):
+        m._resolve_node({"PATH": os.defpath, "FIREEMU_NODE": str(target)})
+
+
+def test_launcher_refuses_a_shim_before_any_process_or_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(m, "_capture", lambda *a, **kw: pytest.fail("must not launch"))
+    env = env_for(tmp_path)
+    env["PATH"] = shim_on_path(tmp_path)
+    env["VOLTA_HOME"] = str(tmp_path / "no-volta")
+    with pytest.raises(m.Refused, match="volta-shim-refused"):
+        m.run(tmp_path / "new", env=env)
+    assert not (tmp_path / "new").exists()
+    assert not (tmp_path / "shim/SPAWNED").exists()
+
+
 def test_real_cli_with_missing_sdk_fails_after_persisting_launch_without_cloud_access(tmp_path):
     env = env_for(tmp_path)
     code = subprocess.run([sys.executable, "-I", "-S", str(m.HERE / "local_supervisor.py"),
@@ -315,7 +396,8 @@ export const createUserWithEmailAndPassword=async()=>{
     assert "execution-deadline" in result["issues"]
     assert result["journal"]["lastPhase"] == "account-create-intent"
     assert (tmp_path / "unsettled/checkpoints/1-account-create-intent.json").exists()
-    assert calls == ["/identitytoolkit.googleapis.com/v1/projects/demo-local/accounts:lookup"]
+    # One preflight lookup per principal, then the unsettled signup of the first.
+    assert calls == ["/identitytoolkit.googleapis.com/v1/projects/demo-local/accounts:lookup"] * 2
     assert result["execution"]["elapsedSeconds"] < 4
 
 

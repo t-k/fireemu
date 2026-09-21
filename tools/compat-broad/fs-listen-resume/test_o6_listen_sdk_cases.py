@@ -41,6 +41,8 @@ def test_declared_dimensions_cover_the_blocking_condition_topics():
         "unsubscribe",
         "auth-switch",
         "default-subscription",
+        "cross-identity",
+        "token-revocation",
     }
 
 
@@ -181,7 +183,7 @@ def test_unobserved_paths_name_browser_and_both_declared_mobile_platforms():
         "browser-webchannel",
         "android-sdk",
         "apple-sdk",
-        "cross-identity-isolation",
+        "tenant-isolation",
         "raw-resume-token",
     } == paths
     for entry in catalog()["unobservedPaths"]:
@@ -211,21 +213,62 @@ def test_get_case_returns_a_copy():
     assert get_case("FS-LISTEN-SDK-101")["steps"]
 
 
-def test_the_cross_identity_gap_is_registered_as_unobserved():
+def test_the_cross_identity_cases_use_a_second_principal_and_deny_without_a_server_read():
+    case = get_case("FS-LISTEN-SDK-108")
+    control = get_case("FS-LISTEN-SDK-108C")
+    assert case["listeners"][0]["target"] == "privateB"
+    assert "client" not in case["listeners"][0], (
+        "the denied listener is the first principal's"
+    )
+    assert control["listeners"][0]["client"] == "secondary"
+    assert control["listeners"][0]["target"] == "privateB"
+    assert [event["error"] for event in case["expectedLocal"]] == ["permission-denied"]
+    assert "no-server-snapshot-before-error" in case["invariants"]
+    assert case["ignoreCachedPrefix"] is True
+    assert control["expectedLocal"][0]["exists"] is True
+    assert control["expectedLocal"][0]["listener"] == "secondary"
+    # Only the secondary client ever writes privateB.
+    for spec in (case, control):
+        for step in spec["steps"]:
+            if step.get("doc") == "privateB" and step["kind"] in {"seed", "write"}:
+                assert step["client"] == "secondary", spec["caseId"]
+    # Tenant isolation is what remains unobserved once principals are covered.
     entry = next(
         item
         for item in catalog()["unobservedPaths"]
-        if item["path"] == "cross-identity-isolation"
+        if item["path"] == "tenant-isolation"
     )
-    # One account is budgeted and both auth cases use the same principal, so no
-    # case observes one principal being refused another principal's document.
-    assert "one account" in entry["reason"]
-    assert "permission-denied" in entry["plan"]
+    assert "108" in entry["reason"]
     assert all(
-        step.get("account") in (None, "throwaway")
+        step.get("account") in (None, "throwaway", "second")
         for case in CASES
         for step in case["steps"]
     )
+
+
+def test_the_revocation_case_revokes_after_the_baseline_and_its_control_does_not():
+    case = get_case("FS-LISTEN-SDK-109")
+    control = get_case("FS-LISTEN-SDK-109C")
+    kinds = [step["kind"] for step in case["steps"]]
+    assert kinds.count("revoke") == 1
+    assert kinds.index("baseline") < kinds.index("revoke") < kinds.index("awaitError")
+    assert case["steps"][kinds.index("revoke")]["client"] == "primary"
+    # The session must be older than the whole-second validSince.
+    assert kinds.index("signIn") < kinds.index("settle") < kinds.index("seed")
+    # Local fireemu re-verifies the token on the next commit and the SDK
+    # surfaces the stream's UNAUTHENTICATED as a terminal listener error.
+    assert [event["error"] for event in case["expectedLocal"]] == ["unauthenticated"]
+    assert all(step["kind"] != "revoke" for step in control["steps"])
+    assert "no-event-after-quiet-window" in control["invariants"]
+    assert control["expectedLocal"][0]["snapshotKind"] == "delta"
+    # Both cases trigger the commit-driven refresh from the other principal.
+    for spec in (case, control):
+        assert any(
+            step["kind"] == "write"
+            and step["client"] == "secondary"
+            and step["doc"] == "privateB"
+            for step in spec["steps"]
+        ), spec["caseId"]
 
 
 def test_the_default_subscription_case_compares_snapshot_kind():

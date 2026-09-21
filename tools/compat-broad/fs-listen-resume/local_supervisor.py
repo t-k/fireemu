@@ -34,7 +34,7 @@ if not __package__:
     sys.modules[package.__name__] = package
     __package__ = package.__name__
 from .export_spec import budget_document, campaign_document, cases_document
-from .campaign import owned_paths
+from .campaign import owned_paths, secondary_paths
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
@@ -298,6 +298,59 @@ def _capture(command: list[str], env: dict[str, str], cwd: Path, output: Path,
     return result
 
 
+def _executable_file(path: str) -> bool:
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def _is_volta_shim(path: str) -> bool:
+    # `~/.volta/bin/node` is a symlink to `volta-shim`. Run with the private
+    # empty HOME below, the shim tries to install a default Node and, when it
+    # finds itself on PATH, spawns itself recursively. Only the resolved
+    # basename decides; the candidate is never executed to find out.
+    return os.path.basename(os.path.realpath(path)) == "volta-shim"
+
+
+def _volta_image_node(env: dict[str, str]) -> str | None:
+    """The real binary behind a volta shim, found on disk without running volta."""
+    home = env.get("VOLTA_HOME") or os.environ.get("VOLTA_HOME") or os.path.join(Path.home(), ".volta")
+    images = Path(home) / "tools" / "image" / "node"
+    candidates: list[str] = []
+    try:
+        pinned = json.loads((Path(home) / "tools" / "user" / "platform.json").read_bytes())
+        candidates.append(str(pinned["node"]["runtime"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        versions = [d.name for d in images.iterdir() if re.fullmatch(r"\d+\.\d+\.\d+", d.name)]
+    except OSError:
+        versions = []
+    candidates.extend(sorted(versions, key=lambda v: tuple(int(x) for x in v.split(".")), reverse=True))
+    for version in candidates:
+        binary = images / version / "bin" / "node"
+        if _executable_file(str(binary)) and not _is_volta_shim(str(binary)):
+            return str(binary)
+    return None
+
+
+def _resolve_node(env: dict[str, str]) -> str:
+    """`FIREEMU_NODE` wins; otherwise PATH, with a volta shim replaced or refused."""
+    explicit = env.get("FIREEMU_NODE")
+    if explicit:
+        if not _executable_file(explicit):
+            raise Refused("node-not-found")
+        if _is_volta_shim(explicit):
+            raise Refused("volta-shim-refused")
+        return explicit
+    node = shutil.which("node", path=env.get("PATH", os.defpath))
+    if node is None:
+        raise Refused("node-not-found")
+    if _is_volta_shim(node):
+        node = _volta_image_node(env)
+        if node is None:
+            raise Refused("volta-shim-refused")
+    return node
+
+
 def _bindings() -> dict[str, str]:
     paths = list(budget_document()["boundSources"]) + [
         str((HERE / "local_supervisor.py").relative_to(ROOT)),
@@ -336,10 +389,19 @@ def _journal_summary(directory: Path, nonce: str, project: str) -> dict[str, Any
             raise Refused("invalid-lifecycle-value")
         if index == 2:
             uid = value.get("uid")
+            two = set(value) == {"uid", "paths", "secondaryUid", "secondaryPaths"}
             if (not isinstance(uid, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", uid)
-                    or set(value) != {"uid", "paths"} or value["paths"] != owned_paths(nonce, uid)):
+                    or (not two and set(value) != {"uid", "paths"})
+                    or value["paths"] != owned_paths(nonce, uid)):
                 raise Refused("invalid-lifecycle-ownership")
             path_digests = {k: _sha(v.encode()) for k, v in value["paths"].items() if k != "run"}
+            if two:
+                second = value["secondaryUid"]
+                if (not isinstance(second, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,128}", second)
+                        or second == uid
+                        or value["secondaryPaths"] != secondary_paths(nonce, second)):
+                    raise Refused("invalid-lifecycle-ownership")
+                path_digests.update({k: _sha(v.encode()) for k, v in value["secondaryPaths"].items()})
         elif index == 4:
             if (set(value) != {"complete", "accountCleanupComplete", "clientsComplete",
                               "documentsCleanupComplete"}
@@ -377,9 +439,7 @@ def run(output: Path, *, env: dict[str, str] | None = None,
     module_dir = Path(env.get("O6_FIREBASE_MODULE_DIR", "")).resolve()
     if not env.get("O6_FIREBASE_MODULE_DIR") or not module_dir.is_dir():
         raise Refused("local-sdk-directory-required")
-    node = shutil.which("node", path=env.get("PATH", os.defpath))
-    if node is None:
-        raise Refused("node-not-found")
+    node = _resolve_node(env)
     output = Path(os.path.abspath(output))
     # Reject an existing symlink (including dangling) before resolve().
     if output.exists() or output.is_symlink():

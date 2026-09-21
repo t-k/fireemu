@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { createLifecycleJournal } from './listen_journal.mjs';
-import { ownedPaths } from './listen_collector.mjs';
+import { ownedPaths, secondaryPaths } from './listen_collector.mjs';
 
 const context = { nonce: 'd'.repeat(32), projectId: 'demo-local' };
 function fixture(t) {
@@ -127,5 +127,31 @@ for (const progress of [0, 1, 2]) {
     const record = JSON.parse(readFileSync(path.join(dir, '4-lifecycle-result.json')));
     assert.equal(record.value.complete, false);
     assert.equal(record.authorizesCleanup, false);
+  });
+}
+
+test('the account checkpoint may record the second principal with its own path', t => {
+  const { dir } = fixture(t); const write = createLifecycleJournal(dir, context);
+  write('account-create-intent');
+  write('account-created', { uid: 'owned-uid', paths: ownedPaths(context.nonce, 'owned-uid'),
+    secondaryUid: 'second-uid', secondaryPaths: secondaryPaths(context.nonce, 'second-uid') });
+  const record = JSON.parse(readFileSync(path.join(dir, '2-account-created.json'), 'utf8'));
+  assert.equal(record.value.secondaryUid, 'second-uid');
+  assert.deepEqual(record.value.secondaryPaths, { privateB: 'o6_listen_private/second-uid' });
+});
+
+for (const mutation of ['same-uid', 'wrong-path', 'missing-paths', 'unsafe-uid', 'foreign-run']) {
+  test(`the second principal's checkpoint rejects ${mutation}`, t => {
+    const { dir } = fixture(t); const write = createLifecycleJournal(dir, context);
+    write('account-create-intent');
+    const value = { uid: 'owned-uid', paths: ownedPaths(context.nonce, 'owned-uid'),
+      secondaryUid: 'second-uid', secondaryPaths: secondaryPaths(context.nonce, 'second-uid') };
+    if (mutation === 'same-uid') value.secondaryUid = 'owned-uid';
+    if (mutation === 'wrong-path') value.secondaryPaths.privateB = 'o6_listen_private/owned-uid';
+    if (mutation === 'missing-paths') delete value.secondaryPaths;
+    if (mutation === 'unsafe-uid') value.secondaryUid = 'a/b';
+    if (mutation === 'foreign-run') value.secondaryPaths = { privateB: 'other/second-uid' };
+    assert.throws(() => write('account-created', value));
+    assert.equal(readdirSync(dir).length, 2);
   });
 }

@@ -186,18 +186,25 @@ def _default_mode_listener(name: str, doc: str) -> dict[str, Any]:
     }
 
 
-def _doc_listener(name: str, doc: str, *, metadata: bool = False) -> dict[str, Any]:
+def _doc_listener(
+    name: str, doc: str, *, metadata: bool = False, client: str | None = None
+) -> dict[str, Any]:
     # `metadata` records whether the case treats metadata as a compared signal.
     # The listener always subscribes with includeMetadataChanges because the
     # collector needs the cache-to-server transition to know the listener is
     # ready; cases that do not compare metadata collapse those events back out.
-    return {
+    # `client` names the SDK client that subscribes; the case client (signed
+    # in as the first principal) when absent.
+    listener = {
         "name": name,
         "kind": "document",
         "target": doc,
         "includeMetadataChanges": True,
         "metadataIsCompared": metadata,
     }
+    if client is not None:
+        listener["client"] = client
+    return listener
 
 
 def _query_listener(name: str, *, metadata: bool = False) -> dict[str, Any]:
@@ -636,6 +643,126 @@ _CASE_107C = _case(
     documents=["alpha"],
 )
 
+# Two principals. The case client and the witness client are signed in as the
+# first throwaway account ("throwaway"); the `secondary` client is signed in as
+# the second one ("second"), whose only owned document is `privateB`.
+SECOND_ACCOUNT = "second"
+
+_CASE_108 = _case(
+    "FS-LISTEN-SDK-108",
+    role=ROLE_OBSERVATION,
+    dimension="cross-identity",
+    title="A listener on another principal's private document fails without a server snapshot",
+    listeners=[_doc_listener("primary", "privateB")],
+    steps=[
+        _step("signIn", client="primary", account="throwaway"),
+        _step("write", client="secondary", doc="privateB", fields={"value": "b0"}),
+        _step("listen", listener="primary"),
+        _step("awaitError", listener="primary"),
+    ],
+    expected_local=[
+        _event("primary", "error", error="permission-denied"),
+    ],
+    comparison=COMPARISON_ORDERED,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
+    ignore_cached_prefix=True,
+    discriminators=["error"],
+    invariants=["no-server-snapshot-before-error", "no-event-after-listener-error"],
+    requires_rules=True,
+    documents=["privateB"],
+)
+
+_CASE_108C = _case(
+    "FS-LISTEN-SDK-108C",
+    role=ROLE_CONTROL,
+    control_for="FS-LISTEN-SDK-108",
+    dimension="cross-identity",
+    title="The owning principal's listener on the same document receives the server snapshot",
+    listeners=[_doc_listener("secondary", "privateB", client="secondary")],
+    steps=[
+        _step("write", client="secondary", doc="privateB", fields={"value": "b0"}),
+        _step("listen", listener="secondary"),
+        _step("awaitServer", listener="secondary"),
+    ],
+    expected_local=[
+        _event("secondary", "initial", docs=["privateB"], exists=True),
+    ],
+    comparison=COMPARISON_ORDERED,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
+    discriminators=["snapshotKind", "exists"],
+    requires_rules=True,
+    documents=["privateB"],
+)
+
+# Revocation while a listener is attached. The expected local result records
+# what fireemu does: it re-verifies the credential on every commit-triggered
+# refresh, so the Listen stream ends with UNAUTHENTICATED ("token revoked") at
+# the next commit on the database and the SDK surfaces that to the listener as
+# a terminal `unauthenticated` error. The production hypothesis (recorded in
+# the preparation document, not asserted here) is that the listener keeps
+# working until the ID token expires, because Firestore does not consult
+# revocation for an already-issued token.
+_CASE_109 = _case(
+    "FS-LISTEN-SDK-109",
+    role=ROLE_OBSERVATION,
+    dimension="token-revocation",
+    title="Revoking the principal's sessions mid-listen: local fireemu ends the listener at the next commit",
+    listeners=[_doc_listener("primary", "private")],
+    steps=[
+        _step("signIn", client="primary", account="throwaway"),
+        # validSince has whole-second precision: the session must be older than
+        # the revocation instant for the revocation to cover it.
+        _step("settle", listener="primary", seconds=1.2),
+        _step("seed", doc="private", fields={"value": "p0"}),
+        _step("listen", listener="primary"),
+        _step("awaitServer", listener="primary"),
+        _step("baseline"),
+        _step("revoke", client="primary"),
+        # An unrelated commit by the other principal triggers the refresh.
+        _step("write", client="secondary", doc="privateB", fields={"value": "b1"}),
+        _step("awaitError", listener="primary"),
+    ],
+    expected_local=[
+        _event("primary", "error", error="unauthenticated"),
+    ],
+    comparison=COMPARISON_ORDERED,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
+    discriminators=["error", "snapshotKind"],
+    invariants=["no-event-after-listener-error"],
+    requires_rules=True,
+    documents=["private", "privateB"],
+)
+
+_CASE_109C = _case(
+    "FS-LISTEN-SDK-109C",
+    role=ROLE_CONTROL,
+    control_for="FS-LISTEN-SDK-109",
+    dimension="token-revocation",
+    title="Without revocation the same listener survives the other principal's commit and sees its own",
+    listeners=[_doc_listener("primary", "private")],
+    steps=[
+        _step("signIn", client="primary", account="throwaway"),
+        _step("settle", listener="primary", seconds=1.2),
+        _step("seed", doc="private", fields={"value": "p0"}),
+        _step("listen", listener="primary"),
+        _step("awaitServer", listener="primary"),
+        _step("baseline"),
+        _step("write", client="secondary", doc="privateB", fields={"value": "b1"}),
+        _step("quiet", listener="primary", seconds=3),
+        _step("write", client="witness", doc="private", fields={"value": "p1"}),
+        _step("await", listener="primary", events=1),
+    ],
+    expected_local=[
+        _event("primary", "delta", docs=["private"], exists=True),
+    ],
+    comparison=COMPARISON_ORDERED,
+    compared_fields=list(SEMANTIC_ONLY_FIELDS),
+    discriminators=["snapshotKind"],
+    invariants=["no-event-after-quiet-window"],
+    requires_rules=True,
+    documents=["private", "privateB"],
+)
+
 CASES: tuple[dict[str, Any], ...] = (
     _CASE_101,
     _CASE_101C,
@@ -651,6 +778,10 @@ CASES: tuple[dict[str, Any], ...] = (
     _CASE_106N,
     _CASE_107,
     _CASE_107C,
+    _CASE_108,
+    _CASE_108C,
+    _CASE_109,
+    _CASE_109C,
 )
 
 # Paths the campaign explicitly cannot observe from a Node process. Each entry
@@ -659,11 +790,15 @@ UNOBSERVED_PATHS = (
     MappingProxyType(
         {
             "path": "browser-webchannel",
-            "reason": "The Node SDK build selects the gRPC transport; WebChannel framing, "
-            "long-poll fallback and browser tab lifecycle are not exercised.",
-            "plan": "A separate browser campaign driving the same case catalog through a "
-            "headless Chromium page against the same oracle project, with the "
-            "WebChannel request log captured from the page rather than from Node.",
+            "reason": "The Node SDK build selects the gRPC transport; this campaign does not "
+            "exercise WebChannel framing, long polling, the streamed backchannel "
+            "or browser tab lifecycle in production. A local browser shadow "
+            "(listen_browser_adapter.mjs) runs the same catalog through headless "
+            "Chromium, but that is local evidence only.",
+            "plan": "A separate browser campaign driving the same case catalog through the "
+            "existing headless Chromium adapter against the same oracle project, "
+            "with the WebChannel request log captured from the page rather than "
+            "from Node.",
         }
     ),
     MappingProxyType(
@@ -684,16 +819,14 @@ UNOBSERVED_PATHS = (
     ),
     MappingProxyType(
         {
-            "path": "cross-identity-isolation",
-            "reason": "The campaign budget allows one account, and both auth cases sign the "
-            "same principal out and back in. No case has user A listen to user B's "
-            "document, so tenant and principal isolation under Rules is not "
-            "observed and a MATCH must not be read as covering it.",
-            "plan": "A second throwaway account and a case in which A opens a listener on "
-            "B's o6_listen_private document and on B's run prefix, expecting "
-            "permission-denied in both, with a control proving B's own listener "
-            "succeeds. It needs maxAccounts raised to two and a second sign-in in "
-            "the adapter.",
+            "path": "tenant-isolation",
+            "reason": "Cases 108/108C observe one principal being refused another "
+            "principal's private document within one project. Identity Platform "
+            "tenants are not exercised: both accounts live in the default tenant, "
+            "so a MATCH says nothing about cross-tenant isolation under Rules.",
+            "plan": "A tenant-scoped throwaway account and a listener case whose principal "
+            "carries a tenant claim, expecting permission-denied across the tenant "
+            "boundary, once the oracle project has a second tenant.",
         }
     ),
     MappingProxyType(

@@ -1,0 +1,788 @@
+{
+  "schema": "sdk-smoke-browser-v1",
+  "transport": "browser-webchannel",
+  "productionExecuted": false,
+  "browser": {
+    "name": "chromium",
+    "version": "151.0.7922.34"
+  },
+  "pages": {
+    "listener-lifecycle": {
+      "page": "listener-lifecycle",
+      "passed": true,
+      "status": "passed",
+      "elapsedMs": 934,
+      "result": {
+        "passed": true,
+        "maximumConnectedForms": 1,
+        "maximumConnectedRouteTrees": 1,
+        "initialHtml": {
+          "event": "initial-html",
+          "connectedForms": 1,
+          "routeTrees": [
+            "ssr"
+          ],
+          "headings": [
+            {
+              "text": "Listener lifecycle settings",
+              "ancestry": [
+                "h1",
+                "form",
+                "main#app",
+                "body",
+                "html"
+              ]
+            }
+          ]
+        },
+        "callbackAfterUnsubscribe": [],
+        "deniedOperations": [
+          "unauthenticated-user-read",
+          "unauthenticated-user-write",
+          "unauthenticated-project-read",
+          "unauthenticated-project-write",
+          "unauthenticated-mail-read",
+          "unauthenticated-mail-write",
+          "unauthenticated-destination-read",
+          "unauthenticated-destination-write",
+          "cross-user-user-read",
+          "cross-user-user-write",
+          "cross-user-project-read",
+          "cross-user-project-write",
+          "cross-user-mail-read",
+          "cross-user-mail-write",
+          "cross-user-destination-read",
+          "cross-user-destination-write"
+        ],
+        "deniedWriteSessionDeltas": {
+          "unauthenticated-user-write": 1,
+          "unauthenticated-project-write": 1,
+          "unauthenticated-mail-write": 1,
+          "unauthenticated-destination-write": 1,
+          "cross-user-user-write": 1,
+          "cross-user-project-write": 1,
+          "cross-user-mail-write": 1,
+          "cross-user-destination-write": 1
+        },
+        "writeSessionOpeningCount": 9,
+        "values": {
+          "shellUser": [
+            0
+          ],
+          "pageUser": [
+            0
+          ],
+          "firstProject": [
+            0
+          ],
+          "firstDestinationSizes": [
+            1
+          ],
+          "replacementUser": [
+            0
+          ],
+          "replacementProject": [
+            0,
+            1
+          ],
+          "replacementDestinationSizes": [
+            1
+          ]
+        },
+        "eventCount": 50,
+        "events": [
+          {
+            "event": "initial-html",
+            "connectedForms": 1,
+            "routeTrees": [
+              "ssr"
+            ],
+            "headings": [
+              {
+                "text": "Listener lifecycle settings",
+                "ancestry": [
+                  "h1",
+                  "form",
+                  "main#app",
+                  "body",
+                  "html"
+                ]
+              }
+            ]
+          },
+          {
+            "event": "dom-mutation",
+            "connectedForms": 1,
+            "routeTrees": [
+              "ssr"
+            ],
+            "headings": [
+              {
+                "text": "Listener lifecycle settings",
+                "ancestry": [
+                  "h1",
+                  "form",
+                  "main#app",
+                  "body",
+                  "html"
+                ]
+              }
+            ]
+          },
+          {
+            "event": "dom-mutation",
+            "connectedForms": 1,
+            "routeTrees": [
+              "ssr"
+            ],
+            "headings": [
+              {
+                "text": "Listener lifecycle settings",
+                "ancestry": [
+                  "h1",
+                  "form",
+                  "main#app",
+                  "body",
+                  "html"
+                ]
+              }
+            ]
+          },
+          {
+            "event": "denied",
+            "label": "unauthenticated-user-read",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "unauthenticated-user-write",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "unauthenticated-project-read",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "unauthenticated-project-write",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "unauthenticated-mail-read",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "unauthenticated-mail-write",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "unauthenticated-destination-read",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "unauthenticated-destination-write",
+            "code": "permission-denied"
+          },
+          {
+            "event": "auth",
+            "ordinal": 1,
+            "state": "signed-out"
+          },
+          {
+            "event": "auth",
+            "ordinal": 2,
+            "state": "signed-in"
+          },
+          {
+            "event": "denied",
+            "label": "cross-user-user-read",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "cross-user-user-write",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "cross-user-project-read",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "cross-user-project-write",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "cross-user-mail-read",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "cross-user-mail-write",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "cross-user-destination-read",
+            "code": "permission-denied"
+          },
+          {
+            "event": "denied",
+            "label": "cross-user-destination-write",
+            "code": "permission-denied"
+          },
+          {
+            "event": "mount-client-1",
+            "connectedForms": 1,
+            "routeTrees": [
+              "client-1"
+            ],
+            "headings": [
+              {
+                "text": "Listener lifecycle settings",
+                "ancestry": [
+                  "h1",
+                  "form",
+                  "main#app",
+                  "body",
+                  "html"
+                ]
+              }
+            ]
+          },
+          {
+            "event": "subscribe",
+            "label": "shell-user",
+            "ordinal": 1
+          },
+          {
+            "event": "subscribe",
+            "label": "page-user-1",
+            "ordinal": 2
+          },
+          {
+            "event": "subscribe",
+            "label": "project-1",
+            "ordinal": 3
+          },
+          {
+            "event": "subscribe",
+            "label": "destinations-1",
+            "ordinal": 4
+          },
+          {
+            "event": "dom-mutation",
+            "connectedForms": 1,
+            "routeTrees": [
+              "client-1"
+            ],
+            "headings": [
+              {
+                "text": "Listener lifecycle settings",
+                "ancestry": [
+                  "h1",
+                  "form",
+                  "main#app",
+                  "body",
+                  "html"
+                ]
+              }
+            ]
+          },
+          {
+            "event": "callback",
+            "label": "shell-user",
+            "ordinal": 1,
+            "callbackOrdinal": 1,
+            "value": 0
+          },
+          {
+            "event": "callback",
+            "label": "page-user-1",
+            "ordinal": 2,
+            "callbackOrdinal": 1,
+            "value": 0
+          },
+          {
+            "event": "callback",
+            "label": "project-1",
+            "ordinal": 3,
+            "callbackOrdinal": 1,
+            "value": 0
+          },
+          {
+            "event": "callback",
+            "label": "destinations-1",
+            "ordinal": 4,
+            "callbackOrdinal": 1,
+            "value": 1
+          },
+          {
+            "event": "one-shot",
+            "label": "mail",
+            "revision": 0
+          },
+          {
+            "event": "unsubscribe",
+            "label": "page-user-1",
+            "ordinal": 2
+          },
+          {
+            "event": "unsubscribe",
+            "label": "project-1",
+            "ordinal": 3
+          },
+          {
+            "event": "unsubscribe",
+            "label": "destinations-1",
+            "ordinal": 4
+          },
+          {
+            "event": "unmount-client-1",
+            "connectedForms": 1,
+            "routeTrees": [
+              "client-1"
+            ],
+            "headings": [
+              {
+                "text": "Listener lifecycle settings",
+                "ancestry": [
+                  "h1",
+                  "form",
+                  "main#app",
+                  "body",
+                  "html"
+                ]
+              }
+            ]
+          },
+          {
+            "event": "mount-client-2",
+            "connectedForms": 1,
+            "routeTrees": [
+              "client-2"
+            ],
+            "headings": [
+              {
+                "text": "Listener lifecycle settings",
+                "ancestry": [
+                  "h1",
+                  "form",
+                  "main#app",
+                  "body",
+                  "html"
+                ]
+              }
+            ]
+          },
+          {
+            "event": "subscribe",
+            "label": "page-user-2",
+            "ordinal": 5
+          },
+          {
+            "event": "subscribe",
+            "label": "project-2",
+            "ordinal": 6
+          },
+          {
+            "event": "subscribe",
+            "label": "destinations-2",
+            "ordinal": 7
+          },
+          {
+            "event": "dom-mutation",
+            "connectedForms": 1,
+            "routeTrees": [
+              "client-2"
+            ],
+            "headings": [
+              {
+                "text": "Listener lifecycle settings",
+                "ancestry": [
+                  "h1",
+                  "form",
+                  "main#app",
+                  "body",
+                  "html"
+                ]
+              }
+            ]
+          },
+          {
+            "event": "callback",
+            "label": "page-user-2",
+            "ordinal": 5,
+            "callbackOrdinal": 1,
+            "value": 0
+          },
+          {
+            "event": "callback",
+            "label": "project-2",
+            "ordinal": 6,
+            "callbackOrdinal": 1,
+            "value": 0
+          },
+          {
+            "event": "callback",
+            "label": "destinations-2",
+            "ordinal": 7,
+            "callbackOrdinal": 1,
+            "value": 1
+          },
+          {
+            "event": "callback",
+            "label": "project-2",
+            "ordinal": 6,
+            "callbackOrdinal": 2,
+            "value": 1
+          },
+          {
+            "event": "unsubscribe",
+            "label": "page-user-2",
+            "ordinal": 5
+          },
+          {
+            "event": "unsubscribe",
+            "label": "project-2",
+            "ordinal": 6
+          },
+          {
+            "event": "unsubscribe",
+            "label": "destinations-2",
+            "ordinal": 7
+          },
+          {
+            "event": "unsubscribe",
+            "label": "shell-user",
+            "ordinal": 1
+          },
+          {
+            "event": "settled",
+            "connectedForms": 1,
+            "routeTrees": [
+              "client-2"
+            ],
+            "headings": [
+              {
+                "text": "Listener lifecycle settings",
+                "ancestry": [
+                  "h1",
+                  "form",
+                  "main#app",
+                  "body",
+                  "html"
+                ]
+              }
+            ]
+          }
+        ],
+        "cleanupErrors": []
+      },
+      "pageErrors": [],
+      "webchannel": {
+        "summary": {
+          "requests": 80,
+          "listen": 31,
+          "write": 49,
+          "handshakes": 11,
+          "forward": 21,
+          "backchannel": 37,
+          "terminate": 11,
+          "backchannelCi": {
+            "streamed": 0,
+            "longPolled": 37
+          }
+        },
+        "columns": [
+          "atMs",
+          "stream",
+          "method",
+          "role",
+          "ci",
+          "status"
+        ],
+        "rows": [
+          "374 Listen POST handshake - 200",
+          "378 Listen GET backchannel 1 200",
+          "379 Listen GET backchannel 1 200",
+          "381 Write POST handshake - 200",
+          "382 Write GET backchannel 1 200",
+          "385 Write POST forward - 200",
+          "385 Write GET backchannel 1 200",
+          "386 Write POST terminate - 200",
+          "401 Listen POST forward - 200",
+          "402 Listen GET backchannel 1 200",
+          "403 Write POST handshake - 200",
+          "403 Write GET backchannel 1 200",
+          "404 Write POST forward - 200",
+          "404 Write GET backchannel 1 200",
+          "404 Write POST terminate - 200",
+          "417 Listen POST forward - 200",
+          "418 Listen GET backchannel 1 200",
+          "419 Write POST handshake - 200",
+          "420 Write GET backchannel 1 200",
+          "420 Write POST forward - 200",
+          "420 Write GET backchannel 1 200",
+          "421 Write POST terminate - 200",
+          "434 Listen POST forward - 200",
+          "435 Listen GET backchannel 1 200",
+          "435 Write POST handshake - 200",
+          "436 Write GET backchannel 1 200",
+          "436 Write POST forward - 200",
+          "436 Write GET backchannel 1 200",
+          "437 Write POST terminate - 200",
+          "455 Listen POST terminate - 200",
+          "456 Listen POST handshake - 200",
+          "456 Listen GET backchannel 1 200",
+          "457 Listen GET backchannel 1 200",
+          "457 Write POST handshake - 200",
+          "458 Write GET backchannel 1 200",
+          "458 Write POST forward - 200",
+          "458 Write GET backchannel 1 200",
+          "459 Write POST terminate - 200",
+          "478 Listen POST forward - 200",
+          "479 Listen GET backchannel 1 200",
+          "480 Write POST handshake - 200",
+          "480 Write GET backchannel 1 200",
+          "481 Write POST forward - 200",
+          "481 Write GET backchannel 1 200",
+          "482 Write POST terminate - 200",
+          "493 Listen POST forward - 200",
+          "494 Listen GET backchannel 1 200",
+          "494 Write POST handshake - 200",
+          "495 Write GET backchannel 1 200",
+          "495 Write POST forward - 200",
+          "496 Write GET backchannel 1 200",
+          "496 Write POST terminate - 200",
+          "509 Listen POST forward - 200",
+          "510 Listen GET backchannel 1 200",
+          "510 Write POST handshake - 200",
+          "511 Write GET backchannel 1 200",
+          "512 Write POST forward - 200",
+          "512 Write GET backchannel 1 200",
+          "513 Write POST terminate - 200",
+          "526 Write POST handshake - 200",
+          "527 Write GET backchannel 1 200",
+          "528 Write POST forward - 200",
+          "528 Write GET backchannel 1 200",
+          "530 Write GET backchannel 1 200",
+          "532 Write GET backchannel 1 200",
+          "533 Listen POST forward - 200",
+          "533 Listen POST forward - 200",
+          "534 Listen GET backchannel 1 200",
+          "535 Listen GET backchannel 1 200",
+          "536 Listen GET backchannel 1 200",
+          "537 Listen POST forward - 200",
+          "537 Write POST forward - 200",
+          "538 Listen GET backchannel 1 200",
+          "538 Listen POST forward - 200",
+          "539 Write GET backchannel 1 200",
+          "539 Listen GET backchannel 1 200",
+          "540 Listen GET backchannel 1 200",
+          "791 Listen POST forward - -",
+          "792 Listen POST terminate - 200",
+          "792 Write POST terminate - 200"
+        ]
+      }
+    },
+    "listen-reconnect": {
+      "page": "listen-reconnect",
+      "passed": true,
+      "status": "passed",
+      "elapsedMs": 371,
+      "result": {
+        "passed": true,
+        "transport": "browser-webchannel",
+        "sdkVersion": "12.18.0",
+        "snapshots": [
+          {
+            "exists": true,
+            "revision": 0,
+            "fromCache": true,
+            "hasPendingWrites": false
+          },
+          {
+            "exists": true,
+            "revision": 0,
+            "fromCache": false,
+            "hasPendingWrites": false
+          },
+          {
+            "exists": true,
+            "revision": 0,
+            "fromCache": true,
+            "hasPendingWrites": false
+          },
+          {
+            "exists": true,
+            "revision": 1,
+            "fromCache": true,
+            "hasPendingWrites": true
+          },
+          {
+            "exists": true,
+            "revision": 1,
+            "fromCache": false,
+            "hasPendingWrites": true
+          },
+          {
+            "exists": true,
+            "revision": 1,
+            "fromCache": false,
+            "hasPendingWrites": false
+          }
+        ],
+        "events": [
+          {
+            "event": "snapshot",
+            "value": {
+              "exists": true,
+              "revision": 0,
+              "fromCache": true,
+              "hasPendingWrites": false
+            }
+          },
+          {
+            "event": "snapshot",
+            "value": {
+              "exists": true,
+              "revision": 0,
+              "fromCache": false,
+              "hasPendingWrites": false
+            }
+          },
+          {
+            "event": "snapshot",
+            "value": {
+              "exists": true,
+              "revision": 0,
+              "fromCache": true,
+              "hasPendingWrites": false
+            }
+          },
+          {
+            "event": "snapshot",
+            "value": {
+              "exists": true,
+              "revision": 1,
+              "fromCache": true,
+              "hasPendingWrites": true
+            }
+          },
+          {
+            "event": "pending-cache",
+            "value": {
+              "exists": true,
+              "revision": 1,
+              "fromCache": true,
+              "hasPendingWrites": true
+            }
+          },
+          {
+            "event": "snapshot",
+            "value": {
+              "exists": true,
+              "revision": 1,
+              "fromCache": false,
+              "hasPendingWrites": true
+            }
+          },
+          {
+            "event": "snapshot",
+            "value": {
+              "exists": true,
+              "revision": 1,
+              "fromCache": false,
+              "hasPendingWrites": false
+            }
+          },
+          {
+            "event": "reconnect-ack",
+            "value": {
+              "exists": true,
+              "revision": 1,
+              "fromCache": false,
+              "hasPendingWrites": false
+            }
+          },
+          {
+            "event": "unsubscribe-check",
+            "callbacksAfterUnsubscribe": 0
+          },
+          {
+            "event": "auth-switch",
+            "state": "signed-out"
+          },
+          {
+            "event": "unauthenticated-read",
+            "denied": true
+          }
+        ]
+      },
+      "pageErrors": [],
+      "webchannel": {
+        "summary": {
+          "requests": 29,
+          "listen": 15,
+          "write": 14,
+          "handshakes": 5,
+          "forward": 4,
+          "backchannel": 15,
+          "terminate": 5,
+          "backchannelCi": {
+            "streamed": 0,
+            "longPolled": 15
+          }
+        },
+        "columns": [
+          "atMs",
+          "stream",
+          "method",
+          "role",
+          "ci",
+          "status"
+        ],
+        "rows": [
+          "1289 Write POST handshake - 200",
+          "1291 Write GET backchannel 1 200",
+          "1292 Write POST forward - 200",
+          "1292 Write GET backchannel 1 200",
+          "1295 Write GET backchannel 1 200",
+          "1295 Listen POST handshake - 200",
+          "1296 Listen GET backchannel 1 200",
+          "1297 Listen GET backchannel 1 200",
+          "1298 Write POST terminate - 200",
+          "1298 Listen POST terminate - 200",
+          "1326 Write POST handshake - 200",
+          "1326 Listen POST handshake - 200",
+          "1327 Write GET backchannel 1 200",
+          "1327 Listen GET backchannel 1 200",
+          "1328 Write POST forward - 200",
+          "1329 Write GET backchannel 1 200",
+          "1329 Listen GET backchannel 1 200",
+          "1329 Write GET backchannel 1 200",
+          "1330 Listen GET backchannel 1 200",
+          "1357 Listen POST forward - 200",
+          "1357 Write POST forward - 200",
+          "1358 Listen GET backchannel 1 200",
+          "1358 Write GET backchannel 1 200",
+          "1462 Write POST terminate - 200",
+          "1462 Listen POST terminate - 200",
+          "1463 Listen POST handshake - 200",
+          "1464 Listen GET backchannel 1 200",
+          "1464 Listen GET backchannel 1 -",
+          "1464 Listen POST terminate - 200"
+        ]
+      }
+    }
+  },
+  "complete": true
+}

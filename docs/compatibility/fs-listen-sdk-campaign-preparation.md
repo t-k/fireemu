@@ -15,10 +15,13 @@ and owner preconditions, and a local shadow that ran the whole catalog against
 
 ## Observation Cases
 
-Fourteen cases live in `tools/compat-broad/fs-listen-resume/cases.py` and are
+Eighteen cases live in `tools/compat-broad/fs-listen-resume/cases.py` and are
 published for the Node collector as `spec/compatibility/fs-listen-sdk-cases.json`.
-Seven are observation cases; each has a control or negative counterpart, so a run
-cannot report agreement from a listener that never delivered anything.
+Nine are observation cases; each has a control or negative counterpart, so a run
+cannot report agreement from a listener that never delivered anything. Two
+principals take part: the case client and a witness client are signed in as the
+first throwaway account, and a `secondary` client is signed in as the second
+one, whose only owned document is `privateB`.
 
 | Case | Dimension | What it observes | Counterpart |
 | --- | --- | --- | --- |
@@ -29,6 +32,17 @@ cannot report agreement from a listener that never delivered anything.
 | `FS-LISTEN-SDK-105` | Unsubscribe | Callbacks stop while a witness listener still sees the write | `105C` keeps the listener and sees the same write on both |
 | `FS-LISTEN-SDK-106` | Auth switching | Signing out mid-listen terminates a Rules-protected listener | `106N` starts the listener signed out and never reaches the server |
 | `FS-LISTEN-SDK-107` | Default subscription | A listener that does not request metadata changes raises one callback per data change | `107C` writes the same data again and expects no callback |
+| `FS-LISTEN-SDK-108` | Cross-identity | The first principal's listener on the second principal's private document ends in `permission-denied` with no server snapshot before the error | `108C` has the second principal listen to the same document and receive the server snapshot |
+| `FS-LISTEN-SDK-109` | Token revocation | The first principal's sessions are revoked (`validSince`) while its listener is attached; an unrelated commit by the second principal follows. Locally the listener ends with `unauthenticated` | `109C` applies the same commits without revoking and expects the listener to stay silent for the other principal's write and to see its own |
+
+`FS-LISTEN-SDK-109` records what `fireemu` does: it re-verifies the credential on
+every commit-triggered refresh, so the Listen stream ends with `UNAUTHENTICATED`
+("token revoked") at the next commit and the SDK surfaces that as a terminal
+listener error. The production hypothesis is different and is deliberately not
+asserted: Firestore does not consult revocation for an already-issued ID token,
+so a production listener is expected to keep working until the token expires.
+The comparator will report that as a mismatch to be judged, not as a defect on
+either side.
 
 Each case declares the fields it compares. A listener that does not treat
 metadata as a signal drops `fromCache` and `hasPendingWrites` from the compared
@@ -118,21 +132,22 @@ Planned operations and the frozen caps:
 
 | Quantity | Planned | Cap |
 | --- | --- | --- |
-| Writes | 25 | 60 |
+| Writes | 32 | 60 |
 | Deletes (observation) | 1 | 80 |
-| Reads (observation) | 25 | 600 |
-| Raw snapshot deliveries | 76 | 120 |
-| Listener registrations | 17 | 40 |
-| Cleanup reads (reserve) | 150 | 200 |
-| Cleanup deletes (reserve) | 75 | 100 |
+| Reads (observation) | 29 | 600 |
+| Raw snapshot deliveries | 92 | 120 |
+| Listener registrations | 21 | 40 |
+| Cleanup reads (reserve) | 228 | 300 |
+| Cleanup deletes (reserve) | 114 | 150 |
 | Wall clock | one run | 600 s plus a 180 s cleanup reserve |
 
-The estimated cost at published Firestore list prices is USD 0.000165, against a
+The estimated cost at published Firestore list prices is USD 0.000235, against a
 hard ceiling of USD 0.50. That is a planning ceiling, not an observed bill.
 
 The permission envelope inherits from nothing. It allows one run of the declared
-catalog, one throwaway account sign-in and sign-out, and creation plus
-conditional deletion of the declared owned documents. It forbids reuse of any
+catalog, sign-in, sign-out and session revocation of at most two throwaway
+accounts, and creation plus conditional deletion of the declared owned
+documents. It forbids reuse of any
 earlier compat-broad permission, any write outside the owned prefixes, any retry
 past the deadline or the cost ceiling, and recording an identity token, refresh
 token or password anywhere in the output.
@@ -156,12 +171,15 @@ token or password anywhere in the output.
    }
    ```
 
-2. **Throwaway account.** One email and password account owned by the campaign
-   operator, its password supplied through a private file descriptor.
+2. **Throwaway accounts.** Two email and password accounts owned by the campaign
+   operator: the principal every case signs in as, and the second principal of
+   the cross-identity and revocation cases. Each password is supplied through
+   its own private file descriptor (`O6_LISTEN_PASSWORD_FD`,
+   `O6_LISTEN_SECONDARY_PASSWORD_FD`).
 3. **Index.** None. The query filters and orders on the same field, which the
    automatic single-field index serves.
-4. **Clean prefix.** The nonce-scoped run document and the private document must
-   not exist before the run.
+4. **Clean prefix.** The nonce-scoped run document and both private documents
+   must not exist before the run.
 
 ## Comparator contract
 
@@ -191,9 +209,10 @@ the permission and transport bindings.
 
 ## Local shadow
 
-The current shadow receipt was regenerated from commit `4130d105b0e157f6a807594c761a3fac84a19819`
-with the pinned Firebase SDK `12.18.0`. All fourteen cases agreed with their
-expected local result. The collector ran
+The current shadow receipt was regenerated from commit `b691969d997a34319f5b6fa87c01eea6a498cb05`
+with the pinned Firebase SDK `12.18.0`. All eighteen cases agreed with their
+expected local result, both throwaway accounts were deleted and proved absent,
+and the revocation case ended the listener with `unauthenticated` as recorded. The collector ran
 the full catalog against an owned local `fireemu` instance
 started by `fireemu exec` with the Firestore and Auth emulators on OS-assigned
 ports. The runtime was built from this worktree with `cargo build -p fireemu`,
@@ -245,6 +264,42 @@ deterministic, and that `fireemu` produces the expected local result. It does
 not show that production produces the same result; that is the campaign's whole
 purpose.
 
+## Browser WebChannel local shadow
+
+The Node build of the firebase JS SDK speaks gRPC, so the receipt above says
+nothing about WebChannel. A second shadow runs the same eighteen cases through
+the browser build of release `12.18.0` in a headless Chromium that
+`tools/compat-broad/fs-listen-resume/listen_browser_adapter.mjs` owns, against
+an owned `fireemu exec` child on OS-assigned loopback ports. The page loads
+`listen_collector.mjs` byte-identical from the lane directory (an import map
+supplies a browser SHA-256 for its single `node:crypto` import), so the
+normalised event rows have the Node receipt's shape by construction rather than
+by translation. The catalog runs twice, one throwaway account each: with
+`experimentalForceLongPolling` (every backchannel response closes at once,
+`CI=1`) and with auto-detection and long polling both off (one streamed
+backchannel per session, `CI=0`). Each per-mode receipt records
+`transport: browser-webchannel`, the mode, the Chromium version, the SHA-256 of
+the three gstatic bundles the browser executed, the `SDK_VERSION` the bundle
+reported, and the WebChannel request log taken from the page's own network view
+(stream, role, `CI` and status per request; never a session id, header or body).
+
+The checked-in result is `spec/compatibility/fs-listen-sdk-browser-local-shadow.json`,
+with its campaign record at `fs-listen-sdk-browser-local-shadow-campaign.json`.
+`test_o6_listen_sdk_browser_local_shadow.py` recomputes the bound source
+digests, the catalog digest, the ruleset and binary digests and every case
+comparison in both modes, and requires that the long-polling receipt saw only
+`CI=1` backchannels and the streaming receipt only `CI=0`. Each per-mode receipt
+also passes `local_shadow_check.mjs` unchanged. The two hand-written smoke pages
+(`listen-reconnect.html`, `listener-lifecycle.html`) are driven by
+`tools/sdk-smoke-browser/run-browser.mjs`; their result is
+`spec/compatibility/fs-listen-sdk-browser-smoke-pages.json`.
+
+All eighteen cases agreed with their expected local result in both modes,
+including the cross-identity denial and the revocation outcome, which the
+WebChannel transport reproduces exactly as gRPC does. This removes "browser
+WebChannel path not executed" from the local side of the `FS-LISTEN-SDK`
+closure condition; production remains unobserved for every transport.
+
 ## What this preparation established about the SDK
 
 Three expectations written before the shadow ran turned out to be wrong about
@@ -266,21 +321,21 @@ None of these is a `fireemu` defect, and no Repair Ticket was opened.
 
 ## What remains unobserved
 
-Four paths cannot be observed from this lane. Each is recorded in the catalog
+Five paths cannot be observed from this lane. Each is recorded in the catalog
 and repeated in every comparison result, so a future `MATCH` cannot be read as
 covering them.
 
 | Path | Why it is unobserved | Plan |
 | --- | --- | --- |
-| Cross-identity isolation | The budget allows one account and both auth cases sign the same principal out and back in, so no case has one principal refused another principal's document. A `MATCH` must not be read as covering tenant or principal isolation. | A second throwaway account and a case where A opens a listener on B's private document and on B's run prefix, expecting `permission-denied` in both, with a control proving B's own listener succeeds. It needs the account budget raised to two. |
-| Browser WebChannel | The Node SDK build selects the gRPC transport. WebChannel framing, long-poll fallback and tab lifecycle are never exercised. | A separate browser campaign driving the same catalog through a headless Chromium page against the same oracle project, capturing the WebChannel request log from the page rather than from Node. |
+| Tenant isolation | Cases `108`/`108C` now observe one principal being refused another principal's private document within one project, but both accounts live in the default tenant. A `MATCH` says nothing about cross-tenant isolation under Rules. | A tenant-scoped throwaway account and a listener case whose principal carries a tenant claim, expecting `permission-denied` across the tenant boundary, once the oracle project has a second tenant. |
+| Browser WebChannel | The Node SDK build selects the gRPC transport. WebChannel framing, long polling and the streamed backchannel are exercised only by the browser shadow above, which is local evidence; tab lifecycle is not exercised by any lane. | The browser adapter now exists and runs the same catalog locally. A production browser campaign would drive it against the oracle project with the same page-side request log. |
 | Android SDK | No Android runtime, Gradle toolchain or device is available here. | An instrumented Android test module replaying the same catalog and emitting the same normalized event rows. |
 | Apple SDK | No iOS or macOS SDK harness exists in this repository. | An XCTest target replaying the same catalog and emitting the same normalized event rows. |
 | Raw resume token | The Node client SDK owns the resume token and does not expose it, so `RESET`, stale tokens and compacted tokens cannot be driven from application code. | A direct gRPC Listen probe that supplies a chosen resume token and records the `TargetChange` response, kept as a separate case from SDK-level resume. |
 
 Because all five remain open, `FS-LISTEN-SDK` keeps its blocking condition and
 its `WAITING_ORACLE` status. Running this campaign would reduce that condition
-to the browser, Android and Apple paths, cross-identity isolation and raw token
+to the browser, Android and Apple paths, tenant isolation and raw token
 behaviour; it would not clear it.
 
 ## Supervised local SDK execution (non-authorizing)

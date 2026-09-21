@@ -8,13 +8,13 @@
     "tools/compat-broad/fs-listen-resume/observation.py"
   ],
   "budget": {
-    "cleanupReserveDeletes": 100,
-    "cleanupReserveReads": 200,
+    "cleanupReserveDeletes": 150,
+    "cleanupReserveReads": 300,
     "cleanupReserveSeconds": 180,
     "estimatedCostUsd": 0.01,
     "hardCostCeilingUsd": 0.5,
-    "maxAccounts": 1,
-    "maxClients": 2,
+    "maxAccounts": 2,
+    "maxClients": 3,
     "maxConcurrency": 1,
     "maxConcurrentListeners": 3,
     "maxDeletes": 80,

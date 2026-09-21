@@ -43,16 +43,16 @@
     "database": "(default)",
     "estimatedCostUsd": 0.000235,
     "owner": {
-      "namespace": "o6/FS-LISTEN-SDK/467580e726dc40ce5cad8d5eaf9462e3",
-      "nonceDigest": "a9940954b461047308d2da84d223108fabcd730ba64e5fb40f3224f0104c2210",
+      "namespace": "o6/FS-LISTEN-SDK/1473a02140f2c1dec70aed83dc1f3211",
+      "nonceDigest": "4ceac18341d6d73306b5842fee0d3d34fadeacd6bbde7d2c0bc76b1e49f438fe",
       "paths": {
-        "absent": "o6_listen/{uid}/runs/467580e726dc40ce5cad8d5eaf9462e3/docs/absent",
-        "alpha": "o6_listen/{uid}/runs/467580e726dc40ce5cad8d5eaf9462e3/docs/alpha",
-        "beta": "o6_listen/{uid}/runs/467580e726dc40ce5cad8d5eaf9462e3/docs/beta",
-        "gamma": "o6_listen/{uid}/runs/467580e726dc40ce5cad8d5eaf9462e3/docs/gamma",
+        "absent": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/absent",
+        "alpha": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/alpha",
+        "beta": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/beta",
+        "gamma": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211/docs/gamma",
         "private": "o6_listen_private/{uid}",
         "privateB": "o6_listen_private/{uidB}",
-        "run": "o6_listen/{uid}/runs/467580e726dc40ce5cad8d5eaf9462e3"
+        "run": "o6_listen/{uid}/runs/1473a02140f2c1dec70aed83dc1f3211"
       }
     },
     "ownerPreconditions": [
@@ -162,7 +162,7 @@
       }
     ]
   },
-  "campaignDigest": "9ffdbada7ee0d6b184442deb1d05d666bc7e5eb5568b58494f883b2e6c0214bb",
-  "nonce": "467580e726dc40ce5cad8d5eaf9462e3",
+  "campaignDigest": "7c43eaad9fbcd6bd574f471ac4caad0f69414a8b0aae39053060ddb3a0bb93fd",
+  "nonce": "1473a02140f2c1dec70aed83dc1f3211",
   "schema": "o6-listen-sdk-shadow-campaign-v1"
 }

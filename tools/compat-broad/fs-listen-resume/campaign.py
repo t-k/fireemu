@@ -74,8 +74,8 @@ BUDGET = MappingProxyType(
         "maxConcurrency": 1,
         "maxConcurrentListeners": 3,
         "maxListenerRegistrations": 40,
-        "maxClients": 2,
-        "maxAccounts": 1,
+        "maxClients": 3,
+        "maxAccounts": 2,
         "maxDocuments": 6,
         "maxWrites": 60,
         "maxDeletes": 80,
@@ -84,8 +84,8 @@ BUDGET = MappingProxyType(
         # an expired observation deadline can never leave an owned document
         # behind. The reserve is charged separately and reported separately.
         "cleanupReserveSeconds": 180,
-        "cleanupReserveReads": 200,
-        "cleanupReserveDeletes": 100,
+        "cleanupReserveReads": 300,
+        "cleanupReserveDeletes": 150,
         "maxSnapshots": 120,
         "estimatedCostUsd": 0.01,
         "hardCostCeilingUsd": 0.5,
@@ -105,11 +105,12 @@ OWNER_PRECONDITIONS = (
     MappingProxyType(
         {
             "id": "throwaway-account",
-            "requirement": "Create one throwaway email/password account owned by the campaign "
-            "operator in the oracle project. Its password is supplied to the "
-            "collector through a private file descriptor, never through argv or "
-            "the environment.",
-            "verifiable": "exactly one account identifier appears in the receipt",
+            "requirement": "Create two throwaway email/password accounts owned by the campaign "
+            "operator in the oracle project: the principal every case signs in "
+            "as, and the second principal of the cross-identity and revocation "
+            "cases. Each password is supplied to the collector through its own "
+            "private file descriptor, never through argv or the environment.",
+            "verifiable": "exactly two account identifiers appear in the receipt",
         }
     ),
     MappingProxyType(
@@ -137,12 +138,12 @@ PERMISSION_ENVELOPE = MappingProxyType(
         "inheritsFrom": None,
         "allows": (
             "one run of the declared case catalog against the oracle project",
-            "at most one throwaway account sign-in and sign-out",
+            "sign-in, sign-out and session revocation of at most two throwaway accounts",
             "creation and conditional deletion of the declared owned documents",
         ),
         "forbids": (
             "reuse of any earlier compat-broad permission",
-            "any write outside the nonce-scoped run document and the private document",
+            "any write outside the nonce-scoped run document and the two private documents",
             "any retry after the deadline or the hard cost ceiling",
             "recording an identity token, refresh token or password in any output",
         ),
@@ -151,7 +152,11 @@ PERMISSION_ENVELOPE = MappingProxyType(
 
 
 def owned_paths(nonce: str, uid_placeholder: str = "{uid}") -> dict[str, str]:
-    """Return the owned document paths for a run nonce."""
+    """Return the first principal's owned document paths for a run nonce.
+
+    This mirrors `ownedPaths` in `listen_collector.mjs`; the second principal's
+    single document comes from `secondary_paths`.
+    """
     if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):
         raise ValueError("nonce must be exactly 128-bit lowercase hexadecimal")
     run = f"{cases.RUN_COLLECTION}/{uid_placeholder}/runs/{nonce}"
@@ -164,6 +169,18 @@ def owned_paths(nonce: str, uid_placeholder: str = "{uid}") -> dict[str, str]:
         "absent": f"{docs}/absent",
         "private": f"{cases.PRIVATE_COLLECTION}/{uid_placeholder}",
     }
+
+
+def secondary_paths(nonce: str, uid_placeholder: str = "{uidB}") -> dict[str, str]:
+    """Return the second principal's owned document path (`secondaryPaths` in Node)."""
+    if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):
+        raise ValueError("nonce must be exactly 128-bit lowercase hexadecimal")
+    return {"privateB": f"{cases.PRIVATE_COLLECTION}/{uid_placeholder}"}
+
+
+def campaign_paths(nonce: str) -> dict[str, str]:
+    """Every document a run may create, both principals together."""
+    return {**owned_paths(nonce), **secondary_paths(nonce)}
 
 
 def count_operations() -> dict[str, int]:
@@ -188,7 +205,7 @@ def count_operations() -> dict[str, int]:
     # one read to prove ownership, one delete, one read to prove absence. Those
     # operations are charged to the cleanup reserve, not to the observation
     # budget, so they are counted separately.
-    owned = len(owned_paths("0" * 32)) - 1  # the run document itself is not seeded
+    owned = len(campaign_paths("0" * 32)) - 1  # the run document itself is not seeded
     passes = len(cases.CASES) + 1  # once per case, plus one final pass
     return {
         "writes": writes,
@@ -225,7 +242,7 @@ def compile_campaign(
     database: str = DATABASE,
 ) -> dict[str, Any]:
     """Compile the frozen campaign manifest for one run nonce."""
-    paths = owned_paths(nonce)
+    paths = campaign_paths(nonce)
     if project != PROJECT or database != DATABASE:
         raise ValueError("project/database are fixed to the oracle default")
     if permission is not None and not _PERMISSION.fullmatch(permission):

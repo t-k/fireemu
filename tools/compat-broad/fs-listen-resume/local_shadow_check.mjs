@@ -1,7 +1,9 @@
 // Local expectation checking only: no SDK, network, production admission, or
 // assertion that this receipt was produced by the current source/binary.
 // Usage: node local_shadow_check.mjs [--legacy-lifecycle] <receipt.json>
-// Old immutable receipts without lifecycle evidence require the explicit flag.
+// Old immutable receipts without lifecycle evidence require the explicit flag,
+// and O6_LISTEN_CATALOG_PATH must name the catalog of their era
+// (spec/compatibility/fs-listen-sdk-cases-historical.json).
 import { constants, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -13,7 +15,10 @@ const count = value => Number.isSafeInteger(value) && value >= 0;
 const hex = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const equal = isDeepStrictEqual;
 const sortedKeys = value => Object.keys(value).sort();
-const resources = ['absent', 'alpha', 'beta', 'gamma', 'private'];
+// The owned resources are whatever the catalog's cases declare: five documents
+// for the single-principal catalog, six once the second principal's private
+// document joined it.
+const resourcesOf = catalog => [...new Set(catalog.cases.flatMap(row => row.documents ?? []))].sort();
 const budgetKinds = ['deletes', 'listeners', 'reads', 'snapshots', 'writes'];
 const canonical = value => Array.isArray(value) ? value.map(canonical)
   : object(value) ? Object.fromEntries(sortedKeys(value).map(key => [key, canonical(value[key])])) : value;
@@ -104,6 +109,7 @@ export const checkShadow = (receipt, catalog, { legacyLifecycle = false } = {}) 
       Number.isFinite(b.deadlineMs) && b.deadlineMs > 0 && budgetKinds.every(k =>
         count(b.used[k]) && count(b.limits[k]) && b.used[k] <= b.limits[k]), `${key}-invalid-or-exhausted`);
   }
+  const resources = resourcesOf(catalog);
   const cleanupValid = value => object(value) && value.complete === true && Array.isArray(value.rows) &&
     equal(value.rows.map(row => row?.name).sort(), resources) && value.rows.every(row =>
       hex(row.pathDigest) && row.detail === null &&

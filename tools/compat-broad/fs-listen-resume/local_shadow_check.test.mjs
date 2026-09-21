@@ -12,11 +12,16 @@ const cli = path.join(root, 'tools/compat-broad/fs-listen-resume/local_shadow_ch
 const historical = JSON.parse(readFileSync(path.join(root, 'spec/compatibility/fs-listen-sdk-local-shadow-historical.json'), 'utf8'));
 const currentEvidence = JSON.parse(readFileSync(path.join(root, 'spec/compatibility/fs-listen-sdk-local-shadow.json'), 'utf8'));
 const catalog = JSON.parse(readFileSync(path.join(root, 'spec/compatibility/fs-listen-sdk-cases.json'), 'utf8'));
+// The catalog the historical receipt ran under: fourteen single-principal cases.
+const historicalCatalogPath = path.join(root, 'spec/compatibility/fs-listen-sdk-cases-historical.json');
+const historicalCatalog = JSON.parse(readFileSync(historicalCatalogPath, 'utf8'));
 const current = () => structuredClone(currentEvidence);
 
-test('historical expected events pass only under the explicit legacy contract', () => {
-  assert.equal(checkShadow(historical, catalog).complete, false);
-  const result = checkShadow(historical, catalog, { legacyLifecycle: true });
+test('historical expected events pass only under the explicit legacy contract and their own catalog', () => {
+  assert.equal(checkShadow(historical, historicalCatalog).complete, false);
+  assert.equal(checkShadow(historical, catalog, { legacyLifecycle: true }).complete, false,
+    'the current catalog has more cases than the historical receipt');
+  const result = checkShadow(historical, historicalCatalog, { legacyLifecycle: true });
   assert.equal(result.complete, true);
   assert.equal(result.legacyLifecycle, true);
   assert.equal(result.currentArtifactVerified, false);
@@ -116,13 +121,16 @@ test('CLI failure codes and strict/legacy evidence remain distinguishable', () =
   const dir = mkdtempSync(path.join(tmpdir(), 'listen-check-'));
   try {
     const file = path.join(dir, 'receipt.json');
-    const run = args => spawnSync(process.execPath, [cli, ...args], { cwd: root, encoding: 'utf8', timeout: 5000 });
+    const run = (args, env = {}) => spawnSync(process.execPath, [cli, ...args],
+      { cwd: root, encoding: 'utf8', timeout: 5000, env: { ...process.env, ...env } });
     writeFileSync(file, JSON.stringify(current()));
     let result = run([file]); assert.equal(result.status, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).currentArtifactVerified, false);
     writeFileSync(file, JSON.stringify(historical));
-    assert.equal(run([file]).status, 1);
-    assert.equal(run(['--legacy-lifecycle', file]).status, 0);
+    const historicalEnv = { O6_LISTEN_CATALOG_PATH: historicalCatalogPath };
+    assert.equal(run([file], historicalEnv).status, 1);
+    assert.equal(run(['--legacy-lifecycle', file]).status, 1);
+    assert.equal(run(['--legacy-lifecycle', file], historicalEnv).status, 0);
     const failure = current(); failure.cases = [];
     writeFileSync(file, JSON.stringify(failure)); assert.equal(run([file]).status, 1);
     writeFileSync(file, '{"secret":"PRIVATE-TOKEN",'); result = run([file]);

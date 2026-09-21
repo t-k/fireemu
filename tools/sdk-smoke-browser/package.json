@@ -1,0 +1,16 @@
+{
+  "name": "fireemu-sdk-smoke-browser",
+  "private": true,
+  "description": "Drives the browser build of the pinned firebase JS SDK (WebChannel transport) through headless Chromium against a fireemu exec child.",
+  "type": "module",
+  "scripts": {
+    "listen:browser": "node run-browser.mjs",
+    "test": "node --test run-browser.test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

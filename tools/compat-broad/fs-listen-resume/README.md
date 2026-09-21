@@ -21,10 +21,12 @@ uv run --project tools/compat-inventory --locked pytest -q tools/compat-broad/fs
 A second, separate layer prepares a bounded production campaign for the same
 inventory row. It does not execute one, and the row stays `WAITING_ORACLE`.
 
-- `cases.py` declares twelve Observation Cases: six observations, each with a
+- `cases.py` declares eighteen Observation Cases: nine observations, each with a
   control or negative counterpart, covering document and query event order,
-  `hasPendingWrites`, resume after a forced stream break, unsubscribe and auth
-  switching on a Rules-protected document.
+  `hasPendingWrites`, resume after a forced stream break, unsubscribe, auth
+  switching on a Rules-protected document, default-mode subscription, a second
+  principal's private document (cross-identity) and session revocation while a
+  listener is attached.
 - `campaign.py` freezes the manifest: resolved SDK identities with npm
   integrity digests, the budget, the permission envelope and the owner
   preconditions. A compiled campaign is `BLOCKED_OWNER` until a campaign-scoped
@@ -32,6 +34,13 @@ inventory row. It does not execute one, and the row stays `WAITING_ORACLE`.
 - `listen_collector.mjs` is the bounded step machine, budget, invariant checker
   and cleanup contract. It imports no Firebase code; `listen_sdk_adapter.mjs`
   supplies the real SDK and refuses production mode.
+- `listen_browser_adapter.mjs` runs the same catalog through the browser build
+  of the SDK (WebChannel transport) in a headless Chromium it owns, once with
+  forced long polling and once with a streamed backchannel. The collector is
+  served to the page byte-identical, so the event rows have the Node receipt's
+  shape; the receipt adds the page's WebChannel request log and the digests of
+  the SDK bundles the browser executed. Playwright lives in its own package,
+  `tools/sdk-smoke-browser/` (see its README for the run command).
 - `observation.py` compares a local receipt against a production receipt. It
   reaches `MATCH` only on acquisition evidence and reports the paths it could
   not observe in every result.
@@ -70,6 +79,14 @@ and generates fresh unapproved local inputs. It does not start/stop the emulator
 or authorize production. See the supervised execution section of
 `docs/compatibility/fs-listen-sdk-campaign-preparation.md` for prerequisites and
 limits.
+
+Node resolution: `FIREEMU_NODE` (an executable file) wins. Otherwise the first
+`node` on `PATH` is used, resolved through symlinks; when that resolves to a
+`volta-shim` the launcher substitutes the pinned image from
+`$VOLTA_HOME/tools/image/node/<version>/bin/node` (`tools/user/platform.json`
+first, then the newest image) and refuses with `volta-shim-refused` when none
+exists. The shim is never executed: with the private empty `HOME` the child
+gets, it would try to install a default Node and can spawn itself recursively.
 
 The private pre-spawn launch record and synchronous adapter checkpoints retain
 recovery responsibility if a Promise stalls or the process is killed. Process

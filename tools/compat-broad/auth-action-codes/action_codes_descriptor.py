@@ -130,7 +130,7 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
     }
 
 
-def validate_permission(permission, plan):
+def validate_permission(permission, plan, *, source_inputs=None, source_commit=None, artifact_sha256=None):
     """Validate authorization semantics, not only a digest over caller data."""
     envelope = plan["permissionEnvelope"]
     expected = {
@@ -142,9 +142,9 @@ def validate_permission(permission, plan):
         "methods": list(envelope["methods"]),
         "nonce": plan["nonce"],
         "planDigest": digest(plan),
-        "sourceCommit": permission.get("sourceCommit"),
-        "sourceInputs": permission.get("sourceInputs"),
-        "artifactSha256": permission.get("artifactSha256"),
+        "sourceCommit": source_commit if source_commit is not None else permission.get("sourceCommit"),
+        "sourceInputs": source_inputs if source_inputs is not None else permission.get("sourceInputs"),
+        "artifactSha256": artifact_sha256 if artifact_sha256 is not None else permission.get("artifactSha256"),
         "wallSeconds": 300,
         "recoverySeconds": 180,
         "resourceLocks": lock_scopes(plan),

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -28,11 +29,14 @@ def _artifacts(tmp_path):
     artifact = tmp_path / "artifact"
     artifact.write_bytes(b"action-code-local-shadow-artifact")
     source_inputs = campaign.source_map()
+    source_commit = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+    ).strip()
     permission = campaign.permission_bindings(
-        plan, "0" * 40, hashlib.sha256(artifact.read_bytes()).hexdigest(), source_inputs
+        plan, source_commit, hashlib.sha256(artifact.read_bytes()).hexdigest(), source_inputs
     )
     inputs = admission.freeze_inputs(
-        permission, plan, source_commit="0" * 40, artifact_sha256=permission["artifactSha256"]
+        permission, plan, source_commit=source_commit, artifact_sha256=permission["artifactSha256"]
     )
     manifest = {"kind": campaign.MANIFEST_KIND, "inputsDigest": inputs["inputsDigest"]}
     manifest_bytes = json.dumps(manifest, sort_keys=True).encode()
@@ -95,6 +99,9 @@ def test_nonce_and_resource_binding_mutations_are_rejected(tmp_path):
     values = _artifacts(tmp_path)
     descriptor, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = values
     for mutate in (
+        lambda value: value["permission"].update(sourceCommit="f" * 40),
+        lambda value: value["permission"]["sourceInputs"].update({"forged.py": "0" * 64}),
+        lambda value: value["permission"].update(artifactSha256="0" * 64),
         lambda value: value["permission"].update(nonce="c" * 32),
         lambda value: value["permission"].update(resourceLocks=[]),
         lambda value: value["permission"]["budget"].update(observationRequests=1),

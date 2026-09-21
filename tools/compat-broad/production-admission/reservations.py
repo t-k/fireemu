@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import os
 import platform
+import stat
 
 from broad_contract import digest
 from shared_gate import (
@@ -1027,14 +1028,35 @@ class Ledger:
     @staticmethod
     def _read_bounded_json(path):
         path = Path(path)
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or str(path.resolve()) != str(path)
-            or path.stat().st_size > MAX_BYTES
-        ):
+        if not path.is_absolute() or str(path.resolve(strict=False)) != str(path):
             raise ValueError("bounded canonical evidence file required")
-        value = json.loads(path.read_bytes())
+        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError) as error:
+            raise ValueError("bounded canonical evidence file required") from error
+        try:
+            initial = os.fstat(descriptor)
+            if not stat.S_ISREG(initial.st_mode) or initial.st_size > MAX_BYTES:
+                raise ValueError("bounded regular evidence file required")
+            chunks = []
+            remaining = MAX_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            final = os.fstat(descriptor)
+            identity = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+            if not stat.S_ISREG(final.st_mode) or any(
+                getattr(initial, key) != getattr(final, key) for key in identity
+            ) or sum(map(len, chunks)) > MAX_BYTES:
+                raise ValueError("bounded stable evidence file required")
+            payload = b"".join(chunks)
+        finally:
+            os.close(descriptor)
+        value = json.loads(payload)
         if not isinstance(value, dict):
             raise ValueError("bounded evidence object required")
         return value

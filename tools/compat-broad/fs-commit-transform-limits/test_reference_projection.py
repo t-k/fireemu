@@ -87,3 +87,21 @@ def test_projection_refuses_evidence_and_cleanup_mutations(v6_copy):
     evidence_path.write_text(json.dumps(evidence))
     with pytest.raises(ValueError):
         projection.project_run(cleanup_run, V6_COMPILER)
+
+
+def test_projection_refuses_deleted_file_with_recomputed_seal_map(v6_copy):
+    evidence_path = v6_copy / "evidence.json"
+    evidence = json.loads(evidence_path.read_text())
+    (v6_copy / "result.json").unlink()
+    del evidence["files"]["result.json"]
+    evidence_path.write_text(json.dumps(evidence))
+    with pytest.raises(ValueError, match="local run record is unreadable|sealed file digest map is incomplete|sealed run file set differs"):
+        projection.project_run(v6_copy, V6_COMPILER)
+
+
+def test_real_v6_projection_is_accepted_when_private_fixture_is_available():
+    if not V6_RUN.is_dir() or not V6_COMPILER.is_file():
+        pytest.skip("private v6 replay is unavailable")
+    projected = projection.project_run(V6_RUN, V6_COMPILER)
+    assert len(projected["rows"]) == 11
+    assert len(projected["cleanup"]) == 6

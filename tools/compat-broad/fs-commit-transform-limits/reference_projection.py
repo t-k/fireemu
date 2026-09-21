@@ -46,6 +46,28 @@ _ROW_KEYS = frozenset(
         "headers",
     }
 )
+_SEALED_BASE_FILES = frozenset(
+    {
+        "cases.json",
+        "command.json",
+        "config.json",
+        "identity.json",
+        "instance.json",
+        "local-contract.json",
+        "manifest.json",
+        "owned-stderr.log",
+        "plan.json",
+        "result.json",
+        "retained-manifest.json",
+        "run-inputs.json",
+        "supervisor-final.json",
+    }
+)
+_SEALED_FILES = _SEALED_BASE_FILES | frozenset(
+    f"wire/{index:03d}-{kind}.json"
+    for index in range(17)
+    for kind in ("request", "receipt")
+)
 
 
 def _load(path: Path) -> Any:
@@ -80,6 +102,8 @@ def _validate_source_map(inputs: dict[str, Any]) -> None:
 
 
 def _validate_seal(run: Path, profile: dict[str, Any]) -> dict[str, Any]:
+    if (run / "evidence.json").is_symlink() or (run / "run-inputs.json").is_symlink():
+        raise ValueError("local run seal contains a symlink")
     evidence = _load(run / "evidence.json")
     inputs = _load(run / "run-inputs.json")
     if not isinstance(evidence, dict) or not isinstance(inputs, dict):
@@ -112,8 +136,17 @@ def _validate_seal(run: Path, profile: dict[str, Any]) -> dict[str, Any]:
     validate_copied_manifest(run, inputs, profile)
     _validate_source_map(inputs)
     files = evidence.get("files")
-    if not isinstance(files, dict) or not files:
+    if not isinstance(files, dict) or set(files) != _SEALED_FILES:
         raise ValueError("sealed file digest map is incomplete")
+    actual_files = {
+        str(path.relative_to(run))
+        for path in run.rglob("*")
+        if path.is_file() and path.name != "evidence.json"
+    }
+    if actual_files != _SEALED_FILES or any(
+        path.is_symlink() for path in run.rglob("*") if path.name != "evidence.json"
+    ):
+        raise ValueError("sealed run file set differs")
     for relative, expected in files.items():
         if not isinstance(relative, str) or not isinstance(expected, str) or _sha(run / relative) != expected:
             raise ValueError("sealed file digest differs")

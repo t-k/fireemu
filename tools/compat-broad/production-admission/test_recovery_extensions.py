@@ -349,6 +349,50 @@ def test_settle_recovery_child_accepts_one_authoritative_200_delete_chain(tmp_pa
     assert ledger.snapshot() == before
 
 
+def test_close_after_recovery_child_releases_only_parent_and_is_idempotent(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_recovery_extension(
+        parent, child, envelope, parent_plan, child_plan, now=1100,
+        canonical_parent_inputs=ACTUAL_INPUTS, parent_permission=ACTUAL_PERMISSION,
+    )
+    create_gate(child["gatePath"], child_plan)
+    gate = EnrichedRecoveryGate(child["gatePath"], reservations.RECOVERY_GATE_JOB)
+    gate.claim()
+    for operation in child_plan["jobs"][reservations.RECOVERY_GATE_JOB]["recovery"]:
+        wire = dict(operation)
+        if operation["kind"] == "recovery-conditional-delete":
+            wire.pop("versionFrom")
+        gate.dispatch(wire, True, lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}))
+    gate.finish()
+    ledger.settle_recovery_child(child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan, now=10**12)
+    closed = ledger.close_after_recovery_child(
+        parent, child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan, now=10**12,
+    )
+    assert closed == parent
+    assert ledger.snapshot()["reservations"][parent["reservation"]]["state"] == "closed-after-recovery-child"
+    assert ledger.close_after_recovery_child(
+        parent, child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan,
+    ) == parent
+    before = ledger.snapshot()
+    parent_gate_path = Path(before["reservations"][parent["reservation"]]["claim"]["gatePath"])
+    parent_gate_state_path = parent_gate_path / "state.json"
+    parent_gate_state = json.loads(parent_gate_state_path.read_text())
+    parent_gate_state["planDigest"] = "0" * 64
+    _save(parent_gate_path, parent_gate_state)
+    with pytest.raises(ValueError):
+        ledger.close_after_recovery_child(
+            parent, child_ticket, receipt_digest="close-receipt", canonical_parent_plan=parent_plan,
+        )
+    assert ledger.snapshot() == before
+    parent_gate_state["planDigest"] = digest(parent_gate_state["plan"])
+    _save(parent_gate_path, parent_gate_state)
+    with pytest.raises(ValueError, match="different recovery settlement receipt"):
+        ledger.close_after_recovery_child(
+            parent, child_ticket, receipt_digest="wrong", canonical_parent_plan=parent_plan,
+        )
+    assert ledger.snapshot() == before
+
+
 def test_recovery_extension_refuses_tariff_or_plan_count_mutation_without_save(tmp_path):
     ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
     before = ledger.snapshot()

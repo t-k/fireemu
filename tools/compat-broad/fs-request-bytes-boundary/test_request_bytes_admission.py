@@ -403,6 +403,31 @@ def test_transport_source_mutation_is_outside_frozen_generation(tmp_path, path):
         )
 
 
+def test_noncurrent_source_map_cannot_downgrade_generation_closure(tmp_path):
+    built = Admission(tmp_path)
+    inputs = copy.deepcopy(built.inputs)
+    inputs["sourceInputs"].pop(
+        "tools/compat-broad/fs-request-bytes-boundary/request_bytes_campaign.py"
+    )
+    generation = admission.abort_generation(built.inputs)
+    generation["sourceDigests"].pop("batch_wire.py")
+    with pytest.raises(ValueError, match="source map differs"):
+        campaign.validate_generation(generation, inputs)
+
+
+def test_historical_generation_requires_exact_legacy_closure(tmp_path):
+    built = Admission(tmp_path)
+    generation = admission.abort_generation(built.inputs)
+    generation["sourceDigests"] = {
+        Path(name).name: built.inputs["sourceInputs"][name]
+        for name in campaign.LEGACY_CLOSURE_SOURCES
+    }
+    campaign.validate_generation(generation, built.inputs)
+    generation["sourceCommit"] = "0" * 40
+    with pytest.raises(ValueError, match="commit differs"):
+        campaign.validate_generation(generation, built.inputs)
+
+
 @pytest.mark.parametrize(
     "damage",
     [

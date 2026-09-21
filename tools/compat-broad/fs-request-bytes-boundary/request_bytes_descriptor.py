@@ -141,6 +141,7 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_descriptor.py",
     *TRANSPORT_CLOSURE_SOURCES,
 )
+LEGACY_CLOSURE_SOURCES = ABORT_CLOSURE_SOURCES[:5]
 
 
 def shadow_record() -> dict:
@@ -732,20 +733,26 @@ def generation_source_digests(source_inputs: dict[str, str]) -> dict[str, str]:
 
 
 def validate_generation(generation: dict, inputs: dict) -> None:
-    """Validate current generations while accepting historical omissions."""
+    """Validate current generations and one explicit historical schema."""
     if not isinstance(generation, dict) or not isinstance(inputs, dict):
         raise ValueError("saved generation binding required")
     source_digests = generation.get("sourceDigests")
     if not isinstance(source_digests, dict):
         raise ValueError("saved generation source closure required")
-    expected = generation_source_digests(inputs.get("sourceInputs"))
-    for name, value in source_digests.items():
-        if name in expected and value != expected[name]:
-            raise ValueError("saved generation source differs")
-    # A newly frozen packet has the current descriptor map. Historical inputs
-    # may legitimately predate this transport closure and remain readable.
-    if inputs.get("sourceInputs") == source_map() and source_digests != expected:
-        raise ValueError("saved generation source closure incomplete")
+    source_inputs = inputs.get("sourceInputs")
+    current = generation_source_digests(source_inputs)
+    legacy = {
+        Path(name).name: source_inputs[name] for name in LEGACY_CLOSURE_SOURCES
+    }
+    if generation.get("sourceCommit") != inputs.get("sourceCommit"):
+        raise ValueError("saved generation commit differs")
+    if generation.get("collectorSourceDigest") != digest(source_inputs):
+        raise ValueError("saved generation source map differs")
+    if source_digests == current:
+        return
+    if source_digests == legacy:
+        return
+    raise ValueError("saved generation source closure incomplete")
 
 
 def collector(gate, plan, output, *, transmit):

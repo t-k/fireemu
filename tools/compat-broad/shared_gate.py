@@ -1153,6 +1153,13 @@ def can_create(operation):
     path = path if isinstance(path, str) else ""
     method = operation.get("method")
     body = operation.get("body")
+    if (
+        operation.get("kind") == "action-stage"
+        and operation.get("service") == "auth"
+        and method == "POST"
+        and path.startswith("identitytoolkit.googleapis.com/v1/")
+    ):
+        return False
     if _document_read_rpc(operation) or _auth_noncreating_rpc(operation):
         return False
     writes = _bulk_writes(operation)

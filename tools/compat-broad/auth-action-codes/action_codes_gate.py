@@ -279,7 +279,20 @@ class ActionGate(shared_gate.Gate):
                 and isinstance(body.get("refreshToken"), str)
             )
             if not valid:
-                event["authEvidence"] = {"account": operation["account"], "creationOutcome": "refused", "status": status}
+                event["creationOutcome"] = "unknown"
+                event["authEvidence"] = {
+                    "account": operation["account"],
+                    "creationOutcome": "unknown",
+                    "status": status,
+                }
+                state.setdefault("jobs", {}).setdefault(self.job, {}).setdefault("authAccounts", {})[
+                    operation["account"]
+                ] = {
+                    "resource": operation["resource"],
+                    "createEvent": len(state["events"]) - 1,
+                    "requestDigest": event["requestDigest"],
+                    "creationOutcome": "unknown",
+                }
                 return
             records = job = state["jobs"][self.job]
             accounts = job.setdefault("authAccounts", {})

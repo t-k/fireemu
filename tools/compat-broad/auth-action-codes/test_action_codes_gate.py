@@ -75,6 +75,25 @@ def test_gate_rejects_foreign_resource_or_nonce(tmp_path):
         shared_gate.create(tmp_path / "gate", plan)
 
 
+def test_incomplete_signup_is_unknown_held_and_not_refused(tmp_path):
+    plan = gate.gate_plan(PROJECT, NONCE)
+    path = tmp_path / "gate"
+    gate.create(path, plan)
+    handle = gate.ActionGate(path, gate.JOB)
+    handle.claim()
+    signup = plan["jobs"][gate.JOB]["observation"][0]
+    handle.dispatch(signup, False, lambda: (200, {"localId": "uid-a"}))
+    state = json.loads((path / "state.json").read_bytes())
+    event = state["events"][0]
+    record = state["jobs"][gate.JOB]["authAccounts"]["accountA"]
+    assert event["creationOutcome"] == "unknown"
+    assert event["authEvidence"]["creationOutcome"] == "unknown"
+    assert record["creationOutcome"] == "unknown"
+    assert record["resource"] == signup["resource"]
+    assert record["createEvent"] == 0
+    assert "uid" not in record
+
+
 def test_action_delete_predicate_does_not_union_invoking_job_bindings():
     plan = gate.gate_plan(PROJECT, NONCE)
     original = plan["jobs"][gate.JOB]

@@ -42,6 +42,7 @@ def test_source_map_contains_actual_transport_and_shared_abort_closure():
     ).hexdigest()
     for name in campaign.ABORT_CLOSURE_SOURCES:
         assert name in sources
+    assert "tools/compat-broad/auth-action-codes/action_codes_gate.py" in campaign.ABORT_CLOSURE_SOURCES
 
 
 def test_transport_requires_the_closed_credential_envelope():

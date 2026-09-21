@@ -48,6 +48,7 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/o8-core/o8_admission.py",
     f"{LANE_DIRECTORY}/action_codes_plan.py",
     f"{LANE_DIRECTORY}/action_codes_admission.py",
+    f"{LANE_DIRECTORY}/action_codes_gate.py",
     f"{LANE_DIRECTORY}/action_codes_descriptor.py",
     f"{LANE_DIRECTORY}/action_codes_remote_transport.py",
     f"{LANE_DIRECTORY}/action_codes_production.py",

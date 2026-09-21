@@ -148,14 +148,43 @@ def _replace_during_run(path, data):
     return thread, failures
 
 
-def _recompare(inputs, output, reference, root):
+def _recompare(inputs, output, reference, root, historical_compiler_path=None):
     return recompare.recompare_saved(
         output,
         reference,
         expected_inputs_digest=inputs["inputsDigest"],
         comparator_root=root,
+        historical_compiler_path=historical_compiler_path,
         expected_execution_kind="injected-transport",
     )
+
+
+def test_historical_compiler_path_is_source_bound_and_recorded(tmp_path, monkeypatch):
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=False)
+    record = _recompare(inputs, output, reference, root, root / "transform_compiler.py")
+    assert record["repaired"]["classification"] == "MATCH"
+    assert record["binding"]["historicalCompilerSourceSha256"] == _sha256(
+        root / "transform_compiler.py"
+    )
+
+
+def test_historical_compiler_symlink_is_refused(tmp_path, monkeypatch):
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=False)
+    link = tmp_path / "compiler-link.py"
+    link.symlink_to(root / "transform_compiler.py")
+    with pytest.raises(ValueError, match="regular non-empty file required"):
+        _recompare(inputs, output, reference, root, link)
+
+
+def test_historical_compiler_byte_mutation_is_refused(tmp_path, monkeypatch):
+    inputs, output, reference = _saved(tmp_path, monkeypatch)
+    root = _comparator_root(tmp_path / "comparator-a", slow=False)
+    mutated = tmp_path / "mutated-compiler.py"
+    mutated.write_bytes((root / "transform_compiler.py").read_bytes() + b"\n# mutation\n")
+    with pytest.raises(ValueError, match="historical compiler source binding differs"):
+        _recompare(inputs, output, reference, root, mutated)
 
 
 def test_a_quiet_run_records_the_hashes_of_the_sources_it_executed(

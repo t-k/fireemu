@@ -85,6 +85,7 @@ _KERNEL = (
 # new lane import fails to import rather than silently loading it from a
 # directory this run does not hash.
 _SOURCES = ("transform_comparator.py", "transform_compiler.py")
+_COMPILER_INPUT = "tools/compat-broad/fs-commit-transform-limits/transform_compiler.py"
 
 
 def _read_bytes(path) -> bytes:
@@ -191,14 +192,14 @@ def _snapshot(sources: dict[str, bytes], snapshot: Path) -> dict[str, str]:
     rather than a source that may since have been replaced.
     """
     digests = {}
-    for name in _SOURCES:
+    for name, source in sources.items():
         handle = os.open(snapshot / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
         with os.fdopen(handle, "wb") as stream:
-            stream.write(sources[name])
+            stream.write(source)
             stream.flush()
             os.fsync(stream.fileno())
         written = _read_bytes(snapshot / name)
-        if written != sources[name]:
+        if written != source:
             raise ValueError("comparator snapshot differs from its source")
         digests[name] = _sha256(written)
     return digests
@@ -210,6 +211,7 @@ def recompare_saved(
     *,
     expected_inputs_digest: str,
     comparator_root,
+    historical_compiler_path=None,
     expected_execution_kind: str = "fixed-production-wire",
 ) -> dict[str, Any]:
     """Compare one saved receipt under both the frozen and repaired comparator.
@@ -222,7 +224,12 @@ def recompare_saved(
     output = Path(output)
     comparator_root = Path(comparator_root)
     reference_path = Path(reference_path)
+    historical_compiler = (
+        Path(historical_compiler_path) if historical_compiler_path is not None else None
+    )
     depends_on = _required_paths(output, comparator_root, reference_path)
+    if historical_compiler is not None:
+        depends_on += (historical_compiler,)
 
     # The pre-image is taken first, but only as a probe, because
     # `compare_saved` owns the refusal for an invalid saved directory and that
@@ -272,6 +279,15 @@ def recompare_saved(
     inputs = json.loads(witness[output / "inputs.json"])
     receipt = json.loads(witness[output / "receipt.json"])
     reference = json.loads(witness[reference_path])
+    if historical_compiler is not None:
+        expected_compiler_sha = inputs.get("sourceInputs", {}).get(_COMPILER_INPUT)
+        if not isinstance(expected_compiler_sha, str):
+            raise ValueError("saved compiler source binding is missing")
+        compiler_bytes = witness[historical_compiler]
+        if _sha256(compiler_bytes) != expected_compiler_sha:
+            raise ValueError("historical compiler source binding differs")
+    else:
+        compiler_bytes = witness[comparator_root / "transform_compiler.py"]
     payload = json.dumps(
         {
             "plan": inputs["plan"],
@@ -285,7 +301,11 @@ def recompare_saved(
     try:
         os.chmod(snapshot, 0o700)
         repaired_sources = _snapshot(
-            {name: witness[comparator_root / name] for name in _SOURCES}, snapshot
+            {
+                "transform_comparator.py": witness[comparator_root / "transform_comparator.py"],
+                "transform_compiler.py": compiler_bytes,
+            },
+            snapshot,
         )
         completed = subprocess.run(
             [sys.executable, "-I", "-S", "-B", "-c", _KERNEL, str(snapshot)],
@@ -314,6 +334,9 @@ def recompare_saved(
     return {
         "binding": {
             "comparatorSourceSha256": repaired_sources,
+            "historicalCompilerSourceSha256": (
+                _sha256(compiler_bytes) if historical_compiler is not None else None
+            ),
             "expectedInputsDigest": expected_inputs_digest,
             "frozenComparatorSourceSha256": {
                 name: _sha256(witness[output / name]) for name in _SOURCES

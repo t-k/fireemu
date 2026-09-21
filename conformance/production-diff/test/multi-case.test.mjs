@@ -128,3 +128,10 @@ test("buildExecArgs defaults to the batch-write project and accepts an override"
     COMMIT_TRANSFORM_CASE.project,
   );
 });
+
+test("buildExecArgs selects auth and firestore only for G0", () => {
+  const args = buildExecArgs("/binary", "/dir", "/entry.mjs", "/node", G0_CASE.project, "auth,firestore").args;
+  assert.equal(args[args.indexOf("--only") + 1], "auth,firestore");
+  assert.equal(args[args.indexOf("--auth-port") + 1], "0");
+  assert.equal(args[args.indexOf("--firestore-port") + 1], "0");
+});

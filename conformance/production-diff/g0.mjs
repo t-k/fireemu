@@ -9,6 +9,16 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const G0_PRODUCTION_SHA256 =
   "47672f4e3162b4a0ddfb7baaab622007602aeed6c1fa3d6e5e84034bcbb87772";
 
+export function validateG0Origins(env) {
+  const values = {
+    firestore: env?.FIRESTORE_EMULATOR_HOST,
+    auth: env?.FIREBASE_AUTH_EMULATOR_HOST,
+  };
+  for (const value of Object.values(values))
+    requireThat(/^127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(value ?? ""), "g0-owned-origin-required");
+  return values;
+}
+
 const adapterFiles = ["g0-plan.mjs", "g0-session.mjs", "g0.mjs", "pilot.mjs", "registry.mjs"];
 
 async function sourceDigests() {

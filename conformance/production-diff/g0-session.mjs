@@ -6,10 +6,12 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { publishJson } from "./io.mjs";
 import { requireThat, digestJson, safeCode } from "./core.mjs";
+import { validateG0Origins } from "./g0.mjs";
 
 const directory = process.env.PILOT_RUN_DIR;
 requireThat(typeof directory === "string", "missing-run-directory");
 const root = resolve(process.env.PILOT_REPO ?? resolve(dirname(fileURLToPath(import.meta.url)), "../.."));
+validateG0Origins(process.env);
 const plan = JSON.parse(await fs.readFile(join(directory, "program.json"), "utf8"));
 const python = [
   "import json, os, pathlib, subprocess, sys",
@@ -21,7 +23,9 @@ const python = [
   "from shared_gate import create",
   "plan=json.loads((out/'program.json').read_bytes()); plan['observerSha256']=observer_digest()",
   "create(out/'gate', plan)",
-  "origins={'firestore': local_origin('http://' + os.environ['FIRESTORE_EMULATOR_HOST'])}",
+  "firestore=os.environ.get('FIRESTORE_EMULATOR_HOST'); auth=os.environ.get('FIREBASE_AUTH_EMULATOR_HOST')",
+  "if not firestore or not auth: raise ValueError('g0-owned-origins-missing')",
+  "origins={'firestore': local_origin('http://' + firestore), 'auth': local_origin('http://' + auth)}",
   "if not execute(out, origins): raise SystemExit(3)",
 ].join("; ");
 const result = await new Promise((done) => {
@@ -59,6 +63,7 @@ await publishJson(join(directory, "session-result.json"), {
   cleanup,
   requests: [],
   requestCount: 0,
+  authRequests: 0,
   productionRequests: 0,
   endpoint: null,
 });

@@ -84,7 +84,9 @@ export function buildExecArgs(
   sessionEntry,
   node = process.execPath,
   project = CASE.project,
+  services = "firestore",
 ) {
+  const withAuth = services.split(",").includes("auth");
   return {
     command: binary,
     args: [
@@ -94,7 +96,8 @@ export function buildExecArgs(
       "--project",
       project,
       "--only",
-      "firestore",
+      services,
+      ...(withAuth ? ["--auth-port", "0"] : []),
       "--firestore-port",
       "0",
       "--http-port",
@@ -200,6 +203,7 @@ async function replay(prepared, options, directory) {
     join(HERE, entry.sessionScript ?? "local-session.mjs"),
     process.execPath,
     entry.project,
+    entry.adapter === "g0" ? "auth,firestore" : "firestore",
   );
   const processResult = await runProcess(command, args, {
     cwd: directory,

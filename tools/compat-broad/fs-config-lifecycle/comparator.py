@@ -51,14 +51,18 @@ ACQUISITION_BINDING = "production-acquisition-binding"
 _HEX64 = re.compile(r"[a-f0-9]{64}")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class VerifiedAcquisition:
     """What the O8 boundary verified about one saved production acquisition.
 
-    Built only by `lifecycle_production.verify_saved`, which checks the receipt
-    directory and the shared Ledger row before naming these values. The comparator
-    accepts nothing else on the production side: not a dict, not a label. Every
-    field is a binding the comparator re-checks against the collection it is handed.
+    Built and registered only by `lifecycle_production.verify_saved`, which checks
+    the receipt directory and the shared Ledger row before naming these values. The
+    comparator accepts nothing else on the production side: not a dict, not a label,
+    and not an instance constructed elsewhere (`eq=False` keeps identity semantics,
+    and `lifecycle_production.verified` is asked for that identity). Every field is
+    a binding the comparator re-checks against the collection it is handed.
+    `synthetic` is True when the anchor was a proof Ledger, and such an object never
+    validates acquisition.
     """
 
     campaign_id: str
@@ -71,8 +75,9 @@ class VerifiedAcquisition:
     artifact_sha256: str
     worker_sha256: str
     collection_digest: str
+    synthetic: bool
 
-    def summary(self) -> dict[str, str]:
+    def summary(self) -> dict[str, Any]:
         return {
             "reservation": self.reservation,
             "ledgerIdentity": self.ledger_identity,
@@ -82,6 +87,7 @@ class VerifiedAcquisition:
             "workerSha256": self.worker_sha256,
             "endpoint": self.endpoint,
             "collectionDigest": self.collection_digest,
+            "synthetic": self.synthetic,
         }
 
 
@@ -141,12 +147,18 @@ COMPARISON_CONTRACT: dict[str, Any] = {
     ),
     "acquisitionValidated": (
         "True only when the production collection's digest is the one the verified "
-        "acquisition names, the acquisition names this campaign, the fixed "
-        "production wire and the production origin, and the whole-run "
-        "classification is MATCH or MISMATCH. The reviewed worker digest, the "
-        "receipt, the frozen inputs, the gate snapshot and the Ledger row are "
-        "checked where the object is built. An executionKind label never "
-        "establishes it."
+        "acquisition names, the acquisition is the object lifecycle_production "
+        "registered when it verified the receipt directory, it names this campaign, "
+        "the fixed production wire and the production origin, its anchor was not a "
+        "proof Ledger (synthetic is false), and the whole-run classification is "
+        "MATCH or MISMATCH. The reviewed worker digest, the receipt, the frozen "
+        "inputs, the gate snapshot and the Ledger row are checked where the object "
+        "is built. An executionKind label never establishes it."
+    ),
+    "syntheticAnchor": (
+        "An acquisition anchored in a proof Ledger is reported with synthetic true "
+        "on the object and syntheticAnchor true on the comparison; its rows are the "
+        "semantic result of a local proof and acquisitionValidated stays false."
     ),
     "refused": (
         "A production record without a VerifiedAcquisition, or with one bound to "
@@ -240,13 +252,25 @@ def _summary(row: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def _registered(acquisition: Any) -> bool:
+    """Ask the O8 boundary whether it built this exact object.
+
+    Imported here rather than at module level: the boundary imports this module,
+    and the local rehearsal child must not load the O8 stack to compare rows.
+    """
+    from fs_config_lifecycle import lifecycle_production
+
+    return lifecycle_production.verified(acquisition)
+
+
 def _acquisition_errors(acquisition: Any, collection: dict[str, Any]) -> list[str]:
     """The comparator's own re-check of the verified acquisition against the record.
 
-    The object's identity is required (a dict is a copy, not a verification), and
-    every binding it names is compared here rather than trusted.
+    The object's identity is required (a dict is a copy, not a verification; an
+    instance the boundary did not register is a construction, not a verification),
+    and every binding it names is compared here rather than trusted.
     """
-    if type(acquisition) is not VerifiedAcquisition:
+    if type(acquisition) is not VerifiedAcquisition or not _registered(acquisition):
         return [ACQUISITION_UNVERIFIED]
     digests = (
         acquisition.receipt_digest,
@@ -264,6 +288,7 @@ def _acquisition_errors(acquisition: Any, collection: dict[str, Any]) -> list[st
         or not acquisition.ledger_identity
         or any(not isinstance(v, str) or _HEX64.fullmatch(v) is None for v in digests)
         or acquisition.collection_digest != digest(collection)
+        or type(acquisition.synthetic) is not bool
     ):
         return [ACQUISITION_BINDING]
     return []
@@ -290,6 +315,7 @@ def compare(
         "classification": PREPARATION_ONLY,
         "promotionReady": False,
         "acquisitionValidated": False,
+        "syntheticAnchor": None,
         "productionUnobservedConditionsReduced": 0,
         "contract": COMPARISON_CONTRACT,
         "rows": [],
@@ -321,6 +347,7 @@ def compare(
         result["errors"] = errors
         return result
     result["acquisition"] = acquisition.summary()
+    result["syntheticAnchor"] = acquisition.synthetic
     rows = compare_rows(local["collection"], production["collection"], nonce)
     result["rows"] = rows
     result["localCleanupComplete"] = local["collection"].get("cleanupComplete") is True
@@ -336,5 +363,7 @@ def compare(
         result["classification"] = MISMATCH
     else:
         result["classification"] = INDETERMINATE
-    result["acquisitionValidated"] = result["classification"] in (MATCH, MISMATCH)
+    result["acquisitionValidated"] = not acquisition.synthetic and result[
+        "classification"
+    ] in (MATCH, MISMATCH)
     return result

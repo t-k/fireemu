@@ -27,6 +27,7 @@ import json
 import os
 import sys
 import tempfile
+import weakref
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -54,6 +55,9 @@ from fs_config_lifecycle.surface_matrix import digest as canonical_digest
 
 PROOF_MARKER = "PROOF-LEDGER"
 REQUIRED_EVIDENCE = ("inputs.json", "gate-snapshot.json", "collection/result.json")
+# Identity registry of the acquisition objects verify_saved built, the way o8-core
+# keeps its live capabilities: membership, never shape, is what the comparator asks.
+_VERIFIED: weakref.WeakSet = weakref.WeakSet()
 
 
 def _write_receipt(path: Path, receipt: dict) -> None:
@@ -78,14 +82,28 @@ def _write_receipt(path: Path, receipt: dict) -> None:
         os.close(directory)
 
 
-def _proof_ledger(ledger_root) -> None:
-    """An injected transport may reserve only in a Ledger created for a proof."""
+def _is_proof_ledger(ledger_root) -> bool:
     root = Path(ledger_root)
     marker = root / PROOF_MARKER
-    if root.is_symlink() or marker.is_symlink() or not marker.is_file():
+    return not root.is_symlink() and not marker.is_symlink() and marker.is_file()
+
+
+def _proof_ledger(ledger_root) -> None:
+    """An injected transport may reserve only in a Ledger created for a proof."""
+    if not _is_proof_ledger(ledger_root):
         raise ValueError(
             "injected transport requires a proof Ledger, never the canonical one"
         )
+
+
+def verified(acquisition) -> bool:
+    """Whether this exact object is one verify_saved built and registered."""
+    return type(acquisition) is VerifiedAcquisition and acquisition in _VERIFIED
+
+
+def _register(acquisition: VerifiedAcquisition) -> VerifiedAcquisition:
+    _VERIFIED.add(acquisition)
+    return acquisition
 
 
 def execute_reserved(
@@ -254,14 +272,35 @@ def _read_evidence(root: Path, name: str) -> tuple[dict, bytes]:
     return value, raw
 
 
-def verify_saved(output, *, ledger_root) -> tuple[dict, VerifiedAcquisition]:
+def verify_saved(
+    output, *, ledger_root, synthetic: bool = False
+) -> tuple[dict, VerifiedAcquisition]:
     """Verify one saved O8 acquisition and return the comparator's production input.
 
     Returns `(record, acquisition)`: the `{executionKind, collection}` record the
-    comparator takes and the `VerifiedAcquisition` bound to that collection. Raises
-    `ValueError` naming the first binding that does not hold. Nothing is sent and
-    nothing in the directory or the Ledger is changed.
+    comparator takes and the `VerifiedAcquisition` bound to that collection,
+    registered so `verified()` answers for it. Raises `ValueError` naming the first
+    binding that does not hold. Nothing is sent and nothing in the directory or the
+    Ledger is changed.
+
+    A proof Ledger (the temporary one the integration tests create) is refused as
+    the anchor unless `synthetic=True` is passed explicitly, and the object then
+    carries `synthetic=True` so the comparison can never read as production;
+    `synthetic=True` against a Ledger without the proof marker is refused too.
+
+    The Ledger row anchors the reservation (claim digest, gate plan digest,
+    generation, nonce digest, gate path), not the bytes observed after it: the
+    receipt, gate snapshot and collection digests are checked against each other
+    inside the directory. A shared `attach_evidence` Ledger transition is the
+    missing piece for anchoring those.
     """
+    if type(synthetic) is not bool:
+        raise ValueError("synthetic must be an explicit boolean")
+    if _is_proof_ledger(ledger_root) != synthetic:
+        raise ValueError(
+            "proof Ledger anchors require synthetic=True and a canonical Ledger "
+            "refuses it"
+        )
     output = Path(output)
     if output.is_symlink() or not output.is_dir():
         raise ValueError("saved receipt directory required")
@@ -351,5 +390,6 @@ def verify_saved(output, *, ledger_root) -> tuple[dict, VerifiedAcquisition]:
         artifact_sha256=inputs["artifactSha256"],
         worker_sha256=receipt["workerSha256"],
         collection_digest=canonical_digest(collection),
+        synthetic=synthetic,
     )
-    return record, acquisition
+    return record, _register(acquisition)

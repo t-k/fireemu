@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
-from fs_config_lifecycle import lifecycle_remote_transport
+from fs_config_lifecycle import lifecycle_production, lifecycle_remote_transport
 from fs_config_lifecycle.comparator import (
     COMPARISON_CONTRACT,
     EXPECTED_LOCAL_DEVIATION,
@@ -45,10 +45,9 @@ def _record(kind: str, collection: dict) -> dict:
     return {"executionKind": kind, "collection": collection}
 
 
-def _acquisition(collection: dict, **overrides) -> VerifiedAcquisition:
+def _unregistered(collection: dict, **overrides) -> VerifiedAcquisition:
     """An acquisition object shaped like the one `lifecycle_production.verify_saved`
-    returns, bound to `collection`. It stands in for the O8 boundary here; the
-    boundary's own binding checks are proven in test_fs_config_o8."""
+    returns, bound to `collection`, but constructed here: the boundary never saw it."""
     values = {
         "campaign_id": "FS-CONFIG-LIFECYCLE-01",
         "execution_kind": PRODUCTION_KIND,
@@ -60,9 +59,18 @@ def _acquisition(collection: dict, **overrides) -> VerifiedAcquisition:
         "artifact_sha256": "f" * 64,
         "worker_sha256": lifecycle_remote_transport._WORKER_SHA256,
         "collection_digest": digest(collection),
+        "synthetic": False,
     }
     values.update(overrides)
     return VerifiedAcquisition(**values)
+
+
+def _acquisition(collection: dict, **overrides) -> VerifiedAcquisition:
+    """The same object, registered through the boundary's private registry so the
+    semantic tests here can run without a receipt directory. The registry is the
+    only thing that makes it acceptable; the boundary's binding checks and the
+    real registration path are proven in test_fs_config_o8."""
+    return lifecycle_production._register(_unregistered(collection, **overrides))
 
 
 def test_the_comparator_refuses_a_drifted_manifest_and_an_invalid_nonce(
@@ -135,9 +143,102 @@ def test_identical_shapes_on_a_verified_acquisition_classify_as_a_match(
         "workerSha256": lifecycle_remote_transport._WORKER_SHA256,
         "endpoint": "https://firestore.googleapis.com",
         "collectionDigest": digest(production),
+        "synthetic": False,
     }
+    assert result["syntheticAnchor"] is False
     assert result["promotionReady"] is False
     assert result["productionUnobservedConditionsReduced"] == 0
+
+
+def test_a_hand_constructed_acquisition_with_plausible_digests_is_refused(
+    tmp_path: Path,
+) -> None:
+    """Reviewer Should Fix 1: the object must be the one the boundary registered.
+    A VerifiedAcquisition built here with well-formed hex strings and the right
+    collection digest is a construction, not a verification."""
+    manifest = compile_manifest(NONCE)
+    local = _collection(tmp_path, "local")
+    production = _collection(tmp_path, "production")
+    plausible = _unregistered(
+        production,
+        reservation="f" * 64,
+        ledger_identity="x",
+        receipt_digest="f" * 64,
+        gate_digest="f" * 64,
+        artifact_sha256="f" * 64,
+        worker_sha256="f" * 64,
+    )
+    assert lifecycle_production.verified(plausible) is False
+    result = compare(
+        manifest,
+        _record(LOCAL_KIND, local),
+        _record(PRODUCTION_KIND, production),
+        NONCE,
+        acquisition=plausible,
+    )
+    assert result["classification"] == REFUSED
+    assert result["errors"] == ["production-acquisition-unverified"]
+    assert result["rows"] == []
+    assert result["acquisitionValidated"] is False
+    # Registration is by identity: an equal-looking second instance stays refused.
+    registered = _acquisition(production)
+    twin = _unregistered(production)
+    assert lifecycle_production.verified(registered) is True
+    assert lifecycle_production.verified(twin) is False
+    assert (
+        compare(
+            manifest,
+            _record(LOCAL_KIND, local),
+            _record(PRODUCTION_KIND, production),
+            NONCE,
+            acquisition=twin,
+        )["classification"]
+        == REFUSED
+    )
+
+
+def test_a_synthetic_anchor_yields_the_semantic_result_but_never_validates_acquisition(
+    tmp_path: Path,
+) -> None:
+    """Reviewer Should Fix 2: an acquisition anchored in a proof Ledger is reported
+    as synthetic on the object and on the comparison, and acquisitionValidated
+    stays False whatever the rows say."""
+    manifest = compile_manifest(NONCE)
+    local = _collection(tmp_path, "local")
+    production = _collection(tmp_path, "production")
+    result = compare(
+        manifest,
+        _record(LOCAL_KIND, local),
+        _record(PRODUCTION_KIND, production),
+        NONCE,
+        acquisition=_acquisition(production, synthetic=True),
+    )
+    assert result["classification"] == MATCH
+    assert result["syntheticAnchor"] is True
+    assert result["acquisition"]["synthetic"] is True
+    assert result["acquisitionValidated"] is False
+    assert result["promotionReady"] is False
+    mismatched = copy.deepcopy(production)
+    mismatched["rows"][0]["status"] = 418
+    result = compare(
+        manifest,
+        _record(LOCAL_KIND, local),
+        _record(PRODUCTION_KIND, mismatched),
+        NONCE,
+        acquisition=_acquisition(mismatched, synthetic=True),
+    )
+    assert result["classification"] == MISMATCH
+    assert result["acquisitionValidated"] is False
+    # A non-boolean synthetic marker is a broken binding, not a production anchor.
+    result = compare(
+        manifest,
+        _record(LOCAL_KIND, local),
+        _record(PRODUCTION_KIND, production),
+        NONCE,
+        acquisition=_acquisition(production, synthetic=0),
+    )
+    assert result["classification"] == REFUSED
+    assert result["errors"] == ["production-acquisition-binding"]
 
 
 def test_a_relabelled_local_collection_is_refused_as_production_acquisition(
@@ -161,6 +262,7 @@ def test_a_relabelled_local_collection_is_refused_as_production_acquisition(
     assert result["errors"] == ["production-acquisition-unverified"]
     assert result["rows"] == []
     assert result["acquisitionValidated"] is False
+    assert result["syntheticAnchor"] is None
     assert result["promotionReady"] is False
     assert "acquisition" not in result
 

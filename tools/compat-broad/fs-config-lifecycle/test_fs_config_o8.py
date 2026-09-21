@@ -878,7 +878,38 @@ def test_a_proof_run_with_an_injected_transport_is_never_a_verified_acquisition(
     _built, root, result = _proof_run(tmp_path)
     assert result["executionKind"] == "injected-transport"
     with pytest.raises(ValueError, match="not a production acquisition"):
-        lifecycle_production.verify_saved(tmp_path / "run", ledger_root=root)
+        lifecycle_production.verify_saved(
+            tmp_path / "run", ledger_root=root, synthetic=True
+        )
+
+
+def test_a_proof_ledger_anchor_requires_the_explicit_synthetic_flag_and_says_so(
+    tmp_path: Path,
+) -> None:
+    """Reviewer Should Fix 2, both directions: a proof Ledger is refused as the
+    anchor without synthetic=True, a Ledger without the proof marker refuses
+    synthetic=True, and a synthetic anchor is carried on the object."""
+    _built, root, _result = _proof_run(tmp_path)
+    run = tmp_path / "run"
+    _as_production_receipt(run)
+    with pytest.raises(ValueError, match="proof Ledger anchors require synthetic"):
+        lifecycle_production.verify_saved(run, ledger_root=root)
+    with pytest.raises(ValueError, match="proof Ledger anchors require synthetic"):
+        lifecycle_production.verify_saved(run, ledger_root=root, synthetic=False)
+    with pytest.raises(ValueError, match="explicit boolean"):
+        lifecycle_production.verify_saved(run, ledger_root=root, synthetic=1)
+    canonical_shaped = tmp_path / "canonical-shaped"
+    reservations.Ledger.create(canonical_shaped)
+    with pytest.raises(ValueError, match="canonical Ledger refuses"):
+        lifecycle_production.verify_saved(
+            run, ledger_root=canonical_shaped, synthetic=True
+        )
+    _record, acquisition = lifecycle_production.verify_saved(
+        run, ledger_root=root, synthetic=True
+    )
+    assert acquisition.synthetic is True
+    assert acquisition.summary()["synthetic"] is True
+    assert lifecycle_production.verified(acquisition) is True
 
 
 def test_verify_saved_binds_the_receipt_directory_to_its_ledger_row(
@@ -891,9 +922,13 @@ def test_verify_saved_binds_the_receipt_directory_to_its_ledger_row(
     built, root, _result = _proof_run(tmp_path, poll_rounds=2)
     run = tmp_path / "run"
     _as_production_receipt(run)
-    record, acquisition = lifecycle_production.verify_saved(run, ledger_root=root)
+    record, acquisition = lifecycle_production.verify_saved(
+        run, ledger_root=root, synthetic=True
+    )
     receipt = _receipt(run)
     assert type(acquisition) is VerifiedAcquisition
+    assert lifecycle_production.verified(acquisition) is True
+    assert acquisition.synthetic is True
     assert record == {
         "executionKind": PRODUCTION_KIND,
         "collection": receipt["collection"],
@@ -924,7 +959,7 @@ def test_verify_saved_refuses_every_broken_binding(tmp_path: Path) -> None:
         _built, root, _result = _proof_run(tmp_path / name, poll_rounds=2)
         run = tmp_path / name / "run"
         _as_production_receipt(run)
-        lifecycle_production.verify_saved(run, ledger_root=root)
+        lifecycle_production.verify_saved(run, ledger_root=root, synthetic=True)
         mutate(run)
         return run, root
 
@@ -999,20 +1034,24 @@ def test_verify_saved_refuses_every_broken_binding(tmp_path: Path) -> None:
     for name, mutate, reason in cases:
         directory, root = tampered(name, mutate)
         with pytest.raises(ValueError, match=reason):
-            lifecycle_production.verify_saved(directory, ledger_root=root)
+            lifecycle_production.verify_saved(
+                directory, ledger_root=root, synthetic=True
+            )
     # The right receipt against a Ledger that never held its reservation.
     intact, _root = tampered("intact", lambda _directory: None)
     (tmp_path / "other").mkdir()
     other_root = _proof_ledger(tmp_path / "other")
     with pytest.raises(ValueError, match="reservation"):
-        lifecycle_production.verify_saved(intact, ledger_root=other_root)
+        lifecycle_production.verify_saved(
+            intact, ledger_root=other_root, synthetic=True
+        )
     # A receipt directory copied elsewhere no longer sits at the gate path the
     # Ledger claim names.
     good, root = tampered("good", lambda _directory: None)
     moved = tmp_path / "moved"
     shutil.copytree(good, moved, symlinks=True)
     with pytest.raises(ValueError, match="gate path"):
-        lifecycle_production.verify_saved(moved, ledger_root=root)
+        lifecycle_production.verify_saved(moved, ledger_root=root, synthetic=True)
 
 
 def test_the_verified_acquisition_yields_the_semantic_result_and_a_relabelled_copy_does_not(
@@ -1028,13 +1067,19 @@ def test_the_verified_acquisition_yields_the_semantic_result_and_a_relabelled_co
     _built, root, _result = _proof_run(tmp_path)
     run = tmp_path / "run"
     _as_production_receipt(run)
-    record, acquisition = lifecycle_production.verify_saved(run, ledger_root=root)
+    record, acquisition = lifecycle_production.verify_saved(
+        run, ledger_root=root, synthetic=True
+    )
     local = {"executionKind": LOCAL_KIND, "collection": _collection(tmp_path, "local")}
     manifest = compile_manifest(NONCE)
     verified = compare(manifest, local, record, NONCE, acquisition=acquisition)
     assert verified["classification"] == MATCH
-    assert verified["acquisitionValidated"] is True
+    # The anchor is a proof Ledger, so the semantic rows are there but the run
+    # is marked synthetic and never a validated production acquisition.
+    assert verified["syntheticAnchor"] is True
+    assert verified["acquisitionValidated"] is False
     assert verified["acquisition"] == acquisition.summary()
+    assert verified["acquisition"]["synthetic"] is True
     assert verified["promotionReady"] is False
     # The same collection bytes, handed over without the boundary's object.
     relabelled = compare(manifest, local, copy.deepcopy(record), NONCE)

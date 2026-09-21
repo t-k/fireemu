@@ -123,7 +123,11 @@ def execute(
     handle.claim()
     binding = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
     binding_digest = hashlib.sha256(binding).hexdigest()
-    runtime = dict(bindings)
+    runtime = {
+        name: value
+        for stage_bindings in bindings.values()
+        for name, value in stage_bindings.items()
+    }
     for account in ("accountA", "accountB"):
         if account + ".localId" in runtime:
             runtime[account + "Uid"] = runtime[account + ".localId"]

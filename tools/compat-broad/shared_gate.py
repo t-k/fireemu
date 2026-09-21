@@ -1563,7 +1563,7 @@ def _management_abort_projection(state, marker, *, skipped):
     return projection
 
 
-def _management_cancel_prefix_valid(state):
+def _management_cancel_prefix_valid(state, *, prefix_len=None):
     """Require the closed limits lifecycle apply and its registered suffix."""
     observation = state["plan"].get("management", {}).get("observation", [])
     identities = ["observation:" + entry.get("id", "") for entry in observation]
@@ -1572,6 +1572,8 @@ def _management_cancel_prefix_valid(state):
         index for index, identity in enumerate(identities) if identity == apply_id
     ]
     used = state.get("managementUsed", [])
+    if prefix_len is not None:
+        used = used[:prefix_len]
     if len(apply_indexes) != 1:
         return False
     apply_index = apply_indexes[0]
@@ -1590,9 +1592,11 @@ def _management_cancel_prefix_valid(state):
     )
 
 
-def _management_cancel_events_valid(state):
+def _management_cancel_events_valid(state, *, prefix_len=None):
     """Allow a completed prefix and one reaped unknown terminal lifecycle slot."""
     events = state.get("managementEvents", [])
+    if prefix_len is not None:
+        events = events[:prefix_len]
     if not events:
         return False
     terminal = events[-1]
@@ -1722,11 +1726,23 @@ def _validate_management_abort_marker(state):
         )
         or (
             marker["applyOutcome"] == "coordinator-cancelled"
-            and not _management_cancel_events_valid(state)
+            and not _management_cancel_events_valid(
+                state, prefix_len=prefix_len
+            )
         )
         or (
             marker["applyOutcome"] == "coordinator-cancelled"
-            and not _management_cancel_prefix_valid(state)
+            and not _management_cancel_prefix_valid(
+                state, prefix_len=prefix_len
+            )
+        )
+        or (
+            marker["applyOutcome"] == "coordinator-cancelled"
+            and any(
+                event.get("completed") is not True
+                or event.get("workerReaped") is not True
+                for event in state.get("managementEvents", [])[prefix_len:]
+            )
         )
     ):
         raise ValueError("forged management abort marker")

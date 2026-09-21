@@ -116,6 +116,18 @@ def dispatch_before_apply(gate):
         )
 
 
+def assert_cancel_recovery_progress(gate):
+    operation = base_plan()["jobs"]["a"]["observation"][0]
+    for slot in ("project", "database", "index-exemption"):
+        gate.management_dispatch("recovery", slot, lambda _deadline: receipt())
+        state = gate.cancel_management_observation()
+        assert state["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
+        with pytest.raises(ValueError, match="cleanup incomplete"):
+            gate.finish()
+        with pytest.raises(ValueError):
+            gate.dispatch(operation, False, lambda: pytest.fail("data must stay closed"))
+
+
 def tokeninfo_receipt():
     return {
         **receipt(),
@@ -351,10 +363,7 @@ def test_coordinator_cancel_preserves_completed_apply_and_skips_remaining_observ
     assert after["jobs"]["a"]["complete"] is False
     assert gate.cancel_management_observation() == after
 
-    restored = gate.management_dispatch(
-        "recovery", "project", lambda _deadline: receipt()
-    )
-    assert restored["complete"] is True
+    assert_cancel_recovery_progress(gate)
 
 
 def test_coordinator_cancel_before_declared_apply_is_unchanged(tmp_path):
@@ -415,6 +424,7 @@ def test_coordinator_cancel_accepts_reaped_semantic_error_and_preserves_receipt(
     assert state["managementEvents"][6]["status"] == 400
     assert state["managementEvents"][6]["completed"] is True
     assert state["managementEvents"][6]["workerReaped"] is True
+    assert_cancel_recovery_progress(gate)
 
 
 def test_coordinator_cancel_accepts_reaped_unknown_terminal_poll(tmp_path):
@@ -434,6 +444,7 @@ def test_coordinator_cancel_accepts_reaped_unknown_terminal_poll(tmp_path):
     assert state["managementEvents"][7]["completed"] is False
     assert state["managementEvents"][7]["workerReaped"] is True
     assert state["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
+    assert_cancel_recovery_progress(gate)
 
 
 def test_coordinator_cancel_rejects_foreign_coordinator_without_state_change(tmp_path):

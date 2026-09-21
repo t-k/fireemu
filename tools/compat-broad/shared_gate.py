@@ -1110,6 +1110,20 @@ def _creation_outcome(operation, status, body, proofs):
     for index, write in enumerate(writes):
         if _existing_transform(write):
             continue
+        if batch and write == {}:
+            # An empty write names no document and cannot create one. It is
+            # accounted for only when the server refused it per item with the
+            # typed INVALID_ARGUMENT code and the empty result slot; any other
+            # answer for it leaves the request unknown.
+            entry = statuses[index]
+            if (
+                isinstance(entry, dict)
+                and entry.get("code") == 3
+                and isinstance(results[index], dict)
+                and not results[index]
+            ):
+                continue
+            return "unknown"
         if (
             not isinstance(write, dict)
             or not {"update", "currentDocument"}

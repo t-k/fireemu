@@ -525,3 +525,53 @@ def test_conflicting_batch_status_with_nonempty_or_untyped_result_stays_unknown(
     recover(gate, declared, created={RESOURCES[0]})
     with pytest.raises(ValueError, match="ownership retained"):
         gate.finish()
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+@pytest.mark.parametrize("sibling_code", [0, 3])
+def test_empty_batch_item_with_typed_refusal_settles_the_batch(
+    tmp_path, scheduled, sibling_code
+):
+    """R3: an undecodable BatchWrite item alongside a real conditional write.
+
+    An empty item names no document, so it never earns a creation proof, but a
+    complete typed refusal (code 3, empty result) for it does not leave the
+    sibling write's outcome unknown.
+    """
+    operation = bulk([{}, conditional(RESOURCES[0])], "batchWrite")
+    gate, declared = started(tmp_path, operation, scheduled=scheduled, full_cleanup=True)
+    gate.dispatch(operation, False, lambda: response([3, sibling_code]))
+    state = gate.snapshot()
+    proved = {RESOURCES[0]} if sibling_code == 0 else set()
+    assert set(state["jobs"]["case"]["owned"]) == proved
+    assert unconfirmed_creates(state, "case") == 0
+    assert state["events"][0]["creationOutcome"] == ("created" if proved else "refused")
+    recover(gate, declared, created=proved)
+    gate.finish()
+    assert gate.snapshot()["jobs"]["case"]["complete"] is True
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+@pytest.mark.parametrize(
+    "malform",
+    ["wrong-code", "nonempty-result", "missing-code-field", "untyped-result"],
+)
+def test_empty_batch_item_without_a_clean_refusal_stays_unknown(
+    tmp_path, scheduled, malform
+):
+    operation = bulk([{}, conditional(RESOURCES[0])], "batchWrite")
+    gate, declared = started(tmp_path, operation, scheduled=scheduled, full_cleanup=True)
+    status, body = response([3, 0])
+    if malform == "wrong-code":
+        body["status"][0] = {"code": 6}
+    elif malform == "nonempty-result":
+        body["writeResults"][0] = {"updateTime": VERSION}
+    elif malform == "missing-code-field":
+        body["status"][0] = {}
+    elif malform == "untyped-result":
+        body["writeResults"][0] = None
+    gate.dispatch(operation, False, lambda: (status, body))
+    assert unconfirmed_creates(gate.snapshot(), "case") == 1
+    recover(gate, declared, created={RESOURCES[0]})
+    with pytest.raises(ValueError, match="ownership retained"):
+        gate.finish()

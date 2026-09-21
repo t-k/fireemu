@@ -1324,6 +1324,68 @@ class Ledger:
         with self._locked() as state:
             return self._row(state, ticket)["claim"]
 
+    def bound_recovery_claim(self, child_ticket):
+        """Read one persisted recovery child and its immutable parent binding.
+
+        The child ticket must be the exact nested ticket written by
+        ``begin_recovery_extension``. This is an inspection API: it does not
+        apply an authorization deadline, consume capacity, or create a Gate.
+        The returned object is detached from Ledger state and contains the
+        child claim, its persisted recovery envelope, the parent claim and
+        identity, plus the child state and deadline.
+        """
+        if not isinstance(child_ticket, dict) or set(child_ticket) != {
+            "ledgerPath", "ledgerIdentity", "reservation", "claimDigest",
+            "envelopeDigest", "parentReservation",
+        }:
+            raise ValueError("exact recovery child ticket required")
+        if (
+            child_ticket["ledgerPath"] != str(self.path)
+            or child_ticket["ledgerIdentity"] != self.identity
+            or not isinstance(child_ticket["reservation"], str)
+            or not isinstance(child_ticket["parentReservation"], str)
+        ):
+            raise ValueError("recovery child ticket ledger binding changed")
+        with self._locked() as state:
+            parent = state["reservations"].get(child_ticket["parentReservation"])
+            if parent is None:
+                raise ValueError("recovery child parent reservation missing")
+            child = next(
+                (
+                    value
+                    for value in parent.get("recoveryChildren", [])
+                    if value.get("reservation") == child_ticket["reservation"]
+                ),
+                None,
+            )
+            if child is None or child.get("ticket") != child_ticket:
+                raise ValueError("exact persisted recovery child ticket required")
+            if (
+                child.get("claimDigest") != child_ticket["claimDigest"]
+                or child.get("envelopeDigest") != child_ticket["envelopeDigest"]
+                or child.get("envelopeDigest") not in state.get("recoveryEnvelopes", {})
+            ):
+                raise ValueError("recovery child ticket binding changed")
+            envelope = state["recoveryEnvelopes"][child["envelopeDigest"]]["envelope"]
+            parent_identity = {
+                "ledgerPath": str(self.path),
+                "ledgerIdentity": self.identity,
+                "reservation": child_ticket["parentReservation"],
+                "claimDigest": parent["claimDigest"],
+                "envelopeDigest": parent["envelopeDigest"],
+            }
+            return copy.deepcopy(
+                {
+                    "ticket": child["ticket"],
+                    "childClaim": child["claim"],
+                    "newEnvelope": envelope,
+                    "parentClaim": parent["claim"],
+                    "parentIdentity": parent_identity,
+                    "deadline": child["deadline"],
+                    "state": child["state"],
+                }
+            )
+
     def validate(self, ticket, *, now=None, duration=13):
         if now is not None:
             _number(now)

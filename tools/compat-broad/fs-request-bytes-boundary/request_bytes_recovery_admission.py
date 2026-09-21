@@ -16,7 +16,9 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(ROOT / "tools/compat-broad/production-admission"))
 
 import o8_admission
+import request_bytes_compiler as parent_compiler
 import request_bytes_descriptor as parent_descriptor
+import request_bytes_recovery_campaign as recovery_campaign
 from broad_contract import digest
 from o8_campaign import CampaignDescriptor
 
@@ -149,57 +151,87 @@ def validate_bound_child(bound: dict[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(bound)
 
 
+def _canonical_plans(parent_plan, *, selected_probe: str, recovery_nonce: str):
+    actual_parent = parent_compiler.compile_request_bytes_plan(
+        parent_plan["project"], parent_plan["database"], parent_plan["nonce"]
+    )
+    if digest(actual_parent) != digest(parent_plan):
+        raise ValueError("canonical parent compiler plan differs")
+    recovery_plan = recovery_campaign.compile_recovery_plan(
+        actual_parent, selected_probe=selected_probe, recovery_nonce=recovery_nonce
+    )
+    gate_plan = recovery_campaign.compile_gate_plan(
+        actual_parent,
+        selected_probe=selected_probe,
+        recovery_nonce=recovery_nonce,
+        recovery_plan=recovery_plan,
+    )
+    # O8's canonical plan identity is the persisted recovery nonce; it is not
+    # a caller-supplied second nonce and remains transitively child-bound. Keep
+    # it out of the Gate compiler input, whose schema is independently frozen.
+    recovery_plan["nonce"] = recovery_nonce
+    return actual_parent, recovery_plan, gate_plan
+
+
 def freeze_inputs(
-    bound: dict[str, Any],
-    child_plan: dict[str, Any],
-    child_gate_plan: dict[str, Any],
+    ledger,
+    child_ticket: dict[str, Any],
+    parent_plan: dict[str, Any],
     permission: dict[str, Any],
     *,
+    selected_probe: str,
     source_commit: str,
     artifact_sha256: str,
 ) -> dict[str, Any]:
+    bound = ledger.bound_recovery_claim(child_ticket)
     validated = validate_bound_child(bound)
     claim = validated["childClaim"]
-    if digest(child_gate_plan) != claim.get("gatePlanDigest"):
+    _, recovery_plan, expected_gate = _canonical_plans(
+        parent_plan, selected_probe=selected_probe, recovery_nonce=claim["recoveryNonce"]
+    )
+    if digest(expected_gate) != claim.get("gatePlanDigest"):
         raise ValueError("child Gate plan digest differs")
     if digest(permission) != claim.get("permissionDigest"):
         raise ValueError("child permission digest differs")
-    if child_plan.get("campaignId") != CAMPAIGN:
-        raise ValueError("stable recovery campaign required")
-    child_plan = copy.deepcopy(child_plan)
-    if child_plan.get("childClaimDigest") != digest(claim):
-        raise ValueError("frozen child claim binding differs")
-    if child_plan.get("childTicketDigest") != digest(validated["ticket"]):
-        raise ValueError("frozen child ticket binding differs")
+    recovery_plan["childClaimDigest"] = digest(claim)
+    recovery_plan["childTicketDigest"] = digest(validated["ticket"])
     return o8_admission.freeze_inputs(
         descriptor(),
         permission,
-        child_plan,
+        recovery_plan,
         source_commit=source_commit,
         artifact_sha256=artifact_sha256,
     )
 
 
-def issue_production_capability(**bindings):
-    """Issue the opaque O7 capability only after bound-child validation."""
-    bound = bindings.pop("bound")
-    child_plan = bindings.pop("child_plan")
-    child_gate_plan = bindings.pop("child_gate_plan")
-    inputs = bindings["inputs"]
-    if inputs.get("permissionDigest") != bound["childClaim"].get("permissionDigest"):
-        raise ValueError("frozen child permission binding differs")
-    if digest(inputs.get("plan")) != digest(child_plan):
-        raise ValueError("frozen child plan differs")
-    if inputs.get("plan", {}).get("childClaimDigest") != digest(bound["childClaim"]):
-        raise ValueError("frozen child claim binding differs")
-    if inputs.get("plan", {}).get("childTicketDigest") != digest(bound["ticket"]):
-        raise ValueError("frozen child ticket binding differs")
-    validate_bound_child(bound)
-    if digest(child_gate_plan) != bound["childClaim"].get("gatePlanDigest"):
-        raise ValueError("child Gate plan digest differs")
-    return o8_admission.issue_production_capability(
-        descriptor(), **bindings
+def issue_production_capability(
+    *,
+    ledger,
+    child_ticket: dict[str, Any],
+    parent_plan: dict[str, Any],
+    child_gate_plan: dict[str, Any],
+    selected_probe: str,
+    **bindings,
+) -> Any:
+    """Re-read the persisted child immediately before the real O7 issuer."""
+    bound = ledger.bound_recovery_claim(child_ticket)
+    validated = validate_bound_child(bound)
+    claim = validated["childClaim"]
+    _, recovery_plan, expected_gate = _canonical_plans(
+        parent_plan,
+        selected_probe=selected_probe,
+        recovery_nonce=claim["recoveryNonce"],
     )
+    if digest(expected_gate) != claim.get("gatePlanDigest") or child_gate_plan != expected_gate:
+        raise ValueError("authoritative child Gate plan differs")
+    recovery_plan["childClaimDigest"] = digest(claim)
+    recovery_plan["childTicketDigest"] = digest(validated["ticket"])
+    inputs = bindings["inputs"]
+    if inputs.get("plan") != recovery_plan:
+        raise ValueError("frozen authoritative recovery plan differs")
+    if inputs.get("permissionDigest") != claim.get("permissionDigest"):
+        raise ValueError("frozen child permission binding differs")
+    return o8_admission.issue_production_capability(descriptor(), **bindings)
 
 
 __all__ = [

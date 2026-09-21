@@ -5,6 +5,7 @@ import https from "node:https";
 import dns from "node:dns";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
+import { TextDecoder } from "node:util";
 import { requireThat } from "./core.mjs";
 
 export function localOrigin(host) {
@@ -71,25 +72,42 @@ export function installNetworkGuard(origin = null) {
   return globalThis.fetch;
 }
 
-export async function boundedText(response, maxBytes = 2 * 1024 * 1024) {
+export async function boundedText(response, maxBytes = 2 * 1024 * 1024, signal) {
+  signal?.throwIfAborted();
   const chunks = [];
   let size = 0;
   if (response.body) {
     const reader = response.body.getReader();
+    // Do not rely only on fetch's abort forwarding after headers have arrived. Cancel
+    // the locked reader directly so even a continuously streaming body reaches EOF.
+    // Cancellation of the underlying source need not finish before we report failure.
+    const cancel = () => {
+      void reader.cancel().catch(() => {});
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
       for (;;) {
+        signal?.throwIfAborted();
         const { done, value } = await reader.read();
+        signal?.throwIfAborted();
         if (done) break;
         size += value.byteLength;
         if (size > maxBytes) {
-          await reader.cancel();
+          cancel();
           throw new Error("response-too-large");
         }
         chunks.push(Buffer.from(value));
       }
     } finally {
+      signal?.removeEventListener("abort", cancel);
       reader.releaseLock();
     }
   }
-  return Buffer.concat(chunks).toString("utf8");
+  // Evidence must not silently turn malformed wire bytes into U+FFFD. Preserve a BOM
+  // rather than removing it: callers still decide whether that text is valid JSON.
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks));
+  } catch {
+    throw new Error("response-invalid-utf8");
+  }
 }

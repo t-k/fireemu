@@ -33,6 +33,21 @@ const origin = localOrigin(process.env.FIRESTORE_EMULATOR_HOST);
 requireThat(process.env.GOOGLE_CLOUD_PROJECT === entry.project, "wrong-child-project");
 
 const guardedFetch = installNetworkGuard(origin);
+// This is a local recorder limit, not a claim about production latency. One signal
+// covers the connection, headers and entire body; the parent still bounds the whole run.
+const REQUEST_TIMEOUT_MS = 10000;
+async function requestText(url, init) {
+  const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  try {
+    const response = await guardedFetch(url, { ...init, signal });
+    const text = await boundedText(response, undefined, signal);
+    return { response, text };
+  } catch (error) {
+    if (signal.aborted) throw new Error("request-timeout");
+    throw error;
+  }
+}
+
 const labelOf = (resource) => {
   for (const [label, doc] of Object.entries(plan.documents))
     if (doc.resource === resource) return label;
@@ -64,8 +79,7 @@ async function execute(op, index, priorRow) {
     redirect: "error",
   };
   if (op.body !== null && op.body !== undefined) init.body = JSON.stringify(op.body);
-  const response = await guardedFetch(url, init);
-  const text = await boundedText(response);
+  const { response, text } = await requestText(url, init);
   totalBytes += Buffer.byteLength(text);
   requireThat(totalBytes <= 8 * 1024 * 1024, "response-budget");
   let body = null;
@@ -100,11 +114,9 @@ try {
   try {
     for (const resource of entry.ownedDocuments) {
       cleanup.requests++;
-      const response = await guardedFetch(origin + "/v1/" + resource, {
+      const { response, text } = await requestText(origin + "/v1/" + resource, {
         headers: { authorization: "Bearer owner" },
-        signal: AbortSignal.timeout(10000),
       });
-      const text = await boundedText(response);
       const body = text ? JSON.parse(text) : null;
       requireThat(
         response.status === 404 && body?.error?.status === "NOT_FOUND",

@@ -405,6 +405,16 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -
     )
     assert published_manifest["indexConfiguration"]["shadowDifference"] is False
     assert published_binding["source"]["commit"] == commit
+    run.mkdir()
+    (run / "manifest.json").write_text(json.dumps(supervisor))
+    (run / "result.json").write_text(json.dumps(result))
+    binding["supervisorManifestSha256"] = "0" * 64
+    (run / "shadow-binding.json").write_text(json.dumps(binding))
+    with pytest.raises(SystemExit, match="fully recorded, source-bound"):
+        package_03.shadow_record(run, commit)
+    import shutil
+
+    shutil.rmtree(run)
     mutations = [
         ("pendingDifferences", [{"pending": True}]),
         ("completed", False),

@@ -177,11 +177,13 @@ def shadow_record(run: Path, commit: str) -> dict:
     supervisor = _load(run / "manifest.json")
     result = _load(run / "result.json")
     binding = _load(run / "shadow-binding.json")
+    supervisor_manifest_sha256 = _sha(run / "manifest.json")
     if (
         result.get("recordingComplete") is not True
         or result.get("stateValidation") is not True
         or binding.get("bound") is not True
         or result.get("campaignId") != CAMPAIGN
+        or binding.get("supervisorManifestSha256") != supervisor_manifest_sha256
     ):
         raise SystemExit("a fully recorded, source-bound shadow run is required")
     # Preserve the distinction between a fully closed local run and a recorded

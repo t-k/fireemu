@@ -2,11 +2,11 @@
 // Firebase project; the one test that launches Chromium does so only to prove
 // the harness closes it again.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { cpSync, existsSync, mkdtempSync, promises as fs, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { request as httpRequest } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -26,7 +26,16 @@ import {
   serveStatic,
   summarizeWebChannel,
 } from "./browser_harness.mjs";
-import { PAGES, parseArgs } from "./run-browser.mjs";
+import {
+  PAGES,
+  createInstallRulesBinding,
+  main,
+  parseArgs,
+  runPage,
+  safeError,
+  safeText,
+  scrubStrings,
+} from "./run-browser.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WEB = path.join(HERE, "..", "sdk-smoke", "web");
@@ -263,7 +272,7 @@ test("the request summary separates long-polled from streamed backchannels", () 
 
 test("runner arguments require loopback endpoints, a demo project and known pages", () => {
   const env = { FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099",
-    GOOGLE_CLOUD_PROJECT: "demo-app", FIREEMU_CONTROL_TOKEN: "t" };
+    GOOGLE_CLOUD_PROJECT: "demo-app", FIREEMU_CONTROL_TOKEN: "control-token-value" };
   const options = parseArgs([], env);
   assert.deepEqual(options.pages, ["listener-lifecycle", "listen-reconnect"]);
   assert.equal(options.firestorePort, 8080);
@@ -275,8 +284,13 @@ test("runner arguments require loopback endpoints, a demo project and known page
   assert.throws(() => parseArgs([], { ...env, FIRESTORE_EMULATOR_HOST: "firestore.googleapis.com:443" }), /127\.0\.0\.1/);
   assert.throws(() => parseArgs([], { ...env, GOOGLE_CLOUD_PROJECT: "real-project" }), /demo project/);
   for (const spec of Object.values(PAGES)) assert.ok(existsSync(path.join(WEB, spec.file)), spec.file);
-  // The control token is page input, never part of the runner's own output shape.
-  assert.ok(!Object.keys(PAGES["listener-lifecycle"].query(options)).includes("token"));
+  // The control token is never page URL input: no page query carries it.
+  for (const [name, spec] of Object.entries(PAGES)) {
+    assert.ok(!Object.keys(spec.query(options)).includes("token"), name);
+    assert.ok(!JSON.stringify(spec.query(options)).includes("control-token-value"), `${name} query leaks the token`);
+  }
+  assert.equal(PAGES["listen-reconnect"].installsRules, true);
+  assert.equal(PAGES["listener-lifecycle"].installsRules, undefined);
 });
 
 test("the runner derives its directories from a checkout path with a space, a Japanese character and a percent sign", async () => {
@@ -349,3 +363,248 @@ test("a launched Chromium is gone after close (process hygiene)", { skip: !chrom
   while (running().length > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
   assert.deepEqual(running(), [], "no Chromium process may survive close()");
 });
+
+// --- control token handoff and error hygiene -------------------------------
+
+const SECRET = "dummy-control-token-4f9c1e";
+const RUNNER_ENV = { FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099",
+  GOOGLE_CLOUD_PROJECT: "demo-app", FIREEMU_CONTROL_TOKEN: SECRET };
+
+test("safeText removes the secret and every URL query string", () => {
+  const raw = `page.goto: net::ERR_FAILED at http://127.0.0.1:1/x.html?fs=1&token=${SECRET} (${SECRET})`;
+  const safe = safeText(raw, [SECRET]);
+  assert.ok(!safe.includes(SECRET));
+  assert.equal(safe, "page.goto: net::ERR_FAILED at http://127.0.0.1:1/x.html?[redacted] ([redacted])");
+  assert.equal(safeText("no url, no secret", [SECRET, "", undefined]), "no url, no secret");
+  assert.equal(safeText("https://a.test/p?q=1 and http://b.test/?z", []), "https://a.test/p?[redacted] and http://b.test/?[redacted]");
+  assert.equal(safeText(new Error(`boom ${SECRET}`), [SECRET]), "Error: boom [redacted]");
+  const error = safeError(Object.assign(new Error(`failed ${SECRET} at http://h/p?token=${SECRET}`), { code: "x/y" }), [SECRET]);
+  assert.equal(error.message, "failed [redacted] at http://h/p?[redacted]");
+  assert.equal(error.code, "x/y");
+  assert.ok(!error.stack.includes(SECRET));
+  assert.deepEqual(scrubStrings({ a: [`${SECRET}`, 1, null], b: { c: `u http://h/?t=${SECRET}` } }, [SECRET]),
+    { a: ["[redacted]", 1, null], b: { c: "u http://h/?[redacted]" } });
+});
+
+/** A loopback stand-in for the emulator's control route that records the bearer it saw. */
+const controlRouteDouble = async (status = 200) => {
+  const seen = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body });
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify({ echo: request.headers.authorization }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return { seen, port: server.address().port, close: () => new Promise((resolve) => server.close(resolve)) };
+};
+
+test("the rules binding attaches the token in Node, answers only a status and works once", async () => {
+  const route = await controlRouteDouble();
+  try {
+    const binding = createInstallRulesBinding({ authPort: route.port, controlToken: SECRET });
+    assert.deepEqual(await binding("rules_version = '2';"), { ok: true, status: 200 });
+    assert.equal(route.seen.length, 1);
+    assert.equal(route.seen[0].method, "PUT");
+    assert.equal(route.seen[0].url, "/v1/rules");
+    assert.equal(route.seen[0].authorization, `Bearer ${SECRET}`);
+    assert.deepEqual(JSON.parse(route.seen[0].body), { source: "rules_version = '2';" });
+    // One-shot: the page cannot use the binding as a generic control client.
+    assert.deepEqual(await binding("rules_version = '2';"), { ok: false, status: 0, error: "rules binding already used" });
+    assert.equal(route.seen.length, 1);
+    for (const bad of [undefined, 42, "", "x".repeat(64 * 1024 + 1)]) {
+      const fresh = createInstallRulesBinding({ authPort: route.port, controlToken: SECRET });
+      assert.equal((await fresh(bad)).ok, false, String(bad).slice(0, 10));
+    }
+    assert.equal(route.seen.length, 1);
+    const denied = await controlRouteDouble(401);
+    try {
+      assert.deepEqual(await createInstallRulesBinding({ authPort: denied.port, controlToken: SECRET })("r"), { ok: false, status: 401 });
+    } finally {
+      await denied.close();
+    }
+  } finally {
+    await route.close();
+  }
+  const unreachable = createInstallRulesBinding({ authPort: 1, controlToken: SECRET });
+  assert.deepEqual(await unreachable("rules_version = '2';"), { ok: false, status: 0, error: "unreachable" });
+});
+
+/**
+ * A page double with Playwright's failure habits: `goto` quotes the URL it
+ * was given, and a page error carries whatever the page threw.
+ */
+const fakeChromium = ({ gotoFails = false, pageError = null, status = "failed", text = "{}" } = {}) => {
+  const calls = [];
+  const handlers = {};
+  const exposed = {};
+  const page = {
+    on: (event, handler) => { handlers[event] = handler; },
+    exposeFunction: async (name, fn) => { exposed[name] = fn; calls.push(["expose", name]); },
+    goto: async (url) => {
+      calls.push(["goto", url]);
+      if (gotoFails) throw new Error(`page.goto: net::ERR_CONNECTION_REFUSED at ${url}?token=${SECRET}\n=========================== logs ===========================\nnavigating to "${url}", waiting until "load"`);
+      if (pageError) handlers.pageerror?.(pageError);
+    },
+    waitForSelector: async () => {},
+    evaluate: async (fn) => (String(fn).includes("dataset.status") ? status : text),
+    close: async () => calls.push(["page-close"]),
+  };
+  const context = { newPage: async () => page, close: async () => calls.push(["context-close"]) };
+  return { calls, exposed, chromium: { name: "chromium", version: "0.0", browser: { newContext: async () => context }, close: async () => calls.push(["browser-close"]) } };
+};
+
+test("a navigation failure never carries the token or the page URL query into the error", async () => {
+  const { chromium, calls } = fakeChromium({ gotoFails: true });
+  const options = parseArgs([], RUNNER_ENV);
+  await assert.rejects(runPage(chromium, "http://127.0.0.1:1", "listen-reconnect", options), (error) => {
+    assert.ok(!error.message.includes(SECRET), error.message);
+    assert.ok(!error.stack.includes(SECRET));
+    assert.match(error.message, /ERR_CONNECTION_REFUSED at http:\/\/127\.0\.0\.1:1\/listen-reconnect\.html\?\[redacted\]/);
+    return true;
+  });
+  const gotoUrl = new URL(calls.find((call) => call[0] === "goto")[1]);
+  assert.equal(gotoUrl.searchParams.has("token"), false);
+  assert.ok(!gotoUrl.href.includes(SECRET));
+  assert.deepEqual(calls.filter((call) => call[0] === "expose"), [["expose", "__fireemuInstallRules"]]);
+  assert.deepEqual(calls.slice(-2).map((call) => call[0]), ["page-close", "context-close"]);
+});
+
+test("a page error and the page text are scrubbed before they reach the receipt", async () => {
+  const pageError = new Error(`Uncaught TypeError: ${SECRET} at http://127.0.0.1:1/listen-reconnect.html?fs=8080&token=${SECRET}`);
+  const { chromium, calls } = fakeChromium({ pageError, status: "failed",
+    text: JSON.stringify({ passed: false, error: `Error: rules load failed ${SECRET} http://h/p?token=${SECRET}`, events: [] }) });
+  const options = parseArgs([], RUNNER_ENV);
+  const receipt = await runPage(chromium, "http://127.0.0.1:1", "listen-reconnect", options);
+  assert.equal(receipt.passed, false);
+  assert.deepEqual(receipt.pageErrors, ["Uncaught TypeError: [redacted] at http://127.0.0.1:1/listen-reconnect.html?[redacted]"]);
+  assert.equal(receipt.result.error, "Error: rules load failed [redacted] http://h/p?[redacted]");
+  assert.ok(!JSON.stringify(receipt).includes(SECRET));
+  // The lifecycle page gets no control binding at all.
+  const plain = fakeChromium({ status: "passed", text: JSON.stringify({ passed: true }) });
+  await runPage(plain.chromium, "http://127.0.0.1:1", "listener-lifecycle", options);
+  assert.deepEqual(plain.calls.filter((call) => call[0] === "expose"), []);
+});
+
+test("main emits a receipt without the token on the page-error path and a safe error on the navigation path", async () => {
+  const emitted = [];
+  const failing = fakeChromium({ gotoFails: true });
+  const previousExitCode = process.exitCode;
+  try {
+    await assert.rejects(
+      main({ argv: ["--pages", "listen-reconnect"], env: { ...RUNNER_ENV, SDK_SMOKE_WEB_DIR: WEB },
+        emit: (value) => emitted.push(value), launch: async () => failing.chromium }),
+      (error) => !error.message.includes(SECRET) && /\[redacted\]/.test(error.message),
+    );
+    assert.deepEqual(emitted, []);
+    assert.ok(failing.calls.some((call) => call[0] === "browser-close"), "the browser is closed after a failure");
+    const erroring = fakeChromium({ pageError: new Error(`bad ${SECRET}`), status: "failed",
+      text: JSON.stringify({ passed: false, error: SECRET, events: [] }) });
+    const document = await main({ argv: ["--pages", "listen-reconnect"], env: { ...RUNNER_ENV, SDK_SMOKE_WEB_DIR: WEB },
+      emit: (value) => emitted.push(value), launch: async () => erroring.chromium });
+    assert.equal(document.complete, false);
+    assert.equal(emitted.length, 1);
+    assert.ok(!JSON.stringify(emitted[0]).includes(SECRET));
+    assert.deepEqual(emitted[0].pages["listen-reconnect"].pageErrors, ["bad [redacted]"]);
+    assert.equal(process.exitCode, 2);
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+});
+
+/**
+ * Install a stand-in `playwright` package under a temporary module directory
+ * so the runner can be started as a real child process without Chromium.
+ * `FAKE_PLAYWRIGHT_MODE` selects the failure path.
+ */
+const fakePlaywrightDir = () => {
+  const base = mkdtempSync(path.join(tmpdir(), "fireemu-fake-playwright-"));
+  const pkg = path.join(base, "node_modules", "playwright");
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "playwright", main: "index.cjs" }));
+  writeFileSync(path.join(pkg, "index.cjs"), `
+    const mode = process.env.FAKE_PLAYWRIGHT_MODE;
+    const secret = process.env.FIREEMU_CONTROL_TOKEN;
+    const page = (handlers = {}) => ({
+      on: (event, handler) => { handlers[event] = handler; },
+      exposeFunction: async () => {},
+      goto: async (url) => {
+        if (mode === "goto-fails") throw new Error("page.goto: net::ERR_ABORTED at " + url + "?token=" + secret);
+        handlers.pageerror?.(new Error("Uncaught " + secret + " at " + url + "?token=" + secret));
+      },
+      waitForSelector: async () => {},
+      evaluate: async (fn) => String(fn).includes("dataset.status") ? "failed"
+        : JSON.stringify({ passed: false, error: "leak " + secret, events: [] }),
+      close: async () => {},
+    });
+    const context = () => ({ newPage: async () => page(), close: async () => {} });
+    module.exports = { chromium: {
+      executablePath: () => "/fake/chromium",
+      launch: async () => ({ version: () => "0.0", newContext: async () => context(), close: async () => {} }),
+    } };
+  `);
+  return base;
+};
+
+const runChild = (args, env) =>
+  new Promise((resolve) => {
+    execFile(process.execPath, [path.join(HERE, "run-browser.mjs"), ...args], { env, encoding: "utf8" },
+      (error, stdout, stderr) => resolve({ code: error?.code ?? 0, stdout, stderr }));
+  });
+
+test("the runner process keeps the token out of stdout and stderr on both failure paths", async () => {
+  const playwrightDir = fakePlaywrightDir();
+  const env = { ...process.env, ...RUNNER_ENV, O6_PLAYWRIGHT_MODULE_DIR: playwrightDir, SDK_SMOKE_WEB_DIR: WEB };
+  try {
+    const navigation = await runChild(["--pages", "listen-reconnect"], { ...env, FAKE_PLAYWRIGHT_MODE: "goto-fails" });
+    assert.equal(navigation.code, 1);
+    assert.equal(navigation.stdout, "");
+    assert.match(navigation.stderr, /ERR_ABORTED at http:\/\/127\.0\.0\.1:\d+\/listen-reconnect\.html\?\[redacted\]/);
+    assert.ok(!navigation.stderr.includes(SECRET), navigation.stderr);
+    const output = path.join(playwrightDir, "receipt.json");
+    const pageError = await runChild(["--pages", "listen-reconnect", "--output", output], { ...env, FAKE_PLAYWRIGHT_MODE: "page-error" });
+    assert.equal(pageError.code, 2);
+    assert.ok(!pageError.stdout.includes(SECRET));
+    assert.ok(!pageError.stderr.includes(SECRET), pageError.stderr);
+    const receipt = JSON.parse(await readFile(output, "utf8"));
+    assert.equal(receipt.complete, false);
+    assert.ok(!JSON.stringify(receipt).includes(SECRET));
+    assert.match(receipt.pages["listen-reconnect"].pageErrors[0], /^Uncaught \[redacted\] at http:\/\/127\.0\.0\.1:\d+\/listen-reconnect\.html\?\[redacted\]$/);
+    assert.equal(receipt.pages["listen-reconnect"].result.error, "leak [redacted]");
+  } finally {
+    rmSync(playwrightDir, { recursive: true, force: true });
+  }
+});
+
+const gstaticReachable = async () => {
+  try {
+    const response = await fetch("https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js",
+      { method: "HEAD", signal: AbortSignal.timeout(3000) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
+test("the real reconnect page fails safely when the control route is unreachable (no token anywhere)",
+  { skip: !chromiumInstalled() ? "playwright chromium is not installed" : !(await gstaticReachable()) && "gstatic is unreachable" },
+  async () => {
+    const emitted = [];
+    const previousExitCode = process.exitCode;
+    try {
+      // Port 1 answers nothing: the binding reports `unreachable` and the page fails on it.
+      const document = await main({ argv: ["--pages", "listen-reconnect"],
+        env: { ...RUNNER_ENV, FIRESTORE_EMULATOR_HOST: "127.0.0.1:1", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:1", O6_PLAYWRIGHT_MODULE_DIR: HERE, SDK_SMOKE_WEB_DIR: WEB },
+        emit: (value) => emitted.push(value) });
+      const page = document.pages["listen-reconnect"];
+      assert.equal(page.passed, false);
+      assert.match(page.result.error, /rules load failed: unreachable/);
+      assert.deepEqual(page.pageErrors, []);
+      assert.ok(!JSON.stringify(document).includes(SECRET));
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });

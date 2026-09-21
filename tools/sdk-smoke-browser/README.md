@@ -58,6 +58,19 @@ target/debug/fireemu exec \
 
 The checked-in result is `spec/compatibility/fs-listen-sdk-browser-smoke-pages.json`.
 
+The child-scoped control token (`FIREEMU_CONTROL_TOKEN`) never enters a page
+URL. The listen-reconnect page needs one privileged operation, installing its
+ruleset, so the runner exposes a one-shot `__fireemuInstallRules(source)`
+binding, performs the `PUT /v1/rules` itself with the bearer token and hands
+the page back `{ ok, status }` only. (Opened by hand without the runner, the
+page still accepts `?token=` as `tools/sdk-smoke/README.md` describes.) Every
+error that could reach stderr, `pageErrors` or the receipt passes through
+`safeText`, which replaces the token and every URL query string, because
+Playwright quotes the navigation URL in its failure diagnostics.
+`run-browser.test.mjs` forces both a navigation failure and a page error with
+a dummy token, in-process and as a child process, and asserts the token is
+absent from stdout, stderr and the receipt.
+
 ## Listen catalog: `listen_browser_adapter.mjs`
 
 `tools/compat-broad/fs-listen-resume/listen_browser_adapter.mjs` runs the

@@ -190,3 +190,5 @@ flock. Do not put it in a retry loop.
 - The model's self-reported confidence is not part of the schema and is
   never used for acceptance. Findings are candidates for a human or cloud
   reviewer to verify; "not found" in the excerpts is never "does not exist".
+
+The transport accepts exactly one body framing (a single `Content-Length`, a single `Transfer-Encoding: chunked`, or close-delimited), refuses a chunked reply whose terminator was cut short, connects to `localhost` as the literal `127.0.0.1` (IPv6 loopback is written `[::1]`) without a resolver, and refuses an invalid method, port, deadline (non-finite, non-positive or above 900 s) or credential string before opening a socket.

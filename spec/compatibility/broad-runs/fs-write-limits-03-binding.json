@@ -1,0 +1,76 @@
+{
+  "blockingReasons": [
+    "owner permission envelope fields are unset",
+    "no production release artifact SHA-256 is bound",
+    "the limits production runner is bound to the limits-02 compiler and cannot execute this campaign",
+    "no fresh production nonce is reserved for either part",
+    "the declared index exemption is not deployed"
+  ],
+  "campaignId": "FS-WRITE-LIMITS-03",
+  "campaignIds": [
+    "FS-WRITE-LIMITS-03"
+  ],
+  "collector": {
+    "differenceFromLimits02": "Every mutating method is gated by the write-safety predicate, not PATCH alone, because this campaign sends writes over :batchWrite. The preflight prefix length is read from the plan. A row the campaign has declared it cannot predict locally is excused from the safety predicate, though its journal integrity is still checked. collector.py is byte-for-byte unchanged, so the frozen limits-02 collector source digest still resolves.",
+    "digest": "94e41aaff2441f5d3e32a64c6799297fca72e75543d31ac054e58c6799e55fe3",
+    "path": "tools/compat-broad/fs-write-limits/collector_03.py",
+    "productionCollector": null,
+    "scope": "REST BatchWrite per-position outcome, create-only document writes, typed readbacks and request-stage name refusals, with ownership and version bound cleanup. No configuration, index, Rules or account operation.",
+    "status": "local-only",
+    "technicalBlocker": "The limits production runner in tools/compat-broad/fs-write-limits/production.py is bound to the limits-02 compiler and does not yet accept this campaign."
+  },
+  "comparator": {
+    "addition": "A per-row structural field reports status, typed error code and status, the per-item BatchWrite codes and whether the document is present, with diagnostic wording removed. It is additive and never changes the classification. It is what keeps a known wording difference from hiding the answer this campaign exists to get.",
+    "contract": "The limits-02 contract: both plans are regenerated from the compiler, every ordered request including its typed body is checked, a complete response journal is required, and normalized document identity and server timestamps may differ as EXPECTED_NONDETERMINISM while everything else, message text included, is significant.",
+    "digest": "1528fd6bb73c9c7228a155d4228893cda0653d2547b41042cd7a2668b091d843",
+    "path": "tools/compat-broad/fs-write-limits/comparator_03.py",
+    "productionComparator": null,
+    "status": "preparation-only"
+  },
+  "gateEnvelope": {
+    "executionWindow": null,
+    "owner": null,
+    "permissionReference": null,
+    "productionAuthorization": false,
+    "productionNonce": null,
+    "requiredInputs": [
+      "owner identity and explicit permission reference covering this owned-data campaign",
+      "project/database/tenant and configuration readback",
+      "a fresh nonce per part, absent from every current, next and backlog campaign",
+      "current release artifact SHA-256",
+      "collector and comparator digests",
+      "recovery owner and tariff acceptance",
+      "the declared index exemption deployed and READY"
+    ],
+    "stopConditions": [
+      "binding drift",
+      "unexpected resource",
+      "an accepted write at a refused boundary",
+      "budget exhaustion",
+      "cleanup uncertainty",
+      "incomplete receipt"
+    ]
+  },
+  "kind": "firestore-write-limits-campaign-binding-v2",
+  "localShadow": {
+    "path": "spec/compatibility/broad-runs/fs-write-limits-03-local-shadow.json",
+    "productionExecuted": false,
+    "sha256": "2ba79c5be80b7cdbdfcaabb2178cdcb48faa3715bd54b32d66b5dabcdffb50df",
+    "status": "completed"
+  },
+  "manifest": {
+    "path": "spec/compatibility/broad-runs/fs-write-limits-03.json",
+    "sha256": "2c980933eb11a361c0ff2020d9822722423be8d9d5606ce422c03f0a6d21545b"
+  },
+  "productionExecuted": false,
+  "source": {
+    "codeSourceHead": "2906dffc3bbdceae13e9e29157e8e7cc2cd5847a",
+    "commit": "2906dffc3bbdceae13e9e29157e8e7cc2cd5847a",
+    "productionArtifactSha256": null,
+    "shadowArtifactSha256": {
+      "ALL": "f3308333c4e7dd1acead9db87cdbc07781f925105881cdc55e1c90b8546aae60"
+    }
+  },
+  "status": "BLOCKED_OWNER",
+  "technicalStatus": "BLOCKED_TECHNICAL"
+}

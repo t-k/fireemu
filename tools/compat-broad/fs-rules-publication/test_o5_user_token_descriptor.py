@@ -513,8 +513,8 @@ def test_preserved_local_runner_acquisition_remains_accepted_without_management_
     if not configured:
         pytest.skip("O5_PRESERVED_LOCAL_RUNNER is not configured")
     raw_path = Path(configured)
-    if raw_path.is_symlink() or not raw_path.is_file():
-        pytest.skip("configured preserved local runner receipt is unavailable")
+    assert not raw_path.is_symlink(), "configured preserved runner must not be a symlink"
+    assert raw_path.is_file(), "configured preserved local runner receipt is unavailable"
     raw = json.loads(raw_path.read_bytes())
     recorded = raw["bundle"]["acquisition"]
     acquisition = {key: recorded[key] for key in ("environment", "campaignManifestDigest", "nonceReservation", "ownerPermission", "artifact", "principals", "window")}

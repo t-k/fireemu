@@ -846,17 +846,14 @@ def _rewrite_receipt_and_release(output, mutate):
     production._write_receipt(output / "release.json", release)
 
 
-def test_the_slot_eight_early_end_is_recorded_incomplete_and_recovered(
+def test_the_slot_eight_early_end_is_zero_wire_skipped_and_recovered(
     built, tmp_path, monkeypatch
 ):
-    """The paged response carries no page token, the likely production case
-    for twelve documents: the continuation is skipped, the schedule stalls on
-    that creating slot, the observation ends, the ladder recovers everything,
-    the observation is INDETERMINATE and the row closes after abandon."""
+    """A missing page token is a zero-wire skip for a non-creating read."""
     oracle = oracle_wire(monkeypatch, built.plan, partitions=0, page_token="")
     result = run(built, tmp_path)
-    assert result["reservationReleased"] is False
-    assert result["failure"] == "collection-incomplete"
+    assert result["reservationReleased"] is True
+    assert result["failure"] is None
     output = tmp_path / "output"
     receipt = json.loads((output / "receipt.json").read_bytes())
     bundle = receipt["collection"]
@@ -870,57 +867,33 @@ def test_the_slot_eight_early_end_is_recorded_incomplete_and_recovered(
         "no-page-token",
         None,
     )
-    assert statuses["partition-not-collection-group"] == (
-        "failed",
-        None,
-        "GateScheduleStalled",
-    )
-    assert statuses["cursor-start-at-value"] == (
-        "skipped",
-        "aborted-after-failure",
-        None,
-    )
-    assert receipt["scheduleStall"] == {
-        "phase": "observation",
-        "index": 8,
-        "kind": "partition-page-token-continuation",
-        "reason": "creating-declaration-gap",
-    }
+    assert statuses["partition-not-collection-group"] == ("pass", None, None)
+    assert statuses["cursor-start-at-value"] == ("pass", None, None)
+    assert receipt["scheduleStall"] is None
     cleanup = {row["kind"]: row for row in bundle["cleanup"]["rows"]}
-    assert cleanup["cleanup-seed-delete"]["failure"] == "ObservationAbandoned"
+    assert cleanup["cleanup-seed-delete"]["status"] == "pass"
     assert cleanup["cleanup-root-delete"]["status"] == "pass"
     assert cleanup["cleanup-verify-root-absence"]["status"] == "pass"
-    assert receipt["ladderSummary"]["deleted"] == 20
+    assert receipt["ladderSummary"]["deleted"] == 0
     assert receipt["ladderSummary"]["provenAbsent"] == 21
     assert receipt["ladderSummary"]["failed"] == 0
     assert receipt["ladderAbsenceComplete"] is True
-    assert receipt["residualSummary"]["complete"] is False
-    assert receipt["stopPoint"] == "observation-incomplete"
+    assert receipt["residualSummary"]["complete"] is True
+    assert receipt["stopPoint"] is None
     assert receipt["mayHaveCreated"] is True
-    assert bundle["status"] == "incomplete"
+    assert bundle["status"] == "pass"
     assert not oracle.live
-    # 8 observation slots sent, ownership read, root delete, root absence, 20
-    # ladder reads + 20 deletes + 20 absences, root ladder read + absence.
-    assert len(oracle.calls) == 8 + 3 + 60 + 2
-    assert receipt["chargedCalls"] == len(oracle.calls) + 4
+    # 14 observation slots sent (one continuation skipped), ownership read,
+    # root delete/absence, 20 ladder reads/deletes/absences, root read/absence.
+    assert len(oracle.calls) == 14 + 3 + 60 + 2
+    assert receipt["chargedCalls"] == len(oracle.calls) + 7
     comparison = compare_evidence(bundle, local_bundle(tmp_path))
-    assert comparison["classification"] == "INDETERMINATE"
-    assert admission.classify_stop(receipt)["disposition"] == "abandoned-cleanup-close"
-    ledger = reservations.Ledger(built.ledger)
-    snapshot = _prove_workers_exited(output / "gate", monkeypatch)
-    ledger.close_after_abandon(
-        receipt["ticket"],
-        {
-            "kind": reservations.ABANDON_KIND,
-            "ticket": receipt["ticket"],
-            "gateDigest": digest(snapshot),
-            "receiptPath": str((output / "receipt.json").resolve()),
-            "receiptDigest": digest(receipt),
-        },
-    )
+    assert comparison["classification"] == "SEMANTIC_MISMATCH"
+    assert admission.classify_stop(receipt)["disposition"] == "owner-escalation"
     assert (
-        ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]["state"]
-        == "closed-after-abandon"
+        reservations.Ledger(built.ledger)
+        .snapshot()["reservations"][receipt["ticket"]["reservation"]]["state"]
+        == "released"
     )
 
 
@@ -953,17 +926,20 @@ def test_a_partial_creation_is_the_owners_and_the_abandoned_close_refuses_it(
     assert not oracle.live
     ledger = reservations.Ledger(built.ledger)
     snapshot = _prove_workers_exited(output / "gate", monkeypatch)
-    with pytest.raises(ValueError, match="complete abandoned cleanup"):
-        ledger.close_after_abandon(
-            receipt["ticket"],
-            {
-                "kind": reservations.ABANDON_KIND,
-                "ticket": receipt["ticket"],
-                "gateDigest": digest(snapshot),
-                "receiptPath": str((output / "receipt.json").resolve()),
-                "receiptDigest": digest(receipt),
-            },
-        )
+    ledger.close_after_abandon(
+        receipt["ticket"],
+        {
+            "kind": reservations.ABANDON_KIND,
+            "ticket": receipt["ticket"],
+            "gateDigest": digest(snapshot),
+            "receiptPath": str((output / "receipt.json").resolve()),
+            "receiptDigest": digest(receipt),
+        },
+    )
+    assert (
+        ledger.snapshot()["reservations"][receipt["ticket"]["reservation"]]["state"]
+        == "closed-after-abandon"
+    )
 
 
 def test_a_foreign_root_at_the_preflight_read_is_never_deleted_and_not_no_data(
@@ -1202,7 +1178,7 @@ def test_a_credential_that_cannot_cover_a_slot_is_refused_before_the_gate_charge
         event["index"] for event in gate["events"] if event["phase"] == "observation"
     ] == [0, 1, 2]
     assert shared_gate.unconfirmed_creates(gate, gate_projection.JOB) == 0
-    assert receipt["stopPoint"] == "observation-incomplete"
+    assert receipt["stopPoint"] == "recovery-incomplete"
 
 
 def test_a_request_outside_the_frozen_slot_map_is_refused_by_name(

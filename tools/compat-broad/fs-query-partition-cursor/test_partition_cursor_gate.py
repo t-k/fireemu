@@ -448,9 +448,12 @@ def test_a_ladder_delete_after_a_typed_absence_is_consumed_without_a_send(tmp_pa
 def test_an_untyped_read_only_response_stops_the_run_unsettled(
     tmp_path, kind, status, body, message
 ):
-    """G08/G13: a read-only slot the shared Gate treats as creating is settled
-    only from a response the facade can type; anything else keeps the
-    outcome unknown, stops the job and names the failure."""
+    """G08/G13: every recognized read-only slot rejects an untyped response.
+
+    The Shared Gate now recognizes partitionQuery as non-creating, so the
+    refusal is recorded without a creation outcome while the facade still
+    stops on malformed response bodies and mismatched typed errors.
+    """
 
     class Untyped(TamperingOracle):
         overrides: typing.ClassVar[dict] = {kind: (status, body)}
@@ -469,9 +472,9 @@ def test_an_untyped_read_only_response_stops_the_run_unsettled(
         driver.dispatch("observation", index)
     event = driver.last_event()
     assert event["failure"] == "UnsettledPartitionCursorResponse", message
-    assert event["creationOutcome"] == "unknown"
+    assert "creationOutcome" not in event
     assert driver.gate.snapshot()["jobs"][JOB]["stopped"] is True
-    assert shared_gate.unconfirmed_creates(driver.gate.snapshot(), JOB) == 1
+    assert shared_gate.unconfirmed_creates(driver.gate.snapshot(), JOB) == 0
 
 
 def test_a_delete_commit_acknowledging_fewer_writes_is_not_settled(tmp_path):
@@ -515,5 +518,6 @@ def test_a_typed_partition_refusal_is_settled_by_the_shared_gate_itself(tmp_path
     driver.dispatch("observation", 9)
     event = driver.last_event()
     assert event["status"] == 400
-    assert event["creationOutcome"] == "refused"
+    assert "creationOutcome" not in event
     assert "settledBy" not in event
+    assert shared_gate.unconfirmed_creates(driver.gate.snapshot(), JOB) == 0

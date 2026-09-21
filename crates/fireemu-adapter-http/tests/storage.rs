@@ -3108,7 +3108,8 @@ fn set_rules_body() -> Vec<u8> {
 /// SETR-1: `PUT /internal/setRules` replaces the authorization policy of the whole run, so a
 /// page on a loopback origin must present the control token, exactly as the equivalent
 /// control route requires. A foreign origin never reaches it, and the `@firebase/rules-unit-testing`
-/// shape (no `Origin`, no `Sec-Fetch-*`) keeps working unauthenticated.
+/// shape (no `Origin`, no `Sec-Fetch-Site`/`Sec-Fetch-Dest`; Node's built-in `fetch` does
+/// attach `sec-fetch-mode: cors`) keeps working unauthenticated.
 #[test]
 fn set_rules_from_a_browser_needs_the_control_token() {
     let update = set_rules_body();
@@ -3127,7 +3128,6 @@ fn set_rules_from_a_browser_needs_the_control_token() {
             ],
         ),
         ("sec-fetch-site only", vec![("sec-fetch-site", "same-site")]),
-        ("sec-fetch-mode only", vec![("sec-fetch-mode", "cors")]),
         ("sec-fetch-dest only", vec![("sec-fetch-dest", "empty")]),
         (
             "foreign origin with the control token",
@@ -3197,6 +3197,37 @@ fn set_rules_from_a_browser_needs_the_control_token() {
         200
     );
     assert_eq!(anonymous_multipart_upload(&s, "sdk.txt").status, 200);
+
+    // The header set Node 24's built-in `fetch` (undici) attaches when a script sets only
+    // `Content-Type`: `sec-fetch-mode: cors` is among them and cannot be removed by the script.
+    // This is what `@firebase/rules-unit-testing` 5.0.2's `loadStorageRules` sends, and it is
+    // a process, not a page, so it is admitted without a token.
+    let s = state(Some(SETR_DENY_ALL));
+    let response = handle(
+        &s,
+        req(
+            "PUT",
+            "/internal/setRules",
+            &[
+                ("host", "127.0.0.1:9199"),
+                ("connection", "keep-alive"),
+                ("content-type", "application/json"),
+                ("accept", "*/*"),
+                ("accept-language", "*"),
+                ("sec-fetch-mode", "cors"),
+                ("user-agent", "node"),
+                ("accept-encoding", "gzip, deflate"),
+            ],
+            &update,
+        ),
+    );
+    assert_eq!(
+        response.status,
+        200,
+        "undici shape: {}",
+        String::from_utf8_lossy(&response.body)
+    );
+    assert_eq!(anonymous_multipart_upload(&s, "undici.txt").status, 200);
 }
 
 /// SETR-2: the rules body is bounded like the control port's (256 KiB), before it is parsed.

@@ -432,7 +432,9 @@ def test_short_summary_id_boundary_survives_unbalanced_or_dashed_brackets(
 def test_short_summary_dashed_message_is_not_mistaken_for_more_id(
     nodeid, expected_name
 ):
-    text = f"FAILED {nodeid} - AssertionError: some - message - here\n1 failed in 0.00s\n"
+    text = (
+        f"FAILED {nodeid} - AssertionError: some - message - here\n1 failed in 0.00s\n"
+    )
     result = parse_log(text)
     assert len(result.failures) == 1
     assert result.failures[0].name == expected_name

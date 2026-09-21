@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { test } from "node:test";
-import { compareG0, validateG0Origins } from "../g0.mjs";
+import { compareG0, g0SessionPythonSource, validateG0Origins } from "../g0.mjs";
 import { G0_CASE } from "../registry.mjs";
 
 test("G0 compare refuses a missing retained build binding", () => {
@@ -43,4 +44,13 @@ test("G0 origin binding requires both real loopback services", () => {
     { FIRESTORE_EMULATOR_HOST: "127.0.0.1:18080" },
     { FIRESTORE_EMULATOR_HOST: "example.invalid:18080", FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:19090" },
   ]) assert.throws(() => validateG0Origins(env), /g0-owned-origin-required/);
+});
+
+test("G0 session bridge compiles as the exact Python source it will execute", () => {
+  const source = g0SessionPythonSource();
+  execFileSync(
+    "uv",
+    ["run", "python", "-c", "compile(__import__('sys').stdin.read(), '<g0-session>', 'exec')"],
+    { input: source, encoding: "utf8", stdio: ["pipe", "ignore", "pipe"] },
+  );
 });

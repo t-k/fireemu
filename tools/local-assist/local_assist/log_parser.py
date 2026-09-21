@@ -82,15 +82,26 @@ def _pytest_short(line: str) -> tuple[str, str, str] | None:
     if match is None:
         return None
     rest = match.group("rest")
-    depth = 0
-    for index, char in enumerate(rest):
-        if char == "[":
-            depth += 1
-        elif char == "]" and depth:
-            depth -= 1
-        elif not depth and rest.startswith(" - ", index):
-            return match.group("status"), rest[:index], rest[index + 3 :]
-    return match.group("status"), rest, ""
+    status = match.group("status")
+    if "[" in rest:
+        # pytest does not escape '[' or ']' inside a parametrize id, so a
+        # parameter value that itself contains a bracket can desync a
+        # naive bracket-depth count: an unbalanced '[' in the value never
+        # lets depth return to 0 (test_bad[[] never "closes"), and an
+        # unbalanced ']' can return depth to 0 too early (inside
+        # test_bad[] - suffix], right after the value's own ']'). Anchor on
+        # the rightmost '] - ' instead: pytest always closes the id's own
+        # wrapping bracket last, immediately before " - <message>".
+        split = rest.rfind("] - ")
+        if split != -1:
+            return status, rest[: split + 1], rest[split + 4 :]
+        # No bracket-anchored separator: any '[' present belongs to the
+        # message (e.g. "test_bad - assert x in [1, 2, 3]"), not the id, so
+        # a plain split is unambiguous.
+    split = rest.find(" - ")
+    if split != -1:
+        return status, rest[:split], rest[split + 3 :]
+    return status, rest, ""
 
 
 def _pytest_summary(line: str, line_number: int) -> dict | None:
@@ -310,34 +321,64 @@ def _pytest_message(block: list[str]) -> tuple[list[str], str | None]:
     return message, location
 
 
-def _detail_identity(name: str) -> str:
-    for prefix in ("ERROR at setup of ", "ERROR at teardown of ", "ERROR collecting "):
+# Phases whose short-summary status is FAILED vs ERROR: a body (call)
+# failure is always reported as FAILED; setup, teardown and collection
+# problems are always reported as ERROR. Matching on this in addition to
+# the name keeps a body failure and a teardown error of the same test from
+# being joined to each other's detail block.
+_DETAIL_PHASE_PREFIXES = (
+    ("ERROR at setup of ", "setup"),
+    ("ERROR at teardown of ", "teardown"),
+    ("ERROR collecting ", "collection"),
+)
+_PHASES_BY_STATUS = {
+    "FAILED": frozenset({"body"}),
+    "ERROR": frozenset({"setup", "teardown", "collection"}),
+}
+
+
+def _detail_identity_and_phase(name: str) -> tuple[str, str]:
+    phase = "body"
+    for prefix, prefix_phase in _DETAIL_PHASE_PREFIXES:
         if name.startswith(prefix):
             name = name[len(prefix) :]
+            phase = prefix_phase
             break
     if name.endswith(".py"):
-        return name  # A collection-error path is not a dotted test class name.
+        # A collection-error path is not a dotted test class name.
+        return name, "collection"
     base, bracket, parameters = name.partition("[")
-    return base.replace(".", "::") + bracket + parameters
+    return base.replace(".", "::") + bracket + parameters, phase
+
+
+def _detail_identity(name: str) -> str:
+    identity, _phase = _detail_identity_and_phase(name)
+    return identity
 
 
 def _join_short_summaries(
-    failures: list[Failure], short: list[tuple[str, str, int]]
+    failures: list[Failure], short: list[tuple[str, str, str, int]]
 ) -> None:
     """Join unambiguously; retain a standalone summary row when detail is absent.
 
     Same-named tests in different files must not be rebound to the last nodeid.
-    Each summary entry and detailed block is matched at most once.
+    Each summary entry and detailed block is matched at most once. A body
+    failure and a teardown/setup/collection error of the same test share one
+    nodeid in the short summary, so the FAILED/ERROR status plus the phase
+    recorded on the detail block's own heading is required to tell them apart.
     """
     used: set[int] = set()
-    for nodeid, message, line_number in short:
-        group, separator, name = nodeid.partition("::")
-        name = name if separator else nodeid
-        candidates = []
+
+    def candidates_for(
+        expected_phases: frozenset[str], group: str, name: str, nodeid: str
+    ) -> list[int]:
+        found = []
         for index, failure in enumerate(failures):
             if index in used or failure.group != "pytest":
                 continue
-            identity = _detail_identity(failure.name)
+            identity, phase = _detail_identity_and_phase(failure.name)
+            if phase not in expected_phases:
+                continue
             if identity != name and failure.name != nodeid:
                 continue
             # A collection heading names the full source file explicitly;
@@ -346,12 +387,28 @@ def _join_short_summaries(
                 source = failure.location.rsplit(":", 1)[0]
                 if source != group and not source.endswith("/" + group):
                     continue
-            candidates.append(index)
+            found.append(index)
+        return found
+
+    for status, nodeid, message, line_number in short:
+        group, separator, name = nodeid.partition("::")
+        name = name if separator else nodeid
+        strict_phases = _PHASES_BY_STATUS.get(status, frozenset())
+        candidates = candidates_for(strict_phases, group, name, nodeid)
+        if not candidates and status != "FAILED":
+            # A detail heading without an "at setup/teardown/collecting of"
+            # phrase (e.g. a bare dotted class.method name) still resolves
+            # to phase "body"; a FAILED status never matches anything but
+            # a body block, but an ERROR-family status may, in the absence
+            # of a stricter match, still be the only detail block for it.
+            candidates = candidates_for(strict_phases | {"body"}, group, name, nodeid)
         if len(candidates) == 1 and not failures[candidates[0]].location:
             # One remaining display block is still ambiguous when two different
             # files report the same name. The summary order is not provenance.
             possible = {
-                other for other, _, _ in short if other.partition("::")[2] == name
+                other
+                for other_status, other, _, _ in short
+                if other_status == status and other.partition("::")[2] == name
             }
             if len(possible) > 1:
                 candidates = []
@@ -380,7 +437,7 @@ def _join_short_summaries(
 def parse_pytest(lines: list[str]) -> ParsedLog:
     summary: dict = {}
     failures: list[Failure] = []
-    short: list[tuple[str, str, int]] = []
+    short: list[tuple[str, str, str, int]] = []
     seen_short: set[tuple[str, str, str]] = set()
     in_failures = False
     block_start: int | None = None
@@ -434,7 +491,7 @@ def parse_pytest(lines: list[str]) -> ParsedLog:
             key = (status, nodeid, message)
             if key not in seen_short:
                 seen_short.add(key)
-                short.append((nodeid, message, index + 1))
+                short.append((status, nodeid, message, index + 1))
     close_block(len(lines))
     _join_short_summaries(failures, short)
     if not summary:

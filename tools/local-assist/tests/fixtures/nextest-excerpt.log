@@ -99,4 +99,4 @@
         FAIL [   0.048s] ( 170/3062) fireemu::resources doctor_connect_reads_the_running_daemon_and_stays_loopback_only
         FAIL [   0.026s] ( 313/3062) fireemu::bin/fireemu functions::tests::workspace_runner_is_found_from_the_executable_without_a_compiled_in_path
 error: test run failed
-local-regression-gate: failed (3062 run, 3054 passed, 8 failed, 81 skipped) at 2dd6d9d9ddfc; report /home/user/work/firebase-emulator/docs.local/gates/REDACTED.json
+local-regression-gate: failed (3062 run, 3054 passed, 8 failed, 81 skipped) at 2dd6d9d9ddfc; report /repo/docs.local/gates/REDACTED.json

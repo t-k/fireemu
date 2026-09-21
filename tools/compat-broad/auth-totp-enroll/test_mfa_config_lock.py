@@ -179,6 +179,93 @@ def test_a_resume_admits_the_normalized_live_shape_and_nothing_else(tmp_path):
         again.preflight(resume=True)
 
 
+def test_normalization_never_folds_a_totp_difference_into_the_disabled_shape():
+    # A TOTP provider config is never known-equivalent to an absent/disabled mfa
+    # block; owner review a2d2db49c item 2 found `normalized()` discarding it.
+    disabled = {"mfa": {"state": "DISABLED"}}
+    enabled_totp = {
+        "mfa": {
+            "providerConfigs": [
+                {"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 1}}
+            ]
+        }
+    }
+    assert normalized(disabled) != normalized(enabled_totp)
+
+
+def test_normalization_is_sensitive_to_adjacent_intervals():
+    one = {
+        "mfa": {
+            "providerConfigs": [
+                {"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 1}}
+            ]
+        }
+    }
+    two = {
+        "mfa": {
+            "providerConfigs": [
+                {"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 2}}
+            ]
+        }
+    }
+    assert normalized(one) != normalized(two)
+
+
+def test_normalization_is_sensitive_to_provider_configs_added_or_removed():
+    without = {"mfa": {"state": "DISABLED"}}
+    with_provider = {
+        "mfa": {
+            "state": "DISABLED",
+            "providerConfigs": [{"state": "DISABLED", "totpProviderConfig": {}}],
+        }
+    }
+    assert normalized(without) != normalized(with_provider)
+
+
+def test_normalization_still_unifies_the_known_equivalent_unset_disabled_pair():
+    # The one pair the earlier production recorder proved equivalent stays unified:
+    # no providerConfigs on either side.
+    unset = {}
+    explicit_disabled = {"mfa": {"state": "DISABLED"}, "signIn": {}}
+    assert normalized(unset) == normalized(explicit_disabled)
+
+
+def test_a_restore_with_a_totp_difference_is_never_reported_normalized(tmp_path):
+    # End-to-end regression for the bug: a restore whose readback still carries a
+    # TOTP providerConfigs difference from the baseline must not be accepted as
+    # `restored-verified-normalized`.
+    baseline = copy.deepcopy(BASELINE_CONFIG)
+    service = Service(baseline)
+    lock = lock_for(tmp_path, service)
+    lock.preflight()
+    lock.apply()
+
+    def leave_totp_behind(body, mask):
+        service.patches.append((copy.deepcopy(body), mask))
+        assert mask == UPDATE_MASK
+        # The restore is answered, but the service still reports a TOTP provider
+        # config that the baseline never had: an incomplete restore.
+        service.config["mfa"] = {
+            "state": "DISABLED",
+            "providerConfigs": [
+                {"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 1}}
+            ],
+        }
+        service.config.setdefault("signIn", {})["phoneNumber"] = copy.deepcopy(
+            body["signIn"]["phoneNumber"]
+        )
+        service.config["smsRegionConfig"] = copy.deepcopy(body["smsRegionConfig"])
+        return 200, copy.deepcopy(service.config)
+
+    lock._patch = leave_totp_behind
+    with pytest.raises(ConfigLockError, match="restored configuration digest differs"):
+        lock.restore()
+    assert lock.record["restoreStatus"] == "restore-readback-differs"
+    assert not validate_evidence(
+        lock.evidence(), frozen_baseline_digest=lock.frozen_baseline_digest
+    )
+
+
 def test_the_restore_patch_writes_back_exactly_the_masked_fields():
     patch = restore_patch(BASELINE_CONFIG)
     assert set(patch) == {"mfa", "signIn", "smsRegionConfig"}

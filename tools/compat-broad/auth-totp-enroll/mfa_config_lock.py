@@ -151,7 +151,16 @@ def applied(readback: dict) -> bool:
 
 
 def normalized(body: dict) -> dict:
-    """The configuration with each masked field's absent and disabled shapes unified."""
+    """The configuration with each masked field's absent and disabled shapes unified.
+
+    Only the pairs the earlier production recorder proved equivalent are unified
+    here: an absent phone block and its explicit disabled shape, and an absent
+    `mfa` and its explicit `{"state": "DISABLED"}` shape. `providerConfigs` (the
+    TOTP factor's state and `adjacentIntervals`) is never known-equivalent to
+    absence, so its presence blocks the `mfa` normalization outright; a restore
+    that left a TOTP difference behind must compare unequal here, not be folded
+    into the disabled shape.
+    """
     value = copy.deepcopy(body)
     sign_in = value.get("signIn") or {}
     phone = sign_in.get("phoneNumber") or {}
@@ -159,7 +168,11 @@ def normalized(body: dict) -> dict:
         sign_in = {**sign_in, "phoneNumber": copy.deepcopy(_DISABLED_PHONE)}
     value["signIn"] = sign_in
     mfa = value.get("mfa") or {}
-    if mfa.get("state") in (None, "DISABLED") and not mfa.get("enabledProviders"):
+    if (
+        mfa.get("state") in (None, "DISABLED")
+        and not mfa.get("enabledProviders")
+        and not mfa.get("providerConfigs")
+    ):
         value["mfa"] = copy.deepcopy(_DISABLED_MFA)
     value["smsRegionConfig"] = value.get("smsRegionConfig") or {}
     return value

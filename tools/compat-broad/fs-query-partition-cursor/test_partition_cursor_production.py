@@ -897,12 +897,14 @@ def test_the_slot_eight_early_end_is_zero_wire_skipped_and_recovered(
     )
 
 
-def test_a_partial_creation_is_the_owners_and_the_abandoned_close_refuses_it(
+def test_a_partial_creation_closes_after_typed_absence_proof(
     built, tmp_path, monkeypatch
 ):
-    """Seed Commit typed-refused after the root create: every resource is
-    proven absent, but only the root has a creation proof, and the shared
-    Ledger closes an abandoned run only when every resource has one."""
+    """A partial create closes after every assigned resource has typed absence.
+
+    Only the root has a creation proof; the updated Shared Gate requires proof
+    for created resources and typed absence for every assigned resource.
+    """
     oracle = oracle_wire(monkeypatch, built.plan)
     original = oracle._body
 

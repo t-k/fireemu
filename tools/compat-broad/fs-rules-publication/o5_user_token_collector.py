@@ -39,6 +39,36 @@ ROLE_PRODUCTION = "production-user-token"
 ROLE_LOCAL_SHADOW = "local-fireemu-shadow"
 ROLES = (ROLE_PRODUCTION, ROLE_LOCAL_SHADOW)
 
+# The environment a bundle was acquired in. A role names the side of a
+# comparison; the environment, the endpoints and the artifact binding are what
+# a comparator checks the role against.
+ENVIRONMENT_PRODUCTION = "production-oracle"
+ENVIRONMENT_LOCAL = "local-fireemu"
+ENVIRONMENTS = (ENVIRONMENT_PRODUCTION, ENVIRONMENT_LOCAL)
+
+# Hosts a production acquisition may reach, and the loopback hosts a local
+# shadow must not leave. A receipt names the host the transport connected to;
+# the collector classifies it and a comparator refuses a mixed or foreign set.
+PRODUCTION_HOSTS = frozenset(
+    {
+        "firestore.googleapis.com",
+        "identitytoolkit.googleapis.com",
+        "firebaserules.googleapis.com",
+    }
+)
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+# How a Ruleset release readback was obtained. A production transport reads the
+# active release back through the Rules API; the local runtime has no readback
+# route, so its transport echoes the digest of the bytes it published.
+READBACK_RELEASE_GET = "release-get"
+READBACK_PUBLISH_ECHO = "publish-echo"
+READBACK_KINDS = (READBACK_RELEASE_GET, READBACK_PUBLISH_ECHO)
+
+_ENDPOINT = re.compile(
+    r"^(?P<host>[a-z0-9.-]{1,253}|\[[0-9a-f:]{2,39}\]|::1)(?::(?P<port>[0-9]{1,5}))?$"
+)
+
 # A key containing any of these substrings, at any depth and in any case, means
 # a credential escaped the transport.
 FORBIDDEN_KEY_TOKENS = (
@@ -90,9 +120,28 @@ def _now() -> float:
     return time.monotonic()
 
 
-def _credential_fingerprint(nonce: str, ref: str) -> str:
+def credential_fingerprint(nonce: str, ref: str) -> str:
     """Bind a row to its principal without recording anything secret."""
     return digest(["credential-ref", nonce, ref])[:16]
+
+
+_credential_fingerprint = credential_fingerprint
+
+
+def endpoint_host(endpoint: str) -> str | None:
+    """The host of a ``host[:port]`` endpoint a transport reported, or None.
+
+    A scheme, a path, a query, userinfo or anything but a host and a port is
+    not an endpoint but a URL, and a URL is not recorded.
+    """
+    match = _ENDPOINT.fullmatch(endpoint) if isinstance(endpoint, str) else None
+    if match is None:
+        return None
+    port = match.group("port")
+    if port is not None and not 0 < int(port) < 65536:
+        return None
+    host = match.group("host")
+    return host[1:-1] if host.startswith("[") else host
 
 
 def _scan(value: Any, depth: int, budget: list[int]) -> str | None:
@@ -180,7 +229,9 @@ class _Journal:
             return
         try:
             line = json.dumps(
-                {"kind": kind, **payload}, sort_keys=True, separators=(",", ":"),
+                {"kind": kind, **payload},
+                sort_keys=True,
+                separators=(",", ":"),
                 allow_nan=False,
             )
             self._handle.write(line + "\n")
@@ -561,7 +612,11 @@ def _recovery_evidence_error(kind: str, receipt: Mapping[str, Any]) -> str | Non
     codes = {"OK", 0}
     http_codes = {200}
     if not present and not deleting:
-        permitted |= {"NOT_FOUND", "USER_NOT_FOUND"} if kind.startswith("account-") else {"NOT_FOUND"}
+        permitted |= (
+            {"NOT_FOUND", "USER_NOT_FOUND"}
+            if kind.startswith("account-")
+            else {"NOT_FOUND"}
+        )
         codes |= permitted | {5}
         http_codes.add(404)
     for key in ("status", "code"):

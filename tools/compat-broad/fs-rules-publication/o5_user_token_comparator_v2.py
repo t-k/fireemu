@@ -1,0 +1,818 @@
+"""Acquisition comparator for the FS-RULES user-token observation matrix.
+
+This is the second comparator module of the lane. The first,
+``o5_user_token_comparator.py``, has no positive classification and stays that
+way; it records the reviewed decision that a recording is not an acquisition.
+This module is the separately reviewed path that can reach ``MATCH``, and it can
+do so only when every binding the first module names is present on both sides
+and verified here against something the bundle itself cannot fabricate:
+
+* the collector identity, as digests of the lane sources recomputed from disk;
+* the endpoint every request reached, as recorded by the transport per receipt,
+  with a production host allowlist on one side and loopback on the other;
+* the Ruleset releases, with their source digest, readback and activation order
+  relative to the rows that depend on them;
+* the principal provenance per credential reference, as fingerprints derived
+  from the campaign nonce and the account identity, never a token or a uid;
+* the campaign manifest digest the run was admitted under, recomputed from the
+  checked-in campaign module;
+* version-bound cleanup with typed final absence for every document and account;
+* monotonic time and wire-sequence consistency between rows, releases, recovery
+  steps and the enforced budget;
+* the nonce reservation and owner permission on the production side, and the
+  artifact binding on the local side;
+* the environment label, refused when it contradicts the role, the endpoints or
+  the artifact binding.
+
+Every failed binding is a named error. A bundle that fails an identity or
+authority binding is ``REFUSED``; a bundle whose evidence is incomplete or
+internally contradictory is ``INDETERMINATE``. Only two admitted bundles are
+compared row by row, and a row that disagrees is ``SEMANTIC_MISMATCH``.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+from collections.abc import Mapping
+from itertools import pairwise
+from typing import Any
+
+from o5_user_token_campaign import manifest, source_digests
+from o5_user_token_case import (
+    ACCOUNT_PRINCIPALS,
+    CAMPAIGN,
+    compile_case,
+    digest,
+    validate_case,
+)
+from o5_user_token_collector import (
+    COLLECTOR_CONTRACT,
+    ENVIRONMENT_LOCAL,
+    ENVIRONMENT_PRODUCTION,
+    LOOPBACK_HOSTS,
+    PRODUCTION_HOSTS,
+    READBACK_RELEASE_GET,
+    ROLE_LOCAL_SHADOW,
+    ROLE_PRODUCTION,
+    credential_fingerprint,
+    endpoint_host,
+)
+
+COMPARATOR_CONTRACT = "fs-rules-user-token-comparator-v3"
+
+MATCH = "MATCH"
+SEMANTIC_MISMATCH = "SEMANTIC_MISMATCH"
+INDETERMINATE = "INDETERMINATE"
+REFUSED = "REFUSED"
+CLASSIFICATIONS = (MATCH, SEMANTIC_MISMATCH, INDETERMINATE, REFUSED)
+
+SIDE_PRODUCTION = "production"
+SIDE_LOCAL = "local"
+_ROLE_FOR_SIDE = {SIDE_PRODUCTION: ROLE_PRODUCTION, SIDE_LOCAL: ROLE_LOCAL_SHADOW}
+_ENVIRONMENT_FOR_SIDE = {
+    SIDE_PRODUCTION: ENVIRONMENT_PRODUCTION,
+    SIDE_LOCAL: ENVIRONMENT_LOCAL,
+}
+_PROVIDER_FOR_KIND = {"email-password": "password", "anonymous": "anonymous"}
+
+# Errors of these names refuse the comparison outright: the bundle is not an
+# acquisition of this campaign by this collector on the side it was passed as.
+# Everything else leaves the comparison indeterminate.
+REFUSAL_ERRORS = frozenset(
+    {
+        "not-a-bundle",
+        "collector-contract-drift",
+        "bundle-claims-authority",
+        "local-claims-production",
+        "local-claims-reservation",
+        "local-mislabelled-as-production",
+        "local-reached-nonloopback",
+        "endpoint-outside-allowlist",
+        "role-mismatch",
+        "case-identity-drift",
+        "campaign-identity-drift",
+        "case-digest-drift",
+        "observer-digest-drift",
+        "manifest-mismatch",
+        "self-comparison",
+        "principal-shared-across-sides",
+        "plan-invalid",
+    }
+)
+
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_HEX40 = re.compile(r"^[0-9a-f]{40}$")
+_HEX16 = re.compile(r"^[0-9a-f]{16}$")
+# Wall and monotonic clocks drift; more than this between their spans is a
+# contradiction, not drift.
+_CLOCK_TOLERANCE_SECONDS = 60.0
+
+
+def _is_number(value: Any) -> bool:
+    return type(value) in (int, float) and math.isfinite(value)
+
+
+def _hex(value: Any, pattern: re.Pattern[str]) -> bool:
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
+class _Side:
+    """One bundle under admission, with the plan it must bind."""
+
+    def __init__(self, bundle: Any, side: str) -> None:
+        self.bundle = bundle
+        self.side = side
+        self.role = _ROLE_FOR_SIDE[side]
+        self.errors: list[str] = []
+        self.plan: dict[str, Any] | None = None
+        self.acquisition: dict[str, Any] | None = None
+
+    def fail(self, name: str) -> None:
+        entry = f"{self.side}:{name}"
+        if entry not in self.errors:
+            self.errors.append(entry)
+
+    @property
+    def refused(self) -> bool:
+        return any(error.split(":", 2)[1] in REFUSAL_ERRORS for error in self.errors)
+
+
+def _admit_side(side: _Side, production_plan: dict[str, Any]) -> None:
+    bundle = side.bundle
+    if not isinstance(bundle, Mapping):
+        side.fail("not-a-bundle")
+        return
+    if bundle.get("contract") != COLLECTOR_CONTRACT:
+        side.fail("collector-contract-drift")
+    if (
+        bundle.get("productionReady") is True
+        or bundle.get("acquisitionValidated") is True
+    ):
+        side.fail("bundle-claims-authority")
+    if side.side == SIDE_LOCAL and bundle.get("productionExecuted") is not False:
+        side.fail("local-claims-production")
+    if side.side == SIDE_PRODUCTION and bundle.get("productionExecuted") is not True:
+        side.fail("production-not-executed")
+    _admit_provenance(side, production_plan)
+    if side.plan is None:
+        return
+    plan = side.plan
+    if bundle.get("planDigest") != plan["planDigest"]:
+        side.fail("case-digest-drift")
+    _admit_acquisition(side)
+    _admit_observer(side)
+    rows = bundle.get("rows")
+    if not isinstance(rows, list) or len(rows) != len(plan["observation"]):
+        side.fail("row-count")
+        rows = None
+    else:
+        _admit_rows(side, rows)
+    if bundle.get("recordingComplete") is not True:
+        side.fail("recording-incomplete")
+    if bundle.get("abort") is not None:
+        side.fail("recording-aborted")
+    if bundle.get("infrastructureFailures") not in ([], None):
+        side.fail("recording-incomplete:infrastructure")
+    cleanup_steps = _admit_cleanup(side)
+    releases = _admit_releases(side, rows)
+    _admit_transport(side, rows, releases, cleanup_steps)
+    _admit_budget(side, rows, releases, cleanup_steps)
+
+
+def _admit_provenance(side: _Side, production_plan: dict[str, Any]) -> None:
+    provenance = side.bundle.get("provenance")
+    if not isinstance(provenance, Mapping):
+        side.fail("missing-provenance")
+        return
+    if provenance.get("role") != side.role:
+        side.fail("role-mismatch")
+    run_id = provenance.get("runId")
+    if not isinstance(run_id, str) or not run_id:
+        side.fail("missing-run-identity")
+    case = provenance.get("case")
+    keys = ("project", "database", "nonce", "tenant")
+    if not isinstance(case, Mapping) or any(
+        not isinstance(case.get(key), str) for key in keys
+    ):
+        side.fail("missing-case-identity")
+        return
+    if side.side == SIDE_PRODUCTION:
+        if all(case[key] == production_plan[key] for key in keys):
+            side.plan = production_plan
+            return
+        # Refused, but the remaining bindings are still checked against the
+        # identity the bundle declares, so a relabelled local run is named as
+        # such and not only as an identity drift.
+        side.fail("case-identity-drift")
+    elif any(
+        case[key] != production_plan[key] for key in ("project", "database", "nonce")
+    ):
+        # The local shadow runs the same campaign nonce against the same
+        # project and database. Only the tenant identifier is assigned by the
+        # local Auth emulator, so the local plan is recompiled from the
+        # bundle's own identity.
+        side.fail("campaign-identity-drift")
+        return
+    try:
+        side.plan = compile_case(*(case[key] for key in keys))
+    except (TypeError, ValueError):
+        side.fail("case-identity-drift")
+
+
+def _admit_acquisition(side: _Side) -> None:
+    acquisition = side.bundle.get("acquisition")
+    if not isinstance(acquisition, Mapping):
+        side.fail("missing-acquisition-bindings")
+        return
+    side.acquisition = dict(acquisition)
+    environment = acquisition.get("environment")
+    kind = environment.get("kind") if isinstance(environment, Mapping) else None
+    expected = _ENVIRONMENT_FOR_SIDE[side.side]
+    if kind != expected:
+        if side.side == SIDE_PRODUCTION and kind == ENVIRONMENT_LOCAL:
+            side.fail("local-mislabelled-as-production")
+        elif side.side == SIDE_LOCAL and kind == ENVIRONMENT_PRODUCTION:
+            side.fail("local-claims-production")
+        else:
+            side.fail("missing-binding:environment")
+    if not _hex(acquisition.get("campaignManifestDigest"), _HEX64):
+        side.fail("missing-binding:campaignManifestDigest")
+    artifact = acquisition.get("artifact")
+    reservation = acquisition.get("nonceReservation")
+    permission = acquisition.get("ownerPermission")
+    if side.side == SIDE_PRODUCTION:
+        if artifact is not None:
+            side.fail("local-mislabelled-as-production")
+        _admit_reservation(side, reservation)
+        if not isinstance(permission, Mapping) or not _hex(
+            permission.get("permissionDigest"), _HEX64
+        ):
+            side.fail("missing-binding:ownerPermission")
+        window = acquisition.get("window")
+        if (
+            not isinstance(window, Mapping)
+            or not _is_number(window.get("startsAt"))
+            or not _is_number(window.get("expiresAt"))
+            or not window["startsAt"] < window["expiresAt"]
+        ):
+            side.fail("missing-binding:window")
+    else:
+        if (
+            not isinstance(artifact, Mapping)
+            or not _hex(artifact.get("artifactSha256"), _HEX64)
+            or not _hex(artifact.get("sourceCommit"), _HEX40)
+        ):
+            side.fail("missing-binding:artifact")
+        if reservation is not None:
+            side.fail("local-claims-reservation")
+    _admit_principals(side, acquisition.get("principals"))
+
+
+def _admit_reservation(side: _Side, reservation: Any) -> None:
+    if not isinstance(reservation, Mapping):
+        side.fail("missing-binding:nonceReservation")
+        return
+    identifier = reservation.get("reservationId")
+    if not isinstance(identifier, str) or not identifier:
+        side.fail("missing-binding:nonceReservation")
+    if reservation.get("campaignId") != CAMPAIGN:
+        side.fail("nonce-reservation-mismatch:campaign")
+    assert side.plan is not None
+    if reservation.get("nonceDigest") != digest(side.plan["nonce"]):
+        side.fail("nonce-reservation-mismatch:nonce")
+
+
+def _admit_principals(side: _Side, principals: Any) -> None:
+    assert side.plan is not None
+    if not isinstance(principals, Mapping):
+        side.fail("missing-binding:principals")
+        return
+    for entry in side.plan["ownedAccounts"]:
+        ref = entry["ref"]
+        principal = principals.get(ref)
+        if not isinstance(principal, Mapping):
+            side.fail(f"principal-mismatch:{ref}:missing")
+            continue
+        if not _hex(principal.get("uidFingerprint"), _HEX16):
+            side.fail(f"principal-mismatch:{ref}:fingerprint")
+        if principal.get("provider") != _PROVIDER_FOR_KIND.get(entry["kind"]):
+            side.fail(f"principal-mismatch:{ref}:provider")
+        if principal.get("tenant") != entry["tenant"]:
+            side.fail(f"principal-mismatch:{ref}:tenant")
+        if principal.get("claimsDigest") != digest(entry["claims"]):
+            side.fail(f"principal-mismatch:{ref}:claims")
+    unknown = sorted(set(principals) - set(ACCOUNT_PRINCIPALS))
+    if unknown:
+        side.fail("principal-mismatch:unknown-reference")
+
+
+def _admit_observer(side: _Side) -> None:
+    observer = side.bundle.get("observer")
+    if not isinstance(observer, Mapping):
+        side.fail("missing-binding:observerDigest")
+        return
+    expected = source_digests()
+    declared = observer.get("sourceDigests")
+    if not isinstance(declared, Mapping) or dict(declared) != expected:
+        side.fail("observer-digest-drift")
+        return
+    if observer.get("observerDigest") != digest(expected):
+        side.fail("observer-digest-drift")
+
+
+def _admit_rows(side: _Side, rows: list[Any]) -> None:
+    assert side.plan is not None
+    plan = side.plan
+    nonce = plan["nonce"]
+    previous_at: float | None = None
+    for row, operation in zip(rows, plan["observation"], strict=True):
+        if not isinstance(row, Mapping):
+            side.fail("row-shape")
+            return
+        case_id = operation["caseId"]
+        if row.get("caseId") != case_id or row.get("index") != operation["index"]:
+            side.fail("row-identity")
+            return
+        if row.get("credentialRef") != operation["credential"]["ref"]:
+            side.fail(f"principal-drift:{case_id}")
+        if row.get("credentialFingerprint") != credential_fingerprint(
+            nonce, operation["credential"]["ref"]
+        ):
+            side.fail(f"principal-fingerprint:{case_id}")
+        if row.get("resources") != operation["resources"]:
+            side.fail(f"target-drift:{case_id}")
+        if row.get("ruleset") != operation["ruleset"]:
+            side.fail(f"ruleset-mismatch:row:{case_id}")
+        if row.get("failure") is not None:
+            side.fail(f"row-failed:{case_id}")
+        observed = row.get("observed")
+        if not isinstance(observed, Mapping) or not isinstance(
+            observed.get("status"), str
+        ):
+            side.fail(f"row-unobserved:{case_id}")
+        at = row.get("at")
+        if not _is_number(at):
+            side.fail("time-contradiction:row-timestamp")
+        elif previous_at is not None and at <= previous_at:
+            side.fail("time-contradiction:rows-not-monotonic")
+        else:
+            previous_at = at
+        _admit_endpoint(side, row.get("endpoint"), f"row:{case_id}")
+
+
+def _admit_endpoint(side: _Side, endpoint: Any, where: str) -> None:
+    host = endpoint_host(endpoint) if isinstance(endpoint, str) else None
+    if host is None:
+        side.fail(f"missing-binding:endpoint:{where}")
+        return
+    loopback = host in LOOPBACK_HOSTS
+    production = host in PRODUCTION_HOSTS
+    if side.side == SIDE_PRODUCTION:
+        if loopback:
+            side.fail("local-mislabelled-as-production")
+        elif not production:
+            side.fail("endpoint-outside-allowlist")
+    elif not loopback:
+        side.fail("local-reached-nonloopback")
+
+
+def _admit_cleanup(side: _Side) -> list[dict[str, Any]]:
+    """Every owned document and account must be read back, deleted under its
+    observed version or uid, and then read back absent. Anything else is an
+    unknown cleanup state, never a silent success."""
+    assert side.plan is not None
+    plan = side.plan
+    cleanup = side.bundle.get("cleanup")
+    if not isinstance(cleanup, Mapping):
+        side.fail("cleanup-unknown:missing")
+        return []
+    if cleanup.get("cleanupComplete") is not True:
+        side.fail("cleanup-unknown:incomplete")
+    for key in ("outstandingResources", "outstandingAccounts", "unrecoveredAttempted"):
+        if cleanup.get(key) != []:
+            side.fail(f"cleanup-unknown:{key}")
+    steps: list[dict[str, Any]] = []
+    for key in ("documentSteps", "accountSteps"):
+        value = cleanup.get(key)
+        if not isinstance(value, list) or not all(
+            isinstance(s, Mapping) for s in value
+        ):
+            side.fail(f"cleanup-unknown:{key}")
+            continue
+        steps.extend(dict(step) for step in value)
+    for step in steps:
+        if step.get("failure") is not None:
+            side.fail(f"cleanup-unknown:{step.get('kind')}")
+        _admit_endpoint(side, step.get("endpoint"), f"cleanup:{step.get('kind')}")
+    _admit_subjects(
+        side, steps, plan["ownedResources"], "resource", "documentPresent", "version"
+    )
+    _admit_subjects(
+        side,
+        steps,
+        [entry["ref"] for entry in plan["ownedAccounts"]],
+        "accountRef",
+        "accountPresent",
+        "uid",
+    )
+    attempted = side.bundle.get("attemptedResources")
+    if not isinstance(attempted, list) or any(
+        resource not in plan["ownedResources"] for resource in attempted
+    ):
+        side.fail("cleanup-unknown:attempted-outside-owned-scope")
+    return steps
+
+
+def _admit_subjects(
+    side: _Side,
+    steps: list[dict[str, Any]],
+    subjects: list[str],
+    subject_key: str,
+    presence_key: str,
+    identity_key: str,
+) -> None:
+    prefix = "account-" if subject_key == "accountRef" else ""
+    for subject in subjects:
+        own = [step for step in steps if step.get(subject_key) == subject]
+        kinds = [step.get("kind") for step in own]
+        readback = next((s for s in own if s.get("kind") == f"{prefix}readback"), None)
+        if readback is None:
+            side.fail(f"cleanup-unknown:no-readback:{subject}")
+            continue
+        observed = readback.get("observed") or {}
+        present = observed.get(presence_key)
+        if type(present) is not bool:
+            side.fail(f"cleanup-unknown:untyped-presence:{subject}")
+            continue
+        if present is False:
+            if kinds != [f"{prefix}readback"]:
+                side.fail(f"cleanup-unknown:steps-after-absence:{subject}")
+            continue
+        if (
+            not isinstance(observed.get(identity_key), str)
+            or not observed[identity_key]
+        ):
+            side.fail(f"cleanup-unknown:missing-identity:{subject}")
+        if kinds != [f"{prefix}readback", f"{prefix}delete", f"{prefix}absence"]:
+            side.fail(f"cleanup-unknown:step-sequence:{subject}")
+            continue
+        absence = (own[2].get("observed") or {}).get(presence_key)
+        if absence is not False:
+            side.fail(f"cleanup-unknown:not-absent:{subject}")
+
+
+def _admit_releases(side: _Side, rows: list[Any] | None) -> list[dict[str, Any]]:
+    assert side.plan is not None
+    plan = side.plan
+    transport = side.bundle.get("transport")
+    releases = (
+        transport.get("rulesetReleases") if isinstance(transport, Mapping) else None
+    )
+    if not isinstance(releases, list) or not releases:
+        side.fail("missing-binding:rulesetReleases")
+        return []
+    accepted: list[dict[str, Any]] = []
+    for release in releases:
+        if not isinstance(release, Mapping):
+            side.fail("ruleset-mismatch:shape")
+            return []
+        label = release.get("label")
+        if label not in plan["rulesets"]:
+            side.fail("ruleset-mismatch:unknown-label")
+            continue
+        expected = digest(plan["rulesets"][label]["source"])
+        if release.get("sourceDigest") != expected:
+            side.fail(f"ruleset-mismatch:{label}:source")
+        readback = release.get("readback")
+        if not isinstance(readback, Mapping) or readback.get("digest") != expected:
+            side.fail(f"ruleset-mismatch:{label}:readback")
+        elif (
+            side.side == SIDE_PRODUCTION
+            and readback.get("kind") != READBACK_RELEASE_GET
+        ):
+            side.fail(f"ruleset-mismatch:{label}:readback-kind")
+        name = release.get("releaseName")
+        if not isinstance(name, str) or not name:
+            side.fail(f"ruleset-mismatch:{label}:release-name")
+        if (
+            not _is_number(release.get("activeFrom"))
+            or type(release.get("beforeIndex")) is not int
+        ):
+            side.fail(f"ruleset-generation-order:{label}:unbound")
+            continue
+        _admit_endpoint(side, release.get("endpoint"), f"ruleset:{label}")
+        accepted.append(dict(release))
+    if rows is None or len(accepted) != len(releases):
+        return accepted
+    # Replay the releases against the rows: each row must run under the label
+    # released most recently before it, and after that release became active.
+    ordered = sorted(accepted, key=lambda r: (r["beforeIndex"], r["activeFrom"]))
+    if ordered != accepted:
+        side.fail("ruleset-generation-order:sequence")
+    active: dict[str, Any] | None = None
+    pending = list(accepted)
+    for index, row in enumerate(rows):
+        while pending and pending[0]["beforeIndex"] <= index:
+            active = pending.pop(0)
+        if active is None or active["label"] != row.get("ruleset"):
+            side.fail(f"ruleset-generation-order:{row.get('caseId')}")
+            continue
+        at = row.get("at")
+        if _is_number(at) and at < active["activeFrom"]:
+            side.fail(f"ruleset-generation-order:{row.get('caseId')}")
+    if pending:
+        side.fail("ruleset-generation-order:unused-release")
+    return accepted
+
+
+def _admit_transport(
+    side: _Side,
+    rows: list[Any] | None,
+    releases: list[dict[str, Any]],
+    cleanup_steps: list[dict[str, Any]],
+) -> None:
+    transport = side.bundle.get("transport")
+    if not isinstance(transport, Mapping):
+        side.fail("missing-binding:transport")
+        return
+    endpoints = transport.get("endpoints")
+    if not isinstance(endpoints, list) or not endpoints:
+        side.fail("missing-binding:endpoint")
+    else:
+        for endpoint in endpoints:
+            _admit_endpoint(side, endpoint, "transport")
+    # Wire sequence: every receipt carries the transport's own request counter,
+    # and the counters must increase strictly in the order the collector
+    # issued the requests: releases and rows first, recovery steps last.
+    sequenced: list[Any] = []
+    if rows is not None:
+        events = [(r["beforeIndex"], -1, r) for r in releases]
+        events.extend((i, 0, row) for i, row in enumerate(rows))
+        events.sort(key=lambda e: (e[0], e[1]))
+        sequenced.extend(entry[2].get("wireSequence") for entry in events)
+    sequenced.extend(step.get("wireSequence") for step in cleanup_steps)
+    if any(type(value) is not int for value in sequenced):
+        side.fail("missing-binding:wireCounts")
+    elif any(b <= a for a, b in pairwise(sequenced)):
+        side.fail("count-contradiction:wire-sequence")
+    receipts = transport.get("receipts")
+    if type(receipts) is not int or receipts != len(sequenced):
+        side.fail("count-contradiction:wire-receipts")
+    if transport.get("sequenceMonotonic") is not True:
+        side.fail("count-contradiction:wire-sequence")
+    _admit_clocks(side, transport, rows)
+
+
+def _admit_clocks(
+    side: _Side, transport: Mapping[str, Any], rows: list[Any] | None
+) -> None:
+    clock = transport.get("clock")
+    wall = transport.get("wallClock")
+    budget = side.bundle.get("budget")
+    if not isinstance(clock, Mapping) or not all(
+        _is_number(clock.get(key))
+        for key in ("started", "observationFinished", "finished")
+    ):
+        side.fail("time-contradiction:clock")
+        return
+    started = clock["started"]
+    observation_finished = clock["observationFinished"]
+    finished = clock["finished"]
+    if not started <= observation_finished <= finished:
+        side.fail("time-contradiction:clock-order")
+    if rows:
+        stamps = [row.get("at") for row in rows if isinstance(row, Mapping)]
+        if (
+            all(_is_number(s) for s in stamps)
+            and stamps
+            and not (started <= stamps[0] and stamps[-1] <= observation_finished)
+        ):
+            side.fail("time-contradiction:rows-outside-observation")
+    if isinstance(budget, Mapping):
+        deadline = budget.get("deadlineSeconds")
+        recovery_deadline = budget.get("recoveryDeadlineSeconds")
+        if _is_number(deadline) and observation_finished - started > deadline:
+            side.fail("time-contradiction:deadline")
+        if _is_number(recovery_deadline) and finished - started > recovery_deadline:
+            side.fail("time-contradiction:recovery-deadline")
+    if not isinstance(wall, Mapping) or not all(
+        _is_number(wall.get(key)) for key in ("startedAt", "finishedAt")
+    ):
+        side.fail("time-contradiction:wall-clock")
+        return
+    wall_span = wall["finishedAt"] - wall["startedAt"]
+    if (
+        wall_span < 0
+        or abs(wall_span - (finished - started)) > _CLOCK_TOLERANCE_SECONDS
+    ):
+        side.fail("time-contradiction:wall-clock")
+    window = (side.acquisition or {}).get("window")
+    if (
+        isinstance(window, Mapping)
+        and all(_is_number(window.get(key)) for key in ("startsAt", "expiresAt"))
+        and not (
+            window["startsAt"]
+            <= wall["startedAt"]
+            <= wall["finishedAt"]
+            <= window["expiresAt"]
+        )
+    ):
+        side.fail("time-contradiction:outside-window")
+
+
+def _admit_budget(
+    side: _Side,
+    rows: list[Any] | None,
+    releases: list[dict[str, Any]],
+    cleanup_steps: list[dict[str, Any]],
+) -> None:
+    budget = side.bundle.get("budget")
+    if not isinstance(budget, Mapping):
+        side.fail("count-contradiction:budget")
+        return
+    if rows is not None and budget.get("observationSpent") != len(rows):
+        side.fail("count-contradiction:observation-spent")
+    if budget.get("rulesetSpent") != len(releases):
+        side.fail("count-contradiction:ruleset-spent")
+    recovery = budget.get("recoverySpent")
+    ceiling = budget.get("recoveryCeiling")
+    if type(recovery) is not int or type(ceiling) is not int or recovery > ceiling:
+        side.fail("count-contradiction:recovery-ceiling")
+    elif recovery != len(cleanup_steps):
+        side.fail("count-contradiction:recovery-spent")
+
+
+def _cross_errors(
+    production: _Side, local: _Side, plan: dict[str, Any], manifest_digest: str | None
+) -> list[str]:
+    errors: list[str] = []
+    if production.bundle is local.bundle:
+        errors.append("self-comparison")
+    production_run = _provenance_value(production.bundle, "runId")
+    if production_run is not None and production_run == _provenance_value(
+        local.bundle, "runId"
+    ):
+        errors.append("self-comparison")
+    declared = {
+        side.side: (side.acquisition or {}).get("campaignManifestDigest")
+        for side in (production, local)
+    }
+    expected = manifest(
+        plan["project"], plan["database"], plan["nonce"], plan["tenant"]
+    )["manifestDigest"]
+    if any(value is not None and value != expected for value in declared.values()):
+        errors.append("manifest-mismatch")
+    if manifest_digest is not None and manifest_digest != expected:
+        errors.append("manifest-mismatch:admitted")
+    shared = _shared_fingerprints(production, local)
+    if shared:
+        errors.append("principal-shared-across-sides:" + ",".join(shared))
+    return errors
+
+
+def _shared_fingerprints(production: _Side, local: _Side) -> list[str]:
+    left = (production.acquisition or {}).get("principals")
+    right = (local.acquisition or {}).get("principals")
+    if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+        return []
+    shared = []
+    for ref in ACCOUNT_PRINCIPALS:
+        a = left.get(ref) if isinstance(left.get(ref), Mapping) else {}
+        b = right.get(ref) if isinstance(right.get(ref), Mapping) else {}
+        fingerprint = a.get("uidFingerprint")
+        if isinstance(fingerprint, str) and fingerprint == b.get("uidFingerprint"):
+            shared.append(ref)
+    return shared
+
+
+def _provenance_value(bundle: Any, key: str) -> Any:
+    if not isinstance(bundle, Mapping):
+        return None
+    provenance = bundle.get("provenance")
+    return provenance.get(key) if isinstance(provenance, Mapping) else None
+
+
+def _compare_rows(
+    plan: dict[str, Any], production: dict[str, Any], local: dict[str, Any]
+) -> list[dict[str, Any]]:
+    rows = []
+    for operation, left, right in zip(
+        plan["observation"], production["rows"], local["rows"], strict=True
+    ):
+        row = {
+            "caseId": operation["caseId"],
+            "index": operation["index"],
+            "condition": operation["condition"],
+            "ruleset": operation["ruleset"],
+            "expected": operation["expect"]["status"],
+            "production": _projection(left, operation),
+            "local": _projection(right, operation),
+            "classification": MATCH,
+            "reasons": [],
+        }
+        if row["production"] != row["local"]:
+            row["classification"] = SEMANTIC_MISMATCH
+            row["reasons"] = sorted(
+                key
+                for key in row["production"]
+                if row["production"][key] != row["local"][key]
+            )
+        rows.append(row)
+    return rows
+
+
+def _projection(row: Mapping[str, Any], operation: Mapping[str, Any]) -> dict[str, Any]:
+    """The comparable part of an observed row.
+
+    Field values that resolve to a principal differ between sides by
+    construction, because the two runs mint different accounts, so only their
+    presence is compared. Every other field value is compared literally.
+    """
+    observed = row.get("observed") or {}
+    fields = observed.get("fields")
+    projected_fields: dict[str, Any] | None = None
+    if isinstance(fields, Mapping):
+        expected = operation["expect"].get("fields", {})
+        projected_fields = {}
+        for key in sorted(fields):
+            value = fields[key]
+            if isinstance(expected.get(key), Mapping):
+                projected_fields[key] = (
+                    "<principal>" if isinstance(value, str) and value else None
+                )
+            else:
+                projected_fields[key] = value
+    return {
+        "status": observed.get("status"),
+        "documentPresent": observed.get("documentPresent"),
+        "fields": projected_fields,
+    }
+
+
+def compare(
+    production: Any,
+    local: Any,
+    plan: Any,
+    *,
+    manifest_digest: str | None = None,
+) -> dict[str, Any]:
+    """Classify a production bundle against a local shadow bundle.
+
+    ``plan`` is the compiled production case. ``manifest_digest``, when given,
+    is the digest the run was admitted under and must equal the recomputed one.
+    The result never carries a positive classification unless both bundles
+    were admitted as acquisitions of this campaign.
+    """
+    result: dict[str, Any] = {
+        "contract": COMPARATOR_CONTRACT,
+        "classification": INDETERMINATE,
+        "rows": [],
+        "conditions": {},
+        "errors": [],
+        "acquisitionValidated": False,
+        "productionObserved": False,
+        "promotionReady": False,
+    }
+    try:
+        validate_case(plan)
+    except (TypeError, ValueError) as error:
+        result["errors"] = [f"plan-invalid:{error}"]
+        result["classification"] = REFUSED
+        return result
+    production_side = _Side(production, SIDE_PRODUCTION)
+    local_side = _Side(local, SIDE_LOCAL)
+    _admit_side(production_side, plan)
+    _admit_side(local_side, plan)
+    errors = [*production_side.errors, *local_side.errors]
+    cross = _cross_errors(production_side, local_side, plan, manifest_digest)
+    errors.extend(cross)
+    result["errors"] = errors
+    refused = (
+        production_side.refused
+        or local_side.refused
+        or any(error.split(":", 1)[0] in REFUSAL_ERRORS for error in cross)
+    )
+    if refused:
+        result["classification"] = REFUSED
+        return result
+    if errors:
+        return result
+    result["acquisitionValidated"] = True
+    result["productionObserved"] = True
+    rows = _compare_rows(plan, production, local)
+    result["rows"] = rows
+    conditions: dict[str, str] = {}
+    for row in rows:
+        current = conditions.get(row["condition"], MATCH)
+        if row["classification"] == SEMANTIC_MISMATCH or current == SEMANTIC_MISMATCH:
+            conditions[row["condition"]] = SEMANTIC_MISMATCH
+        else:
+            conditions[row["condition"]] = MATCH
+    result["conditions"] = dict(sorted(conditions.items()))
+    if all(row["classification"] == MATCH for row in rows):
+        result["classification"] = MATCH
+        result["promotionReady"] = True
+    else:
+        result["classification"] = SEMANTIC_MISMATCH
+    return result

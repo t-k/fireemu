@@ -21,6 +21,7 @@ _SOURCE_FILES = (
     "o5_user_token_collector.py",
     "o5_user_token_campaign.py",
     "o5_user_token_comparator.py",
+    "o5_user_token_comparator_v2.py",
     "o5_user_token_shadow.py",
     "o5_user_token_local_run.py",
 )
@@ -62,7 +63,13 @@ PERMISSION_ENVELOPE = {
 }
 
 
-def _source_digests() -> dict[str, str]:
+def source_digests() -> dict[str, str]:
+    """SHA-256 of every lane module, read from disk now.
+
+    The collector records these as its observer identity and the acquisition
+    comparator recomputes them, so a bundle produced by other bytes than the
+    ones under review is named as drift rather than accepted.
+    """
     here = Path(__file__).resolve().parent
     digests = {}
     for name in _SOURCE_FILES:
@@ -123,7 +130,7 @@ def manifest(
         "productionReady": False,
         "frozenInputs": {
             "caseDigest": plan["planDigest"],
-            "sources": _source_digests(),
+            "sources": source_digests(),
             "rulesetDigests": {
                 label: digest(body["source"])
                 for label, body in plan["rulesets"].items()

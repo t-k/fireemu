@@ -51,6 +51,7 @@ for, because an administrator bypasses Rules evaluation.
 | `o5_user_token_collector.py` | Runs the matrix through an injected transport under an enforced request ceiling, separate observation and recovery deadlines, an fsynced journal and version-bound cleanup of documents and accounts |
 | `o5_user_token_campaign.py` | Freezes the inputs, the budget estimate, the permission envelope and the owner preconditions; admission always raises |
 | `o5_user_token_comparator.py` | Names why a pair of bundles is not an acquisition; it has no positive classification |
+| `o5_user_token_comparator_v2.py` | The acquisition comparator: reaches `MATCH`, `SEMANTIC_MISMATCH`, `INDETERMINATE` or `REFUSED`, and reaches a positive classification only when every binding below is present on both sides and verified |
 | `o5_user_token_shadow.py` | Fixes the owned local `fireemu` launch specification and turns local deviations into repair tickets |
 | `o5_user_token_local_run.py` | Executes the shadow: builds `fireemu` from this worktree, creates the accounts and fixtures, publishes each Ruleset, drives the matrix with real ID tokens and recovers everything |
 
@@ -77,10 +78,56 @@ It acquires no production credential, publishes no production Ruleset, creates
 no production account and sends no production request. It is not an execution
 permission: `admission` raises `PermissionError` and lists the blockers.
 
-The comparator has no positive classification: every call returns
+The first comparator has no positive classification: every call returns
 `INDETERMINATE` and names the acquisition bindings a bundle is missing. A
 locally collected bundle labelled with the production role therefore cannot
-reach agreement. Re-opening positive classification is a separate review.
+reach agreement there. Positive classification lives in the separately
+reviewed second module described below, and only behind the bindings it
+verifies.
+
+### Comparator v2 (acquisition comparator)
+
+`o5_user_token_comparator_v2.py` is the second comparator module. The first
+module is unchanged and its `test_no_success_vocabulary_exists_in_the_module`
+still holds: the two modules record two different decisions. The first says a
+recording is not an acquisition. The second says what an acquisition has to
+bind, checks each binding against something the bundle cannot fabricate, and
+compares rows only after both sides are admitted.
+
+`compare(production, local, plan, *, manifest_digest=None)` returns
+`classification` in `MATCH`, `SEMANTIC_MISMATCH`, `INDETERMINATE`, `REFUSED`,
+the 26 per-row decisions, a per-condition summary, and `errors` naming every
+binding that failed, prefixed with the side (`production:` or `local:`) or
+unprefixed when it concerns the pair.
+
+| Binding | Verified against | Named error |
+| --- | --- | --- |
+| Collector identity | SHA-256 of every lane module in `_SOURCE_FILES`, recomputed from disk now | `observer-digest-drift` (refused) |
+| Endpoint reached | Per receipt, from the transport: production side only `firestore.googleapis.com`, `identitytoolkit.googleapis.com`, `firebaserules.googleapis.com`; local side only loopback | `local-mislabelled-as-production`, `endpoint-outside-allowlist`, `local-reached-nonloopback` (refused), `missing-binding:endpoint:...` |
+| Ruleset releases | Source digest equals the plan's Ruleset source; readback digest equals it; production readback is a `release-get`, not a publish echo; every row runs under the release most recently active before it | `ruleset-mismatch:<label>:...`, `ruleset-generation-order:<caseId>` |
+| Principal provenance | Row fingerprint recomputed from the nonce and reference; per account a uid fingerprint, provider, tenant and claims digest matching the plan; fingerprints differ between sides | `principal-drift`, `principal-fingerprint`, `principal-mismatch:<ref>:...`, `principal-shared-across-sides` (refused) |
+| Manifest digest | Recomputed from `o5_user_token_campaign.manifest()` for the production identity; equal on both sides; equal to the admitted digest when one is passed | `manifest-mismatch` (refused) |
+| Cleanup proof | Every owned document and account: readback, delete under the observed version or uid, typed absence; no step failure; nothing outstanding | `cleanup-unknown:...` |
+| Time and counts | Rows strictly monotonic and inside the observation span and deadline; wire sequence strictly increasing across releases, rows and recovery steps; receipt count equals the steps; `observationSpent`, `rulesetSpent`, `recoverySpent` equal the recorded steps; wall clock agrees with the monotonic span and lies inside the approval window | `time-contradiction:...`, `count-contradiction:...` |
+| Reservation and permission | Production side: reservation id, campaign id and nonce digest; owner permission digest; approval window. Local side: artifact digest and source commit, and no reservation | `missing-binding:...`, `nonce-reservation-mismatch:...`, `local-claims-reservation` (refused) |
+| Environment label | `acquisition.environment.kind` must agree with the role, the endpoints and the artifact binding | `local-mislabelled-as-production`, `local-claims-production` (refused) |
+| Identity | Same run on both sides, a bundle claiming `productionReady` or `acquisitionValidated`, a role that is not the side it was passed as, a plan or case digest that is not the campaign's | `self-comparison`, `bundle-claims-authority`, `role-mismatch`, `case-digest-drift`, `campaign-identity-drift` (refused) |
+
+An error in the refusal set makes the result `REFUSED`; any other error makes
+it `INDETERMINATE`; neither carries rows. Only two admitted bundles are
+compared, row by row, on status, document presence and field values, with a
+field that resolves to a principal compared by presence rather than by uid,
+because the two runs mint different accounts by construction.
+
+The local shadow is compiled with the tenant identifier the local Auth
+emulator assigned, so the local plan is recompiled from the bundle's own case
+identity and must share the campaign's project, database and nonce. A local
+bundle for another nonce is refused.
+
+The module is listed in `o5_user_token_campaign._SOURCE_FILES`, so the campaign
+manifest digest binds it and a change to it changes what a run is admitted
+under. The frozen matrix template in `spec/compatibility` carries no source
+digests, so it does not change with the module list.
 
 The local shadow does start a process, create local accounts and publish local
 Rulesets, all against one owned `fireemu` instance on loopback ports. That is

@@ -42,6 +42,7 @@ REQUIRED_PACKET_KEYS = frozenset(
         "frozenInputs",
         "accountBindings",
         "identityProofs",
+        "fixtureOrigin",
         "gate",
         "ledger",
         "ticket",
@@ -65,6 +66,8 @@ def _require_packet(packet: Any) -> dict[str, Any]:
         or not isinstance(packet["frozenInputs"], dict)
         or not isinstance(packet["accountBindings"], dict)
         or not isinstance(packet["identityProofs"], dict)
+        or packet["fixtureOrigin"] is not None
+        and not isinstance(packet["fixtureOrigin"], str)
         or not isinstance(packet["ticket"], dict)
         or not isinstance(packet["acquisition"], dict)
         or not isinstance(packet["runId"], str)
@@ -130,6 +133,7 @@ def run_approved(packet: dict[str, Any]) -> dict[str, Any]:
             account_bindings=values["accountBindings"],
             identity_proofs=values["identityProofs"],
             capability=capability,
+            fixture_origin=values["fixtureOrigin"],
         )
         return run_bound_collection(
             plan=values["plan"],

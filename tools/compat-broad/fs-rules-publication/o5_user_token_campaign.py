@@ -266,7 +266,7 @@ def validate_production_packet(
         raise ValueError("production packet budget differs")
     if (
         capability_inputs.get("plan") != plan
-        or capability_inputs.get("planDigest") != plan.get("planDigest")
+        or capability_inputs.get("planDigest") != digest(plan)
         or approval.get("status") != "approved"
         or permission.get("campaignId") != CAMPAIGN
         or permission.get("planDigest") != plan.get("planDigest")

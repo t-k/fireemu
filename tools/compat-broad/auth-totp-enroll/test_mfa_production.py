@@ -615,6 +615,35 @@ def test_rows_carry_the_observed_age_anchored_to_each_resource(completed):
         assert row["observedAgeSeconds"] == float(age) + 1.0
 
 
+def _process_dies_when(monkeypatch, dead):
+    """After `dead["now"]` is set, the process sends nothing more: no slot is
+    consumed, no management slot is charged, exactly as a killed process leaves
+    the Gate. The inner session is failed too so the un-gated retries do nothing."""
+    import mfa_production
+
+    original_dispatch = mfa_production.GateSession._dispatch
+    original_management = mfa_production.GateSession._management
+
+    def dispatch(self, path, body, *, owner):
+        if dead["now"]:
+            raise ValueError("the process is dead: nothing more is sent")
+        return original_dispatch(self, path, body, owner=owner)
+
+    def management(self, expected, call):
+        if dead["now"]:
+            raise ValueError("the process is dead: nothing more is sent")
+        return original_management(self, expected, call)
+
+    monkeypatch.setattr(mfa_production.GateSession, "_dispatch", dispatch)
+    monkeypatch.setattr(mfa_production.GateSession, "_management", management)
+
+    def fault(kind, path, count, fake):
+        if dead["now"]:
+            raise ValueError("the process is dead: nothing more is sent")
+
+    return fault
+
+
 # --- re-review: cross-process adoption, un-gated restore, lost signups ------------
 
 
@@ -704,7 +733,7 @@ def test_a_lost_signup_answer_is_discovered_and_the_account_deleted(tmp_path):
     assert result["untrackedIntents"] == []
 
 
-def test_a_lost_signup_in_a_dead_process_is_recovered_by_abandon(tmp_path):
+def test_a_lost_signup_in_a_dead_process_is_recovered_by_abandon(tmp_path, monkeypatch):
     built = RehearsalAdmission(tmp_path)
     counters = {"signups": 0}
     dead = {"now": False}
@@ -716,14 +745,12 @@ def test_a_lost_signup_in_a_dead_process_is_recovered_by_abandon(tmp_path):
                 dead["now"] = True
                 raise ValueError("answer lost, then the process dies")
 
-    def fault(kind, path, count, fake):
-        if dead["now"]:
-            raise ValueError("the process is dead: nothing more is sent")
-
+    fault = _process_dies_when(monkeypatch, dead)
     first = built.run(fault=fault, after=after)
     assert first["cleanup"]["complete"] is False
     assert first["configuration"]["restoreStatus"] == "restore-failed"
     assert len(built.fake.accounts) == 3
+    dead["now"] = False
     recovered = built.run(abandon=True)
     assert recovered["cleanup"]["ownedAccounts"] == 3
     assert recovered["cleanup"]["complete"] is True
@@ -757,3 +784,111 @@ def test_an_anonymous_signup_whose_answer_was_lost_is_reported_untracked(tmp_pat
     # The anonymous account is the one residue the cleanup contract cannot find.
     assert len(built.fake.accounts) == 1
     assert admission.classify_stop(result)["disposition"] == "owner-escalation"
+
+
+def test_a_death_between_the_gate_journal_and_the_walk_ack_is_reconciled(
+    tmp_path, monkeypatch
+):
+    """The Gate journals a creation the instant the answer arrives; the walk a moment later."""
+    import mfa_walk
+
+    built = RehearsalAdmission(tmp_path)
+    counters = {"signups": 0}
+    original = mfa_walk.register_owned
+
+    def dying_register(state, kind, identifier, now):
+        counters["signups"] += 1
+        if counters["signups"] == 3:
+            raise RuntimeError("process dies before the walk owns the account")
+        return original(state, kind, identifier, now)
+
+    monkeypatch.setattr(mfa_walk, "register_owned", dying_register)
+    first = built.run()
+    monkeypatch.setattr(mfa_walk, "register_owned", original)
+    # In-process the terminal path already reconciles: three accounts, all gone.
+    assert first["accountEvidence"]["createdAccounts"] == 3
+    assert (
+        first["cleanup"]["ownedAccounts"] == 3 and first["cleanup"]["complete"] is True
+    )
+    assert first["gateComplete"] is True
+    assert built.fake.accounts == {}
+
+
+def test_a_dead_process_with_the_gate_ahead_of_the_walk_is_recovered_by_abandon(
+    tmp_path, monkeypatch
+):
+    import mfa_walk
+
+    built = RehearsalAdmission(tmp_path)
+    counters = {"signups": 0}
+    original = mfa_walk.register_owned
+    dead = {"now": False}
+
+    def dying_register(state, kind, identifier, now):
+        counters["signups"] += 1
+        if counters["signups"] == 3:
+            dead["now"] = True
+            raise RuntimeError("process dies before the walk owns the account")
+        return original(state, kind, identifier, now)
+
+    fault = _process_dies_when(monkeypatch, dead)
+    monkeypatch.setattr(mfa_walk, "register_owned", dying_register)
+    first = built.run(fault=fault)
+    monkeypatch.setattr(mfa_walk, "register_owned", original)
+    assert first["cleanup"]["complete"] is False and len(built.fake.accounts) == 3
+    dead["now"] = False
+    recovered = built.run(abandon=True)
+    assert recovered["accountEvidence"]["createdAccounts"] == 3
+    assert recovered["cleanup"]["ownedAccounts"] == 3
+    assert recovered["cleanup"]["complete"] is True
+    assert recovered["gateComplete"] is True
+    assert built.fake.accounts == {}
+    assert (
+        admission.classify_stop(recovered)["disposition"]
+        == "abandoned-cleanup-complete"
+    )
+
+
+def test_a_dead_process_with_a_request_in_flight_is_adopted_and_settled(
+    tmp_path, monkeypatch
+):
+    """SIGKILL during a send leaves the Gate's in-flight marker; the answer is unknowable."""
+    import os
+
+    import mfa_gate
+
+    built = RehearsalAdmission(tmp_path)
+    first = built.run(stop_requested=_stop_after(built, 4))
+    assert first["resumable"] is True
+    # Leave the next observation slot in flight, as a killed process would.
+    gate = mfa_gate.MfaGate(built.output / "gate")
+    with gate.locked() as state:
+        job = state["jobs"][mfa_gate.JOB]
+        index = job["observation"]
+        state["events"].append(
+            {
+                "job": mfa_gate.JOB,
+                "phase": "observation",
+                "index": index,
+                "started": state["lastSent"],
+                "requestDigest": "0" * 64,
+                "service": "auth",
+                "method": "POST",
+                "completed": False,
+            }
+        )
+        job["observation"] += 1
+        job["scheduleDone"] += 1
+        job["inflight"] = True
+        mfa_gate._save(gate.path, state)
+    # While the recorded process lives, adoption is refused.
+    with pytest.raises(ValueError, match="in flight"):
+        mfa_gate.MfaGate(built.output / "gate").adopt()
+    real = os.getpid()
+    monkeypatch.setattr(os, "getpid", lambda: real + 100_000)
+    monkeypatch.setattr(mfa_gate, "_process_alive", lambda pid: pid != real)
+    recovered = built.run(abandon=True)
+    assert recovered["adoptions"][-1]["settledInflight"]
+    assert recovered["cleanup"]["complete"] is True
+    assert built.fake.accounts == {}
+    assert not applied(built.fake.config)

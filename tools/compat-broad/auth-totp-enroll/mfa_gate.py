@@ -741,17 +741,24 @@ class MfaGate(FrozenGate):
         The shared Gate pins the coordinator and job process ids at `claim()` and
         refuses every later dispatch from another process. Adoption is admitted
         only when the recorded processes are gone (the liveness test the base
-        Gate's no-data abort makes), nothing is in flight, and the Gate's monotonic
-        clock still runs forward from the recorded start, which holds on the same
-        boot and not after one. Every adoption is journaled in the Gate state.
+        Gate's no-data abort makes) and the Gate's monotonic clock still runs
+        forward from the recorded start. That clock check is necessary, not
+        sufficient: a reboot whose uptime already exceeds the previous one passes
+        it, and the Gate's own phase deadline (`started + wallSeconds`) is then the
+        backstop that refuses every dispatch, so the run fails closed.
+
+        A request the dead process left in flight is settled here, because no
+        answer can arrive for it any more: a creating slot becomes `unknown` and
+        is discovered by the address readback, any other slot is recorded as
+        interrupted, and an in-flight management slot is recorded as failed. A
+        live process with a request in flight is refused. Every adoption is
+        journaled in the Gate state.
         """
         with self.locked() as state:
             job = state["jobs"][self.job]
             recorded = [state["coordinatorPid"], job["pid"]]
             if state.get("noDataAbort") is not None:
                 raise ValueError("terminal Gate abort")
-            if state["coordinatorInflight"] or job["inflight"]:
-                raise ValueError("adoption refused: a request is in flight")
             if any(pid is None for pid in recorded):
                 raise ValueError("adoption refused: the job was never claimed")
             now = time.monotonic()
@@ -761,12 +768,54 @@ class MfaGate(FrozenGate):
             for pid in recorded:
                 if pid != me and _process_alive(pid):
                     raise ValueError(f"adoption refused: process {pid} is still alive")
+            if me in recorded and (state["coordinatorInflight"] or job["inflight"]):
+                raise ValueError("adoption refused: a request is in flight")
+            settled = self._settle_inflight(state, job)
             state["coordinatorPid"] = me
             job["pid"] = me
-            record = {"from": recorded, "to": me, "at": time.time()}
+            record = {
+                "from": recorded,
+                "to": me,
+                "at": time.time(),
+                "settledInflight": settled,
+            }
             state.setdefault("adoptions", []).append(record)
             _save(self.path, state)
             return record
+
+    def _settle_inflight(self, state, job) -> list[dict[str, Any]]:
+        """Close what a proven-dead process left open; the answer is unknowable."""
+        settled = []
+        recipe = state["plan"]["jobs"][self.job]
+        if job["inflight"]:
+            for event in reversed(state["events"]):
+                if event.get("job") == self.job and not event.get("completed"):
+                    operation = recipe[event["phase"]][event["index"]]
+                    if (
+                        event.get("phase") == "observation"
+                        and operation["kind"] in CREATING_KINDS
+                    ):
+                        event["creationOutcome"] = "unknown"
+                    event["failure"] = event.get("failure") or "InterruptedByDeath"
+                    event["ended"] = time.monotonic()
+                    settled.append(
+                        {
+                            "phase": event["phase"],
+                            "index": event["index"],
+                            "kind": operation["kind"],
+                        }
+                    )
+                    break
+            job["inflight"] = False
+        if state["coordinatorInflight"]:
+            for event in reversed(state["managementEvents"]):
+                if not event.get("completed"):
+                    event["failure"] = event.get("failure") or "InterruptedByDeath"
+                    event["ended"] = time.monotonic()
+                    settled.append({"management": event["id"]})
+                    break
+            state["coordinatorInflight"] = False
+        return settled
 
     def unsettled_accounts(self) -> list[str]:
         """Roles whose signup was sent and whose answer never settled it."""
@@ -1153,9 +1202,19 @@ def account_evidence(snapshot: dict[str, Any]) -> dict[str, Any]:
     """The publishable account evidence of a Gate snapshot: counts, never identifiers."""
     job = snapshot["jobs"][JOB]
     accounts = job.get("authAccounts", {})
+    recipe = snapshot["plan"]["jobs"][JOB]["observation"]
+    unsettled = sum(
+        1
+        for event in snapshot["events"]
+        if event.get("job") == JOB
+        and event.get("phase") == "observation"
+        and recipe[event["index"]]["kind"] in CREATING_KINDS
+        and event.get("creationOutcome") in ("pending", "unknown")
+    )
     return {
         "plannedAccounts": len(snapshot["plan"]["plannedAccounts"]),
         "createdAccounts": len(accounts),
+        "unsettledSignups": unsettled,
         "deletedAccounts": sum(a.get("deleted") is True for a in accounts.values()),
         "uidAbsenceReadbacks": sum(
             a.get("uidAbsent") is True for a in accounts.values()

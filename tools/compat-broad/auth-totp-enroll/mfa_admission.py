@@ -508,7 +508,21 @@ def classify_stop(receipt) -> dict:
             or configuration.get("restoreStatus") == "not-attempted"
         )
     )
-    absent = cleanup.get("complete") is True and not receipt.get("untrackedIntents")
+    # The walk's ledger and the Gate's must agree: the Gate's finish is the proof
+    # that every account it journaled as created was read back absent.
+    evidence = receipt.get("accountEvidence") or {}
+    gate_agrees = receipt.get("gateComplete") is True or (
+        # A run that created nothing has nothing for the Gate to finish; its
+        # journal must then show no creation and no signup left unsettled.
+        evidence.get("createdAccounts") == 0
+        and evidence.get("unsettledSignups") == 0
+        and cleanup.get("ownedAccounts") == 0
+    )
+    absent = (
+        cleanup.get("complete") is True
+        and not receipt.get("untrackedIntents")
+        and gate_agrees
+    )
     if restored and absent:
         return {
             "stopPoint": stop,

@@ -359,6 +359,27 @@ def discover_unsettled(walk, gate, inner, journal: list) -> dict:
     return {"untracked": untracked}
 
 
+def reconcile_gate_accounts(walk, gate) -> list[str]:
+    """Own every account the Gate journaled as created that the walk does not know.
+
+    The Gate records a creation the instant the answer arrives; the walk records
+    its ownership a moment later. A death in between leaves the Gate's ledger
+    ahead of the walk's, and the two must agree before cleanup or the receipt
+    would count the walk's accounts as everything there is.
+    """
+    adopted = []
+    accounts = gate.snapshot()["jobs"][mfa_gate.JOB].get("authAccounts", {})
+    known = walk.material.value["accounts"]
+    for role, record in accounts.items():
+        if role in known:
+            if known[role]["localId"] != record["uid"]:
+                raise ValueError("Gate and walk disagree on an account identity")
+            continue
+        walk.adopt_account(role, record["uid"])
+        adopted.append(role)
+    return adopted
+
+
 def ungated_restore(output, inner, lock_arguments, journal: list, *, attempts: int = 2):
     """Restore the configuration outside the Gate, after the gated restore failed.
 
@@ -626,6 +647,7 @@ def execute(
                     stop_requested=stop_requested,
                 )
                 stop_point = "recover-unsettled"
+                reconcile_gate_accounts(walk, gate)
                 untracked = discover_unsettled(
                     walk, gate, inner, session.management_receipts
                 )["untracked"]
@@ -726,6 +748,8 @@ def execute(
                     gate_refusal = type(error).__name__
             session.phase = "recovery"
             try:
+                if walk is not None:
+                    reconcile_gate_accounts(walk, gate)
                 if walk is not None and gate.unsettled_accounts():
                     untracked = discover_unsettled(
                         walk, gate, inner, session.management_receipts

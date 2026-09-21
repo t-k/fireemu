@@ -368,6 +368,7 @@ def _configuration(status, *, attempted=True):
                 "stopPoint": "cases",
                 "configuration": _configuration("restored-verified"),
                 "cleanup": {"complete": True},
+                "gateComplete": True,
             },
             "abandoned-cleanup-complete",
         ),
@@ -376,8 +377,19 @@ def _configuration(status, *, attempted=True):
                 "stopPoint": "cases",
                 "configuration": _configuration("restored-verified-normalized"),
                 "cleanup": {"complete": True},
+                "gateComplete": True,
             },
             "abandoned-cleanup-complete",
+        ),
+        # The walk's cleanup alone is not proof: the Gate's finish must agree.
+        (
+            {
+                "stopPoint": "cases",
+                "configuration": _configuration("restored-verified"),
+                "cleanup": {"complete": True},
+                "gateComplete": False,
+            },
+            "owner-escalation",
         ),
         # A verified status alone is not enough: the evidence has to validate.
         (

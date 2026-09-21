@@ -270,6 +270,19 @@ def test_settle_recovery_child_uses_completed_real_gate_and_is_idempotent(tmp_pa
             lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
         )
     gate.finish()
+    gate_state_path = Path(child["gatePath"]) / "state.json"
+    gate_state = json.loads(gate_state_path.read_text())
+    gate_state["jobs"][reservations.RECOVERY_GATE_JOB]["creationProofs"] = {"foreign": {}}
+    _save(Path(child["gatePath"]), gate_state)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="creation proofs"):
+        ledger.settle_recovery_child(
+            child_ticket, receipt_digest="receipt-correlation",
+            canonical_parent_plan=parent_plan, now=10**12,
+        )
+    assert ledger.snapshot() == before
+    gate_state["jobs"][reservations.RECOVERY_GATE_JOB]["creationProofs"] = {}
+    _save(Path(child["gatePath"]), gate_state)
     settled = ledger.settle_recovery_child(
         child_ticket, receipt_digest="receipt-correlation", canonical_parent_plan=parent_plan, now=10**12
     )

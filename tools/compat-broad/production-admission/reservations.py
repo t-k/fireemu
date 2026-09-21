@@ -838,6 +838,8 @@ def _validate_recovery_terminal_slots(gate, job_name, expected_fields):
     """Bind every compiler recovery slot to its journal event or skip."""
     job = gate["jobs"][job_name]
     plan_job = gate["plan"]["jobs"][job_name]
+    if job.get("creationProofs") != {}:
+        raise ValueError("recovery child creation proofs must remain empty")
     operations = plan_job["recovery"]
     schedule = plan_job.get("schedule", [])
     if len(operations) != RECOVERY_CHILD_REQUESTS or len(schedule) != len(operations):

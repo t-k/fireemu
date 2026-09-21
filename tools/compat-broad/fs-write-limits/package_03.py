@@ -92,7 +92,8 @@ def validate_nx_local_shadow(
     expected_configuration_digest: str | None = None,
 ) -> None:
     """Require complete, source-bound runtime evidence before clearing G1."""
-    execution = shadow["execution"]["ALL"]["execution"]
+    part = shadow["execution"]["ALL"]
+    execution = part["execution"]
     index = execution.get("indexConfiguration", {})
     if index.get("profile", "historical") != "nx-local":
         return
@@ -100,7 +101,7 @@ def validate_nx_local_shadow(
         raise ValueError("nx-local shadow index digest is not the declared after state")
     if index.get("sourceCommit") is not None:
         raise ValueError("nx-local shadow index source commit is not local")
-    execution_commit = execution.get("executionCommit")
+    execution_commit = part.get("executionCommit")
     if not isinstance(execution_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", execution_commit):
         raise ValueError("nx-local shadow source commit identity is missing")
     if expected_commit is not None and execution_commit != expected_commit:

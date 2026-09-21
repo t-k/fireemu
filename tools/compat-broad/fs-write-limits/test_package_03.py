@@ -318,51 +318,96 @@ def test_pending_rows_are_recorded_with_their_reasons() -> None:
     assert "index configuration" in next(iter(reasons))
 
 
-def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap() -> None:
+def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -> None:
     import package_03
 
-    shadow = load(SHADOW)
-    execution = shadow["execution"]["ALL"]["execution"]
-    execution["indexConfiguration"] = {
-        "profile": "nx-local",
-        "sha256": package_03.campaign.INDEXES_SHA256_AFTER,
-        "sourceCommit": None,
-    }
-    execution.update(
-        semanticMismatches=[],
-        pendingDifferences=[],
-        pendingRows=[],
-        recordingComplete=True,
-        stateValidation=True,
-        cleanupComplete=True,
-        cleanupValidated=True,
-        receiptValidated=True,
-        completed=True,
-        allOwnedResourcesAbsentAfterRecovery=True,
-        supervisorStatus="completed",
-        configurationDigest="a" * 64,
-        executionCommit=subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-        ).strip(),
-    )
-    execution["ownedProcess"] = {"stopped": True, "listenersClosed": True}
-    shadow["execution"]["ALL"]["artifact"] = {
-        "sha256": "b" * 64,
-        "runtimeInputsDigest": "c" * 64,
-    }
+    published = load(SHADOW)
+    previous = published["execution"]["ALL"]["execution"]
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    run = tmp_path / "retained-nx-shadow"
+    run.mkdir()
+    try:
+        supervisor = {
+            "executionCommit": commit,
+            "configurationDigest": "a" * 64,
+            "indexConfiguration": {
+                "profile": "nx-local",
+                "sha256": package_03.campaign.INDEXES_SHA256_AFTER,
+                "sourceCommit": None,
+            },
+            "ownedProcess": {"pid": 1, "stopped": True, "listenersClosed": True},
+            "status": "completed",
+            "build": {
+                "command": ["offline-test-build"],
+                "inputs": {"source": "retained-test-input"},
+                "rustc": "retained-test-rustc",
+                "artifactSha256": "b" * 64,
+            },
+        }
+        result = {
+            key: copy.deepcopy(previous[key])
+            for key in (
+                "recordingComplete",
+                "stateValidation",
+                "cleanupComplete",
+                "cleanupValidated",
+                "receiptValidated",
+                "semanticMismatches",
+                "pendingDifferences",
+                "pendingRows",
+                "infrastructureFailures",
+                "project",
+            )
+        }
+        result.update(
+            campaignId=package_03.CAMPAIGN,
+            completed=True,
+            rows=[{}],
+            cleanup=[{}],
+            resourceAbsence={"retained-doc": True},
+            recordingComplete=True,
+            stateValidation=True,
+            cleanupComplete=True,
+            cleanupValidated=True,
+            receiptValidated=True,
+            semanticMismatches=[],
+            pendingDifferences=[],
+            pendingRows=[],
+            infrastructureFailures=[],
+        )
+        binding = {
+            "bound": True,
+            "sourceInputsBefore": package_03.source_inputs(),
+            "supervisorManifestSha256": "unused-before-write",
+        }
+        (run / "manifest.json").write_text(json.dumps(supervisor))
+        binding["supervisorManifestSha256"] = hashlib.sha256(
+            (run / "manifest.json").read_bytes()
+        ).hexdigest()
+        (run / "result.json").write_text(json.dumps(result))
+        (run / "shadow-binding.json").write_text(json.dumps(binding))
+        shadow = package_03.shadow_record(run, commit)
+    finally:
+        import shutil
+
+        shutil.rmtree(run)
+
     package_03.validate_nx_local_shadow(
         shadow,
-        expected_commit=execution["executionCommit"],
+        expected_commit=commit,
         expected_artifact_sha256="b" * 64,
-        expected_runtime_inputs_digest="c" * 64,
+        expected_runtime_inputs_digest=package_03.digest({"source": "retained-test-input"}),
         expected_configuration_digest="a" * 64,
     )
+    published_manifest = package_03.manifest(load(MANIFEST), shadow, commit)
+    published_binding = package_03.binding(
+        load(BINDING), published_manifest, shadow, commit
+    )
+    assert published_manifest["indexConfiguration"]["shadowDifference"] is False
+    assert published_binding["source"]["commit"] == commit
     mutations = [
         ("pendingDifferences", [{"pending": True}]),
         ("completed", False),
-        ("executionCommit", None),
-        ("executionCommit", "g" * 40),
-        ("executionCommit", "0" * 40),
         ("artifactSha256", "d" * 64),
         ("indexSourceCommit", "0" * 40),
     ]
@@ -377,11 +422,17 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap() -> None:
         with pytest.raises(ValueError, match="nx-local shadow"):
             package_03.validate_nx_local_shadow(
                 mutated,
-                expected_commit=execution["executionCommit"],
+                expected_commit=commit,
                 expected_artifact_sha256="b" * 64,
-                expected_runtime_inputs_digest="c" * 64,
+                expected_runtime_inputs_digest=package_03.digest({"source": "retained-test-input"}),
                 expected_configuration_digest="a" * 64,
             )
+
+    for value in (None, "g" * 40, "0" * 40):
+        mutated = copy.deepcopy(shadow)
+        mutated["execution"]["ALL"]["executionCommit"] = value
+        with pytest.raises(ValueError, match="nx-local shadow"):
+            package_03.validate_nx_local_shadow(mutated, expected_commit=commit)
 
 
 def test_the_document_name_figures_are_computed_not_written_by_hand() -> None:

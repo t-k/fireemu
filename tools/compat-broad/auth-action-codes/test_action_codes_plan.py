@@ -14,6 +14,7 @@ from action_codes_plan import (
     STAGE_IDS,
     campaign_cases,
     campaign_manifest,
+    compiled_methods,
     proposal,
     validate_proposal,
 )
@@ -207,12 +208,9 @@ def test_the_permission_envelope_names_a_least_privilege_role() -> None:
     assert permission["scope"] == "https://www.googleapis.com/auth/identitytoolkit"
     assert permission["projectScope"] == "the single approved project"
     assert any("cloud-platform" in row for row in permission["notRequired"])
-    assert set(permission["methods"]) == {
-        "accounts:sendOobCode",
-        "accounts:update",
-        "accounts:lookup",
-        "accounts:delete",
-    }
+    assert permission["methods"] == [
+        "accounts:" + method for method in compiled_methods(NONCE)
+    ]
     assert manifest["ownerInputs"]["credentialRole"] is None
 
 

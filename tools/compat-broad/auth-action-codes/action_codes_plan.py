@@ -613,6 +613,19 @@ def _validate_project(project: Any) -> str:
     return project
 
 
+def compiled_methods(nonce: str = NONCE_TEMPLATE, *, project: str = LOCAL_PROJECT) -> tuple[str, ...]:
+    """Return the exact Auth methods used by every compiled campaign row."""
+    _validate_project(project)
+    if nonce != NONCE_TEMPLATE and not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        raise ValueError("fresh 32-character hexadecimal nonce required")
+    methods = []
+    for row in (*campaign_stages(), *campaign_recovery()):
+        method = row["path"].rsplit("accounts:", 1)[-1]
+        if method not in methods:
+            methods.append(method)
+    return tuple(methods)
+
+
 def campaign_manifest(
     nonce: str = NONCE_TEMPLATE, *, project: str = LOCAL_PROJECT
 ) -> dict[str, Any]:
@@ -672,12 +685,7 @@ def campaign_manifest(
             "scope": "https://www.googleapis.com/auth/identitytoolkit",
             "projectId": project,
             "projectScope": "the single approved project",
-            "methods": [
-                "accounts:sendOobCode",
-                "accounts:update",
-                "accounts:lookup",
-                "accounts:delete",
-            ],
+            "methods": [f"accounts:{method}" for method in compiled_methods(nonce, project=project)],
             "notRequired": [
                 "https://www.googleapis.com/auth/cloud-platform",
                 "organization or folder level access",

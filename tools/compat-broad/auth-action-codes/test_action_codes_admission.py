@@ -64,6 +64,59 @@ def _artifacts(tmp_path):
     return descriptor, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("projectId", "foreign-project"),
+        ("methods", []),
+        ("methods", ["accounts:signUp", "accounts:delete", "accounts:admin"]),
+        ("role", "roles/viewer"),
+        ("scope", "https://www.googleapis.com/auth/cloud-platform"),
+    ],
+)
+def test_semantic_permission_mutation_is_rejected_without_side_effect(tmp_path, field, value):
+    values = _artifacts(tmp_path)
+    descriptor, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = values
+    ledger = tmp_path / "ledger"
+    ledger.mkdir()
+    (ledger / "state.json").write_text('{"reservations": {}, "envelopes": {}}')
+    before = (ledger / "state.json").read_bytes()
+    forged = json.loads(json.dumps(inputs))
+    forged["permission"][field] = value
+    forged["permissionDigest"] = digest(forged["permission"])
+    forged["inputsDigest"] = digest({key: value for key, value in forged.items() if key != "inputsDigest"})
+    with pytest.raises(ValueError, match="semantic owner permission"):
+        admission.validate_frozen_inputs(forged)
+    assert (ledger / "state.json").read_bytes() == before
+    assert artifact.read_bytes() == b"action-code-local-shadow-artifact"
+
+
+def test_nonce_and_resource_binding_mutations_are_rejected(tmp_path):
+    values = _artifacts(tmp_path)
+    descriptor, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = values
+    for mutate in (
+        lambda value: value["permission"].update(nonce="c" * 32),
+        lambda value: value["permission"].update(resourceLocks=[]),
+        lambda value: value["permission"]["budget"].update(observationRequests=1),
+    ):
+        forged = json.loads(json.dumps(inputs))
+        mutate(forged)
+        forged["permissionDigest"] = digest(forged["permission"])
+        forged["inputsDigest"] = digest({key: value for key, value in forged.items() if key != "inputsDigest"})
+        with pytest.raises(ValueError, match="semantic owner permission"):
+            admission.validate_frozen_inputs(forged)
+
+
+def test_cost_is_derived_from_all_compiled_rows():
+    descriptor = campaign.descriptor()
+    plan = descriptor.plan_compiler(NONCE)
+    rows = (*plan["stages"], *plan["recovery"])
+    assert descriptor.cost_model()["requests"] == len(rows)
+    assert descriptor.cost_model()["maximumCostMicrousd"] == round(
+        plan["budget"]["planningCeilingUsd"] * 1_000_000
+    )
+
+
 def test_o7_issue_path_accepts_temporary_ledger_artifacts(tmp_path):
     values = _artifacts(tmp_path)
     descriptor, inputs, permission, manifest, manifest_bytes, manifest_path, artifact, launcher, approval = values

@@ -97,7 +97,13 @@ def budget() -> dict:
 
 
 def cost_model() -> dict:
-    return {"campaignId": CAMPAIGN, "maximumCostMicrousd": 20_000, "requests": 32}
+    plan = plan_compiler("0" * 32)
+    rows = (*plan["stages"], *plan["recovery"])
+    return {
+        "campaignId": CAMPAIGN,
+        "maximumCostMicrousd": round(plan["budget"]["planningCeilingUsd"] * 1_000_000),
+        "requests": len(rows),
+    }
 
 
 def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
@@ -109,6 +115,9 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
         "projectId": AUTHORIZED_PROJECT,
+        "role": plan["permissionEnvelope"]["role"],
+        "scope": plan["permissionEnvelope"]["scope"],
+        "methods": list(plan["permissionEnvelope"]["methods"]),
         "nonce": plan["nonce"],
         "planDigest": digest(plan),
         "sourceCommit": source_commit,
@@ -119,6 +128,30 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "resourceLocks": lock_scopes(plan),
         "budget": budget(),
     }
+
+
+def validate_permission(permission, plan):
+    """Validate authorization semantics, not only a digest over caller data."""
+    envelope = plan["permissionEnvelope"]
+    expected = {
+        "kind": PERMISSION_KIND,
+        "campaignId": CAMPAIGN,
+        "projectId": AUTHORIZED_PROJECT,
+        "role": envelope["role"],
+        "scope": envelope["scope"],
+        "methods": list(envelope["methods"]),
+        "nonce": plan["nonce"],
+        "planDigest": digest(plan),
+        "sourceCommit": permission.get("sourceCommit"),
+        "sourceInputs": permission.get("sourceInputs"),
+        "artifactSha256": permission.get("artifactSha256"),
+        "wallSeconds": 300,
+        "recoverySeconds": 180,
+        "resourceLocks": lock_scopes(plan),
+        "budget": budget(),
+    }
+    if permission != expected:
+        raise ValueError("semantic owner permission binding differs")
 
 
 def transport_bound(value, *, binding, binding_digest, capability=None):

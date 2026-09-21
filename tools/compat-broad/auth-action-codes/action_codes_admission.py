@@ -29,14 +29,17 @@ def freeze_inputs(permission, plan, *, source_commit, artifact_sha256):
 
 
 def validate_frozen_inputs(inputs):
-    return o8_admission.validate_frozen_inputs(descriptor(), inputs)
+    o8_admission.validate_frozen_inputs(descriptor(), inputs)
+    campaign.validate_permission(inputs["permission"], inputs["plan"])
 
 
 def validate_o7_admission(**bindings):
+    validate_frozen_inputs(bindings["inputs"])
     return o8_admission.validate_o7_admission(descriptor(), **bindings)
 
 
 def issue_production_capability(**bindings):
+    validate_frozen_inputs(bindings["inputs"])
     return o8_admission.issue_production_capability(descriptor(), **bindings)
 
 

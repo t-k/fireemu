@@ -117,11 +117,20 @@ fn signed_bad_time_claims_cannot_change_an_account() {
             UPDATE,
             &json!({"idToken": bad, "displayName": "must-not-be-committed"}),
         );
-        assert_eq!(response.status, 400, "a well-signed, invalid-time token is refused");
+        assert_eq!(
+            response.status, 400,
+            "a well-signed, invalid-time token is refused"
+        );
         assert!(response.body.get("idToken").is_none());
         let after = handle(&state, "POST", LOOKUP, &json!({"idToken": original}));
-        assert_eq!(after.status, 200, "the valid token remains usable after refusal");
-        assert_eq!(after.body["users"][0], before_user, "no partial account update");
+        assert_eq!(
+            after.status, 200,
+            "the valid token remains usable after refusal"
+        );
+        assert_eq!(
+            after.body["users"][0], before_user,
+            "no partial account update"
+        );
     }
 }
 
@@ -158,7 +167,10 @@ fn a_signed_temporal_failure_never_enters_the_unsigned_mock_fallback() {
         let bad = revised_token(&original, signer.as_ref(), key, Some(json!(NOW + 600)));
         let store = state.store.lock().unwrap();
         for acceptance in [TokenAcceptance::Verified, TokenAcceptance::EmulatorMock] {
-            assert_eq!(verify_rules_token(&bad, &store, AT, acceptance), Err(JwtError::Malformed));
+            assert_eq!(
+                verify_rules_token(&bad, &store, AT, acceptance),
+                Err(JwtError::Malformed)
+            );
         }
     }
 }
@@ -198,7 +210,10 @@ fn session_cookie_creation_refuses_future_time_claims_and_accepts_the_original()
         &headers,
         &json!({"idToken": original, "validDuration": "3600"}),
     );
-    assert_eq!(good.status, 200, "positive control for the same route and credential");
+    assert_eq!(
+        good.status, 200,
+        "positive control for the same route and credential"
+    );
     for key in ["iat", "auth_time"] {
         let bad = revised_token(&original, signer.as_ref(), key, Some(json!(NOW + 600)));
         let rejected = handle_with(

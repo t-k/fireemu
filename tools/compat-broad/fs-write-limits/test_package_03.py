@@ -320,6 +320,7 @@ def test_pending_rows_are_recorded_with_their_reasons() -> None:
 
 def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -> None:
     import package_03
+    import broad
 
     published = load(SHADOW)
     previous = published["execution"]["ALL"]["execution"]
@@ -329,7 +330,7 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -
     try:
         supervisor = {
             "executionCommit": commit,
-            "configurationDigest": "a" * 64,
+            "configurationDigest": "unused-before-write",
             "indexConfiguration": {
                 "profile": "nx-local",
                 "sha256": package_03.campaign.INDEXES_SHA256_AFTER,
@@ -339,9 +340,9 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -
             "status": "completed",
             "build": {
                 "command": ["offline-test-build"],
-                "inputs": {"source": "retained-test-input"},
+                "inputs": package_03.runtime_inputs_at_commit(commit, ROOT),
                 "rustc": "retained-test-rustc",
-                "artifactSha256": "b" * 64,
+                "artifactSha256": "unused-before-write",
             },
         }
         result = {
@@ -378,8 +379,36 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -
         binding = {
             "bound": True,
             "sourceInputsBefore": package_03.source_inputs(),
+            "sourceInputsAfter": package_03.source_inputs(),
+            "childSourceInputs": package_03.source_inputs(),
             "supervisorManifestSha256": "unused-before-write",
         }
+        index_bytes, index_sha, _ = broad.index_bytes_for_profile("nx-local")
+        (run / "indexes.json").write_bytes(index_bytes)
+        actual_config = {
+            **broad.CONFIG,
+            "daemon": {"authProjectNumbers": {}},
+            "firestore": {
+                **broad.FIRESTORE_CONFIG,
+                "indexFile": "/retained/private/indexes.json",
+            },
+        }
+        config_bytes = json.dumps(actual_config).encode()
+        (run / "configuration.json").write_bytes(config_bytes)
+        supervisor["configurationDigest"] = hashlib.sha256(
+            (run / "configuration.json").read_bytes()
+        ).hexdigest()
+        supervisor["configuration"] = {
+            **actual_config,
+            "firestore": {
+                **actual_config["firestore"],
+                "indexFile": "<owned-private-index-file>",
+            },
+        }
+        artifact = b"retained-fireemu-artifact"
+        (run / "fireemu").write_bytes(artifact)
+        supervisor["build"]["artifactSha256"] = hashlib.sha256(artifact).hexdigest()
+        supervisor["indexConfiguration"]["value"] = json.loads(index_bytes)
         (run / "manifest.json").write_text(json.dumps(supervisor))
         binding["supervisorManifestSha256"] = hashlib.sha256(
             (run / "manifest.json").read_bytes()
@@ -395,9 +424,9 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -
     package_03.validate_nx_local_shadow(
         shadow,
         expected_commit=commit,
-        expected_artifact_sha256="b" * 64,
-        expected_runtime_inputs_digest=package_03.digest({"source": "retained-test-input"}),
-        expected_configuration_digest="a" * 64,
+        expected_artifact_sha256=supervisor["build"]["artifactSha256"],
+        expected_runtime_inputs_digest=package_03.digest(supervisor["build"]["inputs"]),
+        expected_configuration_digest=supervisor["configurationDigest"],
     )
     published_manifest = package_03.manifest(load(MANIFEST), shadow, commit)
     published_binding = package_03.binding(
@@ -407,6 +436,9 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -
     assert published_binding["source"]["commit"] == commit
     run.mkdir()
     (run / "manifest.json").write_text(json.dumps(supervisor))
+    (run / "configuration.json").write_bytes(config_bytes)
+    (run / "indexes.json").write_bytes(index_bytes)
+    (run / "fireemu").write_bytes(artifact)
     (run / "result.json").write_text(json.dumps(result))
     binding["supervisorManifestSha256"] = "0" * 64
     (run / "shadow-binding.json").write_text(json.dumps(binding))
@@ -433,8 +465,8 @@ def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -
             package_03.validate_nx_local_shadow(
                 mutated,
                 expected_commit=commit,
-                expected_artifact_sha256="b" * 64,
-                expected_runtime_inputs_digest=package_03.digest({"source": "retained-test-input"}),
+        expected_artifact_sha256=supervisor["build"]["artifactSha256"],
+        expected_runtime_inputs_digest=package_03.digest(supervisor["build"]["inputs"]),
                 expected_configuration_digest="a" * 64,
             )
 

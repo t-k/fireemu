@@ -30,6 +30,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / "tools/compat-broad"))
+sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 sys.path.insert(0, str(HERE))
 
 import compiler_03
@@ -38,6 +39,7 @@ import limits_03_descriptor as campaign
 import limits_03_indexes
 import limits_03_preflight as preflight
 from broad_contract import digest
+from evidence_common import runtime_inputs_at_commit
 from compiler_03 import CAMPAIGN, DOCUMENT_NAME_MAX, name_charge_floor
 from shadow_03 import source_inputs
 
@@ -178,12 +180,20 @@ def shadow_record(run: Path, commit: str) -> dict:
     result = _load(run / "result.json")
     binding = _load(run / "shadow-binding.json")
     supervisor_manifest_sha256 = _sha(run / "manifest.json")
+    retained_artifact = run / "fireemu"
+    retained_configuration = run / "configuration.json"
+    retained_indexes = run / "indexes.json"
     if (
         result.get("recordingComplete") is not True
         or result.get("stateValidation") is not True
         or binding.get("bound") is not True
         or result.get("campaignId") != CAMPAIGN
         or binding.get("supervisorManifestSha256") != supervisor_manifest_sha256
+        or binding.get("sourceInputsAfter") != source_inputs()
+        or binding.get("childSourceInputs") != source_inputs()
+        or not retained_artifact.is_file()
+        or not retained_configuration.is_file()
+        or not retained_indexes.is_file()
     ):
         raise SystemExit("a fully recorded, source-bound shadow run is required")
     # Preserve the distinction between a fully closed local run and a recorded
@@ -200,6 +210,46 @@ def shadow_record(run: Path, commit: str) -> dict:
     execution_commit = supervisor.get("executionCommit")
     if not isinstance(execution_commit, str) or len(execution_commit) != 40:
         raise SystemExit("the shadow run records no execution commit")
+    try:
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{execution_commit}^{{commit}}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", execution_commit, commit],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        expected_runtime_inputs = runtime_inputs_at_commit(execution_commit, ROOT)
+    except (subprocess.CalledProcessError, ValueError) as error:
+        raise SystemExit("the shadow execution commit is not a current ancestor") from error
+    build = supervisor["build"]
+    if build.get("inputs") != expected_runtime_inputs:
+        raise SystemExit("the shadow runtime inputs differ from its execution commit")
+    if _sha(retained_artifact) != build.get("artifactSha256"):
+        raise SystemExit("the retained artifact differs from the build identity")
+    actual_config = _load(retained_configuration)
+    if _sha(retained_configuration) != supervisor.get("configurationDigest"):
+        raise SystemExit("the retained configuration differs from its digest")
+    expected_config = copy.deepcopy(supervisor.get("configuration"))
+    if not isinstance(expected_config, dict):
+        raise SystemExit("the shadow run records no configuration projection")
+    actual_index_path = actual_config.get("firestore", {}).get("indexFile")
+    if not isinstance(actual_index_path, str):
+        raise SystemExit("the retained configuration has no owned index file")
+    projected_actual = copy.deepcopy(actual_config)
+    projected_actual.setdefault("firestore", {})["indexFile"] = "<owned-private-index-file>"
+    if projected_actual != expected_config:
+        raise SystemExit("the retained configuration differs from its projection")
+    index_profile = supervisor.get("indexConfiguration", {}).get("profile", "historical")
+    if index_profile == "nx-local":
+        if _sha(retained_indexes) != campaign.INDEXES_SHA256_AFTER:
+            raise SystemExit("the retained nx-local index bytes differ from the after state")
+        if json.loads(retained_indexes.read_bytes()) != supervisor["indexConfiguration"].get("value"):
+            raise SystemExit("the retained nx-local index readback differs")
     execution = {
         key: result[key]
         for key in (
@@ -234,7 +284,6 @@ def shadow_record(run: Path, commit: str) -> dict:
         key: supervisor["ownedProcess"][key]
         for key in ("pid", "stopped", "listenersClosed")
     }
-    build = supervisor["build"]
     execution["supervisorStatus"] = supervisor.get("status")
     execution["completed"] = completed
     execution["gateCloseRefused"] = not completed and any(

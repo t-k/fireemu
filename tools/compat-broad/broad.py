@@ -745,12 +745,18 @@ def run(
         index_bytes, index_sha, index_commit = index_bytes_for_profile(index_profile)
         index_file = private / "indexes.json"
         index_file.write_bytes(index_bytes)
+        if retain_executed_artifact:
+            shutil.copyfile(index_file, output / "indexes.json")
+            (output / "indexes.json").chmod(0o400)
         actual_config = {
             **base_config,
             "firestore": {**FIRESTORE_CONFIG, "indexFile": str(index_file)},
         }
         config = private / "config.json"
         save(config, actual_config)
+        if retain_executed_artifact:
+            shutil.copyfile(config, output / "configuration.json")
+            (output / "configuration.json").chmod(0o400)
         command = [
             str(artifact),
             "exec",

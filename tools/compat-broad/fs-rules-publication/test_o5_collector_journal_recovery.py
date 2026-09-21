@@ -8,6 +8,105 @@ from pathlib import Path
 import o5_user_token_collector as module
 import pytest
 from test_o5_user_token_collector import Transport, case
+from test_o5_user_token_collector_bound import acquisition_for, bound_transport
+
+
+def test_unreaped_worker_failure_blocks_recovery_and_preserves_evidence():
+    plan = case()
+    calls = []
+
+    class UnreapedWorker(ValueError):
+        worker_reaped = False
+
+    def execute(request):
+        calls.append(request)
+        raise UnreapedWorker("worker reap unconfirmed")
+
+    result = module.collect(
+        plan,
+        execute,
+        role=module.ROLE_LOCAL_SHADOW,
+        run_id="unreaped-worker",
+    )
+
+    assert result["transport"]["workerReaped"] is False
+    assert result["cleanup"]["cleanupComplete"] is False
+    assert result["cleanup"]["blockedReason"] == "worker-reap-unconfirmed"
+    assert result["cleanup"]["outstandingResources"] == plan["ownedResources"]
+    assert result["cleanup"]["outstandingAccounts"] == [
+        entry["ref"] for entry in plan["ownedAccounts"]
+    ]
+    assert calls and all(request.get("phase") != "recovery" for request in calls)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "allows_recovery"),
+    [(None, False), (1, False), (False, False), (True, True)],
+)
+def test_worker_failure_status_requires_exact_true(attribute, allows_recovery):
+    plan = case()
+    calls = []
+
+    class WorkerFailure(ValueError):
+        pass
+
+    if attribute is not None:
+        WorkerFailure.worker_reaped = attribute
+
+    def execute(request):
+        calls.append(request)
+        raise WorkerFailure("worker status is not proven")
+
+    result = module.collect(
+        plan,
+        execute,
+        role=module.ROLE_LOCAL_SHADOW,
+        run_id="unknown-worker-status",
+    )
+
+    assert result["transport"]["workerReaped"] is (True if allows_recovery else False)
+    if allows_recovery:
+        assert len(calls) > 1
+        assert "blockedReason" not in result["cleanup"]
+    else:
+        assert result["cleanup"]["blockedReason"] == "worker-reap-unconfirmed"
+        assert len(calls) == 1
+
+
+@pytest.mark.parametrize("failure_phase", ["ruleset", "principal", "recovery"])
+def test_unreaped_worker_failure_is_sticky_across_collector_helpers(failure_phase):
+    plan = case()
+    transport = bound_transport(plan, module.ROLE_LOCAL_SHADOW)
+    calls = []
+    failed = False
+
+    class UnreapedWorker(ValueError):
+        worker_reaped = False
+
+    def execute(request):
+        nonlocal failed
+        calls.append(request)
+        if request.get("phase") == failure_phase and not failed:
+            failed = True
+            raise UnreapedWorker("worker reap unconfirmed")
+        return transport(request)
+
+    result = module.collect(
+        plan,
+        execute,
+        role=module.ROLE_LOCAL_SHADOW,
+        run_id="unreaped-helper-" + failure_phase,
+        acquisition=acquisition_for(plan, module.ROLE_LOCAL_SHADOW),
+    )
+
+    assert failed
+    assert result["transport"]["workerReaped"] is False
+    assert result["cleanup"]["cleanupComplete"] is False
+    assert result["cleanup"]["blockedReason"] == "worker-reap-unconfirmed"
+    failure_index = next(
+        index for index, request in enumerate(calls) if request.get("phase") == failure_phase
+    )
+    assert len(calls) == failure_index + 1
 
 
 @pytest.mark.parametrize(

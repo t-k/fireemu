@@ -717,6 +717,8 @@ def collect(
     journal.record("accounts", {"refs": attempted_accounts})
     failures: list[str] = []
     abort: str | None = None
+    worker_reaped: bool | None = None
+    worker_state = {"unreaped": False}
     active_ruleset: str | None = None
 
     try:
@@ -726,7 +728,8 @@ def collect(
                 break
             if bindings is not None and operation["ruleset"] != active_ruleset:
                 release, release_failure = _release_ruleset(
-                    plan, execute, budget, wire, journal, operation
+                    plan, execute, budget, wire, journal, operation,
+                    worker_state=worker_state,
                 )
                 if release_failure is not None:
                     failures.append(f"ruleset:{operation['ruleset']}:{release_failure}")
@@ -736,7 +739,8 @@ def collect(
                 active_ruleset = operation["ruleset"]
             if bindings is not None and operation.get("principalAction"):
                 action, action_failure = _apply_principal_action(
-                    execute, budget, wire, journal, operation, bindings
+                    execute, budget, wire, journal, operation, bindings,
+                    worker_state=worker_state,
                 )
                 if action_failure is not None:
                     ref = operation["principalAction"]["ref"]
@@ -764,6 +768,10 @@ def collect(
             try:
                 raw = execute(dict(request))
             except Exception as error:  # noqa: BLE001 - type name only, no message
+                status = getattr(error, "worker_reaped", None)
+                if type(status) is bool:
+                    worker_reaped = status
+                _note_worker_failure(worker_state, error)
                 raw, receipt_failure = None, f"transport:{type(error).__name__}"
             else:
                 raw, receipt_failure = _accept(raw, OBSERVATION_RECEIPT_KEYS)
@@ -795,11 +803,21 @@ def collect(
     finally:
         observation_finished = budget.stamp()
         try:
-            cleanup = _recover(plan, execute, budget, wire, attempted, journal)
+            if worker_state["unreaped"]:
+                cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
+            else:
+                cleanup = _recover(
+                    plan, execute, budget, wire, attempted, journal,
+                    worker_state=worker_state,
+                )
+                if worker_state["unreaped"]:
+                    cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
         finally:
             journal.close()
     finished = budget.stamp()
     wall_finished = _read_wall_clock(wall_clock)
+    if worker_state["unreaped"]:
+        worker_reaped = False
 
     if journal.failures:
         failures.extend(journal.failures)
@@ -819,6 +837,7 @@ def collect(
         **wire.record(),
         "rulesetReleases": releases,
         "principalActions": actions,
+        "workerReaped": worker_reaped,
         "clock": {
             "started": budget.started,
             "observationFinished": observation_finished,
@@ -898,6 +917,8 @@ def _apply_principal_action(
     journal: _Journal,
     operation: Mapping[str, Any],
     bindings: Mapping[str, Any],
+    *,
+    worker_state: dict[str, bool] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Apply one administrator action to an owned account between two rows.
 
@@ -930,6 +951,7 @@ def _apply_principal_action(
     try:
         raw = execute(dict(request))
     except Exception as error:  # noqa: BLE001 - type name only, never a message
+        _note_worker_failure(worker_state, error)
         return None, f"transport:{type(error).__name__}"
     accepted, failure = _accept(raw, PRINCIPAL_ACTION_RECEIPT_KEYS)
     if failure is not None:
@@ -994,6 +1016,13 @@ def _read_wall_clock(wall_clock: Callable[[], float]) -> float | None:
     return float(value) if _finite(value) else None
 
 
+def _note_worker_failure(
+    worker_state: dict[str, bool] | None, error: BaseException
+) -> None:
+    if worker_state is not None and getattr(error, "worker_reaped", None) is not True:
+        worker_state["unreaped"] = True
+
+
 def _release_ruleset(
     plan: Mapping[str, Any],
     execute: Callable[[dict[str, Any]], Any],
@@ -1001,6 +1030,8 @@ def _release_ruleset(
     wire: _Wire,
     journal: _Journal,
     operation: Mapping[str, Any],
+    *,
+    worker_state: dict[str, bool] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Release one Ruleset through the transport and check its readback.
 
@@ -1031,6 +1062,7 @@ def _release_ruleset(
     try:
         raw = execute(dict(request))
     except Exception as error:  # noqa: BLE001 - type name only, never a message
+        _note_worker_failure(worker_state, error)
         return None, f"transport:{type(error).__name__}"
     accepted, failure = _accept(raw, RULESET_RECEIPT_KEYS)
     if failure is not None:
@@ -1162,6 +1194,8 @@ def _recover(
     wire: _Wire,
     attempted: list[str],
     journal: _Journal,
+    *,
+    worker_state: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """Version-bound cleanup of every owned document and account.
 
@@ -1174,7 +1208,8 @@ def _recover(
     outstanding: list[str] = []
     for resource in plan["ownedResources"]:
         readback = _cleanup_step(
-            execute, budget, wire, journal, "readback", resource=resource
+            execute, budget, wire, journal, "readback", resource=resource,
+            worker_state=worker_state,
         )
         document_steps.append(readback)
         observed = readback.get("observed") or {}
@@ -1188,11 +1223,24 @@ def _recover(
             outstanding.append(resource)
             continue
         delete = _cleanup_step(
-            execute, budget, wire, journal, "delete", resource=resource, version=version
+            execute,
+            budget,
+            wire,
+            journal,
+            "delete",
+            resource=resource,
+            version=version,
+            worker_state=worker_state,
         )
         document_steps.append(delete)
         absence = _cleanup_step(
-            execute, budget, wire, journal, "absence", resource=resource
+            execute,
+            budget,
+            wire,
+            journal,
+            "absence",
+            resource=resource,
+            worker_state=worker_state,
         )
         document_steps.append(absence)
         absent = (absence.get("observed") or {}).get("documentPresent") is False
@@ -1204,7 +1252,13 @@ def _recover(
     for entry in plan["ownedAccounts"]:
         ref = entry["ref"]
         readback = _cleanup_step(
-            execute, budget, wire, journal, "account-readback", account=ref
+            execute,
+            budget,
+            wire,
+            journal,
+            "account-readback",
+            account=ref,
+            worker_state=worker_state,
         )
         account_steps.append(readback)
         observed = readback.get("observed") or {}
@@ -1218,11 +1272,24 @@ def _recover(
             outstanding_accounts.append(ref)
             continue
         delete = _cleanup_step(
-            execute, budget, wire, journal, "account-delete", account=ref, uid=uid
+            execute,
+            budget,
+            wire,
+            journal,
+            "account-delete",
+            account=ref,
+            uid=uid,
+            worker_state=worker_state,
         )
         account_steps.append(delete)
         absence = _cleanup_step(
-            execute, budget, wire, journal, "account-absence", account=ref
+            execute,
+            budget,
+            wire,
+            journal,
+            "account-absence",
+            account=ref,
+            worker_state=worker_state,
         )
         account_steps.append(absence)
         absent = (absence.get("observed") or {}).get("accountPresent") is False
@@ -1237,6 +1304,24 @@ def _recover(
         "outstandingAccounts": outstanding_accounts,
         "unrecoveredAttempted": unrecovered,
         "cleanupComplete": not outstanding and not outstanding_accounts,
+    }
+
+
+def _blocked_cleanup(
+    plan: Mapping[str, Any], attempted: list[str], *, worker_reaped: bool
+) -> dict[str, Any]:
+    """Keep owned resources open when a worker's process group is uncertain."""
+    resources = list(plan["ownedResources"])
+    accounts = [entry["ref"] for entry in plan["ownedAccounts"]]
+    return {
+        "documentSteps": [],
+        "accountSteps": [],
+        "outstandingResources": resources,
+        "outstandingAccounts": accounts,
+        "unrecoveredAttempted": [resource for resource in attempted if resource in resources],
+        "cleanupComplete": False,
+        "blockedReason": "worker-reap-unconfirmed",
+        "workerReaped": worker_reaped,
     }
 
 
@@ -1298,6 +1383,7 @@ def _cleanup_step(
     account: str | None = None,
     version: str | None = None,
     uid: str | None = None,
+    worker_state: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     subject = resource if resource is not None else account
     request: dict[str, Any] = {
@@ -1332,6 +1418,9 @@ def _cleanup_step(
             "failure": failure,
         }
 
+    if worker_state is not None and worker_state["unreaped"]:
+        return outcome("worker-reap-unconfirmed", None)
+
     try:
         at = budget.take_recovery()
     except BudgetExhausted as error:
@@ -1341,6 +1430,7 @@ def _cleanup_step(
     try:
         raw = execute(dict(request))
     except Exception as error:  # noqa: BLE001 - type name only, never a message
+        _note_worker_failure(worker_state, error)
         return outcome(f"transport:{type(error).__name__}", None)
     try:
         accepted, failure = _accept(raw, RECOVERY_RECEIPT_KEYS)

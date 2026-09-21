@@ -15,7 +15,7 @@ from typing import Any
 
 MAX_REQUEST_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-MAX_SECONDS = 12.0
+MAX_SECONDS = 8.0
 FIXED_ORIGINS = {
     "firestore": "https://firestore.googleapis.com",
     "identity": "https://identitytoolkit.googleapis.com",
@@ -174,9 +174,14 @@ def exchange(
     )
     opener = urllib.request.build_opener(_NoRedirect(), urllib.request.ProxyHandler({}))
     started = time.monotonic()
+    deadline = started + float(seconds)
     try:
         with opener.open(request, timeout=float(seconds)) as response:
+            if time.monotonic() > deadline:
+                raise TimeoutError
             raw = response.read(MAX_RESPONSE_BYTES + 1)
+            if time.monotonic() > deadline:
+                raise TimeoutError
             if len(raw) > MAX_RESPONSE_BYTES:
                 raise ValueError("response body exceeds bound")
             return {
@@ -187,6 +192,8 @@ def exchange(
             }
     except urllib.error.HTTPError as error:
         raw = error.read(MAX_RESPONSE_BYTES + 1)
+        if time.monotonic() > deadline:
+            raise TimeoutError
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ValueError("response body exceeds bound") from None
         return {
@@ -195,15 +202,16 @@ def exchange(
                 json.loads(raw) if raw else {}, error="object response required"
             ),
         }
+    except TimeoutError:
+        raise ValueError("worker deadline exceeded") from None
     except (
         OSError,
-        TimeoutError,
         http.client.HTTPException,
         json.JSONDecodeError,
     ) as error:
         raise ValueError("bounded worker exchange failed") from error
     finally:
-        if time.monotonic() - started > float(seconds) + 0.5:
+        if time.monotonic() > deadline:
             raise ValueError("worker walltime exceeded")
 
 

@@ -363,11 +363,13 @@ def test_a_recovery_deadline_before_the_observation_deadline_is_rejected() -> No
         )
 
 
-def test_recovery_still_runs_after_a_transport_exception() -> None:
+def test_unknown_transport_exception_blocks_recovery() -> None:
     plan = case()
     transport = Transport(plan)
+    calls = []
 
     def flaky(request: dict) -> dict:
+        calls.append(request)
         if request.get("phase") != "recovery" and request["index"] == 2:
             raise TimeoutError("network detail that must not be recorded")
         return transport(request)
@@ -375,6 +377,27 @@ def test_recovery_still_runs_after_a_transport_exception() -> None:
     bundle = collect(plan, flaky, role=ROLE_PRODUCTION, run_id="run-1")
     assert bundle["rows"][2]["failure"] == "transport:TimeoutError"
     assert "network detail" not in repr(bundle)
+    assert bundle["transport"]["workerReaped"] is False
+    assert bundle["cleanup"]["cleanupComplete"] is False
+    assert bundle["cleanup"]["blockedReason"] == "worker-reap-unconfirmed"
+    assert len(calls) == 3
+
+
+def test_explicit_reaped_transport_exception_allows_bounded_recovery() -> None:
+    plan = case()
+    transport = Transport(plan)
+
+    class ReapedTimeoutError(TimeoutError):
+        worker_reaped = True
+
+    def flaky(request: dict) -> dict:
+        if request.get("phase") != "recovery" and request["index"] == 2:
+            raise ReapedTimeoutError("network detail that must not be recorded")
+        return transport(request)
+
+    bundle = collect(plan, flaky, role=ROLE_PRODUCTION, run_id="run-1")
+    assert bundle["rows"][2]["failure"] == "transport:ReapedTimeoutError"
+    assert bundle["transport"]["workerReaped"] is True
     assert bundle["cleanup"]["cleanupComplete"] is True
 
 

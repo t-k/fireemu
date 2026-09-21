@@ -147,9 +147,7 @@ def test_lifecycle_transport_reaches_real_loopback_batch_wire() -> None:
                 else "op-restore"
             )
             self._respond(
-                {
-                    "name": f"projects/fireemu-35fe6/databases/(default)/operations/{operation}"
-                }
+                {"name": f"projects/fireemu-35fe6/databases/(default)/operations/{operation}"}
             )
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -245,9 +243,11 @@ def test_lifecycle_transport_reaches_real_loopback_batch_wire() -> None:
     assert seen[5][1].endswith("/operations/op-restore")
 
 
-@pytest.mark.parametrize("lost_apply", [False, True])
+@pytest.mark.parametrize(
+    "fault", ["normal", "lost-apply", "after-mismatch", "poll-invalid", "foreign-operation"]
+)
 def test_management_session_runs_real_gate_lifecycle_over_loopback(
-    tmp_path, monkeypatch, lost_apply
+    tmp_path, monkeypatch, fault
 ):
     """The real Gate and temporary Ledger charge all lifecycle calls through batch_wire."""
     built = o8_fixture.Admission(tmp_path)
@@ -289,7 +289,10 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
         def do_GET(self):
             self._record()
             if "/operations/" in self.path:
-                self._respond({"name": self.path.removeprefix("/v1/"), "done": True})
+                body = {"name": self.path.removeprefix("/v1/"), "done": True}
+                if fault == "poll-invalid" and "op-apply" in self.path:
+                    body["error"] = {"status": "FAILED_PRECONDITION"}
+                self._respond(body)
             elif "/collectionGroups/nx/fields/" in self.path:
                 field_reads = len(
                     [
@@ -301,7 +304,7 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
                 )
                 expected_states = (
                     {1: "before", 2: "before", 3: "after", 4: "before"}
-                    if lost_apply
+                    if fault in ("lost-apply", "poll-invalid", "foreign-operation")
                     else {
                         1: "before",
                         2: "before",
@@ -312,7 +315,11 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
                 )
                 expected_state = expected_states[field_reads]
                 assert state["field"] == expected_state
-                exempt_reads = (1, 3) if lost_apply else (1, 4)
+                exempt_reads = (
+                    (1, 3)
+                    if fault in ("lost-apply", "poll-invalid", "foreign-operation")
+                    else (1, 4)
+                )
                 if field_reads in exempt_reads:
                     self._respond(
                         {
@@ -330,9 +337,11 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
                     {
                         "name": preflight.LIFECYCLE_FIELD,
                         "indexConfig": {
-                            "indexes": [{"queryScope": "COLLECTION"}]
-                            if inherited
-                            else [],
+                            "indexes": (
+                                [{"queryScope": "COLLECTION"}]
+                                if inherited or fault == "after-mismatch"
+                                else []
+                            ),
                             "usesAncestorConfig": inherited,
                             "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
                         },
@@ -370,13 +379,14 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
             if "/collectionGroups/nx/fields/" in self.path:
                 if state["field"] == "before":
                     state["field"] = "after"
-                    operation = "op-apply"
+                    operation = "op-foreign" if fault == "foreign-operation" else "op-apply"
                 else:
                     state["field"] = "before"
                     operation = "op-restore"
+                project = "foreign" if operation == "op-foreign" else "fireemu-35fe6"
                 self._respond(
                     {
-                        "name": f"projects/fireemu-35fe6/databases/(default)/operations/{operation}"
+                        "name": f"projects/{project}/databases/(default)/operations/{operation}"
                     }
                 )
                 return
@@ -446,7 +456,7 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
             receipt=receipt,
         )
         if (
-            lost_apply
+            fault == "lost-apply"
             and not lost_apply_response
             and method == "PATCH"
             and path.endswith("?updateMask=indexConfig")
@@ -524,7 +534,7 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
         for _, path, _, _ in seen
         if "/collectionGroups/nx/fields/" in path or "/operations/" in path
     ]
-    if lost_apply:
+    if fault == "lost-apply":
         assert result["failure"] == "management-observation-aborted"
         assert result["reservationReleased"] is False
         assert receipt["releaseEligible"] is False
@@ -539,7 +549,7 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
         assert lifecycle_paths[5].endswith("/operations/op-restore")
         assert lifecycle_paths[6].endswith("/collectionGroups/nx/fields/*")
         assert state["field"] == "before"
-    else:
+    elif fault == "normal":
         assert result["failure"] is None
         assert result["reservationReleased"] is True
         assert len(gate["managementEvents"]) == 16
@@ -548,13 +558,20 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
         assert lifecycle_paths[3].endswith("/operations/op-apply")
         assert lifecycle_paths[6].endswith("?updateMask=indexConfig")
         assert lifecycle_paths[7].endswith("/operations/op-restore")
+    else:
+        assert result["failure"] == "management-observation-aborted"
+        assert result["reservationReleased"] is False
+        assert receipt["releaseEligible"] is False
+        assert gate["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
+        assert wire_observations == []
+        assert state["field"] == "before"
     firestore_requests = [entry for entry in seen if entry[1].startswith("/v1/")]
     assert firestore_requests
     assert all(
         entry[2] == "Bearer " + o8_fixture.TOKEN for entry in firestore_requests
     ), [(entry[1], entry[2]) for entry in firestore_requests]
     assert all(deadline > 0 for _, _, deadline, _ in wire_observations)
-    if not lost_apply:
+    if fault == "normal":
         assert wire_observations
         assert receipt["collection"]["cleanupComplete"] is True
     assert responder.documents == {}

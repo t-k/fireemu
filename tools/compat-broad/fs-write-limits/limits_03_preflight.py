@@ -128,13 +128,13 @@ def _field_readback(body, field=INDEX_FIELD):
     default wildcard field, which the API names in either state.
     """
     if not isinstance(body, dict) or body.get("name") != field:
-        raise ValueError("typed index field readback required")
+        raise TypeError("typed index field readback required")
     configuration = body.get("indexConfig", {})
     if not isinstance(configuration, dict):
-        raise ValueError("typed index field readback required")
+        raise TypeError("typed index field readback required")
     indexes = configuration.get("indexes", [])
     if not isinstance(indexes, list):
-        raise ValueError("typed index field readback required")
+        raise TypeError("typed index field readback required")
     uses_ancestor = configuration.get("usesAncestorConfig", False)
     if uses_ancestor is not True and uses_ancestor is not False:
         raise ValueError("typed index field readback required")
@@ -428,6 +428,8 @@ class ManagementSession:
     def run(self, phase):
         if phase not in ("observation", "recovery"):
             raise ValueError("closed management phase required")
+        if phase == "recovery":
+            self.lifecycle_failed = False
         slots = (
             MANAGEMENT_OBSERVATION_IDS
             if phase == "observation"
@@ -508,6 +510,8 @@ class ManagementSession:
                     raise ValueError("credential attestation failed")
             elif slot in LIFECYCLE_SLOTS:
                 self._accept_lifecycle_response(slot, response)
+                if self.lifecycle_failed:
+                    raise ValueError("lifecycle semantic validation failed")
             else:
                 validate_attestation(slot, response, self.permission)
         if phase == "observation":

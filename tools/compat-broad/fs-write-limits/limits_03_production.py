@@ -186,15 +186,28 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             management.run("observation")
         except Exception as error:
             event = gate.snapshot()["managementEvents"][-1]
-            if not (
-                event.get("id") == "observation:index-lifecycle-apply"
-                and event.get("completed") is False
-                and event.get("workerReaped") is True
-            ):
+            lifecycle_events = gate.snapshot()["managementEvents"]
+            lifecycle_ids = {
+                "observation:index-lifecycle-apply",
+                "observation:index-lifecycle-poll",
+                "observation:index-lifecycle-after",
+            }
+            if event.get("id") not in lifecycle_ids or event.get("workerReaped") is not True:
                 raise
+            cancel = event.get("completed") is True
             failure = type(error).__name__
             try:
-                gate.abort_management_observation()
+                if cancel:
+                    if not any(
+                        row.get("id") == "observation:index-lifecycle-apply"
+                        and row.get("completed") is True
+                        and row.get("workerReaped") is True
+                        for row in lifecycle_events
+                    ):
+                        raise ValueError("completed lifecycle apply evidence required")
+                    gate.cancel_management_observation()
+                else:
+                    gate.abort_management_observation()
                 management.run("recovery")
             except Exception as recovery_error:  # noqa: BLE001 -- retain the reservation.
                 failure = type(recovery_error).__name__

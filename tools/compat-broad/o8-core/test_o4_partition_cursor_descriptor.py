@@ -4,6 +4,7 @@ Nothing here reaches production: no credential, no origin, no Ledger and no
 collector run. The synthetic approval is built from local files in tmp_path.
 """
 
+import copy
 import hashlib
 import json
 import sys
@@ -23,6 +24,7 @@ import o8_admission
 import partition_cursor_gate as gate_projection
 import partition_cursor_manifest
 import partition_cursor_wire as wire
+import shared_gate
 from broad_contract import digest
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, REQUIRED_MEMBERS, CampaignDescriptor
 
@@ -278,6 +280,48 @@ def test_the_creating_declaration_gap_is_empty_for_partition_queries():
     # Shared Gate recognizes partitionQuery as a non-creating read, so no
     # partition slot remains in the declaration gap.
     assert gap == []
+
+
+def test_partition_schedule_declarations_remain_fail_closed_for_mutations():
+    plan = o4.plan_compiler(NONCE)
+    projection = gate_projection.gate_operations(plan)
+    coordinate = next(
+        (phase, index)
+        for phase, index in projection["order"]
+        if projection[phase][index]["kind"] == "partition-page-token-continuation"
+    )
+    phase, index = coordinate
+    schedule = gate_projection._schedule(projection, slot_seconds=6.0)
+    by_coordinate = {(entry["phase"], entry["index"]): entry for entry in schedule}
+    assert by_coordinate[coordinate]["creates"] is False
+
+    mutations = (
+        (
+            "unknown RPC",
+            {
+                "path": projection[phase][index]["path"].replace(
+                    ":partitionQuery", ":unknownRpc"
+                )
+            },
+        ),
+        (
+            "unknown body key",
+            {"body": {**projection[phase][index]["body"], "unknown": True}},
+        ),
+        ("creating body", {"body": {"writes": []}}),
+    )
+    for _label, mutation in mutations:
+        mutated = copy.deepcopy(projection)
+        mutated[phase][index].update(mutation)
+        operation = mutated[phase][index]
+        assert shared_gate.can_create(operation) is True
+        mutated_schedule = gate_projection._schedule(mutated, slot_seconds=6.0)
+        mutated_entry = next(
+            entry
+            for entry in mutated_schedule
+            if (entry["phase"], entry["index"]) == coordinate
+        )
+        assert "creates" not in mutated_entry
 
 
 def test_the_permission_bindings_carry_the_projection_and_index_facts():

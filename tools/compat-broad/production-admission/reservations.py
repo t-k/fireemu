@@ -831,6 +831,80 @@ def _validate_recovery_gate_plan(parent_plan, child_plan, child):
         raise ValueError("recovery resources differ from canonical plan")
 
 
+def _validate_recovery_terminal_slots(gate, job_name):
+    """Bind every compiler recovery slot to its journal event or skip."""
+    job = gate["jobs"][job_name]
+    plan_job = gate["plan"]["jobs"][job_name]
+    operations = plan_job["recovery"]
+    schedule = plan_job.get("schedule", [])
+    if len(operations) != RECOVERY_CHILD_REQUESTS or len(schedule) != len(operations):
+        raise ValueError("recovery schedule is not canonical")
+    events, skips = {}, {}
+    journal_events = gate.get("events", [])
+    for event in gate.get("events", []):
+        if event.get("job") == job_name and event.get("phase") == "recovery":
+            index = event.get("index")
+            if type(index) is not int or index in events:
+                raise ValueError("recovery journal index changed")
+            events[index] = event
+    for skip in gate.get("skips", []):
+        if skip.get("job") == job_name:
+            index = skip.get("index")
+            if type(index) is not int or index in skips:
+                raise ValueError("recovery skip index changed")
+            skips[index] = skip
+    for index, operation in enumerate(operations):
+        if schedule[index].get("phase") != "recovery" or schedule[index].get("index") != index or schedule[index].get("creates") is not False:
+            raise ValueError("recovery schedule slot changed")
+        event, skip = events.get(index), skips.get(index)
+        if operation["kind"] == "recovery-inspection-read":
+            if event is None or skip is not None or event.get("requestDigest") != digest(operation) or event.get("method") != "GET" or event.get("service") != operation["service"] or event.get("completed") is not True:
+                raise ValueError("recovery inspection journal differs")
+            status = event.get("status")
+            capture = job.get("captures", {}).get(str(index), {})
+            if status == 404:
+                if capture.get("status") != 404:
+                    raise ValueError("recovery inspection absence proof differs")
+            elif status == 200:
+                if capture.get("status") != 200 or capture.get("name") != operation["resource"] or not isinstance(capture.get("updateTime"), str) or not capture["updateTime"]:
+                    raise ValueError("recovery inspection capture differs")
+            else:
+                raise ValueError("recovery inspection status differs")
+        elif operation["kind"] == "recovery-conditional-delete":
+            source_index = next((position for position, candidate in enumerate(operations[:index]) if candidate.get("kind") == operation.get("versionFrom") and candidate.get("resource") == operation["resource"]), None)
+            if source_index is None:
+                raise ValueError("recovery delete source differs")
+            capture = job.get("captures", {}).get(str(source_index), {})
+            if capture.get("status") == 404:
+                if event is not None or skip is None or skip.get("reason") not in {"refused-create", "never-dispatched", "absent-or-unavailable-cleanup-read"}:
+                    raise ValueError("recovery delete skip differs")
+            elif capture.get("status") == 200:
+                if skip is not None or event is None or event.get("completed") is not True:
+                    raise ValueError("recovery delete event differs")
+                wire = dict(operation)
+                wire.pop("versionFrom", None)
+                wire["path"] += "?currentDocument.updateTime=" + quote(capture["updateTime"], safe="")
+                if event.get("requestDigest") != digest(wire) or event.get("method") != "DELETE" or event.get("service") != operation["service"]:
+                    raise ValueError("recovery delete binding differs")
+            else:
+                raise ValueError("recovery delete source status differs")
+        elif operation["kind"] == "recovery-absence-read":
+            proof = job.get("absenceProofs", {}).get(operation["resource"])
+            proof_event = (
+                journal_events[proof["eventIndex"]]
+                if isinstance(proof, dict)
+                and type(proof.get("eventIndex")) is int
+                and 0 <= proof["eventIndex"] < len(journal_events)
+                else None
+            )
+            if event is None or skip is not None or event.get("requestDigest") != digest(operation) or event.get("method") != "GET" or event.get("service") != operation["service"] or event.get("completed") is not True or event.get("status") != 404 or not isinstance(proof, dict) or proof_event is not event or not typed_absence(404, proof.get("body")):
+                raise ValueError("recovery absence journal differs")
+        else:
+            raise ValueError("unknown recovery operation kind")
+    if set(events) | set(skips) != set(range(len(operations))) or set(events) & set(skips):
+        raise ValueError("recovery journal does not cover every slot")
+
+
 class Ledger:
     def __init__(self, path):
         if Path(path).is_symlink():
@@ -1472,6 +1546,7 @@ class Ledger:
             or unconfirmed_creates(gate, job_name)
         ):
             raise ValueError("recovery Gate terminal evidence incomplete")
+        _validate_recovery_terminal_slots(gate, job_name)
         try:
             validate_absence_proofs(gate, job_name)
         except Exception as error:

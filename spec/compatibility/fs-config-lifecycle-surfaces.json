@@ -39,7 +39,7 @@
       "local": {
         "citations": [
           "crates/fireemu-adapter-grpc/src/rest/mod.rs:307",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:707",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:709",
           "crates/fireemu-core-types/src/edition.rs:12"
         ],
         "status": "implemented"
@@ -354,8 +354,8 @@
       "id": "emulator.clearFirestoreData",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:512",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:543"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:514",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:545"
         ],
         "status": "implemented"
       },
@@ -500,8 +500,8 @@
       "dataPlaneConsequence": "The final post-state, absence of the deleted documents, is observable from the data plane; the local emulator wipe route is the local-safety counterpart.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:512",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:543"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:514",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:545"
         ],
         "status": "local-extension-only"
       },
@@ -687,8 +687,8 @@
       "dataPlaneConsequence": "A wrong concurrencyMode, databaseEdition or versionRetentionPeriod makes a caller choose transaction, edition and read-time behavior the local runtime will then refuse or accept differently from production.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:692",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:767",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:694",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:769",
           "crates/fireemu-adapter-grpc/src/rest/mod.rs:278"
         ],
         "status": "partial"
@@ -715,9 +715,9 @@
       "dataPlaneConsequence": "A database absent in production but present locally lets a caller address a database that would return NOT_FOUND against the real service.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:692",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:756",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:735"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:694",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:758",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:737"
         ],
         "status": "partial"
       },
@@ -933,7 +933,7 @@
     {
       "citations": [
         "crates/fireemu-adapter-grpc/src/rest/mod.rs:307",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:707",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:709",
         "crates/fireemu-adapter-grpc/src/rest/mod.rs:295"
       ],
       "class": "data-plane-contract",

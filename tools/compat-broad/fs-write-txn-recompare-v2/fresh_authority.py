@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -20,6 +21,7 @@ MANIFEST_SHA = "38b7bbd5e496feb54925ae05d7ff82776ecd9a0a4d8420c381095cb7fae6436a
 RECEIPT_SHA = "67a89a1654a4891a57d212b341725a6f20602324d764d9b2f5402ec178c82a90"
 PRODUCTION_SHA = "12956fbe82acefc106093eb2cd913ede9092f74aa98bd29f39e795492754b3f3"
 BUILD_COMMAND = ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
+COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def sha(value: bytes) -> str:
@@ -42,6 +44,30 @@ def read(path: Path, expected: str | None = None) -> bytes:
 
 def git(source: Path, *args: str) -> str:
     return subprocess.check_output(["git", "-C", str(source), *args], text=True).strip()
+
+
+def source_closure(root: Path, expected_commit: str) -> dict[str, str]:
+    if not COMMIT_RE.fullmatch(expected_commit):
+        raise ValueError("reviewed authority commit must be a full SHA")
+    if git(root, "rev-parse", "--verify", f"{expected_commit}^{{commit}}") != expected_commit:
+        raise ValueError("reviewed authority commit is unavailable")
+    if git(root, "status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("authority checkout is dirty")
+    paths = [
+        Path(__file__).resolve().relative_to(root),
+        Path("tools/compat-broad/fs-write-txn/stream_comparison.mjs"),
+        *sorted(Path("tools/compat-broad/fs-write-txn-recompare-v2").glob("*.mjs")),
+    ]
+    result: dict[str, str] = {}
+    for path in paths:
+        absolute = root / path
+        result[str(path)] = sha(read(absolute))
+        reviewed = subprocess.check_output(
+            ["git", "-C", str(root), "show", f"{expected_commit}:{path}"],
+        )
+        if sha(reviewed) != result[str(path)]:
+            raise ValueError("authority source differs from reviewed commit")
+    return result
 
 
 def clean_runtime_source(source: Path, expected_commit: str) -> None:
@@ -167,6 +193,8 @@ def run(args: argparse.Namespace) -> dict:
     manifest = json.loads(manifest_bytes)
     receipt = json.loads(receipt_bytes)
     production = json.loads(production_bytes)
+    authority_root = Path(__file__).resolve().parents[3]
+    closure_before = source_closure(authority_root, args.authority_commit)
     execution_commit = receipt["ownedArtifact"]["executionCommit"]
     clean_runtime_source(runtime_source, execution_commit)
     runtime_binding(runtime_source, manifest, sha(artifact_bytes), receipt)
@@ -177,13 +205,14 @@ def run(args: argparse.Namespace) -> dict:
     contract = json.loads(subprocess.check_output([sys.executable, "-c", contract_script], cwd=runtime_source, input=json.dumps(production_plan), text=True))
     contract["local"] = {"projectId": local_plan["projectId"], "documentPrefix": local_plan["documentPrefix"]}
     node = local_plan["nodeRuntime"]["path"]
-    result = comparison(Path(__file__).resolve().parents[3], production, receipt, contract, node)
+    result = comparison(authority_root, production, receipt, contract, node)
     before = [sha(artifact_bytes), sha(manifest_bytes), sha(receipt_bytes), sha(production_bytes)]
     after = [sha(read(artifact, ARTIFACT_SHA)), sha(read(manifest_path, MANIFEST_SHA)), sha(read(receipt_path, RECEIPT_SHA)), sha(read(production_path, PRODUCTION_SHA))]
     if before != after:
         raise ValueError("input changed during authority")
-    authority_root = Path(__file__).resolve().parents[3]
-    comparator_path = authority_root / "tools/compat-broad/fs-write-txn/stream_comparison.mjs"
+    closure_after = source_closure(authority_root, args.authority_commit)
+    if closure_before != closure_after:
+        raise ValueError("authority source changed during comparison")
     v2_path = authority_root / "tools/compat-broad/fs-write-txn-recompare-v2/stream_recompare_v2.mjs"
     return {
         "kind": "stream-fresh-authority-v1",
@@ -192,7 +221,7 @@ def run(args: argparse.Namespace) -> dict:
         "classification": result["v2Classification"],
         "v1Classification": result["v1Classification"],
         "rowCounts": result["rowCounts"],
-        "bindings": {"artifactSha256": sha(artifact_bytes), "manifestSha256": sha(manifest_bytes), "localReceiptSha256": sha(receipt_bytes), "productionReceiptSha256": sha(production_bytes), "executionCommit": execution_commit, "runtimeBuildCommit": manifest["executionCommit"], "authorityCommit": git(authority_root, "rev-parse", "HEAD"), "authoritySourceSha256": sha(read(Path(__file__))), "comparatorSha256": sha(read(comparator_path)), "v2SourceSha256": sha(read(v2_path)), "runtimeInputCount": 427},
+        "bindings": {"artifactSha256": sha(artifact_bytes), "manifestSha256": sha(manifest_bytes), "localReceiptSha256": sha(receipt_bytes), "productionReceiptSha256": sha(production_bytes), "executionCommit": execution_commit, "runtimeBuildCommit": manifest["executionCommit"], "authorityCommit": args.authority_commit, "authoritySourceSha256": closure_after[str(Path(__file__).resolve().relative_to(authority_root))], "comparatorSha256": closure_after["tools/compat-broad/fs-write-txn/stream_comparison.mjs"], "v2SourceSha256": closure_after[str(v2_path.relative_to(authority_root))], "runtimeInputCount": 427},
     }
 
 
@@ -201,6 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--input-root", type=Path)
     parser.add_argument("--runtime-source", type=Path, required=True)
+    parser.add_argument("--authority-commit", required=True)
     parser.add_argument("--receipt", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)

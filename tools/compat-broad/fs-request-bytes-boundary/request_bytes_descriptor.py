@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT / "tools/compat-broad/o8-core"))
 sys.path.insert(0, str(HERE))
 
 import request_bytes_remote_transport
+import request_bytes_campaign as campaign
 from batch_contract import NUMBER, PROJECT
 from broad_contract import digest
 from o8_admission import authorize_transport
@@ -81,6 +82,7 @@ PERMISSION_KIND = "request-bytes-owner-execution-permission-v1"
 APPROVAL_KIND = "request-bytes-o8-approval-v1"
 MANIFEST_KIND = "request-bytes-o8-manifest-v1"
 SHADOW_RECORD = "spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json"
+PRINCIPAL_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 # The published local shadow is the comparison reference, so the artifact
 # profile names the build that shadow ran, derived from the record rather than
 # typed in. The digest still proves only which bytes the owner retained.
@@ -95,6 +97,9 @@ COMPARATOR_ENTRY = (
 )
 WORKER_ENTRY = (
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_https_worker.py"
+)
+PREFLIGHT_ENTRY = (
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py"
 )
 TRANSPORT_ENTRY = (
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_remote_transport.py"
@@ -111,6 +116,10 @@ SHARED_SOURCES = (
     "tools/compat-broad/production-admission/reservations.py",
     "tools/compat-broad/o8-core/o8_admission.py",
     "tools/compat-broad/o8-core/o8_campaign.py",
+    "tools/compat-broad/fs-write-txn/credential_prep.py",
+    "tools/compat-broad/batch_adapter.py",
+    "tools/compat-broad/batch_wire.py",
+    "tools/compat-broad/batch_contract.py",
 )
 # The closure a reservation records, so a later abort proves it runs the same
 # sources the acquisition ran.
@@ -239,6 +248,41 @@ def budget() -> dict:
     return copy.deepcopy(budget_document()["budget"])
 
 
+def management_contract() -> dict:
+    """Closed management slots consumed by the shared Gate driver.
+
+    This is declarative only. Sending is owned by the Gate's charged
+    ``management_dispatch`` path; no transport callable is exposed here.
+    """
+    return {
+        "version": "request-bytes-preflight-v1",
+        "dispatchKind": "closed-v1",
+        "observation": list(campaign.MANAGEMENT_OBSERVATION_IDS),
+        "recovery": list(campaign.MANAGEMENT_RECOVERY_IDS),
+        "credentialIds": ["oauth-tokeninfo"],
+        "credentialSlots": ["tokeninfo"],
+        "slotSeconds": campaign.MANAGEMENT_SLOT_SECONDS,
+        "durationSeconds": 12.0,
+        "intervalSeconds": campaign.MANAGEMENT_INTERVAL_SECONDS,
+        "totalRequests": 7,
+        "principal": {
+            "alternatives": [
+                ["clientId", "subject", "requiredScopes"],
+                ["clientId", "verifiedEmail", "requiredScopes"],
+            ],
+            "claims": [
+                "issued_to",
+                "audience",
+                "user_id",
+                "email",
+                "verified_email",
+                "scope",
+                "expires_in",
+            ],
+        },
+    }
+
+
 def recovery_reserve_microusd() -> int:
     """What the declared recovery reserve costs at the published unit prices."""
     published = budget_document()
@@ -269,7 +313,13 @@ def ledger_budget() -> dict:
         "requests": int(published_budget["maxHttpRequests"]),
         "accounts": int(published_budget["maxAccounts"]),
         "resources": int(published_budget["maxDistinctResources"]),
-        "costMicrousd": maximum + recovery_reserve_microusd(),
+        # The shared Gate charges management slots as well as data slots. The
+        # seven fixed management calls have no Firestore document tariff, but
+        # they still consume the campaign's bounded admission allowance.
+        "costMicrousd": maximum
+        + recovery_reserve_microusd()
+        + int(published_budget.get("maxManagementRequests", 0))
+        * campaign.MANAGEMENT_REQUEST_COST_MICROUSD,
     }
 
 
@@ -282,7 +332,8 @@ def frozen_bounds() -> dict:
     maximum = published["maximumUsage"]
     accounting = published["accounting"]
     return {
-        "dataRequests": int(maximum["httpRequests"]),
+        "dataRequests": int(maximum["dataRequests"]),
+        "managementRequests": int(maximum["managementRequests"]),
         "observationRequests": 105,
         "recoveryRequests": 153,
         "documentWrites": int(maximum["documentWrites"]),
@@ -387,12 +438,12 @@ def lock_scopes(plan: dict) -> list[dict]:
             "key": (f"{firestore}/documents/oracle/{nonce}/request-bytes-01/*"),
             "mode": "WRITE",
         },
+        {"key": f"{scope}/identity", "mode": "READ"},
         *[
             {"key": f"{firestore}/{kind}", "mode": "READ"}
             for kind in ("indexes", "ruleset", "database")
         ],
         {"key": f"{scope}/auth/config", "mode": "READ"},
-        {"key": f"{scope}/api-key-binding", "mode": "READ"},
     ]
 
 
@@ -525,7 +576,8 @@ def gate_plan(
             if slot["phase"] == "recovery"
         )
     )
-    if recovery_time > recovery_seconds():
+    data_recovery_time = recovery_time
+    if data_recovery_time > recovery_seconds():
         raise ValueError(
             "declared reservations do not fit the campaign wall: "
             f"recovery {recovery_time} s exceeds published reserve {recovery_seconds()} s"
@@ -540,9 +592,27 @@ def gate_plan(
             if slot["phase"] == "observation"
         )
     )
+    management_observation_time = len(campaign.MANAGEMENT_OBSERVATION_IDS) * (
+        campaign.MANAGEMENT_SLOT_SECONDS + campaign.MANAGEMENT_INTERVAL_SECONDS
+    )
+    management_recovery_time = len(campaign.MANAGEMENT_RECOVERY_IDS) * (
+        campaign.MANAGEMENT_SLOT_SECONDS + campaign.MANAGEMENT_INTERVAL_SECONDS
+    )
+    # A wall narrower than the published one shrinks the observation window
+    # with it; the published window is a ceiling, not a substitute.
+    observation_window = min(
+        int(budget_document()["budget"]["observationWindowSeconds"]),
+        wall - recovery_time,
+    )
     # The deficit is named, because "does not fit" is the message that sends
     # someone to guess at the numbers instead of reading them.
-    if not 0 < recovery_time < wall or observation_time > wall - recovery_time:
+    if (
+        not 0 < recovery_time < wall
+        or observation_time + management_observation_time > observation_window
+        or data_recovery_time + management_recovery_time > int(
+            budget_document()["budget"]["recoveryWindow"]["reserveSeconds"]
+        )
+    ):
         raise ValueError(
             "declared reservations do not fit the campaign wall: observation "
             f"{observation_time} s and recovery {recovery_time} s need "
@@ -561,7 +631,12 @@ def gate_plan(
         "wallSeconds": wall,
         "recoverySeconds": recovery_time,
         "intervalSeconds": GATE_INTERVAL_SECONDS,
-        "observationRequests": len(PROBE_SCOPES) * PROBE_OBSERVATIONS,
+        "observationRequests": len(PROBE_SCOPES) * PROBE_OBSERVATIONS
+        + len(campaign.MANAGEMENT_OBSERVATION_IDS),
+        "dataRequests": len(PROBE_SCOPES) * PROBE_OBSERVATIONS
+        + len(PROBE_SCOPES) * PROBE_RECOVERY,
+        "managementRequests": len(campaign.MANAGEMENT_OBSERVATION_IDS)
+        + len(campaign.MANAGEMENT_RECOVERY_IDS),
         "requestCostMicrousd": GATE_REQUEST_COST_MICROUSD,
         "costMicrousd": ledger_budget()["costMicrousd"],
         "receiptKind": RECEIPT_KIND,
@@ -572,10 +647,46 @@ def gate_plan(
         # The owner supplies the bearer token, so this campaign acquires no
         # credential and takes no management slot at all.
         "management": {
-            "observation": [],
-            "recovery": [],
-            "credentialIds": [],
-            "credentialSlots": [],
+            "dispatchKind": "closed-v1",
+            "observation": [
+                {
+                    "id": item,
+                    "seconds": campaign.MANAGEMENT_SLOT_SECONDS,
+                    "duration": 12.0,
+                    "timeout": campaign.MANAGEMENT_SLOT_SECONDS,
+                }
+                for item in campaign.MANAGEMENT_OBSERVATION_IDS
+            ],
+            "recovery": [
+                {
+                    "id": item,
+                    "seconds": campaign.MANAGEMENT_SLOT_SECONDS,
+                    "duration": 12.0,
+                    "timeout": campaign.MANAGEMENT_SLOT_SECONDS,
+                }
+                for item in campaign.MANAGEMENT_RECOVERY_IDS
+            ],
+            "credentialIds": ["oauth-tokeninfo"],
+            "credentialSlots": ["tokeninfo"],
+            "slotSeconds": campaign.MANAGEMENT_SLOT_SECONDS,
+            "intervalSeconds": campaign.MANAGEMENT_INTERVAL_SECONDS,
+            "totalRequests": len(campaign.MANAGEMENT_OBSERVATION_IDS)
+            + len(campaign.MANAGEMENT_RECOVERY_IDS),
+            "phaseSeconds": {
+                "observation": len(campaign.MANAGEMENT_OBSERVATION_IDS)
+                * (campaign.MANAGEMENT_SLOT_SECONDS + campaign.MANAGEMENT_INTERVAL_SECONDS),
+                "recovery": len(campaign.MANAGEMENT_RECOVERY_IDS)
+                * (campaign.MANAGEMENT_SLOT_SECONDS + campaign.MANAGEMENT_INTERVAL_SECONDS),
+            },
+            "observationWindowSeconds": observation_window,
+            "recoveryWindowSeconds": int(
+                budget_document()["budget"]["recoveryWindow"]["reserveSeconds"]
+            ),
+            "principalBinding": {
+                "required": ["clientId", "subject", "requiredScopes"],
+                "claims": ["issued_to", "audience", "user_id", "scope", "expires_in"],
+            },
+            "permissionExpiryBound": True,
         },
         "jobs": jobs,
     }
@@ -639,7 +750,30 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
     re-checked here as well as inside the transport, so a capability issued
     against other bytes cannot reach the wire through this path.
     """
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict):
+        raise ValueError("closed request-byte wire call required")
+    if value.get("kind") == "management":
+        if set(value) != {"kind", "phase", "slot", "token", "deadline"}:
+            raise ValueError("closed management wire call required")
+        if capability is None:
+            raise ValueError("active O7 production capability required")
+        if value["phase"] not in ("observation", "recovery"):
+            raise ValueError("closed management phase required")
+        if type(value["deadline"]) not in (int, float) or isinstance(value["deadline"], bool) or not math.isfinite(value["deadline"]):
+            raise ValueError("finite management deadline required")
+        authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+        verify_worker_binding(binding, binding_digest, None)
+        import request_bytes_preflight
+
+        return request_bytes_preflight.management_transport(
+            value["slot"],
+            value["token"],
+            deadline=value["deadline"],
+            capability=capability,
+            binding=binding,
+            binding_digest=binding_digest,
+        )
+    if set(value) != {
         "plan",
         "phase",
         "index",
@@ -792,6 +926,31 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "tariffsConfirmedBelowPlanningCeilings": True,
         "costModel": cost_model(),
         "artifactProfileBasis": artifact_profile_basis(),
+        "credentialPrincipalContract": {
+            "alternatives": [
+                ["clientId", "subject", "requiredScopes"],
+                ["clientId", "verifiedEmail", "requiredScopes"],
+            ],
+            "requiredScopes": [PRINCIPAL_SCOPE],
+            "tokeninfoClaims": [
+                "issued_to",
+                "audience",
+                "user_id",
+                "email",
+                "verified_email",
+                "scope",
+                "expires_in",
+            ],
+            "identitySource": "owner-frozen permission; never inferred from tokeninfo",
+        },
+        "managementContract": management_contract(),
+        "productionPreflight": {
+            "version": "request-bytes-preflight-v1",
+            "managementRequests": 7,
+            "credentialIds": ["oauth-tokeninfo"],
+            "credentialSlots": ["tokeninfo"],
+            "source": PREFLIGHT_ENTRY,
+        },
     }
     if baseline is not None:
         required.update(commit_baseline.permission_baseline(baseline))

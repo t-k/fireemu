@@ -106,7 +106,9 @@ def test_accepted_cases_delete_every_owned_resource(campaign: dict) -> None:
 
 def test_accounting_matches_the_compiled_schedule(campaign: dict) -> None:
     plan = compile_request_bytes_plan(PROJECT, DATABASE, NONCE)
-    assert campaign["accounting"]["httpRequests"] == plan["bounds"]["totalRequestBound"]
+    assert campaign["accounting"]["dataRequests"] == plan["bounds"]["totalRequestBound"]
+    assert campaign["accounting"]["managementRequests"] == 7
+    assert campaign["accounting"]["httpRequests"] == 265
     assert campaign["accounting"]["documentWrites"] == 2 * DOCUMENT_COUNT
     assert campaign["accounting"]["documentDeletes"] == 2 * DOCUMENT_COUNT
     assert campaign["accounting"]["documentReads"] == 3 * DOCUMENT_COUNT * 4
@@ -540,9 +542,13 @@ def test_the_forecast_is_published_but_binds_nothing(campaign: dict) -> None:
 def test_the_request_bound_and_peak_live_set_do_not_rise(campaign: dict) -> None:
     """Probes are cleaned up one at a time and refused deletes are zero-wire."""
     budget = campaign["budget"]
-    assert budget["maxHttpRequests"] == 258
+    assert budget["maxDataRequests"] == 258
+    assert budget["maxManagementRequests"] == 7
+    assert budget["maxHttpRequests"] == 265
     assert budget["maxPeakLiveDocuments"] == DOCUMENT_COUNT
-    assert campaign["maximumUsage"]["httpRequests"] == 258
+    assert campaign["maximumUsage"]["dataRequests"] == 258
+    assert campaign["maximumUsage"]["managementRequests"] == 7
+    assert campaign["maximumUsage"]["httpRequests"] == 265
     assert campaign["maximumUsage"]["peakLiveDocuments"] == DOCUMENT_COUNT
 
 

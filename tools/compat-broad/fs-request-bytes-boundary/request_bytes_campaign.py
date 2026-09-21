@@ -136,6 +136,20 @@ CAMPAIGN_INTERVAL_SECONDS = 0.25
 #: this 3-second reservation leaves scheduling room around that 2.5-second cap.
 SMALL_REQUEST_SECONDS = 3.0
 
+# Production-only management calls are charged separately from the unchanged
+# local data schedule. They verify the bearer, project, database and Auth
+# baseline before data, and repeat the resource checks after cleanup.
+MANAGEMENT_SLOT_SECONDS = 13.0
+MANAGEMENT_INTERVAL_SECONDS = CAMPAIGN_INTERVAL_SECONDS
+MANAGEMENT_OBSERVATION_IDS = (
+    "oauth-tokeninfo",
+    "project",
+    "database",
+    "auth",
+)
+MANAGEMENT_RECOVERY_IDS = ("project", "database", "auth")
+MANAGEMENT_REQUEST_COST_MICROUSD = 1
+
 
 #: The fields that make up a refusal shape. A classification claiming the shape
 #: matched must compare every one of them; comparing a subset while saying
@@ -270,10 +284,16 @@ def _request_accounting() -> dict[str, int]:
         "documentReads": probes * DOCUMENT_COUNT * 4,
         "documentWrites": accepted * DOCUMENT_COUNT,
         "documentDeletes": accepted * DOCUMENT_COUNT,
+        "dataRequests": probes * DOCUMENT_COUNT * 5 + probes,
+        "managementRequests": len(MANAGEMENT_OBSERVATION_IDS)
+        + len(MANAGEMENT_RECOVERY_IDS),
         # Four reads and one delete slot per owned resource, plus one Commit per
         # probe. Delete slots on a refused probe are consumed as zero-wire
         # skips, so the request figure is the same under every outcome.
-        "httpRequests": probes * DOCUMENT_COUNT * 5 + probes,
+        "httpRequests": probes * DOCUMENT_COUNT * 5
+        + probes
+        + len(MANAGEMENT_OBSERVATION_IDS)
+        + len(MANAGEMENT_RECOVERY_IDS),
         "uploadedBytes": sum(REQUEST_TARGETS),
     }
 
@@ -292,7 +312,13 @@ def _maximum_usage() -> dict[str, int]:
         "documentReads": probes * DOCUMENT_COUNT * 4,
         "documentWrites": probes * DOCUMENT_COUNT,
         "documentDeletes": probes * DOCUMENT_COUNT,
-        "httpRequests": probes * DOCUMENT_COUNT * 5 + probes,
+        "dataRequests": probes * DOCUMENT_COUNT * 5 + probes,
+        "managementRequests": len(MANAGEMENT_OBSERVATION_IDS)
+        + len(MANAGEMENT_RECOVERY_IDS),
+        "httpRequests": probes * DOCUMENT_COUNT * 5
+        + probes
+        + len(MANAGEMENT_OBSERVATION_IDS)
+        + len(MANAGEMENT_RECOVERY_IDS),
         "uploadedBytes": sum(REQUEST_TARGETS),
         "peakLiveDocuments": DOCUMENT_COUNT,
         "distinctResources": probes * DOCUMENT_COUNT,
@@ -464,6 +490,8 @@ def _budget(accounting: dict[str, int], plan: dict[str, Any]) -> dict[str, Any]:
         "maxWrites": maximum["documentWrites"],
         "maxDeletes": maximum["documentDeletes"],
         "maxHttpRequests": maximum["httpRequests"],
+        "maxDataRequests": maximum["dataRequests"],
+        "maxManagementRequests": maximum["managementRequests"],
         "expectedWrites": accounting["documentWrites"],
         "expectedDeletes": accounting["documentDeletes"],
         "budgetBasis": "maxima cover every probe being accepted; expectedWrites and expectedDeletes are the forecast under the expected outcome and bind nothing",
@@ -471,10 +499,11 @@ def _budget(accounting: dict[str, int], plan: dict[str, Any]) -> dict[str, Any]:
         "maxResponseBytes": 2 * 1024 * 1024,
         "perRequestTimeoutSeconds": TRANSPORT_TIMEOUT_SECONDS,
         "smallRequestTimeoutSeconds": SMALL_REQUEST_TIMEOUT,
-        "maxDurationSeconds": 1100,
+        "maxDurationSeconds": 1150,
+        "observationWindowSeconds": 600,
         "schedulingReservation": _scheduling_reservation(plan),
         "recoveryWindow": {
-            "reserveSeconds": 500,
+            "reserveSeconds": 550,
             "reserveReads": len(REQUEST_TARGETS) * DOCUMENT_COUNT * 2,
             "reserveDeletes": len(REQUEST_TARGETS) * DOCUMENT_COUNT,
             "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run",
@@ -522,7 +551,7 @@ def compile_request_bytes_campaign(
     plan = compile_request_bytes_plan(project, database, nonce)
     validate_request_bytes_plan(plan)
     accounting = _request_accounting()
-    if accounting["httpRequests"] != plan["bounds"]["totalRequestBound"]:
+    if accounting["dataRequests"] != plan["bounds"]["totalRequestBound"]:
         raise AssertionError("campaign accounting disagrees with the compiled schedule")
     cases = []
     for case_id, probe, target in zip(CASE_IDS, plan["probes"], REQUEST_TARGETS):
@@ -602,6 +631,32 @@ def compile_request_bytes_campaign(
         "transportDeadline": TRANSPORT_DEADLINE,
         "cost": _cost(accounting),
         "budget": _budget(accounting, plan),
+        "productionPreflight": {
+            "version": "request-bytes-preflight-v1",
+            "dataRequests": plan["bounds"]["totalRequestBound"],
+            "managementRequests": len(MANAGEMENT_OBSERVATION_IDS)
+            + len(MANAGEMENT_RECOVERY_IDS),
+            "totalRequests": plan["bounds"]["totalRequestBound"]
+            + len(MANAGEMENT_OBSERVATION_IDS)
+            + len(MANAGEMENT_RECOVERY_IDS),
+            "observation": list(MANAGEMENT_OBSERVATION_IDS),
+            "recovery": list(MANAGEMENT_RECOVERY_IDS),
+            "credentialIds": ["oauth-tokeninfo"],
+            "credentialSlots": ["tokeninfo"],
+            "slotSeconds": MANAGEMENT_SLOT_SECONDS,
+            "intervalSeconds": MANAGEMENT_INTERVAL_SECONDS,
+            "principalBinding": {
+                "required": ["clientId", "subject", "requiredScopes"],
+                "tokeninfoClaims": ["issued_to", "audience", "user_id", "scope", "expires_in"],
+            },
+            "routes": {
+                "oauth-tokeninfo": "POST https://www.googleapis.com/oauth2/v1/tokeninfo",
+                "project": "GET https://cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6",
+                "database": "GET https://firestore.googleapis.com/v1/projects/fireemu-35fe6/databases/(default)",
+                "auth": "GET https://identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config",
+            },
+            "localShadow": "local-only; never sufficient for O7 production admission",
+        },
         "planDigest": hashlib.sha256(compact_utf8(plan)).hexdigest(),
         "boundSources": [
             "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py",
@@ -611,6 +666,11 @@ def compile_request_bytes_campaign(
             "tools/compat-broad/fs-request-bytes-boundary/request_bytes_remote_transport.py",
             "tools/compat-broad/fs-request-bytes-boundary/request_bytes_https_worker.py",
             "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py",
+            "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py",
+            "tools/compat-broad/fs-write-txn/credential_prep.py",
+            "tools/compat-broad/batch_adapter.py",
+            "tools/compat-broad/batch_wire.py",
+            "tools/compat-broad/batch_contract.py",
         ],
         "productionExecuted": False,
         "formalCompatibilityClaim": False,
@@ -828,10 +888,14 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
         raise ValueError("peak coexisting documents must stay at one probe's set")
     if maximum["httpRequests"] != accounting["httpRequests"]:
         raise ValueError("the request bound does not depend on the outcome")
+    if maximum["dataRequests"] != accounting["dataRequests"]:
+        raise ValueError("the data request bound does not depend on the outcome")
+    if maximum["managementRequests"] != 7:
+        raise ValueError("the production management request bound must be seven")
     bounds = campaign.get("planBounds")
     if not isinstance(bounds, dict):
         raise TypeError("missing compiled schedule bounds")
-    if bounds.get("totalRequestBound") != accounting["httpRequests"]:
+    if bounds.get("totalRequestBound") != accounting["dataRequests"]:
         raise ValueError("accounting disagrees with the compiled schedule bound")
     if bounds.get("maxInFlight") != 1 or bounds.get("probeCount") != len(
         REQUEST_TARGETS
@@ -839,6 +903,17 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
         raise ValueError("compiled schedule bounds drifted")
     if bounds.get("distinctDocumentCount") != len(REQUEST_TARGETS) * DOCUMENT_COUNT:
         raise ValueError("distinct document count drifted")
+    preflight = campaign.get("productionPreflight")
+    if not isinstance(preflight, dict) or preflight.get("version") != "request-bytes-preflight-v1":
+        raise ValueError("production preflight contract is required")
+    if preflight.get("totalRequests") != 265 or preflight.get("managementRequests") != 7:
+        raise ValueError("production preflight request bound drifted")
+    if preflight.get("observation") != list(MANAGEMENT_OBSERVATION_IDS) or preflight.get("recovery") != list(MANAGEMENT_RECOVERY_IDS):
+        raise ValueError("production management schedule drifted")
+    if preflight.get("credentialIds") != ["oauth-tokeninfo"] or preflight.get("credentialSlots") != ["tokeninfo"]:
+        raise ValueError("production credential management schedule drifted")
+    if preflight.get("localShadow") != "local-only; never sufficient for O7 production admission":
+        raise ValueError("local shadow must remain production-ineligible")
     cost = campaign.get("cost")
     if not isinstance(cost, dict):
         raise TypeError("missing cost estimate")

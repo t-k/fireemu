@@ -76,7 +76,13 @@ def test_gate_save_delay_cannot_send_past_slot_or_phase(
             shared_gate.time.now = (
                 shared_gate.time.now + 3.1
                 if delay_kind == "slot"
-                else state["started"] + (600 if phase == "observation" else 1100) + 0.1
+                else state["started"]
+                + (
+                    state["plan"]["wallSeconds"] - state["plan"]["recoverySeconds"]
+                    if phase == "observation"
+                    else state["plan"]["wallSeconds"]
+                )
+                + 0.1
             )
         return result
 
@@ -168,8 +174,8 @@ def test_gate_reserves_three_seconds_inside_published_phase_windows(built):  # n
         observation_slot_seconds=3,
         recovery_slot_seconds=3,
     )
-    assert plan["wallSeconds"] == 1100
-    assert plan["recoverySeconds"] == 500
+    assert plan["wallSeconds"] == 1150
+    assert plan["recoverySeconds"] == 550
     sums = {
         phase: sum(
             slot["seconds"] + plan["intervalSeconds"]
@@ -179,8 +185,10 @@ def test_gate_reserves_three_seconds_inside_published_phase_windows(built):  # n
         )
         for phase in ("observation", "recovery")
     }
-    assert sums["observation"] <= 600
-    assert sums["recovery"] <= 500
+    management = plan["management"]["phaseSeconds"]
+    assert management == {"observation": 53.0, "recovery": 39.75}
+    assert sums["observation"] + management["observation"] <= 600
+    assert sums["recovery"] + management["recovery"] <= 550
 
 
 @pytest.mark.parametrize("deadline", [None, True, float("inf"), float("nan")])

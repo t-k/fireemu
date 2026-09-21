@@ -753,7 +753,9 @@ def _document_read_rpc(operation):
     allowed = {
         "runQuery": {"structuredQuery", "explainOptions", "readTime"},
         "runAggregationQuery": {
-            "structuredAggregationQuery", "explainOptions", "readTime"
+            "structuredAggregationQuery",
+            "explainOptions",
+            "readTime",
         },
         "listCollectionIds": {"pageSize", "pageToken", "readTime"},
     }
@@ -790,10 +792,17 @@ def _auth_noncreating_rpc(operation):
         return (
             set(body) == {"email", "password", "returnSecureToken"}
             and body["returnSecureToken"] is True
-            and all(isinstance(body[key], str) and body[key] for key in ("email", "password"))
+            and all(
+                isinstance(body[key], str) and body[key]
+                for key in ("email", "password")
+            )
         )
     if path == "identitytoolkit.googleapis.com/v1/accounts:lookup":
-        return set(body) == {"idToken"} and isinstance(body["idToken"], str) and bool(body["idToken"])
+        return (
+            set(body) == {"idToken"}
+            and isinstance(body["idToken"], str)
+            and bool(body["idToken"])
+        )
     match = re.fullmatch(
         r"identitytoolkit\.googleapis\.com/v1/projects/([A-Za-z0-9_-]+)/accounts:lookup",
         path,
@@ -1136,6 +1145,81 @@ def _creation_outcome(operation, status, body, proofs):
     return "created" if proofs else "refused"
 
 
+def _management_receipt_valid(result, slot_id):
+    """Accept bounded evidence only; raw tokeninfo is never an admissible body."""
+    if not isinstance(result, dict) or set(result) != {
+        "status",
+        "complete",
+        "workerReaped",
+        "bodyKind",
+        "body",
+    }:
+        return False
+    try:
+        if len(json.dumps(result, allow_nan=False).encode()) > 256 * 1024:
+            return False
+    except (ValueError, TypeError):
+        return False
+    status = result["status"]
+    if (
+        type(result["complete"]) is not bool
+        or type(result["workerReaped"]) is not bool
+        or result["bodyKind"] not in ("json", "non-json", "empty", None)
+    ):
+        return False
+    if status is None:
+        # No HTTP status at all is admissible only as a reaped, incomplete
+        # failure; it is charged and stops the campaign, never validated.
+        if result["complete"] is not False or result["workerReaped"] is not True:
+            return False
+    elif type(status) is not int or not 100 <= status <= 599:
+        return False
+    if slot_id != "oauth-tokeninfo":
+        return True
+    body = result["body"]
+    if body is None:
+        return result["complete"] is False
+    if not isinstance(body, dict) or set(body) != {
+        "kind",
+        "principalDigest",
+        "requiredScopeVerified",
+        "identityMode",
+        "identityVerified",
+        "oauthClientVerified",
+        "expiresInSeconds",
+        "remainingSecondsAtVerification",
+        "requiredSeconds",
+        "complete",
+        "workerReaped",
+    }:
+        return False
+    return (
+        body["kind"] == "request-byte-token-attestation-v1"
+        and isinstance(body["principalDigest"], str)
+        and re.fullmatch(r"[a-f0-9]{64}", body["principalDigest"]) is not None
+        and body["identityMode"] in ("subject", "verified-email")
+        and all(
+            body[key] is True
+            for key in (
+                "requiredScopeVerified",
+                "identityVerified",
+                "oauthClientVerified",
+                "complete",
+                "workerReaped",
+            )
+        )
+        and type(body["expiresInSeconds"]) is int
+        and 2 <= body["expiresInSeconds"] <= 3600
+        and all(
+            type(body[key]) in (int, float)
+            and math.isfinite(body[key])
+            and body[key] > 0
+            for key in ("remainingSecondsAtVerification", "requiredSeconds")
+        )
+        and body["remainingSecondsAtVerification"] >= body["requiredSeconds"]
+    )
+
+
 class Gate:
     def __init__(self, path, job):
         self.path, self.job = Path(path), job
@@ -1209,6 +1293,137 @@ class Gate:
             )
             _save(self.path, state)
             return result
+
+    def management_dispatch(self, phase, slot_id, send):
+        """Debit one closed management slot before invoking its bounded transport.
+
+        The callback is a trusted, capability-bound coordinator closure, never a
+        caller assertion of a charge. It receives the absolute deadline and must
+        enforce it after its own admission waits and in its transport worker.
+        """
+        with self.locked() as state:
+            plan = state["plan"]
+            management = plan.get("management", {})
+            expires = plan.get("permissionExpiresAt")
+            if (
+                management.get("dispatchKind") != "closed-v1"
+                or phase not in PHASES
+                or type(expires) not in (int, float)
+                or not math.isfinite(expires)
+                or state["coordinatorPid"] != os.getpid()
+                or state["coordinatorInflight"]
+                or state.get("credentialRejected")
+                or state.get("noDataAbort") is not None
+                or any(job["inflight"] for job in state["jobs"].values())
+                or (phase == "observation" and (state["stopped"] or state["events"]))
+            ):
+                raise ValueError("closed management admission")
+            declared = [(p, entry) for p in PHASES for entry in management.get(p, [])]
+            identities = [p + ":" + entry["id"] for p, entry in declared]
+            used = state["managementUsed"]
+            if (
+                len(set(identities)) != len(identities)
+                or used != identities[: len(used)]
+                or len(used) >= len(declared)
+                or (phase, slot_id)
+                != (declared[len(used)][0], declared[len(used)][1]["id"])
+                or (
+                    phase == "recovery"
+                    and any(
+                        job["recovery"] != len(plan["jobs"][key]["recovery"])
+                        for key, job in state["jobs"].items()
+                    )
+                )
+            ):
+                raise ValueError("closed management sequence")
+            entry = declared[len(used)][1]
+            seconds = entry.get("timeout")
+            if (
+                type(seconds) not in (int, float)
+                or not math.isfinite(seconds)
+                or not 0 < seconds <= WALL_CAP_SECONDS
+            ):
+                raise ValueError("bounded management reservation required")
+            phase_deadline = (
+                state["started"]
+                + plan["wallSeconds"]
+                - (plan["recoverySeconds"] if phase == "observation" else 0)
+            )
+            delay = max(
+                0, state["lastSent"] + plan["intervalSeconds"] - time.monotonic()
+            )
+            remaining = state["reservedRecovery"] - int(phase == "recovery")
+            cost = plan["requestCostMicrousd"]
+            if (
+                remaining < 0
+                or time.monotonic() + delay + seconds > phase_deadline
+                or time.time() + delay + seconds > expires
+                or (
+                    phase == "observation"
+                    and state[phase] >= plan["observationRequests"]
+                )
+                or state["costMicrousd"] + cost * (1 + remaining) > plan["costMicrousd"]
+            ):
+                raise ValueError("management capacity/deadline")
+            time.sleep(delay)
+            now = time.monotonic()
+            if now + seconds > phase_deadline or time.time() + seconds > expires:
+                raise ValueError("management deadline after wait")
+            deadline = min(now + seconds, phase_deadline, now + expires - time.time())
+            event = {
+                "id": phase + ":" + slot_id,
+                "started": now,
+                "durationReserved": seconds,
+                "deadline": deadline,
+                "completed": False,
+            }
+            state["managementUsed"].append(event["id"])
+            state["managementEvents"].append(event)
+            state["total"] += 1
+            state[phase] += 1
+            state["costMicrousd"] += cost
+            state["reservedRecovery"] = remaining
+            state["lastSent"] = now
+            state["coordinatorInflight"] = True
+            _save(self.path, state)
+            try:
+                result = send(deadline)
+                if not isinstance(result, dict):
+                    raise TypeError("bounded management receipt required")
+                status = result.get("status")
+                if type(status) is int and status in (401, 403):
+                    state["credentialRejected"] = True
+                    state["stopped"] = True
+                if not _management_receipt_valid(result, slot_id):
+                    raise ValueError("bounded management receipt required")
+                event.update(
+                    {
+                        "status": status,
+                        "complete": result["complete"],
+                        "workerReaped": result["workerReaped"],
+                        "bodyKind": result.get("bodyKind"),
+                        "responseDigest": digest(result),
+                        "bodyDigest": digest(result.get("body")),
+                        "ended": time.monotonic(),
+                    }
+                )
+                event["completed"] = bool(
+                    result["complete"]
+                    and result["workerReaped"]
+                    and event["ended"] <= deadline
+                )
+                # An unreaped worker remains an uncertain in-flight operation.
+                state["coordinatorInflight"] = not result["workerReaped"]
+                if not event["completed"]:
+                    state["stopped"] = True
+                _save(self.path, state)
+                return result
+            except BaseException as error:
+                event["failure"] = type(error).__name__[:80]
+                event["ended"] = time.monotonic()
+                state["stopped"] = True
+                _save(self.path, state)
+                raise
 
     def claim(self):
         with self.locked() as state:
@@ -1383,12 +1598,38 @@ class Gate:
                 job["pid"] != os.getpid()
                 or job["complete"]
                 or state["coordinatorInflight"]
+                or state.get("credentialRejected")
                 or state["coordinatorDone"] != plan.get("coordinatorRequests", 0)
                 or any(j["inflight"] for j in state["jobs"].values())
                 or state.get("noDataAbort") is not None
                 or (not recovery and (job["stopped"] or state["stopped"]))
             ):
                 raise ValueError("job or environment stopped/uncertain")
+            management = plan.get("management", {})
+            if management.get("dispatchKind") == "closed-v1":
+                expected_management = [
+                    "observation:" + entry["id"]
+                    for entry in management.get("observation", [])
+                ]
+                events = state["managementEvents"][: len(expected_management)]
+                if (
+                    state["managementUsed"][: len(expected_management)]
+                    != expected_management
+                    or len(events) != len(expected_management)
+                    or any(
+                        event.get("completed") is not True
+                        or type(event.get("status")) is not int
+                        or not 200 <= event["status"] < 300
+                        for event in events
+                    )
+                    or any(
+                        identity.startswith("recovery:")
+                        for identity in state["managementUsed"]
+                    )
+                ):
+                    raise ValueError(
+                        "closed management preflight incomplete or postflight begun"
+                    )
             operations = plan["jobs"][self.job][phase]
             index = job[phase]
             if index >= len(operations):

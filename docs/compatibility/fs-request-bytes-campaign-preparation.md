@@ -115,7 +115,9 @@ for the single result it exists to detect.
 | Document writes | 34 | 51 |
 | Document deletes | 34 | 51 |
 | Document reads | 204 | 204 |
-| HTTP requests | 258 | 258 |
+| Data HTTP requests | 258 | 258 |
+| Production management requests | 7 | 7 |
+| Total production HTTP requests | 265 | 265 |
 | Peak coexisting documents | 17 | 17 |
 | Cost, USD | 0.00019 | 0.000224 |
 
@@ -126,18 +128,19 @@ documents stays at one probe's set, because each probe is cleaned up before the
 next begins. The request count is fixed by the schedule, because a refused
 probe's delete slots are consumed as zero-wire skips rather than saved.
 
-The 258 bound is four reads and one delete slot per owned resource plus one
-Commit per probe. Every one of the eight accept/refuse combinations of the three
-probes fits inside the published maxima, which the validator checks rather than
-asserts.
+The local 258 bound is four reads and one delete slot per owned resource plus one
+Commit per probe. Production adds one OAuth tokeninfo call, three metadata reads
+before data and three metadata reads after cleanup. Every one of the eight
+accept/refuse combinations of the three probes fits inside the published data
+maxima, which the validator checks rather than asserts.
 
 The hard ceiling is 0.50 USD and must clear the maximum, not the forecast. The
 network component is zero to the published precision: about 30 MiB is uploaded
 and ingress is not billed, and under 1 MiB is returned. The 30 MiB upload is the
 unusual quantity here, not the money.
 
-The recovery window reserves 500 seconds, 102 reads and 51 delete slots inside an
-1100-second run. The reserve is sized by the maximum, not the forecast: 51
+The recovery window reserves 550 seconds, 102 reads and 51 delete slots inside a
+1150-second run. The reserve is sized by the maximum, not the forecast: 51
 deletes for every document the worst outcome creates, and two reads per owned
 resource for an ownership read and an absence proof. The validator enforces
 both, and enforces that the hard ceiling clears the maximum cost rather than the
@@ -155,10 +158,13 @@ seconds for a small request:
 | observation, small reads | 102 | 331.50 s |
 | observation, boundary Commits | 3 | 180.75 s |
 | recovery | 153 | 497.25 s |
-| **total** | **258** | **1009.50 s** |
+| management, before data | 4 | 53.00 s |
+| management, after cleanup | 3 | 39.75 s |
+| **data total** | **258** | **1009.50 s** |
 
-So the recovery reserve is 500 against 497.25 needed, and the wall is 1100
-against 1009.50, inside the Gate's 1200 cap. The earlier published pair, 300 and
+So the recovery data reserve is 550 against 497.25 needed, and the observation
+phase has 53 seconds of management overhead inside its 600-second window. The
+full wall is 1150, inside the Gate's 1200 cap. The earlier published pair, 300 and
 900, could not carry this: 300 seconds admits at most 1.71 seconds a recovery
 slot, and at two seconds the recovery phase alone needs 344.25. That figure was
 never stated in the artifact, which is how the published windows and the
@@ -178,7 +184,8 @@ separate quantities. The boundary Commits keep the 60-second transport deadline.
 
 At the enforced 2.5-second cap, 153 recovery slots plus their 0.25-second
 interval consume 420.75 seconds, leaving a nominal 79.25-second margin inside
-the 500-second recovery reserve. This is a planning margin, not a mathematical
+the 550-second recovery reserve before the 39.75 seconds of post-cleanup
+management calls. This is a planning margin, not a mathematical
 full-cleanup guarantee. If cleanup cannot complete, the run retains ownership,
 records unresolved resources and fails closed for owner recovery; it does not
 silently release ownership or widen the scope.

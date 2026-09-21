@@ -18,12 +18,18 @@ import request_bytes_admission as admission
 import request_bytes_collector as collector
 import request_bytes_descriptor as campaign
 import request_bytes_o8 as launcher
+import request_bytes_preflight as preflight
 import request_bytes_production as production
 import request_bytes_remote_transport as remote
 import reservations
 import shared_gate
 from broad_contract import digest
-from test_request_bytes_admission import Admission
+from test_request_bytes_admission import (
+    AUTH_BODY,
+    DATABASE_BODY,
+    PROJECT_BODY,
+    Admission,
+)
 
 
 class Clock:
@@ -33,6 +39,9 @@ class Clock:
     def monotonic(self):
         return self.now
 
+    def time(self):
+        return __import__("time").time()
+
     def sleep(self, seconds):
         self.now += seconds
 
@@ -41,6 +50,31 @@ class Clock:
 def offline(monkeypatch):
     monkeypatch.setattr(shared_gate, "time", Clock())
     monkeypatch.setattr(collector, "time", shared_gate.time)
+    monkeypatch.setattr(preflight, "time", shared_gate.time)
+
+    def management_fixture(slot, token, **_kwargs):
+        assert token == "offline-fixture-token"
+        body = {
+            "project": PROJECT_BODY,
+            "database": DATABASE_BODY,
+            "auth": AUTH_BODY,
+        }.get(slot)
+        if slot == "oauth-tokeninfo":
+            body = {
+                "issued_to": "offline-client",
+                "user_id": "offline-subject",
+                "scope": preflight.SCOPE,
+                "expires_in": 3600,
+            }
+        return {
+            "status": 200,
+            "complete": True,
+            "workerReaped": True,
+            "bodyKind": "json",
+            "body": body,
+        }
+
+    monkeypatch.setattr(preflight, "management_transport", management_fixture)
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("network forbidden in O8 regression")
@@ -227,6 +261,49 @@ def test_stopped_runs_persist_evidence_and_retain_reservation(
     ).snapshot()
     if fault != "preflight":
         assert shared_gate.unconfirmed_creates(gate, row["claim"]["gateJob"])
+
+
+def test_auth_baseline_drift_stops_the_gate_before_any_data(
+    built, tmp_path, monkeypatch
+):
+    """A drifted Auth config is recorded in the Gate, not only in memory."""
+    calls, _live = wire_fixture(monkeypatch)
+    real = preflight.management_transport
+
+    def drifted(slot, token, **kwargs):
+        response = real(slot, token, **kwargs)
+        if slot == "auth":
+            response = {**response, "body": {**AUTH_BODY, "mfa": {"state": "ENABLED"}}}
+        return response
+
+    monkeypatch.setattr(preflight, "management_transport", drifted)
+    assert launcher.main(built.argv(tmp_path)) != 0
+    assert calls == []
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    assert receipt["preflightComplete"] is False
+    assert receipt["releaseEligible"] is False
+    rows = receipt["managementEvidence"]
+    assert [row["id"] for row in rows] == [
+        "observation:oauth-tokeninfo",
+        "observation:project",
+        "observation:database",
+        "observation:auth",
+    ]
+    assert rows[-1]["response"]["complete"] is False
+    assert rows[-1]["response"]["body"]["baselineVerified"] is False
+    # The raw Auth config never reaches the receipt, drifted or not.
+    assert "ENABLED" not in json.dumps(receipt)
+    assert "DISABLED" not in json.dumps(receipt)
+    row = reservations.Ledger(built.ledger).snapshot()["reservations"][
+        receipt["ticket"]["reservation"]
+    ]
+    assert row["state"] == "held"
+    gate = shared_gate.Gate(
+        tmp_path / "output/gate", row["claim"]["gateJob"]
+    ).snapshot()
+    assert gate["stopped"] is True
+    assert gate["managementEvents"][-1]["completed"] is False
+    assert gate["events"] == []
 
 
 def test_invalid_private_handoff_publishes_held_no_data_receipt(built, tmp_path):

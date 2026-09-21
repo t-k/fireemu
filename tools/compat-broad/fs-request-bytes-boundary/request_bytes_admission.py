@@ -31,6 +31,8 @@ sys.path.insert(0, str(HERE))
 
 import o8_admission
 import request_bytes_descriptor as campaign
+import request_bytes_campaign as request_campaign
+import request_bytes_preflight
 from broad_contract import digest
 from o8_admission import (
     ProductionWireCapability,
@@ -72,6 +74,7 @@ __all__ = [
     "validate_frozen_inputs",
     "validate_no_data_receipt",
     "validate_o7_admission",
+    "management_call",
 ]
 
 
@@ -95,6 +98,38 @@ def abort_generation(inputs):
 
 def validate_o7_admission(**bindings):
     return o8_admission.validate_o7_admission(descriptor(), **bindings)
+
+
+def management_call(inputs, phase, slot_id, secret, *, deadline):
+    """Build one closed management value for a Gate-charged dispatch.
+
+    This function only validates the frozen slot coordinates and returns a
+    value. It never performs transport, debits a budget, or accepts a caller
+    supplied charge marker. The shared Gate's ``management_dispatch`` must
+    charge and invoke the capability before this value can reach the wire.
+    """
+    if not isinstance(inputs, dict) or phase not in ("observation", "recovery"):
+        raise ValueError("closed management phase required")
+    allowed = (
+        request_campaign.MANAGEMENT_OBSERVATION_IDS
+        if phase == "observation"
+        else request_campaign.MANAGEMENT_RECOVERY_IDS
+    )
+    if slot_id not in allowed:
+        raise ValueError("undeclared management slot")
+    if not isinstance(secret, str) or not secret or len(secret) > 8192:
+        raise ValueError("bounded management secret required")
+    if type(deadline) not in (int, float) or isinstance(deadline, bool) or not math.isfinite(deadline):
+        raise ValueError("finite management deadline required")
+    return {
+        "kind": "management",
+        "phase": phase,
+        "slot": slot_id,
+        "token": secret,
+        "deadline": deadline,
+    }
+
+
 
 
 def issue_production_capability(**bindings):
@@ -195,12 +230,17 @@ def gate_reservations(permission) -> dict:
 def gate_plan_for(inputs, permission) -> dict:
     """Compile this campaign's Gate plan from the frozen inputs and permission."""
     declared = gate_reservations(permission)
-    return campaign.gate_plan(
+    plan = campaign.gate_plan(
         campaign.execution_plan(inputs["plan"]),
         upload_seconds=declared["upload"],
         observation_slot_seconds=declared["observationSlot"],
         recovery_slot_seconds=declared["recoverySlot"],
     )
+    expiry = permission.get("expiresAt")
+    if type(expiry) not in (int, float) or isinstance(expiry, bool):
+        raise ValueError("permission expiry required for management dispatch")
+    plan["permissionExpiresAt"] = expiry
+    return plan
 
 
 def _validate_owner_window(permission) -> None:
@@ -249,6 +289,24 @@ def _approve(
     # identity: it names who answers for a campaign that stops mid-flight, and
     # this campaign can leave up to 17 documents behind when a request times out.
     validate_owner_identity(permission.get("recoveryOwner"), field="recoveryOwner")
+    principal = permission.get("credentialPrincipal")
+    identity_keys = (
+        {"clientId", "subject", "requiredScopes"}
+        if isinstance(principal, dict) and "subject" in principal
+        else {"clientId", "verifiedEmail", "requiredScopes"}
+    )
+    # The same predicate the run-time session applies, so a principal admitted
+    # here cannot be refused at the first management slot.
+    if (
+        not isinstance(principal, dict)
+        or set(principal) != identity_keys
+        or principal["requiredScopes"] != [
+            "https://www.googleapis.com/auth/cloud-platform"
+        ]
+    ):
+        raise ValueError("owner-frozen credential principal required")
+    request_bytes_preflight.validate_principal(principal)
+    request_bytes_preflight.validate_frozen_baselines(permission)
     if (
         not isinstance(permission.get("permissionReference"), str)
         or not permission["permissionReference"].strip()

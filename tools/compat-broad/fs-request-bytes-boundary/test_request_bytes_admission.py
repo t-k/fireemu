@@ -5,6 +5,7 @@ credential is read, no origin outside the process is contacted, and the shared
 Ledger is only ever a temporary copy.
 """
 
+import copy
 import hashlib
 import json
 import shutil
@@ -135,22 +136,22 @@ def test_the_descriptor_is_complete_and_published_budget_bound():
     assert descriptor.binds_campaign_id is True
     assert descriptor.budget == campaign.budget_document()["budget"]
     assert campaign.ledger_budget() == {
-        "requests": 258,
+        "requests": 265,
         "accounts": 1,
         "resources": 51,
         # The maximum, every probe accepted, plus the declared recovery reserve.
-        "costMicrousd": 296,
+        "costMicrousd": 303,
     }
     # Derived from the published shadow's own Rust SHA, so it rebinds with it.
     assert (
         descriptor.artifact_profile
         == "request-bytes-" + campaign.shadow_record()["runtime"]["sourceCommit"][:9]
     )
-    assert (descriptor.campaign_seconds, descriptor.recovery_seconds) == (1100, 500)
+    assert (descriptor.campaign_seconds, descriptor.recovery_seconds) == (1150, 550)
     # The permission window is the campaign wall plus its recovery reserve, so
-    # it moved with them. It is not the Gate's wall, which stays at 1100 and
+    # it moved with them. It is not the Gate's wall, which stays under the
     # under the Gate's 1200 cap.
-    assert descriptor.window_seconds == 1600
+    assert descriptor.window_seconds == 1700
 
 
 def test_the_transport_deadline_is_the_published_one_and_the_enforced_one():
@@ -221,6 +222,13 @@ def owner_permission(plan, commit, artifact_digest, inputs, baseline):
         "ownerIdentity": "offline-fixture-not-permission",
         "permissionReference": "offline-fixture",
         "recoveryOwner": "offline-recovery",
+        "credentialPrincipal": {
+            "clientId": "offline-client",
+            "subject": "offline-subject",
+            "requiredScopes": [
+                "https://www.googleapis.com/auth/cloud-platform"
+            ],
+        },
         "gateReservationSeconds": {
             "upload": 60.0,
             "observationSlot": 3.0,
@@ -361,7 +369,7 @@ def test_frozen_inputs_bind_the_plan_permission_and_source_snapshot(tmp_path):
     inputs = built.inputs
     assert inputs["kind"] == campaign.FROZEN_INPUTS_KIND
     assert inputs["plan"]["campaignId"] == CAMPAIGN_ID
-    assert inputs["bounds"]["totalRequests"] == 258
+    assert inputs["bounds"]["totalRequests"] == 265
     assert inputs["bounds"]["perRequestTimeoutSeconds"] == 60.0
     assert inputs["sourceCommit"] == built.commit
     admission.validate_frozen_inputs(inputs)
@@ -525,7 +533,7 @@ def test_a_capability_is_issued_against_the_reviewed_worker_source(tmp_path):
         assert capability.binding_digest == (
             request_bytes_remote_transport._WORKER_SHA256
         )
-        assert capability.window_seconds == 1600
+        assert capability.window_seconds == 1700
     finally:
         admission.revoke_production_capability(capability)
 
@@ -755,7 +763,7 @@ def test_an_approval_one_second_short_of_the_minimum_window_is_refused(tmp_path)
     """The carried-over defect: a window sized to the wall budget alone."""
     built = Admission(tmp_path)
     assert campaign.MINIMUM_WINDOW_SECONDS == 1200
-    assert built.descriptor.window_seconds == 1600
+    assert built.descriptor.window_seconds == 1700
     assert built.descriptor.window_seconds >= campaign.MINIMUM_WINDOW_SECONDS
     now = time.time()
     short = admission.o8_admission  # the check lives in the shared core
@@ -815,6 +823,43 @@ def test_a_permission_without_baseline_provenance_is_refused(tmp_path):
             source_root=built.source,
             artifact_path=built.artifact_path,
             baseline=built.baseline,
+        )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(lambda p: p.pop("authConfigDigest"), id="no-auth-digest"),
+        pytest.param(
+            lambda p: p.pop("databaseProjectionDigest"), id="no-database-digest"
+        ),
+        pytest.param(
+            lambda p: p.__setitem__("authConfigDigest", "ABC"), id="short-digest"
+        ),
+        pytest.param(
+            lambda p: p["credentialPrincipal"].__setitem__("subject", "with space"),
+            id="subject-whitespace",
+        ),
+        pytest.param(
+            lambda p: p["credentialPrincipal"].__setitem__("clientId", "\u30af"),
+            id="client-non-ascii",
+        ),
+    ],
+)
+def test_baselines_and_principal_are_refused_at_freeze_time_not_in_production(
+    tmp_path, damage
+):
+    """A gap the first management slot would hit is a preparation blocker."""
+    built = Admission(tmp_path)
+    damaged = copy.deepcopy(built.permission)
+    damage(damaged)
+    built.permission_path.write_text(json.dumps(damaged))
+    with pytest.raises(ValueError):
+        admission.freeze_inputs(
+            built.permission_path,
+            built.plan,
+            source_root=built.source,
+            artifact_path=built.artifact_path,
         )
 
 
@@ -925,12 +970,21 @@ def test_the_gate_plan_hosts_three_interleaved_probes(tmp_path):
     assert plan["jobSlots"] == 3
     assert len(plan["jobs"]) == 3
     assert plan["receiptKind"] == campaign.RECEIPT_KIND
-    assert plan["management"] == {
-        "observation": [],
-        "recovery": [],
-        "credentialIds": [],
-        "credentialSlots": [],
-    }
+    assert [item["id"] for item in plan["management"]["observation"]] == [
+        "oauth-tokeninfo",
+        "project",
+        "database",
+        "auth",
+    ]
+    assert [item["id"] for item in plan["management"]["recovery"]] == [
+        "project",
+        "database",
+        "auth",
+    ]
+    assert plan["management"]["credentialIds"] == ["oauth-tokeninfo"]
+    assert plan["management"]["credentialSlots"] == ["tokeninfo"]
+    assert plan["management"]["dispatchKind"] == "closed-v1"
+    assert plan["permissionExpiresAt"] == built.permission["expiresAt"]
     for job in plan["jobs"].values():
         assert len(job["observation"]) == 35
         assert len(job["recovery"]) == 51
@@ -1049,8 +1103,8 @@ def test_a_three_second_recovery_slot_now_fits_the_published_wall(
     built = Admission(tmp_path)
     execution = campaign.execution_plan(built.plan)
     published = campaign.budget_document()["budget"]
-    assert published["maxDurationSeconds"] == 1100
-    assert published["recoveryWindow"]["reserveSeconds"] == 500
+    assert published["maxDurationSeconds"] == 1150
+    assert published["recoveryWindow"]["reserveSeconds"] == 550
 
     fitting = campaign.gate_plan(
         execution,
@@ -1070,7 +1124,7 @@ def test_a_three_second_recovery_slot_now_fits_the_published_wall(
 
     # A figure the published wall still cannot carry names its own deficit.
     with pytest.raises(
-        ValueError, match="recovery 1263 s exceeds published reserve 500 s"
+        ValueError, match="recovery 1263 s exceeds published reserve 550 s"
     ):
         campaign.gate_plan(
             execution,
@@ -1161,8 +1215,13 @@ def test_the_shared_evidence_contract_reads_this_campaigns_gate_plan(tmp_path):
     gate = {"plan": plan}
     assert reservations._receipt_kind(gate) == campaign.RECEIPT_KIND
     assert reservations._receipt_kind(gate) != "commit-acquisition-receipt-v2"
-    assert reservations._credential_slots(gate) == []
-    assert reservations._management(gate) == ([], [])
+    assert reservations._credential_slots(gate) == ["tokeninfo"]
+    assert reservations._management(gate)[0] == ["observation:oauth-tokeninfo"]
+    assert reservations._management(gate)[1] == [
+        "observation:project",
+        "observation:database",
+        "observation:auth",
+    ]
 
 
 def test_the_reservation_claim_binds_its_gate(tmp_path):
@@ -1185,11 +1244,11 @@ def test_the_reservation_claim_binds_its_gate(tmp_path):
     assert claim["campaignId"] == CAMPAIGN_ID
     assert claim["budget"] == campaign.ledger_budget()
     # 258 already covers observation and recovery; no reserve is added on top.
-    assert claim["budget"]["requests"] == 258 == 105 + 153
+    assert claim["budget"]["requests"] == 265
     assert claim["budget"]["accounts"] == 1
-    assert claim["budget"]["costMicrousd"] == 296
+    assert claim["budget"]["costMicrousd"] == 303
     assert claim["nonceDigest"] == digest(built.plan["nonce"])
-    assert claim["durationSeconds"] == 1100
+    assert claim["durationSeconds"] == 1150
     assert any(lock["mode"] == "WRITE" for lock in claim["locks"])
 
 
@@ -1325,16 +1384,31 @@ def test_three_second_slots_fit_the_rebalanced_wall(tmp_path):
         upload_seconds=60.0,
         observation_slot_seconds=3.0,
         recovery_slot_seconds=3.0,
-        wall_seconds=1100,
     )
-    assert rebalanced["recoverySeconds"] <= 500
-    observation = sum(
-        slot["seconds"] + campaign.GATE_INTERVAL_SECONDS
-        for job in rebalanced["jobs"].values()
-        for slot in job["schedule"]
-        if slot["phase"] == "observation"
-    )
-    assert observation <= rebalanced["wallSeconds"] - rebalanced["recoverySeconds"]
+    assert rebalanced["wallSeconds"] == 1150
+    assert rebalanced["recoverySeconds"] == 550
+    management = rebalanced["management"]["phaseSeconds"]
+    sums = {
+        phase: sum(
+            slot["seconds"] + campaign.GATE_INTERVAL_SECONDS
+            for job in rebalanced["jobs"].values()
+            for slot in job["schedule"]
+            if slot["phase"] == phase
+        )
+        for phase in ("observation", "recovery")
+    }
+    assert sums["observation"] + management["observation"] <= 600
+    assert sums["recovery"] + management["recovery"] <= 550
+    assert 600 == rebalanced["wallSeconds"] - rebalanced["recoverySeconds"]
+    # The previous 1100-second wall cannot carry the four preflight slots.
+    with pytest.raises(ValueError, match="do not fit the campaign wall"):
+        campaign.gate_plan(
+            execution,
+            upload_seconds=60.0,
+            observation_slot_seconds=3.0,
+            recovery_slot_seconds=3.0,
+            wall_seconds=1100,
+        )
 
 
 def test_bound_executor_carries_deadline_through_real_capability(monkeypatch, tmp_path):

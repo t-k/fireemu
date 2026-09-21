@@ -3,7 +3,9 @@
     "documentDeletes": 34,
     "documentReads": 204,
     "documentWrites": 34,
-    "httpRequests": 258,
+    "dataRequests": 258,
+    "managementRequests": 7,
+    "httpRequests": 265,
     "uploadedBytes": 31457280
   },
   "boundSources": [
@@ -13,7 +15,12 @@
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_local_transport.py",
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_remote_transport.py",
     "tools/compat-broad/fs-request-bytes-boundary/request_bytes_https_worker.py",
-    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py"
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_process_exchange.py",
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py",
+    "tools/compat-broad/fs-write-txn/credential_prep.py",
+    "tools/compat-broad/batch_adapter.py",
+    "tools/compat-broad/batch_wire.py",
+    "tools/compat-broad/batch_contract.py"
   ],
   "budget": {
     "budgetBasis": "maxima cover every probe being accepted; expectedWrites and expectedDeletes are the forecast under the expected outcome and bind nothing",
@@ -24,8 +31,11 @@
     "maxDeletes": 51,
     "maxDistinctResources": 51,
     "maxDocuments": 51,
-    "maxDurationSeconds": 1100,
-    "maxHttpRequests": 258,
+    "maxDurationSeconds": 1150,
+    "observationWindowSeconds": 600,
+    "maxDataRequests": 258,
+    "maxManagementRequests": 7,
+    "maxHttpRequests": 265,
     "maxInFlightRequests": 1,
     "maxPeakLiveDocuments": 17,
     "maxReads": 204,
@@ -40,7 +50,7 @@
       "onExhaustion": "stop, leave the remaining resources recorded as unresolved, and escalate to the owner; never widen the scope or retry a Commit",
       "reserveDeletes": 51,
       "reserveReads": 102,
-      "reserveSeconds": 500,
+      "reserveSeconds": 550,
       "trigger": "any probe that reaches an observation failure, an uncertain Commit or an interrupted run"
     },
     "schedulingReservation": {
@@ -51,12 +61,14 @@
       "gateWallCapSeconds": 1200,
       "intervalSeconds": 0.25,
       "observationCommitSlots": 3,
+      "managementObservationSeconds": 53.0,
+      "managementRecoverySeconds": 39.75,
       "observationSeconds": 512.25,
       "observationSmallSlots": 102,
       "recoverySeconds": 497.25,
       "recoverySlots": 153,
       "smallRequestSeconds": 3.0,
-      "totalSeconds": 1009.5
+      "totalSeconds": 1102.25
     },
     "smallRequestTimeoutSeconds": 2.5
   },
@@ -80,11 +92,13 @@
     "documentDeletes": 51,
     "documentReads": 204,
     "documentWrites": 51,
-    "httpRequests": 258,
+    "dataRequests": 258,
+    "managementRequests": 7,
+    "httpRequests": 265,
     "peakLiveDocuments": 17,
     "uploadedBytes": 31457280
   },
-  "note": "The local shadow runs under these same bounds; production additionally requires the owner preconditions in fs-request-bytes-campaign.json. The maxima cover every probe being accepted; accounting is the forecast and binds nothing. budget.schedulingReservation is what shared_gate charges this schedule, computed by calling it. The Gate reserves 3.0 seconds for each small slot while transport enforcement caps the complete small GET or DELETE at 2.5 seconds, including plan preparation, worker startup and network exchange. The runner reserves a conservative pre-dispatch slot and clamps the phase deadline before dispatch. A 500-second recovery window therefore has a nominal 79.25-second margin against 153 small slots at the enforced cap and interval; this is planning margin, not a mathematical full-cleanup guarantee. If cleanup cannot complete, ownership is retained and unresolved resources remain fail-closed for owner recovery.",
+  "note": "The local shadow remains a data-only 258-request reference. Production adds seven separately charged management calls: one tokeninfo attestation, three preflight metadata reads and three post-cleanup metadata reads, for a maximum of 265 total requests. The maxima cover every probe being accepted; accounting is the forecast and binds nothing. The Gate reserves 13 seconds for each management slot, 3.0 seconds for small data slots and 60 seconds for boundary Commits. The 600-second observation and 550-second recovery windows include the management reservations. If cleanup cannot complete or a management baseline drifts, ownership is retained and the run fails closed.",
   "schema": "fs-request-bytes-budget-v1",
   "transportDeadline": {
     "consequenceIfMissed": "The receipt is incomplete, the Commit is uncertain, and the run holds no conditional-creation proof. The version-bound delete is then a zero-wire skip by design, so cleanup detects the residue as `cleanup-not-absent` but cannot remove it: up to 17 documents stay in the project pending manual owner action.",

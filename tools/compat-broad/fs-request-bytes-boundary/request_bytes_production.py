@@ -17,6 +17,7 @@ from urllib.parse import quote
 
 import request_bytes_admission as admission
 import request_bytes_descriptor as campaign
+import request_bytes_preflight as preflight
 import reservations
 import shared_gate
 from broad_contract import digest
@@ -59,7 +60,7 @@ def _write_receipt(path: Path, receipt: dict) -> None:
 def _stop_point(snapshot, plan, ready):
     if ready:
         return None
-    if snapshot is None or snapshot["total"] == 0:
+    if snapshot is None or not snapshot.get("events"):
         return "schedule-not-started"
     for probe in campaign.PROBE_SCOPES:
         name = campaign.gate_job_name(probe)
@@ -114,6 +115,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
     failure = None
     ready = False
     snapshot = None
+    management = None
     try:
         shared_gate.create(output / "gate", gate_plan)
         for probe, scope in zip(plan["probes"], campaign.PROBE_SCOPES, strict=True):
@@ -121,6 +123,17 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             gate.claim()
             gates[probe["label"]] = gate
         token = credential_reader()
+        management = preflight.ManagementSession(
+            gate=next(iter(gates.values())),
+            ledger=ledger,
+            ticket=ticket,
+            capability=capability,
+            inputs=inputs,
+            permission=permission,
+            token=token,
+        )
+        management.run("observation")
+        token = None
         # Coordinates come from the frozen operations, not a count of sends:
         # refused creates skip deletes without consuming transport positions.
         coordinates = {
@@ -148,10 +161,16 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             receipt = _validated_response(
                 capability._transmit(
                     admission.transport_call(
-                        plan, phase, index, operation, token, deadline=deadline
+                        plan,
+                        phase,
+                        index,
+                        operation,
+                        management.data_token(deadline),
+                        deadline=deadline,
                     )
                 )
             )
+            preflight.observe_status(management.credential, receipt.get("status"))
             entry.update(
                 status=receipt.get("status"),
                 responseDigest=digest(receipt.get("body"))
@@ -162,6 +181,7 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
 
         result = collect_local(plan, execute_wire, output / "collection", gate=gates)
         if result.get("completed") and result.get("cleanupComplete"):
+            management.run("recovery")
             for gate in gates.values():
                 gate.finish()
             ready = True
@@ -206,7 +226,10 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         gateDigest=digest(snapshot) if snapshot is not None else None,
         evidenceFiles=evidence,
         chargedCalls=snapshot["total"] if snapshot else 0,
-        credentialEvidence=[],
+        credentialEvidence=management.credential_evidence if management else [],
+        managementEvidence=management.evidence if management else [],
+        preflightComplete=bool(management and management.preflight_complete),
+        postflightComplete=bool(management and management.postflight_complete),
         reservationStateAtPublication="held",
         releaseEligible=ready,
         releaseRecord="release.json" if ready else None,
@@ -294,6 +317,7 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
         or release.get("ticket") != receipt.get("ticket")
     ):
         raise ValueError("saved acquisition binding differs")
+    preflight.validate_saved_management(receipt, snapshot, inputs["permission"])
     ledger = reservations.Ledger(ledger_root)
     ledger.bound_claim(receipt["ticket"])
     final = ledger.snapshot()["reservations"].get(receipt["ticket"]["reservation"])
@@ -343,7 +367,10 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
         collection != receipt.get("collection")
         or collection.get("completed") is not True
         or collection.get("cleanupComplete") is not True
-        or len(routes) != snapshot["total"]
+        # The Gate total counts the seven charged management slots as well as
+        # the data routes; the route journal carries only the data routes.
+        or len(routes) + len(snapshot.get("managementEvents", []))
+        != snapshot["total"]
         or receipt.get("chargedCalls") != snapshot["total"]
         or receipt.get("metadata")
         != [

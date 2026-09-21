@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import batch_adapter
 import compiler_03
 import limits_03_descriptor as campaign
 import limits_03_preflight as preflight
 import pytest
-import batch_adapter
-import o8_admission
 
 
 def test_one_poll_lifecycle_is_compiled_as_seven_charged_slots() -> None:
@@ -51,31 +54,111 @@ def test_hosted_baseline_rejects_wrong_ancestor_before_data() -> None:
         session._accept_lifecycle_response("index-lifecycle-before", response)
 
 
-def test_lifecycle_transport_reaches_real_wire_boundary(monkeypatch) -> None:
-    seen = {}
+def test_lifecycle_transport_reaches_real_loopback_batch_wire() -> None:
+    seen = []
 
-    def wire(route, method, body, headers, *, timeout, receipt):
-        seen.update(route=route, method=method, body=body, headers=headers, timeout=timeout, receipt=receipt)
-        return {"http": {"complete": True, "bodyKind": "json", "status": 200}, "body": {"name": "projects/fireemu-35fe6/databases/(default)/operations/op-1"}}
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            return
 
-    monkeypatch.setattr(batch_adapter, "wire", wire)
-    monkeypatch.setattr(o8_admission, "authorize_transport", lambda *_args, **_kwargs: None)
-    response = preflight.management_transport(
-        "index-lifecycle-apply",
-        "test-token",
-        deadline=10**9,
-        capability=object(),
-        binding=b"worker",
-        binding_digest="0" * 64,
-        operation={
-            "method": "PATCH",
-            "route": preflight.LIFECYCLE_ROUTE + "?updateMask=indexConfig",
-            "body": {"name": preflight.LIFECYCLE_FIELD, "indexConfig": {"indexes": []}},
-        },
-    )
-    assert response["complete"] is True
-    assert seen["method"] == "PATCH"
-    assert seen["route"].endswith("?updateMask=indexConfig")
-    assert seen["body"]["name"] == preflight.LIFECYCLE_FIELD
-    assert seen["headers"]["Authorization"] == "Bearer test-token"
-    assert seen["receipt"] is True
+        def _respond(self, body):
+            encoded = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def _record(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = self.rfile.read(length)
+            seen.append(
+                (
+                    self.command,
+                    self.path,
+                    self.headers.get("Authorization"),
+                    None if not payload else json.loads(payload),
+                )
+            )
+
+        def do_GET(self):
+            self._record()
+            if "/operations/" in self.path:
+                self._respond({"name": self.path.removeprefix("/v1/"), "done": True})
+                return
+            if len([entry for entry in seen if entry[0] == "GET"]) == 1:
+                self._respond(
+                    {
+                        "name": preflight.LIFECYCLE_FIELD,
+                        "indexConfig": {
+                            "indexes": [{"queryScope": "COLLECTION"}],
+                            "usesAncestorConfig": True,
+                            "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+                        },
+                        "ttlConfig": {"state": "ENABLED"},
+                    }
+                )
+                return
+            self._respond(
+                {
+                    "name": preflight.LIFECYCLE_FIELD,
+                    "indexConfig": {
+                        "indexes": [],
+                        "usesAncestorConfig": True,
+                        "ancestorField": preflight.DEFAULT_ANCESTOR_FIELD,
+                    },
+                    "ttlConfig": {"state": "ENABLED"},
+                }
+            )
+
+        def do_PATCH(self):
+            self._record()
+            operation = "op-apply" if len([entry for entry in seen if entry[0] == "PATCH"]) == 1 else "op-restore"
+            self._respond({"name": f"projects/fireemu-35fe6/databases/(default)/operations/{operation}"})
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        origin = f"http://127.0.0.1:{server.server_port}"
+        field_url = origin + "/v1/projects/fireemu-35fe6/databases/(default)/collectionGroups/nx/fields/*"
+        operation_url = origin + "/v1/projects/fireemu-35fe6/databases/(default)/operations/"
+        headers = {"Authorization": "Bearer test-token", "Content-Type": "application/json"}
+
+        responses = [
+            batch_adapter.wire(field_url, "GET", None, headers, local=True, timeout=3, receipt=True),
+            batch_adapter.wire(
+                field_url + "?updateMask=indexConfig",
+                "PATCH",
+                {"name": preflight.LIFECYCLE_FIELD, "indexConfig": {"indexes": []}},
+                headers,
+                local=True,
+                timeout=3,
+                receipt=True,
+            ),
+            batch_adapter.wire(operation_url + "op-apply", "GET", None, headers, local=True, timeout=3, receipt=True),
+            batch_adapter.wire(field_url, "GET", None, headers, local=True, timeout=3, receipt=True),
+            batch_adapter.wire(
+                field_url + "?updateMask=indexConfig",
+                "PATCH",
+                {"name": preflight.LIFECYCLE_FIELD, "indexConfig": {"indexes": {"usesAncestorConfig": True}}},
+                headers,
+                local=True,
+                timeout=3,
+                receipt=True,
+            ),
+            batch_adapter.wire(operation_url + "op-restore", "GET", None, headers, local=True, timeout=3, receipt=True),
+            batch_adapter.wire(field_url, "GET", None, headers, local=True, timeout=3, receipt=True),
+        ]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert all(response["http"]["complete"] is True for response in responses)
+    assert responses[1]["body"]["name"].endswith("/operations/op-apply")
+    assert responses[5]["body"]["name"].endswith("/operations/op-restore")
+    assert [entry[0] for entry in seen] == ["GET", "PATCH", "GET", "GET", "PATCH", "GET", "GET"]
+    assert all(entry[2] == "Bearer test-token" for entry in seen)
+    assert seen[2][1].endswith("/operations/op-apply")
+    assert seen[5][1].endswith("/operations/op-restore")

@@ -1980,21 +1980,23 @@ class Gate:
                 or state.get("observation") != len(used)
                 or state.get("recovery") != 0
                 or any(
-                    job.get(key) not in (0, None, False, {}, [])
-                    for job in state["jobs"].values()
-                    for key in (
-                        "observation",
-                        "recovery",
-                        "pid",
-                        "inflight",
-                        "owned",
-                        "creationProofs",
-                        "absent",
-                        "captures",
-                        "complete",
-                        "stopped",
-                        "scheduleDone",
+                    job.get("pid") not in (None, os.getpid())
+                    or any(
+                        job.get(key) not in (0, None, False, {}, [])
+                        for key in (
+                            "observation",
+                            "recovery",
+                            "inflight",
+                            "owned",
+                            "creationProofs",
+                            "absent",
+                            "captures",
+                            "complete",
+                            "stopped",
+                            "scheduleDone",
+                        )
                     )
+                    for job in state["jobs"].values()
                 )
                 or not events[-1].get("workerReaped")
                 or events[-1].get("completed") is not False

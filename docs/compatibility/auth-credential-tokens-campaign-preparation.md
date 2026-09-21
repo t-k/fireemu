@@ -10,9 +10,9 @@ The published [revision 2 session observations](auth-session-v2.md) and their [p
 
 Those pages state their own exclusions, and this campaign takes exactly those: the same-second boundary, session cookies, custom tokens, refresh timestamp preservation, and claim precedence. Two rows here repeat existing evidence deliberately, as controls that prove the run reached a real service; they name the page that already covers them.
 
-## The seventeen cases
+## The nineteen cases
 
-Cases are grouped, and each group stays contiguous so a partial run is visibly partial. Every row states the expected local result; the production column is `UNOBSERVED` for all seventeen.
+Cases are grouped, and each group stays contiguous so a partial run is visibly partial. Every row states the expected local result; the production column is `UNOBSERVED` for all nineteen. The last group folds in the two refresh refusal-class rows of TP-AUTH-C-02, each carrying a fresh-session control: after the stale refresh token is refused, a fresh sign-in on the same account is exchanged once more and must be accepted, so the refusal is shown to be about the stale credential rather than about the account. The comparator reads the control on both sides before it reads the refusal code, and a row whose control did not hold on either side is `INDETERMINATE`.
 
 | Group | Cases | The question |
 | --- | ---: | --- |
@@ -21,6 +21,7 @@ Cases are grouped, and each group stays contiguous so a partial run is visibly p
 | session-cookie | 7 | Are the five-minute and two-week bounds exact, what does an omitted duration yield, and what claims does the cookie carry? |
 | custom-token | 3 | Do developer claims reach the ID token, and are a reserved claim name and an expired custom token refused? |
 | claim-precedence | 1 | After an account claim is added under the same name as a session claim, which one does a refresh report? |
+| refresh-refusal | 2 | Which refusal does a stale refresh token receive after an out-of-band password reset, and after an explicit administrative `validSince` two seconds after sign-in? The local strict runtime removes the session in both cases and answers `INVALID_REFRESH_TOKEN`; production is expected to answer `TOKEN_EXPIRED`, and a `DIFFERENT` row here is the finding. |
 
 ## The same-second boundary
 
@@ -37,6 +38,8 @@ Which refusal counts is part of the control. Identity Toolkit answers `accounts:
 The local runtime issues unsigned emulator tokens and unsigned session cookies; production issues signed ones. The comparison contract therefore excludes the trust root and the signing algorithm from semantic equality and reports the roots observed on each side separately. A trust-root difference is never counted as a semantic difference, and the campaign makes no claim about signature validity or key rotation on either side.
 
 Absolute server-reported seconds are recorded for review and excluded from equality as well, because two services never agree on a wall-clock second.
+
+Every issued token's claim set, its claim names and types at the top level and under `firebase`, is recorded on the row and compared. The local runtime may add `firebase.fireemu_session_epoch`, a private session marker production never issues; the comparator strips it from both sides before judging equality, so a local token carrying it and a production token without it still match on everything else, while any other claim name or type that differs remains a semantic mismatch. The rule is `credential_comparator.strip_local_only_claims`, and the local-only list is `credential_cases.LOCAL_ONLY_CLAIMS`.
 
 ## Budget, bounds and cleanup
 
@@ -62,7 +65,7 @@ Seven failure modes are rehearsed in the manifest: an exhausted budget, a refuse
 
 The campaign cannot run until an owner supplies all of these. The first is the substantial one.
 
-1. A service account in the oracle project able to mint RS256 custom tokens for it, through a key file or `iam.serviceAccounts.signBlob` on itself. Local custom tokens are unsigned. Eleven of the seventeen cases depend on this: the custom-token and claim-precedence groups directly, and the whole session-cookie group because it derives its cookie from the custom-token session. Each case carries a `requiresSigning` flag, so the split is mechanical rather than editorial.
+1. A service account in the oracle project able to mint RS256 custom tokens for it, through a key file or `iam.serviceAccounts.signBlob` on itself. Local custom tokens are unsigned. Eleven of the nineteen cases depend on this: the custom-token and claim-precedence groups directly, and the whole session-cookie group because it derives its cookie from the custom-token session. Each case carries a `requiresSigning` flag, so the split is mechanical rather than editorial.
 2. An OAuth access token scoped for Identity Toolkit, for the privileged account update, lookup and session-cookie calls.
 3. A Web API key for the same project, for sign-in and the secure-token exchange.
 4. Confirmation that the project's Identity Platform tier makes the budgeted requests non-billable, or an accepted charge.
@@ -73,11 +76,21 @@ An owner permission must use `kind=owner-execution-permission` and carry the cam
 
 ## Local shadow
 
-The campaign was run in full against a `fireemu` built from this checkout. All seventeen cases agreed with their declared expected local results, and the owned process stopped with none of the children it had before the signal surviving. All three owned accounts were deleted, each proved absent by a 200 lookup with an empty result. Two of them had an address and contributed an address readback; the custom-token account has no address, so none is claimed for it. The record is [`auth-credential-tokens-local-shadow-20260918.json`](../../spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260918.json), which binds the artifact digest, the asserted source commit and the collector module digests. It was regenerated after each independent review, most recently after the second, so it records the current code rather than any version reviewed; each earlier run is superseded, not amended. The record now also carries the campaign's deadlines: which phase, if any, one of them stopped, and where the cleanup window began and ended.
+The campaign was run in full against a `fireemu` built from this checkout. All nineteen cases agreed with their declared expected local results over forty-two requests, and the owned process stopped with none of the children it had before the signal surviving. All three owned accounts were deleted, each proved absent by a 200 lookup with an empty result. Two of them had an address and contributed an address readback; the custom-token account has no address, so none is claimed for it. The record is [`auth-credential-tokens-local-shadow-20260921.json`](../../spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260921.json), which binds the artifact digest, the asserted source commit and the collector module digests, now including the Gate facade, the preflight and the production transport that a production receipt would be recorded through. `test_credential_shadow_record.py` fails as soon as a bound module is edited after the run, which is the signal to regenerate it. The seventeen-case record of 2026-09-18 is kept byte-identical as the superseded run; each earlier run is superseded, not amended.
 
 This is local evidence and nothing more. It shows the expected local results in the case list are the runtime's actual behavior rather than a reading of the source, which is what makes a future production comparison meaningful. It establishes no production behavior and promotes no group.
 
 One caution belongs on the record. The first shadow attempt used a `fireemu` binary built from the repository's main branch and reported that a refresh advanced `auth_time` along with `iat`. That binary predates `e90f3e27f fix(auth): preserve auth time across refresh`, which is present in this checkout. A parity conclusion drawn from a binary built at a different commit describes that commit, not this one.
+
+## O8 launch path
+
+The lane declares itself to the shared O8 admission core through `credential_descriptor.py` (a `CampaignDescriptor` with every member real), freezes its inputs and validates the owner permission and approval through `credential_admission.py`, and executes through `credential_o8.py`. The frozen plan is a reference to the shared-Gate plan `credential_gate.py` compiles from the nonce and the signing capability: every request the case runner makes, in order, with `$binding:` placeholders where a value is only known at run time. A facade over the Gate resolves those placeholders from the run's own responses, settles each slot's creation outcome for an account, and records typed deletion and absence evidence per account. No token, key, password or account identifier enters the Gate journal or any evidence record; a record that would carry one is refused, never redacted.
+
+The credential handoff arrives on a private descriptor after admission, reservation and Gate claim, with the shape `{"kind": "auth-credential-handoff-v1", "permissionDigest", "token", "apiKey", "signing"}`. `token` is an OAuth bearer for the principal frozen in the permission, with the cloud-platform scope, and it must carry `firebaseauth.admin` for the privileged `accounts:update`, `accounts:lookup`, `accounts:sendOobCode`, `accounts:delete` and `:createSessionCookie` calls; `apiKey` is the project's Web API key for the end-user calls; `signing` is either `null` or `{"serviceAccount": "fireemu-oracle@fireemu-35fe6.iam.gserviceaccount.com"}`. With signing, the three custom tokens are minted before the data phase through `iamcredentials.googleapis.com` `signBlob` as charged management slots, which needs `iam.serviceAccounts.signBlob` on that service account for the bearer's principal (`roles/iam.serviceAccountTokenCreator` on the service account); no key is fetched or stored. Without signing the plan is frozen without the eleven signing-dependent cases, the run reaches the eight others, and the eleven are recorded as `NOT_RUN` with the reason `signing capability absent`, never as observed. A handoff whose signing declaration disagrees with the frozen plan is refused before any wire call.
+
+The management preflight charges, through the Gate, the tokeninfo attestation of the bearer against the frozen principal, a project identity readback and an Auth admin config readback whose digest the permission froze; after cleanup the Auth config is read back once more. The campaign changes no project, tenant or MFA configuration. The budget is the lane's: sixty requests, of which forty-two are data slots and up to seven are management slots, four accounts, six hundred seconds with a sixty-second cleanup reserve, and the US$0.05 runaway guard as the cost ceiling. Exit codes follow the request-byte lane: 0 means verified cleanup and Ledger release, 1 means the run started and did not complete so the reservation is still held and `receipt.json` names the stop point, 2 means admission refused the run before any wire call.
+
+One thing stops a production launch on the current tree. The shared Ledger's reservation admits only Firestore document resources, and the shared Gate's absence proof is a Firestore typed 404, so `Ledger.reserve` refuses this campaign's account-shaped Gate plan with `canonical Firestore resource required` before any Gate or wire is touched; the lane's tests pin that refusal, and pin alongside it that with a two-function extension of the shared modules, applied to the test process only, a hosted run reserves, reaches every case, cleans up every account, finishes the Gate and releases. The extension is a change to shared modules this lane does not own; it is proposed, not made.
 
 ## Verification
 
@@ -88,6 +101,16 @@ cargo build -p fireemu
 uv run --python 3.12 python tools/compat-broad/auth-credential-tokens/credential_shadow.py \
   --binary target/debug/fireemu --commit "$(git rev-parse HEAD)" \
   --output /absolute/private/credential-shadow.json
+```
+
+The launch, once the shared extension has landed and an O7 package has been reviewed and approved, is the request-byte lane's with this lane's files; the handoff is never on the command line:
+
+```sh
+uv run --python 3.12 python $FROZEN/tools/compat-broad/auth-credential-tokens/credential_o8.py \
+  --inputs <pkg>/auth-credential-frozen-inputs-v1.json --approval $APPROVAL_DIR/auth-credential-o8-approval-v1.json \
+  --manifest <pkg>/auth-credential-o8-manifest-v1.json --permission <pkg>/auth-credential-owner-execution-permission-v1.json \
+  --source $FROZEN --artifact <retained fireemu> --ledger <canonical shared Ledger root> \
+  --output <fresh dir under docs.local/logs/<date>/> --credential-fd 3  3< <private handoff>
 ```
 
 The tool package and its per-file contract are described in [its README](../../tools/compat-broad/auth-credential-tokens/README.md).

@@ -114,7 +114,7 @@ def _recovery_fixture(tmp_path):
     child_generation = dict(parent_generation)
     child_generation["sourceCommit"] = "f" * 40
     child_claim = {
-        "kind": reservations.RECOVERY_CHILD_KIND, "version": 1,
+        "kind": reservations.RECOVERY_CHILD_KIND, "version": 2,
         "campaignId": parent_claim["campaignId"], "manifestDigest": digest(recovery_source),
         "nonceDigest": digest(recovery_nonce), "gatePath": str((tmp_path / "child-gate").resolve()),
         "gatePlanDigest": digest(recovery_plan), "locks": parent_claim["locks"],
@@ -211,4 +211,32 @@ def test_active_child_blocks_ordinary_parent_validate_and_finish(tmp_path):
         ledger.validate(parent, now=1100)
     with pytest.raises(ValueError, match="recovery child"):
         ledger.finish(parent)
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("field", ["version", "readCount", "inspectionCount", "absenceCount", "deleteCount"])
+def test_recovery_extension_rejects_noncanonical_integer_shape(tmp_path, field):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    altered = dict(child, **{field: True if field != "version" else 1})
+    before = ledger.snapshot()
+    with pytest.raises(ValueError):
+        ledger.begin_recovery_extension(parent, altered, envelope, parent_plan, child_plan, now=1100)
+    assert ledger.snapshot() == before
+
+
+def test_recovery_extension_requires_window_to_cover_persisted_duration(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    altered = dict(child, expiresAt=1100 + child["durationSeconds"] - 1)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="permission window"):
+        ledger.begin_recovery_extension(parent, altered, envelope, parent_plan, child_plan, now=1100)
+    assert ledger.snapshot() == before
+
+
+def test_recovery_extension_rejects_child_locks_that_miss_owned_resources(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    altered = dict(child, locks=[{"key": "project/fireemu-35fe6", "mode": "READ"}])
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="resource locks|permission scope"):
+        ledger.begin_recovery_extension(parent, altered, envelope, parent_plan, child_plan, now=1100)
     assert ledger.snapshot() == before

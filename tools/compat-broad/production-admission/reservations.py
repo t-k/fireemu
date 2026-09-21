@@ -750,7 +750,7 @@ def _claim(value):
 def _recovery_child_claim(value):
     if not isinstance(value, dict) or set(value) != RECOVERY_CHILD_FIELDS:
         raise ValueError("exact recovery child claim required")
-    if value["kind"] != RECOVERY_CHILD_KIND or type(value["version"]) is not int or not 1 <= value["version"] <= 100:
+    if value["kind"] != RECOVERY_CHILD_KIND or type(value["version"]) is not int or value["version"] != 2:
         raise ValueError("versioned recovery child claim required")
     for key in ("manifestDigest", "nonceDigest", "gatePlanDigest", "parentClaimDigest", "parentPlanDigest", "resourceDigest", "permissionDigest"):
         _hash(value[key])
@@ -762,7 +762,8 @@ def _recovery_child_claim(value):
     if value["operationClass"] != RECOVERY_OPERATION_CLASS:
         raise ValueError("recovery operation class changed")
     if (
-        value["readCount"] != RECOVERY_INSPECTION_REQUESTS + RECOVERY_ABSENCE_REQUESTS
+        any(type(value[key]) is not int for key in ("readCount", "inspectionCount", "absenceCount", "deleteCount"))
+        or value["readCount"] != RECOVERY_INSPECTION_REQUESTS + RECOVERY_ABSENCE_REQUESTS
         or value["inspectionCount"] != RECOVERY_INSPECTION_REQUESTS
         or value["absenceCount"] != RECOVERY_ABSENCE_REQUESTS
         or value["deleteCount"] != RECOVERY_DELETE_REQUESTS
@@ -941,6 +942,9 @@ class Ledger:
                         raise ValueError("recovery child parent binding changed")
                     if child.get("state") != "allocated" or child.get("envelopeDigest") not in state.get("recoveryEnvelopes", {}):
                         raise ValueError("recovery child state changed")
+                    _number(child.get("deadline"))
+                    if child["deadline"] > child["claim"]["expiresAt"] or child["deadline"] > state["recoveryEnvelopes"][child["envelopeDigest"]]["envelope"]["expiresAt"]:
+                        raise ValueError("recovery child deadline changed")
             yield state
 
     def _save(self, state):
@@ -1168,6 +1172,9 @@ class Ledger:
                 raise ValueError("recovery child must reserve all 85 requests")
             if child_claim["durationSeconds"] < canonical_child_gate_plan["wallSeconds"]:
                 raise ValueError("recovery duration below actual Gate wall")
+            decision_now = time.time() if now is None else now
+            if child_claim["expiresAt"] < decision_now + child_claim["durationSeconds"]:
+                raise ValueError("recovery permission window is too short")
             if new_envelope["permissionDigest"] != child_claim["permissionDigest"] or new_envelope["limits"]["requests"] < RECOVERY_CHILD_REQUESTS or new_envelope["limits"]["costMicrousd"] < RECOVERY_CHILD_COST_MICROUSD:
                 raise ValueError("recovery envelope does not fund canonical child")
             if any(
@@ -1179,7 +1186,20 @@ class Ledger:
                 for lock in child_claim["locks"]
             ):
                 raise ValueError("recovery lock exceeds new permission scope")
-            decision_now = time.time() if now is None else now
+            if any(
+                not any(
+                    _ancestor(_scope(lock), _resource_scope(resource))
+                    and MODES[lock["mode"]] >= MODES["WRITE"]
+                    for lock in child_claim["locks"]
+                )
+                or not any(
+                    _ancestor(_scope(lock), _resource_scope(resource))
+                    and MODES[lock["mode"]] >= MODES["WRITE"]
+                    for lock in claim["locks"]
+                )
+                for resource in child_claim["ownedResources"]
+            ):
+                raise ValueError("recovery resource locks do not cover all resources")
             if not new_envelope["issuedAt"] <= decision_now < new_envelope["expiresAt"] or decision_now + child_claim["durationSeconds"] > new_envelope["expiresAt"] or child_claim["expiresAt"] > new_envelope["expiresAt"]:
                 raise ValueError("recovery child outside permission window")
             if parent["claimDigest"] != initial_claim_digest or parent["claim"] != initial_claim:
@@ -1217,6 +1237,7 @@ class Ledger:
                 "parentClaimDigest": parent["claimDigest"],
                 "envelopeDigest": child_envelope_digest,
                 "state": "allocated",
+                "deadline": decision_now + child_claim["durationSeconds"],
             }
             parent.setdefault("recoveryChildren", []).append(child)
             self._save(state)

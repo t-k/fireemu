@@ -1842,3 +1842,16 @@ def test_a_slot_may_not_carry_both_a_body_and_a_reference(tmp_path):
     value["jobs"]["probe"]["observation"][0]["body"] = bodies[0]
     with pytest.raises(ValueError, match="invalid shared allocation"):
         create(tmp_path / "gate", value)
+
+
+def test_observation_auth_delete_defaults_to_refused(tmp_path):
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).parent / "auth-action-codes"))
+    import action_codes_gate
+
+    value = action_codes_gate.gate_plan("fireemu-35fe6", "c" * 32)
+    value.pop("observationDeletePolicy")
+    with pytest.raises(ValueError, match="destructive Auth delete"):
+        create(tmp_path / "gate", value)

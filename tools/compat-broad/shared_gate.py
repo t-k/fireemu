@@ -344,6 +344,31 @@ def _auth_uid_absence_operation_valid(operation, project, account_bindings=None)
     )
 
 
+def _action_observation_delete_plan_allowed(plan, job, operation):
+    """Recognize only the frozen AUTH-ACTION intentional delete slot."""
+    declared_resources = {
+        binding.get("resource")
+        for candidate in plan.get("jobs", {}).values()
+        for binding in [candidate.get("accountBindings", {}).get("accountB", {})]
+        if isinstance(binding, dict)
+    }
+    return (
+        plan.get("campaignId") == "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01"
+        and plan.get("observationDeletePolicy") == "auth-action-account-b-delete-v1"
+        and operation.get("id") == "account-b-delete"
+        and _auth_operation(operation)
+        and operation.get("method") == "POST"
+        and operation.get("path") == (
+            f"identitytoolkit.googleapis.com/v1/projects/{plan.get('project')}/accounts:delete"
+        )
+        and operation.get("account") == "accountB"
+        and operation.get("uidBinding") == "accountBUid"
+        and operation.get("body") == {"localId": "$binding:accountBUid"}
+        and operation.get("resource") in set(job.get("resources", []))
+        and operation.get("resource") in declared_resources
+    )
+
+
 def _auth_creation_ownership(state, job, operation):
     """Require a journaled creation event for this exact Auth account resource."""
     account = operation.get("account")
@@ -369,8 +394,20 @@ def _auth_creation_ownership(state, job, operation):
         and event.get("creationOutcome") == "created"
         and isinstance(evidence, dict)
         and evidence.get("account") == account
+        and evidence.get("uid") == uid
         and evidence.get("creationOutcome") == "created"
     )
+    job_name = next((name for name, candidate in state["jobs"].items() if candidate is job), None)
+    recipe = state["plan"].get("jobs", {}).get(job_name) if job_name is not None else None
+    observation = recipe.get("observation", []) if isinstance(recipe, dict) else []
+    observed_slot = event.get("index")
+    if (
+        type(observed_slot) is not int
+        or not 0 <= observed_slot < len(observation)
+        or observation[observed_slot].get("kind") != "sign-up"
+        or event.get("requestDigest") != digest(observation[observed_slot])
+    ):
+        return False
     if ordinary:
         return True
     # MFA lost-signup recovery is accepted only as a closed two-event chain. The
@@ -381,7 +418,6 @@ def _auth_creation_ownership(state, job, operation):
     reconcile_index = record.get("reconcileEvent")
     if type(reconcile_index) is not int or not 0 <= reconcile_index < len(state["events"]):
         return False
-    job_name = next((name for name, candidate in state["jobs"].items() if candidate is job), None)
     if job_name is None:
         return False
     recipe = state["plan"]["jobs"].get(job_name)
@@ -775,6 +811,7 @@ def create(path, plan):
                 operation in job.get("observation", [])
                 and operation.get("method") == "POST"
                 and operation.get("path", "").endswith("/accounts:delete")
+                and not _action_observation_delete_plan_allowed(plan, job, operation)
             ):
                 raise ValueError("destructive Auth delete is recovery-only")
             if (
@@ -2093,7 +2130,10 @@ class Gate:
                 management.get("dispatchKind") != "closed-v1"
                 or not used
                 or used != identities[: len(used)]
-                or len(used) >= len(observation_declared)
+                or (
+                    mode == "may-have-landed"
+                    and len(used) >= len(observation_declared)
+                )
                 or any(not identity.startswith("observation:") for identity in used)
                 or state.get("managementSkipped")
                 or [event.get("id") for event in events] != used
@@ -2326,6 +2366,10 @@ class Gate:
         contract before settling an otherwise unknown creation acknowledgement.
         """
 
+    def _allow_observation_auth_delete(self, state, job, operation, index):
+        """Closed extension point; the base Gate never permits Auth observation deletes."""
+        return False
+
     def _validate_finish_evidence(self, state):
         """Validate protocol-specific terminal evidence while the lock is held."""
         if _stream_policy(state["plan"]):
@@ -2456,6 +2500,7 @@ class Gate:
                     and operation.get("method") == "POST"
                     and operation.get("path", "").endswith("/accounts:delete")
                     and not recovery
+                    and not self._allow_observation_auth_delete(state, job, operation, index)
                 ):
                     raise ValueError("destructive Auth delete is recovery-only")
                 if (

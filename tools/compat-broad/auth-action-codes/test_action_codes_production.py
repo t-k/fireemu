@@ -173,6 +173,12 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
     assert result["recovery"] == 6
     assert result["reservation"] == "released"
     assert len(_ActionFixture.calls) == 32
+    gate_state = json.loads((tmp_path / "output" / "gate" / "state.json").read_bytes())
+    assert gate_state["managementUsed"] == [
+        "observation:oauth-tokeninfo",
+        "observation:auth-project-readback",
+    ]
+    assert all(event["completed"] and event["workerReaped"] for event in gate_state["managementEvents"])
     frozen_plan = plan_module.campaign_manifest(NONCE, project=descriptor.AUTHORIZED_PROJECT)
     expected_paths = [
         row["path"].format(project=descriptor.AUTHORIZED_PROJECT).lstrip("/")

@@ -1,8 +1,11 @@
 """Campaign manifest for the bounded partition/cursor observation.
 
 The manifest freezes the lane's own source inputs, the wire and resource budget,
-the owner preconditions and the reasons production admission stays closed. It
-contains no transport, no credential handling and no way to open admission.
+the owner preconditions and the reasons its own admission stays closed. It
+contains no transport, no credential handling and no way to open admission:
+the only production path is the O8 launcher (`partition_cursor_o8.py`), which
+takes an independently frozen owner permission, an approval minted outside the
+packet, a private credential handoff and a shared Ledger reservation.
 """
 
 from __future__ import annotations
@@ -27,13 +30,16 @@ ROOT = Path(__file__).resolve().parents[3]
 HERE = Path(__file__).resolve().parent
 TEMPLATE_PROJECT = "template-project"
 TEMPLATE_NONCE = "0" * 32
+# What the manifest itself cannot supply. Each is an owner input the O8 path
+# takes through the frozen permission and the approval; the typed production
+# collector that used to stand here exists now (`partition_cursor_production`).
 BLOCKERS = (
     "owner-permission",
     "execution-window-and-nonce-reservation",
     "cost-and-retention-acceptance",
     "exclusive-collection-group-namespace",
-    "typed-production-collector",
     "recovery-owner",
+    "independent-o7-review",
 )
 _OWNED_DOCUMENTS = PARTITION_DOCUMENTS + CURSOR_DOCUMENTS + 1
 
@@ -124,9 +130,16 @@ def manifest() -> dict[str, Any]:
             "owner identity, permission reference and execution window",
             "fresh nonce reservation and exclusive collection-group namespace",
             "current pricing acceptance and retention bound for the retained bundle",
-            "typed production collector and its raw sidecar retention boundary",
             "named recovery owner for an interrupted run",
+            "independent O7 review of the frozen packet and its approval",
         ],
+        "productionPath": {
+            "launcher": "tools/compat-broad/fs-query-partition-cursor/partition_cursor_o8.py",
+            "descriptor": "tools/compat-broad/o8-core/o4_partition_cursor_descriptor.py",
+            "collector": "tools/compat-broad/fs-query-partition-cursor/partition_cursor_production.py",
+            "gateProjection": "tools/compat-broad/fs-query-partition-cursor/partition_cursor_gate.py",
+            "productionOrigin": "fixed in partition_cursor_wire.PRODUCTION_ORIGIN",
+        },
         "blockers": list(BLOCKERS),
     }
 
@@ -181,8 +194,9 @@ def validate_permission(permission: Any) -> None:
     )
 
 
+# Versioned: v1 and v2 are historical records and stay byte-identical.
 EVIDENCE = (
-    ROOT / "spec/compatibility/broad-runs/fs-query-partition-cursor-preparation-v2.json"
+    ROOT / "spec/compatibility/broad-runs/fs-query-partition-cursor-preparation-v3.json"
 )
 
 

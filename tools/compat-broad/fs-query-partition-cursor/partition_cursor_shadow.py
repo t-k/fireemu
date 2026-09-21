@@ -338,9 +338,10 @@ def residual_documents(
     return group + int(root["status"] == 200) + len(cursor_documents)
 
 
+# Versioned: the v1 and current-v2 records are historical and stay byte-identical.
 SHADOW_RECORD = (
     Path(__file__).resolve().parents[3]
-    / "spec/compatibility/broad-runs/fs-query-partition-cursor-current-v2-local-shadow.json"
+    / "spec/compatibility/broad-runs/fs-query-partition-cursor-current-v3-local-shadow.json"
 )
 
 

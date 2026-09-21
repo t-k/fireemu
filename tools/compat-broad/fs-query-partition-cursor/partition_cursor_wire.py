@@ -1,8 +1,15 @@
-"""Finite numeric-loopback HTTP transport for the local partition/cursor lane.
+"""Finite HTTP transport for the partition/cursor lane: loopback and fixed host.
 
 The fixed child retains exact bounded bytes. Its parent enforces one post-spawn
-request deadline, including body reception and child exit. No retry or production
-entry exists. OS process creation, kill/reap and kernel stalls are not bounded.
+request deadline, including body reception and child exit. No retry exists. OS
+process creation, kill/reap and kernel stalls are not bounded.
+
+Two closed modes share the child. The local mode addresses a numeric loopback
+origin with an explicit port and a placeholder bearer. The production mode
+addresses exactly one fixed origin, `https://firestore.googleapis.com`, with the
+owner's bearer token delivered on the child's stdin, never on its command line.
+A loopback origin is refused in production mode and a non-loopback origin is
+refused in local mode, so neither mode can be steered at the other's target.
 """
 from __future__ import annotations
 
@@ -25,6 +32,19 @@ MAX_RAW_BYTES = 65536
 MAX_INPUT_BYTES = 262144
 MAX_OUTPUT_BYTES = 90000
 REQUEST_SECONDS = 20.0
+# The one production origin this lane can address. Exact string, no port, no
+# path: the child compares it before it opens a socket, and the parent before
+# it spawns the child.
+PRODUCTION_ORIGIN = "https://firestore.googleapis.com"
+PRODUCTION_USER_PROJECT = "fireemu-35fe6"
+# Whole-worker ceiling for one production request: spawn, TLS, body and exit.
+# The owned documents are tiny, so a request that needs longer is a failure the
+# collector records, never a reason to wait.
+PRODUCTION_REQUEST_SECONDS = 5.0
+MAX_BEARER_BYTES = 8192
+MODES = ("local", "production")
+_LOCAL_INPUT_KEYS = frozenset({"origin", "path", "method", "body", "seconds"})
+_PRODUCTION_INPUT_KEYS = _LOCAL_INPUT_KEYS | {"mode", "bearer", "userProject"}
 
 
 def validate_origin(origin: Any) -> None:
@@ -42,6 +62,21 @@ def validate_origin(origin: Any) -> None:
             or parsed.username is not None or parsed.password is not None
             or parsed.path not in ("", "/") or "?" in origin or "#" in origin):
         raise PermissionError("numeric loopback origin with explicit port required")
+
+
+def validate_production_origin(origin: Any) -> None:
+    """Only the fixed production origin; a loopback or any other host is refused."""
+    if not isinstance(origin, str) or origin != PRODUCTION_ORIGIN:
+        raise PermissionError("fixed production origin required")
+
+
+def _bearer(value: Any) -> str:
+    """A bounded, printable-ASCII bearer token; never logged, never in argv."""
+    if (not isinstance(value, str) or not 0 < len(value) <= MAX_BEARER_BYTES
+            or not value.isascii()
+            or any(ord(c) < 33 or ord(c) == 127 for c in value)):
+        raise ValueError("bounded bearer token required")
+    return value
 
 
 def same_json(left: Any, right: Any) -> bool:
@@ -95,8 +130,19 @@ def _duration(value: Any) -> float:
     return seconds
 
 
-def _input(origin: str, request: dict, seconds: float) -> bytes:
-    validate_origin(origin)
+def _input(origin: str, request: dict, seconds: float, *, mode: str = "local",
+           bearer: Any = None, user_project: Any = None) -> bytes:
+    if mode not in MODES:
+        raise ValueError("closed transport mode required")
+    if mode == "production":
+        validate_production_origin(origin)
+        _bearer(bearer)
+        if user_project != PRODUCTION_USER_PROJECT:
+            raise ValueError("fixed quota project required")
+    else:
+        validate_origin(origin)
+        if bearer is not None or user_project is not None:
+            raise ValueError("local mode carries no credential")
     seconds = _duration(seconds)
     if not isinstance(request, dict):
         raise ValueError("local request required")
@@ -110,15 +156,18 @@ def _input(origin: str, request: dict, seconds: float) -> bytes:
     if body is not None and not isinstance(body, dict):
         raise ValueError("object request body required")
     # Encoding also snapshots all caller-owned mutable values before admission.
-    payload = json.dumps({"origin": origin.rstrip("/"), "method": method, "path": path,
-                          "body": body, "seconds": seconds}, allow_nan=False).encode("utf-8")
+    value: dict[str, Any] = {"origin": origin.rstrip("/"), "method": method, "path": path,
+                             "body": body, "seconds": seconds}
+    if mode == "production":
+        value.update(mode="production", bearer=bearer, userProject=user_project)
+    payload = json.dumps(value, allow_nan=False).encode("utf-8")
     if len(payload) > MAX_INPUT_BYTES:
         raise ValueError("local request exceeds bound")
     return payload
 
 
-def request(origin: str, operation: dict, *, timeout: float = REQUEST_SECONDS) -> dict:
-    payload = _input(origin, operation, timeout)
+def _spawn(payload: bytes, timeout: float) -> dict:
+    """Run the fixed child once on this file; the payload never touches argv."""
     env = {k: os.environ[k] for k in ("PATH", "LANG", "SYSTEMROOT") if k in os.environ}
     try:
         result = subprocess.run([sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve())],
@@ -128,6 +177,10 @@ def request(origin: str, operation: dict, *, timeout: float = REQUEST_SECONDS) -
         raise ValueError("local partition request deadline exceeded") from None
     except OSError:
         raise ValueError("local partition worker unavailable") from None
+    return _receipt(result)
+
+
+def _receipt(result: subprocess.CompletedProcess) -> dict:
     try:
         if result.returncode != 0 or not 0 < len(result.stdout) <= MAX_OUTPUT_BYTES:
             raise ValueError("worker failed")
@@ -143,15 +196,53 @@ def request(origin: str, operation: dict, *, timeout: float = REQUEST_SECONDS) -
         raise ValueError("unusable local partition response") from None
 
 
+def request(origin: str, operation: dict, *, timeout: float = REQUEST_SECONDS) -> dict:
+    """One local-mode exchange against a numeric loopback origin."""
+    return _spawn(_input(origin, operation, timeout), timeout)
+
+
+def production_request(operation: dict, bearer: str, *, origin: str = PRODUCTION_ORIGIN,
+                       timeout: float = PRODUCTION_REQUEST_SECONDS,
+                       deadline: float | None = None) -> dict:
+    """One production-mode exchange against the fixed origin only.
+
+    `deadline` is an absolute `time.monotonic()` instant the whole exchange must
+    finish by; the worker ceiling is the smaller of it and `timeout`. A loopback
+    origin is refused here before any file or process exists.
+    """
+    validate_production_origin(origin)
+    seconds = _duration(timeout)
+    if seconds > PRODUCTION_REQUEST_SECONDS:
+        raise ValueError("production request ceiling exceeded")
+    if deadline is not None:
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise ValueError("finite absolute deadline required")
+        import time
+
+        seconds = min(seconds, deadline - time.monotonic())
+        if seconds <= 0:
+            raise ValueError("production request deadline")
+    payload = _input(origin, operation, seconds, mode="production", bearer=bearer,
+                     user_project=PRODUCTION_USER_PROJECT)
+    return _spawn(payload, seconds)
+
+
 def _exchange(value: Any) -> dict:
-    if not isinstance(value, dict) or set(value) != {"origin", "path", "method", "body", "seconds"}:
+    if not isinstance(value, dict) or set(value) not in (_LOCAL_INPUT_KEYS, _PRODUCTION_INPUT_KEYS):
         raise ValueError("invalid worker input")
-    _input(value["origin"], value, value["seconds"])
+    production = "mode" in value
+    _input(value["origin"], value, value["seconds"],
+           mode="production" if production else "local",
+           bearer=value.get("bearer"), user_project=value.get("userProject"))
     body = value["body"]
     data = None if body is None else json.dumps(body, allow_nan=False).encode("utf-8")
+    headers = {"Authorization": "Bearer owner",
+               "Content-Type": "application/json", "Accept": "application/json"}
+    if production:
+        headers["Authorization"] = "Bearer " + value["bearer"]
+        headers["x-goog-user-project"] = value["userProject"]
     message = urllib.request.Request(value["origin"] + value["path"], data=data,
-                                    method=value["method"], headers={"Authorization": "Bearer owner",
-                                    "Content-Type": "application/json", "Accept": "application/json"})
+                                    method=value["method"], headers=headers)
     opener = urllib.request.build_opener(NoRedirect(), urllib.request.ProxyHandler({}))
     try:
         response = opener.open(message, timeout=min(value["seconds"], 10.0))

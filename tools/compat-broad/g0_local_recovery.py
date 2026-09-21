@@ -291,6 +291,29 @@ def _freshness_handshake(output: Path, origins: dict[str, str]) -> None:
     _validate_launch_receipt(output, handshake)
 
 
+def _wire_history_matches_reservations(state: dict, results: dict) -> bool:
+    """Derive the reservation proof from the immutable journal and saved rows."""
+    events = state.get("events", [])
+    for key, result in results.items():
+        if not result.get("recordingComplete") or not result.get("cleanupComplete"):
+            return False
+        for phase, rows in (("observation", result.get("rows", [])), ("recovery", result.get("cleanup", []))):
+            matching = [event for event in events if event.get("job") == key and event.get("phase") == phase]
+            if len(matching) != len(rows):
+                return False
+            for row, event in zip(rows, matching, strict=True):
+                if row.get("status") is None:
+                    return False
+                if (
+                    event.get("completed") is not True
+                    or event.get("requestDigest") != digest(row.get("request"))
+                    or event.get("responseDigest") != digest(row.get("body"))
+                    or event.get("status") != row.get("status")
+                ):
+                    return False
+    return True
+
+
 def _worker(output: Path, key: str, origins: dict[str, str]) -> None:
     plan = json.loads((output / "gate/state.json").read_bytes())["plan"]
     command = subprocess.check_output(
@@ -346,6 +369,7 @@ def execute(output: Path, origins: dict[str, str]) -> bool:
         else {"recordingComplete": False, "cleanupComplete": False}
         for key in jobs
     }
+    wire_history_matches = _wire_history_matches_reservations(state, results)
     events = state["events"]
     invariant = (
         state["total"] <= 26
@@ -367,6 +391,7 @@ def execute(output: Path, origins: dict[str, str]) -> bool:
             "unrecovered": [key for key, result in results.items() if not result["cleanupComplete"]],
             "productionExecuted": False,
             "sharedConstraints": invariant,
+            "wireHistoryMatchesReservations": wire_history_matches,
             "jobs": results,
             "gate": state,
             "manifestSha256": digest(state["plan"]),

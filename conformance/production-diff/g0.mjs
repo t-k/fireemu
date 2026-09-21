@@ -61,7 +61,7 @@ export function g0SessionPythonSource() {
     "firestore=os.environ.get('FIRESTORE_EMULATOR_HOST'); auth=os.environ.get('FIREBASE_AUTH_EMULATOR_HOST')",
     "if not firestore or not auth: raise ValueError('g0-owned-origins-missing')",
     "origins={'firestore': local_origin('http://' + firestore), 'auth': local_origin('http://' + auth)}",
-    "plan=json.loads((out/'program.json').read_bytes()); canonical_program_digest=digest(plan); plan['observerSha256']=observer_digest(); plan['localOrigins']=origins",
+    "plan=json.loads((out/'program.json').read_bytes()); canonical_program_digest=digest(plan); plan['observerSha256']=observer_digest(); plan['localOrigins']=origins; plan['transport']='local-only'",
     "create(out/'gate', plan)",
     "if not execute(out, origins): raise SystemExit(3)",
   ].join("\n");

@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import copy
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -296,6 +299,13 @@ def test_pending_rows_are_recorded_with_their_reasons() -> None:
         pending["differences"]
         == shadow["execution"]["ALL"]["execution"]["pendingDifferences"]
     )
+    profile = shadow["execution"]["ALL"]["execution"]["indexConfiguration"].get(
+        "profile", "historical"
+    )
+    if profile == "nx-local":
+        assert pending["differences"] == []
+        assert shadow["execution"]["ALL"]["execution"]["pendingRows"] == []
+        return
     for difference in pending["differences"]:
         assert difference["pending"] is True
         assert difference["reason"]
@@ -306,6 +316,165 @@ def test_pending_rows_are_recorded_with_their_reasons() -> None:
     }
     assert len(reasons) == 1
     assert "index configuration" in next(iter(reasons))
+
+
+def test_nx_local_profile_cannot_hide_mismatch_or_identity_gap(tmp_path: Path) -> None:
+    import package_03
+    import broad
+
+    published = load(SHADOW)
+    previous = published["execution"]["ALL"]["execution"]
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    run = tmp_path / "retained-nx-shadow"
+    run.mkdir()
+    try:
+        supervisor = {
+            "executionCommit": commit,
+            "configurationDigest": "unused-before-write",
+            "indexConfiguration": {
+                "profile": "nx-local",
+                "sha256": package_03.campaign.INDEXES_SHA256_AFTER,
+                "sourceCommit": None,
+            },
+            "ownedProcess": {"pid": 1, "stopped": True, "listenersClosed": True},
+            "status": "completed",
+            "build": {
+                "command": ["offline-test-build"],
+                "inputs": package_03.runtime_inputs_at_commit(commit, ROOT),
+                "rustc": "retained-test-rustc",
+                "artifactSha256": "unused-before-write",
+            },
+        }
+        result = {
+            key: copy.deepcopy(previous[key])
+            for key in (
+                "recordingComplete",
+                "stateValidation",
+                "cleanupComplete",
+                "cleanupValidated",
+                "receiptValidated",
+                "semanticMismatches",
+                "pendingDifferences",
+                "pendingRows",
+                "infrastructureFailures",
+                "project",
+            )
+        }
+        result.update(
+            campaignId=package_03.CAMPAIGN,
+            completed=True,
+            rows=[{}],
+            cleanup=[{}],
+            resourceAbsence={"retained-doc": True},
+            recordingComplete=True,
+            stateValidation=True,
+            cleanupComplete=True,
+            cleanupValidated=True,
+            receiptValidated=True,
+            semanticMismatches=[],
+            pendingDifferences=[],
+            pendingRows=[],
+            infrastructureFailures=[],
+        )
+        binding = {
+            "bound": True,
+            "sourceInputsBefore": package_03.source_inputs(),
+            "sourceInputsAfter": package_03.source_inputs(),
+            "childSourceInputs": package_03.source_inputs(),
+            "supervisorManifestSha256": "unused-before-write",
+        }
+        index_bytes, index_sha, _ = broad.index_bytes_for_profile("nx-local")
+        (run / "indexes.json").write_bytes(index_bytes)
+        actual_config = {
+            **broad.CONFIG,
+            "daemon": {"authProjectNumbers": {}},
+            "firestore": {
+                **broad.FIRESTORE_CONFIG,
+                "indexFile": "/retained/private/indexes.json",
+            },
+        }
+        config_bytes = json.dumps(actual_config).encode()
+        (run / "configuration.json").write_bytes(config_bytes)
+        supervisor["configurationDigest"] = hashlib.sha256(
+            (run / "configuration.json").read_bytes()
+        ).hexdigest()
+        supervisor["configuration"] = {
+            **actual_config,
+            "firestore": {
+                **actual_config["firestore"],
+                "indexFile": "<owned-private-index-file>",
+            },
+        }
+        artifact = b"retained-fireemu-artifact"
+        (run / "fireemu").write_bytes(artifact)
+        supervisor["build"]["artifactSha256"] = hashlib.sha256(artifact).hexdigest()
+        supervisor["indexConfiguration"]["value"] = json.loads(index_bytes)
+        (run / "manifest.json").write_text(json.dumps(supervisor))
+        binding["supervisorManifestSha256"] = hashlib.sha256(
+            (run / "manifest.json").read_bytes()
+        ).hexdigest()
+        (run / "result.json").write_text(json.dumps(result))
+        (run / "shadow-binding.json").write_text(json.dumps(binding))
+        shadow = package_03.shadow_record(run, commit)
+    finally:
+        import shutil
+
+        shutil.rmtree(run)
+
+    package_03.validate_nx_local_shadow(
+        shadow,
+        expected_commit=commit,
+        expected_artifact_sha256=supervisor["build"]["artifactSha256"],
+        expected_runtime_inputs_digest=package_03.digest(supervisor["build"]["inputs"]),
+        expected_configuration_digest=supervisor["configurationDigest"],
+    )
+    published_manifest = package_03.manifest(load(MANIFEST), shadow, commit)
+    published_binding = package_03.binding(
+        load(BINDING), published_manifest, shadow, commit
+    )
+    assert published_manifest["indexConfiguration"]["shadowDifference"] is False
+    assert published_binding["source"]["commit"] == commit
+    run.mkdir()
+    (run / "manifest.json").write_text(json.dumps(supervisor))
+    (run / "configuration.json").write_bytes(config_bytes)
+    (run / "indexes.json").write_bytes(index_bytes)
+    (run / "fireemu").write_bytes(artifact)
+    (run / "result.json").write_text(json.dumps(result))
+    binding["supervisorManifestSha256"] = "0" * 64
+    (run / "shadow-binding.json").write_text(json.dumps(binding))
+    with pytest.raises(SystemExit, match="fully recorded, source-bound"):
+        package_03.shadow_record(run, commit)
+    import shutil
+
+    shutil.rmtree(run)
+    mutations = [
+        ("pendingDifferences", [{"pending": True}]),
+        ("completed", False),
+        ("artifactSha256", "d" * 64),
+        ("indexSourceCommit", "0" * 40),
+    ]
+    for key, value in mutations:
+        mutated = copy.deepcopy(shadow)
+        if key == "artifactSha256":
+            mutated["execution"]["ALL"]["artifact"]["sha256"] = value
+        elif key == "indexSourceCommit":
+            mutated["execution"]["ALL"]["execution"]["indexConfiguration"]["sourceCommit"] = value
+        else:
+            mutated["execution"]["ALL"]["execution"][key] = value
+        with pytest.raises(ValueError, match="nx-local shadow"):
+            package_03.validate_nx_local_shadow(
+                mutated,
+                expected_commit=commit,
+        expected_artifact_sha256=supervisor["build"]["artifactSha256"],
+        expected_runtime_inputs_digest=package_03.digest(supervisor["build"]["inputs"]),
+                expected_configuration_digest="a" * 64,
+            )
+
+    for value in (None, "g" * 40, "0" * 40):
+        mutated = copy.deepcopy(shadow)
+        mutated["execution"]["ALL"]["executionCommit"] = value
+        with pytest.raises(ValueError, match="nx-local shadow"):
+            package_03.validate_nx_local_shadow(mutated, expected_commit=commit)
 
 
 def test_the_document_name_figures_are_computed_not_written_by_hand() -> None:
@@ -348,7 +517,11 @@ def test_the_shadow_index_configuration_is_cross_checked() -> None:
         declared = configuration["shadowRanUnder"][part]
         recorded = shadow["execution"][part]["execution"]["indexConfiguration"]
         assert declared == recorded, part
-        assert declared["sha256"] != configuration["conformanceIndexesSha256Before"]
+        if recorded.get("profile", "historical") == "nx-local":
+            assert declared["sha256"] == configuration["conformanceIndexesSha256After"]
+            assert not configuration["shadowDifference"]
+        else:
+            assert declared["sha256"] != configuration["conformanceIndexesSha256Before"]
 
 
 def test_the_declared_data_cost_is_accounted_for_in_the_envelope() -> None:

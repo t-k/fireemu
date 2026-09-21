@@ -2,6 +2,11 @@
 
 import pytest
 from broad_contract import catalog, compare_program, local_origin
+from broad import (
+    HISTORICAL_INDEX_SHA256,
+    INDEX_NX_LOCAL_SHA256,
+    index_bytes_for_profile,
+)
 
 
 def program():
@@ -83,6 +88,22 @@ def test_remote_or_ambiguous_origins_are_refused(value):
 
 def test_os_assigned_loopback_origin_is_accepted():
     assert local_origin("http://127.0.0.1:12345") == "http://127.0.0.1:12345"
+
+
+def test_historical_index_profile_is_unchanged():
+    value, sha256, source_commit = index_bytes_for_profile("historical")
+    assert sha256 == HISTORICAL_INDEX_SHA256
+    assert source_commit == "2526c61eda5fc53ac91250307786127ae3c601be"
+    assert value.endswith(b"\n")
+
+
+def test_nx_local_index_profile_is_closed_and_exact():
+    value, sha256, source_commit = index_bytes_for_profile("nx-local")
+    assert sha256 == INDEX_NX_LOCAL_SHA256
+    assert source_commit is None
+    assert value.count(b'"collectionGroup": "nx"') == 1
+    with pytest.raises(ValueError, match="unknown local index profile"):
+        index_bytes_for_profile("arbitrary")
 
 
 def test_inventory_retains_unexecuted_editions_and_protocols():

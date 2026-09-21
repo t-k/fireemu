@@ -30,6 +30,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(ROOT / "tools/compat-broad"))
+sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 sys.path.insert(0, str(HERE))
 
 import compiler_03
@@ -38,6 +39,7 @@ import limits_03_descriptor as campaign
 import limits_03_indexes
 import limits_03_preflight as preflight
 from broad_contract import digest
+from evidence_common import runtime_inputs_at_commit
 from compiler_03 import CAMPAIGN, DOCUMENT_NAME_MAX, name_charge_floor
 from shadow_03 import source_inputs
 
@@ -83,6 +85,63 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def validate_nx_local_shadow(
+    shadow: dict,
+    *,
+    expected_commit: str | None = None,
+    expected_artifact_sha256: str | None = None,
+    expected_runtime_inputs_digest: str | None = None,
+    expected_configuration_digest: str | None = None,
+) -> None:
+    """Require complete, source-bound runtime evidence before clearing G1."""
+    part = shadow["execution"]["ALL"]
+    execution = part["execution"]
+    index = execution.get("indexConfiguration", {})
+    if index.get("profile", "historical") != "nx-local":
+        return
+    if index.get("sha256") != campaign.INDEXES_SHA256_AFTER:
+        raise ValueError("nx-local shadow index digest is not the declared after state")
+    if index.get("sourceCommit") is not None:
+        raise ValueError("nx-local shadow index source commit is not local")
+    execution_commit = part.get("executionCommit")
+    if not isinstance(execution_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", execution_commit):
+        raise ValueError("nx-local shadow source commit identity is missing")
+    if expected_commit is not None and execution_commit != expected_commit:
+        raise ValueError("nx-local shadow source commit differs")
+    if (
+        execution.get("semanticMismatches")
+        or execution.get("pendingDifferences")
+        or execution.get("pendingRows")
+        or execution.get("recordingComplete") is not True
+        or execution.get("stateValidation") is not True
+        or execution.get("cleanupComplete") is not True
+        or execution.get("cleanupValidated") is not True
+        or execution.get("receiptValidated") is not True
+        or execution.get("completed") is not True
+        or execution.get("allOwnedResourcesAbsentAfterRecovery") is not True
+        or execution.get("supervisorStatus") != "completed"
+        or not isinstance(execution.get("configurationDigest"), str)
+    ):
+        raise ValueError("nx-local shadow is incomplete or mismatched")
+    if not re.fullmatch(r"[0-9a-f]{64}", execution["configurationDigest"]):
+        raise ValueError("nx-local shadow configuration identity is missing")
+    process = execution.get("ownedProcess", {})
+    artifact = shadow["execution"]["ALL"].get("artifact", {})
+    if process.get("stopped") is not True or process.get("listenersClosed") is not True:
+        raise ValueError("nx-local shadow process cleanup is unverified")
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact.get("sha256", "")) or not re.fullmatch(
+        r"[0-9a-f]{64}", artifact.get("runtimeInputsDigest", "")
+    ):
+        raise ValueError("nx-local shadow artifact identity is missing")
+    for actual, expected, label in (
+        (artifact["sha256"], expected_artifact_sha256, "artifact"),
+        (artifact["runtimeInputsDigest"], expected_runtime_inputs_digest, "runtime inputs"),
+        (execution["configurationDigest"], expected_configuration_digest, "configuration"),
+    ):
+        if expected is not None and actual != expected:
+            raise ValueError(f"nx-local shadow {label} identity differs")
+
+
 def head_commit() -> str:
     if subprocess.run(
         ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"],
@@ -120,11 +179,21 @@ def shadow_record(run: Path, commit: str) -> dict:
     supervisor = _load(run / "manifest.json")
     result = _load(run / "result.json")
     binding = _load(run / "shadow-binding.json")
+    supervisor_manifest_sha256 = _sha(run / "manifest.json")
+    retained_artifact = run / "fireemu"
+    retained_configuration = run / "configuration.json"
+    retained_indexes = run / "indexes.json"
     if (
         result.get("recordingComplete") is not True
         or result.get("stateValidation") is not True
         or binding.get("bound") is not True
         or result.get("campaignId") != CAMPAIGN
+        or binding.get("supervisorManifestSha256") != supervisor_manifest_sha256
+        or binding.get("sourceInputsAfter") != source_inputs()
+        or binding.get("childSourceInputs") != source_inputs()
+        or not retained_artifact.is_file()
+        or not retained_configuration.is_file()
+        or not retained_indexes.is_file()
     ):
         raise SystemExit("a fully recorded, source-bound shadow run is required")
     # Preserve the distinction between a fully closed local run and a recorded
@@ -141,6 +210,46 @@ def shadow_record(run: Path, commit: str) -> dict:
     execution_commit = supervisor.get("executionCommit")
     if not isinstance(execution_commit, str) or len(execution_commit) != 40:
         raise SystemExit("the shadow run records no execution commit")
+    try:
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{execution_commit}^{{commit}}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", execution_commit, commit],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        )
+        expected_runtime_inputs = runtime_inputs_at_commit(execution_commit, ROOT)
+    except (subprocess.CalledProcessError, ValueError) as error:
+        raise SystemExit("the shadow execution commit is not a current ancestor") from error
+    build = supervisor["build"]
+    if build.get("inputs") != expected_runtime_inputs:
+        raise SystemExit("the shadow runtime inputs differ from its execution commit")
+    if _sha(retained_artifact) != build.get("artifactSha256"):
+        raise SystemExit("the retained artifact differs from the build identity")
+    actual_config = _load(retained_configuration)
+    if _sha(retained_configuration) != supervisor.get("configurationDigest"):
+        raise SystemExit("the retained configuration differs from its digest")
+    expected_config = copy.deepcopy(supervisor.get("configuration"))
+    if not isinstance(expected_config, dict):
+        raise SystemExit("the shadow run records no configuration projection")
+    actual_index_path = actual_config.get("firestore", {}).get("indexFile")
+    if not isinstance(actual_index_path, str):
+        raise SystemExit("the retained configuration has no owned index file")
+    projected_actual = copy.deepcopy(actual_config)
+    projected_actual.setdefault("firestore", {})["indexFile"] = "<owned-private-index-file>"
+    if projected_actual != expected_config:
+        raise SystemExit("the retained configuration differs from its projection")
+    index_profile = supervisor.get("indexConfiguration", {}).get("profile", "historical")
+    if index_profile == "nx-local":
+        if _sha(retained_indexes) != campaign.INDEXES_SHA256_AFTER:
+            raise SystemExit("the retained nx-local index bytes differ from the after state")
+        if json.loads(retained_indexes.read_bytes()) != supervisor["indexConfiguration"].get("value"):
+            raise SystemExit("the retained nx-local index readback differs")
     execution = {
         key: result[key]
         for key in (
@@ -166,13 +275,15 @@ def shadow_record(run: Path, commit: str) -> dict:
     execution["ownedDocuments"] = len(result["resourceAbsence"])
     execution["configurationDigest"] = supervisor["configurationDigest"]
     execution["indexConfiguration"] = {
-        key: supervisor["indexConfiguration"][key] for key in ("sha256", "sourceCommit")
+        key: supervisor["indexConfiguration"][key]
+        for key in ("sha256", "sourceCommit", "profile")
+        if key in supervisor["indexConfiguration"]
     }
+    index_profile = execution["indexConfiguration"].get("profile", "historical")
     execution["ownedProcess"] = {
         key: supervisor["ownedProcess"][key]
         for key in ("pid", "stopped", "listenersClosed")
     }
-    build = supervisor["build"]
     execution["supervisorStatus"] = supervisor.get("status")
     execution["completed"] = completed
     execution["gateCloseRefused"] = not completed and any(
@@ -192,10 +303,11 @@ def shadow_record(run: Path, commit: str) -> dict:
             "Local artifact evidence only. The executed nonces, the owned resource "
             "names and the retained binaries live in private output directories "
             "and are not published here. This is not a production observation and "
-            "promotes nothing. The local shadow supervisor pins the historical "
-            "index configuration and verifies its digest, so it cannot apply the "
-            "declared exemption; the document-name rows are pending for exactly "
-            "that reason."
+            "promotes nothing. The local shadow supervisor records the closed "
+            f"{index_profile} index profile and verifies its digest. "
+            "The historical profile cannot apply the declared exemption; the "
+            "nx-local profile applies the exact local after-state and does not "
+            "carry those pending rows."
         )
         + (
             ""
@@ -225,6 +337,13 @@ def shadow_record(run: Path, commit: str) -> dict:
             }
         },
     }
+    validate_nx_local_shadow(
+        record,
+        expected_commit=commit,
+        expected_artifact_sha256=build["artifactSha256"],
+        expected_runtime_inputs_digest=digest(build["inputs"]),
+        expected_configuration_digest=supervisor["configurationDigest"],
+    )
     if _NONCE.search(json.dumps(record)):
         raise SystemExit("the shadow record must not publish a nonce")
     return record
@@ -293,6 +412,7 @@ def manifest(
     production_receipt: Path | None = None,
 ) -> dict:
     """The manifest, with every computed member recomputed over HEAD."""
+    validate_nx_local_shadow(shadow, expected_commit=commit)
     value = _rebind_text(copy.deepcopy(previous), commit)
     figures = campaign.budget_figures()
     plan = campaign.figure_plan()
@@ -387,6 +507,11 @@ def manifest(
             "ALL": shadow["execution"]["ALL"]["execution"]["indexConfiguration"]
         },
     }
+    shadow_profile = value["indexConfiguration"]["shadowRanUnder"]["ALL"].get(
+        "profile", "historical"
+    )
+    if shadow_profile == "nx-local":
+        value["indexConfiguration"]["shadowDifference"] = False
     for case in value["cases"]:
         if case.get("limitId") == "FS-LIMIT-DOCUMENT-NAME-BYTES":
             prefix = len("projects/fireemu-35fe6/databases/(default)/documents/")

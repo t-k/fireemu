@@ -30,7 +30,7 @@ ARTIFACT_PROFILE = "auth-action-codes-local-shadow-v1"
 LANE_DIRECTORY = "tools/compat-broad/auth-action-codes"
 COLLECTOR_ENTRY = f"{LANE_DIRECTORY}/action_codes_collector.py"
 COMPARATOR_ENTRY = f"{LANE_DIRECTORY}/action_codes_comparator.py"
-WORKER_ENTRY = f"{LANE_DIRECTORY}/action_codes_remote_transport.py"
+WORKER_ENTRY = "tools/compat-broad/auth-credential-tokens/credential_https_worker.py"
 GATE_ENTRY = f"{LANE_DIRECTORY}/action_codes_plan.py"
 SHARED_SOURCES = (
     "tools/compat-broad/broad_contract.py",
@@ -38,6 +38,7 @@ SHARED_SOURCES = (
     "tools/compat-broad/production-admission/reservations.py",
     "tools/compat-broad/o8-core/o8_admission.py",
     "tools/compat-broad/o8-core/o8_campaign.py",
+    "tools/compat-broad/auth-credential-tokens/credential_https_worker.py",
 )
 ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/shared_gate.py",
@@ -155,7 +156,17 @@ def validate_permission(permission, plan, *, source_inputs=None, source_commit=N
 
 
 def transport_bound(value, *, binding, binding_digest, capability=None):
-    raise ValueError("production Action transport remains closed")
+    if capability is None or not isinstance(value, dict):
+        raise ValueError("closed Action wire call required")
+    required = {"stageId", "project", "nonce", "body", "deadline", "token", "apiKey", "fixtureOrigin"}
+    if set(value) != required:
+        raise ValueError("closed Action credential envelope required")
+    return action_codes_remote_transport._transmit_bound(
+        capability,
+        value,
+        binding=binding,
+        binding_digest=binding_digest,
+    )
 
 
 def binding_verifier(binding, binding_digest, frozen):

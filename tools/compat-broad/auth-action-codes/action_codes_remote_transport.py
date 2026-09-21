@@ -295,20 +295,59 @@ def send(
     deadline: float,
     binding: bytes,
     binding_digest: str,
+    token: str | None = None,
+    api_key: str | None = None,
+    fixture_origin: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Send one ordinary observation through one consumed O8 capability."""
     if not hasattr(capability, "_transmit"):
         raise ValueError("O8 capability required")
     if binding != capability._binding or binding_digest != capability.binding_digest:
         raise ValueError("production capability binding differs")
-    return capability._transmit(
-        {
+    envelope = {
             "stageId": stage_id,
             "project": project,
             "nonce": nonce,
             "body": body,
             "deadline": deadline,
-        }
+    }
+    if token is not None or api_key is not None or fixture_origin is not None:
+        if not all(isinstance(value, str) and value for value in (token, api_key, fixture_origin)):
+            raise ValueError("closed Action credential envelope required")
+        envelope.update(token=token, apiKey=api_key, fixtureOrigin=fixture_origin)
+    return capability._transmit(envelope)
+
+
+def _transmit_bound(capability, value, *, binding, binding_digest):
+    """Adapt the O8 envelope to the existing bounded credential worker."""
+    if not isinstance(value, dict):
+        raise ValueError("closed Action credential envelope required")
+    stage_id = value["stageId"]
+    project = value["project"]
+    nonce = value["nonce"]
+    if project != "fireemu-35fe6" or NONCE.fullmatch(nonce) is None:
+        raise ValueError("authorized Action project and nonce required")
+    stage = _stage(_freeze(_canonical_plan(project, nonce)), stage_id)
+    body = value["body"]
+    if not isinstance(body, dict) or set(body) != set(stage["body"]):
+        raise ValueError("Action body shape differs")
+    path = stage["path"].format(project=project).lstrip("/")
+    declared = {
+        "kind": "action-recovery" if stage_id.startswith("recover-") else "action-stage",
+        "path": path,
+        "body": body,
+        "owner": stage["routeClass"] == "admin",
+    }
+    return credential_remote.transmit(
+        declared,
+        body,
+        token=value["token"],
+        api_key=value["apiKey"],
+        deadline=value["deadline"],
+        capability=capability,
+        binding=binding,
+        binding_digest=binding_digest,
+        fixture_origin=value["fixtureOrigin"],
     )
 
 

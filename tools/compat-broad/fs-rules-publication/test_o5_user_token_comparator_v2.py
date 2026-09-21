@@ -268,6 +268,25 @@ def test_a_non_string_in_a_principal_slot_is_unmapped() -> None:
     )
 
 
+def test_an_unmapped_principal_does_not_validate_the_acquisition() -> None:
+    """Invariant: ``acquisitionValidated`` is true exactly when ``errors`` is
+    empty. An unmapped principal slot is incomplete evidence, like the
+    neighbouring uid-shaped string the redaction missed, and neither
+    validates the acquisition."""
+    production, local, plan = bound_pair()
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "stranger"
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert result["errors"] != []
+    assert result["acquisitionValidated"] is False
+    assert result["promotionReady"] is False
+    local["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    production["rows"][0]["observed"]["fields"]["ownerUid"] = "principal:owner-a"
+    result = compare(production, local, plan)
+    assert result["errors"] == []
+    assert result["acquisitionValidated"] is True
+
+
 def test_an_unmapped_principal_on_both_sides_never_matches() -> None:
     production, local, plan = bound_pair()
     production["rows"][0]["observed"]["fields"]["ownerUid"] = "stranger"

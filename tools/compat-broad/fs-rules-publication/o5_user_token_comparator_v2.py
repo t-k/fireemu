@@ -1235,7 +1235,11 @@ def compare(
                 side, name, key = reason.split(":", 2)
                 errors.append(f"{side}:{name}:{row['caseId']}:{key}")
     if errors:
+        # Invariant: acquisitionValidated == (errors == []). A row whose
+        # principal slot has no binding is incomplete evidence, exactly like
+        # a uid-shaped string the redaction missed, and neither validates.
         result["errors"] = errors
+        result["acquisitionValidated"] = False
         return result
     if all(row["classification"] == MATCH for row in rows):
         result["classification"] = MATCH

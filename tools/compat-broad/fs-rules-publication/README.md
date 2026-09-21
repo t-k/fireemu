@@ -178,7 +178,9 @@ compared as the logical principal each side's binding maps it to
 `other-b` is a `SEMANTIC_MISMATCH` on that row), because the two runs mint
 different accounts by construction; a value neither binding maps is
 `principal-unmapped` and the result is `INDETERMINATE` with the row marked
-`INDETERMINATE` and the condition summary following the weakest row. `observed.code`
+`INDETERMINATE`, `acquisitionValidated` false (the invariant is
+`acquisitionValidated == (errors == [])`) and the condition summary following
+the weakest row. `observed.code`
 is recorded but not compared: the local transport never sets it and a
 production transport's code vocabulary is unobserved. A production release
 must be named by its Rules API resource (`projects/<p>/releases/<n>` or

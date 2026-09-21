@@ -941,8 +941,12 @@ class Ledger:
                     _recovery_child_claim(child["claim"])
                     if child.get("parentClaimDigest") != row["claimDigest"] or child.get("claimDigest") != digest(child["claim"]):
                         raise ValueError("recovery child parent binding changed")
-                    if child.get("state") != "allocated" or child.get("envelopeDigest") not in state.get("recoveryEnvelopes", {}):
+                    if child.get("state") not in {"allocated", "settled"} or child.get("envelopeDigest") not in state.get("recoveryEnvelopes", {}):
                         raise ValueError("recovery child state changed")
+                    if child.get("state") == "settled":
+                        if not isinstance(child.get("receiptDigest"), str) or not 1 <= len(child["receiptDigest"]) <= 256:
+                            raise ValueError("recovery settlement receipt changed")
+                        _hash(child.get("finalGateDigest"))
                     _number(child.get("deadline"))
                     if child["deadline"] > child["claim"]["expiresAt"] or child["deadline"] > state["recoveryEnvelopes"][child["envelopeDigest"]]["envelope"]["expiresAt"]:
                         raise ValueError("recovery child deadline changed")

@@ -213,7 +213,7 @@ def test_bound_recovery_claim_rejects_forged_or_parent_ticket(tmp_path, mutation
         ledger.bound_recovery_claim(forged)
 
 
-def test_settle_recovery_child_refuses_incomplete_real_gate_without_mutation(tmp_path):
+def test_settle_recovery_child_uses_completed_real_gate_and_is_idempotent(tmp_path):
     ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
     child_ticket = ledger.begin_recovery_extension(
         parent, child, envelope, parent_plan, child_plan, now=1100,
@@ -222,8 +222,35 @@ def test_settle_recovery_child_refuses_incomplete_real_gate_without_mutation(tmp
     create_gate(child["gatePath"], child_plan)
     gate = Gate(child["gatePath"], reservations.RECOVERY_GATE_JOB)
     gate.claim()
+    operations = child_plan["jobs"][reservations.RECOVERY_GATE_JOB]["recovery"]
+    for operation in operations:
+        wire_operation = dict(operation)
+        if operation["kind"] == "recovery-conditional-delete":
+            # The preceding typed-absent inspection makes this registered
+            # cleanup slot a real Gate skip; no parent proof is fabricated.
+            wire_operation.pop("versionFrom")
+        gate.dispatch(
+            wire_operation,
+            True,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
+    gate.finish()
+    settled = ledger.settle_recovery_child(
+        child_ticket, receipt_digest="receipt-correlation", now=10**12
+    )
+    assert settled == child_ticket
+    child_row = ledger.snapshot()["reservations"][parent["reservation"]]["recoveryChildren"][0]
+    assert child_row["state"] == "settled"
+    assert ledger.settle_recovery_child(child_ticket, receipt_digest="receipt-correlation") == child_ticket
     before = ledger.snapshot()
-    with pytest.raises(ValueError, match="terminal evidence incomplete"):
+    with pytest.raises(ValueError, match="different recovery settlement"):
+        ledger.settle_recovery_child(child_ticket, receipt_digest="other-receipt")
+    assert ledger.snapshot() == before
+    gate_state_path = Path(child["gatePath"]) / "state.json"
+    gate_state = json.loads(gate_state_path.read_text())
+    gate_state["planDigest"] = "0" * 64
+    _save(Path(child["gatePath"]), gate_state)
+    with pytest.raises(ValueError):
         ledger.settle_recovery_child(child_ticket, receipt_digest="receipt-correlation")
     assert ledger.snapshot() == before
 

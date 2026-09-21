@@ -62,19 +62,26 @@ pub fn origin_is_local(origin: &str) -> bool {
     authority_is_loopback(authority)
 }
 
-/// Request fields whose presence marks a request as issued by a web page rather than by a
-/// process.
+/// Request fields whose presence is evidence that a request was issued by a web page rather
+/// than by a process.
 ///
 /// `Origin` alone is not enough to rely on: it is attached to the requests a page makes that
 /// need CORS, but the decision of a privileged route must not hinge on one header an old or
-/// unusual browser may omit. `Sec-Fetch-*` is attached by every current browser and cannot be
-/// set by page script; `Referer` and `Cookie` are attached by browsers that predate
-/// `Sec-Fetch-*`. A process-issued request (a test library running under Node, the CLI) sends
-/// none of them, which is what keeps the unauthenticated compatibility paths working.
+/// unusual browser may omit. `Sec-Fetch-Site` and `Sec-Fetch-Dest` are attached by every
+/// current browser to every request and cannot be set or removed by page script; `Referer`
+/// and `Cookie` are attached by browsers that predate `Sec-Fetch-*`.
+///
+/// `Sec-Fetch-Mode` is deliberately not in this set. Node's built-in `fetch` (undici, Node 18
+/// and later) attaches `sec-fetch-mode: cors` to every request it makes and a script cannot
+/// remove it (it is a forbidden header name), while it attaches nothing else from this list.
+/// That is the shape `@firebase/rules-unit-testing` 5.x sends from `clearFirestore()`,
+/// `loadFirestoreRules` and `loadStorageRules` (they call the global `fetch`), so counting
+/// `Sec-Fetch-Mode` as browser evidence would refuse the very process clients the
+/// unauthenticated compatibility paths exist for. A browser never sends `Sec-Fetch-Mode`
+/// without `Sec-Fetch-Site` and `Sec-Fetch-Dest`, so leaving it out loses no browser evidence.
 pub const BROWSER_METADATA_HEADERS: &[&str] = &[
     "origin",
     "sec-fetch-site",
-    "sec-fetch-mode",
     "sec-fetch-dest",
     "referer",
     "cookie",
@@ -122,5 +129,120 @@ pub fn privileged_route_admission(
         PrivilegedAdmission::Admit
     } else {
         PrivilegedAdmission::ControlTokenRequired
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lookup<'a>(headers: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<&'a str> {
+        move |name| {
+            headers
+                .iter()
+                .find(|(field, _)| field.eq_ignore_ascii_case(name))
+                .map(|(_, value)| *value)
+        }
+    }
+
+    /// The exact header set Node 24's built-in `fetch` (undici) attaches to a request a script
+    /// issues with no headers of its own (probe against a loopback listener, 2026-09-21):
+    /// `host`, `connection`, `accept`, `accept-language`, `sec-fetch-mode`, `user-agent`,
+    /// `accept-encoding`. This is what `@firebase/rules-unit-testing` 5.0.2 sends from
+    /// `clearFirestore()`, and it is a process, not a page.
+    #[test]
+    fn the_undici_header_set_is_not_browser_evidence() {
+        let undici = [
+            ("host", "127.0.0.1:8080"),
+            ("connection", "keep-alive"),
+            ("accept", "*/*"),
+            ("accept-language", "*"),
+            ("sec-fetch-mode", "cors"),
+            ("user-agent", "node"),
+            ("accept-encoding", "gzip, deflate"),
+        ];
+        assert!(!carries_browser_metadata(lookup(&undici)));
+        assert!(!carries_browser_metadata(lookup(&[(
+            "Sec-Fetch-Mode",
+            "navigate"
+        )])));
+    }
+
+    /// Every current browser attaches `Sec-Fetch-Site` and `Sec-Fetch-Dest` to every request
+    /// it makes, with or without `Origin`, so a real page-issued request is recognised.
+    #[test]
+    fn a_browser_header_set_is_browser_evidence() {
+        let chrome_cors = [
+            ("origin", "http://localhost:5173"),
+            ("sec-fetch-site", "same-site"),
+            ("sec-fetch-mode", "cors"),
+            ("sec-fetch-dest", "empty"),
+        ];
+        assert!(carries_browser_metadata(lookup(&chrome_cors)));
+        let chrome_same_origin_without_origin_header = [
+            ("sec-fetch-site", "same-origin"),
+            ("sec-fetch-mode", "cors"),
+            ("sec-fetch-dest", "empty"),
+        ];
+        assert!(carries_browser_metadata(lookup(
+            &chrome_same_origin_without_origin_header
+        )));
+    }
+
+    /// Each field of the set is sufficient on its own: the decision must not hinge on one
+    /// header an old or unusual browser may omit.
+    #[test]
+    fn each_browser_metadata_field_alone_is_browser_evidence() {
+        for field in [
+            "origin",
+            "sec-fetch-site",
+            "sec-fetch-dest",
+            "referer",
+            "cookie",
+        ] {
+            assert!(carries_browser_metadata(lookup(&[(field, "x")])), "{field}");
+            assert!(
+                carries_browser_metadata(lookup(&[(&field.to_ascii_uppercase(), "x")])),
+                "{field} looked up case-insensitively"
+            );
+        }
+        assert!(!BROWSER_METADATA_HEADERS.contains(&"sec-fetch-mode"));
+    }
+
+    /// A field present but empty counts as absent.
+    #[test]
+    fn an_empty_field_is_absent() {
+        for field in BROWSER_METADATA_HEADERS {
+            assert!(!carries_browser_metadata(lookup(&[(field, "")])), "{field}");
+        }
+        assert!(!carries_browser_metadata(lookup(&[])));
+    }
+
+    #[test]
+    fn a_process_request_is_admitted_and_a_page_needs_a_loopback_origin_and_the_token() {
+        assert_eq!(
+            privileged_route_admission(false, None, false),
+            PrivilegedAdmission::Admit
+        );
+        assert_eq!(
+            privileged_route_admission(true, Some("http://localhost:5173"), false),
+            PrivilegedAdmission::ControlTokenRequired
+        );
+        assert_eq!(
+            privileged_route_admission(true, None, false),
+            PrivilegedAdmission::ControlTokenRequired
+        );
+        assert_eq!(
+            privileged_route_admission(true, Some("http://localhost:5173"), true),
+            PrivilegedAdmission::Admit
+        );
+        assert_eq!(
+            privileged_route_admission(true, Some("https://evil.example"), true),
+            PrivilegedAdmission::ForeignOrigin
+        );
+        assert_eq!(
+            privileged_route_admission(false, Some("https://evil.example"), false),
+            PrivilegedAdmission::ForeignOrigin
+        );
     }
 }

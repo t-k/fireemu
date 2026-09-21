@@ -831,9 +831,11 @@ pub const MAX_SET_RULES_BODY_BYTES: usize = crate::server::MAX_BODY_BYTES;
 /// port: it replaces the authorization policy of every bucket in the run, so a browser
 /// request is held to exactly what [`crate::control::browser_guard`] holds the equivalent
 /// `PUT /v1/storage/rules` control route to -- a loopback origin and the control token. A
-/// request with neither `Origin` nor a `Sec-Fetch-*` field is not a browser request (this is
-/// the shape `@firebase/rules-unit-testing` sends from Node) and keeps its unauthenticated
-/// access, so the compatibility surface is unchanged.
+/// request with none of [`fireemu_core_session::loopback::BROWSER_METADATA_HEADERS`] is not a
+/// browser request and keeps its unauthenticated access, so the compatibility surface is
+/// unchanged. `@firebase/rules-unit-testing` calls this route through Node's built-in `fetch`,
+/// which attaches `sec-fetch-mode: cors` and nothing else a browser would; that header alone
+/// is therefore not browser evidence (see the doc comment on the header set).
 fn set_rules_browser_guard(state: &StorageState, req: &StorageRequest) -> Option<StorageResponse> {
     let presented = req
         .header("authorization")

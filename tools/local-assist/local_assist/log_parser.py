@@ -108,10 +108,18 @@ def _well_formed_nodeid(candidate: str) -> bool:
       wraps the whole parametrize id in one more '[...]', so nesting is
       normal), or it may end in a stray, never-reopened ']' (the id's own
       bracket closed, and a later ']' from the message text follows with no
-      further '[' before it). What it must not do is close and then
-      *reopen* with a fresh '[': that shape only occurs when a second,
-      unrelated bracketed fragment from the message got absorbed into the
-      candidate along with the id's own group.
+      further '[' before it). A close followed by a *reopen* with a fresh
+      '[' is, on its own, not disqualifying either: a parametrize value is
+      free to contain '] ... [' as literal text (e.g. a value of
+      "] - [x"), which is exactly as well-formed a nodeid shape as a
+      message glued on by a wrong split. What *is* disqualifying is a
+      reopen with anything other than the bare " - " split separator
+      between the close and it: real message text (an exception name, a
+      colon, other words) between them means this candidate absorbed part
+      of the message, not that the parameter value happened to close and
+      reopen a bracket. When that ambiguity cannot be resolved this way
+      either, more than one candidate stays well-formed and the caller
+      keeps the raw line with the id unresolved rather than guess.
     """
     name_part, opened, bracket_part = candidate.partition("[")
     if not name_part or any(char.isspace() for char in name_part):
@@ -122,15 +130,21 @@ def _well_formed_nodeid(candidate: str) -> bool:
         return False
     depth = 0
     closed_once = False
+    gap = ""
     for char in "[" + bracket_part:
         if char == "[":
             if depth == 0 and closed_once:
-                return False
+                if gap != " - ":
+                    return False
+                gap = ""
             depth += 1
         elif char == "]":
             depth -= 1
             if depth == 0:
                 closed_once = True
+                gap = ""
+        elif depth == 0 and closed_once:
+            gap += char
     return True
 
 
@@ -538,6 +552,7 @@ def parse_pytest(lines: list[str]) -> ParsedLog:
     short: list[tuple[str, str, str, int, bool]] = []
     seen_short: set[tuple[str, str, str]] = set()
     in_failures = False
+    in_short_summary = False
     block_start: int | None = None
     block_name: str | None = None
     # Nodeid identities (no leading "path::") already seen as a detail block
@@ -575,12 +590,15 @@ def parse_pytest(lines: list[str]) -> ParsedLog:
         if final is not None:
             close_block(index)
             in_failures = False
+            in_short_summary = False
             summary = final
             continue
         banner = PYTEST_BANNER.match(line)
         if banner:
             close_block(index)
-            in_failures = banner.group("title").strip() in ("FAILURES", "ERRORS")
+            title = banner.group("title").strip()
+            in_failures = title in ("FAILURES", "ERRORS")
+            in_short_summary = title == "short test summary info"
             continue
         if in_failures:
             block = PYTEST_BLOCK.match(line)
@@ -589,13 +607,24 @@ def parse_pytest(lines: list[str]) -> ParsedLog:
                 block_start = index
                 block_name = block.group("name").strip()
                 continue
-        verbose = PYTEST_VERBOSE.match(line)
-        if verbose:
-            nodeid = verbose.group("nodeid")
-            _, verbose_sep, verbose_tail = nodeid.partition("::")
-            if verbose_sep:
-                known_identities.add(verbose_tail)
-            continue
+        # A verbose (-v) progress line and a short-summary row are told
+        # apart by section, not by which regex happens to match first: the
+        # progress regex is lenient enough (it accepts any status word,
+        # including PASSED/FAILED/ERROR appearing at the end of a *message*)
+        # that a "FAILED ... - ValueError: ERROR" row would otherwise be
+        # misread as "<nodeid> ERROR" and silently dropped instead of
+        # becoming a failure. Never try it inside the short test summary
+        # info section, and never on a line that is itself a short-summary
+        # row (those always start with "FAILED "/"ERROR "; a real nodeid
+        # never does).
+        if not in_short_summary and not line.startswith(("FAILED ", "ERROR ")):
+            verbose = PYTEST_VERBOSE.match(line)
+            if verbose:
+                nodeid = verbose.group("nodeid")
+                _, verbose_sep, verbose_tail = nodeid.partition("::")
+                if verbose_sep:
+                    known_identities.add(verbose_tail)
+                continue
         short_match = _pytest_short(line, frozenset(known_identities))
         if short_match:
             status, nodeid, message, id_resolved = short_match

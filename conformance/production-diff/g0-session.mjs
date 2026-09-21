@@ -13,6 +13,8 @@ requireThat(typeof directory === "string", "missing-run-directory");
 const root = resolve(process.env.PILOT_REPO ?? resolve(dirname(fileURLToPath(import.meta.url)), "../.."));
 const inventoryProject = resolve(root, "tools/compat-inventory");
 const plan = JSON.parse(await fs.readFile(join(directory, "program.json"), "utf8"));
+const canonicalProgramDigest = process.env.PILOT_PROGRAM_DIGEST;
+requireThat(canonicalProgramDigest === digestJson(plan), "g0-program-digest-binding");
 const receiptPath = join(directory, "launch-receipt.json");
 const receiptInfo = await fs.lstat(receiptPath);
 requireThat(receiptInfo.isFile() && !receiptInfo.isSymbolicLink(), "g0-launch-receipt-type");
@@ -48,6 +50,7 @@ const freshness = {
   receiptSha256: createHash("sha256").update(receiptBytes).digest("hex"),
   binarySha256: receipt.binarySha256,
   sourceCommit: receipt.sourceCommit,
+  argv: [receipt.command, ...receipt.args],
   configSha256: receipt.configSha256,
   rulesSha256: receipt.rulesSha256,
   environmentSha256: receipt.environmentSha256,
@@ -55,6 +58,7 @@ const freshness = {
   import: null,
   exportOnExit: null,
   origins,
+  programDigest: canonicalProgramDigest,
 };
 await publishJson(join(directory, "freshness-handshake.json"), freshness);
 const python = g0SessionPythonSource();
@@ -81,7 +85,7 @@ if (result.code !== 0) {
   await publishJson(join(directory, "session-result.json"), {
     schema: "fireemu-production-diff-session-v1",
     caseId: process.env.PILOT_CASE_ID,
-    programDigest: digestJson(plan),
+    programDigest: canonicalProgramDigest,
     localSha256: null,
     completed: false,
     failure: result.error,
@@ -113,7 +117,7 @@ const cleanup = { state: batch.completed ? "confirmed" : "unconfirmed", absent: 
 await publishJson(join(directory, "session-result.json"), {
   schema: "fireemu-production-diff-session-v1",
   caseId: process.env.PILOT_CASE_ID,
-  programDigest: digestJson(plan),
+  programDigest: canonicalProgramDigest,
   localSha256: createHash("sha256").update(JSON.stringify(local, null, 2) + "\n").digest("hex"),
   completed: result.code === 0 && batch.completed,
   failure: result.error,

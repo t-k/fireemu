@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { compareG0, g0SessionPythonSource, validateG0Origins } from "../g0.mjs";
+import { verifyG0ProgramDigest } from "../pilot.mjs";
+import { digestJson } from "../core.mjs";
 import { G0_CASE } from "../registry.mjs";
 
 test("G0 compare refuses a missing retained build binding", () => {
@@ -82,6 +84,19 @@ test("G0 session uses the locked Python 3.12 inventory runtime for generated cod
   assert.match(output.trim(), /^3\.12(?:\.|$)/);
 });
 
+test("G0 session rejects stale or substituted launcher receipts before Python dispatch", () => {
+  const source = readFileSync(new URL("../g0-session.mjs", import.meta.url), "utf8");
+  for (const token of [
+    "receipt.pid === process.ppid",
+    "receipt.binarySha256 === binaryHash",
+    "receipt.configSha256 === configHash",
+    "receipt.rulesSha256 === rulesHash",
+    "receipt.runDirectory?.ino === runInfo.ino",
+    "!receipt.args.includes(\"--import\")",
+    "receipt.import === null",
+  ]) assert.ok(source.includes(token), token);
+});
+
 test("G0 session binds validated origins before the real Gate and Adapter are constructed", () => {
   const directory = mkdtempSync(join(tmpdir(), "g0-binding-"));
   const script = `
@@ -140,4 +155,14 @@ print("binding-ok")
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("session verification binds the prepared canonical program, not its runtime-enriched clone", () => {
+  const prepared = { jobs: { partial: { observation: [] } }, nonce: "a".repeat(32) };
+  const canonical = digestJson(prepared);
+  verifyG0ProgramDigest(canonical, prepared);
+  const runtimePlan = { ...prepared, localOrigins: { firestore: "127.0.0.1:18080" } };
+  assert.notEqual(digestJson(runtimePlan), canonical);
+  assert.throws(() => verifyG0ProgramDigest(digestJson(runtimePlan), prepared), /local-record-binding/);
+  assert.throws(() => verifyG0ProgramDigest("0".repeat(64), prepared), /local-record-binding/);
 });

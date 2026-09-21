@@ -91,6 +91,9 @@ class G0RecoveryGate(Gate):
             job = state["jobs"][self.job]
             job["creationProofs"].clear()
             job["owned"].clear()
+        elif operation.get("method") == "DELETE" and status != 200:
+            state["jobs"][self.job]["g0RecoveryFailure"] = "conditional-delete-failed"
+            raise ValueError("g0-conditional-delete-failed")
 
     def finish(self):
         """Close only after this lane's readback evidence is terminal.
@@ -110,6 +113,12 @@ class G0RecoveryGate(Gate):
                 or set(job["absent"]) != set(job["resources"])
                 or job["creationProofs"]
                 or job["owned"]
+                or job.get("g0RecoveryFailure") is not None
+                or any(
+                    event.get("phase") == "recovery"
+                    and event.get("creationOutcome") == "unknown"
+                    for event in state["events"]
+                )
             ):
                 raise ValueError("g0 cleanup incomplete; ownership retained")
             self._validate_finish_evidence(state)
@@ -122,11 +131,19 @@ def _freshness_handshake(output: Path, origins: dict[str, str]) -> None:
     if path.is_symlink() or not path.is_file():
         raise ValueError("g0-freshness-handshake-missing")
     handshake = json.loads(path.read_bytes())
+    plan = json.loads((output / "program.json").read_bytes())
+    expected_digest = digest(plan)
     if (
         handshake.get("schema") != "fireemu-g0-freshness-v1"
         or handshake.get("origins") != origins
+        or handshake.get("programDigest") != expected_digest
         or not isinstance(handshake.get("receiptSha256"), str)
         or not isinstance(handshake.get("parentPid"), int)
+        or handshake.get("childPid") != os.getppid()
+        or not isinstance(handshake.get("argv"), list)
+        or "--import" in handshake["argv"]
+        or "--export-on-exit" in handshake["argv"]
+        or not isinstance(handshake.get("binarySha256"), str)
         or handshake.get("import") is not None
         or handshake.get("exportOnExit") is not None
     ):

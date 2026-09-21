@@ -132,6 +132,10 @@ async function portIsClosed(endpoint) {
   });
 }
 
+export function verifyG0ProgramDigest(sessionDigest, preparedProgram) {
+  requireThat(sessionDigest === digestJson(preparedProgram), "local-record-binding");
+}
+
 export function verifySession(session, prepared, localBytes) {
   const entry = prepared.entry;
   // The setup prefix (e.g. batch-write's reset+seed) is case-specific; a case with no separate
@@ -147,10 +151,10 @@ export function verifySession(session, prepared, localBytes) {
   requireThat(
     session?.schema === "fireemu-production-diff-session-v1" &&
       session.caseId === entry.id &&
-      session.programDigest === digestJson(prepared.program) &&
       session.localSha256 === sha256(localBytes),
     "local-record-binding",
   );
+  verifyG0ProgramDigest(session.programDigest, prepared.program);
   const expectedCount = setupPhases.length + entry.stepIds.length;
   requireThat(
     session.productionRequests === 0 &&
@@ -212,6 +216,7 @@ async function replay(prepared, options, directory) {
       PILOT_RUN_DIR: directory,
       PILOT_CASE_ID: entry.id,
       PILOT_REPO: options.repo,
+      ...(entry.adapter === "g0" ? { PILOT_PROGRAM_DIGEST: digestJson(prepared.program) } : {}),
     },
     timeoutMs: options.timeout * 1000,
     onSpawn:

@@ -88,6 +88,7 @@ def _recovery_fixture(tmp_path):
     parent_path = (tmp_path / "parent-gate").resolve()
     parent_claim = request_bytes_admission.reservation_claim(fixture.inputs, gate_path=parent_path, gate_plan=parent_gate_plan)
     parent_envelope = request_bytes_production._envelope(fixture.permission, parent_claim)
+    parent_envelope["expiresAt"] = time.time() + 3600
     parent_generation = request_bytes_admission.abort_generation(fixture.inputs)
     parent_plan = request_bytes_compiler.compile_request_bytes_plan(
         request_bytes_descriptor.PROJECT, request_bytes_descriptor.DATABASE, fixture.plan["nonce"]
@@ -114,20 +115,20 @@ def _recovery_fixture(tmp_path):
     child_generation["sourceCommit"] = "f" * 40
     child_claim = {
         "kind": reservations.RECOVERY_CHILD_KIND, "version": 1,
-        "campaignId": parent_claim["campaignId"], "manifestDigest": parent_claim["manifestDigest"],
+        "campaignId": parent_claim["campaignId"], "manifestDigest": digest(recovery_source),
         "nonceDigest": digest(recovery_nonce), "gatePath": str((tmp_path / "child-gate").resolve()),
         "gatePlanDigest": digest(recovery_plan), "locks": parent_claim["locks"],
         "budget": {"requests": 85, "accounts": 0, "resources": 51, "costMicrousd": 85},
-        "durationSeconds": 100, "generation": child_generation, "parentClaimDigest": ticket["claimDigest"],
+        "durationSeconds": 1200, "generation": child_generation, "parentClaimDigest": ticket["claimDigest"],
         "parentPlanDigest": digest(parent_plan), "recoveryNonce": recovery_nonce, "selectedProbe": "under",
         "resourceDigest": digest(resources), "ownedResources": resources,
         "ownerIdentity": "owner", "recoveryOwner": "recovery-owner",
         "operationClass": reservations.RECOVERY_OPERATION_CLASS, "readCount": 68,
         "inspectionCount": 17, "absenceCount": 51, "deleteCount": 17,
-        "tariffEstimateMicrousd": 45, "expiresAt": 1900,
+        "tariffEstimateMicrousd": 45, "expiresAt": time.time() + 2400,
         "executionHost": request_bytes_admission.execution_host(), "permissionDigest": "b" * 64,
     }
-    envelope = {"permissionDigest": "b" * 64, "issuedAt": 1000, "expiresAt": 2000,
+    envelope = {"permissionDigest": "b" * 64, "issuedAt": 1000, "expiresAt": time.time() + 3000,
                 "limits": {"requests": 85, "accounts": 0, "resources": 51, "costMicrousd": 85},
                 "concurrency": 1, "scopes": parent_envelope["scopes"]}
     return ledger, ticket, child_claim, envelope, parent_plan, recovery_plan
@@ -199,4 +200,15 @@ def test_recovery_extension_requires_compiler_exact_child_plan(tmp_path, mutatio
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="authoritative|provenance|nonce"):
         ledger.begin_recovery_extension(parent, altered, envelope, parent_plan, mutated, now=1100)
+    assert ledger.snapshot() == before
+
+
+def test_active_child_blocks_ordinary_parent_validate_and_finish(tmp_path):
+    ledger, parent, child, envelope, parent_plan, child_plan = _recovery_fixture(tmp_path)
+    ledger.begin_recovery_extension(parent, child, envelope, parent_plan, child_plan, now=1100)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="recovery child"):
+        ledger.validate(parent, now=1100)
+    with pytest.raises(ValueError, match="recovery child"):
+        ledger.finish(parent)
     assert ledger.snapshot() == before

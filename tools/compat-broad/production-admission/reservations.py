@@ -1119,11 +1119,22 @@ class Ledger:
         parent_gate = Gate(initial_gate_path, initial_gate_job).snapshot()
         if (
             digest(parent_gate.get("plan")) != initial_claim["gatePlanDigest"]
+            or parent_gate.get("plan", {}).get("campaignId") != canonical_parent_plan.get("campaignId")
+            or parent_gate.get("plan", {}).get("nonce") != canonical_parent_plan.get("nonce")
             or parent_gate.get("coordinatorInflight")
             or not parent_gate.get("events")
             or any(job.get("inflight") for job in parent_gate.get("jobs", {}).values())
         ):
             raise ValueError("parent Gate predecessor is not settled")
+        parent_resources = sorted({resource for probe in canonical_parent_plan.get("probes", []) for resource in probe.get("resources", [])})
+        registered_resources = sorted({resource for job in parent_gate.get("plan", {}).get("jobs", {}).values() for resource in job.get("resources", [])})
+        if registered_resources != parent_resources:
+            raise ValueError("registered parent resources differ")
+        parent_operations = canonical_parent_plan.get("observation", []) + canonical_parent_plan.get("recovery", [])
+        registered_operations = [operation for job in parent_gate.get("plan", {}).get("jobs", {}).values() for phase in ("observation", "recovery") for operation in job.get(phase, [])]
+        operation_key = lambda operation: (operation.get("kind"), operation.get("method"), operation.get("path"), operation.get("resource"), operation.get("probe"))
+        if sorted(map(operation_key, registered_operations), key=repr) != sorted(map(operation_key, parent_operations), key=repr):
+            raise ValueError("registered parent operations differ")
         for pid in [parent_gate.get("coordinatorPid")] + [job.get("pid") for job in parent_gate.get("jobs", {}).values()]:
             if pid is None:
                 continue
@@ -1144,7 +1155,9 @@ class Ledger:
                 parent_ticket.get("claimDigest") != parent["claimDigest"]
                 or child_claim["parentClaimDigest"] != parent["claimDigest"]
                 or child_claim["campaignId"] != claim["campaignId"]
-                or child_claim["manifestDigest"] != claim["manifestDigest"]
+                or claim["campaignId"] != "FS-LIMIT-API-REQUEST-BYTES"
+                or claim["budget"]["requests"] != 265
+                or claim["budget"]["costMicrousd"] != 303
                 or child_claim["nonceDigest"] == claim["nonceDigest"]
                 or child_claim["gatePlanDigest"] == claim["gatePlanDigest"]
                 or child_claim["permissionDigest"] == state["envelopes"][parent["envelopeDigest"]]["envelope"]["permissionDigest"]
@@ -1153,6 +1166,8 @@ class Ledger:
                 raise ValueError("recovery child is not bound to held parent")
             if child_claim["budget"]["requests"] != RECOVERY_CHILD_REQUESTS or child_claim["budget"]["costMicrousd"] != RECOVERY_CHILD_COST_MICROUSD:
                 raise ValueError("recovery child must reserve all 85 requests")
+            if child_claim["durationSeconds"] < canonical_child_gate_plan["wallSeconds"]:
+                raise ValueError("recovery duration below actual Gate wall")
             if new_envelope["permissionDigest"] != child_claim["permissionDigest"] or new_envelope["limits"]["requests"] < RECOVERY_CHILD_REQUESTS or new_envelope["limits"]["costMicrousd"] < RECOVERY_CHILD_COST_MICROUSD:
                 raise ValueError("recovery envelope does not fund canonical child")
             if any(
@@ -1230,6 +1245,8 @@ class Ledger:
             raise ValueError("positive bounded operation required")
         with self._locked() as state:
             row = self._row(state, ticket)
+            if row.get("recoveryChildren"):
+                raise ValueError("recovery child must settle before parent validation")
             decision_now = time.time() if now is None else now
             _number(decision_now)
             if row["state"] != "held" or decision_now + duration > row["deadline"]:

@@ -32,6 +32,13 @@ RUST_NOTE = re.compile(r"^\s*note: run with `RUST_BACKTRACE=1`")
 PYTEST_BANNER = re.compile(r"^=+ (?P<title>.+?) =+$")
 PYTEST_BLOCK = re.compile(r"^_+ (?P<name>.+?) _+$")
 PYTEST_SHORT = re.compile(r"^(?P<status>FAILED|ERROR) (?P<rest>.+)$")
+# A verbose (-v) per-test progress line: "<nodeid> <STATUS> [ NN%]". Used
+# only as a source of known nodeids for _pytest_short; never itself turned
+# into a Failure (PASSED/SKIPPED nodeids are harmless extra candidates).
+PYTEST_VERBOSE = re.compile(
+    r"^(?P<nodeid>.+?)\s+(?:PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS|RERUN)"
+    r"(?:\s+\[\s*\d+%\s*\])?\s*$"
+)
 PYTEST_FINAL = re.compile(
     r"(?P<body>no tests ran|\d+ (?:failed|passed|skipped|errors?|warnings?|xfailed|xpassed|"
     r"deselected|subtests passed)(?:, \d+ (?:failed|passed|skipped|errors?|warnings?|"
@@ -57,6 +64,10 @@ class Failure:
     endLine: int
     message: list[str] = field(default_factory=list)
     location: str | None = None
+    # False only for a pytest short-summary row whose id/message boundary
+    # could not be resolved (see _pytest_short); `name` is then the raw,
+    # unsplit rest of the line and `message` is empty.
+    idResolved: bool = True
 
 
 @dataclass
@@ -77,31 +88,101 @@ def _plain_line(line: str) -> str:
     return ANSI_CSI.sub("", ANSI_LINK.sub("", line))
 
 
-def _pytest_short(line: str) -> tuple[str, str, str] | None:
+def _well_formed_nodeid(candidate: str) -> bool:
+    """Is `candidate` shaped like a pytest nodeid, not a nodeid-plus-message?
+
+    pytest does not escape '[' or ']' inside a parametrize id, so neither
+    the first nor the last separator in a short-summary line can be trusted
+    to be the id/message boundary: a raised message can itself contain
+    '[...]' or ' - ', and a parametrize value can itself contain ']' or a
+    dash. This checks one candidate id in isolation, without assuming which
+    split point produced it:
+
+    - Everything before the first '[' (the whole candidate, if there is no
+      '[') must contain no whitespace. A pytest id/path never does; a
+      message glued onto the id by a wrong split always does (it is
+      prefixed by " - " or contains an exception name like "ValueError: ").
+    - A candidate containing '[' must end with ']' (its own wrapping
+      bracket has to be the last thing before a message would start).
+    - The bracket portion may be a single, possibly nested, group (pytest
+      wraps the whole parametrize id in one more '[...]', so nesting is
+      normal), or it may end in a stray, never-reopened ']' (the id's own
+      bracket closed, and a later ']' from the message text follows with no
+      further '[' before it). What it must not do is close and then
+      *reopen* with a fresh '[': that shape only occurs when a second,
+      unrelated bracketed fragment from the message got absorbed into the
+      candidate along with the id's own group.
+    """
+    name_part, opened, bracket_part = candidate.partition("[")
+    if not name_part or any(char.isspace() for char in name_part):
+        return False
+    if not opened:
+        return True
+    if not candidate.endswith("]"):
+        return False
+    depth = 0
+    closed_once = False
+    for char in "[" + bracket_part:
+        if char == "[":
+            if depth == 0 and closed_once:
+                return False
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                closed_once = True
+    return True
+
+
+def _pytest_short(
+    line: str, known_identities: frozenset[str] = frozenset()
+) -> tuple[str, str, str, bool] | None:
+    """Split a "FAILED ..."/"ERROR ..." short-summary line into its parts.
+
+    Returns (status, nodeid, message, idResolved). `known_identities` are
+    nodeid identities (no leading "path::") already seen elsewhere in the
+    log -- a detail block heading or a verbose (-v) progress line -- and
+    take priority over guessing: never decide the id boundary from the
+    first or last separator in the line alone.
+    """
     match = PYTEST_SHORT.fullmatch(line)
     if match is None:
         return None
-    rest = match.group("rest")
     status = match.group("status")
-    if "[" in rest:
-        # pytest does not escape '[' or ']' inside a parametrize id, so a
-        # parameter value that itself contains a bracket can desync a
-        # naive bracket-depth count: an unbalanced '[' in the value never
-        # lets depth return to 0 (test_bad[[] never "closes"), and an
-        # unbalanced ']' can return depth to 0 too early (inside
-        # test_bad[] - suffix], right after the value's own ']'). Anchor on
-        # the rightmost '] - ' instead: pytest always closes the id's own
-        # wrapping bracket last, immediately before " - <message>".
-        split = rest.rfind("] - ")
-        if split != -1:
-            return status, rest[: split + 1], rest[split + 4 :]
-        # No bracket-anchored separator: any '[' present belongs to the
-        # message (e.g. "test_bad - assert x in [1, 2, 3]"), not the id, so
-        # a plain split is unambiguous.
-    split = rest.find(" - ")
-    if split != -1:
-        return status, rest[:split], rest[split + 3 :]
-    return status, rest, ""
+    rest = match.group("rest")
+    group, sep, tail = rest.partition("::")
+
+    if sep and known_identities:
+        best: str | None = None
+        for identity in known_identities:
+            if not tail.startswith(identity):
+                continue
+            remainder = tail[len(identity) :]
+            if remainder and not remainder.startswith(" - "):
+                continue
+            if best is None or len(identity) > len(best):
+                best = identity
+        if best is not None:
+            message = tail[len(best) :]
+            if message.startswith(" - "):
+                message = message[3:]
+            return status, f"{group}::{best}", message, True
+
+    # No known nodeid covers this line: enumerate every ' - ' split point
+    # (plus "no split at all", for a message-less row) as a candidate
+    # id/message boundary, and accept only if exactly one candidate is a
+    # well-formed nodeid on its own. More than one, or none, means the line
+    # is genuinely ambiguous from local text alone; keep it raw rather than
+    # guess (see the owner review this fixes: a raised message containing
+    # its own '[...] - ...' used to be silently folded into the id).
+    candidates = [(rest, "")] + [
+        (rest[: m.start()], rest[m.start() + 3 :]) for m in re.finditer(" - ", rest)
+    ]
+    valid = [pair for pair in candidates if _well_formed_nodeid(pair[0])]
+    if len(valid) == 1:
+        nodeid, message = valid[0]
+        return status, nodeid, message, True
+    return status, rest, "", False
 
 
 def _pytest_summary(line: str, line_number: int) -> dict | None:
@@ -357,7 +438,7 @@ def _detail_identity(name: str) -> str:
 
 
 def _join_short_summaries(
-    failures: list[Failure], short: list[tuple[str, str, str, int]]
+    failures: list[Failure], short: list[tuple[str, str, str, int, bool]]
 ) -> None:
     """Join unambiguously; retain a standalone summary row when detail is absent.
 
@@ -390,9 +471,26 @@ def _join_short_summaries(
             found.append(index)
         return found
 
-    for status, nodeid, message, line_number in short:
+    for status, nodeid, message, line_number, id_resolved in short:
         group, separator, name = nodeid.partition("::")
         name = name if separator else nodeid
+        if not id_resolved:
+            # The id/message boundary could not be resolved (see
+            # _pytest_short): `name` is the raw, unsplit rest of the line,
+            # not a real identity, so it cannot be matched against a detail
+            # block's heading. Keep it as its own standalone row.
+            failures.append(
+                Failure(
+                    name=name,
+                    group=group,
+                    startLine=line_number,
+                    endLine=line_number,
+                    message=[],
+                    idResolved=False,
+                )
+            )
+            used.add(len(failures) - 1)
+            continue
         strict_phases = _PHASES_BY_STATUS.get(status, frozenset())
         candidates = candidates_for(strict_phases, group, name, nodeid)
         if not candidates and status != "FAILED":
@@ -407,7 +505,7 @@ def _join_short_summaries(
             # files report the same name. The summary order is not provenance.
             possible = {
                 other
-                for other_status, other, _, _ in short
+                for other_status, other, _, _, _ in short
                 if other_status == status and other.partition("::")[2] == name
             }
             if len(possible) > 1:
@@ -437,11 +535,16 @@ def _join_short_summaries(
 def parse_pytest(lines: list[str]) -> ParsedLog:
     summary: dict = {}
     failures: list[Failure] = []
-    short: list[tuple[str, str, str, int]] = []
+    short: list[tuple[str, str, str, int, bool]] = []
     seen_short: set[tuple[str, str, str]] = set()
     in_failures = False
     block_start: int | None = None
     block_name: str | None = None
+    # Nodeid identities (no leading "path::") already seen as a detail block
+    # heading or a verbose (-v) progress line, in log order. Both always
+    # precede the short-summary section they resolve, so a single forward
+    # pass can feed each short-summary line every identity seen so far.
+    known_identities: set[str] = set()
 
     def close_block(end_index: int) -> None:
         nonlocal block_start, block_name
@@ -461,6 +564,7 @@ def parse_pytest(lines: list[str]) -> ParsedLog:
                 location=location,
             )
         )
+        known_identities.add(_detail_identity(block_name))
         block_start = None
         block_name = None
 
@@ -485,13 +589,20 @@ def parse_pytest(lines: list[str]) -> ParsedLog:
                 block_start = index
                 block_name = block.group("name").strip()
                 continue
-        short_match = _pytest_short(line)
+        verbose = PYTEST_VERBOSE.match(line)
+        if verbose:
+            nodeid = verbose.group("nodeid")
+            _, verbose_sep, verbose_tail = nodeid.partition("::")
+            if verbose_sep:
+                known_identities.add(verbose_tail)
+            continue
+        short_match = _pytest_short(line, frozenset(known_identities))
         if short_match:
-            status, nodeid, message = short_match
+            status, nodeid, message, id_resolved = short_match
             key = (status, nodeid, message)
             if key not in seen_short:
                 seen_short.add(key)
-                short.append((status, nodeid, message, index + 1))
+                short.append((status, nodeid, message, index + 1, id_resolved))
     close_block(len(lines))
     _join_short_summaries(failures, short)
     if not summary:
@@ -524,7 +635,12 @@ def render_excerpt(parsed: ParsedLog, source_name: str) -> str:
         out.append(f"source: {source_name}:{failure.startLine}-{failure.endLine}")
         if failure.location:
             out.append(f"location: {failure.location}")
-        if failure.message:
+        if not failure.idResolved:
+            out.append(
+                "(id boundary unresolved: the name above is the raw, "
+                "unsplit short-summary line; no message was separated out)"
+            )
+        elif failure.message:
             out.extend(failure.message)
         else:
             out.append("(no failure message captured in the log)")

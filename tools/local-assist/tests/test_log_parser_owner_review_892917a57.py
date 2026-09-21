@@ -14,6 +14,12 @@ Adapted from the standalone FIREEMU_REPO-based script to this repo's
    same test produced four failure blocks instead of two joined ones.
 
 At 892917a57: 2 positive controls passed, 3 regression cases failed.
+
+Update (owner review of e663e2cf1, 2026-09-21): the `value="] - suffix"`
+case of `test_parameter_bracket_does_not_corrupt_nodeid` below no longer
+resolves to `test_bad[] - suffix]`. See
+`test_parameter_bracket_with_dash_suffix_is_now_unresolved` for why and
+`test_log_parser_owner_review_e663e2cf1.py` for the fix this documents.
 """
 
 from __future__ import annotations
@@ -83,7 +89,6 @@ def test_positive_control_balanced_parameter_with_separator(tmp_path):
     "value,expected_name",
     [
         ("[", "test_bad[[]"),
-        ("] - suffix", "test_bad[] - suffix]"),
     ],
 )
 def test_parameter_bracket_does_not_corrupt_nodeid(tmp_path, value, expected_name):
@@ -96,6 +101,33 @@ def test_parameter_bracket_does_not_corrupt_nodeid(tmp_path, value, expected_nam
     assert len(parsed.failures) == 1
     assert parsed.failures[0].name == expected_name
     assert parsed.failures[0].message == ["assert False"]
+    assert parsed.failures[0].idResolved is True
+
+
+def test_parameter_bracket_with_dash_suffix_is_now_unresolved(tmp_path):
+    # This used to be one more case of test_parameter_bracket_does_not_
+    # corrupt_nodeid above, with value="] - suffix" resolving to name
+    # "test_bad[] - suffix]". Per the owner review of e663e2cf1
+    # (docs.local/reviews/2026-09-21/owner-review-e663e2cf1/review.md), the
+    # rightmost "] - " anchor that produced that answer is exactly as
+    # consistent with reading the id as "test_bad[]" and treating "-
+    # suffix] - assert False" as the (unparsed) message: both candidates
+    # close a bracket group cleanly with nothing reopening it afterwards,
+    # so nothing in a --tb=no line (no detail block to resolve against)
+    # picks one over the other. The parser now refuses to guess: it keeps
+    # the raw short-summary line and marks the id unresolved instead of
+    # picking the previously "lucky" answer.
+    source = (
+        "import pytest\n"
+        '@pytest.mark.parametrize("value", ["] - suffix"])\n'
+        "def test_bad(value):\n    assert False\n"
+    )
+    parsed = run_case(tmp_path, source, "--tb=no")
+    assert len(parsed.failures) == 1
+    failure = parsed.failures[0]
+    assert failure.idResolved is False
+    assert failure.name == "test_bad[] - suffix] - assert False"
+    assert failure.message == []
 
 
 def test_call_failure_and_teardown_error_are_not_duplicated(tmp_path):

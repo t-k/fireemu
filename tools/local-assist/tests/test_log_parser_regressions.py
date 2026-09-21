@@ -401,7 +401,6 @@ def test_one_unlocated_detail_does_not_guess_between_two_same_named_files():
     "value,expected_name",
     [
         ("[", "test_bad[[]"),
-        ("] - suffix", "test_bad[] - suffix]"),
         ("a - b", "test_bad[a - b]"),
         ("[x[1]]", "test_bad[[x[1]]]"),
     ],
@@ -420,6 +419,29 @@ def test_short_summary_id_boundary_survives_unbalanced_or_dashed_brackets(
     assert len(result.failures) == 1
     assert result.failures[0].name == expected_name
     assert result.failures[0].message == ["assert False"]
+    assert result.failures[0].idResolved is True
+
+
+def test_short_summary_id_boundary_is_unresolved_when_genuinely_ambiguous():
+    # Owner review of e663e2cf1 (docs.local/reviews/2026-09-21/
+    # owner-review-e663e2cf1/review.md): a parametrize value of "] - suffix"
+    # used to resolve to "test_bad[] - suffix]" by trusting the rightmost
+    # "] - " in the line. That anchor is exactly as consistent with reading
+    # the id as "test_bad[]" and the rest ("- suffix] - assert False") as an
+    # unparsed message: both candidates close a bracket group cleanly with
+    # nothing reopening it afterwards, so nothing in the line itself picks
+    # one over the other. Per the review, the parser must no longer guess:
+    # it keeps the raw short-summary line and marks the id unresolved.
+    text = (
+        "FAILED test_case.py::test_bad[] - suffix] - assert False\n1 failed in 0.00s\n"
+    )
+    result = parse_log(text)
+    assert len(result.failures) == 1
+    failure = result.failures[0]
+    assert failure.idResolved is False
+    assert failure.group == "test_case.py"
+    assert failure.name == "test_bad[] - suffix] - assert False"
+    assert failure.message == []
 
 
 @pytest.mark.parametrize(
@@ -505,3 +527,87 @@ def test_body_failure_and_teardown_error_join_separately_by_kind():
     by_message = {f.message[0]: f for f in result.failures}
     assert "E AssertionError: assert False" in by_message
     assert "E RuntimeError: teardown failure" in by_message
+
+
+def test_verbose_progress_line_resolves_an_otherwise_ambiguous_short_summary():
+    # A verbose (-v) run prints "<nodeid> FAILED" while the test executes,
+    # before the short summary. That nodeid is a known-good source of truth
+    # -- unlike guessing from the short-summary line's own separators -- so
+    # it should resolve a line that would otherwise be ambiguous (the same
+    # "close then a stray, never-reopened ']'" shape as the owner review's
+    # "] - suffix" case).
+    log = "\n".join(
+        [
+            "test_case.py::test_bad[] - suffix] FAILED               [100%]",
+            "",
+            "=== short test summary info ===",
+            "FAILED test_case.py::test_bad[] - suffix] - assert False",
+            "1 failed in 0.01s",
+        ]
+    )
+    result = parse_log(log)
+    assert len(result.failures) == 1
+    failure = result.failures[0]
+    assert failure.idResolved is True
+    assert failure.group == "test_case.py"
+    assert failure.name == "test_bad[] - suffix]"
+    assert failure.message == ["assert False"]
+
+
+@pytest.mark.parametrize(
+    "rest,expected_name,expected_message",
+    [
+        # A parametrize id bracket, then a message that opens and closes
+        # its own fresh '[...]': the id's bracket group is well-formed, and
+        # the alternative reading (extending the id through the message's
+        # bracket) requires a '[' to reopen after the id's own bracket
+        # already closed, which is never well-formed. Unambiguous.
+        (
+            "test_case.py::test_bad[x] - ValueError: [y] - z",
+            "test_bad[x]",
+            "ValueError: [y] - z",
+        ),
+        # A parametrize value containing ' - ', then a message with its own
+        # bracket: same reasoning, the id's own bracket group still has to
+        # close before any '-' or '[' from the message. Unambiguous.
+        (
+            "test_case.py::test_bad[a - b] - ValueError: [y]",
+            "test_bad[a - b]",
+            "ValueError: [y]",
+        ),
+        # No bracket in the id at all; the message has both a bracket and a
+        # dash. Every candidate id extending past the first ' - ' contains
+        # whitespace (it is message text), so only the shortest split (no
+        # brackets, bare name) is well-formed.
+        (
+            "test_case.py::test_bad - some [thing] - here",
+            "test_bad",
+            "some [thing] - here",
+        ),
+    ],
+)
+def test_id_and_message_bracket_combinations_resolve_unambiguously(
+    rest, expected_name, expected_message
+):
+    text = f"FAILED {rest}\n1 failed in 0.01s\n"
+    result = parse_log(text)
+    assert len(result.failures) == 1
+    failure = result.failures[0]
+    assert failure.idResolved is True
+    assert failure.name == expected_name
+    assert failure.message == [expected_message]
+
+
+def test_message_bracket_without_its_own_open_is_still_ambiguous():
+    # Contrast with the cases above: here the message's ']' is a stray,
+    # never-reopened close (no fresh '[' of its own), so it has exactly the
+    # same shape as the id's own bracket group closing early. Nothing in
+    # the line picks one reading over the other, so this stays unresolved
+    # even though a bracket ("[ok]") the id may legitimately own is present.
+    text = "FAILED test_case.py::test_bad[ok] - ValueError: msg] - tail\n1 failed in 0.01s\n"
+    result = parse_log(text)
+    assert len(result.failures) == 1
+    failure = result.failures[0]
+    assert failure.idResolved is False
+    assert failure.name == "test_bad[ok] - ValueError: msg] - tail"
+    assert failure.message == []

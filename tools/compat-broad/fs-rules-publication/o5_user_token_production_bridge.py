@@ -63,6 +63,65 @@ def worker_timeout(operation: dict[str, Any], deadline: float | None) -> float:
     return seconds
 
 
+def data_gate_receipt(plan, index, raw):
+    """Project transport-verified data evidence, never infer a no-write result."""
+    rows = {row["index"]: row for row in plan["observation"]}
+    if type(index) is not int or index not in rows:
+        raise ValueError("canonical data row required")
+    if (
+        not isinstance(raw, dict)
+        or type(raw.get("httpStatus")) is not int
+        or type(raw.get("complete")) is not bool
+        or type(raw.get("workerReaped")) is not bool
+        or not isinstance(raw.get("responseDigest"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", raw["responseDigest"]) is None
+        or not isinstance(raw.get("effects"), list)
+    ):
+        raise ValueError("actual data wire proof required")
+    body = {
+        "kind": "rules-management-proof-v1",
+        "responseDigest": raw["responseDigest"],
+        "effects": raw["effects"],
+    }
+    if "refusal" in raw:
+        row = rows[index]
+        expected = {
+            "kind": "atomic-commit-permission-denied-v1",
+            "canonicalRowDigest": digest(row),
+            "principalRef": row["principal"],
+            "operation": "Commit",
+            "code": 7,
+            "restErrorCode": 403,
+            "status": "PERMISSION_DENIED",
+        }
+        if (
+            row["method"] != "commit"
+            or raw["refusal"] != expected
+            or raw["httpStatus"] != 403
+            or not raw["complete"]
+            or not raw["workerReaped"]
+            or raw["effects"]
+        ):
+            raise ValueError("typed atomic refusal binding differs")
+        body["refusal"] = {
+            "kind": "rules-atomic-commit-refusal-v1",
+            "slotId": f"data/{index}",
+            "rowDigest": digest(row),
+            "principal": row["principal"],
+            "operation": "Commit",
+            "restCode": 403,
+            "status": "PERMISSION_DENIED",
+            "canonicalCode": 7,
+        }
+    return {
+        "status": raw["httpStatus"],
+        "complete": raw["complete"],
+        "workerReaped": raw["workerReaped"],
+        "bodyKind": "json",
+        "body": body,
+    }
+
+
 def rules_gate_receipt(
     plan: dict[str, Any], operation: dict[str, Any], raw: dict[str, Any]
 ) -> RulesManagementReceipt:

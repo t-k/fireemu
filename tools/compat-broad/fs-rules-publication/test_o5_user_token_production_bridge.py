@@ -57,6 +57,43 @@ def test_worker_timeout_refuses_expired_deadline():
         bridge.worker_timeout({"kind": "observation"}, 0.0)
 
 
+def test_data_denial_projects_only_exact_remote_atomic_commit_evidence():
+    plan = _plan()
+    row = next(row for row in plan["observation"] if row["method"] == "commit")
+    raw = {
+        "httpStatus": 403,
+        "complete": True,
+        "workerReaped": True,
+        "responseDigest": "a" * 64,
+        "effects": [],
+        "refusal": {
+            "kind": "atomic-commit-permission-denied-v1",
+            "canonicalRowDigest": digest(row),
+            "principalRef": row["principal"],
+            "operation": "Commit",
+            "code": 7,
+            "restErrorCode": 403,
+            "status": "PERMISSION_DENIED",
+        },
+    }
+    receipt = bridge.data_gate_receipt(plan, row["index"], raw)
+    assert receipt["status"] == 403
+    assert receipt["body"]["effects"] == []
+    assert receipt["body"]["refusal"] == {
+        "kind": "rules-atomic-commit-refusal-v1",
+        "slotId": f"data/{row['index']}",
+        "rowDigest": digest(row),
+        "principal": row["principal"],
+        "operation": "Commit",
+        "restCode": 403,
+        "status": "PERMISSION_DENIED",
+        "canonicalCode": 7,
+    }
+    raw["refusal"]["canonicalRowDigest"] = "b" * 64
+    with pytest.raises(ValueError, match="refusal"):
+        bridge.data_gate_receipt(plan, row["index"], raw)
+
+
 def test_rules_receipt_preserves_real_status_and_keeps_rest_body_outside_gate():
     raw = {
         "httpStatus": 404,

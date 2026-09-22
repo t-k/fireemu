@@ -59,6 +59,7 @@ ASSERTION_NAMES = (
     "acceptedResponse",
     "idTokenReturned",
     "refreshTokenReturned",
+    "idTokenMatchesAccount",
     "authTimePreserved",
     "iatAdvanced",
     "expIsIatPlusHour",
@@ -167,6 +168,7 @@ def observation_cases() -> list[dict[str, Any]]:
             "A refresh exchange keeps the originating session's auth_time while iat and exp advance.",
             _accepted(
                 "acceptedResponse",
+                "idTokenMatchesAccount",
                 "idTokenReturned",
                 "refreshTokenReturned",
                 "authTimePreserved",
@@ -183,6 +185,7 @@ def observation_cases() -> list[dict[str, Any]]:
             "A second exchange still reports the original sign-in auth_time, not the first exchange's iat.",
             _accepted(
                 "acceptedResponse",
+                "idTokenMatchesAccount",
                 "idTokenReturned",
                 "refreshTokenReturned",
                 "authTimePreserved",
@@ -355,6 +358,7 @@ def observation_cases() -> list[dict[str, Any]]:
             "After an account claim is added under the same name, a refresh still reports the session's developer claim, while a new account-only claim appears.",
             _accepted(
                 "acceptedResponse",
+                "idTokenMatchesAccount",
                 "sessionClaimWinsOverAccountClaim",
                 "accountOnlyClaimPresent",
                 "authTimePreserved",

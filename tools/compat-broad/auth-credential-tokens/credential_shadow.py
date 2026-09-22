@@ -37,6 +37,7 @@ from credential_collector import (
     claim_set,
     claim_shape,
     custom_signin_response_uid,
+    id_token_matches_account,
     enter_recovery,
     mark_deleted,
     new_budget,
@@ -322,6 +323,44 @@ def _boundary_readback_second(status: Any, body: Any, uid: str) -> int | str:
     return stored
 
 
+def _require_account_update_ack(status: Any, body: Any, uid: str) -> None:
+    """A failed setup cannot establish the next credential observation's premise.
+
+    This is an ACK check, not state readback or ownership evidence. Do not
+    require optional response fields or echoed settings, but reject an explicit
+    conflicting identity. Raw responses, UIDs and credentials stay out of errors.
+    """
+    if (
+        type(status) is not int or status != 200
+        or type(body) is not dict or "error" in body
+        or ("localId" in body and (
+            type(body["localId"]) is not str or body["localId"] != uid
+        ))
+    ):
+        raise ShadowError("account-update setup acknowledgement unconfirmed")
+
+
+def _revocation_session_shape(
+    session: dict[str, Any], *, uid: str, project: str
+) -> dict[str, Any]:
+    """Bind a revocation specimen before deriving or testing this account's cutoff.
+
+    The existing response-identity check is not signature verification or ownership
+    authority. A token for another account/project cannot place this boundary;
+    do not mutate the cutoff or send the specimen's lookup in that case.
+    """
+    if (
+        type(session) is not dict or "error" in session
+        or ("localId" in session and session["localId"] != uid)
+        or not id_token_matches_account(session.get("idToken"), uid=uid, project=project)
+    ):
+        raise ShadowError("revocation setup token did not identify the requested account")
+    shape = claim_shape(session["idToken"])
+    if "auth_time" not in shape["times"]:
+        raise ShadowError("revocation setup token has no integer auth_time")
+    return shape
+
+
 def run_cases(
     base: str,
     budget: dict[str, Any],
@@ -394,10 +433,48 @@ def run_cases(
     def custom_token(kind: str, uid: str) -> str:
         return signer(kind, custom_token_payload(kind, issuer, uid, int(time.time())))
 
-    def fresh_control(email: str, secret: str = password) -> dict[str, Any]:
-        """A fresh sign-in exchanged once more, recorded as the row's control."""
+    def control_id_token(
+        body: Any, id_field: str, refresh_field: str, reference_token: str
+    ) -> str:
+        """Check an admitted response's control identity, not its JWT signature.
+
+        HTTP 200 alone does not prove a fresh exchange on this account. Keep
+        the tokens private and grant no ownership, cleanup or authentication
+        authority here. An unusable control must not place a refusal boundary.
+        """
+        failure = "fresh-session control did not confirm the intended account"
+        if type(body) is not dict or "error" in body:
+            raise ShadowError(failure)
+        token, refresh_value = body.get(id_field), body.get(refresh_field)
+        if any(
+            type(value) is not str or not 0 < len(value) <= 8192
+            for value in (token, refresh_value)
+        ):
+            raise ShadowError(failure)
+        try:
+            shape = claim_shape(token, reveal=("aud",))
+        except (ValueError, TypeError):
+            raise ShadowError(failure) from None
+        if (
+            not subjects_match(reference_token, token)
+            or shape["issuer"] != f"https://securetoken.google.com/{env['project']}"
+            or shape["claimValues"].get("aud") != env["project"]
+            or shape["firebase"] is None
+            or "tenant" in shape["firebase"]["claimNames"]
+        ):
+            raise ShadowError(failure)
+        return token
+
+    def fresh_control(
+        email: str, reference_token: str, secret: str = password
+    ) -> dict[str, Any]:
+        """Exchange a fresh session of the same default-namespace account."""
         fresh = signin(email, secret)
+        fresh_token = control_id_token(fresh, "idToken", "refreshToken", reference_token)
         status, body = refresh(fresh["refreshToken"])
+        if status == 200:
+            control_id_token(body, "id_token", "refresh_token", fresh_token)
+        # A real refusal is still data; do not turn it into a synthetic success.
         return {"status": status, "errorCode": error_code(body)}
 
     # The refresh-refusal group runs last on both paths, so it is a closure over
@@ -439,7 +516,11 @@ def run_cases(
             status,
             body,
             {},
-            freshSessionRefresh=fresh_control(first_email, env["resetPassword"]),
+        )
+        # Preserve the received subject response before the follow-up control.
+        # A failed control stays absent and cannot establish this comparison.
+        rows["refresh-after-password-reset-rejected"]["freshSessionRefresh"] = fresh_control(
+            first_email, state["firstIdToken"], env["resetPassword"]
         )
 
         # An explicit administrative validSince on the second account, set two whole
@@ -454,23 +535,22 @@ def run_cases(
             {"localId": revoked["localId"], "validSince": str(explicit_second)},
             owner=True,
         )
-        # The row means nothing unless the update applied: a refused update leaves
-        # the session valid and the refresh below would be accepted for a reason that
-        # is not the finding. The applied second is recorded so review can see the
-        # two-second protocol was executed.
-        if status != 200:
-            raise ShadowError(f"explicit validSince update failed: {error_code(body)}")
+        # A refused or malformed setup ACK is not a revocation observation.
+        # The requested second is recorded; an ACK alone is not state readback.
+        _require_account_update_ack(status, body, revoked["localId"])
         status, body = refresh(later["refreshToken"])
         rows["refresh-after-explicit-valid-since-rejected"] = row(
             "refresh-after-explicit-valid-since-rejected",
             status,
             body,
             {},
-            freshSessionRefresh=fresh_control(revoked_email),
             diagnostics={
                 "authTime": later_shape["times"]["auth_time"],
                 "validSince": explicit_second,
             },
+        )
+        rows["refresh-after-explicit-valid-since-rejected"]["freshSessionRefresh"] = fresh_control(
+            revoked_email, revoked["idToken"]
         )
 
     # --- refresh -------------------------------------------------------------
@@ -488,6 +568,11 @@ def run_cases(
             "acceptedResponse": status == 200,
             "idTokenReturned": bool(body.get("id_token")),
             "refreshTokenReturned": bool(body.get("refresh_token")),
+            "idTokenMatchesAccount": bool(
+                status == 200 and id_token_matches_account(
+                    body.get("id_token"), uid=first["localId"], project=env["project"]
+                )
+            ),
             "authTimePreserved": bool(
                 refreshed
                 and refreshed["times"]["auth_time"] == base_shape["times"]["auth_time"]
@@ -518,6 +603,11 @@ def run_cases(
             "acceptedResponse": status == 200,
             "idTokenReturned": bool(body.get("id_token")),
             "refreshTokenReturned": bool(body.get("refresh_token")),
+            "idTokenMatchesAccount": bool(
+                status == 200 and id_token_matches_account(
+                    body.get("id_token"), uid=first["localId"], project=env["project"]
+                )
+            ),
             "authTimePreserved": bool(
                 second
                 and second["times"]["auth_time"] == base_shape["times"]["auth_time"]
@@ -535,7 +625,10 @@ def run_cases(
         },
     )
     first_refresh_token = body.get("refresh_token", first_refresh_token)
-    state.update(firstEmail=first_email, firstRefresh=first_refresh_token)
+    state.update(
+        firstEmail=first_email, firstRefresh=first_refresh_token,
+        firstIdToken=first["idToken"],
+    )
     status, body = refresh("rt1.0.0.demo-app.unissued0000000000000")
     rows["refresh-unknown-token-rejected"] = row(
         "refresh-unknown-token-rejected", status, body, {}
@@ -544,15 +637,18 @@ def run_cases(
     # --- revocation ----------------------------------------------------------
     revoked = signup(1)
     revoked_email = owned_email(tracker, 1)
-    revoked_shape = claim_shape(revoked["idToken"])
+    revoked_shape = _revocation_session_shape(
+        revoked, uid=revoked["localId"], project=env["project"]
+    )
     valid_since = revoked_shape["times"]["auth_time"] + 2
-    send(
+    setup_status, setup_body = send(
         budget,
         admin,
         "/accounts:update",
         {"localId": revoked["localId"], "validSince": str(valid_since)},
         owner=True,
     )
+    _require_account_update_ack(setup_status, setup_body, revoked["localId"])
     status, body = lookup(revoked["idToken"])
     rows["revocation-older-session-rejected"] = row(
         "revocation-older-session-rejected", status, body, {}
@@ -564,15 +660,18 @@ def run_cases(
     _rest(budget, 2)
     _sleep_to_next_second(budget)
     boundary = signin(revoked_email)
-    boundary_shape = claim_shape(boundary["idToken"])
+    boundary_shape = _revocation_session_shape(
+        boundary, uid=revoked["localId"], project=env["project"]
+    )
     boundary_second = boundary_shape["times"]["auth_time"]
-    send(
+    setup_status, setup_body = send(
         budget,
         admin,
         "/accounts:update",
         {"localId": revoked["localId"], "validSince": str(boundary_second)},
         owner=True,
     )
+    _require_account_update_ack(setup_status, setup_body, revoked["localId"])
     read_status, read_back = send(
         budget, admin, "/accounts:lookup", {"localId": [revoked["localId"]]}, owner=True
     )
@@ -590,7 +689,9 @@ def run_cases(
 
     _rest(budget, 2)
     later = signin(revoked_email)
-    later_shape = claim_shape(later["idToken"])
+    later_shape = _revocation_session_shape(
+        later, uid=revoked["localId"], project=env["project"]
+    )
     status, body = lookup(later["idToken"])
     rows["revocation-newer-session-accepted"] = row(
         "revocation-newer-session-accepted",
@@ -735,7 +836,7 @@ def run_cases(
     )
 
     # --- claim precedence ----------------------------------------------------
-    send(
+    setup_status, setup_body = send(
         budget,
         admin,
         "/accounts:update",
@@ -745,6 +846,7 @@ def run_cases(
         },
         owner=True,
     )
+    _require_account_update_ack(setup_status, setup_body, custom_uid)
     _rest(budget, 1)
     status, body = refresh(custom_session["refreshToken"])
     refreshed_custom = (
@@ -758,6 +860,11 @@ def run_cases(
         body,
         {
             "acceptedResponse": status == 200,
+            "idTokenMatchesAccount": bool(
+                status == 200 and id_token_matches_account(
+                    body.get("id_token"), uid=custom_uid, project=env["project"]
+                )
+            ),
             "sessionClaimWinsOverAccountClaim": bool(
                 refreshed_custom
                 and refreshed_custom["claimValues"].get("role") == "tester"

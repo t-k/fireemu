@@ -403,6 +403,34 @@ def subjects_match(first: str, second: str) -> bool:
     return subject is not None and subject == _subject(second)
 
 
+def id_token_matches_account(token: str, *, uid: str, project: str) -> bool:
+    """Project an admitted ID-token response's identity without exposing its values.
+
+    This compares the subject to the account identified by this run, not to a
+    UID from another run or just another token. Namespace is the campaign's
+    default project namespace. It does NOT verify a signature or grant auth,
+    creation ownership or cleanup authority. A measured disagreement is data.
+    """
+    if (
+        type(uid) is not str or not 1 <= len(uid) <= 128
+        or type(project) is not str or not project
+    ):
+        raise ValueError("known account and project required for identity comparison")
+    try:
+        _, payload = _jwt_objects(token)
+    except (ValueError, TypeError):
+        return False
+    firebase = payload.get("firebase")
+    return (
+        payload.get("sub") == uid
+        and payload.get("aud") == project
+        and payload.get("iss") == f"https://securetoken.google.com/{project}"
+        and ("user_id" not in payload or payload["user_id"] == uid)
+        and type(firebase) is dict
+        and "tenant" not in firebase
+    )
+
+
 # --- owned resources ------------------------------------------------------------
 
 

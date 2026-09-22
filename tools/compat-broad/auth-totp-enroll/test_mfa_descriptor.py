@@ -42,6 +42,7 @@ def test_the_production_descriptor_is_complete_and_wall_clock_bound():
     assert len(descriptor.approval_fields) == 17
     assert descriptor.binds_campaign_id is True
     assert descriptor.campaign_seconds == LIMITS["maxWallSeconds"] == 2700
+    assert descriptor.frozen_bounds["maxWallSeconds"] == 2700
     assert descriptor.recovery_seconds == LIMITS["recoveryReserveSeconds"] == 300
     assert descriptor.window_seconds == 3000
     assert descriptor.frozen_bounds["timingMode"] == "wall-clock"
@@ -70,6 +71,13 @@ def test_the_selected_plan_reference_binds_the_allowlisted_selector():
     assert plan["limits"]["maxWallSeconds"] == 1200
     assert reference["caseCount"] == reference["selectedCaseCount"] == 3
     assert reference["ownedAccounts"] == reference["selectedAccountCount"] == 1
+    selected_descriptor = campaign.descriptor_for_plan(
+        reference, WallClockSleeper()
+    )
+    assert selected_descriptor.campaign_seconds == 1200
+    assert selected_descriptor.frozen_bounds["maxWallSeconds"] == 1200
+    assert selected_descriptor.frozen_bounds["criticalPathSeconds"] == 301
+    assert selected_descriptor.frozen_bounds["recoveryReserveSeconds"] == 300
     assert campaign.lock_scopes(reference)[0]["key"].endswith(
         "auth/accounts/o2-mfa-pending-age-300-" + NONCE
     )

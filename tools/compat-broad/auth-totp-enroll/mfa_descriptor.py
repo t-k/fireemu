@@ -215,15 +215,21 @@ def request_budget() -> dict:
     }
 
 
-def wall_budget() -> dict:
+def wall_budget(
+    *,
+    max_wall_seconds: int | None = None,
+    critical_path: int | None = None,
+    recovery_reserve: int | None = None,
+) -> dict:
     """The wall split: provisioning, the concurrent aging critical path, recovery."""
-    critical = critical_path_seconds()
-    total = campaign_seconds()
+    critical = critical_path_seconds() if critical_path is None else critical_path
+    total = campaign_seconds() if max_wall_seconds is None else max_wall_seconds
+    recovery = recovery_seconds() if recovery_reserve is None else recovery_reserve
     used = (
         PROVISIONING_SECONDS
         + CONFIG_ENFORCEMENT_LAG_SECONDS
         + critical
-        + recovery_seconds()
+        + recovery
     )
     if used > total:
         raise ValueError("wall budget does not hold the critical path and recovery")
@@ -232,7 +238,7 @@ def wall_budget() -> dict:
         "provisioningSeconds": PROVISIONING_SECONDS,
         "configurationEnforcementLagSeconds": CONFIG_ENFORCEMENT_LAG_SECONDS,
         "criticalPathSeconds": critical,
-        "recoveryReserveSeconds": recovery_seconds(),
+        "recoveryReserveSeconds": recovery,
         "slackSeconds": total - used,
         "timingMode": WALL_CLOCK,
     }
@@ -299,11 +305,21 @@ def configuration_change() -> dict:
 
 
 def frozen_bounds(
-    *, case_count: int | None = None, account_count: int | None = None
+    *,
+    case_count: int | None = None,
+    account_count: int | None = None,
+    limits: dict | None = None,
 ) -> dict:
+    wall = wall_budget(
+        max_wall_seconds=None if limits is None else limits["maxWallSeconds"],
+        critical_path=None if limits is None else limits["criticalPathSeconds"],
+        recovery_reserve=(
+            None if limits is None else limits["recoveryReserveSeconds"]
+        ),
+    )
     return {
         **request_budget(),
-        **wall_budget(),
+        **wall,
         "caseCount": (
             len(observation_cases()) if case_count is None else case_count
         ),
@@ -661,7 +677,9 @@ def descriptor_for_plan(plan: dict, sleeper=None) -> CampaignDescriptor:
     active_sleeper = WallClockSleeper() if sleeper is None else sleeper
     require_wall_clock(active_sleeper)
     bounds = frozen_bounds(
-        case_count=plan["caseCount"], account_count=plan["ownedAccounts"]
+        case_count=plan["caseCount"],
+        account_count=plan["ownedAccounts"],
+        limits=manifest["limits"],
     )
     return _descriptor(
         active_sleeper,

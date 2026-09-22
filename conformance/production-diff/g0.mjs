@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { digestJson, requireThat, sha256 } from "./core.mjs";
+import { digestJson, object, requireThat, sha256 } from "./core.mjs";
 import { gitState, readSource } from "./io.mjs";
 import { compileFrozenG0Plan } from "./g0-plan.mjs";
 
@@ -171,25 +171,84 @@ function invokeComparator(repo, productionPath, local, runtime) {
   }
 }
 
-export function compareG0({ repo, entry, actual, execution, build }) {
+/** The prepared frozen recipe, not the reply, defines the complete row identity set. */
+function expectedG0Rows(program) {
+  requireThat(object(program?.jobs), "g0-comparison-program-shape");
+  const rows = [];
+  for (const [job, recipe] of Object.entries(program.jobs)) {
+    requireThat(object(recipe) && Array.isArray(recipe.observation), "g0-comparison-program-shape");
+    requireThat(recipe.observation.length <= 12 - rows.length, "g0-observation-shape");
+    for (let index = 0; index < recipe.observation.length; index++) rows.push({ job, index });
+  }
+  requireThat(rows.length === 12, "g0-observation-shape");
+  return rows;
+}
+
+export function compareG0({ repo, entry, program, actual, execution, build }) {
   requireThat(actual && typeof actual === "object", "g0-local-record-shape");
   requireThat(build?.artifactSha256 === execution?.artifact?.sha256, "g0-artifact-receipt-mismatch");
+  const expected = expectedG0Rows(program);
   const result = invokeComparator(
     repo,
     process.env[entry.productionResultPath],
     actual,
     { artifactSha256: execution?.artifact?.sha256 },
   );
-  const rows = result.rows.map((row) => ({
-    stepId: `${row.job}:${row.index}`,
-    comparison: row.verdict.toUpperCase(),
-    production: { redacted: true },
-    local: { redacted: true },
-  }));
+  requireThat(
+    object(result) &&
+      ["match", "mismatch", "indeterminate"].includes(result.compatibility) &&
+      Array.isArray(result.rows) &&
+      result.rows.length <= expected.length &&
+      (result.reason === undefined || result.reason === null || typeof result.reason === "string"),
+    "g0-comparator-result-shape",
+  );
+  const key = (row) => JSON.stringify([row.job, row.index]);
+  const expectedKeys = new Set(expected.map(key));
+  const received = new Map();
+  for (const row of result.rows) {
+    requireThat(
+      object(row) &&
+        typeof row.job === "string" &&
+        Number.isSafeInteger(row.index) &&
+        expectedKeys.has(key(row)) &&
+        !received.has(key(row)) &&
+        ["match", "mismatch", "indeterminate"].includes(row.verdict),
+      "g0-comparator-row-shape",
+    );
+    received.set(key(row), row);
+  }
+  const indeterminate = result.compatibility === "indeterminate";
+  if (!indeterminate) {
+    requireThat(
+      received.size === expected.length &&
+        result.rows.every((row) => row.verdict !== "indeterminate") &&
+        result.compatibility === (result.rows.some((row) => row.verdict === "mismatch") ? "mismatch" : "match") &&
+        !result.reason,
+      "g0-comparator-result-contradiction",
+    );
+  }
+  // An upstream admission failure is not a completed mismatch. Materialize unknown
+  // rows from the frozen recipe so resultEnvelope cannot mistake empty counts for
+  // complete evidence. Preserve any provisional verdicts as diagnostics only.
+  const rows = expected.map((identity) => {
+    const row = received.get(key(identity));
+    return {
+      stepId: `${identity.job}:${identity.index}`,
+      comparison: indeterminate ? "INDETERMINATE" : row.verdict.toUpperCase(),
+      ...(indeterminate ? {
+        comparisonReported: row !== undefined,
+        ...(row ? { reportedComparison: row.verdict.toUpperCase() } : {}),
+      } : {}),
+      production: { redacted: true },
+      local: { redacted: true },
+    };
+  });
   const counts = { match: 0, mismatch: 0, indeterminate: 0 };
   for (const row of rows) counts[row.comparison.toLowerCase()]++;
   return {
-    verdict: result.compatibility === "match" ? "MATCH" : "MISMATCH",
+    verdict: result.compatibility.toUpperCase(),
+    expectedRowCount: expected.length,
+    reportedRowCount: received.size,
     counts,
     rows,
     issues: result.reason ? [result.reason] : [],

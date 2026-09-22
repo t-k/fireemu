@@ -37,6 +37,12 @@ def synthetic_pair() -> tuple[dict, dict]:
             "trustRoot": "unsigned-emulator",
             **control_members(case),
         }
+        if (row["assertions"].get("idTokenReturned") is True
+                or row["assertions"].get("sessionCookieReturned") is True
+                or case["group"] == "claim-precedence"):
+            # This synthetic fixture supplies the measured claim projection too.
+            row["claims"] = {"claimNames": ["sub"],
+                             "claimTypes": {"sub": "string"}, "firebase": None}
         if case["id"] == SAME_SECOND_CASE_ID:
             row.update(boundaryPinned=True,
                        boundarySeconds={"authTime": 1800000000, "validSince": 1800000000})

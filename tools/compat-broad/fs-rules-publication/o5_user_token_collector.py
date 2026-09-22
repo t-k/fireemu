@@ -1840,8 +1840,10 @@ def recover_owned(
                 unconfirmed.append(resource)
             elif phase in {"held", "patch-uncertain"}:
                 held.append(resource)
-            else:
+            elif phase == "not-attempted" and isinstance(state, Mapping) and state.get("gateDisposition") == "never-attempted":
                 not_attempted.append(resource)
+            else:
+                held.append(resource)
         for entry in plan["ownedAccounts"]:
             ref = entry["ref"]
             state = ownership.get(ref)
@@ -1852,8 +1854,10 @@ def recover_owned(
                 unconfirmed.append(ref)
             elif phase in {"held", "patch-uncertain"}:
                 held.append(ref)
-            else:
+            elif phase == "not-attempted" and isinstance(state, Mapping) and state.get("gateDisposition") == "never-attempted":
                 not_attempted.append(ref)
+            else:
+                held.append(ref)
         selected_plan = dict(plan)
         selected_plan["ownedResources"] = [
             resource for resource in plan["ownedResources"] if resource in acknowledged_resources
@@ -1879,7 +1883,7 @@ def recover_owned(
     result["held"] = sorted(set(held + result["outstandingResources"] + result["outstandingAccounts"]))
     result["unconfirmed"] = sorted(set(unconfirmed))
     result["notAttempted"] = sorted(set(not_attempted))
-    result["cleanupComplete"] = not result["held"] and not result["unconfirmed"]
+    result["cleanupComplete"] = not result["held"] and not result["unconfirmed"] and not result["notAttempted"]
     return result
 
 
@@ -1917,14 +1921,17 @@ def _recover(
             continue
         expected = ownership.get(resource) if ownership is not None else None
         if expected is not None:
-            if (
-                expected.get("version") is not None
-                and observed.get("version") != expected.get("version")
-            ):
+            if not isinstance(expected.get("version"), str) or not expected["version"]:
+                outstanding.append(resource)
+                continue
+            if observed.get("version") != expected["version"]:
                 outstanding.append(resource)
                 continue
             expected_fields = expected.get("fieldsDigest")
-            if expected_fields is not None and observed.get("fieldsDigest") != expected_fields:
+            if not isinstance(expected_fields, str) or not expected_fields:
+                outstanding.append(resource)
+                continue
+            if observed.get("fieldsDigest") != expected_fields:
                 outstanding.append(resource)
                 continue
         version = observed.get("version")
@@ -1978,10 +1985,13 @@ def _recover(
             continue
         expected = ownership.get(ref) if ownership is not None else None
         if expected is not None:
-            if expected.get("uid") is not None and observed.get("uid") != expected.get("uid"):
+            if not isinstance(expected.get("uid"), str) or not expected["uid"]:
                 outstanding_accounts.append(ref)
                 continue
-            if expected.get("tenantId") is not None and observed.get("tenantId") != expected.get("tenantId"):
+            if observed.get("uid") != expected["uid"]:
+                outstanding_accounts.append(ref)
+                continue
+            if "tenantId" not in expected or observed.get("tenantId") != expected["tenantId"]:
                 outstanding_accounts.append(ref)
                 continue
         uid = observed.get("uid")

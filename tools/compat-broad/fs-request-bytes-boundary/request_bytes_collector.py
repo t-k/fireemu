@@ -776,7 +776,7 @@ def collect_local(
                             return wire_receipt["status"], wire_receipt.get("body")
 
                         cap = (
-                            campaign.transport_deadline_seconds()
+                            campaign.transport_deadline_seconds(plan.get("caseId"))
                             if operation_copy.get("body") is not None
                             else campaign.small_request_timeout_seconds()
                         )

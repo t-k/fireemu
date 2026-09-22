@@ -21,6 +21,11 @@ from o8_campaign import CAMPAIGN_APPROVAL_FIELDS
 
 
 NONCE = "b" * 32
+FIXTURE_PRINCIPAL = {
+    "clientId": "auth-action-local-client",
+    "verifiedEmail": "action-runner@example.test",
+    "requiredScopes": [campaign.IDENTITY_SCOPE],
+}
 
 
 def _artifacts(tmp_path):
@@ -33,7 +38,11 @@ def _artifacts(tmp_path):
         ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
     ).strip()
     permission = campaign.permission_bindings(
-        plan, source_commit, hashlib.sha256(artifact.read_bytes()).hexdigest(), source_inputs
+        plan,
+        source_commit,
+        hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        source_inputs,
+        {"credentialPrincipal": FIXTURE_PRINCIPAL},
     )
     inputs = admission.freeze_inputs(
         permission, plan, source_commit=source_commit, artifact_sha256=permission["artifactSha256"]

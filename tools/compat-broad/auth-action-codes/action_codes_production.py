@@ -79,7 +79,9 @@ def _claim(inputs: dict, plan: dict, gate_plan: dict, output: Path) -> dict:
             "resources": resources,
             "costMicrousd": gate_plan["costMicrousd"],
         },
-        "durationSeconds": 300,
+        # The owner window covers observation plus recovery; the phase bounds
+        # remain 300 and 180 seconds inside this 480-second reservation.
+        "durationSeconds": 480,
     }
 
 
@@ -93,6 +95,35 @@ def _wire_body(plan: dict, operation: dict, bindings: dict[str, str]) -> dict:
     if row is None:
         raise ValueError("Action operation is outside frozen manifest")
     return _resolve(row["body"], bindings)
+
+
+def _operation_deadline(now, run_started, *, is_recovery, wall_seconds, recovery_seconds):
+    phase_end = run_started + (wall_seconds + recovery_seconds if is_recovery else wall_seconds)
+    return min(now + 8, phase_end)
+
+
+def _persist_receipt(output: Path, *, plan: dict, snapshot: dict, reservation: str, error: str | None = None) -> None:
+    """Persist only bounded execution facts; never persist credentials or bodies."""
+    receipt = {
+        "kind": "auth-action-production-receipt-v1",
+        "campaignId": descriptor.CAMPAIGN,
+        "planDigest": digest(plan),
+        "gateDigest": digest(snapshot),
+        "requests": snapshot.get("total"),
+        "observation": snapshot.get("observation"),
+        "recovery": snapshot.get("recovery"),
+        "reservation": reservation,
+        "cleanup": {
+            "complete": snapshot.get("jobs", {}).get(gate_module.JOB, {}).get("complete"),
+            "owned": snapshot.get("jobs", {}).get(gate_module.JOB, {}).get("owned", []),
+            "absent": snapshot.get("jobs", {}).get(gate_module.JOB, {}).get("absent", []),
+        },
+        "error": error,
+    }
+    path = output / "production-receipt.json"
+    with path.open("x", encoding="utf-8") as stream:
+        json.dump(receipt, stream, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        stream.write("\n")
 
 
 def execute(
@@ -204,18 +235,28 @@ def execute(
 
     def dispatch_one(operation, is_recovery):
         body = _wire_body(plan, operation, runtime)
-        result = remote.send(
-            capability,
-            stage_id=operation["id"],
-            project=project,
-            nonce=nonce,
-            body=body,
-            deadline=min(time.monotonic() + 8, run_started + (180 if is_recovery else 300)),
-            binding=binding,
-            binding_digest=binding_digest,
-            inputs_digest=inputs["inputsDigest"],
+        deadline = _operation_deadline(
+            time.monotonic(),
+            run_started,
+            is_recovery=is_recovery,
+            wall_seconds=gate_plan["wallSeconds"],
+            recovery_seconds=gate_plan["recoverySeconds"],
         )
-        handle.dispatch(operation, is_recovery, lambda result=result: result)
+        result = handle.dispatch(
+            operation,
+            is_recovery,
+            lambda: remote.send(
+                capability,
+                stage_id=operation["id"],
+                project=project,
+                nonce=nonce,
+                body=body,
+                deadline=deadline,
+                binding=binding,
+                binding_digest=binding_digest,
+                inputs_digest=inputs["inputsDigest"],
+            ),
+        )
         status, response = result
         if status == 200 and operation.get("kind") == "sign-up":
             account = operation["account"]
@@ -236,6 +277,13 @@ def execute(
                 dispatch_one(operation, True)
             except Exception:
                 continue
+        _persist_receipt(
+            output,
+            plan=plan,
+            snapshot=handle.snapshot(),
+            reservation=ticket["reservation"],
+            error="action-observation-failure",
+        )
         raise
     else:
         for operation in recovery:
@@ -245,6 +293,12 @@ def execute(
         snapshot = handle.snapshot()
     finally:
         remote.forget_transport(inputs["inputsDigest"])
+    _persist_receipt(
+        output,
+        plan=plan,
+        snapshot=snapshot,
+        reservation=ticket["reservation"],
+    )
     return {
         "campaignId": descriptor.CAMPAIGN,
         "planDigest": digest(plan),

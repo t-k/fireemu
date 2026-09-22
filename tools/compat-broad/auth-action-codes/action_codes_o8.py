@@ -9,10 +9,10 @@ fields. A loopback origin is deliberately unavailable in production mode.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import select
-import secrets
 import stat
 import sys
 import time
@@ -99,20 +99,25 @@ def _names(value: Any) -> set[str]:
 def bindings_for(plan: dict) -> dict[str, dict[str, str]]:
     """Create private in-memory values for every frozen placeholder."""
     result: dict[str, dict[str, str]] = {}
+    nonce = plan["nonce"]
+
+    def stable(name: str) -> str:
+        return hashlib.sha256(f"AUTH-ACTION:{nonce}:{name}".encode()).hexdigest()
+
     for stage in (*plan["stages"], *plan["recovery"]):
         values: dict[str, str] = {}
         for name in _names(stage["body"]):
-            if name.endswith(".email"):
+            if name == "unknownEmail" or name.endswith(".email"):
                 suffix = name.split(".", 1)[0][-1].lower() if name != "unknownEmail" else "absent"
-                values[name] = f"o1-oob-{plan['nonce']}-{suffix}@example.invalid"
+                values[name] = f"o1-oob-{nonce}-{suffix}@example.invalid"
             elif name.endswith(".localId"):
-                values[name] = "pending-" + secrets.token_urlsafe(12)
+                values[name] = "pending-" + stable(name)[:24]
             elif name == "weakPassword":
-                values[name] = "Aa9!" + secrets.token_urlsafe(16)
+                values[name] = "Aa9!" + stable(name)[:20]
             elif name == "wrongCode":
-                values[name] = "wrong-" + secrets.token_urlsafe(12)
+                values[name] = "wrong-" + stable(name)[:24]
             else:
-                values[name] = secrets.token_urlsafe(24)
+                values[name] = "private-" + stable(name)[:24]
         result[stage["id"]] = values
     return result
 

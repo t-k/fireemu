@@ -108,7 +108,8 @@ def _frozen_inputs():
             },
         },
         "credentialPrincipal": {
-            "subject": "owner@example.test",
+            "clientId": "auth-action-local-client",
+            "verifiedEmail": "action-runner@example.test",
             "requiredScopes": [action_remote.IDENTITY_SCOPE],
         },
     }
@@ -171,7 +172,7 @@ def _handoff(permission):
         "token": "owner-token",
         "apiKey": "web-key",
         "permissionDigest": digest(permission),
-        "principal": "owner@example.test",
+        "principal": "action-runner@example.test",
         "scope": action_remote.IDENTITY_SCOPE,
     }
 
@@ -361,7 +362,7 @@ def test_noncanonical_project_is_rejected_before_fixture_constructor():
 def test_rehashed_permission_digest_does_not_authorize_mutated_permission():
     inputs = _frozen_inputs()
     inputs["permission"]["projectId"] = PROJECT
-    inputs["permission"]["credentialPrincipal"]["subject"] = "other@example.test"
+    inputs["permission"]["credentialPrincipal"]["verifiedEmail"] = "other@example.test"
     # Keep the original permissionDigest to model a caller that only rehashes
     # the outer frozen inputs after changing the permission object.
     unsigned = {key: item for key, item in inputs.items() if key != "inputsDigest"}

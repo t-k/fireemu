@@ -120,6 +120,7 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         plan_compiler(plan["nonce"])
     ):
         raise ValueError("authorized project plan differs")
+    principal = _owner_principal(baseline)
     return {
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
@@ -131,8 +132,7 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "role": plan["permissionEnvelope"]["role"],
         "scope": plan["permissionEnvelope"]["scope"],
         "credentialPrincipal": {
-            "subject": "owner@example.test",
-            "requiredScopes": [action_codes_remote_transport.IDENTITY_SCOPE],
+            **principal,
         },
         "methods": list(plan["permissionEnvelope"]["methods"]),
         "nonce": plan["nonce"],
@@ -150,6 +150,7 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
 def validate_permission(permission, plan, *, source_inputs=None, source_commit=None, artifact_sha256=None):
     """Validate authorization semantics, not only a digest over caller data."""
     envelope = plan["permissionEnvelope"]
+    principal = _owner_principal(permission)
     expected = {
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
@@ -161,8 +162,7 @@ def validate_permission(permission, plan, *, source_inputs=None, source_commit=N
         "role": envelope["role"],
         "scope": envelope["scope"],
         "credentialPrincipal": {
-            "subject": "owner@example.test",
-            "requiredScopes": [action_codes_remote_transport.IDENTITY_SCOPE],
+            **principal,
         },
         "methods": list(envelope["methods"]),
         "nonce": plan["nonce"],
@@ -177,6 +177,31 @@ def validate_permission(permission, plan, *, source_inputs=None, source_commit=N
     }
     if permission != expected:
         raise ValueError("semantic owner permission binding differs")
+
+
+def _owner_principal(value):
+    candidate = value.get("credentialPrincipal") if isinstance(value, dict) else None
+    if not isinstance(candidate, dict) or set(candidate) != {
+        "clientId", "verifiedEmail", "requiredScopes"
+    }:
+        raise ValueError("owner-approved credential principal required")
+    client_id = candidate["clientId"]
+    email = candidate["verifiedEmail"]
+    scopes = candidate["requiredScopes"]
+    if (
+        not isinstance(client_id, str)
+        or not client_id
+        or not isinstance(email, str)
+        or not email
+        or not isinstance(scopes, list)
+        or scopes != [action_codes_remote_transport.IDENTITY_SCOPE]
+    ):
+        raise ValueError("owner-approved credential principal differs")
+    return {
+        "clientId": client_id,
+        "verifiedEmail": email,
+        "requiredScopes": list(scopes),
+    }
 
 
 def transport_bound(value, *, binding, binding_digest, capability=None):

@@ -14,6 +14,11 @@ import action_codes_descriptor as campaign
 
 
 NONCE = "a" * 32
+FIXTURE_PRINCIPAL = {
+    "clientId": "auth-action-local-client",
+    "verifiedEmail": "action-runner@example.test",
+    "requiredScopes": [campaign.IDENTITY_SCOPE],
+}
 
 
 def test_descriptor_binds_explicit_project_and_complete_campaign():
@@ -48,3 +53,26 @@ def test_source_map_contains_actual_transport_and_shared_abort_closure():
 def test_transport_requires_the_closed_credential_envelope():
     with pytest.raises(ValueError, match="closed Action wire call"):
         campaign.descriptor().transport_bound({}, binding=b"x", binding_digest="x")
+
+
+def test_permission_requires_private_typed_principal():
+    plan = campaign.plan_compiler(NONCE)
+    with pytest.raises(ValueError, match="owner-approved credential principal"):
+        campaign.permission_bindings(plan, "a" * 40, "b" * 64, campaign.source_map())
+    permission = campaign.permission_bindings(
+        plan, "a" * 40, "b" * 64, campaign.source_map(),
+        {"credentialPrincipal": FIXTURE_PRINCIPAL},
+    )
+    assert permission["credentialPrincipal"] == FIXTURE_PRINCIPAL
+
+
+@pytest.mark.parametrize("mutation", [{"clientId": ""}, {"verifiedEmail": ""}])
+def test_permission_rejects_empty_principal_fields(mutation):
+    plan = campaign.plan_compiler(NONCE)
+    principal = dict(FIXTURE_PRINCIPAL)
+    principal.update(mutation)
+    with pytest.raises(ValueError, match="owner-approved credential principal"):
+        campaign.permission_bindings(
+            plan, "a" * 40, "b" * 64, campaign.source_map(),
+            {"credentialPrincipal": principal},
+        )

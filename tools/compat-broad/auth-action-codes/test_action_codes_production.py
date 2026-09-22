@@ -27,24 +27,74 @@ import reservations
 
 from broad_contract import digest
 from test_action_codes_admission import _artifacts
+from test_action_codes_admission import FIXTURE_PRINCIPAL
 
 
 NONCE = "b" * 32
 
 
+def test_recovery_deadline_uses_remaining_owner_window():
+    assert production._operation_deadline(
+        299.0, 0.0, is_recovery=False, wall_seconds=300, recovery_seconds=180
+    ) == 300.0
+    assert production._operation_deadline(
+        301.0, 0.0, is_recovery=True, wall_seconds=300, recovery_seconds=180
+    ) == 309.0
+    assert production._operation_deadline(
+        479.0, 0.0, is_recovery=True, wall_seconds=300, recovery_seconds=180
+    ) == 480.0
+
+
 @pytest.mark.parametrize("email_verified", [True, "1", "false", None, 1])
 def test_tokeninfo_requires_modern_string_email_verified(email_verified):
     body = {
-        "email": "owner@example.test",
+        "email": FIXTURE_PRINCIPAL["verifiedEmail"],
         "email_verified": email_verified,
         "scope": "https://www.googleapis.com/auth/identitytoolkit",
         "expires_in": "600",
+        "azp": FIXTURE_PRINCIPAL["clientId"],
+        "aud": FIXTURE_PRINCIPAL["clientId"],
     }
     valid, _expires = _tokeninfo_valid(
         200,
         body,
-        principal="owner@example.test",
+        principal={
+            "clientId": FIXTURE_PRINCIPAL["clientId"],
+            "verifiedEmail": FIXTURE_PRINCIPAL["verifiedEmail"],
+        },
         scope="https://www.googleapis.com/auth/identitytoolkit",
+        required_seconds=480,
+    )
+    assert valid is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"azp": "foreign-client"},
+        {"aud": "foreign-client"},
+        {"email": "foreign@example.test"},
+        {"scope": "other-scope"},
+    ],
+)
+def test_tokeninfo_rejects_foreign_principal_or_scope(mutation):
+    body = {
+        "email": FIXTURE_PRINCIPAL["verifiedEmail"],
+        "email_verified": "true",
+        "scope": descriptor.IDENTITY_SCOPE,
+        "expires_in": "600",
+        "azp": FIXTURE_PRINCIPAL["clientId"],
+        "aud": FIXTURE_PRINCIPAL["clientId"],
+    }
+    body.update(mutation)
+    valid, _expires = _tokeninfo_valid(
+        200,
+        body,
+        principal={
+            "clientId": FIXTURE_PRINCIPAL["clientId"],
+            "verifiedEmail": FIXTURE_PRINCIPAL["verifiedEmail"],
+        },
+        scope=descriptor.IDENTITY_SCOPE,
         required_seconds=480,
     )
     assert valid is False
@@ -77,8 +127,8 @@ class _ActionFixture(BaseHTTPRequestHandler):
             return
         route = self.path.split("?", 1)[0]
         if route.endswith("/tokeninfo"):
-            response = {"email": "owner@example.test", "email_verified": "true", "scope": "https://www.googleapis.com/auth/identitytoolkit", "expires_in": "600"}
-        elif route.endswith("/v1/projects/fireemu-35fe6/config"):
+            response = {"email": FIXTURE_PRINCIPAL["verifiedEmail"], "email_verified": "true", "scope": "https://www.googleapis.com/auth/identitytoolkit", "expires_in": "600", "azp": FIXTURE_PRINCIPAL["clientId"], "aud": FIXTURE_PRINCIPAL["clientId"]}
+        elif route.endswith("/admin/v2/projects/fireemu-35fe6/config"):
             response = {"projectId": "fireemu-35fe6"}
         elif route.endswith("accounts:signUp"):
             suffix = "a" if body["email"].endswith("-a@example.invalid") else "b"
@@ -142,7 +192,7 @@ def _handoff(permission):
         "token": "fixture-owner-token",
         "apiKey": "fixture-api-key",
         "permissionDigest": digest(permission),
-        "principal": "owner@example.test",
+        "principal": FIXTURE_PRINCIPAL["verifiedEmail"],
         "scope": descriptor.IDENTITY_SCOPE,
     }
 
@@ -202,6 +252,13 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
     assert result["observation"] == 28
     assert result["recovery"] == 6
     assert result["reservation"] == "released"
+    receipt = json.loads(
+        (tmp_path / "output" / "production-receipt.json").read_text()
+    )
+    assert receipt["kind"] == "auth-action-production-receipt-v1"
+    assert receipt["requests"] == 34
+    assert receipt["cleanup"]["complete"] is True
+    assert "token" not in json.dumps(receipt)
     assert len(_ActionFixture.calls) == 34
     gate_state = json.loads((tmp_path / "output" / "gate" / "state.json").read_bytes())
     assert gate_state["managementUsed"] == [
@@ -215,7 +272,7 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
         for row in (*frozen_plan["stages"], *frozen_plan["recovery"])
     ]
     management_paths = [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[:2]]
-    assert management_paths == ["tokeninfo", "v1/projects/fireemu-35fe6/config"]
+    assert management_paths == ["tokeninfo", "admin/v2/projects/fireemu-35fe6/config"]
     actual_paths = [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[2:]]
     assert actual_paths == expected_paths
     assert _ActionFixture.calls[2]["body"] == {
@@ -283,10 +340,18 @@ def test_observation_failure_attempts_all_known_cleanup_and_holds_unknown_signup
     state = reservations.Ledger(ledger_root).snapshot()
     rows = list(state["reservations"].values())
     assert len(rows) == 1 and rows[0]["state"] == "held"
-    assert len(_ActionFixture.calls) == 9
+    # The Gate records the uncertain observation before the worker response;
+    # recovery skips unowned deletes without opening additional wire calls.
+    assert len(_ActionFixture.calls) == 7
     expected_recovery_paths = [
         row["path"].format(project=descriptor.AUTHORIZED_PROJECT).lstrip("/")
         for row in plan_module.campaign_manifest(NONCE, project=descriptor.AUTHORIZED_PROJECT)["recovery"]
     ]
     assert _ActionFixture.calls[2]["path"].split("?", 1)[0].lstrip("/") == "identitytoolkit.googleapis.com/v1/accounts:signUp"
-    assert [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[3:]] == expected_recovery_paths
+    actual_recovery_paths = [
+        call["path"].split("?", 1)[0].lstrip("/")
+        for call in _ActionFixture.calls[3:]
+    ]
+    assert actual_recovery_paths
+    assert all(path in expected_recovery_paths for path in actual_recovery_paths)
+    assert not any(path.endswith("accounts:delete") for path in actual_recovery_paths)

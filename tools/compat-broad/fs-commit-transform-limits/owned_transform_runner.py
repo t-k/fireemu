@@ -69,9 +69,22 @@ G0_CURRENT_PROFILE = {
     "manifestCommitField": "executionCommit",
     "requireTopLevelArtifactSha": False,
 }
+CURRENT_8245_PROFILE = {
+    "name": "current-8245-e896132a",
+    "artifactSha256": "8245b80ea941344e114fe8f61cd7721d2519739509779e7504c295c1bbb66849",
+    "runtimeCommit": "e896132a2317a5f38b2780857301f7b0f88b2e68",
+    "manifestCommitPath": ["runtimeSource", "commit"],
+    "requireTopLevelArtifactSha": False,
+}
 PROFILES = {
     item["name"]: item
-    for item in (DEFAULT_PROFILE, REPAIRED_PROFILE, CURRENT_PROFILE, G0_CURRENT_PROFILE)
+    for item in (
+        DEFAULT_PROFILE,
+        REPAIRED_PROFILE,
+        CURRENT_PROFILE,
+        G0_CURRENT_PROFILE,
+        CURRENT_8245_PROFILE,
+    )
 }
 PROJECT = "demo-firestore-probe"
 CONFIGURATION = {
@@ -156,6 +169,26 @@ def resolve_profile(profile: dict | str = DEFAULT_PROFILE) -> dict:
     return registered
 
 
+def manifest_commit(manifest: dict, profile: dict) -> str | None:
+    path = profile.get("manifestCommitPath")
+    if path is not None:
+        if not isinstance(path, list) or not path or any(
+            not isinstance(part, str) or not part for part in path
+        ):
+            raise ValueError("invalid manifest commit path")
+        value: object = manifest
+        for part in path:
+            if not isinstance(value, dict) or part not in value:
+                return None
+            value = value[part]
+        return value if isinstance(value, str) else None
+    field = profile.get("manifestCommitField")
+    if not isinstance(field, str) or not field:
+        raise ValueError("invalid manifest commit field")
+    value = manifest.get(field)
+    return value if isinstance(value, str) else None
+
+
 def validate_runtime_provenance(
     manifest: dict, profile: dict | str = DEFAULT_PROFILE
 ) -> dict:
@@ -164,7 +197,7 @@ def validate_runtime_provenance(
     runtime_commit = profile["runtimeCommit"]
     expected = runtime_inputs_at_commit(runtime_commit, ROOT)
     actual = manifest.get("build", {}).get("inputs")
-    if manifest.get(profile["manifestCommitField"]) != runtime_commit or not _exact(
+    if manifest_commit(manifest, profile) != runtime_commit or not _exact(
         actual, expected
     ):
         raise ValueError("retained runtime input map differs from fixed Git tree")
@@ -183,7 +216,7 @@ def validate_manifest_payload(
     artifact_sha = profile["artifactSha256"]
     build = manifest.get("build", {})
     if (
-        manifest.get(profile["manifestCommitField"]) != profile["runtimeCommit"]
+        manifest_commit(manifest, profile) != profile["runtimeCommit"]
         or (
             profile["requireTopLevelArtifactSha"]
             and manifest.get("artifactSha256") != artifact_sha
@@ -270,7 +303,7 @@ def validate_current_g0_artifact(
         raise ValueError("retained artifact exceeds bound")
     runtime = validate_retained_artifact(artifact, manifest_path, profile=profile)
     manifest = json.loads(manifest_path.read_bytes())
-    source_commit = manifest.get(profile["manifestCommitField"])
+    source_commit = manifest_commit(manifest, profile)
     current_commit = subprocess.check_output(
         ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
     ).strip()

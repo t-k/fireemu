@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import subprocess
+from pathlib import Path
 
 import owned_transform_runner as runner
 import pytest
 from owned_transform_runner import (
     BUILD_COMMAND,
     CURRENT_PROFILE,
+    CURRENT_8245_PROFILE,
     G0_CURRENT_PROFILE,
     PROFILES,
     REPAIRED_PROFILE,
@@ -45,6 +49,83 @@ def test_g0_profile_is_closed_to_the_retained_build_identity():
         "manifestCommitField": "executionCommit",
         "requireTopLevelArtifactSha": False,
     }
+
+
+PRIVATE_8245_ENABLED = os.environ.get("G0_8245_RUN_PRIVATE_TESTS") == "1"
+PRIVATE_8245_ARTIFACT = Path(
+    os.environ.get(
+        "G0_8245_RETAINED_ARTIFACT",
+        "/Users/tk/work/firebase-emulator/docs.local/runs/saved-runtime-20260922-approved/projection-e896/fireemu",
+    )
+)
+PRIVATE_8245_MANIFEST = Path(
+    os.environ.get(
+        "G0_8245_BUILD_MANIFEST",
+        "/Users/tk/work/firebase-emulator/docs.local/runs/saved-runtime-20260922-approved/projection-e896/build-local.json",
+    )
+)
+
+
+@pytest.mark.skipif(
+    not PRIVATE_8245_ENABLED
+    or not PRIVATE_8245_ARTIFACT.is_file()
+    or not PRIVATE_8245_MANIFEST.is_file(),
+    reason="opt-in retained 8245 provenance fixture is unavailable",
+)
+def test_current_8245_profile_accepts_private_nested_runtime_source():
+    assert PROFILES["current-8245-e896132a"] == CURRENT_8245_PROFILE == {
+        "name": "current-8245-e896132a",
+        "artifactSha256": "8245b80ea941344e114fe8f61cd7721d2519739509779e7504c295c1bbb66849",
+        "runtimeCommit": "e896132a2317a5f38b2780857301f7b0f88b2e68",
+        "manifestCommitPath": ["runtimeSource", "commit"],
+        "requireTopLevelArtifactSha": False,
+    }
+    result = validate_current_g0_artifact(
+        PRIVATE_8245_ARTIFACT,
+        PRIVATE_8245_MANIFEST,
+        profile="current-8245-e896132a",
+        repo=runner.ROOT,
+    )
+
+    assert result["artifactSha256"] == "8245b80ea941344e114fe8f61cd7721d2519739509779e7504c295c1bbb66849"
+    assert result["runtimeSourceCommit"] == "e896132a2317a5f38b2780857301f7b0f88b2e68"
+    assert result["runtimeInputCount"] == 430
+    assert result["sourceInputsDigest"] == result["currentInputsDigest"]
+
+
+@pytest.mark.skipif(
+    not PRIVATE_8245_ENABLED
+    or not PRIVATE_8245_ARTIFACT.is_file()
+    or not PRIVATE_8245_MANIFEST.is_file(),
+    reason="opt-in retained 8245 provenance fixture is unavailable",
+)
+@pytest.mark.parametrize("mutation", ["nested-commit", "extra-input", "missing-input", "changed-input", "artifact-hash", "build-command"])
+def test_current_8245_profile_rejects_private_provenance_mutations(tmp_path, mutation):
+    artifact = tmp_path / "fireemu"
+    shutil.copyfile(PRIVATE_8245_ARTIFACT, artifact)
+    manifest = json.loads(PRIVATE_8245_MANIFEST.read_text())
+    if mutation == "nested-commit":
+        manifest["runtimeSource"]["commit"] = "f" * 40
+    elif mutation == "extra-input":
+        manifest["build"]["inputs"]["forged-input"] = "0" * 64
+    elif mutation == "missing-input":
+        del manifest["build"]["inputs"]["Cargo.toml"]
+    elif mutation == "changed-input":
+        manifest["build"]["inputs"]["Cargo.toml"] = "0" * 64
+    elif mutation == "artifact-hash":
+        manifest["build"]["artifactSha256"] = "0" * 64
+    else:
+        manifest["build"]["command"] = ["cargo", "build", "--unlocked"]
+    mutated = tmp_path / "build-local.json"
+    mutated.write_text(json.dumps(manifest))
+
+    with pytest.raises(ValueError):
+        validate_current_g0_artifact(
+            artifact,
+            mutated,
+            profile="current-8245-e896132a",
+            repo=runner.ROOT,
+        )
 
 
 @pytest.fixture

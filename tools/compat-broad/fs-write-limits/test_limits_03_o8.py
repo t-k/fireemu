@@ -943,6 +943,44 @@ def test_a_lost_create_response_is_never_retired_as_no_data(
     assert row["state"] == "held"
 
 
+def test_a_real_incomplete_collector_restores_index_before_holding(
+    built, tmp_path, monkeypatch
+):
+    """A real DATA event still attempts REC before retaining ownership."""
+    calls, _responder = wire_fixture(monkeypatch, fault="create")
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] in ("RuntimeError", "ValueError")
+    assert any(op["method"] in ("PATCH", "POST") for _, _, op in calls)
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    assert "recovery:index-lifecycle-restored" in management_ids
+    assert receipt["postflightComplete"] is True
+    assert receipt["reservationStateAtPublication"] == "held"
+
+
+def test_a_real_cleanup_complete_mismatch_restores_index_before_holding(
+    built, tmp_path, monkeypatch, gate_accounts_the_empty_batch_item
+):
+    """A real DATA mismatch with completed cleanup still performs REC."""
+    calls, responder = wire_fixture(monkeypatch, fault="mismatch")
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] in ("RuntimeError", "ValueError")
+    assert responder.documents == {}
+    assert any(op["method"] in ("PATCH", "POST") for _, _, op in calls)
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    assert receipt["collection"]["cleanupComplete"] is True
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    assert management_ids[-1] == "recovery:index-lifecycle-restored"
+    assert receipt["postflightComplete"] is True
+    assert receipt["reservationStateAtPublication"] == "held"
+
+
 def test_a_stop_after_a_create_recovers_exactly_the_created_documents(
     built, tmp_path, monkeypatch, gate_accounts_the_empty_batch_item
 ):

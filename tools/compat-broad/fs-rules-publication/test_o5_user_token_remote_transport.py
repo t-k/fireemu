@@ -54,14 +54,23 @@ class _FixtureHandler(http.server.BaseHTTPRequestHandler):
         elif self.path.startswith("/v1/accounts:"):
             payload = json.dumps(self.__class__.issuance_body or {}).encode()
             status = 200
+        elif self.path.endswith("/documents:commit"):
+            request_json = json.loads(body)
+            writes = request_json.get("writes", [])
+            payload = json.dumps(
+                {
+                    "writeResults": [
+                        {"updateTime": "2026-09-22T00:00:00Z"} for _ in writes
+                    ],
+                    "commitTime": "2026-09-22T00:00:00Z",
+                }
+            ).encode()
+            status = 200
         else:
             payload = json.dumps(
                 {
-                    "complete": True,
-                    "status": "OK",
-                    "releaseName": "fixture-release",
-                    "readbackKind": "release-get",
-                    "readbackDigest": "d" * 64,
+                    "name": self.path.removeprefix("/v1/"),
+                    "fields": {},
                 }
             ).encode()
             status = 200
@@ -438,6 +447,63 @@ def test_transport_adapts_official_document_response_through_real_worker(fixture
     }
 
 
+def test_transport_rejects_forged_normalized_firestore_document_response(fixture_origin):
+    plan, operation, _resource = minimal_wire_plan()
+    _FixtureHandler.response_status = 200
+    _FixtureHandler.response_body = {"complete": True, "status": "OK"}
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=fixture_origin,
+        )
+        with pytest.raises(ValueError, match="REST Document response shape refused"):
+            transmit(
+                operation,
+                binding=source,
+                binding_digest=source_digest,
+                capability=capability,
+            )
+    finally:
+        _ACTIVE.discard(capability)
+
+
+def test_transport_rejects_malformed_firestore_typed_value(fixture_origin):
+    plan, operation, resource = minimal_wire_plan()
+    _FixtureHandler.response_status = 200
+    _FixtureHandler.response_body = {
+        "name": resource,
+        "fields": {"count": {"stringValue": {"not": "a string"}}},
+    }
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=fixture_origin,
+        )
+        with pytest.raises(ValueError, match="Firestore string value refused"):
+            transmit(
+                operation,
+                binding=source,
+                binding_digest=source_digest,
+                capability=capability,
+            )
+    finally:
+        _ACTIVE.discard(capability)
+
+
 def test_transport_adapts_official_commit_response_through_real_worker(fixture_origin):
     plan, operation, _resource = minimal_wire_plan("commit", "create")
     _FixtureHandler.response_status = 200
@@ -683,7 +749,8 @@ def test_worker_uses_fixture_origin_and_never_redirects(fixture_origin):
         fixture_origin=fixture_origin,
     )
     assert result["status"] == 200
-    assert result["body"]["complete"] is True
+    assert result["body"]["writeResults"] == []
+    assert result["body"]["commitTime"] == "2026-09-22T00:00:00Z"
     assert (
         _FixtureHandler.requests[0]["path"]
         == "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit"

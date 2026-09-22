@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import signal
@@ -783,28 +784,69 @@ def run_worker(
     )
 
 
-def _decode_firestore_value(value: Any) -> Any:
+_MAX_FIRESTORE_VALUE_DEPTH = 32
+
+
+def _decode_firestore_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > _MAX_FIRESTORE_VALUE_DEPTH:
+        raise ValueError("Firestore value depth refused")
     if not isinstance(value, dict) or len(value) != 1:
         raise ValueError("Firestore value shape refused")
     kind, payload = next(iter(value.items()))
-    if kind in {"nullValue", "booleanValue", "stringValue", "doubleValue"}:
+    if kind == "nullValue":
+        if payload is not None:
+            raise ValueError("Firestore null value refused")
+        return payload
+    if kind == "booleanValue":
+        if type(payload) is not bool:
+            raise ValueError("Firestore boolean value refused")
+        return payload
+    if kind == "stringValue":
+        if not isinstance(payload, str):
+            raise ValueError("Firestore string value refused")
+        return payload
+    if kind == "doubleValue":
+        if type(payload) not in {int, float} or not math.isfinite(payload):
+            raise ValueError("Firestore double value refused")
         return payload
     if kind == "integerValue":
         if not isinstance(payload, str) or not re.fullmatch(r"-?(0|[1-9][0-9]*)", payload):
             raise ValueError("Firestore integer value refused")
         return int(payload)
     if kind == "mapValue":
-        if not isinstance(payload, dict) or set(payload) != {"fields"} or not isinstance(payload["fields"], dict):
+        if not isinstance(payload, dict) or set(payload) - {"fields"}:
             raise ValueError("Firestore map value refused")
-        return {key: _decode_firestore_value(nested) for key, nested in payload["fields"].items()}
+        fields = payload.get("fields", {})
+        if not isinstance(fields, dict):
+            raise ValueError("Firestore map value refused")
+        return {
+            key: _decode_firestore_value(nested, depth=depth + 1)
+            for key, nested in fields.items()
+        }
     if kind == "arrayValue":
-        if not isinstance(payload, dict) or set(payload) != {"values"} or not isinstance(payload["values"], list):
+        if not isinstance(payload, dict) or set(payload) - {"values"}:
             raise ValueError("Firestore array value refused")
-        return [_decode_firestore_value(nested) for nested in payload["values"]]
-    if kind in {"timestampValue", "bytesValue", "referenceValue", "geoPointValue"}:
-        if not isinstance(payload, (str, dict)):
+        values = payload.get("values", [])
+        if not isinstance(values, list):
+            raise ValueError("Firestore array value refused")
+        return [_decode_firestore_value(nested, depth=depth + 1) for nested in values]
+    if kind in {"timestampValue", "bytesValue", "referenceValue"}:
+        if not isinstance(payload, str):
             raise ValueError("Firestore scalar value refused")
         return payload
+    if kind == "geoPointValue":
+        if not isinstance(payload, dict) or set(payload) != {"latitude", "longitude"}:
+            raise ValueError("Firestore geo point value refused")
+        latitude = payload["latitude"]
+        longitude = payload["longitude"]
+        if (
+            type(latitude) not in {int, float}
+            or type(longitude) not in {int, float}
+            or not math.isfinite(latitude)
+            or not math.isfinite(longitude)
+        ):
+            raise ValueError("Firestore geo point value refused")
+        return {"latitude": latitude, "longitude": longitude}
     raise ValueError("Firestore value kind refused")
 
 
@@ -816,8 +858,6 @@ def _adapt_firestore_result(
     if type(status) is not int or not isinstance(body, dict):
         raise ValueError("REST response envelope refused")
     wire = {"endpoint": endpoint, "wireSequence": sequence}
-    if "complete" in body and "status" in body:
-        return {**body, "httpStatus": status, **wire}
     error = body.get("error")
     if status < 200 or status >= 300:
         if (

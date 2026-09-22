@@ -186,6 +186,13 @@ export const TRANSFORMS_CASE = Object.freeze({
   programId: "writes/transforms",
   programDigest: "b6cf42bea907f63553c645a5a03b0aa3d60c346174c9f228c3056ee8d117a6c5",
   title: "Saved production transforms, typed refusals and ordered post-state reads",
+  // Raw responses for REQUEST_TIME precision/readback diagnostics only. The
+  // historical normalized comparison and its evidence claims are unchanged.
+  rawTimestampResponseSteps: Object.freeze([
+    "server-timestamp-and-increments", "read-after-increments", "read-after-max-min",
+    "read-after-array-transforms", "transform-only-write-creates",
+    "read-transform-created", "read-set-and-transform",
+  ]),
   stepIds: Object.freeze([
     "server-timestamp-and-increments",
     "read-after-increments",

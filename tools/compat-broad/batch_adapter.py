@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
+import selectors
 import signal
 import subprocess
 import sys
@@ -38,6 +40,300 @@ HOSTS = {
     "www.googleapis.com",
     "apikeys.googleapis.com",
 }
+MAX_WORKER_STDOUT = 131072
+MAX_WORKER_STDERR = 8192
+MAX_WORKER_URL = 65536
+MAX_WORKER_HEADERS = 65536
+MAX_WORKER_INPUT = 262144
+
+
+class WorkerProcessError(ValueError):
+    """A bounded worker failure with truthful, secret-free process state."""
+
+    def __init__(self, message, process_receipt):
+        super().__init__(message)
+        self.process_receipt = process_receipt
+
+
+def _process_receipt(
+    *, pid, returncode, worker_reaped, termination, deadline_exceeded=False, started=True
+):
+    return {
+        "pid": pid,
+        "returncode": returncode,
+        "workerReaped": worker_reaped,
+        "termination": termination,
+        "deadlineExceeded": deadline_exceeded,
+        "started": started,
+    }
+
+
+def _cleanup_worker(worker, *, termination, deadline_exceeded=False):
+    """Terminate this child and report only state confirmed by wait/poll."""
+    if worker.poll() is None:
+        try:
+            worker.kill()
+        except OSError:
+            pass
+    try:
+        worker.communicate(timeout=1)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        try:
+            worker.kill()
+        except OSError:
+            pass
+        try:
+            worker.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return _process_receipt(
+        pid=worker.pid,
+        returncode=worker.poll(),
+        worker_reaped=worker.poll() is not None,
+        termination=termination,
+        deadline_exceeded=deadline_exceeded,
+    )
+
+
+def _bounded_worker_exchange(worker, payload, deadline):
+    """Exchange bounded bytes with one worker without unbounded pipe reads."""
+    selector = selectors.DefaultSelector()
+    streams = {}
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": MAX_WORKER_STDOUT, "stderr": MAX_WORKER_STDERR}
+    input_bytes = payload.encode()
+    input_offset = 0
+    failure = None
+    timed_out = False
+
+    def close_stream(name):
+        stream = streams.pop(name, None)
+        if stream is not None:
+            try:
+                selector.unregister(stream)
+            except (KeyError, ValueError):
+                pass
+            stream.close()
+
+    try:
+        for name, stream in (("stdout", worker.stdout), ("stderr", worker.stderr)):
+            streams[name] = stream
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, name)
+        stdin = worker.stdin
+        if stdin is not None:
+            os.set_blocking(stdin.fileno(), False)
+            streams["stdin"] = stdin
+            selector.register(stdin, selectors.EVENT_WRITE, "stdin")
+
+        while streams:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            events = selector.select(remaining)
+            if not events:
+                timed_out = True
+                break
+            for key, mask in events:
+                name = key.data
+                stream = key.fileobj
+                try:
+                    if name == "stdin":
+                        if input_offset == len(input_bytes):
+                            close_stream("stdin")
+                            continue
+                        written = os.write(stream.fileno(), input_bytes[input_offset:])
+                        input_offset += written
+                        if input_offset == len(input_bytes):
+                            close_stream("stdin")
+                    else:
+                        chunk = os.read(stream.fileno(), 65536)
+                        if not chunk:
+                            close_stream(name)
+                            continue
+                        output[name].extend(chunk)
+                        if len(output[name]) > limits[name]:
+                            failure = "output-limit"
+                            break
+                except (BrokenPipeError, OSError):
+                    failure = "exchange-failed"
+                    break
+            if failure is not None:
+                break
+    finally:
+        selector.close()
+
+    if failure is not None or timed_out:
+        if worker.poll() is None:
+            try:
+                worker.kill()
+            except OSError:
+                pass
+        try:
+            worker.wait(timeout=0.1)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    else:
+        try:
+            worker.wait(timeout=max(0.0, min(0.1, deadline - time.monotonic())))
+        except (OSError, subprocess.TimeoutExpired):
+            failure = "exchange-failed"
+            if worker.poll() is None:
+                try:
+                    worker.kill()
+                except OSError:
+                    pass
+                try:
+                    worker.wait(timeout=0.1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+
+    for stream in list(streams.values()):
+        stream.close()
+    receipt = _process_receipt(
+        pid=worker.pid,
+        returncode=worker.poll(),
+        worker_reaped=worker.poll() is not None,
+        termination="deadline" if timed_out else (failure or "exited"),
+        deadline_exceeded=timed_out,
+    )
+    if failure is not None:
+        raise WorkerProcessError(
+            "bounded worker output exceeded"
+            if failure == "output-limit"
+            else "bounded worker exchange failed",
+            receipt,
+        ) from None
+    if timed_out:
+        raise WorkerProcessError("whole request deadline exceeded", receipt) from None
+    try:
+        return bytes(output["stdout"]).decode(), receipt
+    except UnicodeDecodeError:
+        raise WorkerProcessError("bounded worker returned malformed output", receipt) from None
+
+
+def _utf8_size(value, limit, label):
+    total = 0
+    for offset in range(0, len(value), 4096):
+        total += len(value[offset : offset + 4096].encode())
+        if total > limit:
+            raise ValueError(f"{label} bound exceeded")
+    return total
+
+
+def _validate_json_value(value, *, depth=0, nodes=None, active=None, budget=None):
+    """Validate bounded JSON inputs before json.dumps can materialize them."""
+    if nodes is None:
+        nodes = [0]
+    if active is None:
+        active = set()
+    if budget is None:
+        budget = [0]
+
+    def charge(amount):
+        budget[0] += amount
+        if budget[0] > 16384:
+            raise ValueError("request body bound exceeded")
+
+    nodes[0] += 1
+    if nodes[0] > 4096 or depth > 64:
+        raise ValueError("request JSON structure bound exceeded")
+    if value is None or isinstance(value, (bool, int)):
+        charge(len(json.dumps(value, allow_nan=False)))
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("request JSON contains non-finite number")
+        charge(len(json.dumps(value, allow_nan=False)))
+        return
+    if isinstance(value, str):
+        _utf8_size(value, 16384, "request body")
+        charge(len(json.dumps(value, allow_nan=False)))
+        return
+    if not isinstance(value, (list, dict)):
+        raise ValueError("request JSON type is invalid")
+    identity = id(value)
+    if identity in active:
+        raise ValueError("request JSON cycle is invalid")
+    active.add(identity)
+    try:
+        if isinstance(value, list):
+            charge(1)
+            first = True
+            for item in value:
+                if not first:
+                    charge(2)
+                first = False
+                _validate_json_value(
+                    item, depth=depth + 1, nodes=nodes, active=active, budget=budget
+                )
+            charge(1)
+        else:
+            charge(1)
+            first = True
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise ValueError("request JSON object key is invalid")
+                _utf8_size(key, 16384, "request body")
+                if not first:
+                    charge(2)
+                first = False
+                charge(len(json.dumps(key, allow_nan=False)) + 2)
+                _validate_json_value(
+                    item, depth=depth + 1, nodes=nodes, active=active, budget=budget
+                )
+            charge(1)
+    finally:
+        active.remove(identity)
+
+
+def _run_worker(payload, timeout, *, include_process_receipt):
+    if not include_process_receipt:
+        try:
+            result = subprocess.run(
+                [sys.executable, "-I", "-S", "-B", str(HERE / "batch_wire.py")],
+                input=payload,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                env={k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "LANG") if k in os.environ},
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise ValueError("whole request deadline exceeded") from None
+        if result.returncode != 0:
+            raise ValueError("bounded transport failed")
+        return result.stdout, None
+
+    deadline = time.monotonic() + timeout
+    env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "LANG") if k in os.environ}
+    try:
+        worker = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-B", str(HERE / "batch_wire.py")],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+    except OSError:
+        receipt = _process_receipt(
+            pid=None,
+            returncode=None,
+            worker_reaped=False,
+            termination="start-failed",
+            started=False,
+        )
+        raise WorkerProcessError("bounded worker failed to start", receipt) from None
+
+    stdout, receipt = _bounded_worker_exchange(worker, payload, deadline)
+    returncode = receipt["returncode"]
+    if not receipt["workerReaped"]:
+        raise WorkerProcessError("bounded worker was not reaped", receipt)
+    if returncode != 0:
+        raise WorkerProcessError("bounded transport failed", receipt)
+    return stdout, receipt
 
 
 def _creation_version(name, fields, status, body):
@@ -86,7 +382,19 @@ def request_headers(token, *, local, form):
     return headers
 
 
-def wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+def wire(
+    url,
+    method,
+    body,
+    headers,
+    *,
+    local=False,
+    timeout=12,
+    receipt=False,
+    process_receipt=False,
+):
+    if not isinstance(url, str):
+        raise ValueError("request URL is invalid")
     parsed = urllib.parse.urlsplit(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     if local:
@@ -101,40 +409,81 @@ def wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
         raise ValueError("remote origin refused")
     if parsed.fragment or timeout <= 0 or timeout > 12:
         raise ValueError("invalid request boundary")
-    data = (
-        None
-        if body is None
-        else body
-        if isinstance(body, str)
-        else json.dumps(body, allow_nan=False)
-    )
-    if data is not None and len(data.encode()) > 16384:
-        raise ValueError("request body bound exceeded")
+    if not isinstance(method, str) or not method or len(method.encode()) > 128:
+        raise ValueError("request method bound exceeded")
+    try:
+        _utf8_size(url, MAX_WORKER_URL, "request URL")
+    except UnicodeEncodeError:
+        raise ValueError("request URL is invalid") from None
+    if not isinstance(headers, dict):
+        raise ValueError("request headers are invalid")
+    header_size = 0
+    for key, value in headers.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("request headers are invalid")
+        try:
+            header_size += _utf8_size(key, MAX_WORKER_HEADERS, "request headers")
+            header_size += _utf8_size(value, MAX_WORKER_HEADERS, "request headers")
+        except UnicodeEncodeError:
+            raise ValueError("request headers are invalid") from None
+    if header_size > MAX_WORKER_HEADERS:
+        raise ValueError("request headers bound exceeded")
+    if body is None:
+        data = None
+    elif isinstance(body, str):
+        _validate_json_value(body)
+        data = body
+    else:
+        _validate_json_value(body)
+        data = json.dumps(body, allow_nan=False)
+        _utf8_size(data, 16384, "request body")
     payload = json.dumps(
         {
             "url": url,
             "method": method,
             "body": data,
             "headers": headers,
-            "receipt": receipt,
+            "receipt": receipt or process_receipt,
         }
     )
-    env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "LANG") if k in os.environ}
     try:
-        result = subprocess.run(
-            [sys.executable, str(HERE / "batch_wire.py")],
-            input=payload,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            env=env,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        raise ValueError("whole request deadline exceeded") from None
-    if result.returncode != 0:
-        raise ValueError("bounded transport failed")
-    return json.loads(result.stdout)
+        payload_size = len(payload.encode())
+    except UnicodeEncodeError:
+        raise ValueError("request payload is invalid") from None
+    if payload_size > MAX_WORKER_INPUT:
+        raise ValueError("request payload bound exceeded")
+    output, process = _run_worker(
+        payload, timeout, include_process_receipt=process_receipt
+    )
+    try:
+        decoded = json.loads(output)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        if process is not None:
+            raise WorkerProcessError("bounded worker returned malformed output", process) from None
+        raise ValueError("bounded transport returned malformed output") from None
+    if process is None:
+        return decoded
+    if not isinstance(decoded, dict) or not isinstance(decoded.get("http"), dict):
+        raise WorkerProcessError("bounded worker returned malformed output", process)
+    http = decoded["http"]
+    required = ("status", "complete", "bodyKind")
+    if any(key not in http for key in required) or "body" not in decoded:
+        raise WorkerProcessError("bounded worker returned malformed output", process)
+    if (
+        not isinstance(http["status"], int)
+        or isinstance(http["status"], bool)
+        or not isinstance(http["complete"], bool)
+        or not isinstance(http["bodyKind"], str)
+    ):
+        raise WorkerProcessError("bounded worker returned malformed output", process)
+    return {
+        "status": http["status"],
+        "complete": http["complete"],
+        "workerReaped": process["workerReaped"],
+        "bodyKind": http["bodyKind"],
+        "body": decoded["body"],
+        "process": process,
+    }
 
 
 def observer_digest():

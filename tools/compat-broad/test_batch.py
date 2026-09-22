@@ -136,6 +136,289 @@ def test_real_transport_bounds_redirect_body_and_total_deadline():
         thread.join(timeout=5)
 
 
+def test_optional_process_receipt_reports_real_reaped_worker_without_changing_default():
+    import http.server
+    import threading
+
+    import batch_adapter as adapter
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    try:
+        default = adapter.wire(origin + "/ok", "GET", None, {}, local=True)
+        assert default == [200, {"ok": True}, "application/json"]
+        observed = adapter.wire(
+            origin + "/ok",
+            "GET",
+            None,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+        assert observed["status"] == 200
+        assert observed["complete"] is True
+        assert observed["bodyKind"] == "json"
+        assert observed["body"] == {"ok": True}
+        assert observed["workerReaped"] is True
+        process = observed["process"]
+        assert process["pid"] > 0
+        assert isinstance(process["returncode"], int)
+        assert process["termination"] == "exited"
+        assert process["deadlineExceeded"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("worker_source", "returncode", "termination"),
+    [
+        ("import sys; sys.exit(7)", 7, "exited"),
+        ("import os; os.close(0); raise SystemExit(7)", 7, "exited"),
+        ("print('not-json')", 0, "exited"),
+    ],
+)
+def test_process_receipt_failures_report_actual_terminal_state(
+    tmp_path, monkeypatch, worker_source, returncode, termination
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    (worker_dir / "batch_wire.py").write_text(worker_source + "\n", encoding="utf-8")
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    with pytest.raises(adapter.WorkerProcessError) as raised:
+        adapter.wire(
+            "http://127.0.0.1:18081/never",
+            "GET",
+            {"secret": "must-not-appear"},
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    error = raised.value
+    assert "must-not-appear" not in str(error)
+    assert error.process_receipt["returncode"] == returncode
+    assert error.process_receipt["workerReaped"] is True
+    assert error.process_receipt["termination"] == termination
+
+
+def test_process_receipt_rejects_unbounded_worker_output_after_reaping(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    (worker_dir / "batch_wire.py").write_text(
+        "import sys; sys.stdout.write('x' * 200000)\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    with pytest.raises(adapter.WorkerProcessError, match="output exceeded") as raised:
+        adapter.wire(
+            "http://127.0.0.1:18081/never",
+            "GET",
+            None,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    assert raised.value.process_receipt["workerReaped"] is True
+
+
+def test_process_receipt_bounds_simultaneous_stdout_and_stderr_flood(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    (worker_dir / "batch_wire.py").write_text(
+        "import sys; sys.stdout.write('x' * 200000); "
+        "sys.stderr.write('e' * 20000)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    with pytest.raises(adapter.WorkerProcessError, match="output exceeded") as raised:
+        adapter.wire(
+            "http://127.0.0.1:18081/never",
+            "GET",
+            None,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    receipt = raised.value.process_receipt
+    assert receipt["workerReaped"] is True
+    assert receipt["returncode"] is not None
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        lambda origin: (origin + "/" + "u" * 70000, {}, None),
+        lambda origin: (origin + "/ok", {"X-Large": "h" * 70000}, None),
+        lambda origin: (origin + "/ok", {}, {"nested": {"value": "n" * 200000}}),
+    ],
+)
+def test_oversized_input_is_rejected_before_worker_start(tmp_path, monkeypatch, case):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    marker = tmp_path / "started"
+    (worker_dir / "batch_wire.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    url, headers, body = case("http://127.0.0.1:18081")
+    with pytest.raises(ValueError, match="bound exceeded"):
+        adapter.wire(
+            url,
+            "GET",
+            body,
+            headers,
+            local=True,
+            process_receipt=True,
+        )
+    assert not marker.exists()
+
+
+def test_json_prevalidation_rejects_cycle_depth_nonfinite_unicode_and_bad_url(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    marker = tmp_path / "started"
+    (worker_dir / "batch_wire.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    cyclic = []
+    cyclic.append(cyclic)
+    deep = value = []
+    for _ in range(70):
+        value.append([])
+        value = value[0]
+    cases = [
+        ("http://127.0.0.1:18081/ok", {"value": float("nan")}),
+        ("http://127.0.0.1:18081/ok", cyclic),
+        ("http://127.0.0.1:18081/ok", deep),
+        ("http://127.0.0.1:18081/ok", "🦀" * 5000),
+    ]
+    for url, body in cases:
+        with pytest.raises(ValueError):
+            adapter.wire(url, "POST", body, {}, local=True, process_receipt=True)
+    with pytest.raises(ValueError, match="URL"):
+        adapter.wire(123, "GET", None, {}, local=True, process_receipt=True)
+    assert not marker.exists()
+
+
+def test_json_prevalidation_uses_one_aggregate_budget_before_serialization(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    marker = tmp_path / "started"
+    (worker_dir / "batch_wire.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    body = {"items": ["escape-🦀" * 700 for _ in range(20)]}
+    with pytest.raises(ValueError, match="body bound"):
+        adapter.wire(
+            "http://127.0.0.1:18081/ok",
+            "POST",
+            body,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    assert not marker.exists()
+
+
+def test_process_receipt_start_failure_does_not_claim_a_worker_was_reaped(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    monkeypatch.setattr(adapter, "HERE", tmp_path / "missing-worker")
+    monkeypatch.setattr(adapter.sys, "executable", str(tmp_path / "missing-python"))
+    with pytest.raises(adapter.WorkerProcessError) as raised:
+        adapter.wire(
+            "http://127.0.0.1:18081/never",
+            "GET",
+            None,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    receipt = raised.value.process_receipt
+    assert receipt["started"] is False
+    assert receipt["pid"] is None
+    assert receipt["workerReaped"] is False
+    assert receipt["termination"] == "start-failed"
+
+
+def test_process_receipt_timeout_kills_and_reaps_owned_worker():
+    import http.server
+    import threading
+    import time
+
+    import batch_adapter as adapter
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_GET(self):
+            time.sleep(0.8)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(adapter.WorkerProcessError) as raised:
+            adapter.wire(
+                f"http://127.0.0.1:{server.server_port}/slow",
+                "GET",
+                None,
+                {},
+                local=True,
+                timeout=0.2,
+                process_receipt=True,
+            )
+        receipt = raised.value.process_receipt
+        assert receipt["deadlineExceeded"] is True
+        assert receipt["termination"] == "deadline"
+        assert receipt["workerReaped"] is True
+        assert receipt["returncode"] is not None
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_unjournaled_resources_and_foreign_auth_selectors_fail_before_transport(
     tmp_path,
 ):

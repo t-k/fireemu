@@ -358,7 +358,7 @@ def test_launcher_requires_canonical_ledger_and_gate_objects() -> None:
         production.run_approved(packet)
 
 
-@pytest.mark.parametrize("failure_after", [None, 1, 7, 8, 18])
+@pytest.mark.parametrize("failure_after", [None, *range(19)])
 def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
     tmp_path, monkeypatch, failure_after
 ) -> None:

@@ -386,6 +386,65 @@ def test_baseline_recovery_uses_patch_slot_then_release_readback() -> None:
     assert recovery[1]["rulesetName"] == management["baseline"]["rulesetName"]
 
 
+def test_session_accepts_only_a_compiler_bound_setup_observation_and_recovery_prefix(tmp_path) -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    compiled = gate_plan(plan)
+    observation_prefix = ["setup/fixture/setup-doc"]
+    recovery_prefix = ["setup-recovery/fixture/setup-doc/read"]
+    compiled["management"]["observation"] = [
+        {"id": observation_prefix[0], "timeout": 8.0},
+        *compiled["management"]["observation"],
+    ]
+    compiled["management"]["recovery"] = [
+        {"id": recovery_prefix[0], "timeout": 8.0},
+        *compiled["management"]["recovery"],
+    ]
+    gate_path = tmp_path / "gate"
+    ledger_path = tmp_path / "ledger"
+    claim = {
+        "campaignId": plan["campaignId"],
+        "manifestDigest": digest(plan),
+        "nonceDigest": digest(plan["nonce"]),
+        "gatePath": str(gate_path.resolve()),
+        "gatePlanDigest": digest(compiled),
+    }
+    gate = type("Gate", (), {"path": gate_path, "snapshot": lambda self: {"plan": compiled}})()
+    ledger = type(
+        "Ledger",
+        (),
+        {
+            "path": ledger_path,
+            "snapshot": lambda self: {"reservations": {"reservation-1": {"claim": claim}}},
+        },
+    )()
+    ticket = {"reservation": "reservation-1", "ledgerPath": str(ledger_path)}
+    proof = {
+        "observationIds": observation_prefix,
+        "recoveryIds": recovery_prefix,
+        "planDigest": plan["planDigest"],
+        "journalDigest": "journal-proof",
+        "proofDigest": "ownership-proof",
+    }
+    session = RulesManagementSession(
+        gate=gate,
+        ledger=ledger,
+        ticket=ticket,
+        execute=lambda *_args, **_kwargs: {},
+        plan=plan,
+        setup_prefix=proof,
+    )
+    assert session.setup_observation_prefix == observation_prefix
+    assert session.setup_recovery_prefix == recovery_prefix
+    with pytest.raises(ValueError, match="compiled setup prefix proof"):
+        RulesManagementSession(
+            gate=gate,
+            ledger=ledger,
+            ticket=ticket,
+            execute=lambda *_args, **_kwargs: {},
+            plan=plan,
+        )
+
+
 def test_a_bound_run_is_admitted_by_the_acquisition_comparator() -> None:
     from o5_user_token_comparator_v2 import MATCH, compare
 

@@ -270,17 +270,41 @@ class RulesManagementSession:
     response bodies; no plan-time or caller-supplied resource map is trusted.
     """
 
-    def __init__(self, *, gate, ledger, ticket, execute, plan):
+    def __init__(self, *, gate, ledger, ticket, execute, plan, setup_prefix=None):
         if gate is None or ledger is None or not isinstance(ticket, dict):
             raise ValueError("Rules management requires real Gate and Ledger ownership")
         gate_plan = gate.snapshot().get("plan", {})
         management = gate_plan.get("management", {})
+        observation_ids = [entry.get("id") for entry in management.get("observation", [])]
+        rules_observation_ids = list(RULES_MANAGEMENT_OBSERVATION)
+        if observation_ids[-len(rules_observation_ids) :] != rules_observation_ids:
+            raise ValueError("Rules management observation suffix differs")
+        observation_prefix_ids = observation_ids[: -len(rules_observation_ids)]
+        recovery_ids = [entry.get("id") for entry in management.get("recovery", [])]
+        rules_recovery_ids = list(RULES_MANAGEMENT_RECOVERY)
+        if recovery_ids[-len(rules_recovery_ids) :] != rules_recovery_ids:
+            raise ValueError("Rules management recovery suffix differs")
+        recovery_prefix_ids = recovery_ids[: -len(rules_recovery_ids)]
+        if observation_prefix_ids or recovery_prefix_ids:
+            if not isinstance(setup_prefix, dict):
+                raise ValueError("compiled setup prefix proof required")
+            proof_observation_ids = setup_prefix.get("observationIds", setup_prefix.get("ids"))
+            proof_recovery_ids = setup_prefix.get("recoveryIds", [])
+            if proof_observation_ids != observation_prefix_ids or proof_recovery_ids != recovery_prefix_ids:
+                raise ValueError("compiled setup prefix differs")
+            if setup_prefix.get("planDigest") != plan.get("planDigest"):
+                raise ValueError("compiled setup prefix plan differs")
+            if not isinstance(setup_prefix.get("journalDigest"), str) or not setup_prefix["journalDigest"]:
+                raise ValueError("compiled setup journal proof required")
+            if not isinstance(setup_prefix.get("proofDigest"), str) or not setup_prefix["proofDigest"]:
+                raise ValueError("compiled setup ownership proof required")
+        elif setup_prefix is not None:
+            raise ValueError("unexpected compiled setup prefix")
         if (
             gate_plan.get("campaignId") != CAMPAIGN
             or gate_plan.get("project") != plan.get("project")
             or gate_plan.get("database") != plan.get("database")
-            or [entry.get("id") for entry in management.get("observation", [])] != list(RULES_MANAGEMENT_OBSERVATION)
-            or [entry.get("id") for entry in management.get("recovery", [])] != list(RULES_MANAGEMENT_RECOVERY)
+            or recovery_ids[-len(RULES_MANAGEMENT_RECOVERY) :] != list(RULES_MANAGEMENT_RECOVERY)
         ):
             raise ValueError("Rules management Gate plan binding differs")
         state = ledger.snapshot()
@@ -302,6 +326,9 @@ class RulesManagementSession:
         self.ticket = ticket
         self.execute = execute
         self.plan = plan
+        self.setup_prefix = dict(setup_prefix) if isinstance(setup_prefix, dict) else None
+        self.setup_observation_prefix = observation_prefix_ids
+        self.setup_recovery_prefix = recovery_prefix_ids
         self.baseline: dict[str, Any] | None = None
         self.created: dict[str, str] = {}
         self.owned: dict[str, dict[str, Any]] = {}
@@ -512,6 +539,11 @@ class RulesManagementSession:
         """Restore only the captured baseline and prove created absence."""
         if self.baseline is None:
             raise ValueError("Rules observation baseline required before recovery")
+        if self.setup_recovery_prefix:
+            used = self.gate.snapshot().get("managementUsed", [])
+            expected = ["recovery:" + slot for slot in self.setup_recovery_prefix]
+            if used[: len(expected)] != expected:
+                raise ValueError("compiled setup recovery prefix not consumed")
         release_name = self.baseline["releaseName"]
         current_name, current_target = self._release(
             self._dispatch("recovery", "restore-patch", {"action": "release-get", "releaseName": release_name}),

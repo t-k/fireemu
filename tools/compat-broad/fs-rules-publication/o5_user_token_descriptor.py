@@ -7,18 +7,15 @@ scopes, the collector and comparator the campaign runs, the cost model and the
 abort closure.
 
 It authorizes nothing and opens nothing. The lane's own ``admission()`` still
-raises. The members that would let a campaign reach a production wire have no
-working default here, because this lane has no reviewed production transport
-and no worker archive: ``transport_bound`` and ``binding_verifier`` refuse when
-called, so a descriptor built here can freeze inputs and pass the O7 admission
-check set against a synthetic approval, and can do nothing else. The collector
-and the acquisition comparator are the lane's real modules, reached only
-through an injected transport that the core's ``reject_production_transport``
-has inspected.
+raises. The transport and binding members require an independently issued O7
+capability and the reviewed worker bytes; descriptor construction alone cannot
+reach a production wire. The collector and acquisition comparator are the
+lane's real modules, reached only through an injected transport that the
+core's ``reject_production_transport`` has inspected.
 
-The window is the collector's: 600 seconds of observation and 300 seconds of
-recovery on top of it, which is the collector's 900 second recovery deadline
-measured from the start of the run.
+The window contains 300 seconds of observation and 300 seconds of recovery,
+with a 600 second absolute wall allocation. The transport adapter is closed over one
+request bundle and delegates wire execution to the reviewed remote transport.
 """
 
 from __future__ import annotations
@@ -26,7 +23,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +39,8 @@ from broad_contract import digest
 from o5_user_token_campaign import (
     PERMISSION_ENVELOPE,
     admitted_manifest_digest,
+    gate_management_plan,
+    rules_management_contract,
     rules_management_plan,
 )
 from o5_user_token_campaign import (
@@ -64,7 +65,7 @@ MANIFEST_KIND = "o5-user-token-o8-manifest-v1"
 SHADOW_RECORD = "spec/compatibility/fs-rules-user-token-local-shadow.json"
 LANE_DIRECTORY = "tools/compat-broad/fs-rules-publication"
 
-CAMPAIGN_SECONDS = 600
+CAMPAIGN_SECONDS = 300
 RECOVERY_SECONDS = 300
 # The campaign manifest's ceiling, in micro-USD: US$1.00.
 COST_CEILING_MICROUSD = 1_000_000
@@ -155,8 +156,7 @@ def budget() -> dict[str, Any]:
     return {
         "requests": int(estimate["requestUpperBound"]),
         "accounts": len(plan["ownedAccounts"]),
-        # The owned documents plus the tenant this campaign creates.
-        "resources": len(plan["ownedResources"]) + 1,
+        "resources": len(plan["ownedResources"]),
         "costMicrousd": COST_CEILING_MICROUSD,
     }
 
@@ -185,8 +185,8 @@ def lock_scopes(plan: dict[str, Any]) -> list[dict[str, str]]:
 
     Publishing a Ruleset changes the Rules state of the whole database, so the
     database's ruleset key is held exclusively; the nonce subtree and the
-    throwaway accounts are written; the tenant list is written because the
-    campaign creates and deletes one tenant; everything else is read.
+    throwaway accounts are written; the preexisting tenant binding and all
+    remaining configuration are read.
     """
     validate_case(plan)
     scope = f"project/{PROJECT}"
@@ -204,7 +204,7 @@ def lock_scopes(plan: dict[str, Any]) -> list[dict[str, str]]:
         ],
         {"key": f"{scope}/auth/config", "mode": "READ"},
         {"key": f"{scope}/auth/accounts/o5-user-token/{nonce}/*", "mode": "WRITE"},
-        {"key": f"{scope}/auth/tenants/*", "mode": "WRITE"},
+        {"key": f"{scope}/auth/tenants/*", "mode": "READ"},
         {"key": f"{scope}/api-key-binding", "mode": "READ"},
     ]
 
@@ -220,10 +220,12 @@ def cost_model() -> dict[str, Any]:
     }
 
 
-def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = None) -> dict[str, Any]:
+def gate_plan(
+    plan: dict[str, Any], *, permission_expires_at: float | None = None
+) -> dict[str, Any]:
     """Freeze the Rules management envelope consumed by ``Gate``."""
     validate_case(plan)
-    management = rules_management_plan()
+    management = gate_management_plan(plan)
     value = {
         "contract": "shared-local-v1",
         "kind": "fs-rules-user-token-gate-plan-v1",
@@ -233,18 +235,18 @@ def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = Non
         "nonce": plan["nonce"],
         "planDigest": plan["planDigest"],
         "management": management,
-        "observationRequests": len(plan["observation"]) + len(management["observation"]),
+        "rulesManagementContract": rules_management_contract(plan),
+        "observationRequests": len(management["observation"]),
         "dataRequests": len(plan["observation"]),
         "managementRequests": management["totalRequests"],
         "requestCostMicrousd": management["requestCostMicrousd"],
         "costMicrousd": management["totalRequests"],
-        "requestSeconds": 8.0,
+        "requestSeconds": 12.0,
         "wallSeconds": 600.0,
         "recoverySeconds": 300.0,
         "intervalSeconds": 0.25,
         "receiptKind": "fs-rules-management-receipt-v1",
         "transport": "bounded-rules-worker",
-        "requestSeconds": 8.0,
         "jobs": {
             "rules-management": {
                 "resources": list(plan["ownedResources"][:1]),
@@ -371,8 +373,80 @@ def unwired(member: str):
     return refuse
 
 
-transport_bound = unwired("production transport")
-binding_verifier = unwired("worker archive closure")
+_WORKER_TIMEOUT_SECONDS = 8.0
+
+
+def binding_verifier(binding: Any, binding_digest: Any, frozen: Any) -> None:
+    """Verify the reviewed worker bytes and the frozen source-map entry."""
+    from o5_user_token_remote_transport import verify_worker_binding
+
+    verify_worker_binding(binding, binding_digest, frozen)
+
+
+def transport_bound(
+    value: Any,
+    *,
+    binding: bytes,
+    binding_digest: str,
+    capability: Any = None,
+) -> dict[str, Any]:
+    """Run one closed Rules request through the admitted worker.
+
+    Credentials and identity proofs are accepted only in this in-memory call
+    bundle; collector receipts never receive the bundle. The O8 capability and
+    worker binding remain the authority for dispatch.
+    """
+    required = {
+        "plan",
+        "operation",
+        "credentials",
+        "frozenInputs",
+        "accountBindings",
+        "identityProofs",
+        "fixtureOrigin",
+        "deadline",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise ValueError("closed Rules wire call required")
+    if capability is None:
+        raise ValueError("active O7 production capability required")
+    if (
+        not isinstance(value["plan"], dict)
+        or not isinstance(value["operation"], dict)
+        or not isinstance(value["credentials"], dict)
+        or not isinstance(value["frozenInputs"], dict)
+        or not isinstance(value["accountBindings"], dict)
+        or not isinstance(value["identityProofs"], dict)
+        or value["fixtureOrigin"] is not None
+        and not isinstance(value["fixtureOrigin"], str)
+    ):
+        raise ValueError("closed Rules wire call required")
+    deadline = value["deadline"]
+    if (
+        type(deadline) not in (int, float)
+        or not math.isfinite(deadline)
+        or deadline - time.monotonic() < _WORKER_TIMEOUT_SECONDS
+    ):
+        raise TimeoutError("Rules worker cannot fit within Gate deadline")
+    binding_verifier(binding, binding_digest, value["frozenInputs"].get("sourceInputs"))
+    from o5_user_token_remote_transport import make_transport
+    from o8_admission import authorize_transport
+
+    authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+    transmit = make_transport(
+        value["plan"],
+        credentials=value["credentials"],
+        frozen_inputs=value["frozenInputs"],
+        account_bindings=value["accountBindings"],
+        identity_proofs=value["identityProofs"],
+        fixture_origin=value["fixtureOrigin"],
+    )
+    return transmit(
+        value["operation"],
+        binding=binding,
+        binding_digest=binding_digest,
+        capability=capability,
+    )
 
 
 def retained_artifact_validator(

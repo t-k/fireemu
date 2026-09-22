@@ -12,7 +12,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from o5_user_token_case import CAMPAIGN, compile_case, digest
+from o5_user_token_case import CAMPAIGN, compile_case, digest, validate_case
 
 CAMPAIGN_CONTRACT = "fs-rules-user-token-campaign-v1"
 
@@ -35,15 +35,31 @@ _PRICE_PER_DOCUMENT_READ_USD = 0.06 / 100_000
 _PRICE_PER_DOCUMENT_WRITE_USD = 0.18 / 100_000
 
 RULES_MANAGEMENT_OBSERVATION = (
-    "baseline-release-get", "baseline-ruleset-get", "baseline-executable-get",
-    "create-a", "create-a-get", "patch-a", "patch-a-get", "patch-a-executable",
-    "create-b", "create-b-get", "patch-b", "patch-b-get", "patch-b-executable",
+    "baseline-release-get",
+    "baseline-ruleset-get",
+    "baseline-executable-get",
+    "create-a",
+    "create-a-get",
+    "patch-a",
+    "patch-a-get",
+    "patch-a-executable",
+    "create-b",
+    "create-b-get",
+    "patch-b",
+    "patch-b-get",
+    "patch-b-executable",
 )
 RULES_MANAGEMENT_RECOVERY = (
-    "restore-patch", "restore-get", "restore-executable",
+    "restore-patch",
+    "restore-get",
+    "restore-executable",
     "restore-get-executable",
-    "delete-a-get", "delete-a", "delete-a-absence",
-    "delete-b-get", "delete-b", "delete-b-absence",
+    "delete-a-get",
+    "delete-a",
+    "delete-a-absence",
+    "delete-b-get",
+    "delete-b",
+    "delete-b-absence",
 )
 
 
@@ -51,13 +67,173 @@ def rules_management_plan() -> dict[str, Any]:
     """Compiler-owned fixed Gate slots for response-derived Rules operations."""
     return {
         "dispatchKind": "closed-v1",
-        "observation": [{"id": value, "timeout": 8.0} for value in RULES_MANAGEMENT_OBSERVATION],
-        "recovery": [{"id": value, "timeout": 8.0} for value in RULES_MANAGEMENT_RECOVERY],
-        "totalRequests": len(RULES_MANAGEMENT_OBSERVATION) + len(RULES_MANAGEMENT_RECOVERY),
+        "observation": [
+            {"id": value, "timeout": 12.0} for value in RULES_MANAGEMENT_OBSERVATION
+        ],
+        "recovery": [
+            {"id": value, "timeout": 12.0} for value in RULES_MANAGEMENT_RECOVERY
+        ],
+        "totalRequests": len(RULES_MANAGEMENT_OBSERVATION)
+        + len(RULES_MANAGEMENT_RECOVERY),
         "requestCostMicrousd": 1,
         "wallClockDeadlineSeconds": 600.0,
-        "recoveryDeadlineSeconds": 900.0,
+        "recoveryDeadlineSeconds": 300.0,
     }
+
+
+def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Compile every wire exchange, preserving publication and action boundaries."""
+    setup = setup_plan(plan)
+    value = rules_management_plan()
+    entries = [
+        {"id": "setup/" + item["id"], "timeout": 2.0}
+        for item in (*setup["fixtures"], *setup["auth"])
+    ]
+    entries.extend(value["observation"][:3])
+    active = None
+    for row in plan["observation"]:
+        if row["ruleset"] != active:
+            label = row["ruleset"].lower()
+            entries.extend(
+                {"id": slot, "timeout": 12.0}
+                for slot in (
+                    f"create-{label}",
+                    f"create-{label}-get",
+                    f"patch-{label}",
+                    f"patch-{label}-get",
+                    f"patch-{label}-executable",
+                )
+            )
+            active = row["ruleset"]
+        if row.get("principalAction"):
+            entries.extend(
+                {"id": f"action/{row['index']}/{stage}", "timeout": 2.0}
+                for stage in ("mutation", "readback")
+            )
+        entries.append({"id": f"data/{row['index']}", "timeout": 2.0})
+    cleanup = [
+        {
+            "id": f"cleanup/document/{resource.rsplit('/', 1)[-1]}/{stage}",
+            "timeout": 2.0,
+        }
+        for resource in plan["ownedResources"]
+        for stage in ("read", "delete", "absence")
+    ] + [
+        {"id": f"cleanup/account/{account['ref']}/{stage}", "timeout": 2.0}
+        for account in plan["ownedAccounts"]
+        for stage in ("read", "delete", "absence")
+    ]
+    value["observation"] = entries
+    value["recovery"] = cleanup + value["recovery"]
+    value["totalRequests"] = len(entries) + len(value["recovery"])
+    effects = {}
+    for item in (*setup["fixtures"], *setup["auth"]):
+        subject = (
+            "document/" + item["document"]
+            if item["service"] == "firestore"
+            else "account/" + item["accountRef"]
+        )
+        action = (
+            "write"
+            if item["id"].endswith("/claim-update")
+            else "read"
+            if item["id"].endswith("/signin")
+            else "create"
+        )
+        effects["setup/" + item["id"]] = [{"subject": subject, "action": action}]
+    documents = {resource.rsplit("/", 1)[-1] for resource in plan["ownedResources"]}
+    for row in plan["observation"]:
+        effects[f"data/{row['index']}"] = (
+            [
+                {
+                    "subject": "document/" + write["document"],
+                    "action": {"create": "create", "delete": "delete"}.get(
+                        write["operation"], "write"
+                    ),
+                }
+                for write in row["writes"]
+            ]
+            if row["writes"]
+            else [
+                {"subject": "document/" + document, "action": "read"}
+                for document in row["targets"]
+                if document in documents
+            ]
+        )
+        if action := row.get("principalAction"):
+            subject = "account/" + action["ref"]
+            effects[f"action/{row['index']}/mutation"] = [
+                {
+                    "subject": subject,
+                    "action": "delete" if action["action"] == "delete" else "write",
+                }
+            ]
+            effects[f"action/{row['index']}/readback"] = [
+                {"subject": subject, "action": "read"}
+            ]
+    for entry in value["observation"]:
+        entry["effects"] = effects.get(entry["id"], [])
+    for entry in value["recovery"]:
+        slot = entry["id"]
+        if slot.startswith("cleanup/"):
+            subject, step = slot.removeprefix("cleanup/").rsplit("/", 1)
+        else:
+            subject = (
+                "release/baseline"
+                if slot.startswith("restore-")
+                else "ruleset/" + slot.split("-")[1]
+            )
+            step = slot
+        entry["dependency"] = {"subject": subject, "step": step}
+    return value
+
+
+def rules_management_contract(plan: dict[str, Any]) -> dict[str, Any]:
+    """Bind cleanup authority to the exact subjects and their compiled effects."""
+    observation = gate_management_plan(plan)["observation"]
+    subjects = [
+        {
+            "id": "document/" + resource.rsplit("/", 1)[-1],
+            "kind": "document",
+            "resource": resource,
+        }
+        for resource in plan["ownedResources"]
+    ] + [
+        {
+            "id": "account/" + account["ref"],
+            "kind": "account",
+            "resource": account["ref"],
+        }
+        for account in plan["ownedAccounts"]
+    ]
+    for subject in subjects:
+        subject["creationSlots"] = [
+            slot["id"]
+            for slot in observation
+            if any(
+                effect == {"subject": subject["id"], "action": "create"}
+                for effect in slot["effects"]
+            )
+        ]
+        subject["mutationSlots"] = [
+            slot["id"]
+            for slot in observation
+            if any(
+                effect["subject"] == subject["id"]
+                and effect["action"] in {"write", "delete"}
+                for effect in slot["effects"]
+            )
+        ]
+    return {
+        "kind": "rules-management-dependencies-v1",
+        "subjects": subjects,
+        "rulesets": {
+            label.lower(): digest(value["source"])
+            for label, value in plan["rulesets"].items()
+        },
+        "tenantId": plan["tenant"],
+    }
+
 
 OWNER_PRECONDITIONS = (
     "project and database identity confirmed by the owner",
@@ -118,12 +294,9 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
     accounts = plan["ownedAccounts"]
     # Per account: sign-up, plus a claim write and a re-sign-in when it carries
     # a custom claim, plus one administrator action and one lookup readback
-    # when the account is revoked, disabled or deleted between two rows. Plus
-    # one tenant create and one tenant delete.
-    auth_requests = (
-        sum(3 if entry["claims"] else 1 for entry in accounts)
-        + sum(2 for entry in accounts if entry.get("postSignIn"))
-        + 2
+    # when the account is revoked, disabled or deleted between two rows.
+    auth_requests = sum(3 if entry["claims"] else 1 for entry in accounts) + sum(
+        2 for entry in accounts if entry.get("postSignIn")
     )
     # Rules management includes baseline reads, response-derived create/read,
     # activation/readback, exact restore, and guarded delete/absence proof.
@@ -131,7 +304,8 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
     # Recovery: read back, delete and verify absence for every document and
     # every account.
     recovery_requests = 3 * (resources + len(accounts))
-    total = observation + fixtures + auth_requests + rules_requests + recovery_requests
+    schedule = gate_management_plan(plan)
+    total = schedule["totalRequests"]
     reads = observation + resources + len(accounts)
     writes = fixtures + resources + 4
     cost = reads * _PRICE_PER_DOCUMENT_READ_USD + writes * _PRICE_PER_DOCUMENT_WRITE_USD
@@ -145,12 +319,94 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
         "concurrencyUpperBound": 1,
         "perRequestTimeoutSeconds": 12.0,
         "wallClockDeadlineSeconds": 600.0,
-        "recoveryDeadlineSeconds": 900.0,
+        "recoveryDeadlineSeconds": 300.0,
         "billedDocumentReads": reads,
         "billedDocumentWrites": writes,
         "estimatedCostUsd": round(cost, 6),
         "costCeilingUsd": 1.0,
         "estimateBasis": "public Firestore Standard list prices; not a quoted tariff",
+    }
+
+
+def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Describe only setup operations that the source-backed local runner performs.
+
+    This is a transport contract, not production authority. Tenant lifecycle
+    is deliberately absent because the campaign precondition requires the
+    named tenant to exist. The three post-sign-in administrator actions belong
+    to compiled observation rows and are not setup operations.
+    """
+    validate_case(plan)
+    fixtures = [
+        {
+            "id": "fixture/" + entry["document"],
+            "service": "firestore",
+            "route": "document-create",
+            "method": "PATCH",
+            "path": "/v1/" + entry["resource"] + "?currentDocument.exists=false",
+            "document": entry["document"],
+            "resource": entry["resource"],
+            "fields": entry["fields"],
+            "fieldsDigest": digest(entry["fields"]),
+            "precondition": {"exists": False},
+            "response": {
+                "name": entry["resource"],
+                "fieldsDigest": digest(entry["fields"]),
+                "updateTime": "response-bound",
+            },
+        }
+        for entry in plan["fixtures"]
+    ]
+    auth = []
+    for entry in plan["ownedAccounts"]:
+        auth.append(
+            {
+                "id": f"account/{entry['ref']}/signup",
+                "service": "identity",
+                "route": "accounts:signUp",
+                "method": "POST",
+                "accountRef": entry["ref"],
+                "tenant": entry["tenant"],
+                "response": {
+                    "localId": "response-bound",
+                    "idToken": "response-bound",
+                    "expiresIn": "response-bound",
+                },
+            }
+        )
+    owner = next(entry for entry in plan["ownedAccounts"] if entry["ref"] == "owner-a")
+    auth.extend(
+        [
+            {
+                "id": "account/owner-a/claim-update",
+                "service": "identity",
+                "route": "accounts:update",
+                "method": "POST",
+                "accountRef": owner["ref"],
+                "tenant": owner["tenant"],
+                "claimsDigest": digest(owner["claims"]),
+                "response": {"localId": "response-bound"},
+            },
+            {
+                "id": "account/owner-a/signin",
+                "service": "identity",
+                "route": "accounts:signInWithPassword",
+                "method": "POST",
+                "accountRef": owner["ref"],
+                "tenant": owner["tenant"],
+                "response": {
+                    "localId": "response-bound",
+                    "idToken": "response-bound",
+                    "expiresIn": "response-bound",
+                },
+            },
+        ]
+    )
+    return {
+        "contract": "o5-user-token-setup-plan-v1",
+        "fixtures": fixtures,
+        "auth": auth,
+        "totalRequests": len(fixtures) + len(auth),
     }
 
 
@@ -241,3 +497,44 @@ def admission(value: dict[str, Any]) -> dict[str, Any]:
         "ownerPreconditions": list(value["ownerPreconditions"]),
         "admit": admit,
     }
+
+
+def validate_production_packet(
+    plan: dict[str, Any],
+    *,
+    approval: dict[str, Any],
+    permission: dict[str, Any],
+    capability_inputs: dict[str, Any],
+    credentials: dict[str, Any],
+    account_bindings: dict[str, Any],
+    identity_proofs: dict[str, Any],
+    gate: Any,
+    ledger: Any,
+    ticket: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate commander material before O7 capability issuance.
+
+    This is a readiness check, not an authority grant. O8 admission remains
+    the only issuer, and the campaign's preparation manifest stays closed.
+    """
+    estimate = budget(plan)
+    if estimate["requestUpperBound"] != gate_management_plan(plan)["totalRequests"]:
+        raise ValueError("production packet budget differs")
+    if (
+        capability_inputs.get("plan") != plan
+        or capability_inputs.get("planDigest") != digest(plan)
+        or approval.get("status") != "approved"
+        or permission.get("campaignId") != CAMPAIGN
+        or permission.get("planDigest") != plan.get("planDigest")
+        or not isinstance(credentials, dict)
+        or not isinstance(account_bindings, dict)
+        or not isinstance(identity_proofs, dict)
+        or set(identity_proofs) != {entry["ref"] for entry in plan["ownedAccounts"]}
+        or not isinstance(ticket, dict)
+        or gate is None
+        or ledger is None
+        or not callable(getattr(gate, "snapshot", None))
+        or not callable(getattr(ledger, "snapshot", None))
+    ):
+        raise ValueError("production packet bindings differ")
+    return estimate

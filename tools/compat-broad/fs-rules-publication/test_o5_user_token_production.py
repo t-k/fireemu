@@ -144,7 +144,10 @@ def test_setup_plan_is_source_backed_and_excludes_precreated_tenant_and_row_acti
     assert len(setup["auth"]) == 9
     assert setup["totalRequests"] == 19
     assert all(item["service"] == "firestore" for item in setup["fixtures"])
-    assert all(item["route"] == "documents:commit" for item in setup["fixtures"])
+    assert all(item["route"] == "document-create" for item in setup["fixtures"])
+    assert all(item["method"] == "PATCH" for item in setup["fixtures"])
+    assert all(item["precondition"] == {"exists": False} for item in setup["fixtures"])
+    assert all(item["response"]["updateTime"] == "response-bound" for item in setup["fixtures"])
     assert [item["id"] for item in setup["auth"]] == [
         "account/owner-a/signup",
         "account/other-b/signup",

@@ -167,10 +167,15 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
         {
             "id": "fixture/" + entry["document"],
             "service": "firestore",
-            "route": "documents:commit",
-            "method": "POST",
+            "route": "document-create",
+            "method": "PATCH",
+            "path": entry["resource"] + "?currentDocument.exists=false",
             "document": entry["document"],
             "resource": entry["resource"],
+            "fields": entry["fields"],
+            "fieldsDigest": digest(entry["fields"]),
+            "precondition": {"exists": False},
+            "response": {"name": entry["resource"], "fieldsDigest": digest(entry["fields"]), "updateTime": "response-bound"},
         }
         for entry in plan["fixtures"]
     ]
@@ -184,6 +189,7 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 "method": "POST",
                 "accountRef": entry["ref"],
                 "tenant": entry["tenant"],
+                "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"},
             }
         )
     owner = next(entry for entry in plan["ownedAccounts"] if entry["ref"] == "owner-a")
@@ -196,6 +202,8 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 "method": "POST",
                 "accountRef": owner["ref"],
                 "tenant": owner["tenant"],
+                "claimsDigest": digest(owner["claims"]),
+                "response": {"localId": "response-bound", "idToken": "response-bound"},
             },
             {
                 "id": "account/owner-a/signin",
@@ -204,6 +212,7 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 "method": "POST",
                 "accountRef": owner["ref"],
                 "tenant": owner["tenant"],
+                "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"},
             },
         ]
     )

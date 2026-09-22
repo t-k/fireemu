@@ -440,6 +440,14 @@ def wire_fixture(monkeypatch, *, fault=None):
         if fault == "create" and operation["method"] in ("PATCH", "POST"):
             return {"complete": False, "failure": "offline-lost-response"}
         result = responder(operation, phase == "recovery", index, 0)
+        if (
+            fault == "semantic-mismatch"
+            and phase == "observation"
+            and operation["method"] == "GET"
+            and result["status"] == 400
+        ):
+            result = copy.deepcopy(result)
+            result["body"]["error"]["status"] = "FAILED_PRECONDITION"
         raw = json.dumps(result["body"], separators=(",", ":")).encode()
         return {
             **result,
@@ -788,6 +796,50 @@ def test_a_full_run_finishes_the_gate_and_releases_the_temporary_ledger(
         )
 
 
+def test_a_complete_semantic_difference_is_safe_and_repairable(
+    built, tmp_path, monkeypatch, gate_accounts_the_empty_batch_item
+):
+    """Safety completion survives a genuine mismatch and missing release repair."""
+    calls, responder = wire_fixture(monkeypatch, fault="semantic-mismatch")
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+    output = tmp_path / "output"
+    receipt = json.loads((output / "receipt.json").read_bytes())
+    assert result["failure"] is None
+    assert result["reservationReleased"] is True
+    assert receipt["collection"]["expectationMismatches"]
+    assert responder.documents == {}
+    assert calls
+
+    saved = production.verify_saved(
+        output,
+        expected_inputs_digest=built.inputs["inputsDigest"],
+        ledger_root=built.ledger,
+    )
+    assert saved["collection"]["expectationMismatches"]
+    assert production.semantic_classification(saved) == "SEMANTIC_MISMATCH"
+
+    (output / "release.json").unlink()
+    repaired = production.recover_release(
+        output,
+        expected_inputs_digest=built.inputs["inputsDigest"],
+        ledger_root=built.ledger,
+    )
+    assert repaired["receiptDigest"] == digest(receipt)
+    assert json.loads((output / "release.json").read_bytes()) == repaired
+
+    (output / "release.json").unlink()
+    routes = json.loads((output / "routes.json").read_bytes())
+    routes["rows"][0]["route"] += "/tampered"
+    (output / "routes.json").write_text(json.dumps(routes))
+    with pytest.raises(ValueError, match="saved evidence file differs"):
+        production.recover_release(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+    assert not (output / "release.json").exists()
+
+
 def test_collection_failure_after_index_apply_still_runs_reserved_recovery(
     built, tmp_path, monkeypatch
 ):
@@ -979,6 +1031,13 @@ def test_a_real_cleanup_complete_mismatch_restores_index_before_holding(
     assert management_ids[-1] == "recovery:index-lifecycle-restored"
     assert receipt["postflightComplete"] is True
     assert receipt["reservationStateAtPublication"] == "held"
+    with pytest.raises(ValueError, match="saved acquisition binding differs"):
+        production.recover_release(
+            tmp_path / "output",
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+    assert not (tmp_path / "output" / "release.json").exists()
 
 
 def test_a_stop_after_a_create_recovers_exactly_the_created_documents(

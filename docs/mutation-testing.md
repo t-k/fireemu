@@ -23,3 +23,11 @@ cargo mutants --gitignore true --in-diff docs.local/mutation/selection.diff -p <
 ```
 
 Retain the tool version, source commit, selection diff, reviewed list, test arguments and results together. Re-list after changing source, selection or tool versions. Missed unrelated mutants from a regex-only run do not establish that their full relevant test suites are inadequate.
+
+## UI: verify mutant execution
+
+Run `pnpm -C ui mutation:sanity` before trusting a UI mutation campaign. It uses the normal Stryker configuration and runner, selects the scope-transition guard by an exact source anchor, and requires every selected mutant to be killed. A missing or ambiguous anchor, empty selection, survivor, timeout, or infrastructure error fails the command. Results are written to `ui/test-results/mutation-sanity.json`; the exit status is checked against the current in-memory results, not an old report.
+
+The sanity command deliberately exercises a small known behavior-changing slice. It does not claim mutation coverage for the whole UI. Run `pnpm -C ui mutation` for the configured full selection, or use `pnpm -C ui exec stryker run --mutate <source-file>` for a reviewed focused campaign. A successful initial test run alone is not evidence that mutant tests executed.
+
+The earlier Vitest runner failure was not reproduced with the current locked dependencies: the normal runner killed the scope-transition mutants. Keep the runner and dependency versions pinned through the lockfile, and rerun the sanity command after upgrades rather than assuming the historical workaround is still necessary.

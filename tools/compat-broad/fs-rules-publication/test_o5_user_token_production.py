@@ -9,6 +9,7 @@ import socketserver
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import ClassVar
 
@@ -518,7 +519,7 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
         server.server_close()
 
 
-@pytest.mark.parametrize("failure_after", range(19))
+@pytest.mark.parametrize("failure_after", range(20))
 def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
     tmp_path, failure_after
 ) -> None:
@@ -530,6 +531,7 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
         plan_digest=plan["planDigest"],
     )
     ownership = {}
+    private_handoffs = {}
     origin_server = _producer_server()
     thread = threading.Thread(target=origin_server.serve_forever, daemon=True)
     thread.start()
@@ -574,8 +576,12 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
         capability = _fixture_capability(
             plan, binding, binding_digest, bindings["inputs"]
         )
-        with pytest.raises(ValueError, match="setup"):
-            bridge.run_bound_setup(
+        with (
+            pytest.raises(ValueError, match="setup")
+            if failure_after < 19
+            else nullcontext()
+        ):
+            receipts = bridge.run_bound_setup(
                 plan=plan,
                 gate=gate,
                 credentials={
@@ -592,8 +598,19 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
                 binding_digest=binding_digest,
                 journal=journal,
                 ownership=ownership,
+                private_handoffs=private_handoffs,
             )
         snapshot = gate.snapshot()
+        if failure_after == 19:
+            assert len(receipts) == 19
+            assert set(private_handoffs) == {
+                account["ref"] for account in plan["ownedAccounts"]
+            }
+            assert "setup-token" not in json.dumps(receipts)
+            assert "setup-token" not in repr(private_handoffs)
+            assert all(state["phase"] == "acknowledged" for state in ownership.values())
+            assert len(snapshot["managementUsed"]) == 19
+            return
         assert snapshot["stopped"] is True
         assert len(snapshot["managementUsed"]) == failure_after + 1
         assert snapshot["managementEvents"][-1].get("failure")

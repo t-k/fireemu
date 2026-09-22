@@ -49,6 +49,7 @@ def run_bound_setup(
     binding_digest: str,
     journal: Any = None,
     ownership: dict[str, dict[str, Any]] | None = None,
+    private_handoffs: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Charge and execute compiler-owned setup through the Gate journal."""
     if journal is None or journal.path is None or journal.failures:
@@ -108,6 +109,7 @@ def run_bound_setup(
             # passwords or user ID tokens.
             receipt = typed.receipt.as_dict()
             pending["receipt"] = receipt
+            pending["private"] = typed.private
             subject_id = (
                 "document/" + item["document"]
                 if item["service"] == "firestore"
@@ -168,6 +170,11 @@ def run_bound_setup(
         if creating:
             ownership[subject] = {"phase": "acknowledged", **proof}
         receipts.append(receipt)
+        if private_handoffs is not None and item["route"] in {
+            "accounts:signUp",
+            "accounts:signInWithPassword",
+        }:
+            private_handoffs[item["accountRef"]] = pending["private"]
         if item["service"] == "identity" and receipt.get("localId") is not None:
             account_bindings[item["accountRef"]] = {
                 **account_bindings.get(item["accountRef"], {}),
@@ -312,6 +319,7 @@ def run_bound_collection(
         journal_path, run_id=run_id, plan_digest=plan["planDigest"]
     )
     ownership: dict[str, dict[str, Any]] = {}
+    private_handoffs: dict[str, Any] = {}
     try:
         setup_receipts = run_bound_setup(
             plan=plan,
@@ -325,6 +333,7 @@ def run_bound_collection(
             binding_digest=binding_digest,
             journal=journal,
             ownership=ownership,
+            private_handoffs=private_handoffs,
         )
         session = RulesManagementSession(
             gate=gate,

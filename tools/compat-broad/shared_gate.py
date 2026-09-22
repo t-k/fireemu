@@ -1707,6 +1707,32 @@ def _management_cancel_prefix_valid(state, *, prefix_len=None):
         return False
     if used[apply_index] != apply_id:
         return False
+    # A collector may fail after the complete limits preflight, whose final
+    # metadata checks follow the index lifecycle. Only the fully settled,
+    # source-declared sequence can take this branch; partial cancellation
+    # retains the original lifecycle-only suffix rule below.
+    events = state.get("managementEvents", [])[:len(used)]
+    if (
+        used == identities
+        and len(events) == len(used)
+        and identities == [
+            "observation:" + slot for slot in (
+                "oauth-tokeninfo", "project", "database",
+                "index-lifecycle-before", "index-lifecycle-apply",
+                "index-lifecycle-poll", "index-lifecycle-after",
+                "index-exemption", "auth",
+            )
+        ]
+        and [event.get("id") for event in events] == identities
+        and all(
+            event.get("completed") is True
+            and event.get("workerReaped") is True
+            and type(event.get("status")) is int
+            and 200 <= event["status"] < 300
+            for event in events
+        )
+    ):
+        return True
     lifecycle_ids = {
         apply_id,
         "observation:index-lifecycle-poll",

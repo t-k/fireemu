@@ -60,6 +60,22 @@ def test_plan_is_bounded_and_contains_typed_absence_create_readback_cleanup() ->
     )
 
 
+def test_management_observation_reads_inherited_baseline_before_applying_exemption():
+    from compiler_03 import MANAGEMENT_OBSERVATION_IDS
+
+    assert list(MANAGEMENT_OBSERVATION_IDS) == [
+        "oauth-tokeninfo",
+        "project",
+        "database",
+        "index-lifecycle-before",
+        "index-lifecycle-apply",
+        "index-lifecycle-poll",
+        "index-lifecycle-after",
+        "index-exemption",
+        "auth",
+    ]
+
+
 @pytest.mark.parametrize(
     "project,database,nonce",
     [

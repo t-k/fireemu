@@ -477,12 +477,12 @@ def test_the_gate_charges_management_around_the_schedule():
         "oauth-tokeninfo",
         "project",
         "database",
-        "index-exemption",
-        "auth",
         "index-lifecycle-before",
         "index-lifecycle-apply",
         "index-lifecycle-poll",
         "index-lifecycle-after",
+        "index-exemption",
+        "auth",
     ]
     assert [slot["id"] for slot in gate["management"]["recovery"]] == [
         "project",
@@ -676,8 +676,8 @@ def _run_full(built, tmp_path, monkeypatch):
         "observation:oauth-tokeninfo",
         "observation:project",
         "observation:database",
-        "observation:index-exemption",
-        "observation:auth",
+        "observation:index-lifecycle-before",
+        "observation:index-lifecycle-apply",
     ]
     assert TOKEN not in (output / "receipt.json").read_text()
     assert receipt["collection"]["expectationMismatches"] == []
@@ -730,6 +730,63 @@ def test_a_full_run_finishes_the_gate_and_releases_the_temporary_ledger(
         production.verify_saved(
             output, expected_inputs_digest="0" * 64, ledger_root=built.ledger
         )
+
+
+def test_collection_failure_after_index_apply_still_runs_reserved_recovery(
+    built, tmp_path, monkeypatch
+):
+    calls, _responder = wire_fixture(monkeypatch)
+
+    def fail_after_preflight(*_args, **_kwargs):
+        raise RuntimeError("collector fixture failure")
+
+    monkeypatch.setattr(production, "collect", fail_after_preflight)
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] == "ValueError"
+    assert calls == []
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert management_ids[-1] == "observation:auth"
+    assert receipt["recoveryAttempted"] is True
+    assert receipt["recoveryFailure"] == "ValueError"
+    assert receipt["postflightComplete"] is False
+    assert receipt["reservationStateAtPublication"] == "held"
+
+
+def test_restore_readback_failure_is_held_after_actual_recovery_attempt(
+    built, tmp_path, monkeypatch
+):
+    """A failed REC readback leaves the real reservation held."""
+    wire_fixture(monkeypatch)
+    original_transport = preflight.management_transport
+
+    def corrupt_restored_readback(slot, token, **kwargs):
+        response = original_transport(slot, token, **kwargs)
+        if slot == "index-lifecycle-restored":
+            response = copy.deepcopy(response)
+            response["body"] = copy.deepcopy(response["body"])
+            response["body"]["indexConfig"]["usesAncestorConfig"] = False
+        return response
+
+    monkeypatch.setattr(preflight, "management_transport", corrupt_restored_readback)
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] == "ValueError"
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    restored = next(
+        row
+        for row in receipt["managementEvidence"]
+        if row["id"] == "recovery:index-lifecycle-restored"
+    )
+    assert restored["response"]["body"]["indexConfig"]["usesAncestorConfig"] is False
+    assert receipt["recoveryAttempted"] is True
+    assert receipt["recoveryFailure"] == "ValueError"
+    assert receipt["postflightComplete"] is False
+    assert receipt["reservationStateAtPublication"] == "held"
 
 
 def test_head_gate_settles_the_malformed_item_batch(

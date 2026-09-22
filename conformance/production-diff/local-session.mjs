@@ -77,7 +77,9 @@ let index = 0,
 globalThis.fetch = async (url, init = {}) => {
   const parsed = assertUrl(url, origin);
   const op = expected[index];
-  const path = op ? resolveRecordedPath(op.path, rawReplies) : null;
+  const resolvedPath = op ? resolveRecordedPath(op.path, rawReplies) : null;
+  const expectedUrl = op ? assertUrl(origin + resolvedPath, origin) : null;
+  const path = expectedUrl ? expectedUrl.pathname + expectedUrl.search : null;
   requireThat(
     op && op.method === (init.method ?? "GET") && path === parsed.pathname + parsed.search,
     "unexpected-recorder-operation",

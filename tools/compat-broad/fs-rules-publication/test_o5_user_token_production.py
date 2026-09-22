@@ -21,6 +21,7 @@ sys.path.insert(0, str(HERE))
 import o5_user_token_collector as collector_module
 import o5_user_token_descriptor as lane
 import o5_user_token_production as production
+import o5_user_token_production_bridge as bridge
 import o5_user_token_remote_transport as remote
 import shared_gate
 from o5_user_token_campaign import digest, setup_plan
@@ -29,6 +30,7 @@ from reservations import Ledger
 from test_o5_user_token_collector_bound import acquisition_for
 from test_o5_user_token_descriptor import synthetic
 from test_o5_user_token_remote_transport import (
+    _fixture_capability,
     _fixture_proofs,
     _FixtureHandler,
     account_bindings,
@@ -45,6 +47,7 @@ class _ProducerHandler(_FixtureHandler):
     requests: ClassVar[list[dict[str, object]]] = []
     setup_uids: ClassVar[dict[str, str]] = {}
     setup_account_order: ClassVar[list[str]] = []
+    fail_setup_after: ClassVar[int | None] = None
 
     def do_any(self) -> None:
         size = int(self.headers.get("Content-Length", "0"))
@@ -52,6 +55,24 @@ class _ProducerHandler(_FixtureHandler):
         path = self.path
         self.__class__.requests.append({"method": self.command, "path": path, "body": body})
         status = 200
+        setup_request_count = sum(
+            "currentDocument.exists=false" in request["path"]
+            or "/v1/projects/" in request["path"] and "/accounts:" in request["path"]
+            for request in self.__class__.requests
+        )
+        if (
+            self.__class__.fail_setup_after is not None
+            and setup_request_count > self.__class__.fail_setup_after
+            and ("currentDocument.exists=false" in path or "/v1/projects/" in path and "/accounts:" in path)
+        ):
+            status, payload = 500, {"error": {"code": 500, "status": "INTERNAL"}}
+            raw = json.dumps(payload, separators=(",", ":")).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if "currentDocument.exists=false" in path:
             # The worker has already checked the compiler-owned conditional
             # path and request shape. Echo the materialized Firestore fields
@@ -227,6 +248,7 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
     _ProducerHandler._plan = None
     _ProducerHandler.setup_uids = {}
     _ProducerHandler.requests = []
+    _ProducerHandler.fail_setup_after = None
     server = socketserver.TCPServer(("127.0.0.1", 0), _ProducerHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -365,3 +387,69 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_setup_failure_stops_gate_and_preserves_ledger_reservation(tmp_path) -> None:
+    """A failed setup slot remains durably owned for recovery, never closes it."""
+    plan = lane.plan_compiler("a" * 32)
+    origin_server = socketserver.TCPServer(("127.0.0.1", 0), _ProducerHandler)
+    thread = threading.Thread(target=origin_server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{origin_server.server_address[1]}"
+    try:
+        _ProducerHandler._plan = plan
+        _ProducerHandler.requests = []
+        _ProducerHandler.setup_uids = {}
+        _ProducerHandler.fail_setup_after = 3
+        bindings = synthetic(tmp_path, lane.descriptor())
+        binding, binding_digest = remote.worker_binding()
+        gate_path = tmp_path / "gate"
+        expires_at = time.time() + 1200
+        frozen_gate = lane.gate_plan(plan, permission_expires_at=expires_at)
+        ledger = Ledger.create(tmp_path / "ledger")
+        envelope = {
+            "permissionDigest": digest(bindings["permission"]),
+            "issuedAt": time.time() - 1,
+            "expiresAt": expires_at,
+            "limits": {"requests": 146, "accounts": 7, "resources": 21, "costMicrousd": 1_000_000},
+            "concurrency": 1,
+            "scopes": lane.lock_scopes(plan),
+        }
+        claim = {
+            "campaignId": plan["campaignId"],
+            "manifestDigest": digest(plan),
+            "nonceDigest": digest(plan["nonce"]),
+            "gatePath": str(gate_path.resolve()),
+            "gatePlanDigest": digest(frozen_gate),
+            "locks": lane.lock_scopes(plan),
+            "budget": dict(envelope["limits"]),
+            "durationSeconds": 600,
+        }
+        ledger.reserve(envelope, claim, frozen_gate)
+        shared_gate.create(gate_path, frozen_gate)
+        gate = shared_gate.Gate(gate_path, plan["campaignId"])
+        capability = _fixture_capability(plan, binding, binding_digest, bindings["inputs"])
+        with pytest.raises(ValueError, match="setup"):
+            bridge.run_bound_setup(
+                plan=plan,
+                gate=gate,
+                credentials={"administrator": "fixture-admin"},
+                setup_secrets={row["ref"]: "fixture-password" for row in plan["ownedAccounts"]},
+                account_bindings=account_bindings(plan),
+                capability=capability,
+                fixture_origin=origin,
+                binding=binding,
+                binding_digest=binding_digest,
+            )
+        snapshot = gate.snapshot()
+        assert snapshot["stopped"] is True
+        assert len(snapshot["managementUsed"]) == 4
+        assert snapshot["managementEvents"][-1].get("failure")
+        assert ledger.snapshot()["reservations"]
+        serialized = json.dumps(snapshot)
+        assert "fixture-password" not in serialized
+        assert "idToken" not in serialized
+    finally:
+        _ProducerHandler.fail_setup_after = None
+        origin_server.shutdown()
+        origin_server.server_close()

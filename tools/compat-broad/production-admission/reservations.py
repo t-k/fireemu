@@ -705,11 +705,29 @@ def _auth_account_scope(resource):
     return _scope({"key": "/".join(("project", parts[1], "auth", "accounts", parts[4])), "mode": "WRITE"})
 
 
+def _auth_config_scope(resource):
+    if not isinstance(resource, str):
+        raise TypeError("canonical Auth configuration resource required")
+    parts = resource.split("/")
+    if (
+        len(parts) != 4
+        or parts[0] != "projects"
+        or not parts[1]
+        or parts[2:] != ["auth", "config"]
+    ):
+        raise ValueError("canonical Auth configuration resource required")
+    return _scope(
+        {"key": "/".join(("project", parts[1], "auth", "config")), "mode": "WRITE"}
+    )
+
+
 def _resource_scope(resource):
     if not isinstance(resource, str):
         raise TypeError("canonical Auth account resource required")
     parts = resource.split("/")
     if len(parts) > 2 and parts[0] == "projects" and parts[2] == "auth":
+        if parts == ["projects", parts[1], "auth", "config"]:
+            return _auth_config_scope(resource)
         return _auth_account_scope(resource)
     return _firestore_resource_scope(resource)
 

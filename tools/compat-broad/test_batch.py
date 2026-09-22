@@ -68,6 +68,85 @@ def test_adopted_artifact_requires_bound_receipt_and_complete_runtime_map(tmp_pa
         batch_local.adopted_artifact(binary, receipt_path, "5" * 40)
 
 
+def test_retained_648_profile_is_exact_and_refuses_provenance_drift(
+    tmp_path, monkeypatch
+):
+    import hashlib
+    import json
+
+    import batch_local
+
+    source_commit = "648aabe56cf6147128ffadf565d93ca7a92013c1"
+    binary = tmp_path / "fireemu"
+    binary.write_bytes(b"synthetic-retained-artifact")
+    artifact_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+    inputs = {f"input-{index}": f"sha-{index}" for index in range(430)}
+    input_map_sha = hashlib.sha256(
+        json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    monkeypatch.setattr(batch_local, "RETAINED_648_ARTIFACT_SHA256", artifact_sha)
+    monkeypatch.setattr(batch_local, "RETAINED_648_INPUT_MAP_SHA256", input_map_sha)
+
+    build = {
+        "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fireemu",
+            "--message-format=json",
+        ],
+        "exitCode": 0,
+        "artifactSha256": artifact_sha,
+        "inputs": inputs,
+    }
+    receipt = {
+        "build": build,
+        "runtimeSource": {"commit": source_commit, "files": inputs},
+    }
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt))
+
+    adopted = batch_local.adopted_artifact(binary, receipt_path, source_commit)
+    assert adopted["artifactSha256"] == artifact_sha
+    assert adopted["sourceCommit"] == source_commit
+    assert adopted["runtimeInputCount"] == 430
+
+    with pytest.raises(ValueError, match="source commit"):
+        batch_local.adopted_artifact(binary, receipt_path, "5" * 40)
+
+    binary.write_bytes(b"substituted-artifact")
+    with pytest.raises(ValueError, match="artifact hash"):
+        batch_local.adopted_artifact(binary, receipt_path, source_commit)
+    binary.write_bytes(b"synthetic-retained-artifact")
+
+    changed = json.loads(receipt_path.read_text())
+    changed["runtimeSource"]["files"]["input-0"] = "substituted"
+    changed["build"]["inputs"]["input-0"] = "substituted"
+    receipt_path.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="runtime input map"):
+        batch_local.adopted_artifact(binary, receipt_path, source_commit)
+
+    changed["build"]["inputs"]["input-0"] = "sha-0"
+    receipt_path.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="runtime input map"):
+        batch_local.adopted_artifact(binary, receipt_path, source_commit)
+
+
+def test_retained_648_profile_pins_the_recorded_artifact_and_input_map():
+    import batch_local
+
+    assert batch_local.RETAINED_648_SOURCE_COMMIT == (
+        "648aabe56cf6147128ffadf565d93ca7a92013c1"
+    )
+    assert batch_local.RETAINED_648_ARTIFACT_SHA256 == (
+        "7737f6c389aff0a0f280757591af3b81f11edfbc8438cb69268da0f4c2237026"
+    )
+    assert batch_local.RETAINED_648_INPUT_MAP_SHA256 == (
+        "7e2b0bc7037e0caf9f979f052c69a3820a398c8df72de8dbd19f1aac2f524331"
+    )
+
+
 def test_changed_source_or_namespace_cannot_be_compiled():
     c = contract()
     m = c.candidate()

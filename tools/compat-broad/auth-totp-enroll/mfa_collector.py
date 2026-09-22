@@ -90,6 +90,23 @@ def _contains_sensitive(value: Any, key: str = "") -> bool:
     return False
 
 
+def selected_case_ids(plan: dict[str, Any]) -> list[str]:
+    """Return the manifest-bound denominator; callers cannot supply an arbitrary filter."""
+    selector = plan.get("selector")
+    if selector is None:
+        return [case["id"] for case in observation_cases()]
+    if not isinstance(selector, dict) or selector.get("name") != "pending-age-300-v1":
+        raise ValueError("unsupported MFA selector")
+    expected = [
+        "age-300s-start",
+        "age-300s-finalize",
+        "age-300s-same-account-fresh-control",
+    ]
+    if selector.get("caseIds") != expected:
+        raise ValueError("selected MFA case denominator differs")
+    return expected
+
+
 # Checkpoints are private diagnostic state, never authority to perform a request.
 MAX_CHECKPOINT_BYTES = 2 * 1024 * 1024
 
@@ -116,7 +133,10 @@ def _validate_state(state: Any) -> None:
         "schema", "campaignId", "nonce", "planDigest", "startedAt", "deadline",
         "maxRequests", "requests", "steps", "ownedResources", "aborted", "abortReason",
     }
-    if not isinstance(state, dict) or set(state) != required:
+    if not isinstance(state, dict) or set(state) not in (
+        required,
+        required | {"selectedCaseIds"},
+    ):
         raise ValueError("invalid collector state fields")
     if state["schema"] != SCHEMA or state["campaignId"] != CAMPAIGN_ID:
         raise ValueError("invalid collector identity")
@@ -136,7 +156,14 @@ def _validate_state(state: Any) -> None:
     ):
         raise ValueError("invalid collector abort reason")
     steps = state["steps"]
-    expected = [case["id"] for case in observation_cases()]
+    selected = state.get("selectedCaseIds")
+    expected = selected if selected is not None else [case["id"] for case in observation_cases()]
+    if selected is not None and selected != [
+        "age-300s-start",
+        "age-300s-finalize",
+        "age-300s-same-account-fresh-control",
+    ]:
+        raise ValueError("selected collector denominator differs")
     if not isinstance(steps, list) or len(steps) != len(expected):
         raise ValueError("collector cases are missing or duplicated")
     for step, identifier in zip(steps, expected, strict=True):
@@ -200,7 +227,7 @@ def initial_state(plan: dict[str, Any], now: float) -> dict[str, Any]:
     deadline = _number(start + wall)
     if deadline <= start:
         raise ValueError("unrepresentable collector deadline")
-    return {
+    state = {
         "schema": SCHEMA,
         "campaignId": CAMPAIGN_ID,
         "nonce": plan["owner"]["nonceDigest"],
@@ -210,13 +237,16 @@ def initial_state(plan: dict[str, Any], now: float) -> dict[str, Any]:
         "maxRequests": limits["maxRequests"],
         "requests": 0,
         "steps": [
-            {"id": case["id"], "status": "pending", "dueAt": None, "observation": None}
-            for case in observation_cases()
+            {"id": identifier, "status": "pending", "dueAt": None, "observation": None}
+            for identifier in selected_case_ids(plan)
         ],
         "ownedResources": [],
         "aborted": False,
         "abortReason": None,
     }
+    if plan.get("selector") is not None:
+        state["selectedCaseIds"] = selected_case_ids(plan)
+    return state
 
 
 def _step(state: dict[str, Any], step_id: str) -> dict[str, Any]:
@@ -467,8 +497,11 @@ def load_checkpoint(data: bytes, *, plan: dict[str, Any] | None = None) -> dict[
         _validate_state(state)
         if plan is not None:
             expected = initial_state(plan, state["startedAt"])
-            for field in ("campaignId", "nonce", "planDigest", "maxRequests", "deadline"):
-                if state[field] != expected[field]:
+            for field in (
+                "campaignId", "nonce", "planDigest", "maxRequests", "deadline",
+                "steps", "selectedCaseIds",
+            ):
+                if state.get(field) != expected.get(field):
                     raise CheckpointError("checkpoint does not match the expected plan")
     except (ValueError, TypeError, KeyError, RecursionError, SensitiveMaterialError):
         raise CheckpointError("checkpoint state is invalid") from None

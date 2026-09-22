@@ -528,18 +528,35 @@ def gate_plan(
     recovery_seconds: int,
     cost_microusd: int,
     project: str = PROJECT,
+    selector: str | None = None,
 ) -> dict[str, Any]:
     """Project the campaign onto the shared Gate schema for one nonce."""
     if project != PROJECT:
         raise ValueError("the campaign is fixed to the oracle project")
+    if selector not in (None, "pending-age-300-v1"):
+        raise ValueError("unsupported MFA selector")
     observation = observation_operations(nonce)
     recovery = recovery_operations(nonce)
+    if selector == "pending-age-300-v1":
+        observation = [
+            operation
+            for operation in observation
+            if operation.get("account") == "pending-age-300"
+        ]
+        recovery = [
+            operation
+            for operation in recovery
+            if operation.get("account") == "pending-age-300"
+        ]
+        if len(observation) != 11 or len(recovery) != 4:
+            raise ValueError("selected MFA operation closure differs")
+    roles = ("pending-age-300",) if selector == "pending-age-300-v1" else ROLE_ORDER
     account_bindings = {
         role: {
             "resource": account_resource(project, nonce, role),
             "uidBinding": f"{_camel(role)}Uid",
         }
-        for role in ROLE_ORDER
+        for role in roles
     }
     for operation in (*observation, *recovery):
         account = operation.get("account")
@@ -571,6 +588,7 @@ def gate_plan(
         "contract": CONTRACT,
         "campaignId": CAMPAIGN_ID,
         "nonce": nonce,
+        **({"selector": selector} if selector is not None else {}),
         "project": project,
         "jobSlots": 1,
         "requestSeconds": DATA_SLOT_SECONDS,
@@ -584,9 +602,9 @@ def gate_plan(
         "requestCostMicrousd": REQUEST_COST_MICROUSD,
         "costMicrousd": cost_microusd,
         "receiptKind": "mfa-acquisition-receipt-v1",
-        "plannedAccounts": list(ROLE_ORDER),
+        "plannedAccounts": list(roles),
         "accountResources": [
-            account_resource(project, nonce, role) for role in ROLE_ORDER
+            account_resource(project, nonce, role) for role in roles
         ],
         "configResource": config_resource(project),
         "mintedBindings": list(MINTED_BINDINGS),
@@ -629,8 +647,6 @@ def gate_plan(
             }
         },
     }
-
-
 def _known_noncreating(operation: dict[str, Any]) -> bool:
     """Slots the base Gate itself knows cannot create: password sign-in and lookup."""
     return operation["kind"] in ("sign-in", "lookup")

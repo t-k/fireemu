@@ -215,15 +215,21 @@ def request_budget() -> dict:
     }
 
 
-def wall_budget() -> dict:
+def wall_budget(
+    *,
+    max_wall_seconds: int | None = None,
+    critical_path: int | None = None,
+    recovery_reserve: int | None = None,
+) -> dict:
     """The wall split: provisioning, the concurrent aging critical path, recovery."""
-    critical = critical_path_seconds()
-    total = campaign_seconds()
+    critical = critical_path_seconds() if critical_path is None else critical_path
+    total = campaign_seconds() if max_wall_seconds is None else max_wall_seconds
+    recovery = recovery_seconds() if recovery_reserve is None else recovery_reserve
     used = (
         PROVISIONING_SECONDS
         + CONFIG_ENFORCEMENT_LAG_SECONDS
         + critical
-        + recovery_seconds()
+        + recovery
     )
     if used > total:
         raise ValueError("wall budget does not hold the critical path and recovery")
@@ -232,7 +238,7 @@ def wall_budget() -> dict:
         "provisioningSeconds": PROVISIONING_SECONDS,
         "configurationEnforcementLagSeconds": CONFIG_ENFORCEMENT_LAG_SECONDS,
         "criticalPathSeconds": critical,
-        "recoveryReserveSeconds": recovery_seconds(),
+        "recoveryReserveSeconds": recovery,
         "slackSeconds": total - used,
         "timingMode": WALL_CLOCK,
     }
@@ -298,19 +304,37 @@ def configuration_change() -> dict:
     }
 
 
-def frozen_bounds() -> dict:
+def frozen_bounds(
+    *,
+    case_count: int | None = None,
+    account_count: int | None = None,
+    limits: dict | None = None,
+) -> dict:
+    wall = wall_budget(
+        max_wall_seconds=None if limits is None else limits["maxWallSeconds"],
+        critical_path=None if limits is None else limits["criticalPathSeconds"],
+        recovery_reserve=(
+            None if limits is None else limits["recoveryReserveSeconds"]
+        ),
+    )
     return {
         **request_budget(),
-        **wall_budget(),
-        "caseCount": len(observation_cases()),
-        "ownedAccounts": len(owned_accounts()),
+        **wall,
+        "caseCount": (
+            len(observation_cases()) if case_count is None else case_count
+        ),
+        "ownedAccounts": (
+            len(owned_accounts()) if account_count is None else account_count
+        ),
         "concurrency": 1,
         "configurationChange": configuration_change(),
     }
 
 
 # --- plan ---------------------------------------------------------------------------
-def plan_compiler(nonce: str, *, timing: str = WALL_CLOCK) -> dict:
+def plan_compiler(
+    nonce: str, *, timing: str = WALL_CLOCK, selector: str | None = None
+) -> dict:
     """The plan as the admission sees it: a reference to the frozen manifest.
 
     Every field is derived from the nonce by the reviewed manifest compiler, so the
@@ -322,8 +346,8 @@ def plan_compiler(nonce: str, *, timing: str = WALL_CLOCK) -> dict:
         raise ValueError("fresh 128-bit lowercase hexadecimal nonce required")
     if timing not in (WALL_CLOCK, VIRTUAL_CLOCK):
         raise ValueError("declared timing mode required")
-    manifest = compile_campaign(nonce)
-    return {
+    manifest = compile_campaign(nonce, selector=selector)
+    reference = {
         "schema": "mfa-plan-reference-v1",
         "campaignId": manifest["campaignId"],
         "project": manifest["project"],
@@ -337,6 +361,13 @@ def plan_compiler(nonce: str, *, timing: str = WALL_CLOCK) -> dict:
         "agingSchedule": manifest["agingSchedule"]["mode"],
         "timingMode": timing,
     }
+    if selector is not None:
+        reference["selector"] = copy.deepcopy(manifest["selector"])
+        reference["selectedCaseCount"] = len(manifest["selector"]["caseIds"])
+        reference["selectedAccountCount"] = len(manifest["selector"]["accountRoles"])
+        reference["caseCount"] = reference["selectedCaseCount"]
+        reference["ownedAccounts"] = reference["selectedAccountCount"]
+    return reference
 
 
 def execution_plan(reference: dict) -> dict:
@@ -347,10 +378,11 @@ def execution_plan(reference: dict) -> dict:
     timing = reference.get("timingMode")
     if timing not in (WALL_CLOCK, VIRTUAL_CLOCK):
         raise ValueError("frozen MFA plan reference differs")
-    canonical = plan_compiler(nonce, timing=timing)
+    selector = reference.get("selector", {}).get("name") if "selector" in reference else None
+    canonical = plan_compiler(nonce, timing=timing, selector=selector)
     if digest(reference) != digest(canonical):
         raise ValueError("frozen MFA plan reference differs")
-    manifest = compile_campaign(nonce)
+    manifest = compile_campaign(nonce, selector=selector)
     if digest(manifest) != reference["manifestDigest"] or not validate_campaign(
         manifest
     ):
@@ -367,8 +399,14 @@ def lock_scopes(plan: dict) -> list[dict]:
     """
     nonce = plan["nonce"]
     scope = f"project/{PROJECT}"
+    selector = plan.get("selector")
+    account_key = (
+        f"{scope}/auth/accounts/o2-mfa-pending-age-300-{nonce}"
+        if isinstance(selector, dict) and selector.get("name") == "pending-age-300-v1"
+        else f"{scope}/auth/accounts/o2/{CAMPAIGN}/{nonce}/*"
+    )
     return [
-        {"key": f"{scope}/auth/accounts/o2/{CAMPAIGN}/{nonce}/*", "mode": "WRITE"},
+        {"key": account_key, "mode": "WRITE"},
         {"key": f"{scope}/auth/config", "mode": "EXCLUSIVE"},
         {"key": f"{scope}/identity", "mode": "READ"},
     ]
@@ -499,12 +537,29 @@ def permission_bindings(
     `window` is the descriptor's own (campaign, recovery) seconds; the production
     descriptor binds the manifest's, a rehearsal descriptor binds its short one.
     """
-    canonical = plan_compiler(plan["nonce"], timing=timing)
-    if digest(plan) != digest(canonical):
+    selector = plan.get("selector")
+    if selector is None:
+        selector_name = None
+    elif isinstance(selector, dict):
+        selector_name = selector.get("name")
+    else:
         raise ValueError("fixed production project and timing mode required")
-    seconds, recovery = (
-        window if window is not None else (campaign_seconds(), recovery_seconds())
+    canonical = plan_compiler(
+        plan["nonce"], timing=timing, selector=selector_name
     )
+    if digest(plan) != digest(canonical):
+        raise ValueError("frozen MFA plan reference differs")
+    manifest = execution_plan(plan)
+    account_roles = (
+        manifest["selector"]["accountRoles"]
+        if "selector" in manifest
+        else [account["role"] for account in manifest["owner"]["accounts"]]
+    )
+    plan_seconds = manifest["limits"]["maxWallSeconds"]
+    plan_recovery = manifest["limits"]["recoveryReserveSeconds"]
+    seconds, recovery = window if window is not None else (plan_seconds, plan_recovery)
+    seconds = min(seconds, plan_seconds)
+    recovery = min(recovery, plan_recovery)
     required = {
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
@@ -532,6 +587,9 @@ def permission_bindings(
         "perRequestTimeoutSeconds": transport.REQUEST_SECONDS,
         "concurrency": 1,
         "timingMode": timing,
+        "selector": selector_name,
+        "caseCount": plan["caseCount"],
+        "ownedAccountRoles": list(account_roles),
         "configurationChange": configuration_change(),
         "costModel": cost_model(),
         "artifactProfileBasis": artifact_profile_basis(),
@@ -605,6 +663,29 @@ def descriptor(sleeper=None) -> CampaignDescriptor:
         seconds=campaign_seconds(),
         recovery=recovery_seconds(),
         bounds=frozen_bounds(),
+        timing=WALL_CLOCK,
+    )
+
+
+def descriptor_for_plan(plan: dict, sleeper=None) -> CampaignDescriptor:
+    """Build the production descriptor for one canonical frozen plan reference."""
+    from mfa_timing import WallClockSleeper
+
+    manifest = execution_plan(plan)
+    if plan["timingMode"] != WALL_CLOCK:
+        raise ValueError("wall-clock plan reference required")
+    active_sleeper = WallClockSleeper() if sleeper is None else sleeper
+    require_wall_clock(active_sleeper)
+    bounds = frozen_bounds(
+        case_count=plan["caseCount"],
+        account_count=plan["ownedAccounts"],
+        limits=manifest["limits"],
+    )
+    return _descriptor(
+        active_sleeper,
+        seconds=manifest["limits"]["maxWallSeconds"],
+        recovery=manifest["limits"]["recoveryReserveSeconds"],
+        bounds=bounds,
         timing=WALL_CLOCK,
     )
 

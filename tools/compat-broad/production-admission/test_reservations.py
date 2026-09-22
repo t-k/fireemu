@@ -586,6 +586,64 @@ def test_segment_aware_lock_conflicts(left, right, expected):
     )
 
 
+def test_auth_config_resource_maps_to_exact_write_leaf():
+    assert reservations._resource_scope("projects/p/auth/config") == (
+        "project",
+        "p",
+        "auth",
+        "config",
+    )
+
+
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "projects/p/auth",
+        "projects/p/auth/config/extra",
+        "projects//auth/config",
+        "projects/./auth/config",
+        "projects/../auth/config",
+        "projects/p/auth/config/",
+        "projects/p/authentication/config",
+        "projects/p/auth/unknown",
+    ],
+)
+def test_unknown_or_malformed_auth_resource_refused(resource):
+    with pytest.raises(ValueError):
+        reservations._resource_scope(resource)
+
+
+def test_auth_config_scope_preserves_auth_account_and_firestore_boundaries():
+    config = reservations._resource_scope("projects/p/auth/config")
+    account = reservations._resource_scope("projects/p/auth/accounts/user-1")
+    other_project_config = reservations._resource_scope("projects/q/auth/config")
+    firestore = reservations._resource_scope(
+        "projects/p/databases/(default)/documents/owned/user-1"
+    )
+
+    assert account == ("project", "p", "auth", "accounts", "user-1")
+    assert firestore == (
+        "project",
+        "p",
+        "firestore",
+        "(default)",
+        "documents",
+        "owned",
+        "user-1",
+    )
+    config_lock = {"key": "/".join(config), "mode": "WRITE"}
+    account_lock = {"key": "/".join(account), "mode": "WRITE"}
+    other_project_lock = {"key": "/".join(other_project_config), "mode": "WRITE"}
+    firestore_lock = {"key": "/".join(firestore), "mode": "WRITE"}
+    auth_ancestor = {"key": "project/p/auth", "mode": "WRITE"}
+
+    assert not conflicts(config_lock, account_lock)
+    assert not conflicts(config_lock, other_project_lock)
+    assert not conflicts(config_lock, firestore_lock)
+    assert conflicts(auth_ancestor, config_lock)
+    assert conflicts(auth_ancestor, account_lock)
+
+
 @pytest.mark.parametrize(
     "key",
     [

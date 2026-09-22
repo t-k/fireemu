@@ -41,6 +41,7 @@ from mfa_collector import (
     register_owned,
     run_complete,
     skip_step,
+    selected_case_ids,
 )
 from mfa_config_lock import CONFIG_PATH, TEST_PHONE
 from mfa_timing import timing_mode
@@ -501,8 +502,16 @@ class Walk:
         if material["origin"] is not None:
             return
         acquired = material["acquiredAt"]
-        self._account("pending-control")
-        for age in AGED_PENDING_SAMPLES:
+        selected = self.plan.get("selector")
+        selected_roles = (
+            tuple(selected["accountRoles"])
+            if isinstance(selected, dict)
+            else None
+        )
+        if selected_roles is None or "pending-control" in selected_roles:
+            self._account("pending-control")
+        ages = (300,) if selected_roles is not None else AGED_PENDING_SAMPLES
+        for age in ages:
             key = str(age)
             if key not in material["pendings"]:
                 material["pendings"][key] = self._phone_pending(
@@ -510,7 +519,8 @@ class Walk:
                 )
                 acquired[f"pending-{key}"] = self.sleeper.now()
                 self.material.save()
-        for age in SAMPLED_AGES_SECONDS:
+        session_ages = () if selected_roles is not None else SAMPLED_AGES_SECONDS
+        for age in session_ages:
             key = str(age)
             if key not in material["sessions"]:
                 material["sessions"][key] = self._enroll_totp(
@@ -523,7 +533,10 @@ class Walk:
         # Recording the schedule in the collector makes the checkpoint
         # self-describing: a resumed process waits for the recorded instant, not
         # for an instant it recomputes.
+        selected_ids = set(selected_case_ids(self.plan))
         for case in observation_cases():
+            if case["id"] not in selected_ids:
+                continue
             offset = case["dueOffsetSeconds"]
             if not offset:
                 continue
@@ -842,7 +855,11 @@ class Walk:
         """
         self._check_stop()
         self._ensure_acquired()
-        cases = {case["id"]: case for case in observation_cases()}
+        cases = {
+            case["id"]: case
+            for case in observation_cases()
+            if case["id"] in set(selected_case_ids(self.plan))
+        }
         while True:
             self._check_stop()
             action = next_action(self.state, self.sleeper.now())
@@ -925,6 +942,7 @@ class Walk:
         return [
             copy.deepcopy(self.rows[c["id"]])
             for c in observation_cases()
+            if c["id"] in set(selected_case_ids(self.plan))
             if c["id"] in self.rows
         ]
 

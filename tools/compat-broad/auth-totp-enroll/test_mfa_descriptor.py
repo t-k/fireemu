@@ -42,6 +42,7 @@ def test_the_production_descriptor_is_complete_and_wall_clock_bound():
     assert len(descriptor.approval_fields) == 17
     assert descriptor.binds_campaign_id is True
     assert descriptor.campaign_seconds == LIMITS["maxWallSeconds"] == 2700
+    assert descriptor.frozen_bounds["maxWallSeconds"] == 2700
     assert descriptor.recovery_seconds == LIMITS["recoveryReserveSeconds"] == 300
     assert descriptor.window_seconds == 3000
     assert descriptor.frozen_bounds["timingMode"] == "wall-clock"
@@ -52,6 +53,63 @@ def test_the_production_descriptor_is_complete_and_wall_clock_bound():
         "mode": "EXCLUSIVE",
     }
     assert set(descriptor.members()) == set(REQUIRED_MEMBERS)
+
+
+def test_the_selected_plan_reference_binds_the_allowlisted_selector():
+    reference = campaign.plan_compiler(
+        NONCE, selector="pending-age-300-v1", timing=campaign.WALL_CLOCK
+    )
+    assert reference["selector"]["caseIds"] == [
+        "age-300s-start",
+        "age-300s-finalize",
+        "age-300s-same-account-fresh-control",
+    ]
+    assert reference["selectedCaseCount"] == 3
+    assert reference["selectedAccountCount"] == 1
+    plan = campaign.execution_plan(reference)
+    assert plan["selector"]["name"] == "pending-age-300-v1"
+    assert plan["limits"]["maxWallSeconds"] == 1200
+    assert reference["caseCount"] == reference["selectedCaseCount"] == 3
+    assert reference["ownedAccounts"] == reference["selectedAccountCount"] == 1
+    selected_descriptor = campaign.descriptor_for_plan(
+        reference, WallClockSleeper()
+    )
+    assert selected_descriptor.campaign_seconds == 1200
+    assert selected_descriptor.frozen_bounds["maxWallSeconds"] == 1200
+    assert selected_descriptor.frozen_bounds["criticalPathSeconds"] == 301
+    assert selected_descriptor.frozen_bounds["recoveryReserveSeconds"] == 300
+    assert campaign.lock_scopes(reference)[0]["key"].endswith(
+        "auth/accounts/o2-mfa-pending-age-300-" + NONCE
+    )
+
+
+def test_selected_permission_binding_carries_its_canonical_resource_closure():
+    reference = campaign.plan_compiler(
+        NONCE, selector="pending-age-300-v1", timing=campaign.WALL_CLOCK
+    )
+    permission = campaign.permission_bindings(
+        reference, "a" * 40, "b" * 64, campaign.source_map()
+    )
+    assert permission["planDigest"] == digest(reference)
+    assert permission["manifestDigest"] == reference["manifestDigest"]
+    assert permission["selector"] == "pending-age-300-v1"
+    assert permission["caseCount"] == 3
+    assert permission["ownedAccountRoles"] == ["pending-age-300"]
+    assert permission["ownedAccounts"] == 1
+    assert permission["wallSeconds"] == permission["campaignSeconds"] == 1200
+    assert permission["recoverySeconds"] == 300
+
+    altered = dict(reference, caseCount=33)
+    with pytest.raises(ValueError, match="plan reference differs"):
+        campaign.permission_bindings(
+            altered, "a" * 40, "b" * 64, campaign.source_map()
+        )
+
+    unknown = dict(reference, selector={**reference["selector"], "name": "unknown"})
+    with pytest.raises(ValueError, match="unsupported MFA selector"):
+        campaign.permission_bindings(
+            unknown, "a" * 40, "b" * 64, campaign.source_map()
+        )
 
 
 @pytest.mark.parametrize("member", sorted(REQUIRED_MEMBERS))

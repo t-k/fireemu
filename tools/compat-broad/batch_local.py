@@ -28,6 +28,20 @@ from owned_runner import (
 )
 
 
+RETAINED_648_SOURCE_COMMIT = "648aabe56cf6147128ffadf565d93ca7a92013c1"
+RETAINED_648_ARTIFACT_SHA256 = (
+    "7737f6c389aff0a0f280757591af3b81f11edfbc8438cb69268da0f4c2237026"
+)
+RETAINED_648_INPUT_MAP_SHA256 = (
+    "7e2b0bc7037e0caf9f979f052c69a3820a398c8df72de8dbd19f1aac2f524331"
+)
+
+
+def _runtime_input_map_sha256(inputs: dict) -> str:
+    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def adopted_artifact(binary: Path, receipt_path: Path, source_commit: str) -> dict:
     """Validate an immutable previously built binary without rebuilding or relabeling it."""
     if not binary.is_absolute() or binary.is_symlink() or not binary.is_file():
@@ -46,9 +60,20 @@ def adopted_artifact(binary: Path, receipt_path: Path, source_commit: str) -> di
     inputs = runtime.get("files") if isinstance(runtime, dict) else None
     if runtime.get("commit") != source_commit if isinstance(runtime, dict) else True:
         raise ValueError("artifact source commit mismatch")
-    if not isinstance(inputs, dict) or len(inputs) != 429 or build.get("inputs") != inputs:
+    if not isinstance(inputs, dict) or build.get("inputs") != inputs:
         raise ValueError("runtime input map mismatch")
     artifact_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+    if len(inputs) == 429:
+        pass
+    elif len(inputs) == 430:
+        if source_commit != RETAINED_648_SOURCE_COMMIT:
+            raise ValueError("artifact source commit mismatch")
+        if artifact_sha != RETAINED_648_ARTIFACT_SHA256:
+            raise ValueError("artifact hash mismatch")
+        if _runtime_input_map_sha256(inputs) != RETAINED_648_INPUT_MAP_SHA256:
+            raise ValueError("runtime input map mismatch")
+    else:
+        raise ValueError("runtime input map mismatch")
     validate_build(build, artifact_sha, inputs)
     return {
         "artifactSha256": artifact_sha,

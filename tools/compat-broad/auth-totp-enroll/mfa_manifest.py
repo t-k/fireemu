@@ -29,6 +29,13 @@ from mfa_provenance import compute_provenance, repository_root
 SCHEMA = "o2-mfa-campaign-v1"
 PROJECT = "fireemu-35fe6"
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
+SELECTOR_NAME = "pending-age-300-v1"
+SELECTED_CASE_IDS = (
+    "age-300s-start",
+    "age-300s-finalize",
+    "age-300s-same-account-fresh-control",
+)
+SELECTED_ACCOUNT_ROLES = ("pending-age-300",)
 
 # Time the run spends on work that is not waiting: account creation and verification, the
 # phone and TOTP enrollments, the eleven TOTP lifecycle rows, the five interaction rows,
@@ -127,7 +134,33 @@ _UNSUPPORTED_OBLIGATIONS = (
 )
 
 
-def compile_campaign(nonce: str, project: str = PROJECT) -> dict[str, Any]:
+def selector_spec(selector: str | None) -> dict[str, Any] | None:
+    """Return the sole reviewed finite selector, or refuse every other spelling."""
+    if selector is None:
+        return None
+    if selector != SELECTOR_NAME:
+        raise ValueError("unsupported MFA selector")
+    catalog = {case["id"]: case for case in observation_cases()}
+    if any(identifier not in catalog for identifier in SELECTED_CASE_IDS):
+        raise ValueError("selected MFA case is not in the campaign catalog")
+    return {
+        "name": SELECTOR_NAME,
+        "caseIds": list(SELECTED_CASE_IDS),
+        "accountRoles": list(SELECTED_ACCOUNT_ROLES),
+        "observedAgeSeconds": 301,
+        "dataRequests": 11,
+        "recoveryRequests": 4,
+        "managementRequests": 6,
+        "declaredRequests": 22,
+        "maxWallSeconds": 1200,
+        "criticalPathSeconds": 301,
+        "slackSeconds": 119,
+    }
+
+
+def compile_campaign(
+    nonce: str, project: str = PROJECT, selector: str | None = None
+) -> dict[str, Any]:
     """Compile the deterministic campaign manifest for one fresh nonce."""
     if not isinstance(nonce, str) or not _NONCE.fullmatch(nonce):
         raise ValueError("nonce must be exactly 128-bit lowercase hexadecimal")
@@ -144,7 +177,7 @@ def compile_campaign(nonce: str, project: str = PROJECT) -> dict[str, Any]:
         for role in owned_accounts()
     ]
     cases = observation_cases()
-    return {
+    manifest = {
         "schema": SCHEMA,
         "campaignId": CAMPAIGN_ID,
         "status": "PREPARED_UNOBSERVED",
@@ -198,6 +231,14 @@ def compile_campaign(nonce: str, project: str = PROJECT) -> dict[str, Any]:
         "cases": cases,
         "caseCount": len(cases),
     }
+    selected = selector_spec(selector)
+    if selected is not None:
+        manifest["limits"] = deepcopy(_LIMITS)
+        manifest["limits"]["maxWallSeconds"] = selected["maxWallSeconds"]
+        manifest["limits"]["criticalPathSeconds"] = selected["criticalPathSeconds"]
+        manifest["limits"]["serialAgingSeconds"] = selected["criticalPathSeconds"]
+        manifest["selector"] = selected
+    return manifest
 
 
 def campaign_provenance(root: Any = None) -> dict[str, Any]:
@@ -222,6 +263,7 @@ def validate_campaign(plan: Any) -> bool:
             or plan.get("productionAllowed") is not False
         ):
             return False
-        return plan == compile_campaign(nonce, plan["project"])
+        selector = plan.get("selector", {}).get("name") if "selector" in plan else None
+        return plan == compile_campaign(nonce, plan["project"], selector)
     except (KeyError, TypeError, AttributeError, ValueError):
         return False

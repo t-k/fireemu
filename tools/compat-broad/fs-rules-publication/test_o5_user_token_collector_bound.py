@@ -521,8 +521,8 @@ def test_recover_owned_does_not_dispatch_unacknowledged_subjects(tmp_path) -> No
         journal.close()
     assert calls
     assert all(request.get("resource") == plan["ownedResources"][0] for request in calls)
-    assert result["notAttempted"]
-    assert result["held"] == []
+    assert result["held"]
+    assert result["notAttempted"] == []
 
 
 def test_a_bound_run_is_admitted_by_the_acquisition_comparator() -> None:

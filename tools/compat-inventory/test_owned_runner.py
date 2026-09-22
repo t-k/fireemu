@@ -14,6 +14,7 @@ from aggregation_corpus import CONFIG
 from owned_runner import (
     BUILD_TIMEOUT_VARIABLE,
     DEFAULT_BUILD_TIMEOUT_SECONDS,
+    artifact_binding,
     build_timeout,
     child_identity_matches,
     local_addresses,
@@ -78,6 +79,21 @@ def test_build_receipt_must_bind_the_artifact_and_all_runtime_inputs():
     ]:
         with pytest.raises(ValueError):
             validate_build(receipt, artifact, inputs)
+
+
+def test_artifact_binding_rejects_launch_copy_substitution(tmp_path):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    source.write_bytes(b"source")
+    launch.write_bytes(b"different")
+    receipt = {
+        "artifactSha256": __import__("hashlib").sha256(b"source").hexdigest(),
+        "inputs": {"crates/x.rs": "x"},
+        "command": ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"],
+        "exitCode": 0,
+    }
+    with pytest.raises(ValueError, match="launch copy mismatch"):
+        artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 
 def test_owned_runner_refuses_ambient_configuration_and_remote_endpoints():

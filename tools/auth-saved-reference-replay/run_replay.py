@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -40,11 +41,21 @@ def run(output_root: Path) -> dict:
     # Import lazily so contract/evaluator tests do not build the Rust artifact.
     sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
     try:
-        from owned_runner import build_artifact
+        from owned_runner import artifact_binding, build_artifact
 
         binary, build = build_artifact()
     finally:
         sys.path.pop(0)
+
+    source_path = binary.resolve(strict=True)
+    launch_path = output_root / "artifact" / "fireemu"
+    launch_path.parent.mkdir(mode=0o700)
+    shutil.copyfile(source_path, launch_path)
+    launch_path.chmod(0o500)
+    build = {
+        **build,
+        **artifact_binding(source_path, launch_path, build, build["inputs"]),
+    }
 
     source_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -52,7 +63,7 @@ def run(output_root: Path) -> dict:
     reports = {}
     for name in CORPORA:
         runner = load_runner(RUNNERS[name])
-        runner.build_artifact = lambda: (binary, build)
+        runner.build_artifact = lambda: (launch_path, build)
         report = runner.run(output_root / name)
         require(
             runner.complete(report),

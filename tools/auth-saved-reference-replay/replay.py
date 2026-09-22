@@ -226,6 +226,20 @@ def validate_local_report(name: str, report: dict[str, Any], source_commit: str,
     return {"localRecordedAt": report.get("recordedAt"), "localCases": report["cases"], "localCleanup": report["cleanup"], "localArtifactSha256": artifact["sha256"], "localBuildInputs": digest(build["inputs"]), "localProbeInputs": digest(report["probeInputs"]) if "probeInputs" in report else None, "localConfigurationSha256": configuration.get("sha256"), "localConfigurationFileSha256": configuration.get("fileSha256"), "runtimeSourceCommit": source_commit, "ownedProcess": {"exitCode": process["exitCode"], "stopped": process["stopped"], "listenersClosed": process["listenersClosed"]}}
 
 
+def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: Path) -> None:
+    source_path = Path(build.get("sourcePath", ""))
+    launch_path = Path(build.get("launchCopyPath", ""))
+    require(source_path.is_absolute() and source_path.is_file(), "artifact binding source path is unavailable")
+    require(launch_path.is_absolute() and launch_path.is_file(), "artifact binding launch path is unavailable")
+    require(source_path != launch_path, "artifact binding source and launch paths must differ")
+    require(file_digest(source_path) == build.get("sourceSha256") == artifact, "artifact binding source hash mismatch")
+    require(file_digest(launch_path) == build.get("launchCopySha256") == artifact, "artifact binding launch hash mismatch")
+    try:
+        launch_path.resolve().relative_to(local_root.resolve())
+    except ValueError as exc:
+        raise ValueError("artifact binding launch path escapes private output") from exc
+
+
 def compare(name: str, local: dict[str, Any], receipt: dict[str, Any], expected_source_commit: str | None = None, spec_entry: dict[str, Any] | None = None) -> dict[str, Any]:
     saved = validate_saved_receipt(name, receipt, spec_entry)
     source_commit = local.get("runtimeSourceCommit")
@@ -251,6 +265,7 @@ def validate_manifest(local_root: Path, source_commit: str, spec: dict[str, Any]
     require(build["exitCode"] == 0 and build.get("artifactSha256") == manifest.get("artifactSha256"), "run manifest build failed")
     artifact = manifest.get("artifactSha256")
     require(SHA256_RE.fullmatch(artifact or "") is not None, "run manifest artifact hash is malformed")
+    validate_artifact_binding(build, artifact, local_root)
     require(typed_equal(build.get("inputs"), expected_runtime_inputs()), "run manifest source inputs do not match the current tree")
     entries = manifest.get("corpora")
     require(isinstance(entries, dict) and set(entries) == set(CORPORA), "run manifest corpus binding changed")

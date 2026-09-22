@@ -21,6 +21,7 @@ from replay import (
     load_contract,
     load_spec,
     typed_equal,
+    validate_artifact_binding,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "compat-inventory"))
@@ -60,7 +61,18 @@ def write_complete_failed_bundle(tmp_path):
     root = tmp_path / "complete-failed-bundle"
     root.mkdir(mode=0o700)
     source = "a" * 40
-    artifact = "b" * 64
+    source_path = root / "source-fireemu"
+    launch_path = root / "launch" / "fireemu"
+    launch_path.parent.mkdir(mode=0o700)
+    source_path.write_bytes(b"owned-fireemu-artifact")
+    launch_path.write_bytes(source_path.read_bytes())
+    artifact = file_digest(source_path)
+    artifact_binding = {
+        "sourcePath": str(source_path),
+        "sourceSha256": artifact,
+        "launchCopyPath": str(launch_path),
+        "launchCopySha256": artifact,
+    }
     configuration = {
         "sha256": "c" * 64,
         "fileSha256": "d" * 64,
@@ -78,6 +90,7 @@ def write_complete_failed_bundle(tmp_path):
                     "artifactSha256": artifact,
                     "exitCode": 0,
                     "inputs": inputs,
+                    **artifact_binding,
                 },
                 "ownedProcess": {
                     "exitCode": 0,
@@ -115,6 +128,7 @@ def write_complete_failed_bundle(tmp_path):
             "exitCode": 0,
             "artifactSha256": artifact,
             "inputs": inputs,
+            **artifact_binding,
         },
         "artifactSha256": artifact,
         "corpora": corpora,
@@ -128,6 +142,35 @@ def test_replay_spec_binds_runtime_to_the_run_manifest():
     assert spec["schemaVersion"] == 2
     assert spec["runtimeSourceBinding"] == "run-manifest.sourceCommit"
     assert "sourceCommit" not in spec
+
+
+def test_manifest_requires_durable_artifact_path_and_hash_binding(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest_path = bundle / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    for key in ("sourcePath", "sourceSha256", "launchCopyPath", "launchCopySha256"):
+        manifest["build"].pop(key)
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+    with pytest.raises(ValueError, match="artifact binding"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+@pytest.mark.parametrize("mutation, message", [("path", "source and launch paths"), ("bytes", "launch hash")])
+def test_manifest_rejects_launch_copy_substitution_or_postcopy_mutation(tmp_path, mutation, message):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest_path = bundle / "run-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    if mutation == "path":
+        manifest["build"]["launchCopyPath"] = manifest["build"]["sourcePath"]
+        manifest_path.write_text(json.dumps(manifest, sort_keys=True) + "\n")
+    else:
+        Path(manifest["build"]["launchCopyPath"]).write_bytes(b"changed-after-launch")
+    with pytest.raises(ValueError, match=message):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
 
 
 def test_typed_json_distinguishes_boolean_integer_and_float():
@@ -370,12 +413,16 @@ def test_evaluate_rejects_collision_with_bound_input_paths(
 def test_run_accepts_a_complete_failed_report_and_writes_the_manifest(
     tmp_path, monkeypatch
 ):
+    artifact_path = tmp_path / "artifact"
+    artifact_path.write_bytes(b"artifact")
+    artifact = file_digest(artifact_path)
+
     def fake_run(output):
         output.mkdir(mode=0o700)
         (output / "local.json").write_text("{}")
         return {
             "status": "failed",
-            "artifact": {"sha256": "b" * 64},
+            "artifact": {"sha256": artifact},
             "runtimeSourceCommit": "a" * 40,
             "cleanup": {"uidAbsent": True, "emailAbsent": True},
             "ownedProcess": {"listenersClosed": True, "exitCode": 0},
@@ -389,7 +436,15 @@ def test_run_accepts_a_complete_failed_report_and_writes_the_manifest(
     monkeypatch.setattr(
         owned_runner,
         "build_artifact",
-        lambda: (Path("artifact"), {"artifactSha256": "b" * 64}),
+        lambda: (
+            artifact_path,
+            {
+                "command": BUILD_COMMAND,
+                "artifactSha256": artifact,
+                "exitCode": 0,
+                "inputs": {},
+            },
+        ),
     )
     monkeypatch.setattr(
         run_replay.subprocess, "check_output", lambda *args, **kwargs: "a" * 40 + "\n"
@@ -404,7 +459,9 @@ def test_run_to_evaluate_preserves_complete_semantic_failure(tmp_path, monkeypat
     """A complete failed probe must reach the comparator as a mismatch."""
 
     source = "a" * 40
-    artifact = "b" * 64
+    artifact_path = tmp_path / "artifact"
+    artifact_path.write_bytes(b"artifact")
+    artifact = file_digest(artifact_path)
     inputs = expected_runtime_inputs()
     configuration = {
         "sha256": "c" * 64,
@@ -459,7 +516,7 @@ def test_run_to_evaluate_preserves_complete_semantic_failure(tmp_path, monkeypat
         owned_runner,
         "build_artifact",
         lambda: (
-            Path("artifact"),
+            artifact_path,
             {
                 "command": BUILD_COMMAND,
                 "artifactSha256": artifact,
@@ -493,6 +550,9 @@ def test_run_to_evaluate_preserves_complete_semantic_failure(tmp_path, monkeypat
 
 
 def test_run_stops_when_a_report_is_incomplete(tmp_path, monkeypatch):
+    artifact_path = tmp_path / "artifact"
+    artifact_path.write_bytes(b"artifact")
+    artifact = file_digest(artifact_path)
     fake = types.SimpleNamespace(
         run=lambda output: {"status": "incomplete"}, complete=lambda report: False
     )
@@ -501,7 +561,15 @@ def test_run_stops_when_a_report_is_incomplete(tmp_path, monkeypatch):
     monkeypatch.setattr(
         owned_runner,
         "build_artifact",
-        lambda: (Path("artifact"), {"artifactSha256": "b" * 64}),
+        lambda: (
+            artifact_path,
+            {
+                "command": BUILD_COMMAND,
+                "artifactSha256": artifact,
+                "exitCode": 0,
+                "inputs": {},
+            },
+        ),
     )
     monkeypatch.setattr(
         run_replay.subprocess, "check_output", lambda *args, **kwargs: "a" * 40 + "\n"

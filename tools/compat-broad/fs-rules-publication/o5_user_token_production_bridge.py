@@ -30,6 +30,7 @@ from o5_user_token_collector import (
 from o5_user_token_descriptor import CAMPAIGN, collector, gate_plan
 from o5_user_token_identity_proof import mint_acknowledged_setup_proof
 from o5_user_token_remote_transport import (
+    WorkerExchangeError,
     adapt_setup_result,
     make_transport,
     prepare_setup_request,
@@ -320,12 +321,24 @@ def run_bound_setup(
                 for key in ("service", "route", "method", "path", "headers", "body")
             }
             envelope["seconds"] = SETUP_TIMEOUT_SECONDS
-            result = run_worker(
-                envelope,
-                binding=binding,
-                binding_digest=binding_digest,
-                fixture_origin=fixture_origin,
-            )
+            try:
+                result = run_worker(
+                    envelope,
+                    binding=binding,
+                    binding_digest=binding_digest,
+                    fixture_origin=fixture_origin,
+                )
+            except WorkerExchangeError as error:
+                if error.worker_reaped is not True:
+                    raise
+                pending["failure"] = "setup worker response incomplete"
+                return {
+                    "status": None,
+                    "complete": False,
+                    "workerReaped": True,
+                    "bodyKind": None,
+                    "body": None,
+                }
             try:
                 typed = adapt_setup_result(
                     item,

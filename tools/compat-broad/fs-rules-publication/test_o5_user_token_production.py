@@ -63,6 +63,7 @@ class _ProducerHandler(_FixtureHandler):
     setup_uids: ClassVar[dict[str, str]] = {}
     setup_account_order: ClassVar[list[str]] = []
     fail_setup_after: ClassVar[int | None] = None
+    malformed_setup_failure = False
 
     def do_any(self) -> None:
         size = int(self.headers.get("Content-Length", "0"))
@@ -91,6 +92,8 @@ class _ProducerHandler(_FixtureHandler):
         ):
             status, payload = 500, {"error": {"code": 500, "status": "INTERNAL"}}
             raw = json.dumps(payload, separators=(",", ":")).encode()
+            if self.__class__.malformed_setup_failure:
+                raw = b"{"
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
@@ -533,11 +536,14 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
         server.server_close()
 
 
-@pytest.mark.parametrize("failure_after", range(20))
+@pytest.mark.parametrize("failure_after", [-1, *range(20)])
 def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
     tmp_path, failure_after
 ) -> None:
     """A failed setup slot remains durably owned for recovery, never closes it."""
+    malformed = failure_after == -1
+    if malformed:
+        failure_after = 0
     plan = lane.plan_compiler("a" * 32)
     journal = collector_module.open_ownership_journal(
         tmp_path / "ownership.jsonl",
@@ -556,6 +562,7 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
         _ProducerHandler.requests = []
         _ProducerHandler.setup_uids = {}
         _ProducerHandler.fail_setup_after = failure_after
+        _ProducerHandler.malformed_setup_failure = malformed
         bindings = synthetic(tmp_path, lane.descriptor())
         binding, binding_digest = remote.worker_binding()
         gate_path = tmp_path / "gate"
@@ -660,7 +667,9 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
             return
         assert snapshot["stopped"] is True
         assert len(snapshot["managementUsed"]) == failure_after + 1
-        assert snapshot["managementEvents"][-1]["status"] == 500
+        assert snapshot["managementEvents"][-1]["status"] == (
+            None if malformed else 500
+        )
         assert snapshot["managementEvents"][-1]["workerReaped"] is True
         assert ledger.snapshot()["reservations"]
         operations = setup_plan(plan)["operations"]
@@ -702,5 +711,6 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
     finally:
         journal.close()
         _ProducerHandler.fail_setup_after = None
+        _ProducerHandler.malformed_setup_failure = False
         origin_server.shutdown()
         origin_server.server_close()

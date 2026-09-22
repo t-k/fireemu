@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import socketserver
 import sys
 import threading
@@ -37,6 +38,18 @@ from test_o5_user_token_remote_transport import (
 )
 
 
+def _producer_server():
+    server = socketserver.TCPServer(
+        ("127.0.0.1", int(os.environ.get("PORT", "0"))),
+        _ProducerHandler,
+        bind_and_activate=False,
+    )
+    server.allow_reuse_address = True
+    server.server_bind()
+    server.server_activate()
+    return server
+
+
 class _ProducerHandler(_FixtureHandler):
     """Stateful loopback Rules API plus the shared Auth fixture endpoint."""
 
@@ -53,17 +66,26 @@ class _ProducerHandler(_FixtureHandler):
         size = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(size) or b"{}")
         path = self.path
-        self.__class__.requests.append({"method": self.command, "path": path, "body": body})
+        self.__class__.requests.append(
+            {"method": self.command, "path": path, "body": body}
+        )
         status = 200
         setup_request_count = sum(
             "currentDocument.exists=false" in request["path"]
-            or "/v1/projects/" in request["path"] and "/accounts:" in request["path"]
+            or "/v1/projects/" in request["path"]
+            and "/accounts:" in request["path"]
+            or request["path"].startswith("/v1/accounts:")
             for request in self.__class__.requests
         )
         if (
             self.__class__.fail_setup_after is not None
             and setup_request_count > self.__class__.fail_setup_after
-            and ("currentDocument.exists=false" in path or "/v1/projects/" in path and "/accounts:" in path)
+            and (
+                "currentDocument.exists=false" in path
+                or "/v1/projects/" in path
+                and "/accounts:" in path
+                or path.startswith("/v1/accounts:")
+            )
         ):
             status, payload = 500, {"error": {"code": 500, "status": "INTERNAL"}}
             raw = json.dumps(payload, separators=(",", ":")).encode()
@@ -82,7 +104,7 @@ class _ProducerHandler(_FixtureHandler):
                 "fields": body["fields"],
                 "updateTime": "2026-09-22T00:00:00Z",
             }
-        elif "/v1/projects/" in path and "/accounts:signUp" in path:
+        elif path.startswith("/v1/accounts:signUp?key="):
             email = body.get("email")
             ref = next(
                 (
@@ -101,16 +123,24 @@ class _ProducerHandler(_FixtureHandler):
                 ref = remaining[0]
             uid = "uid-" + str(ref)
             self.__class__.setup_uids[str(ref)] = uid
-            payload = {"localId": uid, "idToken": "setup-token-" + str(ref), "expiresIn": "3600"}
+            payload = {
+                "localId": uid,
+                "idToken": "setup-token-" + str(ref),
+                "expiresIn": "3600",
+            }
         elif "/v1/projects/" in path and "/accounts:update" in path:
             payload = {"localId": body["localId"]}
-        elif "/v1/projects/" in path and "/accounts:signInWithPassword" in path:
+        elif path.startswith("/v1/accounts:signInWithPassword?key="):
             ref = next(
                 ref
                 for ref, uid in self.__class__.setup_uids.items()
                 if uid == "uid-owner-a"
             )
-            payload = {"localId": self.__class__.setup_uids[ref], "idToken": "setup-token-owner-a", "expiresIn": "3600"}
+            payload = {
+                "localId": self.__class__.setup_uids[ref],
+                "idToken": "setup-token-owner-a",
+                "expiresIn": "3600",
+            }
         elif path.startswith("/v1/accounts:"):
             payload = self.__class__.issuance_body or {}
         elif path.endswith(":getExecutable"):
@@ -118,34 +148,84 @@ class _ProducerHandler(_FixtureHandler):
         elif path.endswith("/releases/cloud.firestore"):
             if self.command == "PATCH":
                 self.__class__.active = body["release"]["rulesetName"]
-            payload = {"name": "projects/fireemu-35fe6/releases/cloud.firestore", "rulesetName": self.__class__.active}
+            payload = {
+                "name": "projects/fireemu-35fe6/releases/cloud.firestore",
+                "rulesetName": self.__class__.active,
+            }
         elif path == "/v1/projects/fireemu-35fe6/rulesets" and self.command == "POST":
-            label = "A" if body["source"]["files"][0]["content"] == self._plan["rulesets"]["A"]["source"] else "B"
-            payload = {"name": f"projects/fireemu-35fe6/rulesets/server-{label.lower()}"}
+            label = (
+                "A"
+                if body["source"]["files"][0]["content"]
+                == self._plan["rulesets"]["A"]["source"]
+                else "B"
+            )
+            payload = {
+                "name": f"projects/fireemu-35fe6/rulesets/server-{label.lower()}"
+            }
         elif "/rulesets/" in path:
-            name = "projects/fireemu-35fe6/" + path.split("/v1/projects/fireemu-35fe6/", 1)[1]
+            name = (
+                "projects/fireemu-35fe6/"
+                + path.split("/v1/projects/fireemu-35fe6/", 1)[1]
+            )
             if name in self.__class__.deleted:
                 status, payload = 404, {"error": {"code": 404}}
             elif self.command == "DELETE":
                 self.__class__.deleted.add(name)
                 payload = {}
             else:
-                label = "A" if name.endswith("server-a") else "B" if name.endswith("server-b") else None
-                source = self._plan["rulesets"][label]["source"] if label else "pre-existing"
-                payload = {"name": name, "source": {"files": [{"name": "firestore.rules", "content": source}]}}
+                label = (
+                    "A"
+                    if name.endswith("server-a")
+                    else "B"
+                    if name.endswith("server-b")
+                    else None
+                )
+                source = (
+                    self._plan["rulesets"][label]["source"] if label else "pre-existing"
+                )
+                payload = {
+                    "name": name,
+                    "source": {
+                        "files": [{"name": "firestore.rules", "content": source}]
+                    },
+                }
         elif "/documents:commit" in path:
-            payload = {"status": "OK", "httpStatus": 200, "complete": True, "documentPresent": True, "fields": {}}
+            payload = {
+                "status": "OK",
+                "httpStatus": 200,
+                "complete": True,
+                "documentPresent": True,
+                "fields": {},
+            }
         elif "/documents/" in path:
             if self.command == "DELETE":
                 self.__class__.recovered_documents.add(path.split("?", 1)[0])
-                payload = {"status": "OK", "httpStatus": 200, "complete": True, "documentPresent": False}
+                payload = {
+                    "status": "OK",
+                    "httpStatus": 200,
+                    "complete": True,
+                    "documentPresent": False,
+                }
             elif "fixture-admin" in self.headers.get("Authorization", ""):
-                present = path.split("?", 1)[0] not in self.__class__.recovered_documents
-                payload = {"status": "OK", "httpStatus": 200, "complete": True, "documentPresent": present}
+                present = (
+                    path.split("?", 1)[0] not in self.__class__.recovered_documents
+                )
+                payload = {
+                    "status": "OK",
+                    "httpStatus": 200,
+                    "complete": True,
+                    "documentPresent": present,
+                }
                 if present:
                     payload["version"] = "fixture-version"
             else:
-                payload = {"status": "OK", "httpStatus": 200, "complete": True, "documentPresent": True, "fields": {}}
+                payload = {
+                    "status": "OK",
+                    "httpStatus": 200,
+                    "complete": True,
+                    "documentPresent": True,
+                    "fields": {},
+                }
         elif "/accounts:" in path:
             local_id = body.get("localId") if isinstance(body, dict) else None
             if isinstance(local_id, list):
@@ -157,15 +237,27 @@ class _ProducerHandler(_FixtureHandler):
             )
             if path.endswith(":update") or principal_delete:
                 ref = str(local_id).removeprefix("uid-")
-                action = "revoke" if "validSince" in body else "disable" if body.get("disableUser") else "delete"
+                action = (
+                    "revoke"
+                    if "validSince" in body
+                    else "disable"
+                    if body.get("disableUser")
+                    else "delete"
+                )
                 if action == "delete":
                     self.__class__.deleted_accounts.add(str(local_id))
                 payload = {
-                    "status": "OK", "httpStatus": 200, "complete": True,
-                    "action": action, "authTime": 1,
+                    "status": "OK",
+                    "httpStatus": 200,
+                    "complete": True,
+                    "action": action,
+                    "authTime": 1,
                     "validSince": body.get("validSince"),
-                    "present": action != "delete", "disabled": None if action == "delete" else action == "disable",
-                    "uidFingerprint": digest(["uid", self._plan["nonce"], "production", ref])[:16],
+                    "present": action != "delete",
+                    "disabled": None if action == "delete" else action == "disable",
+                    "uidFingerprint": digest(
+                        ["uid", self._plan["nonce"], "production", ref]
+                    )[:16],
                 }
                 raw = json.dumps(payload, separators=(",", ":")).encode()
                 self.send_response(status)
@@ -177,7 +269,13 @@ class _ProducerHandler(_FixtureHandler):
             if path.endswith(":delete"):
                 self.__class__.deleted_accounts.add(str(local_id))
             absent = str(local_id) in self.__class__.deleted_accounts
-            payload = {"status": "OK", "httpStatus": 200, "complete": True, "accountPresent": not absent, "uid": local_id if not absent else None}
+            payload = {
+                "status": "OK",
+                "httpStatus": 200,
+                "complete": True,
+                "accountPresent": not absent,
+                "uid": local_id if not absent else None,
+            }
         else:
             payload = {"complete": True, "status": "OK"}
         raw = json.dumps(payload, separators=(",", ":")).encode()
@@ -198,7 +296,9 @@ def test_launcher_requires_an_externally_materialized_approved_packet() -> None:
         production.run_approved({})
 
 
-def test_setup_plan_is_source_backed_and_excludes_precreated_tenant_and_row_actions() -> None:
+def test_setup_plan_is_source_backed_and_excludes_precreated_tenant_and_row_actions() -> (
+    None
+):
     plan = lane.plan_compiler("a" * 32)
     setup = setup_plan(plan)
     assert len(setup["fixtures"]) == 10
@@ -207,9 +307,14 @@ def test_setup_plan_is_source_backed_and_excludes_precreated_tenant_and_row_acti
     assert all(item["service"] == "firestore" for item in setup["fixtures"])
     assert all(item["route"] == "document-create" for item in setup["fixtures"])
     assert all(item["method"] == "PATCH" for item in setup["fixtures"])
-    assert all(item["path"].startswith("/v1/projects/fireemu-35fe6/") for item in setup["fixtures"])
+    assert all(
+        item["path"].startswith("/v1/projects/fireemu-35fe6/")
+        for item in setup["fixtures"]
+    )
     assert all(item["precondition"] == {"exists": False} for item in setup["fixtures"])
-    assert all(item["response"]["updateTime"] == "response-bound" for item in setup["fixtures"])
+    assert all(
+        item["response"]["updateTime"] == "response-bound" for item in setup["fixtures"]
+    )
     assert [item["id"] for item in setup["auth"]] == [
         "account/owner-a/signup",
         "account/other-b/signup",
@@ -221,13 +326,21 @@ def test_setup_plan_is_source_backed_and_excludes_precreated_tenant_and_row_acti
         "account/owner-a/claim-update",
         "account/owner-a/signin",
     ]
-    assert not any(item["route"] in {"tenants:create", "tenants:delete"} for item in setup["auth"])
+    assert not any(
+        item["route"] in {"tenants:create", "tenants:delete"} for item in setup["auth"]
+    )
     assert not any("post-signin" in item["id"] for item in setup["auth"])
-    assert next(item for item in setup["auth"] if item["route"] == "accounts:update")["response"] == {"localId": "response-bound"}
+    assert next(item for item in setup["auth"] if item["route"] == "accounts:update")[
+        "response"
+    ] == {"localId": "response-bound"}
 
 
-@pytest.mark.parametrize("field", ["approval", "manifest", "permission", "capabilityInputs"])
-def test_launcher_refuses_missing_authority_material_before_any_wire(field: str) -> None:
+@pytest.mark.parametrize(
+    "field", ["approval", "manifest", "permission", "capabilityInputs"]
+)
+def test_launcher_refuses_missing_authority_material_before_any_wire(
+    field: str,
+) -> None:
     packet = {key: object() for key in production.REQUIRED_PACKET_KEYS}
     packet.pop(field)
     with pytest.raises(ValueError, match="approved O5 packet"):
@@ -249,7 +362,7 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
     _ProducerHandler.setup_uids = {}
     _ProducerHandler.requests = []
     _ProducerHandler.fail_setup_after = None
-    server = socketserver.TCPServer(("127.0.0.1", 0), _ProducerHandler)
+    server = _producer_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     origin = f"http://127.0.0.1:{server.server_address[1]}"
@@ -271,6 +384,7 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
             accounts[ref]["authTime"] = proof.auth_time
         credentials = {ref: proof.token for ref, proof in proofs.items()}
         credentials["administrator"] = "fixture-admin"
+        credentials["api-key"] = "fixture-key"
         credentials.update(
             {
                 "expired-token": "expired-fixture-token",
@@ -338,7 +452,9 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
         # This is a loopback execution, not a production-oracle claim. Keep
         # the launcher path and real worker intact while selecting the
         # collector's explicit local environment for every recorded receipt.
-        packet["acquisition"]["environment"]["kind"] = collector_module.ENVIRONMENT_LOCAL
+        packet["acquisition"]["environment"]["kind"] = (
+            collector_module.ENVIRONMENT_LOCAL
+        )
         monkeypatch.setitem(
             collector_module._ENVIRONMENT_FOR_ROLE,
             ROLE_PRODUCTION,
@@ -354,10 +470,18 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
                 "managementUsed": len(gate.snapshot().get("managementUsed", [])),
                 "cleanup": {
                     key: bundle["cleanup"].get(key)
-                    for key in ("cleanupComplete", "outstandingResources", "outstandingAccounts")
+                    for key in (
+                        "cleanupComplete",
+                        "outstandingResources",
+                        "outstandingAccounts",
+                    )
                 },
                 "documentFailures": [
-                    (step.get("kind"), step.get("failure"), (step.get("observed") or {}).get("documentPresent"))
+                    (
+                        step.get("kind"),
+                        step.get("failure"),
+                        (step.get("observed") or {}).get("documentPresent"),
+                    )
                     for step in bundle["cleanup"].get("documentSteps", [])
                     if step.get("failure") is not None
                 ][:5],
@@ -381,7 +505,12 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
             for receipt in bundle["setup"]["receipts"]
         )
         assert bundle["transport"]["receipts"] == 97
-        assert bundle["budget"]["observationSpent"] + bundle["budget"]["recoverySpent"] + bundle["budget"]["principalActionSpent"] == 97
+        assert (
+            bundle["budget"]["observationSpent"]
+            + bundle["budget"]["recoverySpent"]
+            + bundle["budget"]["principalActionSpent"]
+            == 97
+        )
         assert bundle["cleanup"]["cleanupComplete"] is True
         assert ledger.snapshot()["reservations"]
     finally:
@@ -389,10 +518,19 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
         server.server_close()
 
 
-def test_setup_failure_stops_gate_and_preserves_ledger_reservation(tmp_path) -> None:
+@pytest.mark.parametrize("failure_after", range(19))
+def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
+    tmp_path, failure_after
+) -> None:
     """A failed setup slot remains durably owned for recovery, never closes it."""
     plan = lane.plan_compiler("a" * 32)
-    origin_server = socketserver.TCPServer(("127.0.0.1", 0), _ProducerHandler)
+    journal = collector_module.open_ownership_journal(
+        tmp_path / "ownership.jsonl",
+        run_id="partial-setup",
+        plan_digest=plan["planDigest"],
+    )
+    ownership = {}
+    origin_server = _producer_server()
     thread = threading.Thread(target=origin_server.serve_forever, daemon=True)
     thread.start()
     origin = f"http://127.0.0.1:{origin_server.server_address[1]}"
@@ -400,7 +538,7 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(tmp_path) -> 
         _ProducerHandler._plan = plan
         _ProducerHandler.requests = []
         _ProducerHandler.setup_uids = {}
-        _ProducerHandler.fail_setup_after = 3
+        _ProducerHandler.fail_setup_after = failure_after
         bindings = synthetic(tmp_path, lane.descriptor())
         binding, binding_digest = remote.worker_binding()
         gate_path = tmp_path / "gate"
@@ -411,7 +549,12 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(tmp_path) -> 
             "permissionDigest": digest(bindings["permission"]),
             "issuedAt": time.time() - 1,
             "expiresAt": expires_at,
-            "limits": {"requests": 146, "accounts": 7, "resources": 21, "costMicrousd": 1_000_000},
+            "limits": {
+                "requests": 146,
+                "accounts": 7,
+                "resources": 21,
+                "costMicrousd": 1_000_000,
+            },
             "concurrency": 1,
             "scopes": lane.lock_scopes(plan),
         }
@@ -428,28 +571,49 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(tmp_path) -> 
         ledger.reserve(envelope, claim, frozen_gate)
         shared_gate.create(gate_path, frozen_gate)
         gate = shared_gate.Gate(gate_path, plan["campaignId"])
-        capability = _fixture_capability(plan, binding, binding_digest, bindings["inputs"])
+        capability = _fixture_capability(
+            plan, binding, binding_digest, bindings["inputs"]
+        )
         with pytest.raises(ValueError, match="setup"):
             bridge.run_bound_setup(
                 plan=plan,
                 gate=gate,
-                credentials={"administrator": "fixture-admin"},
-                setup_secrets={row["ref"]: "fixture-password" for row in plan["ownedAccounts"]},
-                account_bindings=account_bindings(plan),
+                credentials={
+                    "administrator": "fixture-admin",
+                    "api-key": "fixture-key",
+                },
+                setup_secrets={
+                    row["ref"]: "fixture-password" for row in plan["ownedAccounts"]
+                },
+                account_bindings={},
                 capability=capability,
                 fixture_origin=origin,
                 binding=binding,
                 binding_digest=binding_digest,
+                journal=journal,
+                ownership=ownership,
             )
         snapshot = gate.snapshot()
         assert snapshot["stopped"] is True
-        assert len(snapshot["managementUsed"]) == 4
+        assert len(snapshot["managementUsed"]) == failure_after + 1
         assert snapshot["managementEvents"][-1].get("failure")
         assert ledger.snapshot()["reservations"]
+        operations = setup_plan(plan)["operations"]
+        creates = [
+            item["service"] == "firestore" or item["id"].endswith("/signup")
+            for item in operations
+        ]
+        assert sum(
+            state["phase"] == "acknowledged" for state in ownership.values()
+        ) == sum(creates[:failure_after])
+        assert sum(
+            state["phase"] == "creation-unconfirmed" for state in ownership.values()
+        ) == int(creates[failure_after])
         serialized = json.dumps(snapshot)
         assert "fixture-password" not in serialized
         assert "idToken" not in serialized
     finally:
+        journal.close()
         _ProducerHandler.fail_setup_after = None
         origin_server.shutdown()
         origin_server.server_close()

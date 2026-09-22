@@ -24,7 +24,13 @@ export const inside = (root, target) => {
   return r === "" || (!r.startsWith(".." + "/") && r !== ".." && !isAbsolute(r));
 };
 
+// Bind the returned bytes to one observed regular-file version. This detects changes;
+// it is not an atomic filesystem snapshot or protection against hostile directory renames.
+const sameSourceVersion = (a, b) =>
+  ["dev", "ino", "mode", "size", "mtimeNs", "ctimeNs"].every((key) => a[key] === b[key]);
+
 export async function readSource(root, name, maxBytes = 16 * 1024 * 1024) {
+  requireThat(Number.isSafeInteger(maxBytes) && maxBytes >= 0, "invalid-source-byte-limit");
   requireThat(
     typeof name === "string" &&
       !isAbsolute(name) &&
@@ -34,17 +40,46 @@ export async function readSource(root, name, maxBytes = 16 * 1024 * 1024) {
   );
   root = await fs.realpath(root);
   let target = root;
+  let checked;
   for (const part of name.split("/")) {
     target = join(target, part);
-    requireThat(!(await fs.lstat(target)).isSymbolicLink(), "source-symlink");
+    checked = await fs.lstat(target, { bigint: true });
+    requireThat(!checked.isSymbolicLink(), "source-symlink");
   }
-  const handle = await fs.open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+  requireThat(checked.isFile() && checked.size <= BigInt(maxBytes), "source-size-or-type");
+  // A FIFO substituted after lstat must not pin a worker before fstat can reject it.
+  const handle = await fs.open(
+    target,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
   try {
-    const info = await handle.stat();
-    requireThat(info.isFile() && info.size <= maxBytes, "source-size-or-type");
-    const data = await handle.readFile();
-    requireThat(data.length <= maxBytes, "source-too-large");
-    return data;
+    const before = await handle.stat({ bigint: true });
+    requireThat(before.isFile() && before.size <= BigInt(maxBytes), "source-size-or-type");
+    requireThat(sameSourceVersion(checked, before), "source-changed");
+    // Read no more than the observed size plus one growth probe, even if a writer
+    // keeps appending. readFile() would consume an unbounded amount before the check.
+    const budget = Number(before.size) + 1;
+    const buffer = Buffer.alloc(Math.min(64 * 1024, budget));
+    const chunks = [];
+    let total = 0;
+    while (total < budget) {
+      const { bytesRead } = await handle.read(
+        buffer, 0, Math.min(buffer.length, budget - total), total,
+      );
+      if (bytesRead === 0) break;
+      total += bytesRead;
+      requireThat(total <= maxBytes, "source-too-large");
+      requireThat(BigInt(total) <= before.size, "source-changed");
+      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+    }
+    requireThat(BigInt(total) === before.size, "source-changed");
+    const after = await handle.stat({ bigint: true });
+    requireThat(sameSourceVersion(before, after), "source-changed");
+    requireThat(
+      sameSourceVersion(after, await fs.lstat(target, { bigint: true })),
+      "source-changed",
+    );
+    return Buffer.concat(chunks, total);
   } finally {
     await handle.close();
   }

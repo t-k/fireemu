@@ -10,12 +10,13 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from broad_contract import digest
 from o5_user_token_campaign import budget as campaign_budget
 from o5_user_token_campaign import setup_plan
-from o5_user_token_collector import RulesManagementSession
+from o5_user_token_collector import RulesManagementSession, open_ownership_journal
 from o5_user_token_descriptor import CAMPAIGN, collector, gate_plan
 from o5_user_token_remote_transport import (
     adapt_setup_result,
@@ -46,14 +47,33 @@ def run_bound_setup(
     fixture_origin: str | None,
     binding: bytes,
     binding_digest: str,
+    journal: Any = None,
+    ownership: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Charge and execute compiler-owned setup through the Gate journal."""
-    items = [*setup_plan(plan)["fixtures"], *setup_plan(plan)["auth"]]
+    if journal is None or journal.path is None or journal.failures:
+        raise ValueError("durable setup journal required")
+    if ownership is None:
+        raise ValueError("shared setup ownership required")
+    items = setup_plan(plan)["operations"]
     receipts: list[dict[str, Any]] = []
     for item in items:
+        subject = item.get("resource", item.get("accountRef"))
+        creating = item["service"] == "firestore" or item["id"].endswith("/signup")
+        slot_id = "setup/" + item["id"]
+        journal.record(
+            "setup-intent",
+            {"slot": slot_id, "subject": subject, "planDigest": plan["planDigest"]},
+        )
+        if journal.failures:
+            raise ValueError("setup journal intent failed")
+        pending: dict[str, Any] = {}
+
         def send(deadline: float, item: dict[str, Any] = item) -> dict[str, Any]:
             if deadline - time.monotonic() < SETUP_TIMEOUT_SECONDS - 0.25:
                 raise TimeoutError("setup worker cannot fit within Gate deadline")
+            if creating:
+                ownership[subject] = {"phase": "creation-unconfirmed", "slot": slot_id}
             prepared = prepare_setup_request(
                 plan,
                 item,
@@ -61,7 +81,9 @@ def run_bound_setup(
                 account_bindings=account_bindings,
                 setup_secrets=setup_secrets,
             )
-            authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+            authorize_transport(
+                capability, binding=binding, binding_digest=binding_digest
+            )
             envelope = {
                 key: prepared[key]
                 for key in ("service", "route", "method", "path", "headers", "body")
@@ -85,26 +107,72 @@ def run_bound_setup(
             # neither its event body nor the returned setup receipt may carry
             # passwords or user ID tokens.
             receipt = typed.receipt.as_dict()
-            private_receipt_digest = digest(receipt)
-            receipts.append(receipt)
-            if item["service"] == "identity" and typed.receipt.local_id is not None:
-                account_bindings[item["accountRef"]] = {
-                    **account_bindings.get(item["accountRef"], {}),
-                    "uid": typed.receipt.local_id,
+            pending["receipt"] = receipt
+            subject_id = (
+                "document/" + item["document"]
+                if item["service"] == "firestore"
+                else "account/" + item["accountRef"]
+            )
+            proof = (
+                {
+                    "kind": "document",
+                    "name": receipt["name"],
+                    "fieldsDigest": receipt["fieldsDigest"],
+                    "updateTime": receipt["updateTime"],
                 }
+                if item["service"] == "firestore"
+                else {
+                    "kind": "account",
+                    "accountRef": item["accountRef"],
+                    "tenantId": item["tenant"],
+                    "uid": receipt["localId"],
+                }
+            )
             return {
                 "status": result["status"],
                 "complete": True,
                 "workerReaped": True,
                 "bodyKind": "json",
                 "body": {
-                    "kind": "setup-receipt-v1",
-                    "id": item["id"],
-                    "receiptDigest": private_receipt_digest,
+                    "kind": "rules-management-proof-v1",
+                    "responseDigest": digest(result["body"]),
+                    "effects": [{"subject": subject_id, "proof": proof}],
                 },
             }
 
-        gate.management_dispatch("observation", "setup/" + item["id"], send)
+        result = gate.management_dispatch("observation", slot_id, send)
+        receipt = pending["receipt"]
+        events = gate.snapshot()["managementEvents"]
+        event = events[-1]
+        if (
+            event.get("responseDigest") != digest(result)
+            or event.get("completed") is not True
+        ):
+            raise ValueError("durable setup Gate acknowledgement required")
+        proof = {
+            "slot": slot_id,
+            "subject": subject,
+            "planDigest": plan["planDigest"],
+            "gateEventDigest": digest(event),
+            "gatePlanDigest": gate.snapshot()["planDigest"],
+            "nonce": plan["nonce"],
+            "receiptDigest": digest(receipt),
+            "version": receipt.get("updateTime"),
+            "fieldsDigest": receipt.get("fieldsDigest"),
+            "uid": receipt.get("localId"),
+            "tenant": item.get("tenant"),
+        }
+        journal.record("setup-acknowledged", proof)
+        if journal.failures:
+            raise ValueError("setup journal acknowledgement failed")
+        if creating:
+            ownership[subject] = {"phase": "acknowledged", **proof}
+        receipts.append(receipt)
+        if item["service"] == "identity" and receipt.get("localId") is not None:
+            account_bindings[item["accountRef"]] = {
+                **account_bindings.get(item["accountRef"], {}),
+                "uid": receipt["localId"],
+            }
     return receipts
 
 
@@ -148,7 +216,9 @@ def bound_execute(
         fixture_origin=fixture_origin,
     )
 
-    def execute(operation: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+    def execute(
+        operation: dict[str, Any], *, deadline: float | None = None
+    ) -> dict[str, Any]:
         if deadline is not None:
             remaining = deadline - time.monotonic()
             if remaining < WORKER_TIMEOUT_SECONDS:
@@ -195,7 +265,10 @@ def run_bound_collection(
     frozen_gate = gate_plan(plan, permission_expires_at=permission_expires_at)
     if gate.snapshot().get("planDigest") != digest(frozen_gate):
         raise ValueError("Rules Gate plan differs")
-    def execute_management(operation: dict[str, Any], *, deadline: float | None = None) -> dict[str, Any]:
+
+    def execute_management(
+        operation: dict[str, Any], *, deadline: float | None = None
+    ) -> dict[str, Any]:
         """Adapt the transport body to the management session's typed receipt.
 
         The shared transport intentionally returns the decoded body to the
@@ -217,7 +290,12 @@ def run_bound_collection(
             "body": raw,
         }
 
-    if setup_secrets is None or capability is None or account_bindings is None or credentials is None:
+    if (
+        setup_secrets is None
+        or capability is None
+        or account_bindings is None
+        or credentials is None
+    ):
         raise ValueError("bound setup inputs required")
     if (
         not isinstance(binding, bytes)
@@ -226,32 +304,46 @@ def run_bound_collection(
     ):
         raise ValueError("bound worker source required")
     verify_worker_binding(binding, binding_digest, None)
-    setup_receipts = run_bound_setup(
-        plan=plan,
-        gate=gate,
-        credentials=credentials,
-        setup_secrets=setup_secrets,
-        account_bindings=account_bindings,
-        capability=capability,
-        fixture_origin=fixture_origin,
-        binding=binding,
-        binding_digest=binding_digest,
+    if journal_path is None:
+        journal_path = Path(gate.path).with_suffix(".ownership.jsonl")
+    if Path(journal_path).exists():
+        raise ValueError("fresh ownership journal required")
+    journal = open_ownership_journal(
+        journal_path, run_id=run_id, plan_digest=plan["planDigest"]
     )
-    session = RulesManagementSession(
-        gate=gate,
-        ledger=ledger,
-        ticket=ticket,
-        execute=execute_management,
-        plan=plan,
-    )
-    bundle = collector(
-        plan,
-        execute,
-        run_id=run_id,
-        acquisition=acquisition,
-        journal_path=journal_path,
-        management_session=session,
-    )
+    ownership: dict[str, dict[str, Any]] = {}
+    try:
+        setup_receipts = run_bound_setup(
+            plan=plan,
+            gate=gate,
+            credentials=credentials,
+            setup_secrets=setup_secrets,
+            account_bindings=account_bindings,
+            capability=capability,
+            fixture_origin=fixture_origin,
+            binding=binding,
+            binding_digest=binding_digest,
+            journal=journal,
+            ownership=ownership,
+        )
+        session = RulesManagementSession(
+            gate=gate,
+            ledger=ledger,
+            ticket=ticket,
+            execute=execute_management,
+            plan=plan,
+        )
+        bundle = collector(
+            plan,
+            execute,
+            run_id=run_id,
+            acquisition=acquisition,
+            journal=journal,
+            ownership=ownership,
+            management_session=session,
+        )
+    finally:
+        journal.close()
     bundle["setup"] = {
         "recordingComplete": len(setup_receipts) == 19,
         "requestCount": len(setup_receipts),

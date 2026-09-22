@@ -261,6 +261,36 @@ class RulesManagementError(ValueError):
         self.failure = failure
 
 
+def _management_cursor(gate) -> dict[str, list[str]]:
+    """Return the durable management cursor without treating skips as receipts.
+
+    Gate versions in this lane expose used operation identities and, when the
+    recovery skip API is available, typed skip records.  The collector only
+    consumes their identity fields here; skip disposition remains Gate-owned.
+    """
+    snapshot = gate.snapshot()
+    used = snapshot.get("managementUsed", [])
+    skipped = snapshot.get("managementSkipped", [])
+    if not isinstance(used, list) or not isinstance(skipped, list):
+        raise ValueError("typed management cursor required")
+    used_ids = [identity for identity in used if isinstance(identity, str)]
+    skipped_ids: list[str] = []
+    for entry in skipped:
+        identity = entry.get("id") if isinstance(entry, dict) else entry
+        if not isinstance(identity, str):
+            raise ValueError("typed management skip required")
+        skipped_ids.append(identity)
+    if len(used_ids) != len(used):
+        raise ValueError("typed management receipt identity required")
+    return {"used": used_ids, "skipped": skipped_ids}
+
+
+def _phase_cursor(cursor: Mapping[str, list[str]], phase: str) -> list[str]:
+    """Select a phase's consumed identities in compiler order."""
+    prefix = phase + ":"
+    return [identity for identity in cursor["used"] + cursor["skipped"] if identity.startswith(prefix)]
+
+
 class RulesManagementSession:
     """Gate-owned Rules lifecycle with response-derived resource bindings.
 
@@ -270,17 +300,52 @@ class RulesManagementSession:
     response bodies; no plan-time or caller-supplied resource map is trusted.
     """
 
-    def __init__(self, *, gate, ledger, ticket, execute, plan):
+    def __init__(self, *, gate, ledger, ticket, execute, plan, setup_prefix=None, lifecycle_slice=None):
         if gate is None or ledger is None or not isinstance(ticket, dict):
             raise ValueError("Rules management requires real Gate and Ledger ownership")
         gate_plan = gate.snapshot().get("plan", {})
         management = gate_plan.get("management", {})
+        observation_ids = [entry.get("id") for entry in management.get("observation", [])]
+        rules_observation_ids = list(RULES_MANAGEMENT_OBSERVATION)
+        if observation_ids[-len(rules_observation_ids) :] != rules_observation_ids:
+            raise ValueError("Rules management observation suffix differs")
+        observation_prefix_ids = observation_ids[: -len(rules_observation_ids)]
+        recovery_ids = [entry.get("id") for entry in management.get("recovery", [])]
+        rules_recovery_ids = list(RULES_MANAGEMENT_RECOVERY)
+        if recovery_ids[-len(rules_recovery_ids) :] != rules_recovery_ids:
+            raise ValueError("Rules management recovery suffix differs")
+        recovery_prefix_ids = recovery_ids[: -len(rules_recovery_ids)]
+        if lifecycle_slice is not None:
+            if not isinstance(lifecycle_slice, dict):
+                raise ValueError("compiled Rules lifecycle slice required")
+            declared_observation = lifecycle_slice.get("observationIds")
+            declared_recovery = lifecycle_slice.get("recoveryIds")
+            if not isinstance(declared_observation, list) or not isinstance(declared_recovery, list):
+                raise ValueError("compiled Rules lifecycle slice malformed")
+            if declared_observation != rules_observation_ids or declared_recovery != rules_recovery_ids:
+                raise ValueError("compiled Rules lifecycle slice differs")
+            if any(identity not in observation_ids for identity in declared_observation) or any(identity not in recovery_ids for identity in declared_recovery):
+                raise ValueError("compiled Rules lifecycle slice absent")
+        if observation_prefix_ids or recovery_prefix_ids:
+            if not isinstance(setup_prefix, dict):
+                raise ValueError("compiled setup prefix proof required")
+            proof_observation_ids = setup_prefix.get("observationIds", setup_prefix.get("ids"))
+            proof_recovery_ids = setup_prefix.get("recoveryIds", [])
+            if proof_observation_ids != observation_prefix_ids or proof_recovery_ids != recovery_prefix_ids:
+                raise ValueError("compiled setup prefix differs")
+            if setup_prefix.get("planDigest") != plan.get("planDigest"):
+                raise ValueError("compiled setup prefix plan differs")
+            if not isinstance(setup_prefix.get("journalDigest"), str) or not setup_prefix["journalDigest"]:
+                raise ValueError("compiled setup journal proof required")
+            if not isinstance(setup_prefix.get("proofDigest"), str) or not setup_prefix["proofDigest"]:
+                raise ValueError("compiled setup ownership proof required")
+        elif setup_prefix is not None:
+            raise ValueError("unexpected compiled setup prefix")
         if (
             gate_plan.get("campaignId") != CAMPAIGN
             or gate_plan.get("project") != plan.get("project")
             or gate_plan.get("database") != plan.get("database")
-            or [entry.get("id") for entry in management.get("observation", [])] != list(RULES_MANAGEMENT_OBSERVATION)
-            or [entry.get("id") for entry in management.get("recovery", [])] != list(RULES_MANAGEMENT_RECOVERY)
+            or recovery_ids[-len(RULES_MANAGEMENT_RECOVERY) :] != list(RULES_MANAGEMENT_RECOVERY)
         ):
             raise ValueError("Rules management Gate plan binding differs")
         state = ledger.snapshot()
@@ -302,18 +367,88 @@ class RulesManagementSession:
         self.ticket = ticket
         self.execute = execute
         self.plan = plan
+        self.setup_prefix = dict(setup_prefix) if isinstance(setup_prefix, dict) else None
+        self.setup_observation_prefix = observation_prefix_ids
+        self.setup_recovery_prefix = recovery_prefix_ids
+        self.lifecycle_slice = {
+            "observationIds": list(rules_observation_ids),
+            "recoveryIds": list(rules_recovery_ids),
+        }
         self.baseline: dict[str, Any] | None = None
         self.created: dict[str, str] = {}
+        self.owned: dict[str, dict[str, Any]] = {}
         self.active: dict[str, str] = {}
         self.receipts: list[dict[str, Any]] = []
         self.release_evidence: list[dict[str, Any]] = []
+        self.observation_outcome = "coordinator-cancelled"
+        self.observation_complete = False
+        self.recovery_allowed = True
+        self.journal = None
+
+    def snapshot(self) -> dict[str, Any]:
+        """Expose only response-derived lifecycle state for partial recovery."""
+        return {
+            "baseline": dict(self.baseline) if self.baseline is not None else None,
+            "created": dict(self.created),
+            "owned": {label: dict(state) for label, state in self.owned.items()},
+            "active": dict(self.active),
+            "releases": [dict(entry) for entry in self.release_evidence],
+            "managementReceipts": [dict(entry) for entry in self.receipts],
+        }
+
+    def close_observation(self) -> None:
+        """Close an interrupted observation cursor before recovery slots begin."""
+        if self.observation_outcome == "may-have-landed":
+            self.gate.abort_management_observation()
+        else:
+            self.gate.cancel_management_observation()
+
+    def bind_journal(self, journal) -> None:
+        """Attach the collector's existing durable journal for ownership facts."""
+        self.journal = journal
+
+    def _record_ownership(self, label: str) -> None:
+        if self.journal is not None and label in self.owned:
+            state = self.owned[label]
+            self.journal.record(
+                "rules-management-ownership",
+                {
+                    "label": label,
+                    "name": state["name"],
+                    "sourceDigest": state["sourceDigest"],
+                    "phase": state["phase"],
+                },
+            )
+
+    def _record_management(self, kind: str, payload: dict[str, Any]) -> None:
+        if self.journal is not None:
+            self.journal.record(kind, payload)
 
     def _dispatch(self, phase: str, slot: str, operation: dict[str, Any], *, allow_status: frozenset[int] = frozenset()) -> dict[str, Any]:
+        self._record_management(
+            "rules-management-intent",
+            {
+                "phase": phase,
+                "slot": slot,
+                "operationDigest": digest(operation),
+            },
+        )
         def send(deadline: float) -> dict[str, Any]:
             if self.ledger is not None:
                 self.ledger.validate(self.ticket, duration=8)
-            request = {"kind": "rules-lifecycle", "phase": "ruleset", **operation}
-            raw = self.execute(request, deadline=deadline)
+            request = {
+                "kind": "rules-lifecycle",
+                "phase": "ruleset",
+                "managementPhase": phase,
+                "managementSlot": slot,
+                **operation,
+            }
+            try:
+                raw = self.execute(request, deadline=deadline)
+            except BaseException:
+                self.observation_outcome = "may-have-landed"
+                self.recovery_allowed = False
+                raise
             if not isinstance(raw, dict):
                 raise ValueError("bounded Rules worker receipt required")
             endpoint = getattr(raw, "endpoint", None)
@@ -326,6 +461,16 @@ class RulesManagementSession:
                     "endpoint": endpoint,
                     "wireSequence": wire_sequence,
                 }
+            )
+            self._record_management(
+                "rules-management-receipt",
+                {
+                    "phase": phase,
+                    "slot": slot,
+                    "wireSequence": wire_sequence,
+                    "endpoint": endpoint,
+                    "responseDigest": digest(raw),
+                },
             )
             credential_failure = _scan_management_receipt(raw)
             if credential_failure is not None:
@@ -345,6 +490,8 @@ class RulesManagementSession:
             }
 
         receipt = self.gate.management_dispatch(phase, slot, send)
+        if phase == "observation" and receipt.get("complete") is False:
+            self.observation_outcome = "may-have-landed"
         if not isinstance(receipt, dict) or receipt.get("complete") is not True or receipt.get("workerReaped") is not True:
             raise ValueError("Rules management slot incomplete")
         status = receipt.get("status")
@@ -409,13 +556,25 @@ class RulesManagementSession:
         if executable.get("rulesetName") != baseline_ruleset:
             raise ValueError("baseline executable differs")
         self.baseline = {"releaseName": release_name, "rulesetName": baseline_ruleset, "sourceDigest": baseline_digest}
+        self._record_management("rules-management-baseline", dict(self.baseline))
         for label, patch_base in (("A", "a"), ("B", "b")):
             source_digest = digest(self.plan["rulesets"][label]["source"])
             created = self._dispatch("observation", f"create-{patch_base}", {"action": "create", "label": label, "sourceDigest": source_digest})
             if not isinstance(created, dict) or not isinstance(created.get("name"), str) or _RULESET_RESOURCE.fullmatch(created["name"]) is None:
                 raise ValueError("created Ruleset name missing")
+            self.owned[label] = {
+                "name": created["name"],
+                "sourceDigest": source_digest,
+                "phase": "created-unverified",
+            }
+            self._record_ownership(label)
             name = self._ruleset(self._dispatch("observation", f"create-{patch_base}-get", {"action": "get", "rulesetName": created["name"]}), source_digest, created["name"])
             self.created[label] = name
+            self.owned[label]["phase"] = "created-verified"
+            self.owned[label]["name"] = name
+            self.owned[label]["sourceDigest"] = source_digest
+            self.owned[label]["phase"] = "patch-uncertain"
+            self._record_ownership(label)
             self._dispatch("observation", f"patch-{patch_base}", {"action": "release-patch", "releaseName": release_name, "rulesetName": name})
             patch_receipt = self.receipts[-1]
             active_name, active_ruleset = self._release(self._dispatch("observation", f"patch-{patch_base}-get", {"action": "release-get", "releaseName": release_name}), release_name)
@@ -425,6 +584,8 @@ class RulesManagementSession:
             if executable.get("rulesetName") != name:
                 raise ValueError("active executable differs")
             self.active[label] = name
+            self.owned[label]["phase"] = "active-verified"
+            self._record_ownership(label)
             self.release_evidence.append(
                 {
                     "label": label,
@@ -437,26 +598,42 @@ class RulesManagementSession:
                     "activeFrom": patch_receipt.get("at"),
                 }
             )
+        self.observation_complete = True
         return {
-            "baseline": dict(self.baseline),
-            "created": dict(self.created),
-            "active": dict(self.active),
-            "releases": [dict(entry) for entry in self.release_evidence],
-            "managementReceipts": [dict(entry) for entry in self.receipts],
+            **self.snapshot(),
         }
 
     def run_recovery(self) -> dict[str, Any]:
         """Restore only the captured baseline and prove created absence."""
-        if self.baseline is None or set(self.created) != {"A", "B"} or set(self.active) != {"A", "B"}:
-            raise ValueError("Rules observation binding required before recovery")
+        if self.baseline is None:
+            raise ValueError("Rules observation baseline required before recovery")
+        if self.setup_recovery_prefix:
+            cursor = _management_cursor(self.gate)
+            actual = _phase_cursor(cursor, "recovery")
+            expected = ["recovery:" + slot for slot in self.setup_recovery_prefix]
+            if actual[: len(expected)] != expected:
+                raise ValueError("compiled setup recovery prefix not consumed")
         release_name = self.baseline["releaseName"]
         current_name, current_target = self._release(
             self._dispatch("recovery", "restore-patch", {"action": "release-get", "releaseName": release_name}),
             release_name,
         )
-        if current_target != self.active["B"]:
+        owned_names = {
+            state["name"]
+            for state in self.owned.values()
+            if isinstance(state.get("name"), str)
+        }
+        if current_target != self.baseline["rulesetName"] and current_target not in owned_names:
             raise ValueError("foreign current Ruleset refuses restore")
-        self._dispatch("recovery", "restore-get", {"action": "release-patch", "releaseName": release_name, "rulesetName": self.baseline["rulesetName"]})
+        self._dispatch(
+            "recovery",
+            "restore-get",
+            {
+                "action": "release-patch",
+                "releaseName": release_name,
+                "rulesetName": self.baseline["rulesetName"],
+            },
+        )
         restored_name, restored_target = self._release(
             self._dispatch("recovery", "restore-executable", {"action": "release-get", "releaseName": release_name}),
             release_name,
@@ -466,13 +643,17 @@ class RulesManagementSession:
         executable = self._dispatch("recovery", "restore-get-executable", {"action": "release-get-executable", "releaseName": release_name})
         if executable.get("rulesetName") != self.baseline["rulesetName"]:
             raise ValueError("restored executable differs")
-        for label in ("A", "B"):
-            name = self.created[label]
-            source_digest = digest(self.plan["rulesets"][label]["source"])
+        held: list[str] = []
+        for label, state in self.owned.items():
+            name = state["name"]
+            if state.get("phase") == "created-unverified":
+                held.append(name)
+                continue
+            source_digest = state["sourceDigest"]
             self._ruleset(self._dispatch("recovery", f"delete-{label.lower()}-get", {"action": "get", "rulesetName": name}), source_digest, name)
             self._dispatch("recovery", f"delete-{label.lower()}", {"action": "delete", "rulesetName": name})
             self._dispatch("recovery", f"delete-{label.lower()}-absence", {"action": "get", "rulesetName": name}, allow_status=frozenset({404}))
-        return {"restored": True, "rulesetName": self.baseline["rulesetName"]}
+        return {"restored": True, "rulesetName": self.baseline["rulesetName"], "held": held, "cleanupComplete": not held}
 
 
 
@@ -558,6 +739,12 @@ def _scan_management_receipt(value: Any) -> str | None:
             for marker in FORBIDDEN_KEY_TOKENS:
                 if marker in lowered:
                     return f"credential-leak:{key}"
+            if (
+                key == "endpoint"
+                and isinstance(nested, str)
+                and endpoint_host(nested) in PRODUCTION_HOSTS | LOOPBACK_HOSTS
+            ):
+                continue
             if key == "content":
                 continue
             failure = _scan_management_receipt(nested)
@@ -637,6 +824,22 @@ class _Journal:
                 self.failures.append("journal-close:" + type(error).__name__)
             finally:
                 self._handle = None
+
+
+def open_ownership_journal(
+    path: str | os.PathLike[str] | None,
+    *,
+    run_id: str,
+    plan_digest: str,
+) -> _Journal:
+    """Open the one durable journal shared by setup, collection and recovery."""
+    if not isinstance(run_id, str) or not run_id:
+        raise ValueError("run identity required")
+    if not isinstance(plan_digest, str) or not plan_digest:
+        raise ValueError("plan digest required")
+    journal = _Journal(path)
+    journal.record("run", {"runId": run_id, "plan": plan_digest})
+    return journal
 
 
 class _Budget:
@@ -931,6 +1134,9 @@ def collect(
     acquisition: Mapping[str, Any] | None = None,
     wall_clock: Callable[[], float] = time.time,
     management_session: RulesManagementSession | None = None,
+    journal: _Journal | None = None,
+    ownership: dict[str, dict[str, Any]] | None = None,
+    recovery_dispatch: Callable[[dict[str, Any]], Any] | None = None,
 ) -> dict[str, Any]:
     """Run the compiled matrix through ``execute`` under enforced bounds.
 
@@ -981,8 +1187,10 @@ def collect(
         "sourceDigests": sources,
         "observerDigest": digest(sources),
     }
-    journal = _Journal(journal_path)
-    journal.record("run", {"runId": run_id, "role": role, "plan": plan["planDigest"]})
+    journal_owned = journal is None
+    journal = journal or open_ownership_journal(
+        journal_path, run_id=run_id, plan_digest=plan["planDigest"]
+    )
     if bindings is not None:
         reservation = bindings["nonceReservation"]
         journal.record(
@@ -1021,6 +1229,8 @@ def collect(
         if management_session is not None:
             if bindings is None or role != ROLE_PRODUCTION:
                 raise ValueError("Rules management requires bound production acquisition")
+            management_session.bind_journal(journal)
+            rules_management = management_session.snapshot()
             rules_management = management_session.run_observation()
             for receipt in management_session.receipts:
                 facts, receipt_failure = wire.note(receipt)
@@ -1098,6 +1308,22 @@ def collect(
                 )
                 break
             rows.append(_row(request, raw, None, at, facts))
+            if ownership is not None:
+                for document in operation["createdDocuments"]:
+                    resource = _resource_for(plan, document)
+                    ownership[resource] = {
+                        "phase": "acknowledged",
+                        "version": raw.get("version"),
+                        "fieldsDigest": digest(raw.get("fields")),
+                    }
+                    journal.record(
+                        "ownership-acknowledged",
+                        {
+                            "subject": resource,
+                            "version": raw.get("version"),
+                            "fieldsDigest": digest(raw.get("fields")),
+                        },
+                    )
             journal.record(
                 "outcome",
                 {"caseId": request["caseId"], "status": raw.get("status")},
@@ -1110,21 +1336,44 @@ def collect(
     except Exception as error:  # noqa: BLE001 -- processing must not skip recovery
         abort = getattr(error, "reason", None) or "collector:" + type(error).__name__
         failures.append(getattr(error, "failure", None) or abort)
+        if (
+            management_session is not None
+            and not management_session.observation_complete
+        ):
+            try:
+                management_session.close_observation()
+            except Exception as close_error:  # noqa: BLE001 - retain the original ownership facts
+                management_session.recovery_allowed = False
+                failures.append("rules-management-close:" + type(close_error).__name__)
+            rules_management = management_session.snapshot()
     finally:
         observation_finished = budget.stamp()
         try:
             if worker_state["unreaped"]:
                 cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
             else:
-                cleanup = _recover(
+                cleanup = recover_owned(
                     plan, execute, budget, wire, attempted, journal,
+                    ownership=ownership,
+                    recovery_dispatch=recovery_dispatch,
                     worker_state=worker_state,
                 )
                 if worker_state["unreaped"]:
                     cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
-            if management_session is not None and rules_management is not None and not worker_state["unreaped"]:
+            if management_session is not None and not management_session.recovery_allowed:
+                rules_management = management_session.snapshot()
+                rules_management["recovery"] = {
+                    "restored": False,
+                    "cleanupComplete": False,
+                    "held": [
+                        state["name"]
+                        for state in management_session.owned.values()
+                        if isinstance(state.get("name"), str)
+                    ],
+                }
+            if management_session is not None and management_session.recovery_allowed and not worker_state["unreaped"]:
                 try:
-                    observed_receipts = len(rules_management.get("managementReceipts", []))
+                    observed_receipts = len(rules_management.get("managementReceipts", [])) if rules_management is not None else 0
                     rules_management["recovery"] = management_session.run_recovery()
                     for receipt in management_session.receipts[observed_receipts:]:
                         facts, receipt_failure = wire.note(receipt)
@@ -1135,11 +1384,22 @@ def collect(
                     ]
                 except Exception as error:  # noqa: BLE001 - retain ownership on uncertainty
                     failure = getattr(error, "reason", None) or "rules-management-recovery:" + type(error).__name__
+                    rules_management = management_session.snapshot()
+                    rules_management["recovery"] = {
+                        "restored": False,
+                        "cleanupComplete": False,
+                        "held": [
+                            state["name"]
+                            for state in management_session.owned.values()
+                            if isinstance(state.get("name"), str)
+                        ],
+                    }
                     if abort is None and failure not in failures:
                         failures.append(failure)
                     abort = abort or "rules-management-recovery"
         finally:
-            journal.close()
+            if journal_owned:
+                journal.close()
     finished = budget.stamp()
     wall_finished = _read_wall_clock(wall_clock)
     if worker_state["unreaped"]:
@@ -1512,6 +1772,85 @@ def _row(
             "fields": receipt.get("fields"),
         }
     return row
+
+
+def recover_owned(
+    plan: Mapping[str, Any],
+    execute: Callable[[dict[str, Any]], Any],
+    budget: _Budget,
+    wire: _Wire,
+    attempted: list[str],
+    journal: _Journal,
+    *,
+    ownership: Mapping[str, Mapping[str, Any]] | None = None,
+    recovery_dispatch: Callable[[dict[str, Any]], Any] | None = None,
+    worker_state: dict[str, bool] | None = None,
+) -> dict[str, Any]:
+    """Recover response-acknowledged subjects through the existing Gate cursor.
+
+    ``ownership`` is deliberately response-derived state.  When supplied, a
+    subject is eligible only in the ``acknowledged`` state; unconfirmed and
+    not-attempted subjects are returned as held without manufacturing a read
+    or absence receipt.  ``recovery_dispatch`` is an orchestrator-owned
+    adapter for the same bounded Gate session, not a second cleanup pass.
+    """
+    dispatch = recovery_dispatch or execute
+    selected_plan = plan
+    held: list[str] = []
+    unconfirmed: list[str] = []
+    not_attempted: list[str] = []
+    if ownership is not None:
+        acknowledged_resources: set[str] = set()
+        acknowledged_accounts: set[str] = set()
+        for resource in plan["ownedResources"]:
+            state = ownership.get(resource)
+            phase = state.get("phase") if isinstance(state, Mapping) else None
+            if phase == "acknowledged":
+                acknowledged_resources.add(resource)
+            elif phase == "creation-unconfirmed":
+                unconfirmed.append(resource)
+            elif phase in {"held", "patch-uncertain"}:
+                held.append(resource)
+            else:
+                not_attempted.append(resource)
+        for entry in plan["ownedAccounts"]:
+            ref = entry["ref"]
+            state = ownership.get(ref)
+            phase = state.get("phase") if isinstance(state, Mapping) else None
+            if phase == "acknowledged":
+                acknowledged_accounts.add(ref)
+            elif phase == "creation-unconfirmed":
+                unconfirmed.append(ref)
+            elif phase in {"held", "patch-uncertain"}:
+                held.append(ref)
+            else:
+                not_attempted.append(ref)
+        selected_plan = dict(plan)
+        selected_plan["ownedResources"] = [
+            resource for resource in plan["ownedResources"] if resource in acknowledged_resources
+        ]
+        selected_plan["ownedAccounts"] = [
+            entry for entry in plan["ownedAccounts"] if entry["ref"] in acknowledged_accounts
+        ]
+    result = _recover(
+        selected_plan,
+        dispatch,
+        budget,
+        wire,
+        attempted,
+        journal,
+        worker_state=worker_state,
+    )
+    result["recovered"] = [
+        subject
+        for subject in selected_plan["ownedResources"] + [entry["ref"] for entry in selected_plan["ownedAccounts"]]
+        if subject not in result["outstandingResources"] and subject not in result["outstandingAccounts"]
+    ]
+    result["held"] = sorted(set(held + result["outstandingResources"] + result["outstandingAccounts"]))
+    result["unconfirmed"] = sorted(set(unconfirmed))
+    result["notAttempted"] = sorted(set(not_attempted))
+    result["cleanupComplete"] = not result["held"] and not result["unconfirmed"]
+    return result
 
 
 def _recover(

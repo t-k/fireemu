@@ -104,6 +104,9 @@ def test_closed_schedule_accounts_for_every_wire_exchange_and_one_cleanup(tmp_pa
     management = compiled["management"]
     observation = management["observation"]
     recovery = management["recovery"]
+    assert observation[0]["id"] == "setup/account/owner-a/signup"
+    assert observation[8]["id"] == "setup/account/owner-a/signin"
+    assert observation[9]["id"] == "setup/fixture/owned-a"
     assert len(observation) == 71
     assert len(recovery) == 73
     assert management["totalRequests"] == 144

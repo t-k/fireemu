@@ -929,9 +929,15 @@ def _auth_recovery_plan(child_plan, child_claim):
     for field in ("sourceBindingDigest", "transportBindingDigest", "o7BindingDigest", "o8BindingDigest"):
         if child_plan.get(field) != child_claim[field]:
             raise ValueError("Auth recovery Gate authority binding changed")
+    plan_cost = child_plan.get("costMicrousd")
+    request_cost = child_plan.get("requestCostMicrousd")
+    budget_cost = child_claim["budget"]["costMicrousd"]
     if (
-        child_plan.get("costMicrousd") != child_claim["budget"]["costMicrousd"]
-        or child_plan.get("requestCostMicrousd") != child_claim["budget"]["costMicrousd"]
+        type(plan_cost) is not int
+        or type(request_cost) is not int
+        or plan_cost <= 0
+        or request_cost != plan_cost
+        or plan_cost > budget_cost
         or child_plan.get("fixedCostMicrousd", 0) != 0
         or child_plan.get("coordinatorRequests", 0) != 0
     ):

@@ -39,6 +39,7 @@ from shared_gate import (
     unconfirmed_creates,
     validate_absence_proofs,
     validate_limits_preparation_plan,
+    validate_limits_preparation_response,
     validate_limits_preparation_success,
 )
 
@@ -1927,6 +1928,52 @@ class Ledger:
                 raise ValueError("configuration before/after proof required")
         return gate
 
+    @staticmethod
+    def _limits_preparation_collection(receipt, gate):
+        """Bind a closed public baseline packet to sanitized worker attestations."""
+        packet = receipt.get("collection")
+        fields = {
+            "kind", "campaignId", "preparationId", "nonce", "permissionDigest", "sourceCommit",
+            "sourceDigest", "manifestDigest", "ticketDigest", "claimDigest", "ownerIdentityDigest",
+            "principalDigest", "issuedAt", "expiresAt", "slots", "evidence", "requestDigests",
+            "chargedCalls", "costMicrousd", "completed", "failed", "failureClass", "project",
+            "database", "authConfigDigest", "apiKey", "packetDigest",
+        }
+        if not isinstance(packet, dict) or set(packet) != fields:
+            raise ValueError("closed sanitized preparation collection required")
+        for key in ("permissionDigest", "sourceDigest", "manifestDigest", "ticketDigest", "claimDigest", "ownerIdentityDigest", "principalDigest", "authConfigDigest", "packetDigest"):
+            _hash(packet[key])
+        requests = packet["requestDigests"]
+        if not isinstance(requests, list) or len(requests) != 6:
+            raise ValueError("six preparation request digests required")
+        for request_digest in requests:
+            _hash(request_digest)
+        _number(packet["issuedAt"])
+        _number(packet["expiresAt"])
+        bodies = {item["id"].removeprefix("observation:"): item["response"]["body"] for item in receipt["managementEvidence"]}
+        if (
+            packet["kind"] != "limits-03-baseline-preparation-v1"
+            or packet["campaignId"] != "FS-WRITE-LIMITS-03"
+            or packet["preparationId"] != gate["plan"]["nonce"] or packet["nonce"] != gate["plan"]["nonce"]
+            or packet["permissionDigest"] != gate["plan"].get("permissionDigest")
+            or packet["sourceCommit"] != receipt["generation"]["sourceCommit"]
+            or packet["sourceDigest"] != receipt["generation"]["collectorSourceDigest"]
+            or packet["ticketDigest"] != digest(receipt["ticket"])
+            or packet["claimDigest"] != receipt["claimDigest"]
+            or packet["principalDigest"] != bodies["oauth-tokeninfo"]["principalDigest"]
+            or not packet["issuedAt"] < packet["expiresAt"]
+            or packet["slots"] != gate["managementUsed"] or packet["evidence"] != gate["managementEvents"]
+            or type(packet["chargedCalls"]) is not int or packet["chargedCalls"] != 6
+            or type(packet["costMicrousd"]) is not int or packet["costMicrousd"] != 600
+            or packet["completed"] is not True or packet["failed"] is not False or packet["failureClass"] is not None
+            or packet["project"] != bodies["project"]["value"]
+            or packet["database"] != bodies["database"]["value"]
+            or packet["authConfigDigest"] != bodies["auth"]["responseDigest"]
+            or packet["apiKey"] != bodies["key"]
+            or packet["packetDigest"] != digest({key: value for key, value in packet.items() if key != "packetDigest"})
+        ):
+            raise ValueError("preparation collection differs from worker evidence")
+
     def finish_limits_preparation(self, ticket, record):
         """Release the exact six-read preparation after its coordinator exits.
 
@@ -1946,6 +1993,12 @@ class Ledger:
         receipt = self._read_bounded_json(record["receiptPath"])
         if digest(receipt) != record["receiptDigest"]:
             raise ValueError("limits preparation receipt digest changed")
+        if set(receipt) != {
+            "kind", "ticket", "claimDigest", "planDigest", "gateDigest", "generation",
+            "reservationStateAtPublication", "executionKind", "releaseEligible", "failure",
+            "chargedCalls", "ownedResources", "collection", "managementEvidence",
+        }:
+            raise ValueError("closed sanitized preparation receipt required")
         with self._locked() as state:
             row = self._row(state, ticket)
             if row.get("recoveryChildren"):
@@ -2004,6 +2057,8 @@ class Ledger:
                     or any(item["response"].get(key) != event.get(key) for key in ("status", "complete", "workerReaped", "bodyKind"))
                 ):
                     raise ValueError("limits preparation management receipt changed")
+                validate_limits_preparation_response(event["id"].removeprefix("observation:"), item["response"])
+            self._limits_preparation_collection(receipt, gate)
             for pid in (gate.get("coordinatorPid"), gate["jobs"]["limits"].get("pid")):
                 if type(pid) is not int or pid <= 0:
                     raise ValueError("recorded preparation worker identity required")
@@ -2470,6 +2525,13 @@ class Ledger:
                     for event in gate_snapshot.get("managementEvents", [])
                 ):
                     raise ValueError("preparation workers must be reaped before abort")
+                rows = receipt.get("managementEvidence")
+                if not isinstance(rows, list):
+                    raise ValueError("sanitized preparation management evidence required")
+                for item in rows:
+                    if not isinstance(item, dict) or set(item) != MANAGEMENT_ROW_FIELDS or not isinstance(item.get("id"), str):
+                        raise ValueError("sanitized preparation management row required")
+                    validate_limits_preparation_response(item["id"].removeprefix("observation:"), item["response"])
             if (
                 record["planDigest"] != claim["gatePlanDigest"]
                 or gate_snapshot.get("planDigest") != claim["gatePlanDigest"]

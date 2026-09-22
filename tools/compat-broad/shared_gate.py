@@ -665,6 +665,31 @@ def _validate_rules_state(state, *, terminal=False):
     ):
         raise ValueError("Rules held recovery disposition changed")
     declared, count = _rules_cursor(state)
+    consumed = set(state["managementUsed"]) | {
+        item["id"] for item in state["managementSkipped"]
+    }
+    account_subjects = {
+        subject["id"]
+        for subject in state["plan"]["rulesManagementContract"]["subjects"]
+        if subject.get("kind") == "account"
+    }
+    before_holds = dict(state)
+    before_holds["rulesRecoveryHeld"] = {}
+    before_hold_subjects = _rules_subject_states(before_holds)
+    for subject_id in held:
+        if subject_id not in account_subjects:
+            raise ValueError("Rules held recovery subject must be an account")
+        if before_hold_subjects[subject_id]["status"] not in {"owned", "verified"}:
+            raise ValueError("Rules held recovery subject lacks pre-recovery ownership")
+        read_slots = {
+            identity
+            for identity, phase, slot in declared
+            if phase == "recovery"
+            and slot["dependency"]["subject"] == subject_id
+            and slot["dependency"]["step"] == "read"
+        }
+        if consumed & read_slots:
+            raise ValueError("Rules held recovery subject already entered recovery")
     slots = {identity: (phase, slot) for identity, phase, slot in declared}
     for event in state["managementEvents"]:
         receipt = event.get("rulesReceipt")
@@ -3202,7 +3227,20 @@ class Gate:
             ]
             if len(dependencies) != 1:
                 raise ValueError("Rules held disposition subject is not canonical")
-            current = _rules_subject_states(state)[subject_id]
+            read_identity = next(
+                identity
+                for identity, phase, slot in declared
+                if phase == "recovery"
+                and slot["dependency"] == dependencies[0]
+            )
+            consumed = set(state["managementUsed"]) | {
+                item["id"] for item in state["managementSkipped"]
+            }
+            if read_identity in consumed:
+                raise ValueError("Rules held recovery subject already entered recovery")
+            before_holds = dict(state)
+            before_holds["rulesRecoveryHeld"] = {}
+            current = _rules_subject_states(before_holds)[subject_id]
             if current["status"] not in {"owned", "verified"}:
                 raise ValueError("Rules held disposition requires acknowledged ownership")
             if not isinstance(failure, str) or not failure or len(failure) > 80:

@@ -27,6 +27,7 @@ from o5_user_token_collector import (
     collect as _collect,
     RulesManagementReceipt,
     RulesManagementSession,
+    _scan_management_receipt,
 )
 from o5_user_token_descriptor import gate_plan
 from reservations import Ledger
@@ -446,6 +447,12 @@ def test_session_accepts_only_a_compiler_bound_setup_observation_and_recovery_pr
             execute=lambda *_args, **_kwargs: {},
             plan=plan,
         )
+
+
+def test_management_scan_allows_only_validated_endpoint_domains() -> None:
+    assert _scan_management_receipt({"endpoint": PRODUCTION_ENDPOINT}) is None
+    assert _scan_management_receipt({"endpoint": LOCAL_ENDPOINT}) is None
+    assert _scan_management_receipt({"note": "firestore.googleapis.com"}) == "credential-leak:token-shaped-value"
 
 
 def test_a_bound_run_is_admitted_by_the_acquisition_comparator() -> None:

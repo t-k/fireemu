@@ -693,6 +693,12 @@ def _scan_management_receipt(value: Any) -> str | None:
             for marker in FORBIDDEN_KEY_TOKENS:
                 if marker in lowered:
                     return f"credential-leak:{key}"
+            if (
+                key == "endpoint"
+                and isinstance(nested, str)
+                and endpoint_host(nested) in PRODUCTION_HOSTS | LOOPBACK_HOSTS
+            ):
+                continue
             if key == "content":
                 continue
             failure = _scan_management_receipt(nested)

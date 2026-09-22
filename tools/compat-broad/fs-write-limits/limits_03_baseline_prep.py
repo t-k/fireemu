@@ -925,6 +925,12 @@ def capture_baseline(*, bindings, output, handoff_fd, custody_output_fd=None):
             # A reaped child has closed its write end, so the reader ends before
             # its descriptor is closed underneath it.
             reader.join(timeout=CUSTODY_CLOSE_SECONDS)
+            if reader.is_alive():
+                # Only a leaked write end keeps the reader blocked. Closing the
+                # descriptor under a blocked read would let its number be
+                # reused by a later open and the thread read that file, so the
+                # one descriptor is left to the reader instead.
+                custody_read_fd = None
         for fd_name in ("custody_read_fd", "custody_write_fd"):
             fd = locals()[fd_name]
             if fd is not None:

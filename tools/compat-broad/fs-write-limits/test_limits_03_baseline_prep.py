@@ -1396,3 +1396,75 @@ def test_capture_finishes_when_custody_exceeds_pipe_capacity(tmp_path, monkeypat
         )
     assert received == [custody]
     assert all(child.poll() is not None for child in spawned)
+
+
+def test_capture_leaves_custody_descriptor_to_a_reader_still_blocked(tmp_path, monkeypatch):
+    """A leaked write end must not turn into a descriptor closed under a read.
+
+    When something outside this process still holds the pipe's write end after
+    the coordinator exits, the reader stays blocked. Closing its descriptor
+    would free the number for the next open and let the reader take that
+    file's bytes, so the descriptor stays open until the reader ends.
+    """
+    import limits_03_baseline_prep as prep
+
+    monkeypatch.setattr(prep, "approve_preparation", lambda **bindings: object())
+    monkeypatch.setattr(prep.o8_admission, "revoke_production_capability", lambda _: None)
+    monkeypatch.setattr(prep, "CUSTODY_CLOSE_SECONDS", 0.2)
+    recorded = []
+    real_pipe = os.pipe
+
+    def record_pipe():
+        pair = real_pipe()
+        recorded.extend(pair)
+        return pair
+
+    monkeypatch.setattr(prep.os, "pipe", record_pipe)
+    leaked = []
+
+    class Coordinator:
+        returncode = 0
+
+        def __init__(self, pass_fds):
+            _handoff_fd, write_fd = pass_fds
+            leaked.append(os.dup(write_fd))
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, payload, timeout):
+            return b"", b""
+
+        def kill(self):
+            pass
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    monkeypatch.setattr(
+        prep.subprocess, "Popen", lambda *args, **kwargs: Coordinator(kwargs["pass_fds"])
+    )
+    try:
+        with tempfile.TemporaryFile() as handoff, tempfile.TemporaryFile() as out, pytest.raises(
+            ValueError, match="custody handoff still open"
+        ):
+            prep.capture_baseline(
+                bindings=_capture_failure_bindings(tmp_path),
+                output=tmp_path / "run",
+                handoff_fd=handoff.fileno(),
+                custody_output_fd=out.fileno(),
+            )
+        read_fd, write_fd = recorded
+        os.fstat(read_fd)
+        with pytest.raises(OSError):
+            os.fstat(write_fd)
+        reader = next(
+            thread for thread in threading.enumerate() if thread.name == "limits-03-custody-reader"
+        )
+        assert reader.is_alive()
+    finally:
+        for fd in leaked:
+            os.close(fd)
+    reader.join(timeout=5)
+    assert not reader.is_alive()
+    os.close(read_fd)

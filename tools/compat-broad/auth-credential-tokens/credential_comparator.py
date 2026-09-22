@@ -323,6 +323,24 @@ def _fresh_control_holds(row: dict[str, Any], requires: str) -> bool:
     return status == REVOCATION_REFUSAL_STATUS and isinstance(control.get("errorCode"), str)
 
 
+def _assertion_shape_complete(row: dict[str, Any], case: dict[str, Any]) -> bool:
+    """Require the declared measurements, not their expected local truth values.
+
+    A recorded refusal need not contain checks on a token it never returned. Keep
+    that existing path comparable, but never treat an empty successful observation
+    or a partial/renamed assertion set as complete evidence.
+    """
+    assertions = row["assertions"]  # unobserved_reason checked this is an object.
+    if set(assertions) == set(case["expectedLocal"]["assertions"]):
+        return True
+    return (
+        not assertions
+        and 400 <= row["status"] <= 599
+        and isinstance(row.get("errorCode"), str)
+        and bool(row["errorCode"])
+    )
+
+
 def _trust_roots(receipt: dict[str, Any]) -> list[str]:
     roots = {
         row.get("trustRoot")
@@ -357,6 +375,7 @@ def compare(local: Any, production: Any) -> dict[str, Any]:
         # itself, because `recordingComplete` is written by the collector under review.
         if any(
             unobserved_reason(side[case_id]) is not None
+            or not _assertion_shape_complete(side[case_id], case)
             or any(type(value) is not bool for value in side[case_id]["assertions"].values())
             or (side[case_id].get("errorCode") is not None
                 and type(side[case_id]["errorCode"]) is not str)

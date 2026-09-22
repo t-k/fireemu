@@ -532,6 +532,20 @@ def _run_gate_worker(
 ) -> tuple[int, dict[str, Any]]:
     """Fork, supervise and reap the sole process that owns the Gate."""
     read_fd, write_fd = os.pipe()
+    payload = bytearray()
+    status: int | None = None
+    eof = False
+    stop_attempted = False
+    worker_reaped = False
+
+    def stop_worker_once() -> None:
+        nonlocal stop_attempted, worker_reaped
+        if stop_attempted or worker_reaped:
+            return
+        stop_attempted = True
+        _stop_worker(pid)
+        worker_reaped = True
+
     try:
         pid = os.fork()
     except OSError:
@@ -580,25 +594,11 @@ def _run_gate_worker(
             os.close(write_fd)
             os._exit(1)
 
-    os.close(write_fd)
-    hard_deadline = time.monotonic() + max(
-        0.0, float(plan["deadlineAt"]) - allocation_now
-    )
-    payload = bytearray()
-    status: int | None = None
-    eof = False
-    stop_attempted = False
-    worker_reaped = False
-
-    def stop_worker_once() -> None:
-        nonlocal stop_attempted, worker_reaped
-        if stop_attempted or worker_reaped:
-            return
-        stop_attempted = True
-        _stop_worker(pid)
-        worker_reaped = True
-
     try:
+        os.close(write_fd)
+        hard_deadline = time.monotonic() + max(
+            0.0, float(plan["deadlineAt"]) - allocation_now
+        )
         while status is None or not eof:
             remaining = hard_deadline - time.monotonic()
             if remaining <= 0:
@@ -619,6 +619,27 @@ def _run_gate_worker(
                 if waited == pid:
                     status = wait_status
                     worker_reaped = True
+        if status is None:
+            _, status = os.waitpid(pid, 0)
+        try:
+            value = json.loads(bytes(payload))
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+            _refuse("recovery worker receipt required")
+        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+            if (
+                isinstance(value, dict)
+                and value.get("kind") == "auth-credential-recovery-worker-failure-v1"
+            ):
+                reason = value.get("reason")
+                if isinstance(reason, str) and reason:
+                    _refuse(f"recovery worker refused ({reason})")
+            _refuse("recovery worker failed")
+        if (
+            not isinstance(value, dict)
+            or value.get("kind") != "auth-credential-recovery-worker-receipt-v1"
+        ):
+            _refuse("recovery worker receipt required")
+        return pid, value
     except BaseException:
         try:
             stop_worker_once()
@@ -626,31 +647,11 @@ def _run_gate_worker(
             del cleanup_error
         raise
     finally:
-        try:
-            os.close(read_fd)
-        except OSError:
-            pass
-    if status is None:
-        _, status = os.waitpid(pid, 0)
-    try:
-        value = json.loads(bytes(payload))
-    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
-        _refuse("recovery worker receipt required")
-    if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
-        if (
-            isinstance(value, dict)
-            and value.get("kind") == "auth-credential-recovery-worker-failure-v1"
-        ):
-            reason = value.get("reason")
-            if isinstance(reason, str) and reason:
-                _refuse(f"recovery worker refused ({reason})")
-        _refuse("recovery worker failed")
-    if (
-        not isinstance(value, dict)
-        or value.get("kind") != "auth-credential-recovery-worker-receipt-v1"
-    ):
-        _refuse("recovery worker receipt required")
-    return pid, value
+        for fd in (read_fd, write_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def execute_recovery(

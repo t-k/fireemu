@@ -1372,7 +1372,8 @@ def collect(
                 management_session.close_observation()
             except Exception as close_error:  # noqa: BLE001 - retain the original ownership facts
                 management_session.recovery_allowed = False
-                failures.append("rules-management-close:" + type(close_error).__name__)
+                if not failures:
+                    failures.append("rules-management-close:" + type(close_error).__name__)
             rules_management = management_session.snapshot()
     finally:
         observation_finished = budget.stamp()

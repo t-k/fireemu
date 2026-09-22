@@ -20,7 +20,7 @@
     "tools/compat-broad/fs-write-limits/limits_03_preflight.py": "c7d7f8ce283c0364c0adda0f916f8b20e2616ff55360a86827d84f9d7e214cbb",
     "tools/compat-broad/fs-write-limits/limits_03_production.py": "0eef4fa29a0fcc7144f4082b3a7d977a3efd7a97223145df0f779467ba029f6c",
     "tools/compat-broad/fs-write-limits/limits_03_remote_transport.py": "d05a53423603931e8f469afc918fa3beec379cb0ee8b8767bae115242863933c",
-    "tools/compat-broad/fs-write-limits/package_03.py": "dac6d427854b354eac69b271dbfb6db24fe648aa53bed3a596e5a61f3bcbd5bc",
+    "tools/compat-broad/fs-write-limits/package_03.py": "20096726e8a4be79d4ffdaaba3ab168e76fd1cba70f72e74969655fc2f4a985d",
     "tools/compat-broad/fs-write-limits/production.py": "a1e1b2c2cf39fdc244aa174e1d23b0625025787b38d5b919cd32b0406348774b",
     "tools/compat-broad/fs-write-limits/production_bridge.py": "6780a04c346b5a445916f9457146cf582e9a552eecc8000df0afc373f37370df",
     "tools/compat-broad/fs-write-limits/production_plan.py": "26f4d606a677b4418e7dd44947a410cde08b46ac06e6cfecaf1054ee5a2a8bda",
@@ -40,7 +40,7 @@
     "tools/compat-broad/fs-write-limits/test_limits_03_index_lifecycle.py": "4063f6d4dbe5672175632ffb62ac6d0e244df6bb3b1bd68cf178a751763ce518",
     "tools/compat-broad/fs-write-limits/test_limits_03_o8.py": "dd99824ff71b8d86ba6c89518024a19b59a3feb048102eb41bf37d2372cbcfef",
     "tools/compat-broad/fs-write-limits/test_namespace_sizes.py": "dbb8df349490168d6f8ac55b392356c23f0a3b0ac24ab120cdb791c9ac65041b",
-    "tools/compat-broad/fs-write-limits/test_package_03.py": "d840f6a6a67488828534afe2a2f772f018f9b44c5de4e6a28ae32ec26def5289",
+    "tools/compat-broad/fs-write-limits/test_package_03.py": "8a9fe0ce5a8bf0cd03f3f868d51458ae9a2b6827ab10793def18201465ac1324",
     "tools/compat-broad/fs-write-limits/test_production.py": "e4e2b568b4d285c501a67e1689d742f3e98e25a706a66525e428aaa297cc6ff4",
     "tools/compat-broad/fs-write-limits/test_production_bridge.py": "0524cac790abe161649e10e8aa517943e14c8e0e1443496bf6fc0d83a89b63e4",
     "tools/compat-broad/fs-write-limits/test_production_plan.py": "fef8e6e786da5f3ef1336b4edb66e1acc177dafa2856f16bd800f664ac04ad5d",
@@ -67,20 +67,20 @@
         "runtimeInputCount": 430,
         "runtimeInputsDigest": "bdeeb69292c6fab6c0a587588f920192ce3ee249c77605af680780d1b74d616b",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "28ae07d5bf1acac7d9e62913631428402c0057ebfa5c338745e46e0db86ae063"
+        "sha256": "83a49f7018984e868849c0f56874af925c64f52ef7f659cb56133950667f8180"
       },
       "campaignId": "FS-WRITE-LIMITS-03",
       "digests": {
-        "parentManifestSha256": "f2a9b520e743649812b2d1b18e7dc3831bfbd68467b3ee1f71fcd605adf96bd8",
+        "parentManifestSha256": "3419d31f420185dde6e48a2c3749f5a5f8872d3c15e8d882af99a73ba0bf9a04",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "f2a9b520e743649812b2d1b18e7dc3831bfbd68467b3ee1f71fcd605adf96bd8"
+        "supervisorManifestSha256": "3419d31f420185dde6e48a2c3749f5a5f8872d3c15e8d882af99a73ba0bf9a04"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
         "completed": true,
-        "configurationDigest": "36ddb185d28e4667b3b35cd81e6eac782edd9d52cbad91b6d0b298c5dd995c27",
+        "configurationDigest": "111f2670a2e070f03aa8b1a1e428472806b7256523f3101d60eb3d6c00177df2",
         "database": "(default)",
         "gateCloseRefused": false,
         "indexConfiguration": {
@@ -92,7 +92,7 @@
         "ownedDocuments": 29,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 73726,
+          "pid": 66560,
           "stopped": true
         },
         "pendingDifferences": [
@@ -124,13 +124,13 @@
         "supervisorStatus": "completed",
         "target": "owned-local-artifact-on-loopback"
       },
-      "executionCommit": "b5f3c1f824a6b33d80e4d652cc99cb485acc5e3d"
+      "executionCommit": "ef7ca9bce90d86509cd0fa98a069429c5e21728c"
     }
   },
   "formalCompatibilityClaim": false,
   "kind": "fs-write-limits-03-local-shadow-v2",
   "note": "Local artifact evidence only. The executed nonces, the owned resource names and the retained binaries live in private output directories and are not published here. This is not a production observation and promotes nothing. The local shadow supervisor records the closed historical index profile and verifies its digest. The historical profile cannot apply the declared exemption; the nx-local profile applies the exact local after-state and does not carry those pending rows.",
   "productionExecuted": false,
-  "sourceCommit": "b5f3c1f824a6b33d80e4d652cc99cb485acc5e3d",
+  "sourceCommit": "ef7ca9bce90d86509cd0fa98a069429c5e21728c",
   "status": "completed-local-only"
 }

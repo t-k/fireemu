@@ -814,6 +814,30 @@ def test_collection_failure_after_index_apply_still_runs_reserved_recovery(
     assert receipt["reservationStateAtPublication"] == "held"
 
 
+def test_incomplete_collection_enters_reserved_recovery_and_reads_restored_state(
+    built, tmp_path, monkeypatch
+):
+    calls, _responder = wire_fixture(monkeypatch)
+
+    def incomplete_collection(*_args, **_kwargs):
+        return {"collectionComplete": False, "cleanupComplete": False}
+
+    monkeypatch.setattr(production, "collect", incomplete_collection)
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] == "ValueError"
+    assert calls == []
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    assert management_ids[-1] == "recovery:index-lifecycle-restored"
+    assert receipt["recoveryAttempted"] is True
+    assert receipt["recoveryFailure"] is None
+    assert receipt["postflightComplete"] is True
+    assert receipt["reservationStateAtPublication"] == "held"
+
+
 def test_restore_readback_failure_is_held_after_actual_recovery_attempt(
     built, tmp_path, monkeypatch
 ):

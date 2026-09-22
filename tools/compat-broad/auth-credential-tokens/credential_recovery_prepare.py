@@ -14,6 +14,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -60,6 +61,18 @@ SECRET_KEYS = frozenset(
     }
 )
 MAX_INPUT_BYTES = 8 * 1024 * 1024
+EXECUTION_SOURCE_KIND = "auth-recovery-executor-source-v1"
+EXECUTION_SOURCE_CLOSURE = (
+    "tools/compat-broad/auth-credential-tokens/credential_recovery_executor.py",
+    "tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py",
+    "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
+    "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
+    "tools/compat-broad/auth-credential-tokens/credential_wire.py",
+    "tools/compat-broad/batch_wire.py",
+    "tools/compat-broad/auth-credential-tokens/credential_https_worker.py",
+    "tools/compat-broad/shared_gate.py",
+    "tools/compat-broad/production-admission/reservations.py",
+)
 
 
 def _refuse(reason: str) -> None:
@@ -76,6 +89,49 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         _refuse("bounded JSON object required")
     return value
+
+
+def _execution_source(source_root: Path) -> dict[str, Any]:
+    """Derive the reviewed executor closure from a clean checkout."""
+    if source_root.is_symlink() or not source_root.is_dir():
+        _refuse("clean execution source checkout required")
+    try:
+        source_commit = subprocess.check_output(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        dirty = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(source_root),
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        _refuse("clean execution source checkout required")
+    if re.fullmatch(r"[0-9a-f]{40}", source_commit) is None or dirty:
+        _refuse("clean execution source checkout required")
+    source_inputs: dict[str, str] = {}
+    for relative in EXECUTION_SOURCE_CLOSURE:
+        path = source_root / relative
+        if path.is_symlink() or not path.is_file():
+            _refuse("execution source closure differs")
+        try:
+            source_inputs[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            _refuse("execution source closure differs")
+    return {
+        "kind": EXECUTION_SOURCE_KIND,
+        "sourceCommit": source_commit,
+        "sourceInputs": source_inputs,
+        "sourceInputsDigest": digest(source_inputs),
+    }
 
 
 def _reconstruct_parent(parent: Mapping[str, Any], ledger: Any) -> tuple[dict[str, Any], Mapping[str, Any]]:
@@ -247,7 +303,11 @@ def _verify_fixed_source(
         _refuse("collector source digest differs")
 
 
-def _review_request(plan: Mapping[str, Any], parent: Mapping[str, Any]) -> dict[str, Any]:
+def _review_request(
+    plan: Mapping[str, Any],
+    parent: Mapping[str, Any],
+    execution_source_digest: str,
+) -> dict[str, Any]:
     return {
         "kind": REVIEW_REQUEST_KIND,
         "campaignId": recovery.CAMPAIGN,
@@ -255,6 +315,7 @@ def _review_request(plan: Mapping[str, Any], parent: Mapping[str, Any]) -> dict[
         "parentEvidenceDigest": parent["evidence"]["evidenceDigest"],
         "sourceCommit": plan["provenance"]["sourceCommit"],
         "recoveryNonceDigest": plan["recoveryNonceDigest"],
+        "executionSourceDigest": execution_source_digest,
         "requestedAuthorityKinds": [recovery.PERMISSION_KIND, recovery.O7_KIND, recovery.O8_KIND],
         "reviewedArtifactsRequired": True,
         "productionExecuted": False,
@@ -271,6 +332,7 @@ def _validate_reviewed_authorities(
     o8_review: Mapping[str, Any] | None,
     *,
     now: float,
+    execution_source_digest: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     if not all(isinstance(value, Mapping) for value in (permission, o7, o8)):
         _refuse("separately reviewed permission/O7/O8 artifacts required")
@@ -281,6 +343,10 @@ def _validate_reviewed_authorities(
     o7 = copy.deepcopy(dict(o7))
     o8 = copy.deepcopy(dict(o8))
     recovery.validate_authority_bundle(plan, permission=permission, o7=o7, o8=o8, now=now)
+    if execution_source_digest is not None:
+        for authority in (permission, o7, o8):
+            if authority.get("executionSourceDigest") != execution_source_digest:
+                _refuse("reviewed executor source binding differs")
     authorities = (permission, o7, o8)
     reviewers: set[str] = set()
     for authority, review in zip(authorities, reviews, strict=True):
@@ -326,14 +392,16 @@ def _compile_context(
     ledger: Any,
     provenance: Mapping[str, Any],
     source_root: Path,
+    execution_source_root: Path,
     recovery_nonce: str | None,
     now: float | None,
     deadline_seconds: int,
     draft: Mapping[str, Any] | None = None,
     assembly_now: float | None = None,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     canonical_parent, ledger_state = _reconstruct_parent(parent, ledger)
     parent_snapshot = recovery._parent_snapshot(canonical_parent)
+    execution_source = _execution_source(execution_source_root)
     _verify_fixed_source(
         provenance,
         source_root,
@@ -347,11 +415,17 @@ def _compile_context(
             _refuse("persisted recovery draft execution flags differ")
         if draft.get("immutableParent") != canonical_parent["immutableParent"] or draft.get("parentEvidence") != parent_snapshot["evidence"]:
             _refuse("persisted recovery draft parent binding differs")
+        if draft.get("executionSource") != execution_source:
+            _refuse("persisted recovery draft execution source differs")
         review_request = draft.get("reviewRequest")
         plan = draft.get("plan")
         if not isinstance(review_request, Mapping) or not isinstance(plan, Mapping):
             _refuse("persisted recovery draft plan required")
-        if review_request.get("planDigest") != plan.get("planDigest") or review_request.get("parentEvidenceDigest") != parent_snapshot["evidence"]["evidenceDigest"]:
+        if (
+            review_request.get("planDigest") != plan.get("planDigest")
+            or review_request.get("parentEvidenceDigest") != parent_snapshot["evidence"]["evidenceDigest"]
+            or review_request.get("executionSourceDigest") != digest(execution_source)
+        ):
             _refuse("persisted recovery draft digest differs")
         parent_binding = plan.get("parent")
         canonical_claim = canonical_parent["claim"]
@@ -379,7 +453,7 @@ def _compile_context(
         recovery._nonce(nonce, "recovery")
         _assert_fresh_nonce(ledger, nonce, ledger_state)
         recovery.validate_plan(plan, canonical_parent)
-        return canonical_parent, parent_snapshot, copy.deepcopy(dict(plan))
+        return canonical_parent, parent_snapshot, copy.deepcopy(dict(plan)), execution_source
     nonce = secrets.token_hex(16) if recovery_nonce is None else recovery_nonce
     recovery._nonce(nonce, "recovery")
     _assert_fresh_nonce(ledger, nonce, ledger_state)
@@ -390,7 +464,7 @@ def _compile_context(
         now=now,
         deadline_seconds=deadline_seconds,
     )
-    return canonical_parent, parent_snapshot, plan
+    return canonical_parent, parent_snapshot, plan, execution_source
 
 
 def prepare_review_draft(
@@ -399,17 +473,19 @@ def prepare_review_draft(
     ledger: Any,
     provenance: Mapping[str, Any],
     source_root: Path,
+    execution_source_root: Path,
     recovery_nonce: str | None = None,
     now: float | None = None,
     deadline_seconds: int = recovery.MAX_DEADLINE_SECONDS,
 ) -> dict[str, Any]:
     """Create a review request without fabricating permission or approvals."""
     try:
-        canonical_parent, parent_snapshot, plan = _compile_context(
+        canonical_parent, parent_snapshot, plan, execution_source = _compile_context(
             parent,
             ledger=ledger,
             provenance=provenance,
             source_root=source_root,
+            execution_source_root=execution_source_root,
             recovery_nonce=recovery_nonce,
             now=now,
             deadline_seconds=deadline_seconds,
@@ -424,10 +500,11 @@ def prepare_review_draft(
         "productionExecuted": False,
         "productionAllowed": False,
         "ledgerMutated": False,
-        "reviewRequest": _review_request(plan, parent_snapshot),
+        "reviewRequest": _review_request(plan, parent_snapshot, digest(execution_source)),
         "immutableParent": copy.deepcopy(dict(canonical_parent["immutableParent"])),
         "parentEvidence": copy.deepcopy(parent_snapshot["evidence"]),
         "plan": plan,
+        "executionSource": execution_source,
     }
     _reject_secret_keys(draft)
     return draft
@@ -439,6 +516,7 @@ def prepare_packet(
     ledger: Any,
     provenance: Mapping[str, Any],
     source_root: Path,
+    execution_source_root: Path,
     permission: Mapping[str, Any] | None,
     o7: Mapping[str, Any] | None,
     o8: Mapping[str, Any] | None,
@@ -453,11 +531,12 @@ def prepare_packet(
 ) -> dict[str, Any]:
     """Compile detached recovery authorities without changing the Ledger."""
     try:
-        canonical_parent, parent_snapshot, plan = _compile_context(
+        canonical_parent, parent_snapshot, plan, execution_source = _compile_context(
             parent,
             ledger=ledger,
             provenance=provenance,
             source_root=source_root,
+            execution_source_root=execution_source_root,
             recovery_nonce=recovery_nonce,
             now=now,
             deadline_seconds=deadline_seconds,
@@ -473,8 +552,9 @@ def prepare_packet(
             o7_review,
             o8_review,
             now=time.time() if authority_now is None else authority_now,
+            execution_source_digest=digest(execution_source),
         )
-        review_request = _review_request(plan, parent_snapshot)
+        review_request = _review_request(plan, parent_snapshot, digest(execution_source))
     except recovery.RecoveryRefusal:
         raise
     except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
@@ -497,6 +577,7 @@ def prepare_packet(
         "permissionReview": reviews[0],
         "o7Review": reviews[1],
         "o8Review": reviews[2],
+        "executionSource": execution_source,
     }
     _reject_secret_keys(bundle)
     return bundle
@@ -622,6 +703,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="clean checkout at the immutable parent sourceCommit",
     )
+    parser.add_argument(
+        "--execution-source",
+        type=Path,
+        required=True,
+        help="clean checkout for the reviewed executor runtime closure",
+    )
     parser.add_argument("--permission", type=Path, help="separately reviewed permission JSON")
     parser.add_argument("--o7", type=Path, help="separately reviewed O7 approval JSON")
     parser.add_argument("--o8", type=Path, help="separately reviewed O8 capability JSON")
@@ -659,6 +746,7 @@ def main(argv: list[str] | None = None) -> int:
                 ledger=ledger,
                 provenance=_read_json(args.provenance),
                 source_root=args.source,
+                execution_source_root=args.execution_source,
                 recovery_nonce=args.recovery_nonce,
                 now=args.now,
                 deadline_seconds=args.deadline_seconds,
@@ -671,6 +759,7 @@ def main(argv: list[str] | None = None) -> int:
             ledger=ledger,
             provenance=_read_json(args.provenance),
             source_root=args.source,
+            execution_source_root=args.execution_source,
             permission=_read_json(args.permission) if args.permission else None,
             o7=_read_json(args.o7) if args.o7 else None,
             o8=_read_json(args.o8) if args.o8 else None,

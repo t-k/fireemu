@@ -93,9 +93,9 @@ def _packet(tmp_path: Path):
     parent = _ledger_parent()
     parent["claim"].pop("claimDigest", None)
     parent["ticket"]["claimDigest"] = digest(parent["claim"])
-    source_root, provenance = _source_inputs(tmp_path, parent)
-    execution_root, execution_source = _execution_source(tmp_path)
-    permission, o7, o8 = _reviewed(parent, provenance)
+    source_root, provenance = _source_inputs(tmp_path, parent, include_execution_closure=False)
+    execution_root, _execution = _execution_source(tmp_path)
+    permission, o7, o8 = _reviewed(parent, provenance, execution_root)
     permission.update(
         ownerIdentity="owner@example.com",
         recoveryOwner="recovery@example.com",
@@ -118,6 +118,7 @@ def _packet(tmp_path: Path):
         ledger=RecordingLedger(parent),
         provenance=provenance,
         source_root=source_root,
+        execution_source_root=execution_root,
         permission=permission,
         o7=o7,
         o8=o8,
@@ -128,7 +129,6 @@ def _packet(tmp_path: Path):
         now=1000.0,
         authority_now=1001.0,
     )
-    bundle["executionSource"] = execution_source
     return parent, source_root, execution_root, bundle
 
 
@@ -136,9 +136,9 @@ def _id_token_sub_packet(tmp_path: Path):
     parent = _real_signing_parent()
     parent["claim"].pop("claimDigest", None)
     parent["ticket"]["claimDigest"] = digest(parent["claim"])
-    source_root, provenance = _source_inputs(tmp_path, parent)
-    execution_root, execution_source = _execution_source(tmp_path)
-    permission, o7, o8 = _reviewed(parent, provenance)
+    source_root, provenance = _source_inputs(tmp_path, parent, include_execution_closure=False)
+    execution_root, _execution = _execution_source(tmp_path)
+    permission, o7, o8 = _reviewed(parent, provenance, execution_root)
     permission.update(
         ownerIdentity="owner@example.com",
         recoveryOwner="recovery@example.com",
@@ -161,6 +161,7 @@ def _id_token_sub_packet(tmp_path: Path):
         ledger=RecordingLedger(parent),
         provenance=provenance,
         source_root=source_root,
+        execution_source_root=execution_root,
         permission=permission,
         o7=o7,
         o8=o8,
@@ -171,7 +172,6 @@ def _id_token_sub_packet(tmp_path: Path):
         now=1000.0,
         authority_now=1001.0,
     )
-    bundle["executionSource"] = execution_source
     return parent, source_root, execution_root, bundle
 
 
@@ -179,8 +179,8 @@ def _real_ledger_packet(tmp_path: Path):
     """Prepare a packet whose held parent is persisted by the real Ledger."""
     parent = _ledger_parent()
     parent["claim"].pop("claimDigest", None)
-    source_root, provenance = _source_inputs(tmp_path, parent)
-    execution_root, execution_source = _execution_source(tmp_path)
+    source_root, provenance = _source_inputs(tmp_path, parent, include_execution_closure=False)
+    execution_root, _execution = _execution_source(tmp_path)
     gate_path = (tmp_path / "parent-gate").resolve()
     resource = parent["gate"]["plan"]["jobs"]["auth-credential"]["observation"][0][
         "resource"
@@ -307,7 +307,7 @@ def _real_ledger_packet(tmp_path: Path):
         "generation": copy.deepcopy(parent["generation"]),
     }
     reservations._save(ledger.path, state)
-    permission, o7, o8 = _reviewed(parent, provenance)
+    permission, o7, o8 = _reviewed(parent, provenance, execution_root)
     permission.update(
         ownerIdentity="owner@example.com",
         recoveryOwner="recovery@example.com",
@@ -330,6 +330,7 @@ def _real_ledger_packet(tmp_path: Path):
         ledger=RecordingLedger(parent),
         provenance=provenance,
         source_root=source_root,
+        execution_source_root=execution_root,
         permission=permission,
         o7=o7,
         o8=o8,
@@ -340,7 +341,6 @@ def _real_ledger_packet(tmp_path: Path):
         now=1000.0,
         authority_now=1001.0,
     )
-    packet["executionSource"] = execution_source
     return parent, source_root, execution_root, packet, ledger
 
 

@@ -31,6 +31,153 @@ INTERVAL_FLOOR_SECONDS = 0.25
 WALL_CAP_SECONDS = 1200
 PHASES = ("observation", "recovery")
 MANAGEMENT_SKIP_REASON = "management-not-run"
+LIMITS_PREPARATION_TRANSPORT = "limits-03-baseline-preparation-v2"
+LIMITS_PREPARATION_RECEIPT = "limits-03-baseline-preparation-receipt-v1"
+LIMITS_PREPARATION_SLOTS = ("refresh", "oauth-tokeninfo", "project", "database", "auth", "key")
+
+
+def validate_limits_preparation_plan(plan):
+    """Validate the sole empty-resource Shared Gate contract, without I/O."""
+    if (
+        plan.get("contract") != "shared-local-v2"
+        or plan.get("transport") != LIMITS_PREPARATION_TRANSPORT
+        or plan.get("receiptKind") != LIMITS_PREPARATION_RECEIPT
+        or plan.get("campaignId") != "FS-WRITE-LIMITS-03"
+        or plan.get("jobs") != {"limits": {
+            "resources": [], "observation": [], "recovery": [], "schedule": [],
+        }}
+        or plan.get("management") != {
+            "dispatchKind": "closed-v1",
+            "credentialIds": ["oauth-tokeninfo"],
+            "credentialSlots": ["oauth-tokeninfo"],
+            "observation": [{"id": slot, "timeout": 12} for slot in LIMITS_PREPARATION_SLOTS],
+            "recovery": [],
+        }
+        or any(type(plan.get(key, default)) is not int or plan.get(key, default) != expected
+               for key, default, expected in (
+                   ("observationRequests", None, 6), ("costMicrousd", None, 600),
+                   ("requestCostMicrousd", None, 100), ("fixedCostMicrousd", 0, 0),
+                   ("coordinatorRequests", 0, 0),
+               ))
+    ):
+        raise ValueError("closed limits preparation plan required")
+
+
+def _preparation_hash(value):
+    return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
+
+
+def validate_limits_preparation_response(slot, result):
+    """Accept only source-owned public attestations, never raw worker bodies."""
+    if slot not in LIMITS_PREPARATION_SLOTS or not _management_receipt_valid(result, slot):
+        raise ValueError("closed preparation response required")
+    if result["complete"] is False and result["workerReaped"] is True and result["body"] is None:
+        return
+    body = result["body"]
+    if result["status"] != 200 or result["complete"] is not True or result["workerReaped"] is not True or result["bodyKind"] != "json" or not isinstance(body, dict):
+        raise ValueError("sanitized successful preparation response required")
+    if slot == "oauth-tokeninfo":
+        return  # The shared token attestation has an exact, secret-free schema.
+    if slot == "refresh":
+        if (
+            set(body) != {"kind", "expiresInSeconds", "authorizedUserDigest"}
+            or body["kind"] != "limits-03-preparation-refresh-v1"
+            or type(body["expiresInSeconds"]) is not int
+            or not 420 <= body["expiresInSeconds"] <= 3600
+            or not _preparation_hash(body["authorizedUserDigest"])
+        ):
+            raise ValueError("sanitized refresh attestation required")
+        return
+    if (
+        set(body) != {"kind", "slot", "responseDigest", "value"}
+        or body["kind"] != "limits-03-preparation-metadata-v1"
+        or body["slot"] != slot or not _preparation_hash(body["responseDigest"])
+        or not isinstance(body["value"], dict)
+    ):
+        raise ValueError("sanitized metadata attestation required")
+    value = body["value"]
+    if slot == "project":
+        valid = value == {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+    elif slot == "auth":
+        valid = value == {"name": "projects/592603257417/config"}
+    elif slot == "key":
+        parent = "projects/592603257417/locations/global"
+        valid = (
+            set(value) == {"parent", "name"} and value["parent"] == parent
+            and isinstance(value["name"], str)
+            and re.fullmatch(re.escape(parent) + r"/keys/[A-Za-z0-9_-]{1,128}", value["name"]) is not None
+        )
+    else:
+        from batch_contract import DATABASE_PROJECTION
+
+        projection = value.get("projection")
+        valid = (
+            set(value) == {"projection", "projectionDigest", "identityProjectionDigest", "responseDigest", "contractDigest"}
+            and isinstance(projection, dict)
+            and set(projection) == {"name", "uid", "databaseEdition", "type", "locationId"}
+            and projection["name"] == "projects/fireemu-35fe6/databases/(default)"
+            and projection["databaseEdition"] == "STANDARD" and projection["type"] == "FIRESTORE_NATIVE"
+            and isinstance(projection["uid"], str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", projection["uid"]) is not None
+            and isinstance(projection["locationId"], str) and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", projection["locationId"]) is not None
+            and all(_preparation_hash(value[key]) for key in ("projectionDigest", "identityProjectionDigest", "responseDigest", "contractDigest"))
+            and value["identityProjectionDigest"] == digest(projection)
+            and value["contractDigest"] == digest(DATABASE_PROJECTION)
+            and value["responseDigest"] == body["responseDigest"]
+        )
+    if not valid:
+        raise ValueError("closed preparation metadata identity required")
+
+
+def validate_limits_preparation_success(state):
+    """Require every declared read to have completed and its worker reaped."""
+    validate_limits_preparation_plan(state["plan"])
+    expected = ["observation:" + slot for slot in LIMITS_PREPARATION_SLOTS]
+    events = state.get("managementEvents", [])
+    job = state.get("jobs", {}).get("limits", {})
+    if (
+        state.get("planDigest") != digest(state["plan"])
+        or state.get("managementUsed") != expected
+        or [event.get("id") for event in events] != expected
+        or state.get("managementSkipped") != []
+        or state.get("managementAbort") is not None
+        or state.get("noDataAbort") is not None
+        or state.get("credentialRejected")
+        or state.get("stopped") is not False
+        or state.get("coordinatorInflight") is not False
+        or state.get("events") != []
+        or state.get("total") != 6 or state.get("observation") != 6
+        or state.get("recovery") != 0 or state.get("reservedRecovery") != 0
+        or state.get("costMicrousd") != 600 or state.get("coordinatorDone") != 0
+        or set(state.get("jobs", {})) != {"limits"}
+        or any(job.get(key) != value for key, value in {
+            "resources": [], "observation": 0, "recovery": 0, "owned": [],
+            "creationProofs": {}, "absent": [], "captures": {}, "inflight": False,
+            "stopped": False, "scheduleDone": 0, "skippedByStop": 0,
+        }.items())
+        or any(
+            event.get("completed") is not True or event.get("complete") is not True
+            or event.get("workerReaped") is not True or event.get("status") != 200
+            or event.get("failure") is not None
+            for event in events
+        )
+    ):
+        raise ValueError("limits preparation completion proof required")
+    previous = state["started"] - state["plan"]["intervalSeconds"]
+    for event in events:
+        if (
+            set(event) != {"id", "started", "durationReserved", "deadline", "completed", "status", "complete", "workerReaped", "bodyKind", "responseDigest", "bodyDigest", "ended"}
+            or event.get("bodyKind") != "json"
+            or not _preparation_hash(event.get("responseDigest")) or not _preparation_hash(event.get("bodyDigest"))
+            or any(type(event.get(key)) not in (int, float) or not math.isfinite(event[key])
+                for key in ("started", "ended", "deadline", "durationReserved"))
+            or event["durationReserved"] != 12
+            or event["started"] < previous + state["plan"]["intervalSeconds"]
+            or not event["started"] <= event["ended"] <= event["deadline"]
+            or event["deadline"] > event["started"] + 12
+            or event["deadline"] > state["started"] + state["plan"]["wallSeconds"] - state["plan"]["recoverySeconds"]
+        ):
+            raise ValueError("limits preparation event deadline proof required")
+        previous = event["started"]
 
 
 def request_seconds(plan, policy=None):
@@ -815,6 +962,9 @@ def _recovery_time(plan, seconds):
 
 def create(path, plan):
     path = Path(path)
+    preparation = plan.get("transport") == LIMITS_PREPARATION_TRANSPORT
+    if preparation:
+        validate_limits_preparation_plan(plan)
     policy = _stream_policy(plan)
     if policy:
         policy.validate_plan(plan)
@@ -885,7 +1035,7 @@ def create(path, plan):
         or _observation_time(plan, seconds)
         > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))
-        or not resources
+        or (not resources and not preparation)
         or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= WALL_CAP_SECONDS
         or plan["recoverySeconds"] < recovery_time
         or not math.isfinite(plan["intervalSeconds"])
@@ -2091,6 +2241,8 @@ class Gate:
                     state["stopped"] = True
                 if not _management_receipt_valid(result, slot_id):
                     raise ValueError("bounded management receipt required")
+                if plan.get("transport") == LIMITS_PREPARATION_TRANSPORT:
+                    validate_limits_preparation_response(slot_id, result)
                 event.update(
                     {
                         "status": status,
@@ -2845,6 +2997,8 @@ class Gate:
 
     def finish(self):
         with self.locked() as state:
+            if state["plan"].get("transport") == LIMITS_PREPARATION_TRANSPORT:
+                validate_limits_preparation_success(state)
             job = state["jobs"][self.job]
             if (
                 state.get("noDataAbort") is not None

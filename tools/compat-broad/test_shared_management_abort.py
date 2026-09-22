@@ -5,11 +5,10 @@ import os
 import time
 
 import pytest
-
 import shared_gate
 from shared_gate import Gate, create
-from test_shared_management_gate import receipt
 from test_shared_gate import plan as base_plan
+from test_shared_management_gate import receipt
 
 
 def management_abort_plan():
@@ -39,7 +38,7 @@ def make_gate(tmp_path):
     return Gate(path, "a")
 
 
-def cancellation_gate(tmp_path, *, completed_metadata_suffix=False):
+def cancellation_gate(tmp_path, *, completed_metadata_suffix=False, unknown_plan_identity=False):
     value = management_abort_plan()
     value["wallSeconds"] = 600
     value["recoverySeconds"] = 300
@@ -68,6 +67,8 @@ def cancellation_gate(tmp_path, *, completed_metadata_suffix=False):
     if completed_metadata_suffix:
         slots = value["management"]["observation"]
         value["management"]["observation"] = slots[:3] + slots[5:] + slots[3:5]
+    if unknown_plan_identity:
+        value["management"]["observation"][-1]["id"] = "unapproved-metadata"
     value["observationRequests"] = len(value["management"]["observation"])
     path = tmp_path / "cancellation-gate"
     create(path, value)
@@ -103,10 +104,13 @@ def test_completed_lifecycle_then_metadata_can_cancel_before_data_and_restore(tm
 
 @pytest.mark.parametrize("fault", [
     "unknown", "unreaped", "http-error", "inflight", "data-started",
-    "foreign", "order", "partial",
+    "foreign", "order", "partial", "unknown-plan-identity",
 ])
 def test_completed_metadata_cancel_refuses_unsafe_state_unchanged(tmp_path, fault):
-    gate = cancellation_gate(tmp_path, completed_metadata_suffix=True)
+    gate = cancellation_gate(
+        tmp_path, completed_metadata_suffix=True,
+        unknown_plan_identity=fault == "unknown-plan-identity",
+    )
     gate.claim()
     slots = gate.snapshot()["plan"]["management"]["observation"]
     for slot in slots[:-1] if fault == "partial" else slots:

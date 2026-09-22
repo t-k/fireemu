@@ -735,7 +735,7 @@ def test_actual_coordinator_cli_timeout_publishes_retirable_four_call_prefix(
     assert b"fixture-access" not in child.stdout + child.stderr
 
 
-@pytest.mark.parametrize("approved", [True, False])
+@pytest.mark.parametrize("approved", [True, False, "preflight-refused"])
 def test_actual_cli_waits_for_independent_final_artifacts(
     fixture_origin, tmp_path, approved
 ):
@@ -804,18 +804,24 @@ def test_actual_cli_waits_for_independent_final_artifacts(
         (observation / "manifest.json").write_bytes(fixture.manifest_bytes)
         (observation / "inputs.json").write_text(json.dumps(fixture.inputs))
         fixture.approval = fixture._approval()
-        if not approved:
+        if approved is False:
             fixture.approval["status"] = "denied"
+        if approved == "preflight-refused":
+            _Fixture.tokeninfo_overrides["email_verified"] = "false"
         _Fixture.service = _service()
         (observation / "approval.json").write_text(json.dumps(fixture.approval))
         stdout, stderr = process.communicate(timeout=90)
-        assert process.returncode == (0 if approved else 2), (stdout, stderr)
-        assert len(fixture_origin[1]) == (53 if approved else 4)
+        completed = approved is True
+        assert process.returncode == (0 if completed else 2), (stdout, stderr)
+        expected_calls = (
+            53 if completed else 5 if approved == "preflight-refused" else 4
+        )
+        assert len(fixture_origin[1]) == expected_calls
         assert (
             b"fixture-access" not in stdout + stderr
             and b"fixture-secret" not in stdout + stderr
         )
-        if approved:
+        if completed:
             receipt = production.verify_saved(
                 tmp_path / "prepared",
                 expected_inputs_digest=fixture.inputs["inputsDigest"],
@@ -825,6 +831,13 @@ def test_actual_cli_waits_for_independent_final_artifacts(
             assert receipt["chargedCalls"] == 53
             assert receipt["credentialEvidence"][0]["requiredSeconds"] < 600
         else:
+            receipt = json.loads((tmp_path / "prepared" / "receipt.json").read_text())
+            snapshot = gate_module.CredentialGate(
+                tmp_path / "prepared" / "gate"
+            ).snapshot()
+            assert receipt["chargedCalls"] == expected_calls
+            assert snapshot["events"] == []
+            assert all(event["workerReaped"] for event in snapshot["managementEvents"])
             assert (
                 bootstrap.retire_no_data(
                     tmp_path / "prepared", ledger_root=fixture.ledger

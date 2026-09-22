@@ -94,7 +94,7 @@ def _packet(tmp_path: Path):
     parent["claim"].pop("claimDigest", None)
     parent["ticket"]["claimDigest"] = digest(parent["claim"])
     source_root, provenance = _source_inputs(tmp_path, parent, include_execution_closure=False)
-    execution_root, _execution = _execution_source(tmp_path)
+    execution_root, execution_source = _execution_source(tmp_path)
     permission, o7, o8 = _reviewed(parent, provenance, execution_root)
     permission.update(
         ownerIdentity="owner@example.com",
@@ -137,7 +137,7 @@ def _id_token_sub_packet(tmp_path: Path):
     parent["claim"].pop("claimDigest", None)
     parent["ticket"]["claimDigest"] = digest(parent["claim"])
     source_root, provenance = _source_inputs(tmp_path, parent, include_execution_closure=False)
-    execution_root, _execution = _execution_source(tmp_path)
+    execution_root, execution_source = _execution_source(tmp_path)
     permission, o7, o8 = _reviewed(parent, provenance, execution_root)
     permission.update(
         ownerIdentity="owner@example.com",
@@ -180,7 +180,7 @@ def _real_ledger_packet(tmp_path: Path):
     parent = _ledger_parent()
     parent["claim"].pop("claimDigest", None)
     source_root, provenance = _source_inputs(tmp_path, parent, include_execution_closure=False)
-    execution_root, _execution = _execution_source(tmp_path)
+    execution_root, execution_source = _execution_source(tmp_path)
     gate_path = (tmp_path / "parent-gate").resolve()
     resource = parent["gate"]["plan"]["jobs"]["auth-credential"]["observation"][0][
         "resource"

@@ -469,6 +469,77 @@ def test_execution_source_preflight_refuses_invalid_checkout_before_publication(
     assert not (tmp_path / "published-packet").exists()
 
 
+def test_execution_source_rejects_committed_intermediate_symlink(
+    tmp_path: Path,
+) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    execution_root, _execution = _execution_source(tmp_path)
+    external_tools = tmp_path / "external-tools"
+    shutil.copytree(execution_root / "tools", external_tools)
+    (execution_root / "tools").rename(execution_root / "tracked-tools")
+    (execution_root / "tools").symlink_to(external_tools, target_is_directory=True)
+    subprocess.run(["git", "-C", str(execution_root), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(execution_root), "commit", "-qm", "symlinked tree"],
+        check=True,
+    )
+
+    with pytest.raises(recovery.RecoveryRefusal, match="execution source"):
+        prepare.prepare_review_draft(
+            parent,
+            ledger=_ReadOnlyLedger(parent),
+            provenance=provenance,
+            source_root=source_root,
+            execution_source_root=execution_root,
+            recovery_nonce="fedcba9876543210fedcba9876543210",
+            now=1000.0,
+        )
+
+
+def test_execution_source_rejects_files_that_differ_from_head_blob(
+    tmp_path: Path,
+) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    execution_root, _execution = _execution_source(tmp_path)
+    changed = execution_root / EXECUTION_CLOSURE[0]
+    changed.write_text(changed.read_text() + "\n# assumed unchanged drift\n")
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(execution_root),
+            "update-index",
+            "--assume-unchanged",
+            EXECUTION_CLOSURE[0],
+        ],
+        check=True,
+    )
+    assert subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(execution_root),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+        ],
+        text=True,
+    ).strip() == ""
+
+    with pytest.raises(recovery.RecoveryRefusal, match="execution source"):
+        prepare.prepare_review_draft(
+            parent,
+            ledger=_ReadOnlyLedger(parent),
+            provenance=provenance,
+            source_root=source_root,
+            execution_source_root=execution_root,
+            recovery_nonce="fedcba9876543210fedcba9876543210",
+            now=1000.0,
+        )
+
+
 @pytest.mark.parametrize("tamper", ["wrong-commit", "extra-key", "map-value"])
 def test_persisted_draft_refuses_execution_source_mismatch_before_authority_assembly(
     tmp_path: Path, tamper: str,

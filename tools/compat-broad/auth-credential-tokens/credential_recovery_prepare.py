@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import time
@@ -120,12 +121,53 @@ def _execution_source(source_root: Path) -> dict[str, Any]:
     source_inputs: dict[str, str] = {}
     for relative in EXECUTION_SOURCE_CLOSURE:
         path = source_root / relative
-        if path.is_symlink() or not path.is_file():
+        candidate = source_root
+        for component in Path(relative).parts:
+            candidate /= component
+            if candidate.is_symlink():
+                _refuse("execution source closure differs")
+        try:
+            regular_file = path.is_file() and stat.S_ISREG(path.stat().st_mode)
+        except OSError:
+            regular_file = False
+        if not regular_file:
             _refuse("execution source closure differs")
         try:
-            source_inputs[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-        except OSError:
+            tree_entry = subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    str(source_root),
+                    "ls-tree",
+                    "-z",
+                    "--full-tree",
+                    "HEAD",
+                    "--",
+                    relative,
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            records = [record for record in tree_entry.split(b"\0") if record]
+            if len(records) != 1:
+                _refuse("execution source closure differs")
+            metadata, tree_path = records[0].split(b"\t", 1)
+            mode, object_type, _object_id = metadata.decode("ascii").split()
+            if (
+                tree_path.decode("utf-8") != relative
+                or mode not in {"100644", "100755"}
+                or object_type != "blob"
+            ):
+                _refuse("execution source closure differs")
+            git_bytes = subprocess.check_output(
+                ["git", "-C", str(source_root), "show", f"HEAD:{relative}"],
+                stderr=subprocess.DEVNULL,
+            )
+            file_bytes = path.read_bytes()
+        except (OSError, UnicodeDecodeError, ValueError, subprocess.CalledProcessError):
             _refuse("execution source closure differs")
+        if file_bytes != git_bytes:
+            _refuse("execution source closure differs")
+        source_inputs[relative] = hashlib.sha256(git_bytes).hexdigest()
     return {
         "kind": EXECUTION_SOURCE_KIND,
         "sourceCommit": source_commit,

@@ -136,11 +136,106 @@ def test_custody_destination_requires_empty_owned_regular_0600_file(tmp_path):
         prep._publish_custody(stream.fileno(), custody)
         stream.seek(0)
         assert prep._validate_custody(json.loads(stream.read()), permission) == custody
+        with pytest.raises(ValueError, match="empty owned"):
+            prep._publish_custody(stream.fileno(), custody)
     nonempty = tmp_path / "nonempty"
     nonempty.write_bytes(b"x")
     nonempty.chmod(0o600)
     with nonempty.open("r+b") as stream, pytest.raises(ValueError, match="empty owned"):
         prep._validate_custody_destination(stream.fileno())
+
+
+@pytest.mark.parametrize("mode", (0o000, 0o200, 0o400, 0o700, 0o640, 0o1600))
+def test_custody_destination_requires_exact_0600_mode(tmp_path, mode):
+    import limits_03_baseline_prep as prep
+
+    path = tmp_path / "custody"
+    path.touch(mode=0o600)
+    with path.open("r+b") as stream, pytest.raises(ValueError, match="empty owned"):
+        path.chmod(mode)
+        prep._validate_custody_destination(stream.fileno())
+
+
+def _capture_failure_bindings(tmp_path):
+    permission, _ = _custody_value()
+    return {
+        "permission": permission,
+        "inputs": {},
+        "approval": {},
+        "manifest": {},
+        "source_root": tmp_path,
+        "manifest_path": tmp_path / "manifest.json",
+        "manifest_bytes": b"{}",
+        "artifact_path": tmp_path / "artifact",
+        "ledger_root": tmp_path / "ledger",
+    }
+
+
+def test_capture_closes_custody_fds_when_worker_launch_fails(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    monkeypatch.setattr(prep, "approve_preparation", lambda **bindings: object())
+    monkeypatch.setattr(prep.o8_admission, "revoke_production_capability", lambda _: None)
+    recorded = []
+    real_pipe = prep.os.pipe
+
+    def record_pipe():
+        pair = real_pipe()
+        recorded.extend(pair)
+        return pair
+
+    monkeypatch.setattr(prep.os, "pipe", record_pipe)
+    monkeypatch.setattr(prep.subprocess, "Popen", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("launch")))
+    with tempfile.TemporaryFile() as handoff, tempfile.TemporaryFile() as custody, pytest.raises(RuntimeError, match="launch"):
+        prep.capture_baseline(
+            bindings=_capture_failure_bindings(tmp_path),
+            output=tmp_path / "run",
+            handoff_fd=handoff.fileno(),
+            custody_output_fd=custody.fileno(),
+        )
+    for fd in recorded:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+def test_capture_closes_custody_fds_after_worker_timeout(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    monkeypatch.setattr(prep, "approve_preparation", lambda **bindings: object())
+    monkeypatch.setattr(prep.o8_admission, "revoke_production_capability", lambda _: None)
+    recorded = []
+    real_pipe = prep.os.pipe
+
+    def record_pipe():
+        pair = real_pipe()
+        recorded.extend(pair)
+        return pair
+
+    monkeypatch.setattr(prep.os, "pipe", record_pipe)
+
+    class TimedOut:
+        returncode = None
+
+        def communicate(self, payload, timeout):
+            raise subprocess.TimeoutExpired("prep", timeout)
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout):
+            self.waited = True
+
+    monkeypatch.setattr(prep.subprocess, "Popen", lambda *args, **kwargs: TimedOut())
+    with tempfile.TemporaryFile() as handoff, tempfile.TemporaryFile() as custody, pytest.raises(ValueError, match="coordinator deadline"):
+        prep.capture_baseline(
+            bindings=_capture_failure_bindings(tmp_path),
+            output=tmp_path / "run",
+            handoff_fd=handoff.fileno(),
+            custody_output_fd=custody.fileno(),
+        )
+    for fd in recorded:
+        with pytest.raises(OSError):
+            os.fstat(fd)
 
 
 def test_custody_refuses_empty_pipe_expiry_or_wrong_permission():

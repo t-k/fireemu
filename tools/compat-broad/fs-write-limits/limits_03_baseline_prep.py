@@ -503,7 +503,7 @@ def _validate_custody_destination(fd):
     if (
         not stat.S_ISREG(info.st_mode)
         or info.st_uid != os.getuid()
-        or info.st_mode & 0o077
+        or stat.S_IMODE(info.st_mode) != 0o600
         or info.st_size != 0
     ):
         raise ValueError("empty owned private custody output required")
@@ -574,6 +574,14 @@ def _clear_custody(fd):
         os.fsync(fd)
     except (OSError, ValueError):
         pass
+
+
+def _require_released_preparation(ledger_root, output):
+    result = Ledger._read_bounded_json(Path(output) / "coordinator-result.json")
+    reservation = result["receipt"]["ticket"]["reservation"]
+    row = Ledger(ledger_root).snapshot()["reservations"].get(reservation)
+    if not isinstance(row, dict) or row.get("state") != "released":
+        raise ValueError("released PREP reservation required before custody publication")
 
 
 def _run_preparation(bindings, output, handoff_fd, custody_pipe_fd=None):
@@ -802,47 +810,60 @@ def capture_baseline(*, bindings, output, handoff_fd, custody_output_fd=None):
             "custodyPipeFd": custody_write_fd,
         }
     ).encode()
-    child = subprocess.Popen(
-        [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), "--worker"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        pass_fds=tuple(fd for fd in (handoff_fd, custody_write_fd) if fd is not None),
-        env={"PATH": os.defpath, "LANG": "C"},
-    )
+    child = None
     try:
-        child.communicate(payload, timeout=420)
-    except subprocess.TimeoutExpired:
-        child.kill()
-        child.wait(timeout=5)
-        raise ValueError(
-            "PREP coordinator deadline; retained recovery context"
-        ) from None
-    if custody_write_fd is not None:
-        os.close(custody_write_fd)
-        custody_write_fd = None
-    custody = None
-    if custody_read_fd is not None:
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), "--worker"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            pass_fds=tuple(fd for fd in (handoff_fd, custody_write_fd) if fd is not None),
+            env={"PATH": os.defpath, "LANG": "C"},
+        )
         try:
-            custody = _read_custody_pipe(custody_read_fd)
-        finally:
-            os.close(custody_read_fd)
-        if custody is not None:
-            _validate_custody(custody, bindings["permission"])
-    if child.returncode != 0:
-        raise ValueError("PREP coordinator failed; retained recovery context")
-    if custody is None:
-        result = Ledger._read_bounded_json(output / "coordinator-result.json")
-        if result["packet"].get("completed") is not False:
-            raise ValueError("verified custody handoff required")
-    packet = retire_preparation(ledger_root=bindings["ledger_root"], output=output)
-    if custody_output_fd is not None and custody is not None:
-        try:
-            _publish_custody(custody_output_fd, custody)
-        except Exception:
-            _clear_custody(custody_output_fd)
-            raise
-    return packet
+            child.communicate(payload, timeout=420)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+            raise ValueError(
+                "PREP coordinator deadline; retained recovery context"
+            ) from None
+        if custody_write_fd is not None:
+            os.close(custody_write_fd)
+            custody_write_fd = None
+        custody = None
+        if custody_read_fd is not None:
+            try:
+                custody = _read_custody_pipe(custody_read_fd)
+            finally:
+                os.close(custody_read_fd)
+                custody_read_fd = None
+            if custody is not None:
+                _validate_custody(custody, bindings["permission"])
+        if child.returncode != 0:
+            raise ValueError("PREP coordinator failed; retained recovery context")
+        if custody is None:
+            result = Ledger._read_bounded_json(output / "coordinator-result.json")
+            if result["packet"].get("completed") is not False:
+                raise ValueError("verified custody handoff required")
+        packet = retire_preparation(ledger_root=bindings["ledger_root"], output=output)
+        if custody_output_fd is not None and custody is not None:
+            _require_released_preparation(bindings["ledger_root"], output)
+            try:
+                _validate_custody(custody, bindings["permission"])
+                _publish_custody(custody_output_fd, custody)
+            except Exception:
+                _clear_custody(custody_output_fd)
+                raise
+        return packet
+    finally:
+        for fd_name in ("custody_read_fd", "custody_write_fd"):
+            fd = locals()[fd_name]
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
 
 def _publish_or_verify(path, value):

@@ -4,7 +4,7 @@
     "cleanupBound": true,
     "configurationComparison": "separate-evidence",
     "tool": "tools/auth-saved-reference-replay/replay.py",
-    "toolSha256": "2841066748fce6b1c82529064ff952c728af067bf589dd71a9608316a1083ff8",
+    "toolSha256": "a9333a0605dcc94f535d85267ae6f0b1cfed25d0c60724ae359c7cc31db31246",
     "typedScalarComparison": true
   },
   "corpora": [
@@ -67,7 +67,7 @@
     "toolSha256": "c8067838bc9ae70ce0bcb6092f6e7798edaa58b778e30f8ce79dfbe743a16937",
     "ownedRunnerHelper": {
       "tool": "tools/compat-inventory/owned_runner.py",
-      "toolSha256": "bca36421fc669d4dd7ba9de8e75b4131bb1f5132ec8c5227304f49ce580d267b"
+      "toolSha256": "e5c58858a4196927e006486add673e92d9c18ebccc7df3947e7694d43bf21f9a"
     },
     "ownedRunners": [
       {

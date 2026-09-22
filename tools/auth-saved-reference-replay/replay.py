@@ -339,12 +339,22 @@ def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: 
             raise ValueError(f"artifact binding {role} path is unavailable") from exc
         try:
             bound = os_module.fstat(bound_descriptor)
+            try:
+                bound_path = os_module.stat(path, follow_symlinks=False)
+            except OSError as exc:
+                raise ValueError(f"artifact binding {role} path disappeared") from exc
         finally:
             os_module.close(bound_descriptor)
         require(
             stat_module.S_ISREG(bound.st_mode)
             and bound.st_nlink == 1
             and identity(bound) == identity(after),
+            f"artifact binding {role} path changed before use",
+        )
+        require(
+            stat_module.S_ISREG(bound_path.st_mode)
+            and bound_path.st_nlink == 1
+            and identity(bound_path) == identity(bound),
             f"artifact binding {role} path changed before use",
         )
         return (

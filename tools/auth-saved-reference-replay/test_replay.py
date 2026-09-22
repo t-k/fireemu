@@ -342,7 +342,33 @@ def test_manifest_rejects_launch_replacement_after_final_stat(tmp_path, monkeypa
         return result
 
     monkeypatch.setattr(replay.os, "stat", replace_after_final_stat)
-    with pytest.raises(ValueError, match="hardlink|before use"):
+    with pytest.raises(ValueError, match="hardlink|while reading|before use"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_launch_replacement_after_bound_descriptor_stat(
+    tmp_path, monkeypatch
+):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_fstat = replay.os.fstat
+    fstats = 0
+
+    def replace_after_bound_fstat(fd):
+        nonlocal fstats
+        result = original_fstat(fd)
+        fstats += 1
+        if fstats == 5:
+            launch_path.unlink()
+            launch_path.hardlink_to(source_path)
+        return result
+
+    monkeypatch.setattr(replay.os, "fstat", replace_after_bound_fstat)
+    with pytest.raises(ValueError, match="hardlink|while reading|before use"):
         validate_artifact_binding(
             manifest["build"], manifest["artifactSha256"], bundle
         )

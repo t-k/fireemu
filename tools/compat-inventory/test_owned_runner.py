@@ -313,7 +313,44 @@ def test_artifact_binding_rejects_launch_replacement_after_final_stat(
         return result
 
     monkeypatch.setattr(owned_runner.os, "stat", replace_after_final_stat)
-    with pytest.raises(ValueError, match="hardlink|before use"):
+    with pytest.raises(ValueError, match="hardlink|while reading|before use"):
+        artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
+
+
+def test_artifact_binding_rejects_launch_replacement_after_bound_descriptor_stat(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    source.write_bytes(b"source")
+    launch.write_bytes(b"source")
+    receipt = {
+        "artifactSha256": __import__("hashlib").sha256(b"source").hexdigest(),
+        "inputs": {"crates/x.rs": "x"},
+        "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fireemu",
+            "--message-format=json",
+        ],
+        "exitCode": 0,
+    }
+    original_fstat = owned_runner.os.fstat
+    fstats = 0
+
+    def replace_after_bound_fstat(fd):
+        nonlocal fstats
+        result = original_fstat(fd)
+        fstats += 1
+        if fstats == 5:
+            launch.unlink()
+            launch.hardlink_to(source)
+        return result
+
+    monkeypatch.setattr(owned_runner.os, "fstat", replace_after_bound_fstat)
+    with pytest.raises(ValueError, match="hardlink|while reading|before use"):
         artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 

@@ -54,6 +54,62 @@ def test_frozen_inputs_bind_the_plan_permission_and_source_snapshot(tmp_path):
     admission.validate_frozen_inputs(inputs, built.descriptor)
 
 
+def test_selected_plan_permission_passes_the_o8_frozen_input_path(tmp_path):
+    plan = campaign.plan_compiler(NONCE, selector="pending-age-300-v1")
+    descriptor = campaign.descriptor_for_plan(plan, WallClockSleeper())
+    source = frozen_checkout(tmp_path)
+    commit = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    artifact = tmp_path / "selected-artifact"
+    artifact.write_bytes(b"retained selected MFA artifact")
+    baseline = digest({"config": "offline selected fixture"})
+    permission = owner_permission(
+        descriptor,
+        plan,
+        commit,
+        hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        campaign.source_map(),
+        baseline,
+    )
+    permission_path = tmp_path / "selected-permission.json"
+    permission_path.write_text(json.dumps(permission))
+
+    inputs = admission.freeze_inputs(
+        permission_path,
+        plan,
+        source_root=source,
+        artifact_path=artifact,
+        descriptor_=descriptor,
+    )
+    admission.validate_frozen_inputs(inputs, descriptor)
+    assert inputs["plan"] == plan
+    assert inputs["permission"]["planDigest"] == digest(plan)
+    assert inputs["permission"]["selector"] == "pending-age-300-v1"
+    assert inputs["permission"]["caseCount"] == 3
+    assert inputs["permission"]["ownedAccounts"] == 1
+    assert inputs["permission"]["campaignSeconds"] == 1200
+
+    mismatch = copy.deepcopy(inputs)
+    mismatch["plan"] = campaign.plan_compiler(NONCE)
+    mismatch["planDigest"] = digest(mismatch["plan"])
+    mismatch["bounds"] = campaign.descriptor(WallClockSleeper()).frozen_bounds
+    mismatch["inputsDigest"] = digest(
+        {key: value for key, value in mismatch.items() if key != "inputsDigest"}
+    )
+    with pytest.raises(ValueError, match="typed owner permission binding differs"):
+        admission.validate_frozen_inputs(mismatch)
+
+    unknown = copy.deepcopy(inputs)
+    unknown["plan"]["selector"]["name"] = "unknown"
+    unknown["planDigest"] = digest(unknown["plan"])
+    unknown["inputsDigest"] = digest(
+        {key: value for key, value in unknown.items() if key != "inputsDigest"}
+    )
+    with pytest.raises(ValueError, match="unsupported MFA selector"):
+        admission.validate_frozen_inputs(unknown)
+
+
 def test_a_complete_o7_binding_is_admitted(tmp_path):
     built = RehearsalAdmission(tmp_path)
     admitted = admission.validate_o7_admission(built.descriptor, **built.bindings())
@@ -270,6 +326,28 @@ def test_the_hosting_check_names_every_shared_module_refusal(tmp_path):
             rehearsal_claim,
             rehearsal_plan,
         )
+
+
+def test_selected_age_300_plan_uses_supported_auth_account_scope_and_bounded_claim(
+    tmp_path,
+):
+    built = RehearsalAdmission(tmp_path)
+    production = campaign.descriptor(WallClockSleeper())
+    inputs = copy.deepcopy(built.inputs)
+    inputs["plan"] = production.plan_compiler(
+        NONCE, selector="pending-age-300-v1"
+    )
+    gate_plan = admission.gate_plan_for(inputs, built.permission, production)
+    claim = admission.reservation_claim(
+        inputs, gate_path=tmp_path / "gate", gate_plan=gate_plan, descriptor_=production
+    )
+
+    assert gate_plan["wallSeconds"] == 1200
+    assert claim["durationSeconds"] == 1200
+    assert claim["locks"][0]["key"].endswith("pending-age-300-" + NONCE)
+    refusals = admission.hosting_check(claim, gate_plan)
+    assert [item["refusal"] for item in refusals] == ["ledger-resource-refused"]
+    assert refusals[0]["value"]["refusedResources"] == 1
 
 
 @pytest.mark.parametrize(

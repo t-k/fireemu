@@ -20,7 +20,11 @@ for entry in (
         sys.path.insert(0, str(entry))
 
 import mfa_o8
-from conftest_rehearsal import RehearsalAdmission
+from conftest_rehearsal import (
+    NONCE,
+    RehearsalAdmission,
+    owner_permission,
+)
 
 
 def _argv(built, tmp_path, *extra):
@@ -59,6 +63,65 @@ def _argv(built, tmp_path, *extra):
         str(handoff),
         *extra,
     ]
+
+
+def _selected_production(built):
+    import hashlib
+    import mfa_admission as admission
+    import mfa_descriptor as campaign
+    from mfa_timing import WallClockSleeper
+
+    plan = campaign.plan_compiler(NONCE, selector="pending-age-300-v1")
+    descriptor = campaign.descriptor_for_plan(plan, WallClockSleeper())
+    permission = owner_permission(
+        descriptor,
+        plan,
+        built.commit,
+        hashlib.sha256(built.artifact_path.read_bytes()).hexdigest(),
+        campaign.source_map(),
+        built.baseline_digest,
+    )
+    built.descriptor = descriptor
+    built.plan = plan
+    built.permission = permission
+    built.permission_path.write_text(json.dumps(permission))
+    built.inputs = admission.freeze_inputs(
+        built.permission_path,
+        plan,
+        source_root=built.source,
+        artifact_path=built.artifact_path,
+        descriptor_=descriptor,
+    )
+    built.manifest = {
+        "kind": campaign.MANIFEST_KIND,
+        "inputsDigest": built.inputs["inputsDigest"],
+    }
+    built.manifest_bytes = json.dumps(built.manifest).encode()
+    built.manifest_path.write_bytes(built.manifest_bytes)
+    built.approval = built._approval()
+    built.approval_path.write_text(json.dumps(built.approval))
+    return built
+
+
+def test_selected_production_plan_passes_o7_then_reaches_o8_hosting_refusal(
+    tmp_path, monkeypatch, capsys
+):
+    import mfa_descriptor as campaign
+    from mfa_timing import WallClockSleeper
+
+    built = _selected_production(RehearsalAdmission(tmp_path))
+    assert campaign.descriptor(WallClockSleeper()).campaign_seconds == 2700
+    assert built.descriptor.campaign_seconds == 1200
+    assert built.descriptor.recovery_seconds == 300
+
+    def never(_args):
+        raise AssertionError("the credential handoff must not be read")
+
+    monkeypatch.setattr(mfa_o8, "_read_handoff", never)
+    assert mfa_o8.main(_argv(built, tmp_path)) == 2
+    assert "refused (HostingRefused)" in capsys.readouterr().err
+    assert not (tmp_path / "output").exists()
+    assert json.loads((built.ledger / "state.json").read_bytes())["reservations"] == {}
 
 
 def test_rehearsal_inputs_are_refused_for_production_before_any_credential(

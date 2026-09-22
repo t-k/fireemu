@@ -156,8 +156,8 @@ def execute(args: argparse.Namespace) -> dict:
     approval, _ = _read_json(args.approval, private=True)
     permission, _ = _read_json(args.permission)
     sleeper = WallClockSleeper()
-    descriptor = campaign.descriptor(sleeper)
     admission.require_production_timing(inputs)
+    descriptor = admission.descriptor_for_plan(inputs["plan"], sleeper)
     admission.validate_o7_admission(
         descriptor,
         inputs=inputs,

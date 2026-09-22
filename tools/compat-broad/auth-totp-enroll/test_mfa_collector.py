@@ -10,6 +10,7 @@ from mfa_collector import (
     SensitiveMaterialError,
     checkpoint_bytes,
     cleanup_complete,
+    digest,
     initial_state,
     load_checkpoint,
     mark_deleted,
@@ -28,6 +29,21 @@ ORIGIN = 1_700_000_000.0
 
 def fresh() -> dict:
     return initial_state(compile_campaign(NONCE), ORIGIN)
+
+
+def test_selected_collector_denominator_is_frozen_to_the_three_case_closure() -> None:
+    state = initial_state(
+        compile_campaign(NONCE, selector="pending-age-300-v1"), ORIGIN
+    )
+    assert [step["id"] for step in state["steps"]] == [
+        "age-300s-start",
+        "age-300s-finalize",
+        "age-300s-same-account-fresh-control",
+    ]
+    assert state["selectedCaseIds"] == [step["id"] for step in state["steps"]]
+    with pytest.raises(CheckpointError, match="checkpoint state is invalid"):
+        altered = dict(state, selectedCaseIds=["age-450s-start"])
+        checkpoint_bytes(altered)
 
 
 def drain(state: dict, now: float) -> None:
@@ -75,6 +91,24 @@ def test_a_checkpoint_round_trip_reproduces_the_same_decision() -> None:
     assert resumed == state
     assert next_action(resumed, ORIGIN + 10) == next_action(state, ORIGIN + 10)
     assert next_action(resumed, ORIGIN + 400)["action"] == "RUN"
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_selector", "plan_selector"),
+    [(None, "pending-age-300-v1"), ("pending-age-300-v1", None)],
+)
+def test_a_checkpoint_cannot_be_loaded_under_a_different_case_denominator(
+    checkpoint_selector, plan_selector
+):
+    checkpoint_plan = compile_campaign(NONCE, selector=checkpoint_selector)
+    expected_plan = compile_campaign(NONCE, selector=plan_selector)
+    state = initial_state(checkpoint_plan, ORIGIN)
+    expected = initial_state(expected_plan, ORIGIN)
+    state["planDigest"] = digest(expected_plan)
+    state["maxRequests"] = expected["maxRequests"]
+    state["deadline"] = expected["deadline"]
+    with pytest.raises(CheckpointError, match="expected plan"):
+        load_checkpoint(checkpoint_bytes(state), plan=expected_plan)
 
 
 def test_an_altered_or_malformed_checkpoint_is_refused() -> None:

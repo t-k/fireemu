@@ -39,9 +39,9 @@ def _parent_generation() -> dict:
 def _parent() -> dict:
     nonce = "0123456789abcdef0123456789abcdef"
     resource = f"projects/fireemu-35fe6/auth/accounts/custom-{nonce}"
-    operation = {"service": "auth", "method": "POST", "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken", "body": {"token": "$binding:customToken", "returnSecureToken": True}, "form": False, "owner": False, "kind": "custom-sign-in", "account": "custom", "binds": {"customUid": "localId", "customIdToken": "idToken", "customRefresh": "refreshToken"}, "resource": resource}
+    operation = {"service": "auth", "method": "POST", "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken", "body": {"token": "$binding:customToken", "returnSecureToken": True}, "form": False, "owner": False, "kind": "custom-sign-in", "account": "custom", "binds": {"customUid": "localId"}, "resource": resource}
     plan = {"campaignId": recovery.CAMPAIGN, "project": recovery.PROJECT, "nonce": nonce, "sourceCommit": "1" * 40, "jobs": {"auth-credential": {"observation": [operation], "recovery": []}}}
-    event = {"job": "auth-credential", "phase": "observation", "index": 0, "requestDigest": digest(operation), "completed": False, "creationOutcome": "unknown", "ended": 999.0}
+    event = {"job": "auth-credential", "phase": "observation", "index": 0, "requestDigest": digest(operation), "service": "auth", "method": "POST", "completed": False, "creationOutcome": "unknown", "ended": 999.0}
     gate = {"plan": plan, "planDigest": digest(plan), "jobs": {"auth-credential": {"inflight": False}}, "events": [event], "coordinatorInflight": False}
     claim = {"campaignId": recovery.CAMPAIGN, "claimDigest": "d" * 64, "gatePlanDigest": digest(plan), "nonceDigest": digest(nonce), "gateJob": "auth-credential"}
     immutable = {"kind": "auth-packet05-parent-binding-v1", "gateDigest": digest(gate), "gatePlanDigest": digest(plan), "nonce": nonce, "resource": resource, "eventIndex": 0, "requestDigest": digest(operation), "sourceCommit": "1" * 40}
@@ -115,7 +115,7 @@ def test_parent_custom_sign_in_shape_is_fully_pinned(field: str) -> None:
     elif field == "body":
         operation[field] = {"token": "$binding:customToken"}
     else:
-        operation[field] = {"customUid": "localId"}
+        operation[field] = {"customUid": "otherId"}
     with pytest.raises(recovery.RecoveryRefusal, match="parent (custom resource|Gate) binding"):
         recovery.compile_recovery_plan(parent, recovery_nonce="e" * 32, provenance=_provenance())
 
@@ -269,10 +269,10 @@ def test_diagnostic_projection_is_secret_free_and_typed() -> None:
 
 def test_real_shared_api924_accepts_canonical_child_and_rejects_overrides(tmp_path) -> None:
     """Exercise the successor Ledger implementation, not a permissive stub."""
-    source = subprocess.check_output(["git", "show", "8b098e1d2:tools/compat-broad/production-admission/reservations.py"])
-    module_path = tmp_path / "reservations_8b.py"
+    source = subprocess.check_output(["git", "show", "4ad1034f5:tools/compat-broad/production-admission/reservations.py"])
+    module_path = tmp_path / "reservations_final.py"
     module_path.write_bytes(source)
-    spec = importlib.util.spec_from_file_location("reservations_8b", module_path)
+    spec = importlib.util.spec_from_file_location("reservations_final", module_path)
     assert spec is not None and spec.loader is not None
     shared = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(shared)

@@ -170,14 +170,14 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
     expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{nonce}"
     expected_parent_path = f"{IDENTITY}/accounts:signInWithCustomToken"
     expected_parent_body = {"token": "$binding:customToken", "returnSecureToken": True}
-    expected_parent_binds = {"customUid": "localId", "customIdToken": "idToken", "customRefresh": "refreshToken"}
+    expected_parent_binds = {"customUid": "localId"}
     if operation.get("service") != "auth" or operation.get("method") != "POST" or operation.get("path") != expected_parent_path or operation.get("form") is not False or operation.get("body") != expected_parent_body or operation.get("binds") != expected_parent_binds or operation.get("owner") is not False or operation.get("resource") != expected_resource or immutable["resource"] != expected_resource or immutable["eventIndex"] != event_index or immutable["requestDigest"] != digest(operation):
         _refuse("parent custom resource binding differs")
     event = next(
         (item for item in gate.get("events", []) if isinstance(item, Mapping) and item.get("job") == parent_job and item.get("phase") == "observation" and item.get("index") == event_index),
         None,
     )
-    if not isinstance(event, Mapping) or event.get("requestDigest") != digest(operation) or event.get("completed") is not False or event.get("creationOutcome") not in {"pending", "unknown"}:
+    if not isinstance(event, Mapping) or event.get("requestDigest") != digest(operation) or event.get("service") != operation["service"] or event.get("method") != operation["method"] or event.get("completed") is not False or event.get("creationOutcome") not in {"pending", "unknown"}:
         _refuse("parent custom event is not unresolved")
     _finite(event.get("ended"), "parent event end")
     custom = responsibility.get("custom") or responsibility.get("custom-signin")

@@ -497,8 +497,11 @@ def load_checkpoint(data: bytes, *, plan: dict[str, Any] | None = None) -> dict[
         _validate_state(state)
         if plan is not None:
             expected = initial_state(plan, state["startedAt"])
-            for field in ("campaignId", "nonce", "planDigest", "maxRequests", "deadline"):
-                if state[field] != expected[field]:
+            for field in (
+                "campaignId", "nonce", "planDigest", "maxRequests", "deadline",
+                "steps", "selectedCaseIds",
+            ):
+                if state.get(field) != expected.get(field):
                     raise CheckpointError("checkpoint does not match the expected plan")
     except (ValueError, TypeError, KeyError, RecursionError, SensitiveMaterialError):
         raise CheckpointError("checkpoint state is invalid") from None

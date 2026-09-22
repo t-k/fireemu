@@ -10,6 +10,7 @@ from mfa_collector import (
     SensitiveMaterialError,
     checkpoint_bytes,
     cleanup_complete,
+    digest,
     initial_state,
     load_checkpoint,
     mark_deleted,
@@ -90,6 +91,24 @@ def test_a_checkpoint_round_trip_reproduces_the_same_decision() -> None:
     assert resumed == state
     assert next_action(resumed, ORIGIN + 10) == next_action(state, ORIGIN + 10)
     assert next_action(resumed, ORIGIN + 400)["action"] == "RUN"
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_selector", "plan_selector"),
+    [(None, "pending-age-300-v1"), ("pending-age-300-v1", None)],
+)
+def test_a_checkpoint_cannot_be_loaded_under_a_different_case_denominator(
+    checkpoint_selector, plan_selector
+):
+    checkpoint_plan = compile_campaign(NONCE, selector=checkpoint_selector)
+    expected_plan = compile_campaign(NONCE, selector=plan_selector)
+    state = initial_state(checkpoint_plan, ORIGIN)
+    expected = initial_state(expected_plan, ORIGIN)
+    state["planDigest"] = digest(expected_plan)
+    state["maxRequests"] = expected["maxRequests"]
+    state["deadline"] = expected["deadline"]
+    with pytest.raises(CheckpointError, match="expected plan"):
+        load_checkpoint(checkpoint_bytes(state), plan=expected_plan)
 
 
 def test_an_altered_or_malformed_checkpoint_is_refused() -> None:

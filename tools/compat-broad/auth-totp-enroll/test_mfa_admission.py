@@ -54,6 +54,48 @@ def test_frozen_inputs_bind_the_plan_permission_and_source_snapshot(tmp_path):
     admission.validate_frozen_inputs(inputs, built.descriptor)
 
 
+def test_selected_plan_permission_passes_the_o8_frozen_input_path(tmp_path):
+    descriptor = campaign.descriptor(WallClockSleeper())
+    plan = descriptor.plan_compiler(NONCE, selector="pending-age-300-v1")
+    source = frozen_checkout(tmp_path)
+    commit = subprocess.check_output(
+        ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+    ).strip()
+    artifact = tmp_path / "selected-artifact"
+    artifact.write_bytes(b"retained selected MFA artifact")
+    baseline = digest({"config": "offline selected fixture"})
+    permission = owner_permission(
+        descriptor,
+        plan,
+        commit,
+        hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        campaign.source_map(),
+        baseline,
+    )
+    permission_path = tmp_path / "selected-permission.json"
+    permission_path.write_text(json.dumps(permission))
+
+    inputs = admission.freeze_inputs(
+        permission_path,
+        plan,
+        source_root=source,
+        artifact_path=artifact,
+        descriptor_=descriptor,
+    )
+    admission.validate_frozen_inputs(inputs, descriptor)
+    assert inputs["plan"] == plan
+    assert inputs["permission"]["planDigest"] == digest(plan)
+    assert inputs["permission"]["selector"] == "pending-age-300-v1"
+    assert inputs["permission"]["caseCount"] == 3
+    assert inputs["permission"]["ownedAccounts"] == 1
+    assert inputs["permission"]["campaignSeconds"] == 1200
+
+    mismatch = copy.deepcopy(inputs)
+    mismatch["plan"]["selector"]["caseIds"] = ["age-450s-start"]
+    with pytest.raises(ValueError):
+        admission.validate_frozen_inputs(mismatch, descriptor)
+
+
 def test_a_complete_o7_binding_is_admitted(tmp_path):
     built = RehearsalAdmission(tmp_path)
     admitted = admission.validate_o7_admission(built.descriptor, **built.bindings())

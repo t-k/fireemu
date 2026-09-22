@@ -343,6 +343,8 @@ def plan_compiler(
         reference["selector"] = copy.deepcopy(manifest["selector"])
         reference["selectedCaseCount"] = len(manifest["selector"]["caseIds"])
         reference["selectedAccountCount"] = len(manifest["selector"]["accountRoles"])
+        reference["caseCount"] = reference["selectedCaseCount"]
+        reference["ownedAccounts"] = reference["selectedAccountCount"]
     return reference
 
 
@@ -513,12 +515,29 @@ def permission_bindings(
     `window` is the descriptor's own (campaign, recovery) seconds; the production
     descriptor binds the manifest's, a rehearsal descriptor binds its short one.
     """
-    canonical = plan_compiler(plan["nonce"], timing=timing)
-    if digest(plan) != digest(canonical):
+    selector = plan.get("selector")
+    if selector is None:
+        selector_name = None
+    elif isinstance(selector, dict):
+        selector_name = selector.get("name")
+    else:
         raise ValueError("fixed production project and timing mode required")
-    seconds, recovery = (
-        window if window is not None else (campaign_seconds(), recovery_seconds())
+    canonical = plan_compiler(
+        plan["nonce"], timing=timing, selector=selector_name
     )
+    if digest(plan) != digest(canonical):
+        raise ValueError("frozen MFA plan reference differs")
+    manifest = execution_plan(plan)
+    account_roles = (
+        manifest["selector"]["accountRoles"]
+        if "selector" in manifest
+        else [account["role"] for account in manifest["owner"]["accounts"]]
+    )
+    plan_seconds = manifest["limits"]["maxWallSeconds"]
+    plan_recovery = manifest["limits"]["recoveryReserveSeconds"]
+    seconds, recovery = window if window is not None else (plan_seconds, plan_recovery)
+    seconds = min(seconds, plan_seconds)
+    recovery = min(recovery, plan_recovery)
     required = {
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
@@ -546,6 +565,9 @@ def permission_bindings(
         "perRequestTimeoutSeconds": transport.REQUEST_SECONDS,
         "concurrency": 1,
         "timingMode": timing,
+        "selector": selector_name,
+        "caseCount": plan["caseCount"],
+        "ownedAccountRoles": list(account_roles),
         "configurationChange": configuration_change(),
         "costModel": cost_model(),
         "artifactProfileBasis": artifact_profile_basis(),

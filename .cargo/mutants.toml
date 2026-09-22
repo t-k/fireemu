@@ -10,3 +10,6 @@ examine_globs = ["crates/**"]
 test_tool = "nextest"
 timeout_multiplier = 3.0
 minimum_test_timeout = 20.0
+
+# Ignored worktrees and local evidence must not be copied into mutation sandboxes.
+gitignore = true

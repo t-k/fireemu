@@ -117,14 +117,14 @@ def validate_source(source_root, source_inputs):
             raise ValueError("historical source bytes differ")
 
 
-def _quiescent(source_root):
+def _quiescent():
     """A missing historical worker receipt is not rewritten into a reaped one."""
     result = subprocess.run(
         ["ps", "-axo", "pid=,args="], capture_output=True, timeout=3, check=False
     )
     if result.returncode or len(result.stdout) > MAX_BYTES:
         raise ValueError("worker inventory unavailable")
-    target = str(Path(source_root) / WORKER)
+    target = Path(WORKER).name
     for line in result.stdout.decode("utf-8", errors="strict").splitlines():
         try:
             words = shlex.split(line)
@@ -133,7 +133,10 @@ def _quiescent(source_root):
             if target in line:
                 raise ValueError("worker quiescence unknown") from None
             continue
-        if target in words[1:]:
+        # A byte-identical source copy is valid evidence, but must not hide a
+        # worker executing from another checkout. Conservatively require every
+        # worker with this exact entrypoint name to have exited.
+        if any(word == target or word.endswith("/" + target) for word in words[1:]):
             raise ValueError("historical worker still active")
 
 
@@ -213,6 +216,29 @@ def _proof(record, receipt, gate, row):
         or preparation.get("requestCount") != 4
     ):
         raise ValueError("retained production preparation proof differs")
+    parent_inputs = _json(output / "preparation-inputs.json")
+    parent_permission = parent_inputs.get("permission", {})
+    if (
+        parent_inputs.get("kind") != "auth-credential-bootstrap-frozen-inputs-v1"
+        or parent_inputs.get("sourceCommit") != SOURCE_COMMIT
+        or parent_inputs.get("sourceInputs") != source_inputs
+        or parent_inputs.get("inputsDigest")
+        != digest({k: v for k, v in parent_inputs.items() if k != "inputsDigest"})
+        or parent_inputs.get("inputsDigest") != preparation.get("inputsDigest")
+        or parent_inputs.get("permissionDigest") != digest(parent_permission)
+        or parent_inputs.get("permissionDigest") != preparation.get("permissionDigest")
+        or parent_inputs.get("permissionDigest") != gate["plan"].get("permissionDigest")
+        or parent_inputs.get("permissionDigest")
+        != gate["plan"].get("bootstrap", {}).get("permissionDigest")
+        or parent_permission.get("kind") != "auth-credential-bootstrap-permission-v1"
+        or parent_permission.get("nonce") != preparation["nonce"]
+        or parent_permission.get("fixtureOrigin") is not None
+        or any(
+            parent_permission.get(k) != permission.get(k)
+            for k in ("ownerIdentity", "recoveryOwner")
+        )
+    ):
+        raise ValueError("parent preparation authority binding differs")
     claim = row["claim"]
     plan = gate["plan"]
     nonce = plan.get("nonce")
@@ -301,6 +327,7 @@ def _proof(record, receipt, gate, row):
     ]
     if (
         receipt.get("kind") != "auth-credential-acquisition-receipt-v1"
+        or receipt.get("gateDigest") != digest(gate)
         or receipt.get("campaignId") != CAMPAIGN
         or receipt.get("chargedCalls") != 11
         or receipt.get("executionKind") != "fixed-production-wire"
@@ -316,9 +343,19 @@ def _proof(record, receipt, gate, row):
         raise ValueError("immutable Auth failure receipt differs")
     admission = _json(output / "observation-admission.json")
     approval = _json(record["approvalPath"])
+    expected_bootstrap = {
+        "proofDigest": digest(preparation),
+        "ticket": record["ticket"],
+        "claimDigest": row["claimDigest"],
+        "gatePlanDigest": row["claim"]["gatePlanDigest"],
+        "preparationInputsDigest": parent_inputs["inputsDigest"],
+        "reservationDeadline": row["deadline"],
+    }
     if (
         set(admission) != {"approvalDigest", "inputsDigest", "bootstrap"}
-        or admission["bootstrap"] is not True
+        or admission["bootstrap"] != expected_bootstrap
+        or permission.get("bootstrap") != expected_bootstrap
+        or preparation.get("reservationDeadline") != row["deadline"]
         or admission["inputsDigest"] != inputs["inputsDigest"]
         or admission["approvalDigest"] != digest(approval)
         or receipt.get("observationApprovalDigest") != digest(admission)
@@ -383,13 +420,14 @@ def _proof(record, receipt, gate, row):
         },
     ]:
         raise ValueError("unresolved signup responsibility differs")
-    _quiescent(record["sourceRoot"])
+    _quiescent()
     evidence = {
         name: hashlib.sha256(_read(output / name)).hexdigest()
         for name in (
             "receipt.json",
             "inputs.json",
             "preparation-proof.json",
+            "preparation-inputs.json",
             "observation-admission.json",
             "responsibility/0000.json",
             "responsibility/0001.json",
@@ -436,6 +474,9 @@ def prepare_resolution(*, ticket, receipt_path, source_root, approval_path):
         "approvalPath": str(Path(approval_path).resolve()),
         "attestation": None,
     }
+    if row["state"] != "held" or row.get("recoveryChildren"):
+        raise ValueError("unresolved parent without a recovery child required")
+    ledger._terminal_gate(row, ticket, receipt, record)
     record["proof"] = _proof(record, receipt, gate, row)
     return record
 

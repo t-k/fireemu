@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(
     0, str(Path(__file__).resolve().parent.parent / "auth-credential-tokens")
 )
@@ -117,9 +118,23 @@ def incident(tmp_path, historical_source):
         "permissionDigest": digest(permission),
     }
     inputs["inputsDigest"] = digest(inputs)
+    prep_permission = {
+        **permission,
+        "kind": "auth-credential-bootstrap-permission-v1",
+        "fixtureOrigin": None,
+    }
+    prep_inputs = {
+        **inputs,
+        "kind": "auth-credential-bootstrap-frozen-inputs-v1",
+        "permission": prep_permission,
+        "permissionDigest": digest(prep_permission),
+    }
+    prep_inputs["inputsDigest"] = digest(
+        {k: v for k, v in prep_inputs.items() if k != "inputsDigest"}
+    )
     plan = credential_gate.bootstrap_plan(
         campaign.compile_gate_plan(nonce, signing=True),
-        permission_digest=digest(permission),
+        permission_digest=digest(prep_permission),
     )
     plan["collectorSourceDigest"] = digest(hashes)
     plan["permissionExpiresAt"] = time.time() + 600
@@ -143,7 +158,7 @@ def incident(tmp_path, historical_source):
         "durationSeconds": 600,
     }
     envelope = {
-        "permissionDigest": digest(permission),
+        "permissionDigest": digest(prep_permission),
         "issuedAt": time.time() - 1,
         "expiresAt": time.time() + 900,
         "limits": claim["budget"],
@@ -151,7 +166,33 @@ def incident(tmp_path, historical_source):
         "scopes": claim["locks"],
     }
     ticket = ledger.reserve(envelope, claim, plan, generation=generation)
-    for name, value in (("inputs.json", inputs), ("plan.json", plan)):
+    preparation = {
+        "kind": "auth-credential-bootstrap-proof-v1",
+        "fixtureOrigin": None,
+        "nonce": nonce,
+        "generation": generation,
+        "ticket": ticket,
+        "claimDigest": ticket["claimDigest"],
+        "gatePlanDigest": digest(plan),
+        "requestCount": 4,
+        "inputsDigest": prep_inputs["inputsDigest"],
+        "permissionDigest": digest(prep_permission),
+        "reservationDeadline": ledger.snapshot()["reservations"][ticket["reservation"]][
+            "deadline"
+        ],
+    }
+    import credential_bootstrap
+
+    permission["bootstrap"] = credential_bootstrap.observation_binding(preparation)
+    inputs["permissionDigest"] = digest(permission)
+    inputs["inputsDigest"] = digest(
+        {k: v for k, v in inputs.items() if k != "inputsDigest"}
+    )
+    for name, value in (
+        ("inputs.json", inputs),
+        ("preparation-inputs.json", prep_inputs),
+        ("plan.json", plan),
+    ):
         (output / name).write_text(json.dumps(value))
     search = [
         REPO / "tools/compat-broad",
@@ -201,16 +242,6 @@ def incident(tmp_path, historical_source):
         ],
     }
     receipt["routeDigest"] = digest(receipt["metadata"])
-    preparation = {
-        "kind": "auth-credential-bootstrap-proof-v1",
-        "fixtureOrigin": None,
-        "nonce": nonce,
-        "generation": generation,
-        "ticket": ticket,
-        "claimDigest": ticket["claimDigest"],
-        "gatePlanDigest": digest(plan),
-        "requestCount": 4,
-    }
     receipt["preparationProof"] = preparation
     (output / "preparation-proof.json").write_text(json.dumps(preparation))
     approval = {
@@ -228,7 +259,7 @@ def incident(tmp_path, historical_source):
     (tmp_path / "approval.json").write_text(json.dumps(approval))
     admission = {
         "approvalDigest": digest(approval),
-        "bootstrap": True,
+        "bootstrap": permission["bootstrap"],
         "inputsDigest": inputs["inputsDigest"],
     }
     (output / "observation-admission.json").write_text(json.dumps(admission))
@@ -287,6 +318,44 @@ def test_exact_source_refusal_retires_without_rewriting_history(
     assert all(Path(p).read_bytes() == raw for p, raw in original.items())
     ledger.close_after_source_refusal(ticket, record)
     assert ledger.snapshot() == final
+    changed = copy.deepcopy(record)
+    changed["attestation"]["reviewerIdentity"] = "another-independent-reviewer"
+    with pytest.raises(ValueError, match="different terminal"):
+        ledger.close_after_source_refusal(ticket, changed)
+    assert ledger.snapshot() == final
+    from reservations import task_spent_microusd
+
+    assert task_spent_microusd(final, "AUTH-CREDENTIAL-TOKENS-01") == 50_000
+    for key, value in before.items():
+        if key != "reservations":
+            assert final[key] == value
+    # An actual subsequent reservation can acquire the released namespace lock,
+    # while both permanent task allocations remain charged. No worker is started.
+    import credential_descriptor as campaign
+    import credential_gate
+
+    nonce = "e" * 32
+    plan = credential_gate.bootstrap_plan(
+        campaign.compile_gate_plan(nonce, signing=True), permission_digest="b" * 64
+    )
+    next_claim = {
+        **row["claim"],
+        "nonceDigest": digest(nonce),
+        "manifestDigest": digest(plan),
+        "gatePath": str(tmp_path / "next-gate"),
+        "gatePlanDigest": digest(plan),
+        "locks": campaign.lock_scopes(campaign.plan_compiler(nonce, signing=True)),
+    }
+    next_envelope = {
+        "permissionDigest": "b" * 64,
+        "issuedAt": time.time() - 1,
+        "expiresAt": time.time() + 900,
+        "limits": next_claim["budget"],
+        "concurrency": 1,
+        "scopes": next_claim["locks"],
+    }
+    ledger.reserve(next_envelope, next_claim, plan, generation=row["generation"])
+    assert task_spent_microusd(ledger.snapshot(), campaign.CAMPAIGN) == 100_000
 
 
 @pytest.mark.parametrize(
@@ -412,4 +481,116 @@ def test_source_refusal_never_accepts_a_caller_boolean(tmp_path):
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="exact Auth source-refusal"):
         ledger.close_after_source_refusal({}, {"attemptDispatched": False})
+    assert ledger.snapshot() == before
+
+
+def test_changed_parent_permission_cannot_be_rebound_by_new_resolution(
+    tmp_path, historical_source
+):
+    import credential_source_refusal as refusal
+
+    ledger, ticket, output, source = incident(tmp_path, historical_source)
+    path = output / "preparation-inputs.json"
+    value = json.loads(path.read_bytes())
+    value["permission"]["ownerIdentity"] = "replacement-owner"
+    value["permissionDigest"] = digest(value["permission"])
+    value["inputsDigest"] = digest(
+        {k: v for k, v in value.items() if k != "inputsDigest"}
+    )
+    path.write_text(json.dumps(value))
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="parent preparation"):
+        refusal.prepare_resolution(
+            ticket=ticket,
+            receipt_path=output / "receipt.json",
+            source_root=source,
+            approval_path=output.parent / "approval.json",
+        )
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("copied_source", [False, True])
+def test_active_frozen_worker_refuses_without_fabricating_reaping(
+    tmp_path, historical_source, copied_source
+):
+    import shutil
+
+    import credential_source_refusal as refusal
+
+    ledger, ticket, output, source = incident(tmp_path, historical_source)
+    proof_source = source
+    if copied_source:
+        proof_source = tmp_path / "same-source-copy"
+        shutil.copytree(source, proof_source)
+    record = resolution(ledger, ticket, output, proof_source)
+    process = subprocess.Popen(
+        [sys.executable, "-I", "-S", "-B", str(source / refusal.WORKER)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    before = ledger.snapshot()
+    try:
+        assert process.poll() is None
+        with pytest.raises(ValueError, match="worker still active"):
+            ledger.close_after_source_refusal(ticket, record)
+        assert ledger.snapshot() == before
+    finally:
+        process.communicate(input=b"", timeout=3)
+    assert process.returncode == 2
+
+
+def test_existing_child_link_keeps_parent_held(tmp_path, historical_source):
+    ledger, ticket, output, source = incident(tmp_path, historical_source)
+    record = resolution(ledger, ticket, output, source)
+    before = ledger.snapshot()
+    # Exercise the existing terminal guard without inventing a valid Auth child
+    # allocation: this campaign has no authorized child producer.
+    state = copy.deepcopy(before)
+    state["reservations"][ticket["reservation"]]["recoveryChildren"] = [
+        "synthetic-child"
+    ]
+    with pytest.raises(ValueError, match="recovery child"):
+        ledger._terminal_row(
+            state,
+            ticket,
+            record,
+            digest_key="sourceRefusalRecordDigest",
+            final="closed-after-escalation",
+        )
+    assert ledger.snapshot() == before
+
+
+def test_replay_rechecks_immutable_history_even_after_retirement(
+    tmp_path, historical_source
+):
+    ledger, ticket, output, source = incident(tmp_path, historical_source)
+    record = resolution(ledger, ticket, output, source)
+    ledger.close_after_source_refusal(ticket, record)
+    before = ledger.snapshot()
+    path = output / "responsibility/0001.json"
+    path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="proof differs"):
+        ledger.close_after_source_refusal(ticket, record)
+    assert ledger.snapshot() == before
+
+
+def test_receipt_cannot_name_another_gate_even_with_a_fresh_proposal(
+    tmp_path, historical_source
+):
+    import credential_source_refusal as refusal
+
+    ledger, ticket, output, source = incident(tmp_path, historical_source)
+    path = output / "receipt.json"
+    receipt = json.loads(path.read_bytes())
+    receipt["gateDigest"] = "0" * 64
+    path.write_text(json.dumps(receipt))
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="failure receipt"):
+        refusal.prepare_resolution(
+            ticket=ticket,
+            receipt_path=path,
+            source_root=source,
+            approval_path=output.parent / "approval.json",
+        )
     assert ledger.snapshot() == before

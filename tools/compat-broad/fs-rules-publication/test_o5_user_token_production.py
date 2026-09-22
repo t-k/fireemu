@@ -64,6 +64,9 @@ class _ProducerHandler(_FixtureHandler):
     setup_account_order: ClassVar[list[str]] = []
     fail_setup_after: ClassVar[int | None] = None
     malformed_setup_failure = False
+    documents: ClassVar[dict] = {}
+    account_state: ClassVar[dict] = {}
+    observation_index = 0
 
     def do_any(self) -> None:
         size = int(self.headers.get("Content-Length", "0"))
@@ -109,6 +112,7 @@ class _ProducerHandler(_FixtureHandler):
                 "fields": body["fields"],
                 "updateTime": "2026-09-22T00:00:00Z",
             }
+            self.__class__.documents[body["name"]] = dict(payload)
         elif path.startswith("/v1/accounts:signUp?key="):
             email = body.get("email")
             ref = next(
@@ -128,6 +132,7 @@ class _ProducerHandler(_FixtureHandler):
                 ref = remaining[0]
             uid = "uid-" + str(ref)
             self.__class__.setup_uids[str(ref)] = uid
+            self.__class__.account_state[uid] = {"localId": uid, "disabled": False}
             account = next(
                 row for row in self._plan["ownedAccounts"] if row["ref"] == ref
             )
@@ -142,6 +147,11 @@ class _ProducerHandler(_FixtureHandler):
                 "expiresIn": "3600",
             }
         elif "/v1/projects/" in path and "/accounts:update" in path:
+            account_state = self.__class__.account_state[body["localId"]]
+            if "disableUser" in body:
+                account_state["disabled"] = body["disableUser"]
+            if "validSince" in body:
+                account_state["validSince"] = str(body["validSince"])
             payload = {"localId": body["localId"]}
         elif path.startswith("/v1/accounts:signInWithPassword?key="):
             ref = next(
@@ -212,92 +222,63 @@ class _ProducerHandler(_FixtureHandler):
                     },
                 }
         elif "/documents:commit" in path:
-            payload = {
-                "status": "OK",
-                "httpStatus": 200,
-                "complete": True,
-                "documentPresent": True,
-                "fields": {},
-            }
-        elif "/documents/" in path:
-            if self.command == "DELETE":
-                self.__class__.recovered_documents.add(path.split("?", 1)[0])
-                payload = {
-                    "status": "OK",
-                    "httpStatus": 200,
-                    "complete": True,
-                    "documentPresent": False,
-                }
-            elif "fixture-admin" in self.headers.get("Authorization", ""):
-                present = (
-                    path.split("?", 1)[0] not in self.__class__.recovered_documents
+            row = self._plan["observation"][self.__class__.observation_index]
+            self.__class__.observation_index += 1
+            assert row["method"] == "commit"
+            if row["expect"]["status"] == "PERMISSION_DENIED":
+                status, payload = (
+                    403,
+                    {"error": {"code": 403, "status": "PERMISSION_DENIED"}},
                 )
-                payload = {
-                    "status": "OK",
-                    "httpStatus": 200,
-                    "complete": True,
-                    "documentPresent": present,
-                }
-                if present:
-                    payload["version"] = "fixture-version"
             else:
+                results = []
+                for write in body["writes"]:
+                    document = write["update"]
+                    self.__class__.documents[document["name"]] = {
+                        **document,
+                        "updateTime": "2026-09-22T00:00:01Z",
+                    }
+                    results.append({"updateTime": "2026-09-22T00:00:01Z"})
                 payload = {
-                    "status": "OK",
-                    "httpStatus": 200,
-                    "complete": True,
-                    "documentPresent": True,
-                    "fields": {},
+                    "writeResults": results,
+                    "commitTime": "2026-09-22T00:00:01Z",
                 }
+        elif "/documents/" in path:
+            name = path.split("?", 1)[0].removeprefix("/v1/")
+            if self.command == "DELETE":
+                self.__class__.documents.pop(name, None)
+                payload = {}
+            else:
+                expected = "OK"
+                if "fixture-admin" not in self.headers.get("Authorization", ""):
+                    row = self._plan["observation"][self.__class__.observation_index]
+                    self.__class__.observation_index += 1
+                    assert row["method"] == "get" and name in row["resources"]
+                    expected = row["expect"]["status"]
+                if expected != "OK":
+                    status = {
+                        "PERMISSION_DENIED": 403,
+                        "UNAUTHENTICATED": 401,
+                        "NOT_FOUND": 404,
+                    }[expected]
+                    payload = {"error": {"code": status, "status": expected}}
+                elif name not in self.__class__.documents:
+                    status, payload = (
+                        404,
+                        {"error": {"code": 404, "status": "NOT_FOUND"}},
+                    )
+                else:
+                    payload = self.__class__.documents[name]
         elif "/accounts:" in path:
             local_id = body.get("localId") if isinstance(body, dict) else None
             if isinstance(local_id, list):
-                local_id = local_id[0] if local_id else "fixture-uid"
-            principal_delete = (
-                path.endswith(":delete")
-                and str(local_id).removeprefix("uid-") == "deleted-g"
-                and str(local_id) not in self.__class__.deleted_accounts
-            )
-            if path.endswith(":update") or principal_delete:
-                ref = str(local_id).removeprefix("uid-")
-                action = (
-                    "revoke"
-                    if "validSince" in body
-                    else "disable"
-                    if body.get("disableUser")
-                    else "delete"
-                )
-                if action == "delete":
-                    self.__class__.deleted_accounts.add(str(local_id))
-                payload = {
-                    "status": "OK",
-                    "httpStatus": 200,
-                    "complete": True,
-                    "action": action,
-                    "authTime": 1,
-                    "validSince": body.get("validSince"),
-                    "present": action != "delete",
-                    "disabled": None if action == "delete" else action == "disable",
-                    "uidFingerprint": digest(
-                        ["uid", self._plan["nonce"], "production", ref]
-                    )[:16],
-                }
-                raw = json.dumps(payload, separators=(",", ":")).encode()
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-                return
+                local_id = local_id[0] if local_id else None
             if path.endswith(":delete"):
-                self.__class__.deleted_accounts.add(str(local_id))
-            absent = str(local_id) in self.__class__.deleted_accounts
-            payload = {
-                "status": "OK",
-                "httpStatus": 200,
-                "complete": True,
-                "accountPresent": not absent,
-                "uid": local_id if not absent else None,
-            }
+                self.__class__.account_state.pop(local_id, None)
+                payload = {}
+            else:
+                account = self.__class__.account_state.get(local_id)
+                payload = {"users": [account] if account is not None else []}
         else:
             payload = {"complete": True, "status": "OK"}
         raw = json.dumps(payload, separators=(",", ":")).encode()
@@ -384,6 +365,9 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
     _ProducerHandler.setup_uids = {}
     _ProducerHandler.requests = []
     _ProducerHandler.fail_setup_after = None
+    _ProducerHandler.documents = {}
+    _ProducerHandler.account_state = {}
+    _ProducerHandler.observation_index = 0
     server = _producer_server()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -440,7 +424,7 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
         }
         ticket = ledger.reserve(envelope, claim, gate_plan)
         shared_gate.create(gate_path, gate_plan)
-        gate = shared_gate.Gate(gate_path, plan["campaignId"])
+        gate = shared_gate.Gate(gate_path, "rules-management")
         binding, binding_digest = remote.worker_binding()
         packet = {
             "approval": bindings["approval"],
@@ -507,27 +491,21 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
         )
         assert bundle["abort"] is None
         assert len(bundle["rows"]) == 33
-        assert len(proofs) == 7
+        assert len(bundle["acquisition"]["principals"]) == 7
         assert bundle["productionExecuted"] is False
         assert bundle["budget"]["observationSpent"] == 33
-        # The compiler reserves three recovery slots per account. The deleted-g
-        # principal action already proves absence, so cleanup correctly spends
-        # one typed lookup slot instead of issuing a redundant delete pair.
-        assert bundle["budget"]["recoverySpent"] == 61
+        # Two atomic-denied create targets and the action-deleted account have
+        # typed terminal dispositions, so their nine recovery slots are skipped.
+        assert bundle["budget"]["recoverySpent"] == 54
         assert bundle["budget"]["principalActionSpent"] == 3
-        assert len(gate.snapshot()["managementUsed"]) == 42
+        assert len(gate.snapshot()["managementUsed"]) == 135
+        assert len(gate.snapshot()["managementSkipped"]) == 9
+        assert len(_ProducerHandler.requests) == 135
         assert bundle["setup"]["recordingComplete"] is True
         assert bundle["setup"]["requestCount"] == 19
         assert all(
             "idToken" not in receipt and "password" not in repr(receipt)
             for receipt in bundle["setup"]["receipts"]
-        )
-        assert bundle["transport"]["receipts"] == 97
-        assert (
-            bundle["budget"]["observationSpent"]
-            + bundle["budget"]["recoverySpent"]
-            + bundle["budget"]["principalActionSpent"]
-            == 97
         )
         assert bundle["cleanup"]["cleanupComplete"] is True
         assert ledger.snapshot()["reservations"]

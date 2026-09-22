@@ -59,6 +59,45 @@ from test_o5_user_token_collector_bound import (
 NONCE = "a" * 32
 
 
+@pytest.mark.parametrize("dimension", ["requests", "costMicrousd"])
+def test_whole_schedule_ledger_reserve_rejects_shortfall_without_state_change(
+    tmp_path, dimension
+):
+    plan = lane.plan_compiler(NONCE)
+    compiled = lane.gate_plan(plan)
+    ledger = Ledger.create(tmp_path / "private-ledger")
+    now = time.time()
+    limits = {"requests": 144, "accounts": 7, "resources": 14, "costMicrousd": 144}
+    limits[dimension] -= 1
+    envelope = {
+        "permissionDigest": digest({"kind": "local-rules-budget-test"}),
+        "issuedAt": now - 1,
+        "expiresAt": now + 1200,
+        "limits": limits,
+        "concurrency": 1,
+        "scopes": lane.lock_scopes(plan),
+    }
+    claim = {
+        "campaignId": CAMPAIGN,
+        "manifestDigest": digest(plan),
+        "nonceDigest": digest(plan["nonce"]),
+        "gatePath": str((tmp_path / "gate").resolve()),
+        "gatePlanDigest": digest(compiled),
+        "locks": lane.lock_scopes(plan),
+        "budget": dict(limits),
+        "durationSeconds": 600,
+    }
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="sub-budget"):
+        ledger.reserve(envelope, claim, compiled)
+    assert ledger.snapshot() == before
+    assert not (tmp_path / "gate").exists()
+    envelope["limits"][dimension] += 1
+    claim["budget"][dimension] += 1
+    ticket = ledger.reserve(envelope, claim, compiled)
+    assert ticket["claimDigest"] == digest(claim)
+
+
 def test_closed_schedule_accounts_for_every_wire_exchange_and_one_cleanup(tmp_path):
     plan = lane.plan_compiler(NONCE)
     compiled = lane.gate_plan(plan)
@@ -87,6 +126,10 @@ def test_closed_schedule_accounts_for_every_wire_exchange_and_one_cleanup(tmp_pa
 def test_cleanup_dependencies_bind_only_compiled_creation_and_mutation_slots():
     plan = lane.plan_compiler(NONCE)
     compiled = lane.gate_plan(plan)
+    assert compiled["rulesCompilerSources"] == {
+        name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
+        for name in ("o5_user_token_case.py", "o5_user_token_campaign.py")
+    }
     contract = compiled["rulesManagementContract"]
     subjects = {subject["id"]: subject for subject in contract["subjects"]}
     assert len(subjects) == 21

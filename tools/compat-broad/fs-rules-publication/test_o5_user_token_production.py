@@ -472,7 +472,11 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
             assert "uid-owner-a" not in _ProducerHandler.account_state
             assert gate.snapshot()["total"] == len(_ProducerHandler.requests) == 5
             assert gate.snapshot()["recovery"] == 3
-            assert ledger.snapshot()["reservations"]
+            assert gate.snapshot()["jobs"]["rules-management"]["pid"] == os.getpid()
+            assert (
+                ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+                == "held"
+            )
             return
         assert bundle["recordingComplete"] is True, repr(
             {
@@ -519,7 +523,10 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
             for receipt in bundle["setup"]["receipts"]
         )
         assert bundle["cleanup"]["cleanupComplete"] is True
-        assert ledger.snapshot()["reservations"]
+        assert (
+            ledger.snapshot()["reservations"][ticket["reservation"]]["state"]
+            == "released"
+        )
     finally:
         server.shutdown()
         server.server_close()

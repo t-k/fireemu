@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 import time
 from collections.abc import Callable
@@ -1007,6 +1008,13 @@ def run_bound_collection(
         journal_path = Path(gate.path).with_suffix(".ownership.jsonl")
     if Path(journal_path).exists():
         raise ValueError("fresh ownership journal required")
+    if gate.job != "rules-management":
+        raise ValueError("canonical Rules management job required")
+    job_pid = gate.snapshot()["jobs"][gate.job]["pid"]
+    if job_pid is None:
+        gate.claim()
+    elif job_pid != os.getpid():
+        raise ValueError("Rules job belongs to another worker")
     journal = open_ownership_journal(
         journal_path, run_id=run_id, plan_digest=plan["planDigest"]
     )
@@ -1139,6 +1147,14 @@ def run_bound_collection(
         "requestCount": len(setup_receipts),
         "receipts": setup_receipts,
     }
+    if (
+        bundle.get("recordingComplete") is True
+        and bundle.get("cleanup", {}).get("cleanupComplete") is True
+        and not journal.failures
+    ):
+        gate.finish()
+        ledger.finish(ticket)
+        bundle["reservationReleased"] = True
     return bundle
 
 

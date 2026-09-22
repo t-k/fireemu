@@ -279,6 +279,44 @@ def test_artifact_binding_rejects_launch_replacement_after_path_recheck(
         artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 
+def test_artifact_binding_rejects_launch_replacement_after_final_stat(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    source.write_bytes(b"source")
+    launch.write_bytes(b"source")
+    receipt = {
+        "artifactSha256": __import__("hashlib").sha256(b"source").hexdigest(),
+        "inputs": {"crates/x.rs": "x"},
+        "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fireemu",
+            "--message-format=json",
+        ],
+        "exitCode": 0,
+    }
+    original_stat = owned_runner.os.stat
+    launch_stats = 0
+
+    def replace_after_final_stat(path, *args, **kwargs):
+        nonlocal launch_stats
+        result = original_stat(path, *args, **kwargs)
+        if Path(path) == launch:
+            launch_stats += 1
+            if launch_stats == 2:
+                launch.unlink()
+                launch.hardlink_to(source)
+        return result
+
+    monkeypatch.setattr(owned_runner.os, "stat", replace_after_final_stat)
+    with pytest.raises(ValueError, match="hardlink|before use"):
+        artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
+
+
 def test_owned_runner_refuses_ambient_configuration_and_remote_endpoints():
     validate_config(CONFIG)
     for extra in [{"profile": "emulator"}, {"firebaseJson": "other.json"}]:

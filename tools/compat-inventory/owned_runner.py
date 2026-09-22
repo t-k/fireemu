@@ -260,14 +260,6 @@ def artifact_binding(
             f"artifact binding {role} path changed while reading",
         )
         try:
-            final_resolved = path.resolve(strict=True)
-        except OSError as exc:
-            raise ValueError(f"artifact binding {role} path disappeared") from exc
-        require(
-            final_resolved == path.absolute(),
-            f"artifact binding {role} path must be canonical and must not use a symlink parent",
-        )
-        try:
             final = os_module.stat(path, follow_symlinks=False)
         except OSError as exc:
             raise ValueError(f"artifact binding {role} path disappeared") from exc
@@ -276,6 +268,28 @@ def artifact_binding(
             and final.st_nlink == 1
             and identity(final) == identity(after),
             f"artifact binding {role} path changed after verification",
+        )
+        try:
+            bound_resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path disappeared") from exc
+        require(
+            bound_resolved == path.absolute(),
+            f"artifact binding {role} path must be canonical and must not use a symlink parent",
+        )
+        try:
+            bound_descriptor = os_module.open(path, flags)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path is unavailable") from exc
+        try:
+            bound = os_module.fstat(bound_descriptor)
+        finally:
+            os_module.close(bound_descriptor)
+        require(
+            stat_module.S_ISREG(bound.st_mode)
+            and bound.st_nlink == 1
+            and identity(bound) == identity(after),
+            f"artifact binding {role} path changed before use",
         )
         return resolved, sha(b"".join(chunks)), (after.st_dev, after.st_ino)
 

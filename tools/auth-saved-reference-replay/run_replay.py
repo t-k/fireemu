@@ -10,15 +10,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from replay import CORPORA, digest, file_digest, require
+from replay import CORPORA, OWNED_RUNNERS, digest, file_digest, require
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNNERS = {
-    "auth-basic-v2": ROOT / "tools/auth-basic-v2/auth_v2_owned.py",
-    "auth-profile": ROOT / "tools/auth-profile/profile_owned.py",
-    "auth-display-name": ROOT / "tools/auth-display-name/display_name_owned.py",
-    "auth-password": ROOT / "tools/auth-password/password_owned.py",
-}
+RUNNERS = OWNED_RUNNERS
 
 
 def load_runner(path: Path):
@@ -37,7 +32,10 @@ def load_runner(path: Path):
 
 def run(output_root: Path) -> dict:
     os_module = __import__("os")
-    require(not output_root.exists(), "output root must not already exist")
+    require(
+        not os_module.path.lexists(output_root),
+        "output root must not already exist",
+    )
     output_root = output_root.resolve()
     output_root.mkdir(mode=0o700)
     # Import lazily so contract/evaluator tests do not build the Rust artifact.

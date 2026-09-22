@@ -40,6 +40,13 @@ CORPORA = {
         "probe": ROOT / "tools/auth-password/password_recorder.py",
     },
 }
+OWNED_RUNNERS = {
+    "auth-basic-v2": ROOT / "tools/auth-basic-v2/auth_v2_owned.py",
+    "auth-profile": ROOT / "tools/auth-profile/profile_owned.py",
+    "auth-display-name": ROOT / "tools/auth-display-name/display_name_owned.py",
+    "auth-password": ROOT / "tools/auth-password/password_owned.py",
+}
+OWNED_RUNNER_HELPER = ROOT / "tools/compat-inventory/owned_runner.py"
 SOURCE_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 BUILD_COMMAND = ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
@@ -132,6 +139,20 @@ def load_spec() -> dict[str, Any]:
         path = ROOT / section["tool"]
         require(relative_spec_path(path) == section["tool"], "replay tool path escaped root")
         require(file_digest(path) == section["toolSha256"], f"replay tool hash mismatch: {path}")
+    owned_runners = runner.get("ownedRunners")
+    require(
+        isinstance(owned_runners, list)
+        and [entry.get("id") for entry in owned_runners] == list(OWNED_RUNNERS),
+        "owned runner order changed",
+    )
+    for entry in owned_runners:
+        path = OWNED_RUNNERS[entry["id"]]
+        require(entry.get("tool") == relative_spec_path(path), f"{entry['id']}: owned runner path changed")
+        require(file_digest(path) == entry.get("toolSha256"), f"{entry['id']}: owned runner hash mismatch")
+    helper = runner.get("ownedRunnerHelper")
+    require(isinstance(helper, dict), "owned runner helper binding missing")
+    require(helper.get("tool") == relative_spec_path(OWNED_RUNNER_HELPER), "owned runner helper path changed")
+    require(file_digest(OWNED_RUNNER_HELPER) == helper.get("toolSha256"), "owned runner helper hash mismatch")
     entries = spec.get("corpora")
     require(isinstance(entries, list) and [entry.get("id") for entry in entries] == list(CORPORA), "replay corpus order changed")
     for entry in entries:
@@ -295,14 +316,6 @@ def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: 
             f"artifact binding {role} path changed while reading",
         )
         try:
-            final_canonical = path.resolve(strict=True)
-        except OSError as exc:
-            raise ValueError(f"artifact binding {role} path disappeared") from exc
-        require(
-            final_canonical == path,
-            f"artifact binding {role} path must be canonical and must not use a symlink parent",
-        )
-        try:
             final = os_module.stat(path, follow_symlinks=False)
         except OSError as exc:
             raise ValueError(f"artifact binding {role} path disappeared") from exc
@@ -311,6 +324,28 @@ def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: 
             and final.st_nlink == 1
             and identity(final) == identity(after),
             f"artifact binding {role} path changed after verification",
+        )
+        try:
+            bound_canonical = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path disappeared") from exc
+        require(
+            bound_canonical == path,
+            f"artifact binding {role} path must be canonical and must not use a symlink parent",
+        )
+        try:
+            bound_descriptor = os_module.open(path, flags)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path is unavailable") from exc
+        try:
+            bound = os_module.fstat(bound_descriptor)
+        finally:
+            os_module.close(bound_descriptor)
+        require(
+            stat_module.S_ISREG(bound.st_mode)
+            and bound.st_nlink == 1
+            and identity(bound) == identity(after),
+            f"artifact binding {role} path changed before use",
         )
         return (
             hashlib.sha256(b"".join(chunks)).hexdigest(),

@@ -145,6 +145,13 @@ def test_replay_spec_binds_runtime_to_the_run_manifest():
     assert "sourceCommit" not in spec
 
 
+def test_run_rejects_dangling_output_root_symlink(tmp_path):
+    output_root = tmp_path / "output-alias"
+    output_root.symlink_to(tmp_path / "missing-output")
+    with pytest.raises(ValueError, match="output root must not already exist"):
+        run_replay.run(output_root)
+
+
 def test_manifest_requires_durable_artifact_path_and_hash_binding(tmp_path):
     bundle, _source = write_complete_failed_bundle(tmp_path)
     manifest_path = bundle / "run-manifest.json"
@@ -311,6 +318,31 @@ def test_manifest_rejects_launch_replacement_after_path_recheck(tmp_path, monkey
 
     monkeypatch.setattr(replay.os, "stat", replace_after_launch_stat)
     with pytest.raises(ValueError, match="hardlink|after verification"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_launch_replacement_after_final_stat(tmp_path, monkeypatch):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_stat = replay.os.stat
+    launch_stats = 0
+
+    def replace_after_final_stat(path, *args, **kwargs):
+        nonlocal launch_stats
+        result = original_stat(path, *args, **kwargs)
+        if Path(path) == launch_path:
+            launch_stats += 1
+            if launch_stats == 2:
+                launch_path.unlink()
+                launch_path.hardlink_to(source_path)
+        return result
+
+    monkeypatch.setattr(replay.os, "stat", replace_after_final_stat)
+    with pytest.raises(ValueError, match="hardlink|before use"):
         validate_artifact_binding(
             manifest["build"], manifest["artifactSha256"], bundle
         )

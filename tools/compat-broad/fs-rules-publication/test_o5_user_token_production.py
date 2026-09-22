@@ -34,6 +34,7 @@ from test_o5_user_token_descriptor import synthetic
 from test_o5_user_token_remote_transport import (
     _fixture_capability,
     _fixture_proofs,
+    _fixture_token,
     _FixtureHandler,
     account_bindings,
 )
@@ -124,9 +125,17 @@ class _ProducerHandler(_FixtureHandler):
                 ref = remaining[0]
             uid = "uid-" + str(ref)
             self.__class__.setup_uids[str(ref)] = uid
+            account = next(
+                row for row in self._plan["ownedAccounts"] if row["ref"] == ref
+            )
             payload = {
                 "localId": uid,
-                "idToken": "setup-token-" + str(ref),
+                "idToken": _fixture_token(
+                    uid,
+                    "anonymous" if account["kind"] == "anonymous" else "password",
+                    account["tenant"],
+                    {},
+                ),
                 "expiresIn": "3600",
             }
         elif "/v1/projects/" in path and "/accounts:update" in path:
@@ -139,7 +148,16 @@ class _ProducerHandler(_FixtureHandler):
             )
             payload = {
                 "localId": self.__class__.setup_uids[ref],
-                "idToken": "setup-token-owner-a",
+                "idToken": _fixture_token(
+                    self.__class__.setup_uids[ref],
+                    "password",
+                    None,
+                    next(
+                        row["claims"]
+                        for row in self._plan["ownedAccounts"]
+                        if row["ref"] == ref
+                    ),
+                ),
                 "expiresIn": "3600",
             }
         elif path.startswith("/v1/accounts:"):
@@ -620,6 +638,12 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
                 assert handoff["private"] is private_handoffs[ref]
                 assert handoff["event"] in snapshot["managementEvents"]
             assert identity_handoffs["owner-a"]["event"]["id"].endswith("/signin")
+            proofs = bridge.setup_identity_proofs(
+                plan, gate, identity_handoffs, fixture_origin=origin
+            )
+            assert set(proofs) == set(private_handoffs)
+            assert all(proof.trusted() for proof in proofs.values())
+            assert len(_ProducerHandler.requests) == 19
             assert all(state["phase"] == "acknowledged" for state in ownership.values())
             for account in plan["ownedAccounts"]:
                 assert ownership[account["ref"]]["tenantId"] == account.get("tenant")

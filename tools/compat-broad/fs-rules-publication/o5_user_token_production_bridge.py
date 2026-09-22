@@ -28,6 +28,7 @@ from o5_user_token_collector import (
     open_ownership_journal,
 )
 from o5_user_token_descriptor import CAMPAIGN, collector, gate_plan
+from o5_user_token_identity_proof import mint_acknowledged_setup_proof
 from o5_user_token_remote_transport import (
     adapt_setup_result,
     make_transport,
@@ -381,6 +382,50 @@ def run_bound_setup(
                 "uid": receipt["localId"],
             }
     return receipts
+
+
+def setup_identity_proofs(plan, gate, handoffs, *, fixture_origin=None):
+    """Mint identities solely from acknowledged setup, without another exchange."""
+    accounts = {account["ref"]: account for account in plan["ownedAccounts"]}
+    if set(handoffs) != set(accounts):
+        raise ValueError("complete acknowledged setup identities required")
+    state = gate.snapshot()
+    proofs = {}
+    for ref, account in accounts.items():
+        handoff = handoffs[ref]
+        event = handoff["event"]
+        suffix = "signin" if account["claims"] else "signup"
+        if event["id"] != f"observation:setup/account/{ref}/{suffix}":
+            raise ValueError("final compiled identity handoff required")
+        token, _, request_digest = handoff["private"].proof_material()
+        acknowledgment = {
+            "kind": "setup-ack",
+            "principalRef": ref,
+            "uid": handoff["receipt"].local_id,
+            "tenant": account["tenant"],
+            "tokenHash": hashlib.sha256(token.encode()).hexdigest(),
+            "requestDigest": request_digest,
+            "responseDigest": event["responseDigest"],
+            "eventDigest": digest(event),
+            "planDigest": state["planDigest"],
+            "nonce": plan["nonce"],
+            "slotId": event["id"],
+        }
+        proofs[ref] = mint_acknowledged_setup_proof(
+            ref,
+            private_handoff=handoff["private"],
+            setup_receipt=handoff["receipt"],
+            gate_authority=gate,
+            gate_acknowledgment=acknowledgment,
+            expected_provider="anonymous"
+            if account["kind"] == "anonymous"
+            else "password",
+            expected_tenant=account["tenant"],
+            expected_claims=account["claims"],
+            request_digest=request_digest,
+            fixture_origin=fixture_origin,
+        )
+    return proofs
 
 
 def validate_compiled_accounting(plan: dict[str, Any]) -> dict[str, int]:

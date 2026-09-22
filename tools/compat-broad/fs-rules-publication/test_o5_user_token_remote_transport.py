@@ -456,6 +456,15 @@ def test_recovery_transport_requires_nonempty_sealed_partial_proofs():
         )
 
 
+def test_principal_action_readback_is_a_separate_typed_request():
+    plan = {"campaignId": remote.CAMPAIGN, "project": "fireemu-35fe6", "database": "(default)", "nonce": "a" * 32, "tenant": "tenant1234", "ownedAccounts": [{"ref": "owner-a", "tenant": None}]}
+    operation = {"kind": "principal-action-readback", "phase": "principal", "principalRef": "owner-a", "credentialRef": "administrator", "credentialClass": "administrator"}
+    request = remote.prepare_request(plan, operation, credentials={"administrator": "fixture-admin"}, account_bindings={"owner-a": {"uid": "fresh-uid", "tenant": None}})
+    assert request["route"] == "principal-action-readback"
+    assert request["path"] == "/v1/projects/fireemu-35fe6/accounts:lookup"
+    assert request["body"] == {"localId": ["fresh-uid"]}
+
+
 def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
     item = {
         "id": "account/owner-a/signin",

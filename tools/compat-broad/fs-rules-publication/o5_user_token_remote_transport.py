@@ -53,7 +53,7 @@ _RULESET_NAME = re.compile(
 _RELEASE_NAME = re.compile(
     r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$"
 )
-_WORKER_SHA256 = "437c7c9fb1796dca76bd0d81b4d50c690709bc219b05917b238a14461ff9e586"
+_WORKER_SHA256 = "cea85b4d407eaf6e31b0894bd1783f0bde7086bf3b760f4ed5efdcee48f7fcb6"
 _OWNED_CHILDREN: set[int] = set()
 
 
@@ -802,6 +802,21 @@ def _principal(
     }
 
 
+def _principal_readback(
+    plan: dict[str, Any], operation: dict[str, Any], credentials: dict[str, Any], account_bindings: dict[str, Any] | None
+) -> dict[str, Any]:
+    required = {"kind", "phase", "principalRef", "credentialRef", "credentialClass"}
+    if set(operation) != required or operation.get("kind") != "principal-action-readback" or operation.get("phase") != "principal" or operation["credentialRef"] != "administrator" or operation["credentialClass"] != "administrator":
+        raise ValueError("principal readback shape refused")
+    ref = operation["principalRef"]
+    account = next((entry for entry in plan.get("ownedAccounts", []) if isinstance(entry, dict) and entry.get("ref") == ref), None)
+    bound = (account_bindings or {}).get(ref)
+    if not isinstance(account, dict) or not isinstance(bound, dict) or not isinstance(bound.get("uid"), str) or bound.get("tenant") != account.get("tenant"):
+        raise ValueError("principal readback binding required")
+    token = _credential(credentials, "administrator", "administrator")
+    return {"service": "identity", "route": "principal-action-readback", "origin": IDENTITY_ORIGIN, "path": _account_path(account.get("tenant"), "lookup"), "method": "POST", "headers": _headers(token), "body": {"localId": [bound["uid"]]}}
+
+
 def _recovery(
     plan: dict[str, Any],
     operation: dict[str, Any],
@@ -922,6 +937,8 @@ def prepare_request(
         return _rules_route(plan, operation, credentials)
     if operation.get("kind") == "principal-action":
         return _principal(plan, operation, credentials, account_bindings)
+    if operation.get("kind") == "principal-action-readback":
+        return _principal_readback(plan, operation, credentials, account_bindings)
     if operation.get("phase") == "recovery":
         return _recovery(
             plan, operation, credentials, nonce=nonce, account_bindings=account_bindings

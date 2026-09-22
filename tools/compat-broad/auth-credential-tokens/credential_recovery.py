@@ -83,6 +83,20 @@ def _project(plan: Mapping[str, Any]) -> None:
         _refuse("oracle project binding differs")
 
 
+def _validate_generation(value: Mapping[str, Any], field: str = "generation") -> None:
+    if not isinstance(value, Mapping) or set(value) != {"sourceCommit", "collectorSourceDigest", "sourceDigests"}:
+        _refuse(f"{field} closure required")
+    if not isinstance(value["sourceCommit"], str) or COMMIT.fullmatch(value["sourceCommit"]) is None:
+        _refuse(f"{field} source commit required")
+    _sha(value["collectorSourceDigest"], f"{field} collector")
+    if not isinstance(value["sourceDigests"], Mapping) or not value["sourceDigests"]:
+        _refuse(f"{field} source closure required")
+    for name, value_hash in value["sourceDigests"].items():
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name):
+            _refuse(f"{field} source name differs")
+        _sha(value_hash, f"{field} source")
+
+
 def _parent_evidence(gate: Mapping[str, Any], job: str, index: int, operation: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
     evidence = {
         "kind": PARENT_EVIDENCE_KIND,
@@ -128,12 +142,18 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
     if receipt.get("failure") is None or receipt.get("postflightComplete") is True:
         _refuse("unresolved parent failure required")
     immutable = parent.get("immutableParent")
-    required_immutable = {"kind", "gateDigest", "gatePlanDigest", "nonce", "resource", "eventIndex", "requestDigest"}
+    required_immutable = {"kind", "gateDigest", "gatePlanDigest", "nonce", "resource", "eventIndex", "requestDigest", "sourceCommit"}
     if not isinstance(immutable, Mapping) or set(immutable) != required_immutable or immutable.get("kind") != "auth-packet05-parent-binding-v1":
         _refuse("immutable packet05 parent binding required")
     _sha(immutable.get("gateDigest"), "parent Gate")
     _sha(immutable.get("gatePlanDigest"), "parent plan")
     _sha(immutable.get("requestDigest"), "parent request")
+    if not isinstance(immutable.get("sourceCommit"), str) or COMMIT.fullmatch(immutable["sourceCommit"]) is None:
+        _refuse("immutable parent source commit required")
+    generation = parent.get("generation")
+    _validate_generation(generation, "parent")
+    if immutable["sourceCommit"] != generation["sourceCommit"]:
+        _refuse("immutable parent source commit changed")
     if immutable["gateDigest"] != digest(gate) or immutable["gatePlanDigest"] != digest(gate_plan) or immutable["nonce"] != nonce or claim.get("gatePlanDigest") != immutable["gatePlanDigest"]:
         _refuse("immutable parent Gate changed")
     operations = plan_job.get("observation")
@@ -148,7 +168,10 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
         _refuse("one uncertain Auth custom create is required")
     event_index, operation = candidates[0]
     expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{nonce}"
-    if operation.get("service") != "auth" or operation.get("method") != "POST" or operation.get("resource") != expected_resource or immutable["resource"] != expected_resource or immutable["eventIndex"] != event_index or immutable["requestDigest"] != digest(operation):
+    expected_parent_path = f"{IDENTITY}/accounts:signInWithCustomToken"
+    expected_parent_body = {"token": "$binding:customToken", "returnSecureToken": True}
+    expected_parent_binds = {"customUid": "localId", "customIdToken": "idToken", "customRefresh": "refreshToken"}
+    if operation.get("service") != "auth" or operation.get("method") != "POST" or operation.get("path") != expected_parent_path or operation.get("form") is not False or operation.get("body") != expected_parent_body or operation.get("binds") != expected_parent_binds or operation.get("owner") is not False or operation.get("resource") != expected_resource or immutable["resource"] != expected_resource or immutable["eventIndex"] != event_index or immutable["requestDigest"] != digest(operation):
         _refuse("parent custom resource binding differs")
     event = next(
         (item for item in gate.get("events", []) if isinstance(item, Mapping) and item.get("job") == parent_job and item.get("phase") == "observation" and item.get("index") == event_index),
@@ -164,6 +187,8 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
         "plan": copy.deepcopy(dict(gate_plan)), "claim": copy.deepcopy(dict(claim)), "gate": copy.deepcopy(dict(gate)),
         "job": parent_job, "eventIndex": event_index, "operation": copy.deepcopy(dict(operation)), "resource": expected_resource,
         "evidence": _parent_evidence(gate, parent_job, event_index, operation, event),
+        "generation": copy.deepcopy(dict(generation)),
+        "sourceCommit": immutable["sourceCommit"],
     }
 
 
@@ -207,8 +232,7 @@ def _provenance(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def _operation(resource: str) -> dict[str, Any]:
     project = resource.split("/")[1]
-    uid = resource.rsplit("/", 1)[1]
-    return {"kind": "auth-custom-uid-lookup", "service": "auth", "method": "POST", "path": f"{IDENTITY}/projects/{project}/accounts:lookup", "body": {"localId": [uid]}, "resource": resource, "precondition": None}
+    return {"kind": "uid-absence", "service": "auth", "method": "POST", "path": f"{IDENTITY}/projects/{project}/accounts:lookup", "body": {"localId": ["$binding:customUid"]}, "account": "custom", "uidBinding": "customUid", "resource": resource, "form": False, "owner": True}
 
 
 def _stable_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
@@ -248,12 +272,12 @@ def _validate_shape(plan: Mapping[str, Any]) -> None:
     if plan.get("operationDigest") != digest(expected) or plan.get("customUid") != resource.rsplit("/", 1)[1] or plan.get("customUidDigest") != digest(plan["customUid"]):
         _refuse("custom UID operation binding differs")
     gate = plan.get("gatePlan")
-    if not isinstance(gate, Mapping) or gate.get("campaignId") != CAMPAIGN or gate.get("nonce") != plan["recoveryNonce"]:
+    if not isinstance(gate, Mapping) or gate.get("campaignId") != CAMPAIGN or gate.get("project") != PROJECT or gate.get("nonce") != plan["recoveryNonce"]:
         _refuse("recovery Gate plan differs")
     job = gate.get("jobs", {}).get(GATE_JOB)
     if gate.get("observationRequests") != 0 or gate.get("dataRequests") != 1 or gate.get("managementRequests") != 0 or gate.get("recoveryRequests") != 1 or gate.get("costMicrousd") != gate.get("requestCostMicrousd") or gate.get("wallSeconds") != plan["deadlineSeconds"] or not isinstance(job, Mapping):
         _refuse("recovery Gate bounds differ")
-    if job.get("observation") != [] or job.get("recovery") != [expected] or job.get("resources") != [resource]:
+    if job.get("observation") != [] or job.get("recovery") != [expected] or job.get("resources") != [resource] or job.get("accountBindings") != {"custom": {"resource": resource, "uidBinding": "customUid"}}:
         _refuse("recovery Gate is not lookup-only")
     schedule = job.get("schedule")
     if not isinstance(schedule, list) or len(schedule) != 1 or schedule[0].get("phase") != "recovery" or schedule[0].get("index") != 0:
@@ -272,14 +296,19 @@ def compile_recovery_plan(parent: Mapping[str, Any], *, recovery_nonce: str, pro
     issued_at = time.time() if now is None else now
     _finite(issued_at, "recovery issue time")
     provenance_value = _provenance(provenance)
-    parent_generation = parent.get("generation")
-    if not isinstance(parent_generation, Mapping) or provenance_value["generation"] != parent_generation:
-        _refuse("parent source generation binding differs")
-    if provenance_value["sourceCommit"] != snapshot["plan"].get("sourceCommit") and parent.get("sourceCommit") not in (None, provenance_value["sourceCommit"]):
-        _refuse("source commit must remain parent-linked")
+    parent_generation = snapshot["generation"]
+    if provenance_value["sourceCommit"] != snapshot["sourceCommit"]:
+        _refuse("source commit must remain immutable-parent-linked")
+    child_generation = provenance_value["generation"]
+    if child_generation == parent_generation or child_generation["sourceCommit"] != parent_generation["sourceCommit"]:
+        _refuse("child source generation must advance parent")
+    parent_sources = parent_generation["sourceDigests"]
+    child_sources = child_generation["sourceDigests"]
+    if any(child_sources.get(name) != value_hash for name, value_hash in parent_sources.items()) or set(child_sources) <= set(parent_sources):
+        _refuse("child source generation must retain and extend parent closure")
     resource = snapshot["resource"]
     operation = _operation(resource)
-    gate_plan = {"campaignId": CAMPAIGN, "nonce": recovery_nonce, "observationRequests": 0, "dataRequests": 1, "managementRequests": 0, "recoveryRequests": 1, "requestCostMicrousd": 1, "costMicrousd": 1, "wallSeconds": deadline_seconds, "jobs": {GATE_JOB: {"observation": [], "recovery": [operation], "resources": [resource], "schedule": [{"phase": "recovery", "index": 0, "seconds": 5.0}]}}}
+    gate_plan = {"campaignId": CAMPAIGN, "project": PROJECT, "nonce": recovery_nonce, "observationRequests": 0, "dataRequests": 1, "managementRequests": 0, "recoveryRequests": 1, "requestCostMicrousd": 1, "costMicrousd": 1, "wallSeconds": deadline_seconds, "jobs": {GATE_JOB: {"observation": [], "recovery": [operation], "resources": [resource], "accountBindings": {"custom": {"resource": resource, "uidBinding": "customUid"}}, "schedule": [{"phase": "recovery", "index": 0, "seconds": 5.0}]}}}
     plan: dict[str, Any] = {"kind": KIND, "campaignId": CAMPAIGN, "operationClass": OPERATION_CLASS, "project": PROJECT, "recoveryNonce": recovery_nonce, "recoveryNonceDigest": digest(recovery_nonce), "issuedAt": issued_at, "deadlineSeconds": deadline_seconds, "deadlineAt": issued_at + deadline_seconds, "budget": copy.deepcopy(CHILD_BUDGET), "parent": {"ticketDigest": digest(parent.get("ticket")), "claimDigest": snapshot["claim"].get("claimDigest", digest(snapshot["claim"])), "planDigest": digest(snapshot["plan"]), "gateDigest": digest(snapshot["gate"]), "eventIndex": snapshot["eventIndex"], "requestDigest": digest(snapshot["operation"]), "resource": resource, "state": "held"}, "customUid": resource.rsplit("/", 1)[1], "customUidDigest": digest(resource.rsplit("/", 1)[1]), "resource": resource, "operationDigest": digest(operation), "operation": operation, "gatePlan": gate_plan, "provenance": provenance_value}
     plan["planDigest"] = digest(_stable_plan(plan))
     _validate_shape(plan)
@@ -343,17 +372,17 @@ def build_child_claim(parent: Mapping[str, Any], plan: Mapping[str, Any], *, per
     snapshot = _parent_snapshot(parent)
     validate_plan(plan, parent)
     authority_plan = _bound_plan(plan, source_binding=source_binding, transport_binding=transport_binding, o7_binding=o7_binding, o8_binding=o8_binding)
+    decision_now = time.time() if now is None else now
+    _finite(decision_now, "child allocation time")
     if not isinstance(o7_binding.get("authority"), Mapping) or not isinstance(o8_binding.get("authority"), Mapping):
         _refuse("fresh O7/O8 authority payload required")
-    validate_authority_bundle(authority_plan, permission=permission, o7=o7_binding["authority"], o8=o8_binding["authority"], now=authority_plan["issuedAt"])
+    validate_authority_bundle(authority_plan, permission=permission, o7=o7_binding["authority"], o8=o8_binding["authority"], now=decision_now)
     if dict(parent_evidence) != snapshot["evidence"]:
         _refuse("parent evidence differs from canonical Gate")
     gate_path = str(Path(gate_path).resolve())
     host = dict(HOST if execution_host is None else execution_host)
     if not _text(owner_identity) or not _text(recovery_owner) or owner_identity == recovery_owner or host != HOST:
         _refuse("exact Auth recovery execution authority required")
-    decision_now = time.time() if now is None else now
-    _finite(decision_now, "child allocation time")
     remaining = authority_plan["deadlineAt"] - decision_now
     if remaining < 1:
         _refuse("recovery deadline expired")
@@ -363,7 +392,7 @@ def build_child_claim(parent: Mapping[str, Any], plan: Mapping[str, Any], *, per
     child_gate_plan["jobs"][GATE_JOB]["schedule"][0]["seconds"] = min(5.0, float(duration))
     resource = authority_plan["resource"]
     locks = [{"key": f"project/{PROJECT}/auth/accounts/{authority_plan['customUid']}", "mode": "WRITE"}]
-    claim = {"kind": CHILD_KIND, "version": 1, "campaignId": CAMPAIGN, "manifestDigest": digest(child_gate_plan), "nonceDigest": authority_plan["recoveryNonceDigest"], "gatePath": gate_path, "gateJob": GATE_JOB, "parentGateJob": snapshot["job"], "gatePlanDigest": digest(child_gate_plan), "parentClaimDigest": snapshot["claim"].get("claimDigest", digest(snapshot["claim"])), "parentPlanDigest": digest(snapshot["plan"]), "parentGateDigest": snapshot["evidence"]["gateDigest"], "parentEvidenceDigest": snapshot["evidence"]["evidenceDigest"], "parentEventIndex": snapshot["eventIndex"], "parentRequestDigest": digest(snapshot["operation"]), "recoveryNonce": authority_plan["recoveryNonce"], "resourceDigest": digest([resource]), "ownedResources": [resource], "locks": locks, "budget": copy.deepcopy(CHILD_BUDGET), "durationSeconds": duration, "generation": copy.deepcopy(parent["generation"]), "ownerIdentity": owner_identity, "recoveryOwner": recovery_owner, "operationClass": OPERATION_CLASS, "readCount": 1, "inspectionCount": 1, "absenceCount": 1, "deleteCount": 0, "expiresAt": authority_plan["deadlineAt"], "executionHost": host, "permissionDigest": digest(permission), "sourceBindingDigest": authority_plan["gatePlan"]["sourceBindingDigest"], "transportBindingDigest": authority_plan["gatePlan"]["transportBindingDigest"], "o7BindingDigest": authority_plan["gatePlan"]["o7BindingDigest"], "o8BindingDigest": authority_plan["gatePlan"]["o8BindingDigest"]}
+    claim = {"kind": CHILD_KIND, "version": 1, "campaignId": CAMPAIGN, "manifestDigest": digest(child_gate_plan), "nonceDigest": authority_plan["recoveryNonceDigest"], "gatePath": gate_path, "gateJob": GATE_JOB, "parentGateJob": snapshot["job"], "gatePlanDigest": digest(child_gate_plan), "parentClaimDigest": snapshot["claim"].get("claimDigest", digest(snapshot["claim"])), "parentPlanDigest": digest(snapshot["plan"]), "parentGateDigest": snapshot["evidence"]["gateDigest"], "parentEvidenceDigest": snapshot["evidence"]["evidenceDigest"], "parentEventIndex": snapshot["eventIndex"], "parentRequestDigest": digest(snapshot["operation"]), "recoveryNonce": authority_plan["recoveryNonce"], "resourceDigest": digest([resource]), "ownedResources": [resource], "locks": locks, "budget": copy.deepcopy(CHILD_BUDGET), "durationSeconds": duration, "generation": copy.deepcopy(authority_plan["provenance"]["generation"]), "ownerIdentity": owner_identity, "recoveryOwner": recovery_owner, "operationClass": OPERATION_CLASS, "readCount": 1, "inspectionCount": 1, "absenceCount": 1, "deleteCount": 0, "expiresAt": authority_plan["deadlineAt"], "executionHost": host, "permissionDigest": digest(permission), "sourceBindingDigest": authority_plan["gatePlan"]["sourceBindingDigest"], "transportBindingDigest": authority_plan["gatePlan"]["transportBindingDigest"], "o7BindingDigest": authority_plan["gatePlan"]["o7BindingDigest"], "o8BindingDigest": authority_plan["gatePlan"]["o8BindingDigest"]}
     envelope = {"permissionDigest": digest(permission), "issuedAt": authority_plan["issuedAt"], "expiresAt": authority_plan["deadlineAt"], "limits": copy.deepcopy(CHILD_BUDGET), "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}/auth/accounts/{authority_plan['customUid']}", "mode": "WRITE"}]}
     authority_plan["gatePlan"] = child_gate_plan
     return claim, envelope, authority_plan
@@ -435,12 +464,14 @@ def execute_lookup(plan: Mapping[str, Any], parent: Mapping[str, Any], *, send: 
     if remaining <= 0:
         _refuse("recovery deadline expired")
     try:
-        status, body = send(copy.deepcopy(validated["operation"]), remaining)
+        wire_operation = copy.deepcopy(validated["operation"])
+        wire_operation["body"] = {"localId": [validated["customUid"]]}
+        status, body = send(wire_operation, remaining)
     except TimeoutError:
         _refuse("lookup timeout")
     except Exception as error:  # noqa: BLE001
         raise RecoveryRefusal(f"lookup transport refused: {type(error).__name__}") from None
-    if clock() > validated["deadlineAt"]:
+    if clock() >= validated["deadlineAt"]:
         _refuse("lookup completed after deadline")
     if not _typed_empty(status, body):
         if type(status) is int and status == 200 and isinstance(body, Mapping) and isinstance(body.get("users"), list):

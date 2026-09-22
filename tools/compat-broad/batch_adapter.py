@@ -38,6 +38,8 @@ HOSTS = {
     "www.googleapis.com",
     "apikeys.googleapis.com",
 }
+MAX_WORKER_STDOUT = 131072
+MAX_WORKER_STDERR = 8192
 
 
 class WorkerProcessError(ValueError):
@@ -59,6 +61,33 @@ def _process_receipt(
         "deadlineExceeded": deadline_exceeded,
         "started": started,
     }
+
+
+def _cleanup_worker(worker, *, termination, deadline_exceeded=False):
+    """Terminate this child and report only state confirmed by wait/poll."""
+    if worker.poll() is None:
+        try:
+            worker.kill()
+        except OSError:
+            pass
+    try:
+        worker.communicate(timeout=1)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        try:
+            worker.kill()
+        except OSError:
+            pass
+        try:
+            worker.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return _process_receipt(
+        pid=worker.pid,
+        returncode=worker.poll(),
+        worker_reaped=worker.poll() is not None,
+        termination=termination,
+        deadline_exceeded=deadline_exceeded,
+    )
 
 
 def _run_worker(payload, timeout, *, include_process_receipt):
@@ -106,13 +135,20 @@ def _run_worker(payload, timeout, *, include_process_receipt):
         if remaining <= 0:
             timed_out = True
             raise subprocess.TimeoutExpired(worker.args, timeout)
-        stdout, _stderr = worker.communicate(input=payload, timeout=remaining)
+        stdout, stderr = worker.communicate(input=payload, timeout=remaining)
     except subprocess.TimeoutExpired:
         timed_out = True
-        worker.kill()
-        # SIGKILL is sent only to this Popen child.  Drain and wait so the
-        # receipt never claims reaping until the OS reports the child exited.
-        stdout, _stderr = worker.communicate()
+        receipt = _cleanup_worker(
+            worker, termination="deadline", deadline_exceeded=True
+        )
+        raise WorkerProcessError("whole request deadline exceeded", receipt) from None
+    except (OSError, ValueError):
+        receipt = _cleanup_worker(worker, termination="exchange-failed")
+        raise WorkerProcessError("bounded worker exchange failed", receipt) from None
+
+    if len(stdout.encode()) > MAX_WORKER_STDOUT or len(stderr.encode()) > MAX_WORKER_STDERR:
+        receipt = _cleanup_worker(worker, termination="output-limit")
+        raise WorkerProcessError("bounded worker output exceeded", receipt) from None
 
     returncode = worker.returncode
     receipt = _process_receipt(

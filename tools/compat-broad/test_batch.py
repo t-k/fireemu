@@ -187,6 +187,7 @@ def test_optional_process_receipt_reports_real_reaped_worker_without_changing_de
     ("worker_source", "returncode", "termination"),
     [
         ("import sys; sys.exit(7)", 7, "exited"),
+        ("import os; os.close(0); raise SystemExit(7)", 7, "exited"),
         ("print('not-json')", 0, "exited"),
     ],
 )
@@ -213,6 +214,29 @@ def test_process_receipt_failures_report_actual_terminal_state(
     assert error.process_receipt["returncode"] == returncode
     assert error.process_receipt["workerReaped"] is True
     assert error.process_receipt["termination"] == termination
+
+
+def test_process_receipt_rejects_unbounded_worker_output_after_reaping(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    (worker_dir / "batch_wire.py").write_text(
+        "import sys; sys.stdout.write('x' * 200000)\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    with pytest.raises(adapter.WorkerProcessError, match="output exceeded") as raised:
+        adapter.wire(
+            "http://127.0.0.1:18081/never",
+            "GET",
+            None,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    assert raised.value.process_receipt["workerReaped"] is True
 
 
 def test_process_receipt_start_failure_does_not_claim_a_worker_was_reaped(

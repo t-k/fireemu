@@ -330,6 +330,7 @@ def _compile_context(
     now: float | None,
     deadline_seconds: int,
     draft: Mapping[str, Any] | None = None,
+    assembly_now: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     canonical_parent, ledger_state = _reconstruct_parent(parent, ledger)
     parent_snapshot = recovery._parent_snapshot(canonical_parent)
@@ -352,14 +353,25 @@ def _compile_context(
             _refuse("persisted recovery draft plan required")
         if review_request.get("planDigest") != plan.get("planDigest") or review_request.get("parentEvidenceDigest") != parent_snapshot["evidence"]["evidenceDigest"]:
             _refuse("persisted recovery draft digest differs")
+        parent_binding = plan.get("parent")
+        canonical_claim = canonical_parent["claim"]
+        canonical_claim_digest = canonical_claim.get("claimDigest", digest(canonical_claim))
+        if (
+            not isinstance(parent_binding, Mapping)
+            or parent_binding.get("ticketDigest") != digest(canonical_parent["ticket"])
+            or parent_binding.get("claimDigest") != canonical_claim_digest
+        ):
+            _refuse("persisted recovery draft parent ticket or claim differs")
         if recovery_nonce is not None and recovery_nonce != plan.get("recoveryNonce"):
             _refuse("persisted recovery draft nonce differs")
-        if now is not None:
-            recovery._finite(now, "draft assembly time")
-            if now < plan.get("issuedAt", now):
-                _refuse("persisted recovery draft is from the future")
-            if now >= plan.get("deadlineAt", now):
-                _refuse("persisted recovery draft expired")
+        draft_now = assembly_now if assembly_now is not None else now
+        if draft_now is None:
+            draft_now = time.time()
+        recovery._finite(draft_now, "draft assembly time")
+        if draft_now < plan.get("issuedAt", draft_now):
+            _refuse("persisted recovery draft is from the future")
+        if draft_now >= plan.get("deadlineAt", draft_now):
+            _refuse("persisted recovery draft expired")
         normalized_provenance = recovery._provenance(provenance)
         if normalized_provenance != plan.get("provenance"):
             _refuse("persisted recovery draft source binding differs")
@@ -450,6 +462,7 @@ def prepare_packet(
             now=now,
             deadline_seconds=deadline_seconds,
             draft=draft,
+            assembly_now=authority_now,
         )
         permission, o7, o8, reviews = _validate_reviewed_authorities(
             plan,

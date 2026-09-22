@@ -1,11 +1,14 @@
+import copy
 import hashlib
 import json
+import os
 import socketserver
 import subprocess
 import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -24,6 +27,56 @@ def test_prepared_final_permission_cannot_omit_terminal_baseline():
         admission._validate_preparation_permission(
             {"kind": "limits-03-prepared-owner-execution-permission-v1"}
         )
+
+
+def test_public_database_identity_keeps_full_baseline_digest_without_private_fields():
+    import limits_03_baseline_prep as prep
+    from batch_contract import database_evidence
+    from broad_contract import digest
+
+    body = {
+        "name": "projects/fireemu-35fe6/databases/(default)",
+        "uid": "fixture-uid",
+        "type": "FIRESTORE_NATIVE",
+        "databaseEdition": "STANDARD",
+        "locationId": "us-central1",
+        "unknownPrivateField": "fixture-private-value",
+    }
+    response = {
+        "status": 200,
+        "complete": True,
+        "workerReaped": True,
+        "bodyKind": "json",
+        "body": body,
+    }
+    public = prep._public_metadata("database", response)["value"]
+    assert public["projectionDigest"] == database_evidence(body)["projectionDigest"]
+    assert set(public["projection"]) == {
+        "name",
+        "uid",
+        "type",
+        "databaseEdition",
+        "locationId",
+    }
+    assert public["identityProjectionDigest"] == digest(public["projection"])
+    assert "fixture-private-value" not in json.dumps(public)
+
+
+def test_private_handoff_rejects_pipe_and_duplicate_json_keys():
+    import limits_03_baseline_prep as prep
+
+    read_fd, write_fd = os.pipe()
+    try:
+        with pytest.raises(ValueError):
+            prep._read_private_json(read_fd)
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+    with tempfile.TemporaryFile() as private:
+        private.write(b'{"kind":1,"kind":2}')
+        private.seek(0)
+        with pytest.raises(ValueError, match="duplicate"):
+            prep._read_private_json(private.fileno())
 
 
 def _approved(tmp_path, *, fixture_origin=None):
@@ -162,7 +215,7 @@ def test_approved_transport_runs_actual_isolated_oauth_and_metadata_workers(tmp_
     import o8_admission
 
     class Handler(socketserver.StreamRequestHandler):
-        seen = []
+        seen: ClassVar[list] = []
 
         def handle(self):
             method, path, _ = self.rfile.readline().decode().split()
@@ -196,6 +249,11 @@ def test_approved_transport_runs_actual_isolated_oauth_and_metadata_workers(tmp_
                 inputs_digest=fixture["inputs"]["inputsDigest"],
                 ledger_root=fixture["ledger_root"],
             )
+            with pytest.raises(ValueError, match="deadline"):
+                capability._transmit(
+                    {"slot": "refresh", "secret": ADC, "deadline": time.monotonic() - 1}
+                )
+            assert Handler.seen == []
             adc = {
                 "type": "authorized_user",
                 "client_id": "fixture-client",
@@ -349,7 +407,16 @@ def test_metadata_packet_rejects_malformed_api_key_readback(tmp_path):
         },
     ]
     with pytest.raises(ValueError):
-        prep._metadata_packet(_permission(), "b" * 32, "ticket", {}, evidence)
+        prep._public_metadata(
+            "key",
+            {
+                "status": 200,
+                "complete": True,
+                "workerReaped": True,
+                "bodyKind": "json",
+                "body": evidence[-1]["value"],
+            },
+        )
 
 
 def test_metadata_packet_rejects_tampered_project_readback():
@@ -386,7 +453,16 @@ def test_metadata_packet_rejects_tampered_project_readback():
         },
     ]
     with pytest.raises(ValueError):
-        prep._metadata_packet(_permission(), "b" * 32, "ticket", {}, evidence)
+        prep._public_metadata(
+            "project",
+            {
+                "status": 200,
+                "complete": True,
+                "workerReaped": True,
+                "bodyKind": "json",
+                "body": evidence[0]["value"],
+            },
+        )
 
 
 def test_preparation_reserves_real_temporary_ledger_and_gate(tmp_path):
@@ -407,6 +483,21 @@ def test_preparation_reserves_real_temporary_ledger_and_gate(tmp_path):
     assert gate_plan["permissionDigest"]
     assert (tmp_path / "run" / "gate" / "state.json").is_file()
     assert allocation["dataDispatchAllowed"] is False
+    before = ledger.snapshot()
+    replay = prep.approve_preparation(**fixture)
+    try:
+        with pytest.raises(ValueError, match="nonce/Gate reuse"):
+            prep.reserve_preparation(
+                fixture["permission"],
+                ledger_root=ledger_root,
+                output=tmp_path / "different-output",
+                capability=replay,
+                inputs=fixture["inputs"],
+            )
+    finally:
+        prep.o8_admission.revoke_production_capability(replay)
+        prep.o8_admission.revoke_production_capability(capability)
+    assert ledger.snapshot() == before
 
     with pytest.raises(ValueError):
         prep.reserve_preparation(
@@ -414,7 +505,11 @@ def test_preparation_reserves_real_temporary_ledger_and_gate(tmp_path):
         )
 
 
-def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path):
+@pytest.mark.parametrize(
+    "fault",
+    [None, "project", "database", "auth", "key", "principal", "key-handoff", "timeout"],
+)
+def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path, fault):
     import limits_03_baseline_prep as prep
 
     database = {
@@ -426,7 +521,7 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path)
     }
 
     class Handler(socketserver.StreamRequestHandler):
-        seen = []
+        seen: ClassVar[list] = []
 
         def handle(self):
             request = self.rfile.readline().decode().split()
@@ -454,17 +549,35 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path)
                     "user_id": "fixture-subject",
                     "scope": prep.campaign.PRINCIPAL_SCOPE,
                 }
+                if fault == "principal":
+                    body["user_id"] = "wrong-subject"
             elif path.startswith("/v1/projects/fireemu-35fe6/databases/"):
-                body = database
+                body = (
+                    {**database, "name": "projects/wrong-project/databases/(default)"}
+                    if fault == "database"
+                    else database
+                )
             elif path.startswith("/v2/keys:lookupKey"):
+                if fault == "timeout":
+                    time.sleep(13)
+                    return
                 body = {
                     "parent": "projects/592603257417/locations/global",
                     "name": "projects/592603257417/locations/global/keys/test",
                 }
+                if fault == "key":
+                    body["name"] = "projects/other/locations/global/keys/test"
             elif path.endswith("/config"):
-                body = {"name": "projects/592603257417/config", "signIn": {}}
+                body = {
+                    "name": "projects/wrong/config"
+                    if fault == "auth"
+                    else "projects/592603257417/config",
+                    "signIn": {},
+                }
             elif path.startswith("/v1/projects/fireemu-35fe6"):
                 body = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+                if fault == "project":
+                    body["projectNumber"] = "1"
             else:
                 body = {"name": "projects/592603257417/config", "signIn": {}}
             encoded = json.dumps(body).encode()
@@ -489,7 +602,9 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path)
                         "kind": "limits-03-preparation-handoff-v1",
                         "permissionDigest": digest(fixture["permission"]),
                         "adc": ADC,
-                        "apiKey": "fixture-key",
+                        "apiKey": "wrong-key"
+                        if fault == "key-handoff"
+                        else "fixture-key",
                     }
                 ).encode()
             )
@@ -501,6 +616,31 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path)
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+    if fault is not None:
+        from reservations import Ledger, task_spent_microusd
+
+        assert packet["completed"] is False
+        assert packet["failed"] is True
+        assert packet["reservationReleased"] is True
+        assert (
+            len(Handler.seen)
+            == {
+                "principal": 2,
+                "project": 3,
+                "database": 4,
+                "auth": 5,
+                "key": 6,
+                "key-handoff": 0,
+                "timeout": 6,
+            }[fault]
+        )
+        state = Ledger(fixture["ledger_root"]).snapshot()
+        assert [row["state"] for row in state["reservations"].values()] == [
+            "aborted-no-data"
+        ]
+        assert task_spent_microusd(state, prep.CAMPAIGN) == 600
+        return
 
     assert packet["completed"] is True
     assert packet["database"]["projectionDigest"]
@@ -532,3 +672,104 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path)
             "fixture-key",
         )
     )
+    assert (
+        prep.retire_preparation(
+            ledger_root=fixture["ledger_root"], output=tmp_path / "run"
+        )
+        == packet
+    )
+    assert len(Handler.seen) == 6
+    _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet)
+
+
+def _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet):
+    import limits_03_admission as admission
+    import limits_03_descriptor as campaign
+    import o8_admission
+    from broad_contract import digest
+    from test_limits_03_o8 import owner_permission
+
+    artifact_digest = hashlib.sha256(fixture["artifact_path"].read_bytes()).hexdigest()
+    plan = campaign.plan_compiler("a" * 32)
+    permission = owner_permission(
+        plan, fixture["inputs"]["sourceCommit"], artifact_digest, campaign.source_map()
+    )
+    receipt_path = (tmp_path / "run" / "receipt.json").resolve()
+    receipt = json.loads(receipt_path.read_bytes())
+    permission.update(
+        kind=admission.PREPARED_PERMISSION_KIND,
+        credentialPrincipal=fixture["permission"]["credentialPrincipal"],
+        databaseProjectionDigest=packet["database"]["projectionDigest"],
+        authConfigDigest=packet["authConfigDigest"],
+        baselinePreparation={
+            "packet": packet,
+            "ticket": receipt["ticket"],
+            "receiptPath": str(receipt_path),
+        },
+    )
+    permission_path = tmp_path / "final-permission.json"
+    permission_path.write_text(json.dumps(permission))
+    inputs = admission.freeze_prepared_inputs(
+        permission_path,
+        plan,
+        source_root=fixture["source_root"],
+        artifact_path=fixture["artifact_path"],
+    )
+    admission.validate_frozen_inputs(inputs)
+    descriptor = admission.descriptor(permission)
+    manifest = {
+        "kind": descriptor.manifest_kind,
+        "inputsDigest": inputs["inputsDigest"],
+    }
+    manifest_bytes = json.dumps(manifest).encode()
+    manifest_path = tmp_path / "final-manifest.json"
+    manifest_path.write_bytes(manifest_bytes)
+    launcher = Path(admission.__file__).with_name("limits_03_o8.py")
+    approval = {
+        **fixture["approval"],
+        "kind": descriptor.approval_kind,
+        "inputsDigest": inputs["inputsDigest"],
+        "permissionDigest": inputs["permissionDigest"],
+        "planDigest": inputs["planDigest"],
+        "nonceDigest": digest(plan["nonce"]),
+        "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "launcherSha256": hashlib.sha256(launcher.read_bytes()).hexdigest(),
+        "windowExpiresAt": time.time() + 4 * descriptor.window_seconds,
+    }
+    binding, binding_digest = campaign.worker_binding()
+    bindings = {
+        "inputs": inputs,
+        "permission": permission,
+        "approval": approval,
+        "manifest": manifest,
+        "manifest_bytes": manifest_bytes,
+        "manifest_path": manifest_path,
+        "ledger_root": fixture["ledger_root"],
+        "artifact_path": fixture["artifact_path"],
+        "launcher_path": launcher,
+        "binding": binding,
+        "binding_digest": binding_digest,
+    }
+    capability = admission.issue_production_capability(**bindings)
+    o8_admission.revoke_production_capability(capability)
+    for damage in ("missing-packet", "modified-packet", "same-nonce", "downgrade"):
+        changed = copy.deepcopy(permission)
+        if damage == "missing-packet":
+            del changed["baselinePreparation"]
+        elif damage == "modified-packet":
+            changed["baselinePreparation"]["packet"]["authConfigDigest"] = "0" * 64
+        elif damage == "same-nonce":
+            changed["nonce"] = packet["nonce"]
+        else:
+            changed["kind"] = campaign.PERMISSION_KIND
+            del changed["baselinePreparation"]
+        altered = copy.deepcopy(inputs)
+        altered["permission"] = changed
+        altered["permissionDigest"] = digest(changed)
+        altered["inputsDigest"] = digest(
+            {key: value for key, value in altered.items() if key != "inputsDigest"}
+        )
+        with pytest.raises(ValueError):
+            admission.issue_production_capability(
+                **{**bindings, "inputs": altered, "permission": changed}
+            )

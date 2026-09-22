@@ -30,7 +30,6 @@ from batch_contract import database_evidence
 from broad_contract import digest
 from limits_03_production import _write_receipt
 from o8_campaign import CampaignDescriptor
-from production_bridge import source_digest
 from production_plan import baseline_preparation_plan
 from reservations import Ledger
 from shared_gate import Gate, create
@@ -85,10 +84,18 @@ def _prep_transport(value, *, binding, binding_digest, capability):
     )
     if duration <= 0:
         raise ValueError("PREP wire deadline expired")
-    from credential_prep import _private_request, private_string
+    from credential_prep import _private_request, build_request, private_string
 
     origin = binding["fixtureOrigin"]
     if slot in ("refresh", "oauth-tokeninfo"):
+        request = build_request("refresh" if slot == "refresh" else "tokeninfo", secret)
+        request_digest = digest(
+            {
+                **request,
+                "body": request["body"].decode("ascii"),
+                "fixtureOrigin": origin,
+            }
+        )
         response = _private_request(
             "refresh" if slot == "refresh" else "tokeninfo",
             secret,
@@ -96,6 +103,7 @@ def _prep_transport(value, *, binding, binding_digest, capability):
             deadline=duration,
         )
         return {
+            "requestDigest": request_digest,
             "status": response.get("status"),
             "complete": response.get("complete") is True,
             "workerReaped": response.get("workerReaped") is True,
@@ -125,15 +133,19 @@ def _prep_transport(value, *, binding, binding_digest, capability):
         route = origin + parsed.path + (("?" + parsed.query) if parsed.query else "")
     from batch_adapter import wire
 
+    headers = {
+        "Authorization": "Bearer " + token,
+        "x-goog-user-project": campaign.PROJECT,
+    }
+    request_digest = digest(
+        {"url": route, "method": "GET", "body": None, "headers": headers}
+    )
     try:
         response = wire(
             route,
             "GET",
             None,
-            {
-                "Authorization": "Bearer " + token,
-                "x-goog-user-project": campaign.PROJECT,
-            },
+            headers,
             local=origin is not None,
             timeout=duration,
             receipt=True,
@@ -141,6 +153,7 @@ def _prep_transport(value, *, binding, binding_digest, capability):
     except ValueError:
         # The bounded host returns/raises only after subprocess.run has waited.
         return {
+            "requestDigest": request_digest,
             "status": None,
             "complete": False,
             "workerReaped": True,
@@ -149,6 +162,7 @@ def _prep_transport(value, *, binding, binding_digest, capability):
         }
     http = response.get("http", {})
     return {
+        "requestDigest": request_digest,
         "status": http.get("status"),
         "complete": http.get("complete") is True,
         "workerReaped": True,
@@ -401,6 +415,17 @@ def _public_metadata(slot, response):
             or body.get("databaseEdition") != "STANDARD"
         ):
             raise ValueError("PREP database identity differs")
+        identity = {
+            key: body[key]
+            for key in ("name", "uid", "databaseEdition", "type", "locationId")
+        }
+        value = {
+            "projection": identity,
+            "projectionDigest": value["projectionDigest"],
+            "identityProjectionDigest": digest(identity),
+            "responseDigest": value["responseDigest"],
+            "contractDigest": value["contractDigest"],
+        }
     elif slot == "auth":
         if body.get("name") != f"projects/{campaign.NUMBER}/config":
             raise ValueError("PREP Auth project differs")
@@ -426,89 +451,13 @@ def _public_metadata(slot, response):
     }
 
 
-def _metadata_packet(permission, nonce, ticket, allocation, evidence):
-    if len(evidence) != 4 or [row.get("id") for row in evidence] != [
-        "observation:project",
-        "observation:database",
-        "observation:auth",
-        "observation:key",
-    ]:
-        raise ValueError("complete ordered metadata evidence required")
-    project, database, auth, key = evidence
-    if any(row.get("status") != 200 for row in evidence):
-        raise ValueError("metadata baseline readback refused")
-    project_value = project.get("value")
-    database_value = database.get("value")
-    key_value = key.get("value")
-    if project_value != {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}:
-        raise ValueError("wrong project readback")
-    projection = (
-        database_value.get("projection") if isinstance(database_value, dict) else None
-    )
-    if (
-        not isinstance(database_value, dict)
-        or not isinstance(projection, dict)
-        or projection.get("name") != "projects/fireemu-35fe6/databases/(default)"
-        or projection.get("type") != "FIRESTORE_NATIVE"
-        or projection.get("databaseEdition") != "STANDARD"
-        or not isinstance(database_value.get("projectionDigest"), str)
-        or len(database_value["projectionDigest"]) != 64
-    ):
-        raise ValueError("wrong database readback")
-    if (
-        not isinstance(key_value, dict)
-        or key_value.get("parent") != "projects/592603257417/locations/global"
-        or not isinstance(key_value.get("name"), str)
-    ):
-        raise ValueError("wrong API-key project readback")
-    if (
-        not isinstance(auth.get("responseDigest"), str)
-        or len(auth["responseDigest"]) != 64
-    ):
-        raise ValueError("Auth config digest missing")
-    return {
-        "kind": PREPARATION_KIND,
-        "campaignId": CAMPAIGN,
-        "preparationId": permission["preparationId"],
-        "nonce": nonce,
-        "permissionDigest": digest(permission),
-        "sourceDigest": source_digest(),
-        "allocationDigest": digest(allocation),
-        "ticketDigest": digest(ticket),
-        "project": project_value,
-        "database": {
-            "name": projection["name"],
-            "type": projection["type"],
-            "databaseEdition": projection["databaseEdition"],
-            "projectionDigest": database_value["projectionDigest"],
-        },
-        "authConfigDigest": auth["responseDigest"],
-        "apiKey": {"parent": key_value["parent"], "name": key_value["name"]},
-        "slots": [
-            "observation:access-command",
-            "observation:tokeninfo",
-            *[row["id"] for row in evidence],
-        ],
-        "evidence": [
-            {
-                "id": row["id"],
-                "status": row["status"],
-                "responseDigest": row["responseDigest"],
-                "value": row.get("value", {}),
-            }
-            for row in evidence
-        ],
-        "completed": True,
-    }
-
-
 def _run_preparation(bindings, output, handoff_fd):
     """The coordinator child owns the Gate; its parent observes its exit."""
     from credential_prep import private_string
 
     capability = approve_preparation(**bindings)
     permission, inputs = bindings["permission"], bindings["inputs"]
-    rows, values = [], {}
+    rows, values, request_digests = [], {}, []
     failure = None
     try:
         ledger, ticket, _allocation, gate_plan = reserve_preparation(
@@ -545,12 +494,13 @@ def _run_preparation(bindings, output, handoff_fd):
                     # Gate calls this after its rate wait. Recheck authority and
                     # the original reservation deadline before spawning a worker.
                     ledger.validate(
-                        ticket, duration=max(0, deadline - time.monotonic())
+                        ticket, duration=max(1, math.ceil(deadline - time.monotonic()))
                     )
                     sent = time.monotonic()
                     raw = capability._transmit(
                         {"slot": slot, "secret": secret, "deadline": deadline}
                     )
+                    request_digests.append(raw["requestDigest"])
                     _write_receipt(output / f"private-{slot}.json", raw)
                     response = {
                         key: raw[key]
@@ -632,6 +582,7 @@ def _run_preparation(bindings, output, handoff_fd):
             "issuedAt": permission["issuedAt"],
             "expiresAt": permission["expiresAt"],
             "slots": snapshot["managementUsed"],
+            "requestDigests": request_digests,
             "evidence": snapshot["managementEvents"],
             "chargedCalls": snapshot["total"],
             "costMicrousd": snapshot["costMicrousd"],
@@ -684,8 +635,6 @@ def _run_preparation(bindings, output, handoff_fd):
 
 def capture_baseline(*, bindings, output, handoff_fd):
     """Execute an independently approved preparation and observe child exit."""
-    from credential_prep import decode_json
-
     output = Path(output).resolve()
     # Admission fails without reading the private descriptor or reserving.
     capability = approve_preparation(**bindings)
@@ -719,16 +668,36 @@ def capture_baseline(*, bindings, output, handoff_fd):
         ) from None
     if child.returncode != 0:
         raise ValueError("PREP coordinator failed; retained recovery context")
-    result = decode_json((output / "coordinator-result.json").read_bytes())
+    return retire_preparation(ledger_root=bindings["ledger_root"], output=output)
+
+
+def _publish_or_verify(path, value):
+    if path.exists():
+        if Ledger._read_bounded_json(path) != value:
+            raise ValueError("immutable PREP evidence differs")
+        return
+    _write_receipt(path, value)
+
+
+def retire_preparation(*, ledger_root, output):
+    """Replay only terminal publication after the coordinator and workers exit."""
+    output = Path(output).resolve()
+    result = Ledger._read_bounded_json(output / "coordinator-result.json")
     receipt, packet = result["receipt"], result["packet"]
-    _write_receipt(output / "receipt.json", receipt)
-    ledger = Ledger(bindings["ledger_root"])
+    _publish_or_verify(output / "receipt.json", receipt)
+    ledger = Ledger(ledger_root)
     ticket = receipt["ticket"]
     if receipt["failure"] is None:
         collection_digest = digest(receipt["collection"])
-        ledger.attach_evidence(
-            ticket, digest(receipt), receipt["gateDigest"], collection_digest
-        )
+        if (
+            ledger.snapshot()["reservations"]
+            .get(ticket["reservation"], {})
+            .get("state")
+            == "held"
+        ):
+            ledger.attach_evidence(
+                ticket, digest(receipt), receipt["gateDigest"], collection_digest
+            )
         ledger.finish_limits_preparation(
             ticket,
             {
@@ -759,7 +728,7 @@ def capture_baseline(*, bindings, output, handoff_fd):
     packet["packetDigest"] = digest(
         {key: value for key, value in packet.items() if key != "packetDigest"}
     )
-    _write_receipt(output / "baseline-packet.json", packet)
+    _publish_or_verify(output / "baseline-packet.json", packet)
     return packet
 
 
@@ -785,6 +754,12 @@ def validate_packet(packet):
         or packet.get("chargedCalls") != 6
         or packet.get("costMicrousd") != 600
         or packet.get("slots") != expected_slots
+        or not isinstance(packet.get("requestDigests"), list)
+        or len(packet["requestDigests"]) != 6
+        or any(
+            not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{64}", value) is None
+            for value in packet["requestDigests"]
+        )
         or not isinstance(evidence, list)
         or len(evidence) != 6
         or [event.get("id") for event in evidence] != expected_slots
@@ -797,7 +772,8 @@ def validate_packet(packet):
         or packet.get("project")
         != {"projectId": campaign.PROJECT, "projectNumber": campaign.NUMBER}
         or not isinstance(database, dict)
-        or database.get("projectionDigest") != digest(database.get("projection"))
+        or database.get("identityProjectionDigest")
+        != digest(database.get("projection"))
         or database.get("projection", {}).get("name")
         != f"projects/{campaign.PROJECT}/databases/{campaign.DATABASE}"
         or packet.get("preparationId") != packet.get("nonce")
@@ -860,15 +836,6 @@ def _read_private_json(fd: int) -> dict:
     if not isinstance(value, dict):
         raise ValueError("private handoff object required")
     return value
-
-
-def _write_private(path: Path, value: dict) -> None:
-    if path.exists() or path.is_symlink():
-        raise ValueError("fresh preparation output required")
-    path.mkdir(mode=0o700, parents=True, exist_ok=False)
-    target = path / "preparation-plan.json"
-    target.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
-    target.chmod(0o600)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -120,13 +120,18 @@ def execute_recovery(
     _validate_loopback_url(base_url)
     if not o8_admission.issued_capability(capability):
         raise ValueError("active O7 production capability required")
-    o8_admission.validate_frozen_inputs(recovery_admission.descriptor(), inputs)
+    selected_probe = inputs["plan"].get("selectedProbe", "under")
+    sentinel = selected_probe == recovery_campaign.parent_compiler.RAW_16MIB_OVER_LABEL
+    case_id = (
+        recovery_campaign.parent_compiler.RAW_16MIB_OVER_CASE_ID if sentinel else None
+    )
+    o8_admission.validate_frozen_inputs(recovery_admission.descriptor(case_id), inputs)
     bound = ledger.bound_recovery_claim(child_ticket)
-    validated = recovery_admission.validate_bound_child(bound)
+    validated = recovery_admission.validate_bound_child(bound, case_id)
     claim = validated["childClaim"]
     _, recovery_plan, expected_gate = recovery_admission._canonical_plans(
         canonical_parent_plan,
-        selected_probe=inputs["plan"].get("selectedProbe", "under"),
+        selected_probe=selected_probe,
         recovery_nonce=claim["recoveryNonce"],
     )
     recovery_plan["childClaimDigest"] = digest(claim)
@@ -136,7 +141,7 @@ def execute_recovery(
     if expected_gate != child_gate_plan:
         raise ValueError("authoritative child Gate plan differs")
     recovery_admission._validate_current_binding(validated, inputs, permission, recovery_plan)
-    if recovery_admission.descriptor().source_map() != inputs["sourceInputs"]:
+    if recovery_admission.descriptor(case_id).source_map() != inputs["sourceInputs"]:
         raise ValueError("current recovery source closure differs")
     request_bytes_descriptor.verify_worker_binding(
         capability._binding, capability.binding_digest, inputs["sourceInputs"]

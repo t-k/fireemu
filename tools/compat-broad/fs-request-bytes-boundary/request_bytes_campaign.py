@@ -67,6 +67,40 @@ READ_USD_PER_UNIT = 0.06 / 100_000
 WRITE_USD_PER_UNIT = 0.18 / 100_000
 DELETE_USD_PER_UNIT = 0.02 / 100_000
 
+
+def sentinel_budget() -> dict[str, Any]:
+    """The immutable one-case maxima, independent of its nonce and response."""
+    return {
+        "maxRuns": 1,
+        "maxConcurrency": 1,
+        "maxInFlightRequests": 1,
+        "maxAccounts": 1,
+        "maxDocuments": 20,
+        "maxDistinctResources": 20,
+        "maxPeakLiveDocuments": 20,
+        "maxReads": 80,
+        "maxWrites": 20,
+        "maxDeletes": 20,
+        "maxHttpRequests": 108,
+        "maxDataRequests": 101,
+        "maxManagementRequests": 7,
+        "maxRequestBytes": RAW_16MIB_OVER_BYTES,
+        "maxResponseBytes": 2 * 1024 * 1024,
+        "perRequestTimeoutSeconds": 80.0,
+        "smallRequestTimeoutSeconds": SMALL_REQUEST_TIMEOUT,
+        "maxDurationSeconds": 1150,
+        "observationWindowSeconds": 600,
+        "recoveryWindow": {
+            "reserveSeconds": 550,
+            "reserveReads": 40,
+            "reserveDeletes": 20,
+            "trigger": "uncertain Commit, observation failure or interrupted run",
+            "authority": "read-only unless this run proved the create and a matching version-bound ownership read",
+            "exitCondition": "typed NOT_FOUND for each of the 20 owned resources",
+            "onExhaustion": "stop and escalate with unresolved owned resources recorded; never retry the Commit or widen scope",
+        },
+    }
+
 # Request bodies are ingress. Firestore does not bill ingress, and the response
 # bodies for this campaign are kilobytes, so the network component is zero to
 # the published precision. The uploaded volume is still recorded because it is
@@ -794,34 +828,7 @@ def compile_request_bytes_sentinel_campaign(
             "basis": "80 seconds retains a little over a 2x margin over upload plus the existing 10 second non-upload reserve.",
         },
         "budget": {
-            "maxRuns": 1,
-            "maxConcurrency": 1,
-            "maxInFlightRequests": 1,
-            "maxAccounts": 1,
-            "maxDocuments": 20,
-            "maxDistinctResources": 20,
-            "maxPeakLiveDocuments": 20,
-            "maxReads": 80,
-            "maxWrites": 20,
-            "maxDeletes": 20,
-            "maxHttpRequests": accounting["httpRequests"],
-            "maxDataRequests": accounting["dataRequests"],
-            "maxManagementRequests": accounting["managementRequests"],
-            "maxRequestBytes": RAW_16MIB_OVER_BYTES,
-            "maxResponseBytes": 2 * 1024 * 1024,
-            "perRequestTimeoutSeconds": SENTINEL_TRANSPORT_DEADLINE_SECONDS,
-            "smallRequestTimeoutSeconds": SMALL_REQUEST_TIMEOUT,
-            "maxDurationSeconds": 1150,
-            "observationWindowSeconds": 600,
-            "recoveryWindow": {
-                "reserveSeconds": 550,
-                "reserveReads": 40,
-                "reserveDeletes": 20,
-                "trigger": "uncertain Commit, observation failure or interrupted run",
-                "authority": "read-only unless this run proved the create and a matching version-bound ownership read",
-                "exitCondition": "typed NOT_FOUND for each of the 20 owned resources",
-                "onExhaustion": "stop and escalate with unresolved owned resources recorded; never retry the Commit or widen scope",
-            },
+            **sentinel_budget(),
         },
         "planBounds": plan["bounds"],
         "planDigest": hashlib.sha256(compact_utf8(plan)).hexdigest(),

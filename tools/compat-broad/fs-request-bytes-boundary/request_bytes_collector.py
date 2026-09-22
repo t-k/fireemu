@@ -30,7 +30,14 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$")
 SEMANTIC_ONLY_FAILURES = frozenset({"over:unexpected-success"})
 SEMANTIC_OUTCOMES = frozenset(
-    {"typed-over-refusal", "unexpected-over-success", "unknown-over-outcome"}
+    {
+        "typed-over-refusal",
+        "unexpected-over-success",
+        "unknown-over-outcome",
+        "sentinel-accepted",
+        "sentinel-typed-refusal",
+        "sentinel-inconclusive",
+    }
 )
 
 

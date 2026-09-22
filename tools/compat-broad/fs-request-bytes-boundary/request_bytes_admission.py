@@ -91,6 +91,10 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
 
 def validate_frozen_inputs(inputs) -> None:
     o8_admission.validate_frozen_inputs(descriptor(), inputs)
+    case_id = inputs["plan"].get("caseId")
+    campaign.execution_plan(inputs["plan"])
+    if inputs.get("bounds") != campaign.frozen_bounds(case_id):
+        raise ValueError("frozen request-byte case bounds differ")
 
 
 def abort_generation(inputs):
@@ -212,7 +216,11 @@ def gate_reservations(permission) -> dict:
         value = declared[name]
         if type(value) not in (int, float) or isinstance(value, bool) or value <= 0:
             raise ValueError("owner declared Gate reservations required")
-    if declared["upload"] != campaign.transport_deadline_seconds():
+    case_id = permission.get("caseId")
+    if case_id not in (None, campaign.RAW_16MIB_OVER_CASE_ID):
+        raise ValueError("unsupported closed request-byte case selector")
+    expected_upload = campaign.transport_deadline_seconds(case_id)
+    if declared["upload"] != expected_upload:
         raise ValueError("upload reservation differs from the enforced ceiling")
     small_reservation = 3.0
     if any(
@@ -335,13 +343,20 @@ def freeze_inputs(permission_path, plan, *, source_root, artifact_path, baseline
     artifact = _artifact(artifact_path)
     _provenance(source_root, commit, inputs)
     _approve(permission, plan, commit, artifact, inputs, baseline)
-    return o8_admission.freeze_inputs(
+    frozen = o8_admission.freeze_inputs(
         descriptor(),
         permission,
         plan,
         source_commit=commit,
         artifact_sha256=artifact,
     )
+    case_id = plan.get("caseId")
+    if case_id is not None:
+        frozen["bounds"] = campaign.frozen_bounds(case_id)
+        frozen["inputsDigest"] = digest(
+            {key: value for key, value in frozen.items() if key != "inputsDigest"}
+        )
+    return frozen
 
 
 def validate_fresh_admission(ledger_root, plan, permission) -> dict:
@@ -399,9 +414,13 @@ def reservation_claim(inputs, *, gate_path, gate_plan):
         "nonceDigest": digest(plan["nonce"]),
         "gatePath": str(Path(gate_path).resolve()),
         "gatePlanDigest": digest(gate_plan),
-        "gateJob": campaign.gate_job_name(campaign.PROBE_SCOPES[0]),
+        "gateJob": campaign.gate_job_name(
+            campaign.RAW_16MIB_OVER_LABEL
+            if plan.get("caseId") == campaign.RAW_16MIB_OVER_CASE_ID
+            else campaign.PROBE_SCOPES[0]
+        ),
         "locks": descriptor_.lock_scopes(plan),
-        "budget": campaign.ledger_budget(),
+        "budget": campaign.ledger_budget(plan.get("caseId")),
         "durationSeconds": descriptor_.campaign_seconds,
     }
 
@@ -469,6 +488,17 @@ def stop_points() -> dict[str, tuple[str, ...]]:
     return {"noData": NO_DATA_STOP_POINTS, "uncertain": UNCERTAIN_STOP_POINTS}
 
 
+def stop_points_for_case(case_id: str | None) -> dict[str, tuple[str, ...]]:
+    if case_id is None:
+        return stop_points()
+    if case_id != campaign.RAW_16MIB_OVER_CASE_ID:
+        raise ValueError("unsupported closed request-byte case selector")
+    return {
+        "noData": ("probe-r16m1-preflight", "schedule-not-started"),
+        "uncertain": ("probe-r16m1-commit-deadline",),
+    }
+
+
 def classify_stop(receipt) -> dict:
     """Name the terminal disposition a stopped run is entitled to.
 
@@ -488,17 +518,19 @@ def classify_stop(receipt) -> dict:
     stop = receipt.get("stopPoint")
     collection = receipt.get("collection")
     routes = receipt.get("metadata")
-    if stop in UNCERTAIN_STOP_POINTS or receipt.get("mayHaveCreated") is not False:
+    points = stop_points_for_case(receipt.get("caseId"))
+    if stop in points["uncertain"] or receipt.get("mayHaveCreated") is not False:
+        resource_count = 20 if receipt.get("caseId") else 17
         return {
             "stopPoint": stop,
             "disposition": "owner-escalation",
             "retirableAsNoData": False,
             "reason": (
                 "a Commit whose receipt was lost may have been applied; up to "
-                "17 documents can remain under the owned scope"
+                f"{resource_count} documents can remain under the owned scope"
             ),
         }
-    if stop not in NO_DATA_STOP_POINTS:
+    if stop not in points["noData"]:
         raise ValueError("unknown request-byte stop point")
     if (
         not isinstance(routes, list)
@@ -528,12 +560,13 @@ def classify_stop(receipt) -> dict:
             "retirableAsNoData": False,
             "reason": "the journal does not prove that nothing was written",
         }
-    return {
+    result = {
         "stopPoint": stop,
         "disposition": "aborted-no-data",
         "retirableAsNoData": True,
         "reason": "no Commit was dispatched and no document was created",
     }
+    return result
 
 
 def validate_no_data_receipt(receipt) -> dict:
@@ -619,7 +652,7 @@ def build_receipt(
         }
         for row in rows
     ]
-    return {
+    result = {
         "kind": "request-bytes-acquisition-receipt-v1",
         "campaignId": descriptor().campaign_id,
         "inputsDigest": inputs["inputsDigest"],
@@ -634,7 +667,13 @@ def build_receipt(
         else "injected-transport",
         "productionExecuted": capability is not None,
         "workerSha256": capability.binding_digest if capability is not None else None,
-        "transportDeadlineSeconds": campaign.transport_deadline_seconds(),
+        "transportDeadlineSeconds": campaign.transport_deadline_seconds(
+            inputs["plan"].get("caseId")
+        ),
         "stopPoint": stop_point,
         "failure": failure,
     }
+    case_id = inputs["plan"].get("caseId")
+    if case_id is not None:
+        result["caseId"] = case_id
+    return result

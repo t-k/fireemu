@@ -274,3 +274,98 @@ def test_sentinel_collector_incomplete_commit_is_inconclusive_and_cannot_delete(
     assert result["completed"] is False
     assert result["semanticOutcome"] == "sentinel-inconclusive"
     assert not any(op["method"] == "DELETE" for op in result["testDispatched"])
+
+
+def test_descriptor_freezes_one_case_and_projects_one_reserved_gate_job() -> None:
+    import request_bytes_descriptor as descriptor
+
+    reference = descriptor.plan_compiler(NONCE, case_id=RAW_16MIB_OVER_CASE_ID)
+    plan = descriptor.execution_plan(reference)
+    gate = descriptor.gate_plan(
+        plan,
+        upload_seconds=80,
+        observation_slot_seconds=3,
+        recovery_slot_seconds=3,
+    )
+
+    assert reference["caseId"] == RAW_16MIB_OVER_CASE_ID
+    assert reference["bounds"]["requestBytes"] == RAW_16MIB_OVER_BYTES
+    assert len(plan["probes"]) == 1
+    assert list(gate["jobs"]) == ["request-bytes-raw-16mib-over"]
+    job = gate["jobs"]["request-bytes-raw-16mib-over"]
+    assert len(job["resources"]) == 20
+    assert len(job["observation"]) == 41
+    assert len(job["recovery"]) == 60
+    assert sum(slot["seconds"] == 80 for slot in job["schedule"]) == 1
+    assert gate["jobSlots"] == 1
+    assert gate["dataRequests"] == 101
+    assert descriptor.lock_scopes(reference)[0]["key"].endswith(
+        f"/oracle/{NONCE}/request-bytes-02/probe-r16m1/*"
+    )
+
+
+def test_gate_reservation_admission_is_case_bound() -> None:
+    import request_bytes_admission as admission
+
+    permission = {
+        "caseId": RAW_16MIB_OVER_CASE_ID,
+        "gateReservationSeconds": {
+            "upload": 80.0,
+            "observationSlot": 3.0,
+            "recoverySlot": 3.0,
+            "slotBasis": admission.PLANNING_ASSUMPTION,
+        },
+    }
+    assert admission.gate_reservations(permission)["upload"] == 80.0
+    permission["gateReservationSeconds"]["upload"] = 60.0
+    with pytest.raises(ValueError, match="enforced ceiling"):
+        admission.gate_reservations(permission)
+
+
+def test_sentinel_recovery_child_is_separate_and_covers_only_20_case_resources():
+    import request_bytes_compiler as compiler
+    import request_bytes_recovery_campaign as recovery
+
+    parent = compiler.compile_request_bytes_sentinel_plan(
+        "fireemu-35fe6", "(default)", "d" * 32
+    )
+    child = recovery.compile_recovery_plan(
+        parent,
+        selected_probe=compiler.RAW_16MIB_OVER_LABEL,
+        recovery_nonce="e" * 32,
+    )
+    gate = recovery.compile_gate_plan(
+        parent,
+        selected_probe=compiler.RAW_16MIB_OVER_LABEL,
+        recovery_nonce="e" * 32,
+        recovery_plan=child,
+    )
+    assert child["bounds"] == {
+        "inspectionReads": 20,
+        "conditionalDeletes": 20,
+        "absenceReads": 20,
+        "maximumRequests": 60,
+        "tariffEstimateMicrousd": 28,
+    }
+    assert len(gate["jobs"][recovery.RECOVERY_JOB]["recovery"]) == 60
+    assert len(gate["jobs"][recovery.RECOVERY_JOB]["resources"]) == 20
+
+
+def test_sentinel_recovery_admission_recompiles_only_its_case_and_60_slot_budget():
+    import request_bytes_compiler as compiler
+    import request_bytes_recovery_admission as recovery_admission
+
+    parent = compiler.compile_request_bytes_sentinel_plan(
+        "fireemu-35fe6", "(default)", "d" * 32
+    )
+    _, recovery_plan, gate = recovery_admission._canonical_plans(
+        parent,
+        selected_probe=compiler.RAW_16MIB_OVER_LABEL,
+        recovery_nonce="e" * 32,
+    )
+    descriptor = recovery_admission.descriptor(compiler.RAW_16MIB_OVER_CASE_ID)
+    assert recovery_plan["caseId"] == compiler.RAW_16MIB_OVER_CASE_ID
+    assert descriptor.budget == recovery_admission.SENTINEL_CHILD_BUDGET
+    assert gate["recoveryRequests"] == 60
+    with pytest.raises(ValueError, match="unsupported closed recovery case"):
+        recovery_admission.descriptor("other-case")

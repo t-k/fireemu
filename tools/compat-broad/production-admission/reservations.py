@@ -1013,10 +1013,23 @@ def _auth_parent_projection(gate, child_claim):
         and operation.get("kind") == "custom-sign-in"
         and operation.get("account") == "custom"
         and isinstance(operation.get("resource"), str)
+        and operation.get("service") == "auth"
+        and operation.get("method") == "POST"
+        and operation.get("path") == AUTH_PARENT_CUSTOM_SIGN_IN_PATH
+        and operation.get("form") is False
+        and isinstance(operation.get("body"), dict)
+        and operation["body"].get("token") in {
+            "$binding:customToken",
+            "$binding:customTokenReserved",
+            "$binding:customTokenExpired",
+        }
+        and operation["body"].get("returnSecureToken") is True
     ]
-    if len(candidates) != 1:
+    index = child_claim.get("parentEventIndex")
+    selected = next((candidate for candidate in candidates if candidate[0] == index), None)
+    if selected is None:
         raise ValueError("one uncertain Auth custom create is required")
-    index, operation = candidates[0]
+    index, operation = selected
     binds = operation.get("binds")
     if (
         index != child_claim["parentEventIndex"]
@@ -1087,6 +1100,49 @@ def _auth_parent_responsibility_projection(gate, child_claim):
         raise ValueError("Auth parent responsibility journal malformed")
     if set(plan_jobs) != set(jobs):
         raise ValueError("Auth parent responsibility jobs differ")
+    management = plan.get("management", {})
+    if management is None:
+        management = {}
+    if not isinstance(management, dict):
+        raise ValueError("Auth parent responsibility management plan malformed")
+    management_observation = management.get("observation", [])
+    management_recovery = management.get("recovery", [])
+    if (
+        not isinstance(management_observation, list)
+        or not isinstance(management_recovery, list)
+        or not all(isinstance(slot, dict) and isinstance(slot.get("id"), str) for slot in management_observation + management_recovery)
+    ):
+        raise ValueError("Auth parent responsibility management plan malformed")
+    declared_management = [
+        phase + ":" + slot["id"]
+        for phase, slots in (("observation", management_observation), ("recovery", management_recovery))
+        for slot in slots
+    ]
+    if len(set(declared_management)) != len(declared_management):
+        raise ValueError("Auth parent responsibility management plan malformed")
+    management_used = gate.get("managementUsed", [])
+    management_events = gate.get("managementEvents", [])
+    management_skipped = gate.get("managementSkipped", [])
+    if (
+        not isinstance(management_used, list)
+        or not isinstance(management_events, list)
+        or not isinstance(management_skipped, list)
+        or management_used != declared_management[:len(management_used)]
+        or len(management_events) != len(management_used)
+        or management_skipped
+        or any(not isinstance(item, str) for item in management_used)
+    ):
+        raise ValueError("Auth parent responsibility management journal differs")
+    for identity, event in zip(management_used, management_events, strict=True):
+        if (
+            not isinstance(event, dict)
+            or event.get("id") != identity
+            or event.get("completed") is not True
+            or event.get("complete") is not True
+            or event.get("workerReaped") is not True
+        ):
+            raise ValueError("Auth parent responsibility management event differs")
+    management_observation_count = sum(identity.startswith("observation:") for identity in management_used)
     if any(
         not isinstance(job, dict)
         or type(job.get("observation")) is not int
@@ -1094,7 +1150,7 @@ def _auth_parent_responsibility_projection(gate, child_claim):
         for job in jobs.values()
     ):
         raise ValueError("Auth parent responsibility observation cursor differs")
-    if type(gate.get("observation")) is not int or gate["observation"] < 0 or gate["observation"] != sum(
+    if type(gate.get("observation")) is not int or gate["observation"] < 0 or gate["observation"] != management_observation_count + sum(
         job["observation"] for job in jobs.values()
     ):
         raise ValueError("Auth parent responsibility observation total differs")
@@ -1262,16 +1318,19 @@ def _auth_parent_responsibility_projection(gate, child_claim):
                 raise ValueError("Auth parent responsibility creating operation semantics differ")
             return index
         if is_custom_sign_in:
+            token = operation.get("body", {}).get("token") if isinstance(operation.get("body"), dict) else None
             if (
                 kind != "custom-sign-in"
                 or operation.get("service") != "auth"
                 or operation.get("method") != "POST"
                 or operation.get("account") != "custom"
                 or operation.get("form") is not False
-                or operation.get("body") != {
-                    "token": "$binding:customToken",
-                    "returnSecureToken": True,
+                or token not in {
+                    "$binding:customToken",
+                    "$binding:customTokenReserved",
+                    "$binding:customTokenExpired",
                 }
+                or operation.get("body", {}).get("returnSecureToken") is not True
             ):
                 raise ValueError("Auth parent responsibility creating operation semantics differ")
             return index

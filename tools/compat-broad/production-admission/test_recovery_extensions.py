@@ -14,6 +14,8 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "fs-request-bytes-boundary"))
+sys.path.insert(0, str(HERE.parent / "auth-credential-tokens"))
+import credential_gate
 import request_bytes_admission
 import request_bytes_compiler
 import request_bytes_descriptor
@@ -716,6 +718,125 @@ def _auth_recovery_fixture(tmp_path):
     return ledger, parent_ticket, child_claim, child_envelope, child_plan, bindings, evidence, resource, child_path
 
 
+def _compiler_auth_projection_fixture(tmp_path, *, management_count=0, malformed_management=None, variant_outcome=None, variant_slot=1):
+    """Build a real compiler plan and Gate journal with a stopped custom create."""
+    nonce = "a" * 32
+    plan = credential_gate.gate_plan(
+        "demo", nonce, signing=True, wall_seconds=600, recovery_seconds=60,
+        cost_microusd=50_000, observation_window_seconds=500,
+    )
+    plan["permissionExpiresAt"] = time.time() + 3_600
+    resources = plan["jobs"]["auth-credential"]["resources"]
+    parent_path = (tmp_path / "compiler-auth-parent-gate").resolve()
+    locks = [
+        {"key": resource.replace("projects/", "project/"), "mode": "WRITE"}
+        for resource in resources
+    ]
+    claim = {
+        "campaignId": plan["campaignId"], "manifestDigest": digest(plan),
+        "nonceDigest": digest(nonce), "gatePath": str(parent_path),
+        "gatePlanDigest": digest(plan), "gateJob": "auth-credential", "locks": locks,
+        "budget": {"requests": 100, "accounts": 3, "resources": 3, "costMicrousd": 50_000},
+        "durationSeconds": 600,
+    }
+    envelope = {
+        "permissionDigest": "1" * 64, "issuedAt": 900, "expiresAt": 2_000,
+        "limits": claim["budget"], "concurrency": 1, "scopes": locks,
+    }
+    ledger = reservations.Ledger.create(tmp_path / "compiler-auth-ledger")
+    ledger.reserve(envelope, claim, plan, now=1000)
+    credential_gate.create(parent_path, plan)
+    gate = credential_gate.CredentialGate(parent_path, "auth-credential")
+    gate.claim()
+    receipt = {
+        "status": 200, "complete": True, "workerReaped": True,
+        "bodyKind": "json", "body": {},
+    }
+    attestation = {
+        "kind": "request-byte-token-attestation-v1", "principalDigest": "a" * 64,
+        "requiredScopeVerified": True, "identityMode": "subject", "identityVerified": True,
+        "oauthClientVerified": True, "expiresInSeconds": 600,
+        "remainingSecondsAtVerification": 600, "requiredSeconds": 600,
+        "complete": True, "workerReaped": True,
+    }
+    for slot in plan["management"]["observation"][:management_count]:
+        result = dict(receipt)
+        if slot["id"] == "oauth-tokeninfo":
+            result["body"] = attestation
+        gate.management_dispatch("observation", slot["id"], lambda _deadline, result=result: result)
+    operations = plan["jobs"]["auth-credential"]["observation"]
+    signups = [
+        (index, operation) for index, operation in enumerate(operations)
+        if operation.get("kind") == "sign-up"
+    ]
+    custom = [
+        (index, operation) for index, operation in enumerate(operations)
+        if operation.get("kind") == "custom-sign-in"
+    ]
+    assert len(signups) == 2 and len(custom) == 3
+    events = []
+    for index, operation in signups:
+        events.append({
+            "job": "auth-credential", "phase": "observation", "index": index,
+            "requestDigest": digest(operation), "service": "auth", "method": "POST",
+            "completed": True, "creationOutcome": "refused", "status": 400,
+            "failure": None, "authEvidence": {
+                "account": operation["account"], "creationOutcome": "refused",
+            },
+        })
+    normal_index, normal_operation = custom[0]
+    events.append({
+        "job": "auth-credential", "phase": "observation", "index": normal_index,
+        "requestDigest": digest(normal_operation), "service": "auth", "method": "POST",
+        "completed": False, "creationOutcome": "unknown", "ended": 2,
+    })
+    schedule_done = normal_index + 1
+    if variant_outcome is not None:
+        if variant_slot == 2:
+            reserved_index, reserved_operation = custom[1]
+            events.append({
+                "job": "auth-credential", "phase": "observation", "index": reserved_index,
+                "requestDigest": digest(reserved_operation), "service": "auth", "method": "POST",
+                "completed": True, "creationOutcome": "refused", "status": 400,
+                "failure": None, "ended": 2,
+                "authEvidence": {"account": "custom", "creationOutcome": "refused"},
+            })
+        variant_index, variant_operation = custom[variant_slot]
+        events.append({
+            "job": "auth-credential", "phase": "observation", "index": variant_index,
+            "requestDigest": digest(variant_operation), "service": "auth", "method": "POST",
+            "completed": variant_outcome == "refused", "creationOutcome": variant_outcome,
+            "status": 400 if variant_outcome == "refused" else None,
+            "failure": None, "ended": 2,
+            "authEvidence": {"account": "custom", "creationOutcome": variant_outcome},
+        })
+        schedule_done = variant_index + 1
+    state = gate.snapshot()
+    state["events"] = events
+    state["observation"] = management_count + len(events)
+    state["total"] = management_count + len(events)
+    job = state["jobs"]["auth-credential"]
+    job["observation"] = len(events)
+    job["scheduleDone"] = schedule_done
+    dead = _dead_pid()
+    state["coordinatorPid"] = dead
+    state["jobs"]["auth-credential"]["pid"] = dead
+    state["stopped"] = True
+    if malformed_management == "order":
+        state["managementUsed"] = list(reversed(state["managementUsed"]))
+    elif malformed_management == "event":
+        state["managementEvents"][0]["id"] = "observation:wrong" if state["managementEvents"] else "observation:wrong"
+    elif malformed_management == "phase":
+        if state["managementEvents"]:
+            state["managementEvents"][0]["id"] = "recovery:" + state["managementEvents"][0]["id"].split(":", 1)[1]
+    _save(parent_path, state)
+    child_claim = {
+        "parentGateJob": "auth-credential", "parentEventIndex": normal_index,
+        "parentRequestDigest": digest(normal_operation), "ownedResources": [normal_operation["resource"]],
+    }
+    return ledger, parent_path, child_claim
+
+
 def _auth_child_gate(path, child_plan, resource, *, body=None, status=200):
     create_gate(path, child_plan)
     gate = Gate(path, "auth-recovery")
@@ -959,6 +1080,72 @@ def test_auth_recovery_child_is_durable_lookup_only_and_closes_parent_on_typed_a
     assert len(ledger.snapshot()["reservations"][parent["reservation"]]["authRecoveryCloseResponsibilitiesDigest"]) == 64
     assert ledger.close_after_auth_recovery_child(parent, child_ticket,
         receipt_digest=digest(proof), now=1000) == parent
+
+
+@pytest.mark.parametrize("management_count", [0, 1, 3])
+def test_auth_parent_projection_counts_validated_management_observations(tmp_path, management_count):
+    ledger, parent_path, child_claim = _compiler_auth_projection_fixture(
+        tmp_path, management_count=management_count,
+    )
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    projection = reservations._auth_parent_responsibility_projection(gate, child_claim)
+    assert projection["kind"] == "auth-parent-responsibility-close-v1"
+    assert gate["observation"] == management_count + gate["jobs"]["auth-credential"]["observation"]
+    assert ledger.snapshot()["reservations"]
+
+
+@pytest.mark.parametrize("malformed_management,management_count", [("order", 2), ("event", 1), ("phase", 1)])
+def test_auth_parent_projection_rejects_malformed_management_journal(tmp_path, malformed_management, management_count):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(
+        tmp_path, management_count=management_count, malformed_management=malformed_management,
+    )
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    with pytest.raises(ValueError, match="management"):
+        reservations._auth_parent_responsibility_projection(gate, child_claim)
+
+
+def test_auth_parent_projection_accepts_compiler_custom_token_negative_slots(tmp_path):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(tmp_path)
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    projection = reservations._auth_parent_responsibility_projection(gate, child_claim)
+    dispositions = {
+        (item["phase"], item["index"]): item["disposition"]
+        for item in projection["responsibilities"]
+    }
+    custom = [
+        index for index, operation in enumerate(gate["plan"]["jobs"]["auth-credential"]["observation"])
+        if operation.get("kind") == "custom-sign-in"
+    ]
+    assert dispositions[("observation", custom[1])] == "not-dispatched"
+    assert dispositions[("observation", custom[2])] == "not-dispatched"
+
+
+@pytest.mark.parametrize("variant_slot", [1, 2])
+def test_auth_parent_projection_accepts_typed_custom_token_refusal(tmp_path, variant_slot):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(
+        tmp_path, variant_outcome="refused", variant_slot=variant_slot,
+    )
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    projection = reservations._auth_parent_responsibility_projection(gate, child_claim)
+    custom = [
+        index for index, operation in enumerate(gate["plan"]["jobs"]["auth-credential"]["observation"])
+        if operation.get("kind") == "custom-sign-in"
+    ]
+    dispositions = {
+        (item["phase"], item["index"]): item["disposition"]
+        for item in projection["responsibilities"]
+    }
+    assert dispositions[("observation", custom[1])] == "refused"
+
+
+@pytest.mark.parametrize("variant_slot", [1, 2])
+def test_auth_parent_projection_retains_unresolved_custom_token_responsibility(tmp_path, variant_slot):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(
+        tmp_path, variant_outcome="unknown", variant_slot=variant_slot,
+    )
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    with pytest.raises(ValueError, match="creating event unresolved"):
+        reservations._auth_parent_responsibility_projection(gate, child_claim)
 
 
 def test_valid_auth_recovery_close_releases_parent_lock_for_new_reservation(tmp_path):

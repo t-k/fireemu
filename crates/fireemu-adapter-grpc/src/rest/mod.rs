@@ -1246,7 +1246,7 @@ impl RestState {
             transaction: transaction_bytes(body.get("transaction"))?,
             request_options: None,
         };
-        if req.encoded_len() > 10 * 1024 * 1024 {
+        if self.gateway.enforce_limits && req.encoded_len() > 10 * 1024 * 1024 {
             return Ok(RestResponse {
                 status: 400,
                 body: fireemu_adapter_support::api_error::google_rpc(

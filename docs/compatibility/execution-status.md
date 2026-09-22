@@ -12,7 +12,7 @@ These are finite revalidations of retained saved-production matrices and program
 
 This checkpoint is source `8d7a02de0d60564184d0cf80292e2278cd6e9d2c`; the request-byte exact-replay runtime source is `ba4a026363d6ec05267cf646439c10d729ab805f`, and the retained artifact SHA-256 is `903728746e512d158363c092196e015f79805ab513757a5924d319c8dac0996d`.
 
-The fresh02 production observation remains immutable. A separate V3 bounded replay is now independently accepted for the exact three saved request bodies and their per-probe side effects; it is bound to source `1f17fb8080461870042f19d5b94767d5f6e203c7` and retained runtime SHA-256 `903728746e512d158363c092196e015f79805ab513757a5924d319c8dac0996d`. The accepted V3 outcome and its limits are recorded below. The legacy collector's `over:unexpected-success` and `cleanupComplete=false` remain immutable historical fields. The parent condition and general 10 MiB quota remain unaccepted.
+The fresh02 production observation remains immutable. A separate V3 bounded replay is now independently accepted for the exact three saved request bodies and their per-probe side effects; it is bound to source `1f17fb8080461870042f19d5b94767d5f6e203c7` and retained runtime SHA-256 `903728746e512d158363c092196e015f79805ab513757a5924d319c8dac0996d`. The accepted V3 outcome and its limits are recorded below. The preserved legacy fields `over:unexpected-success`, `collectorCompleted=false` and `cleanupComplete=false` remain unchanged. The parent condition and general 10 MiB quota remain unaccepted.
 
 ## Request-byte bounded three-case acceptance (V3)
 

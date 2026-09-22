@@ -57,7 +57,11 @@ __all__ = [
     "ProductionWireCapability",
     "abort_generation",
     "bootstrap_reservation_claim",
+    "freeze_preparation_inputs",
+    "issue_preparation_capability",
+    "preparation_gate_plan_for",
     "validate_bootstrap_permission",
+    "validate_preparation_permission",
     "build_receipt",
     "descriptor",
     "execution_host",
@@ -301,6 +305,46 @@ def bootstrap_reservation_claim(inputs, *, permission, gate_plan, gate_path):
     claim = reservation_claim(inputs, gate_path=gate_path, gate_plan=gate_plan)
     claim["manifestDigest"] = digest(permission)
     return claim
+
+
+def preparation_gate_plan_for(inputs, permission) -> dict:
+    """Recover the combined four-row Gate plan from frozen prep inputs."""
+    validate_preparation_permission(inputs, permission)
+    plan = copy.deepcopy(inputs["plan"])
+    expiry = permission.get("expiresAt")
+    if type(expiry) not in (int, float) or isinstance(expiry, bool):
+        raise ValueError("preparation permission expiry required")
+    plan["permissionExpiresAt"] = expiry
+    plan["permissionDigest"] = digest(permission)
+    return plan
+
+
+def validate_preparation_permission(inputs, permission) -> None:
+    if not isinstance(inputs, dict) or inputs.get("kind") != campaign.PREPARATION_FROZEN_INPUTS_KIND:
+        raise ValueError("preparation frozen inputs required")
+    if inputs.get("permissionDigest") != digest(permission):
+        raise ValueError("preparation permission differs from frozen inputs")
+    validate_bootstrap_permission(permission, plan=inputs["plan"])
+
+
+def freeze_preparation_inputs(permission_path, plan, *, source_root, artifact_path):
+    """Freeze the independent prep permission without requiring Auth baseline."""
+    permission = _read(permission_path)
+    campaign.preparation_transport_bound(plan)
+    commit = subprocess.check_output(["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True).strip()
+    artifact = _artifact(artifact_path)
+    inputs = campaign.source_map()
+    _provenance(source_root, commit, inputs)
+    validate_bootstrap_permission(permission, plan=plan)
+    return o8_admission.freeze_inputs(
+        campaign.preparation_descriptor(), permission, plan,
+        source_commit=commit, artifact_sha256=artifact,
+    )
+
+
+def issue_preparation_capability(**bindings):
+    """Issue the generic one-shot capability for the independent prep variant."""
+    return o8_admission.issue_production_capability(campaign.preparation_descriptor(), **bindings)
 
 
 def _private_string(value, maximum):

@@ -575,17 +575,22 @@ def _fixture_proofs(plan, fixture_origin):
     return proofs
 
 
-def _fixture_capability(plan, source, source_digest, frozen):
+def _fixture_capability(
+    plan, source, source_digest, frozen, *, window_seconds: float = 60
+):
+    if type(window_seconds) not in (int, float) or not 0 < window_seconds:
+        raise ValueError("fixture capability window must be positive")
+    window_seconds = float(window_seconds)
     capability = ProductionWireCapability(
         _CAPABILITY_TOKEN,
         binding=source,
         binding_digest=source_digest,
         campaign_id=remote.CAMPAIGN,
-        window_seconds=60,
+        window_seconds=window_seconds,
         inputs_digest=frozen["inputsDigest"],
         ledger_root="fixture-ledger",
         window_starts_at=time.time() - 1,
-        window_expires_at=time.time() + 60,
+        window_expires_at=time.time() + window_seconds,
         approval_digest="f" * 64,
         transport_bound=True,
     )

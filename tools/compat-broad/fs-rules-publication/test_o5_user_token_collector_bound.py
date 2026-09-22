@@ -126,11 +126,12 @@ def bound(
     # Canonical production fixture: run the real 19-slot setup bridge against
     # the loopback producer, then enter the Rules collector with its durable
     # setup proof and shared context.
-    from test_o5_user_token_production import _ProducerHandler, _fixture_capability, _producer_server
+    from test_o5_user_token_production import _ProducerHandler, _producer_server
     import o5_user_token_production_bridge as bridge
     import o5_user_token_descriptor as descriptor
     from test_o5_user_token_descriptor import synthetic
     from test_o5_user_token_remote_transport import account_bindings
+    from test_o5_user_token_remote_transport import _fixture_capability as fixture_capability
 
     with tempfile.TemporaryDirectory(prefix="o5-bound-rules-") as directory:
         root = __import__("pathlib").Path(directory)
@@ -158,7 +159,13 @@ def bound(
         gate = shared_gate.Gate(gate_path, plan["campaignId"])
         bindings = synthetic(root, descriptor.descriptor())
         binding, binding_digest = __import__("o5_user_token_remote_transport").worker_binding()
-        capability = _fixture_capability(plan, binding, binding_digest, bindings["inputs"])
+        capability = fixture_capability(
+            plan,
+            binding,
+            binding_digest,
+            bindings["inputs"],
+            window_seconds=float(claim["durationSeconds"]),
+        )
         _ProducerHandler._plan = plan
         _ProducerHandler.requests = []
         _ProducerHandler.setup_uids = {}

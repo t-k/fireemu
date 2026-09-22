@@ -334,9 +334,17 @@ def _bound_plan(plan: Mapping[str, Any], *, source_binding: Mapping[str, Any], t
     return value
 
 
+def _validate_child_source_binding(plan: Mapping[str, Any], snapshot: Mapping[str, Any]) -> None:
+    provenance = plan.get("provenance")
+    generation = provenance.get("generation") if isinstance(provenance, Mapping) else None
+    if not isinstance(provenance, Mapping) or provenance.get("sourceCommit") != snapshot["sourceCommit"] or not isinstance(generation, Mapping) or generation.get("sourceCommit") != snapshot["sourceCommit"]:
+        _refuse("child source commit must remain immutable-parent-linked")
+
+
 def validate_plan(plan: Mapping[str, Any], parent: Mapping[str, Any]) -> dict[str, Any]:
     snapshot = _parent_snapshot(parent)
     _validate_shape(plan)
+    _validate_child_source_binding(plan, snapshot)
     if plan.get("parent", {}).get("planDigest") != digest(snapshot["plan"]) or plan.get("parent", {}).get("gateDigest") != digest(snapshot["gate"]):
         _refuse("parent Gate evidence differs")
     if plan.get("parent", {}).get("requestDigest") != digest(snapshot["operation"]) or plan.get("parent", {}).get("eventIndex") != snapshot["eventIndex"] or plan.get("resource") != snapshot["resource"]:
@@ -371,6 +379,7 @@ def validate_authority_bundle(plan: Mapping[str, Any], *, permission: Mapping[st
 def build_child_claim(parent: Mapping[str, Any], plan: Mapping[str, Any], *, permission: Mapping[str, Any], source_binding: Mapping[str, Any], transport_binding: Mapping[str, Any], o7_binding: Mapping[str, Any], o8_binding: Mapping[str, Any], parent_evidence: Mapping[str, Any], gate_path: str, owner_identity: str, recovery_owner: str, execution_host: Mapping[str, str] | None = None, now: float | None = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     snapshot = _parent_snapshot(parent)
     validate_plan(plan, parent)
+    _validate_child_source_binding(plan, snapshot)
     authority_plan = _bound_plan(plan, source_binding=source_binding, transport_binding=transport_binding, o7_binding=o7_binding, o8_binding=o8_binding)
     decision_now = time.time() if now is None else now
     _finite(decision_now, "child allocation time")

@@ -160,6 +160,16 @@ def test_child_generation_must_extend_parent_source_closure() -> None:
         recovery.compile_recovery_plan(parent, recovery_nonce="e" * 32, provenance=provenance, now=1000.0)
 
 
+def test_detached_child_source_commit_cannot_bypass_immutable_parent_binding() -> None:
+    parent, plan, _permission, _o7, _o8 = _plan()
+    tampered = copy.deepcopy(plan)
+    tampered["provenance"]["sourceCommit"] = "2" * 40
+    tampered["provenance"]["generation"]["sourceCommit"] = "2" * 40
+    tampered["planDigest"] = digest(recovery._stable_plan(tampered))
+    with pytest.raises(recovery.RecoveryRefusal, match="source commit|parent-linked"):
+        recovery.validate_plan(tampered, parent)
+
+
 class _Ledger:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple, dict]] = []
@@ -307,6 +317,15 @@ def test_real_shared_api924_accepts_canonical_child_and_rejects_overrides(tmp_pa
 
     ledger_parent = copy.deepcopy(parent)
     plan = recovery.compile_recovery_plan(ledger_parent, recovery_nonce="fedcba9876543210fedcba9876543210", provenance=_provenance(), now=1000.0, deadline_seconds=60)
+    detached_plan = copy.deepcopy(plan)
+    detached_plan["provenance"]["sourceCommit"] = "2" * 40
+    detached_plan["provenance"]["generation"]["sourceCommit"] = "2" * 40
+    detached_plan["planDigest"] = digest(recovery._stable_plan(detached_plan))
+    detached_permission, detached_o7, detached_o8 = _authorities(detached_plan)
+    before_detached = json.dumps(ledger.snapshot(), sort_keys=True)
+    with pytest.raises(recovery.RecoveryRefusal, match="source commit|parent-linked"):
+        recovery.begin_child(ledger, parent_ticket=parent_ticket, parent=ledger_parent, plan=detached_plan, permission=detached_permission, o7=detached_o7, o8=detached_o8, gate_path=str(tmp_path / "detached-child-gate"), now=1001.0)
+    assert json.dumps(ledger.snapshot(), sort_keys=True) == before_detached
     permission, o7, o8 = _authorities(plan)
     child_ticket = recovery.begin_child(ledger, parent_ticket=parent_ticket, parent=ledger_parent, plan=plan, permission=permission, o7=o7, o8=o8, gate_path=str(tmp_path / "child-gate"), now=1001.0)
     assert child_ticket["parentReservation"] == reservation

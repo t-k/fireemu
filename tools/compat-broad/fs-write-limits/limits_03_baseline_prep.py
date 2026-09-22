@@ -151,7 +151,7 @@ def _prep_transport(value, *, binding, binding_digest, capability):
     if origin is not None:
         parsed = urlsplit(route)
         route = origin + parsed.path + (("?" + parsed.query) if parsed.query else "")
-    from batch_adapter import wire
+    from batch_adapter import WorkerProcessError, wire
 
     headers = {
         "Authorization": "Bearer " + token,
@@ -169,24 +169,23 @@ def _prep_transport(value, *, binding, binding_digest, capability):
             local=origin is not None,
             timeout=duration,
             receipt=True,
+            process_receipt=True,
         )
-    except ValueError:
-        # The bounded host returns/raises only after subprocess.run has waited.
+    except WorkerProcessError as error:
         return {
             "requestDigest": request_digest,
             "status": None,
             "complete": False,
-            "workerReaped": True,
+            "workerReaped": error.process_receipt.get("workerReaped") is True,
             "bodyKind": None,
             "body": None,
         }
-    http = response.get("http", {})
     return {
         "requestDigest": request_digest,
-        "status": http.get("status"),
-        "complete": http.get("complete") is True,
-        "workerReaped": True,
-        "bodyKind": http.get("bodyKind"),
+        "status": response.get("status"),
+        "complete": response.get("complete") is True,
+        "workerReaped": response.get("workerReaped") is True,
+        "bodyKind": response.get("bodyKind"),
         "body": response.get("body"),
     }
 

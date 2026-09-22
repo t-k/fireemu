@@ -27,6 +27,7 @@ from o5_user_token_collector import (
     collect as _collect,
     RulesManagementReceipt,
     RulesManagementSession,
+    _rules_management_proof,
     _management_cursor,
     recover_owned,
     _scan_management_receipt,
@@ -455,6 +456,27 @@ def test_management_scan_allows_only_validated_endpoint_domains() -> None:
     assert _scan_management_receipt({"endpoint": PRODUCTION_ENDPOINT}) is None
     assert _scan_management_receipt({"endpoint": LOCAL_ENDPOINT}) is None
     assert _scan_management_receipt({"note": "firestore.googleapis.com"}) == "credential-leak:token-shaped-value"
+
+
+def test_rules_management_proof_persists_only_typed_projection() -> None:
+    raw = {
+        "name": "projects/fireemu-35fe6/rulesets/server-a",
+        "source": {"files": [{"name": "firestore.rules", "content": "allow read;"}]},
+        "privateToken": "must-not-cross-gate",
+    }
+    proof = _rules_management_proof(
+        "create-a-get",
+        {"action": "get", "rulesetName": raw["name"]},
+        raw,
+        200,
+    )
+    receipt = RulesManagementReceipt(
+        {"status": 200, "complete": True, "workerReaped": True, "body": proof},
+        response_body=raw,
+    )
+    assert receipt["body"]["kind"] == "rules-management-proof-v1"
+    assert "privateToken" not in json.dumps(receipt["body"])
+    assert receipt.response_body == raw
 
 
 def test_management_cursor_keeps_gate_skips_separate_from_receipts() -> None:

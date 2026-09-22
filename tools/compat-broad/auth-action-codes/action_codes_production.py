@@ -26,8 +26,8 @@ import action_codes_admission as admission
 import action_codes_descriptor as descriptor
 import action_codes_gate as gate_module
 import action_codes_remote_transport as remote
-import reservations
 import o8_admission
+import reservations
 from broad_contract import digest
 
 
@@ -102,8 +102,20 @@ def _operation_deadline(now, run_started, *, is_recovery, wall_seconds, recovery
     return min(now + 8, phase_end)
 
 
-def _persist_receipt(output: Path, *, plan: dict, snapshot: dict, reservation: str, error: str | None = None) -> None:
+def _persist_receipt(
+    output: Path,
+    *,
+    plan: dict,
+    snapshot: dict,
+    reservation: str,
+    error: str | None = None,
+    terminal_phase: str = "complete",
+    primary_error: str | None = None,
+    cleanup_errors: list[dict[str, str]] | None = None,
+    reservation_state: str = "unknown",
+) -> None:
     """Persist only bounded execution facts; never persist credentials or bodies."""
+    cleanup_errors = cleanup_errors or []
     receipt = {
         "kind": "auth-action-production-receipt-v1",
         "campaignId": descriptor.CAMPAIGN,
@@ -119,6 +131,14 @@ def _persist_receipt(output: Path, *, plan: dict, snapshot: dict, reservation: s
             "absent": snapshot.get("jobs", {}).get(gate_module.JOB, {}).get("absent", []),
         },
         "error": error,
+        "reservationState": reservation_state,
+        "reservationReleased": reservation_state == "released",
+        "terminal": {
+            "phase": terminal_phase,
+            "primaryError": primary_error,
+            "cleanupErrors": cleanup_errors,
+            "releaseEvidence": reservation_state == "released",
+        },
     }
     path = output / "production-receipt.json"
     with path.open("x", encoding="utf-8") as stream:
@@ -267,38 +287,113 @@ def execute(
                 runtime[name] = response[operation["binds"][name]]
         return result
 
+    snapshot = {}
+    primary_error = None
+    primary_traceback = None
+    terminal_error = None
+    terminal_phase = "complete"
+    cleanup_errors = []
+    reservation_state = "unknown"
+
+    def remember_primary(error, phase, label):
+        nonlocal primary_error, primary_traceback, terminal_error, terminal_phase
+        if primary_error is None:
+            primary_error = error
+            primary_traceback = error.__traceback__
+            terminal_error = label
+            terminal_phase = phase
+
+    def remember_cleanup_error(error, phase):
+        cleanup_errors.append({"phase": phase, "error": type(error).__name__})
+
+    def record_terminal():
+        nonlocal snapshot, reservation_state, primary_error, primary_traceback
+        try:
+            snapshot = handle.snapshot()
+        except Exception as error:  # noqa: BLE001 -- terminal evidence must survive Gate failures.
+            remember_cleanup_error(error, "gate-snapshot")
+            if primary_error is None:
+                remember_primary(error, "terminal-record", "action-terminal-record-failure")
+            snapshot = {}
+        try:
+            ledger_state = ledger.snapshot()
+            row = ledger_state.get("reservations", {}).get(ticket["reservation"])
+            state = row.get("state") if isinstance(row, dict) else None
+            if state in {"held", "released"}:
+                reservation_state = state
+        except Exception as error:  # noqa: BLE001 -- terminal evidence must survive Ledger failures.
+            remember_cleanup_error(error, "ledger-snapshot")
+            if primary_error is None:
+                remember_primary(error, "terminal-record", "action-terminal-record-failure")
+        try:
+            _persist_receipt(
+                output,
+                plan=plan,
+                snapshot=snapshot,
+                reservation=ticket["reservation"],
+                error=terminal_error,
+                terminal_phase=terminal_phase,
+                primary_error=(
+                    type(primary_error).__name__ if primary_error is not None else None
+                ),
+                cleanup_errors=cleanup_errors,
+                reservation_state=reservation_state,
+            )
+        except Exception as error:  # noqa: BLE001 -- preserve the primary failure.
+            remember_cleanup_error(error, "terminal-record")
+            if primary_error is None:
+                primary_error = error
+                primary_traceback = error.__traceback__
+
     try:
-        for operation in observations:
-            dispatch_one(operation, False)
-    except Exception:
-        handle.abandon_observation("action-observation-failure")
-        for operation in recovery:
+        try:
+            for operation in observations:
+                dispatch_one(operation, False)
+        except Exception as error:  # noqa: BLE001 -- preserve the observation failure.
+            remember_primary(
+                error,
+                "observation",
+                "action-observation-failure",
+            )
             try:
-                dispatch_one(operation, True)
-            except Exception:
-                continue
-        _persist_receipt(
-            output,
-            plan=plan,
-            snapshot=handle.snapshot(),
-            reservation=ticket["reservation"],
-            error="action-observation-failure",
-        )
-        raise
-    else:
-        for operation in recovery:
-            dispatch_one(operation, True)
-        handle.finish()
-        ledger.finish(ticket)
-        snapshot = handle.snapshot()
+                handle.abandon_observation("action-observation-failure")
+            except Exception as cleanup_error:  # noqa: BLE001 -- retain cleanup status.
+                remember_cleanup_error(cleanup_error, "observation-abandon")
+            for operation in recovery:
+                try:
+                    dispatch_one(operation, True)
+                except Exception as cleanup_error:  # noqa: BLE001 -- retain cleanup status.
+                    remember_cleanup_error(cleanup_error, "recovery")
+        else:
+            for operation in recovery:
+                try:
+                    dispatch_one(operation, True)
+                except Exception as error:  # noqa: BLE001 -- preserve the recovery failure.
+                    remember_primary(error, "recovery", "action-recovery-failure")
+                    break
+            if primary_error is None:
+                try:
+                    handle.finish()
+                except Exception as error:  # noqa: BLE001 -- preserve Gate finish refusal.
+                    remember_primary(error, "gate-finish", "action-gate-finish-failure")
+            if primary_error is None:
+                try:
+                    ledger.finish(ticket)
+                    ledger_state = ledger.snapshot()
+                    row = ledger_state.get("reservations", {}).get(ticket["reservation"])
+                    if not isinstance(row, dict) or row.get("state") != "released":
+                        raise ValueError("reservation release evidence missing")
+                except Exception as error:  # noqa: BLE001 -- never imply an unverified release.
+                    remember_primary(error, "ledger-finish", "action-ledger-finish-failure")
     finally:
-        remote.forget_transport(inputs["inputsDigest"])
-    _persist_receipt(
-        output,
-        plan=plan,
-        snapshot=snapshot,
-        reservation=ticket["reservation"],
-    )
+        try:
+            remote.forget_transport(inputs["inputsDigest"])
+        except Exception as error:  # noqa: BLE001 -- transport cleanup cannot replace primary failure.
+            remember_primary(error, "transport-forget", "action-transport-cleanup-failure")
+        record_terminal()
+
+    if primary_error is not None:
+        raise primary_error.with_traceback(primary_traceback)
     return {
         "campaignId": descriptor.CAMPAIGN,
         "planDigest": digest(plan),
@@ -307,7 +402,7 @@ def execute(
         "requests": snapshot["total"],
         "observation": snapshot["observation"],
         "recovery": snapshot["recovery"],
-        "reservation": ledger.snapshot()["reservations"][ticket["reservation"]]["state"],
+        "reservation": reservation_state,
     }
 
 

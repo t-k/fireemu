@@ -8,6 +8,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,14 +21,13 @@ sys.path.insert(0, str(HERE))
 
 import action_codes_admission as admission
 import action_codes_descriptor as descriptor
-import action_codes_production as production
 import action_codes_plan as plan_module
-from action_codes_remote_transport import _tokeninfo_valid
+import action_codes_production as production
 import reservations
+from action_codes_remote_transport import _tokeninfo_valid
 
 from broad_contract import digest
-from test_action_codes_admission import _artifacts
-from test_action_codes_admission import FIXTURE_PRINCIPAL
+from test_action_codes_admission import FIXTURE_PRINCIPAL, _artifacts
 
 
 NONCE = "b" * 32
@@ -355,3 +355,232 @@ def test_observation_failure_attempts_all_known_cleanup_and_holds_unknown_signup
     assert actual_recovery_paths
     assert all(path in expected_recovery_paths for path in actual_recovery_paths)
     assert not any(path.endswith("accounts:delete") for path in actual_recovery_paths)
+
+
+# F4: all post-observation terminal failures use the same bounded receipt path.
+class _F4TerminalHarness:
+    def __init__(self, tmp_path, failure):
+        self.failure = failure
+        self.released = False
+        self.gate_finished = False
+        self.remote_forgotten = False
+        self.output = tmp_path / "output"
+        self.ledger_root = tmp_path / "ledger"
+        self.ledger_root.mkdir(parents=True)
+        (self.ledger_root / "state.json").write_text("{}")
+
+        harness = self
+
+        class Capability:
+            def _consume(self, **_kwargs):
+                return None
+
+        class Ledger:
+            def __init__(self, _path):
+                pass
+
+            def reserve(self, *_args, **_kwargs):
+                return {"reservation": "f4-reservation"}
+
+            def finish(self, _ticket):
+                if harness.failure == "ledger-finish":
+                    raise ValueError("ledger-finish-refused")
+                harness.released = True
+
+            def snapshot(self):
+                return {
+                    "reservations": {
+                        "f4-reservation": {
+                            "state": "released" if harness.released else "held"
+                        }
+                    }
+                }
+
+        class Gate:
+            def __init__(self, _path, _job):
+                self.observation = 0
+                self.recovery = 0
+
+            def claim(self):
+                return None
+
+            def management_dispatch(self, _phase, _slot, send):
+                return send(999.0)
+
+            def dispatch(self, operation, recovery, send):
+                if recovery and harness.failure == "recovery-timeout":
+                    raise TimeoutError("recovery-response-lost")
+                if recovery:
+                    self.recovery += 1
+                else:
+                    self.observation += 1
+                return send()
+
+            def abandon_observation(self, _reason):
+                return None
+
+            def finish(self):
+                if harness.failure == "gate-finish":
+                    raise ValueError("gate-finish-refused")
+                harness.gate_finished = True
+
+            def snapshot(self):
+                return {
+                    "total": self.observation + self.recovery + 2,
+                    "observation": self.observation + 2,
+                    "recovery": self.recovery,
+                    "jobs": {
+                        "auth-action": {
+                            "complete": harness.gate_finished,
+                            "owned": [],
+                            "absent": [],
+                        }
+                    },
+                }
+
+        class Remote:
+            GENERATED_BINDINGS = frozenset()
+
+            @staticmethod
+            def make_transport(**_kwargs):
+                return None
+
+            @staticmethod
+            def management_receipt(**_kwargs):
+                return {"complete": True}
+
+            @staticmethod
+            def send(_capability, **kwargs):
+                if (
+                    kwargs["stage_id"] == "observe-one"
+                    and harness.failure == "observation"
+                ):
+                    raise TimeoutError("observation-response-lost")
+                if kwargs["stage_id"] == "recover-one":
+                    return 200, {"users": []}
+                return 200, {"localId": "f4-uid"}
+
+            @staticmethod
+            def forget_transport(_inputs_digest):
+                harness.remote_forgotten = True
+
+        self.Capability = Capability
+        self.Ledger = Ledger
+        self.Gate = Gate
+        self.Remote = Remote
+
+
+def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
+    tmp_path, monkeypatch
+):
+    """Every terminal failure retains one held record and its primary error."""
+    expected = {
+        "observation": ("observation", "TimeoutError"),
+        "recovery-timeout": ("recovery", "TimeoutError"),
+        "gate-finish": ("gate-finish", "ValueError"),
+        "ledger-finish": ("ledger-finish", "ValueError"),
+    }
+    for failure, (expected_phase, expected_error) in expected.items():
+        case = _F4TerminalHarness(tmp_path / failure, failure)
+        worker = case.output.parent / "worker.fixture"
+        worker.write_bytes(b"fixture worker")
+        monkeypatch.setattr(production, "ROOT", case.output.parent)
+        monkeypatch.setattr(
+            production,
+            "descriptor",
+            SimpleNamespace(
+                CAMPAIGN="AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01",
+                WORKER_ENTRY="worker.fixture",
+                lock_scopes=lambda _plan: [],
+            ),
+        )
+        monkeypatch.setattr(
+            production,
+            "admission",
+            SimpleNamespace(validate_frozen_inputs=lambda _inputs: None),
+        )
+        monkeypatch.setattr(
+            production,
+            "o8_admission",
+            SimpleNamespace(issued_capability=lambda _capability: True),
+        )
+        operation = {
+            "id": "observe-one",
+            "service": "auth",
+            "body": {},
+        }
+        recovery = {
+            "id": "recover-one",
+            "service": "auth",
+            "body": {},
+        }
+        plan = {
+            "nonce": "a" * 32,
+            "stages": [operation],
+            "recovery": [recovery],
+        }
+        gate_plan = {
+            "jobs": {
+                "auth-action": {
+                    "resources": [],
+                    "observation": [operation],
+                    "recovery": [recovery],
+                }
+            },
+            "costMicrousd": 4,
+            "wallSeconds": 300,
+            "recoverySeconds": 180,
+        }
+        monkeypatch.setattr(
+            production,
+            "gate_module",
+            SimpleNamespace(
+                JOB="auth-action",
+                gate_plan=lambda _project, _nonce, frozen_plan=gate_plan: frozen_plan,
+                create=lambda *_args: None,
+                ActionGate=case.Gate,
+            ),
+        )
+        monkeypatch.setattr(
+            production,
+            "reservations",
+            SimpleNamespace(Ledger=case.Ledger),
+        )
+        monkeypatch.setattr(production, "remote", case.Remote)
+        monkeypatch.setattr(
+            production,
+            "_claim",
+            lambda *_args, **_kwargs: {"campaignId": "fixture", "inputsDigest": "fixture"},
+        )
+        monkeypatch.setattr(
+            production,
+            "_envelope",
+            lambda *_args, **_kwargs: {},
+        )
+        permission = {"projectId": "fireemu-35fe6"}
+        inputs = {
+            "plan": plan,
+            "planDigest": digest(plan),
+            "permissionDigest": digest(permission),
+            "inputsDigest": "fixture",
+        }
+        with pytest.raises((TimeoutError, ValueError)):
+            production.execute(
+                capability=case.Capability(),
+                inputs=inputs,
+                permission=permission,
+                ledger_root=case.ledger_root,
+                output=case.output,
+                bindings={},
+                credential_handoff={},
+                verify_handoff=lambda *_args: None,
+                fixture_origin="http://127.0.0.1:1",
+            )
+        receipt = json.loads((case.output / "production-receipt.json").read_text())
+        assert receipt["error"] is not None
+        assert receipt["reservationState"] == "held"
+        assert receipt["reservationReleased"] is False
+        assert receipt["terminal"]["releaseEvidence"] is False
+        assert receipt["terminal"]["phase"] == expected_phase
+        assert receipt["terminal"]["primaryError"] == expected_error
+        assert case.remote_forgotten

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
-import stat
 from pathlib import Path
 
 import pytest
@@ -122,6 +122,66 @@ def test_read_snapshot_refuses_mutation(tmp_path: Path) -> None:
         authority.read(path, snapshots=snapshots)
 
 
+def test_projection_metrics_identical_projections_have_no_differences() -> None:
+    authority = __import__("current_authority")
+    projection = [{"events": [{"type": "status", "value": {"code": 5}}]}]
+    assert authority.v1_projection_metrics({"differences": {"production": projection, "local": projection}}) == {
+        "v1ComparedSlotCount": 1,
+        "v1DifferingSlotCount": 0,
+        "v1DifferenceLeafCount": 0,
+    }
+
+
+def test_projection_metrics_count_single_and_multiple_leaves() -> None:
+    authority = __import__("current_authority")
+    comparison = {
+        "differences": {
+            "production": [{"status": {"code": 5, "message": "a"}}, {"value": 1}],
+            "local": [{"status": {"code": 5, "message": "b"}}, {"value": 2}],
+        }
+    }
+    assert authority.v1_projection_metrics(comparison) == {
+        "v1ComparedSlotCount": 2,
+        "v1DifferingSlotCount": 2,
+        "v1DifferenceLeafCount": 2,
+    }
+
+
+def test_projection_metrics_count_missing_array_items_and_typed_values() -> None:
+    authority = __import__("current_authority")
+    comparison = {
+        "differences": {
+            "production": [{"values": [False, {"present": True}]}],
+            "local": [{"values": [0]}],
+        }
+    }
+    assert authority.v1_projection_metrics(comparison) == {
+        "v1ComparedSlotCount": 1,
+        "v1DifferingSlotCount": 1,
+        "v1DifferenceLeafCount": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    ("production", "local"),
+    [
+        (False, 0),
+        ({"value": {"enabled": False}}, {"value": {"enabled": 0}}),
+    ],
+)
+def test_projection_metrics_typed_boolean_number_differences_count_slots(
+    production: object, local: object
+) -> None:
+    authority = __import__("current_authority")
+    assert authority.v1_projection_metrics(
+        {"differences": {"production": [production], "local": [local]}}
+    ) == {
+        "v1ComparedSlotCount": 1,
+        "v1DifferingSlotCount": 1,
+        "v1DifferenceLeafCount": 1,
+    }
+
+
 def test_missing_configured_root_refuses_without_output(tmp_path: Path) -> None:
     result = run_authority(tmp_path)
     assert result.returncode == 2
@@ -139,13 +199,14 @@ def test_private_current_receipt_is_sanitized_and_bounded(tmp_path: Path) -> Non
     assert summary["promotionReady"] is False
     assert summary["classification"] in {"MATCH", "MISMATCH", "EXPECTED_NONDETERMINISM"}
     assert summary["classification"] != "INDETERMINATE"
-    assert summary["rowCounts"] == {
-        "observations": 15,
-        "recoveryObservations": 10,
-        "gateEvents": 23,
-        "v1DifferenceCount": summary["rowCounts"]["v1DifferenceCount"],
-        "indeterminate": 0,
-    }
+    assert summary["rowCounts"]["observations"] == 15
+    assert summary["rowCounts"]["recoveryObservations"] == 10
+    assert summary["rowCounts"]["gateEvents"] == 23
+    assert summary["rowCounts"]["v1ComparedSlotCount"] == 15
+    assert summary["rowCounts"]["v1DifferingSlotCount"] == 5
+    assert summary["rowCounts"]["v1DifferenceLeafCount"] == 32
+    assert "v1DifferenceCount" not in summary["rowCounts"]
+    assert summary["rowCounts"]["indeterminate"] == 0
     assert summary["bindings"]["runtimeInputCount"] == 430
     assert summary["productionExecuted"] is False
     assert stat.S_IMODE((tmp_path / "out.json").stat().st_mode) == 0o600

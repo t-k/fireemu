@@ -38,6 +38,60 @@ def require(condition: bool, label: str) -> None:
         raise ValueError(label)
 
 
+MISSING = object()
+
+
+def json_difference_leaf_count(left: object, right: object) -> int:
+    """Count differing JSON leaves, treating a missing typed leaf as one difference."""
+    if left is MISSING or right is MISSING:
+        return 1
+    if type(left) is not type(right):
+        return 1
+    if isinstance(left, dict):
+        assert isinstance(right, dict)
+        keys = set(left) | set(right)
+        return sum(json_difference_leaf_count(left.get(key, MISSING), right.get(key, MISSING)) for key in keys)
+    if isinstance(left, list):
+        assert isinstance(right, list)
+        length = max(len(left), len(right))
+        return sum(
+            json_difference_leaf_count(
+                left[index] if index < len(left) else MISSING,
+                right[index] if index < len(right) else MISSING,
+            )
+            for index in range(length)
+        )
+    return int(left != right)
+
+
+def v1_projection_metrics(comparison: dict) -> dict[str, int]:
+    """Return slot and leaf counts from the comparator's JSON projection only."""
+    differences = comparison.get("differences")
+    if not isinstance(differences, dict):
+        return {
+            "v1ComparedSlotCount": 0,
+            "v1DifferingSlotCount": 0,
+            "v1DifferenceLeafCount": 0,
+        }
+    production = differences.get("production")
+    local = differences.get("local")
+    require(isinstance(production, list) and isinstance(local, list), "V1 projection differences must be arrays")
+    require(len(production) == len(local), "V1 projection side lengths differ")
+    differing_slots = sum(
+        json_difference_leaf_count(left, right) > 0
+        for left, right in zip(production, local, strict=True)
+    )
+    leaf_count = sum(
+        json_difference_leaf_count(left, right)
+        for left, right in zip(production, local, strict=True)
+    )
+    return {
+        "v1ComparedSlotCount": len(production),
+        "v1DifferingSlotCount": differing_slots,
+        "v1DifferenceLeafCount": leaf_count,
+    }
+
+
 def sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
@@ -230,7 +284,7 @@ const v2 = compareStreamReceiptsV2({production:x.production, local:x.local, expe
 process.stdout.write(JSON.stringify({
   v1Classification: v1Comparison.classification,
   v2Classification: v2.classification,
-  v1DifferenceCount: v1Comparison.differences?.production?.length ?? 0,
+  v1Comparison,
   v1Indeterminate: v1Comparison.classification === 'INDETERMINATE' ? 1 : 0,
   v2Indeterminate: v2.classification === 'INDETERMINATE' ? 1 : 0,
 }));
@@ -247,7 +301,9 @@ process.stdout.write(JSON.stringify({
     require(result.returncode == 0, "comparison execution failed")
     value = json.loads(result.stdout)
     require(value["v1Indeterminate"] == 0 and value["v2Indeterminate"] == 0, "comparison proof incomplete")
-    return value
+    metrics = v1_projection_metrics(value["v1Comparison"])
+    del value["v1Comparison"]
+    return {**value, **metrics}
 
 
 def run(args: argparse.Namespace) -> dict:
@@ -306,7 +362,9 @@ def run(args: argparse.Namespace) -> dict:
             "observations": len(receipt.get("collection", {}).get("observations", [])),
             "recoveryObservations": len(receipt.get("collection", {}).get("recoveryObservations", [])),
             "gateEvents": len(receipt.get("gate", {}).get("events", [])),
-            "v1DifferenceCount": result["v1DifferenceCount"],
+            "v1ComparedSlotCount": result["v1ComparedSlotCount"],
+            "v1DifferingSlotCount": result["v1DifferingSlotCount"],
+            "v1DifferenceLeafCount": result["v1DifferenceLeafCount"],
             "indeterminate": result["v1Indeterminate"] + result["v2Indeterminate"],
         },
         "bindings": {

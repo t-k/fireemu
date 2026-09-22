@@ -162,6 +162,26 @@ def test_projection_metrics_count_missing_array_items_and_typed_values() -> None
     }
 
 
+@pytest.mark.parametrize(
+    ("production", "local"),
+    [
+        (False, 0),
+        ({"value": {"enabled": False}}, {"value": {"enabled": 0}}),
+    ],
+)
+def test_projection_metrics_typed_boolean_number_differences_count_slots(
+    production: object, local: object
+) -> None:
+    authority = __import__("current_authority")
+    assert authority.v1_projection_metrics(
+        {"differences": {"production": [production], "local": [local]}}
+    ) == {
+        "v1ComparedSlotCount": 1,
+        "v1DifferingSlotCount": 1,
+        "v1DifferenceLeafCount": 1,
+    }
+
+
 def test_missing_configured_root_refuses_without_output(tmp_path: Path) -> None:
     result = run_authority(tmp_path)
     assert result.returncode == 2

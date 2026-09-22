@@ -77,7 +77,10 @@ def v1_projection_metrics(comparison: dict) -> dict[str, int]:
     local = differences.get("local")
     require(isinstance(production, list) and isinstance(local, list), "V1 projection differences must be arrays")
     require(len(production) == len(local), "V1 projection side lengths differ")
-    differing_slots = sum(left != right for left, right in zip(production, local, strict=True))
+    differing_slots = sum(
+        json_difference_leaf_count(left, right) > 0
+        for left, right in zip(production, local, strict=True)
+    )
     leaf_count = sum(
         json_difference_leaf_count(left, right)
         for left, right in zip(production, local, strict=True)

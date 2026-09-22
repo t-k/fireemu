@@ -463,7 +463,7 @@ class _F4TerminalHarness:
             def send(_capability, **kwargs):
                 if (
                     kwargs["stage_id"] == "observe-one"
-                    and harness.failure == "observation"
+                    and harness.failure in {"observation", "observation-transport-forget"}
                 ):
                     raise TimeoutError("observation-response-lost")
                 if kwargs["stage_id"] == "recover-one":
@@ -472,6 +472,8 @@ class _F4TerminalHarness:
 
             @staticmethod
             def forget_transport(_inputs_digest):
+                if harness.failure in {"transport-forget", "observation-transport-forget"}:
+                    raise ValueError("transport-forget-refused")
                 harness.transport_open = False
                 harness.remote_forgotten = True
 
@@ -501,6 +503,8 @@ def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
         "gate-create": ("gate-setup", "ValueError"),
         "gate-construct": ("gate-setup", "ValueError"),
         "gate-claim": ("gate-setup", "ValueError"),
+        "transport-forget": ("complete", None),
+        "observation-transport-forget": ("observation", "TimeoutError"),
     }
     for failure, (expected_phase, expected_error) in expected.items():
         case = _F4TerminalHarness(tmp_path / failure, failure)
@@ -587,24 +591,40 @@ def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
             "permissionDigest": digest(permission),
             "inputsDigest": "fixture",
         }
-        with pytest.raises((TimeoutError, ValueError, FileNotFoundError)):
-            production.execute(
-                capability=case.Capability(),
-                inputs=inputs,
-                permission=permission,
-                ledger_root=case.ledger_root,
-                output=case.output,
-                bindings={},
-                credential_handoff={},
-                verify_handoff=lambda *_args: None,
-                fixture_origin="http://127.0.0.1:1",
-            )
+        execute_kwargs = {
+            "capability": case.Capability(),
+            "inputs": inputs,
+            "permission": permission,
+            "ledger_root": case.ledger_root,
+            "output": case.output,
+            "bindings": {},
+            "credential_handoff": {},
+            "verify_handoff": lambda *_args: None,
+            "fixture_origin": "http://127.0.0.1:1",
+        }
+        if failure == "transport-forget":
+            result = production.execute(**execute_kwargs)
+            assert result["reservation"] == "released"
+        else:
+            with pytest.raises((TimeoutError, ValueError, FileNotFoundError)):
+                production.execute(**execute_kwargs)
         receipt = json.loads((case.output / "production-receipt.json").read_text())
-        assert receipt["error"] is not None
-        assert receipt["reservationState"] == "held"
-        assert receipt["reservationReleased"] is False
-        assert receipt["terminal"]["releaseEvidence"] is False
+        if failure == "transport-forget":
+            assert receipt["error"] is None
+            assert receipt["reservationState"] == "released"
+            assert receipt["reservationReleased"] is True
+            assert receipt["terminal"]["releaseEvidence"] is True
+        else:
+            assert receipt["reservationState"] == "held"
+            assert receipt["reservationReleased"] is False
+            assert receipt["terminal"]["releaseEvidence"] is False
         assert receipt["terminal"]["phase"] == expected_phase
         assert receipt["terminal"]["primaryError"] == expected_error
-        assert case.remote_forgotten is (expected_phase != "gate-setup")
-        assert case.transport_open is False
+        assert any(
+            entry["phase"] == "transport-forget"
+            for entry in receipt["terminal"]["cleanupErrors"]
+        ) is ("transport-forget" in failure)
+        assert case.remote_forgotten is (
+            expected_phase != "gate-setup" and "transport-forget" not in failure
+        )
+        assert case.transport_open is ("transport-forget" in failure)

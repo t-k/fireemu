@@ -256,7 +256,7 @@ def execute(
             try:
                 remote.forget_transport(inputs["inputsDigest"])
             except Exception as error:  # noqa: BLE001 -- transport cleanup cannot replace primary failure.
-                remember_primary(error, "transport-forget", "action-transport-cleanup-failure")
+                remember_cleanup_error(error, "transport-forget")
         record_terminal()
 
     try:

@@ -482,7 +482,10 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
     descriptor = lane.descriptor()
     record = lane.shadow_record()
     plan = lane.plan_compiler(NONCE)
-    production, _ = bound(ROLE_PRODUCTION)
+    production = descriptor.collector(
+        plan, bound_transport(plan, ROLE_PRODUCTION), run_id="preparation-only",
+        acquisition=acquisition_for(plan, ROLE_PRODUCTION),
+    )
     result = descriptor.comparator(production, plan)
     assert result["classification"] == REFUSED
     assert "local:campaign-identity-drift" in result["errors"]
@@ -494,10 +497,10 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
         acquisition=acquisition_for(shadow_plan, ROLE_PRODUCTION),
     )
     result = descriptor.comparator(production, shadow_plan)
-    # The published local shadow is a valid reference, while this side is only
-    # a preparation bundle with no production management session. The
-    # comparator must preserve that uncertainty rather than call it refusal.
-    assert result["classification"] == "INDETERMINATE"
+    # No management session means no production authority evidence. Preserve
+    # the explicit refusal; this preparation bundle is not a parity result.
+    assert result["classification"] == REFUSED
+    assert "production:missing-binding:rulesetReleases" in result["errors"]
     assert "production:recording-incomplete" in result["errors"]
     assert "production:recording-aborted" in result["errors"]
 
@@ -643,7 +646,10 @@ def test_a_reference_bundle_of_another_build_is_refused() -> None:
     descriptor = lane.descriptor()
     record = lane.shadow_record()
     plan = lane.plan_compiler(record["nonce"])
-    production, _ = bound(ROLE_PRODUCTION)
+    production = descriptor.collector(
+        plan, bound_transport(plan, ROLE_PRODUCTION), run_id="preparation-only",
+        acquisition=acquisition_for(plan, ROLE_PRODUCTION),
+    )
     other = json.loads(json.dumps(record["bundle"]))
     other["acquisition"]["artifact"]["artifactSha256"] = "0" * 64
     result = descriptor.comparator(production, plan, other)

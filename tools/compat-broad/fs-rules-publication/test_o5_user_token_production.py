@@ -362,6 +362,8 @@ def test_launcher_requires_canonical_ledger_and_gate_objects() -> None:
 def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
     tmp_path, monkeypatch, failure_after
 ) -> None:
+    _ProducerHandler.active = "projects/fireemu-35fe6/rulesets/pre-existing"
+    _ProducerHandler.deleted = set()
     _ProducerHandler._plan = None
     _ProducerHandler.setup_uids = {}
     _ProducerHandler.requests = []

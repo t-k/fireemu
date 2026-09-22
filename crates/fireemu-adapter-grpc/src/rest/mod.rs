@@ -1599,6 +1599,32 @@ fn database_of(resource: &str) -> Result<String, Status> {
         })
 }
 
+/// Recognizes only the strict REST Commit resource route. The custom-method suffix is
+/// checked before decoding so encoded colons remain document data rather than routing syntax.
+pub(crate) fn is_strict_commit_route(method: &str, raw_path: &str) -> bool {
+    if method != "POST" {
+        return false;
+    }
+    let Some((raw_resource, action)) = raw_path.rsplit_once(':') else {
+        return false;
+    };
+    if action != "commit" {
+        return false;
+    }
+    let Ok(resource) = decode_path(raw_resource) else {
+        return false;
+    };
+    let Some(path) = resource.strip_prefix("/v1/") else {
+        return false;
+    };
+    let segments: Vec<&str> = path.split('/').collect();
+    matches!(
+        segments.as_slice(),
+        ["projects", project, "databases", database, "documents"]
+            if !project.is_empty() && !database.is_empty()
+    )
+}
+
 /// `transaction`, `readTime` and `newTransaction` form a oneof: at most one may be given.
 fn exclusive_selectors(body: &Value) -> Result<(), Status> {
     let given = ["transaction", "readTime", "newTransaction"]

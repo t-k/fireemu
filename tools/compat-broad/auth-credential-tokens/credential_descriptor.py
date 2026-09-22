@@ -581,6 +581,7 @@ def preparation_descriptor() -> CampaignDescriptor:
         permission_kind=PREPARATION_PERMISSION_KIND,
         approval_kind=PREPARATION_APPROVAL_KIND,
         manifest_kind=PREPARATION_MANIFEST_KIND,
+        permission_bindings=preparation_permission_bindings,
     )
     return CampaignDescriptor(**members)
 

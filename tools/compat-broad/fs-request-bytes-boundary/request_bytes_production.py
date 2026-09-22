@@ -7,6 +7,7 @@ zero-dispatch failure remains held until an external owner proves worker exit.
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -21,7 +22,15 @@ import request_bytes_preflight as preflight
 import reservations
 import shared_gate
 from broad_contract import digest
-from request_bytes_collector import _validated_response, collect_local, complete
+from request_bytes_collector import (
+    SEMANTIC_OUTCOMES,
+    _validated_response,
+    commit_versions,
+    cleanup_safety_complete,
+    collect_local,
+    complete,
+    typed_over_refusal,
+)
 
 
 def _envelope(permission: dict, claim: dict) -> dict:
@@ -212,7 +221,10 @@ def execute(
             return receipt
 
         result = collect_local(plan, execute_wire, output / "collection", gate=gates)
-        if result.get("completed") and result.get("cleanupComplete"):
+        if (
+            result.get("cleanupSafetyComplete") is True
+            and cleanup_safety_complete(result)
+        ):
             management.run("recovery")
             for gate in gates.values():
                 gate.finish()
@@ -398,8 +410,10 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
     routes = _read_saved(output / "routes.json")["rows"]
     if (
         collection != receipt.get("collection")
-        or collection.get("completed") is not True
-        or collection.get("cleanupComplete") is not True
+        or collection.get("cleanupSafetyComplete") is not True
+        or not cleanup_safety_complete(collection)
+        or collection.get("formalCompatibilityClaim") is not False
+        or collection.get("semanticOutcome") not in SEMANTIC_OUTCOMES
         # The Gate total counts the seven charged management slots as well as
         # the data routes; the route journal carries only the data routes.
         or len(routes) + len(snapshot.get("managementEvents", []))
@@ -418,6 +432,7 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
         or receipt.get("routeDigest") != digest(receipt.get("metadata"))
     ):
         raise ValueError("saved route journal differs")
+    actual_semantic_outcome = None
     for route, event in zip(routes, snapshot["events"], strict=True):
         # Job order in canonical JSON is alphabetical, so recover the compiler
         # order from its fixed scope names rather than serialized object order.
@@ -489,6 +504,47 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
             or route["route"] != expected_path
         ):
             raise ValueError("saved routes differ from charged Gate events")
+        if (
+            operation.get("probe") == "over"
+            and operation.get("kind") == "conditional-create-commit"
+        ):
+            response = {
+                "complete": event.get("completed") is True,
+                "failure": None,
+                "status": event.get("status"),
+                "body": json.loads(raw),
+                "rawBodyBase64": base64.b64encode(raw).decode("ascii"),
+                "bodyBytes": len(raw),
+            }
+            resources = snapshot["jobs"][event["job"]]["resources"]
+            if typed_over_refusal(response):
+                actual_semantic_outcome = "typed-over-refusal"
+            elif commit_versions(response, resources) is not None:
+                actual_semantic_outcome = "unexpected-over-success"
+            else:
+                actual_semantic_outcome = "unknown-over-outcome"
+    if actual_semantic_outcome is None:
+        raise ValueError("saved over-boundary semantic event missing")
+    if collection["semanticOutcome"] != actual_semantic_outcome:
+        raise ValueError("saved semantic outcome differs from Gate event")
+    if collection["formalCompatibilityClaim"] is not False:
+        raise ValueError("saved compatibility claim differs")
+    if actual_semantic_outcome == "unexpected-over-success":
+        if (
+            collection.get("failures") != ["over:unexpected-success"]
+            or collection.get("completed") is not False
+            or collection.get("cleanupComplete") is not False
+        ):
+            raise ValueError("saved semantic mismatch evidence differs")
+    elif actual_semantic_outcome == "typed-over-refusal":
+        if (
+            collection.get("failures") != []
+            or collection.get("completed") is not True
+            or collection.get("cleanupComplete") is not True
+        ):
+            raise ValueError("saved typed refusal evidence differs")
+    else:
+        raise ValueError("saved over-boundary semantic outcome is unknown")
     for name, job in snapshot["jobs"].items():
         if not job["complete"] or shared_gate.unconfirmed_creates(snapshot, name):
             raise ValueError("saved Gate cleanup incomplete")

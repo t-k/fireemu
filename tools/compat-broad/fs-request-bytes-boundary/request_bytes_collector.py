@@ -26,6 +26,10 @@ from request_bytes_compiler import (
 MAX_ROW_BYTES = 131_072
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$")
+SEMANTIC_ONLY_FAILURES = frozenset({"over:unexpected-success"})
+SEMANTIC_OUTCOMES = frozenset(
+    {"typed-over-refusal", "unexpected-over-success", "unknown-over-outcome"}
+)
 
 
 def _valid_timestamp(value: str) -> bool:
@@ -96,6 +100,17 @@ def complete(receipt: Any) -> bool:
         and type(receipt.get("status")) is int
         and 100 <= receipt["status"] <= 599
         and "body" in receipt
+    )
+
+
+def cleanup_safety_complete(result: Any) -> bool:
+    """Recompute safe retirement from owned-state evidence, not compatibility."""
+    if not isinstance(result, dict) or result.get("resourceAbsence") is not True:
+        return False
+    failures = result.get("failures")
+    return isinstance(failures, list) and all(
+        isinstance(failure, str) and failure in SEMANTIC_ONLY_FAILURES
+        for failure in failures
     )
 
 
@@ -826,6 +841,12 @@ def collect_local(
             item for probe in plan["probes"] for item in probe["resources"]
         }
         absence = all_resources == set().union(*absence_proofs.values())
+        if "over:unexpected-success" in failures:
+            semantic_outcome = "unexpected-over-success"
+        elif over_refusal_observation is not None:
+            semantic_outcome = "typed-over-refusal"
+        else:
+            semantic_outcome = "unknown-over-outcome"
         result = {
             "productionExecuted": False,
             "localOnly": True,
@@ -838,8 +859,12 @@ def collect_local(
             "requestCount": dispatches,
             "resourceAbsence": absence,
             "cleanupComplete": absence and not failures,
+            "cleanupSafetyComplete": cleanup_safety_complete(
+                {"resourceAbsence": absence, "failures": failures}
+            ),
             "completed": not failures,
             "failures": failures,
+            "semanticOutcome": semantic_outcome,
         }
         if over_refusal_observation is not None:
             result["overRefusal"] = over_refusal_observation

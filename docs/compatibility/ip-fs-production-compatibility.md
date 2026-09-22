@@ -14,6 +14,12 @@ The aggregation replay is retained at `docs.local/runs/saved-aggregations-native
 
 These are finite normalized comparisons of retained production observations. They made no fresh production requests, do not establish general query/index or pagination compatibility, and do not promote a parent. Their row counts are not combined into a finite-condition total. `COMPAT_VERIFIED` remains `0 / 14`.
 
+## First46 saved replay on retained artifact `648`
+
+The First46 replay at execution source `7694b1c7d3ff2713bfe18458426153a50e9cbfd4` used the retained artifact from source `648aabe56cf6147128ffadf565d93ca7a92013c1`, with artifact SHA-256 `7737f6c389aff0a0f280757591af3b81f11edfbc8438cb69268da0f4c2237026` and the complete 430-entry runtime-input map digest `7e2b0bc7037e0caf9f979f052c69a3820a398c8df72de8dbd19f1aac2f524331`. The comparator matched all 46 saved normalized production observations (46 MATCH, 0 MISMATCH, 0 INDETERMINATE); bindings, recording and cleanup were complete, and the batch completed with no unrecovered resources. The refusal sequence matched the saved observations: a normal read returned 200, the refused overwrite returned 409 with `ALREADY_EXISTS`, and the read after refusal returned 200. The enclosing seven-row sequence returned `200, 409, 200, 200, 200, 400, 200`.
+
+This is a finite local replay against the retained normalized observations from publication `ab7bd698` / execution `bc38f392077784509f7fbb8993d5be66c1a8be14`; no fresh production request was made. The original publication's 35-match/11-mismatch result remains unchanged, and removed token bytes and absolute times are not recoverable from the normalized observations. Independent review approves only this saved-observation comparison and the stated refusal/recovery evidence. It does not establish behavior for the full parent campaign, promote `FS-DATA-WRITE`, or contribute an aggregated finite-condition total; `COMPAT_VERIFIED` remains `0 / 14`. The author report and independent review are retained at [`2026-09-23-first46-648-replay.md`](../../docs.local/reviews/2026-09-23-first46-648-replay.md) and [`2026-09-23-first46-648-replay-independent.md`](../../docs.local/reviews/2026-09-23-first46-648-replay-independent.md).
+
 ## Checkpoint 8d7: finite production and local progress
 
 This checkpoint is source `8d7a02de0d60564184d0cf80292e2278cd6e9d2c`; the request-byte exact-replay runtime source is `ba4a026363d6ec05267cf646439c10d729ab805f`, and the retained artifact SHA-256 is `903728746e512d158363c092196e015f79805ab513757a5924d319c8dac0996d`.

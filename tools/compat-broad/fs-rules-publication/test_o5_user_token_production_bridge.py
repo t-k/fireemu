@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace as Namespace
 
@@ -27,6 +28,48 @@ from reservations import Ledger
 
 def _plan():
     return case.compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant-test")
+
+
+def _owned_account_gate(tmp_path):
+    plan = descriptor.gate_plan(
+        _plan(), permission_expires_at=time.time() + 900
+    )
+    path = tmp_path / "gate"
+    shared_gate.create(path, plan)
+    gate = shared_gate.Gate(path, "rules-management")
+    gate.claim()
+    effect = {
+        "subject": "account/owner-a",
+        "proof": {
+            "kind": "account",
+            "accountRef": "owner-a",
+            "tenantId": None,
+            "uid": "uid-owner",
+        },
+    }
+    receipt = {
+        "status": 200,
+        "complete": True,
+        "workerReaped": True,
+        "bodyKind": "json",
+        "body": {
+            "kind": "rules-management-proof-v1",
+            "responseDigest": "0" * 64,
+            "effects": [effect],
+        },
+    }
+    gate.management_dispatch(
+        "observation", "setup/account/owner-a/signup", lambda _deadline: receipt
+    )
+    gate.cancel_management_observation()
+    return gate, receipt
+
+
+def _prefix_digest(gate):
+    snapshot = gate.snapshot()
+    return digest(
+        {"used": snapshot["managementUsed"], "skipped": snapshot["managementSkipped"]}
+    )
 
 
 def test_initial_packet_uses_admin_and_api_key_without_preexisting_users(tmp_path):
@@ -59,6 +102,44 @@ def test_shared_inventory_preserves_authoritative_gate_status(tmp_path):
     assert len(ownership) == 21
     assert all(state["status"] == "not-attempted" for state in ownership.values())
     assert gate.snapshot() == before
+
+
+@pytest.mark.parametrize(
+    "subject",
+    ["document/owned-a", "account/other-b", "account/foreign"],
+)
+def test_gate_rejects_forged_or_not_yet_owned_recovery_holds(tmp_path, subject):
+    gate, _receipt = _owned_account_gate(tmp_path)
+    state = gate.snapshot()
+    state["rulesRecoveryHeld"] = {
+        subject: {"kind": "identity-proof-unavailable-v1", "failure": "ValueError"}
+    }
+    shared_gate._save(gate.path, state)
+    with pytest.raises(ValueError, match="held recovery"):
+        gate.snapshot()
+
+
+def test_gate_rejects_hold_after_account_recovery_read(tmp_path):
+    gate, receipt = _owned_account_gate(tmp_path)
+    target = "cleanup/account/owner-a/read"
+    for slot in gate.snapshot()["plan"]["management"]["recovery"]:
+        if slot["id"] == target:
+            break
+        before = gate.snapshot()
+        gate.skip_management_recovery(
+            slot["id"],
+            expected_plan_digest=before["planDigest"],
+            expected_prefix_digest=_prefix_digest(gate),
+        )
+    gate.management_dispatch("recovery", target, lambda _deadline: receipt)
+    before = gate.snapshot()
+    with pytest.raises(ValueError, match="already entered recovery"):
+        gate.hold_management_recovery(
+            "account/owner-a",
+            expected_plan_digest=before["planDigest"],
+            expected_prefix_digest=_prefix_digest(gate),
+            failure="ValueError",
+        )
 
 
 def test_worker_timeout_uses_the_compiled_slot_bound():
@@ -439,9 +520,86 @@ def test_recovery_keeps_confirmed_documents_when_one_identity_proof_fails(monkey
     assert proof_calls == ["account-good", "account-bad"]
     assert recovered_plan[0]["ownedResources"] == ["document-a"]
     assert [account["ref"] for account in recovered_plan[0]["ownedAccounts"]] == [
-        "account-good"
+        "account-good",
+        "account-bad",
     ]
     assert result["cleanupComplete"] is False
     assert result["held"] == ["account-bad"]
     assert result["unrecoveredAttempted"] == ["account-bad"]
     assert result["proofFailures"] == {"account-bad": "ValueError"}
+
+
+def test_recovery_uses_gate_held_disposition_before_selecting_accounts(monkeypatch):
+    plan = {
+        "ownedResources": ["document-a"],
+        "ownedAccounts": [
+            {"ref": "account-bad", "tenant": None},
+            {"ref": "account-good", "tenant": None},
+        ],
+    }
+    ownership = {
+        "document-a": {"phase": "acknowledged"},
+        "account-bad": {"phase": "acknowledged"},
+        "account-good": {"phase": "acknowledged"},
+    }
+    state = {
+        "coordinatorInflight": False,
+        "plan": {"management": {"recovery": [{"id": "cleanup/account/bad/read"}]}},
+        "managementAbort": {"version": "rules-cancel-v1"},
+        "managementUsed": [],
+        "managementSkipped": [],
+        "planDigest": "plan",
+    }
+    held_calls = []
+
+    def hold(subject, **kwargs):
+        held_calls.append((subject, kwargs))
+
+    gate = Namespace(snapshot=lambda: state, hold_management_recovery=hold)
+    context = Namespace(attempted=["account-bad"])
+    proof = Namespace(
+        uid="uid-good",
+        provider="password",
+        tenant=None,
+        claims_digest="claims",
+        auth_time=1,
+    )
+    recovered_plan = []
+
+    def proofs(_plan, _gate, handoffs, **kwargs):
+        ref = next(iter(handoffs))
+        if ref == "account-bad":
+            raise ValueError("injected-proof-failure")
+        return {ref: proof}
+
+    def recover(recovery_plan, *args, **kwargs):
+        recovered_plan.append(recovery_plan)
+        return {"cleanupComplete": True, "held": []}
+
+    monkeypatch.setattr(bridge, "refresh_ownership", lambda _gate, _ownership: None)
+    monkeypatch.setattr(bridge, "setup_identity_proofs", proofs)
+    monkeypatch.setattr(bridge, "make_recovery_transport", lambda *args, **kwargs: object())
+    monkeypatch.setattr(bridge, "collection_dispatch", lambda *args, **kwargs: object())
+    monkeypatch.setattr(bridge, "recover_owned", recover)
+    monkeypatch.setattr(bridge, "skip_unused_recovery", lambda _gate: None)
+
+    result = bridge.recover_setup_failure(
+        plan=plan,
+        gate=gate,
+        context=context,
+        ownership=ownership,
+        identity_handoffs={"account-bad": object(), "account-good": object()},
+        credentials={"administrator": "fixture"},
+        frozen_inputs={},
+        capability=object(),
+        fixture_origin=None,
+        binding=b"worker",
+        binding_digest="digest",
+    )
+
+    assert held_calls[0][0] == "account/account-bad"
+    assert [account["ref"] for account in recovered_plan[0]["ownedAccounts"]] == [
+        "account-good"
+    ]
+    assert result["held"] == ["account-bad"]
+    assert result["unrecoveredAttempted"] == ["account-bad"]

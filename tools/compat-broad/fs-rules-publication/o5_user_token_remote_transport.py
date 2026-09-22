@@ -1092,17 +1092,44 @@ def _adapt_firestore_result(
             or not isinstance(error.get("status"), str)
         ):
             raise ValueError("REST error response shape refused")
+        if prepared["route"] == "document-recovery-get" and status == 404 and error["status"] == "NOT_FOUND":
+            return {
+                "status": "NOT_FOUND",
+                "code": 5,
+                "httpStatus": 404,
+                "documentPresent": False,
+                "version": None,
+                "complete": True,
+                **wire,
+            }
         return {
             "status": error["status"],
             "code": error["code"],
             "httpStatus": status,
             "documentPresent": False,
-            "fields": {},
+            "fields": None,
             "complete": True,
             **wire,
         }
     route = prepared["route"]
-    if route in {"observation-get", "document-recovery-get"}:
+    if route == "document-recovery-get":
+        name = body.get("name")
+        fields = body.get("fields")
+        expected = prepared["path"][len("/v1/") :]
+        if not isinstance(name, str) or name != expected or not isinstance(fields, dict) or not isinstance(body.get("updateTime"), str):
+            raise ValueError("REST recovery Document response shape refused")
+        for value in fields.values():
+            _decode_firestore_value(value)
+        return {
+            "status": "OK",
+            "code": 0,
+            "httpStatus": status,
+            "documentPresent": True,
+            "version": body["updateTime"],
+            "complete": True,
+            **wire,
+        }
+    if route == "observation-get":
         name = body.get("name")
         fields = body.get("fields")
         expected = prepared["path"][len("/v1/") :]
@@ -1140,7 +1167,7 @@ def _adapt_firestore_result(
             "code": 0,
             "httpStatus": status,
             "documentPresent": True,
-            "fields": {},
+            "fields": None,
             "complete": True,
             **wire,
         }

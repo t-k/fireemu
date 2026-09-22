@@ -20,7 +20,7 @@ import o5_user_token_remote_transport as remote
 import pytest
 from broad_contract import digest
 from o5_user_token_case import compile_case, principal_actions
-from o5_user_token_collector import _request
+from o5_user_token_collector import RECOVERY_RECEIPT_KEYS, _accept, _request
 from o8_admission import (
     _ACTIVE,
     _CAPABILITY_STATE,
@@ -684,7 +684,7 @@ def test_transport_adapts_official_permission_error_through_real_worker(fixture_
         "code": 403,
         "httpStatus": 403,
         "documentPresent": False,
-        "fields": {},
+        "fields": None,
         "complete": True,
         "endpoint": fixture_origin.removeprefix("http://"),
         "wireSequence": 1,
@@ -826,6 +826,88 @@ def test_prepare_requires_bound_uid_for_account_recovery(plan):
     )
     assert prepared["method"] == "POST"
     assert prepared["body"] == {"localId": "uid-a"}
+
+
+def test_recovery_document_receipt_uses_version_without_observation_fields(plan):
+    resource = plan["ownedResources"][0]
+    operation = {
+        "kind": "readback",
+        "phase": "recovery",
+        "resource": resource,
+        "accountRef": None,
+        "credentialRef": "administrator",
+        "credentialClass": "administrator",
+        "precondition": None,
+    }
+    prepared = remote.prepare_request(plan, operation, credentials={"administrator": "fixture"})
+    got = remote._adapt_firestore_result(
+        prepared,
+        {
+            "status": 200,
+            "body": {
+                "name": resource,
+                "fields": {"count": {"integerValue": "1"}},
+                "updateTime": "2026-09-22T00:00:00Z",
+            },
+        },
+        sequence=1,
+        endpoint="127.0.0.1:1234",
+    )
+    assert got["documentPresent"] is True
+    assert got["version"] == "2026-09-22T00:00:00Z"
+    assert "fields" not in got
+    accepted, failure = _accept(got, RECOVERY_RECEIPT_KEYS)
+    assert failure is None
+    assert accepted is not None
+
+
+def test_recovery_not_found_receipt_uses_canonical_code_and_no_fields(plan):
+    resource = plan["ownedResources"][0]
+    operation = {
+        "kind": "readback",
+        "phase": "recovery",
+        "resource": resource,
+        "accountRef": None,
+        "credentialRef": "administrator",
+        "credentialClass": "administrator",
+        "precondition": None,
+    }
+    prepared = remote.prepare_request(plan, operation, credentials={"administrator": "fixture"})
+    got = remote._adapt_firestore_result(
+        prepared,
+        {"status": 404, "body": {"error": {"code": 404, "status": "NOT_FOUND"}}},
+        sequence=1,
+        endpoint="127.0.0.1:1234",
+    )
+    assert got["documentPresent"] is False
+    assert got["status"] == "NOT_FOUND"
+    assert got["code"] == 5
+    assert got["version"] is None
+    assert "fields" not in got
+    accepted, failure = _accept(got, RECOVERY_RECEIPT_KEYS)
+    assert failure is None
+    assert accepted is not None
+
+
+def test_commit_and_observation_error_receipts_use_null_fields(plan):
+    commit_plan, operation, _ = minimal_wire_plan("commit", "create")
+    prepared = remote.prepare_request(commit_plan, operation, credentials={"unauthenticated": ""})
+    got = remote._adapt_firestore_result(
+        prepared,
+        {"status": 200, "body": {"writeResults": [{"updateTime": "2026-09-22T00:00:00Z"}], "commitTime": "2026-09-22T00:00:00Z"}},
+        sequence=1,
+        endpoint="127.0.0.1:1234",
+    )
+    assert got["fields"] is None
+    get_plan, get_operation, _ = minimal_wire_plan()
+    get_prepared = remote.prepare_request(get_plan, get_operation, credentials={"unauthenticated": ""})
+    error = remote._adapt_firestore_result(
+        get_prepared,
+        {"status": 403, "body": {"error": {"code": 403, "status": "PERMISSION_DENIED"}}},
+        sequence=1,
+        endpoint="127.0.0.1:1234",
+    )
+    assert error["fields"] is None
 
 
 def test_plan_shape_keeps_o5_accounts_rows_and_rulesets(plan):

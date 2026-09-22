@@ -18,6 +18,7 @@ started as a fixture worker.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import math
@@ -25,6 +26,7 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -38,13 +40,28 @@ from credential_wire import response_body
 from o8_admission import authorize_transport
 
 WORKER_ENTRY = "credential_https_worker.py"
-WORKER_SHA256 = "d1e224560a4b955e4b45fbf68ff47936f76fca253d8c7f429e90205060cbc4b7"
+WORKER_SHA256 = "337bb2a07c3d0d6bbc69a49f5c99faadc7534178b89e1ecf57b24d6614b1f3eb"
 MAX_SECONDS = 12.0
 MAX_ENVELOPE_BYTES = 65536
 MAX_OUTPUT_BYTES = 90000
 PROJECT = "fireemu-35fe6"
 SIGN_BLOB_HOST = "iamcredentials.googleapis.com"
 CUSTOM_TOKEN_HEADER = {"alg": "RS256", "typ": "JWT"}
+
+
+@dataclass(frozen=True)
+class WorkerExchange:
+    status: int
+    body: dict[str, Any]
+    worker_reaped: bool
+
+
+class WorkerFailure(ValueError):
+    """A secret-free worker failure with an observed child lifecycle result."""
+
+    def __init__(self, message: str, *, worker_reaped: bool):
+        super().__init__(message)
+        self.worker_reaped = worker_reaped
 
 
 def worker_binding() -> tuple[bytes, str]:
@@ -87,7 +104,7 @@ def _seconds(deadline: float) -> float:
     return min(MAX_SECONDS, remaining)
 
 
-def request(
+def request_with_lifecycle(
     url: str,
     body: dict[str, Any] | None,
     *,
@@ -95,7 +112,7 @@ def request(
     seconds: float,
     form: bool = False,
     fixture_origin: str | None = None,
-) -> tuple[int, dict[str, Any]]:
+) -> WorkerExchange:
     """Exactly one isolated worker for one request; the deadline kills and reaps it."""
     _source, observed = worker_binding()
     if observed != WORKER_SHA256:
@@ -119,18 +136,30 @@ def request(
     if fixture_origin is not None:
         argv.append("--fixture-worker")
     env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "LANG") if key in os.environ}
+    process = None
     try:
-        result = subprocess.run(
-            argv, input=envelope, capture_output=True, timeout=seconds, env=env, check=False
+        process = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
+        stdout, _stderr = process.communicate(input=envelope, timeout=seconds)
     except subprocess.TimeoutExpired:
-        raise ValueError("credential request deadline exceeded") from None
+        if process is not None:
+            try:
+                process.kill()
+                process.communicate(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
+                raise WorkerFailure("credential worker was not reaped", worker_reaped=False) from None
+            if process.poll() is None:
+                raise WorkerFailure("credential worker was not reaped", worker_reaped=False) from None
+        raise WorkerFailure("credential request deadline exceeded", worker_reaped=True) from None
     except OSError:
-        raise ValueError("credential worker could not start") from None
+        raise WorkerFailure("credential worker could not start", worker_reaped=process is None) from None
+    if process is None or process.poll() is None:
+        raise WorkerFailure("credential worker was not reaped", worker_reaped=False) from None
     try:
-        if result.returncode != 0 or not 0 < len(result.stdout) <= MAX_OUTPUT_BYTES:
-            raise ValueError("invalid worker result")
-        value = json.loads(result.stdout)
+        if process.returncode != 0 or not 0 < len(stdout) <= MAX_OUTPUT_BYTES:
+            raise WorkerFailure("invalid worker result", worker_reaped=True)
+        value = json.loads(stdout)
         if (
             not isinstance(value, list)
             or len(value) != 3
@@ -138,10 +167,30 @@ def request(
             or not 200 <= value[0] <= 599
             or not isinstance(value[1], str)
         ):
-            raise ValueError("invalid worker result")
-        return value[0], response_body(base64.b64decode(value[1], validate=True))
-    except (ValueError, TypeError, UnicodeError, RecursionError):
-        raise ValueError("credential HTTP response was not usable") from None
+            raise WorkerFailure("invalid worker result", worker_reaped=True)
+        body_value = response_body(base64.b64decode(value[1], validate=True))
+        if not isinstance(body_value, dict):
+            raise WorkerFailure("credential HTTP response was not usable", worker_reaped=True)
+        return WorkerExchange(status=value[0], body=body_value, worker_reaped=True)
+    except WorkerFailure:
+        raise
+    except (ValueError, TypeError, UnicodeError, RecursionError, binascii.Error):
+        raise WorkerFailure("credential HTTP response was not usable", worker_reaped=True) from None
+
+
+def request(
+    url: str,
+    body: dict[str, Any] | None,
+    *,
+    headers: dict[str, str],
+    seconds: float,
+    form: bool = False,
+    fixture_origin: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    result = request_with_lifecycle(
+        url, body, headers=headers, seconds=seconds, form=form, fixture_origin=fixture_origin
+    )
+    return result.status, result.body
 
 
 def _origin(fixture_origin: str | None) -> str:

@@ -318,6 +318,28 @@ def test_production_transport_does_not_accept_a_loopback_origin_without_fixture(
     assert called is False
 
 
+def test_explicit_production_transport_has_no_loopback_origin():
+    inputs = _frozen_inputs()
+    transport = action_remote.make_transport(
+        frozen_inputs=inputs,
+        declared_bindings=_bindings(),
+        credential_handoff=_handoff(inputs["permission"]),
+        verify_handoff=_verify_fixture_handoff,
+        production=True,
+    )
+    assert callable(transport)
+    action_remote.forget_transport(inputs["inputsDigest"])
+    with pytest.raises(ValueError, match="cannot use a fixture origin"):
+        action_remote.make_transport(
+            frozen_inputs=inputs,
+            declared_bindings=_bindings(),
+            credential_handoff=_handoff(inputs["permission"]),
+            verify_handoff=_verify_fixture_handoff,
+            fixture_origin=UNUSED_FIXTURE_ORIGIN,
+            production=True,
+        )
+
+
 def test_noncanonical_project_is_rejected_before_fixture_constructor():
     inputs = _frozen_inputs()
     inputs["permission"]["projectId"] = "foreign-project"

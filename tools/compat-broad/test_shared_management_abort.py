@@ -5,11 +5,10 @@ import os
 import time
 
 import pytest
-
 import shared_gate
 from shared_gate import Gate, create
-from test_shared_management_gate import receipt
 from test_shared_gate import plan as base_plan
+from test_shared_management_gate import receipt
 
 
 def management_abort_plan():
@@ -39,7 +38,7 @@ def make_gate(tmp_path):
     return Gate(path, "a")
 
 
-def cancellation_gate(tmp_path):
+def cancellation_gate(tmp_path, *, completed_metadata_suffix=False, unknown_plan_identity=False):
     value = management_abort_plan()
     value["wallSeconds"] = 600
     value["recoverySeconds"] = 300
@@ -65,10 +64,85 @@ def cancellation_gate(tmp_path):
         {"id": "index-lifecycle-poll-restore", "timeout": 13},
         {"id": "index-lifecycle-restored", "timeout": 13},
     ]
+    if completed_metadata_suffix:
+        slots = value["management"]["observation"]
+        value["management"]["observation"] = slots[:3] + slots[5:] + slots[3:5]
+    if unknown_plan_identity:
+        value["management"]["observation"][-1]["id"] = "unapproved-metadata"
     value["observationRequests"] = len(value["management"]["observation"])
     path = tmp_path / "cancellation-gate"
     create(path, value)
     return Gate(path, "a")
+
+
+def test_completed_lifecycle_then_metadata_can_cancel_before_data_and_restore(tmp_path):
+    gate = cancellation_gate(tmp_path, completed_metadata_suffix=True)
+    gate.claim()
+    for slot in gate.snapshot()["plan"]["management"]["observation"]:
+        gate.management_dispatch(
+            "observation", slot["id"],
+            lambda _deadline, slot=slot: (
+                tokeninfo_receipt() if slot["id"] == "oauth-tokeninfo" else receipt()
+            ),
+        )
+    before = gate.snapshot()
+    after = gate.cancel_management_observation()
+    assert after["managementAbort"]["applyOutcome"] == "coordinator-cancelled"
+    assert after["managementSkipped"] == []
+    assert after["total"] == before["total"]
+    assert after["costMicrousd"] == before["costMicrousd"]
+    for slot in after["plan"]["management"]["recovery"]:
+        gate.management_dispatch("recovery", slot["id"], lambda _deadline: receipt())
+    final = gate.cancel_management_observation()
+    assert final["managementUsed"][-3:] == [
+        "recovery:index-lifecycle-restore", "recovery:index-lifecycle-poll-restore",
+        "recovery:index-lifecycle-restored",
+    ]
+    assert final["recovery"] == 7
+    assert final["events"] == []
+
+
+@pytest.mark.parametrize("fault", [
+    "unknown", "unreaped", "http-error", "inflight", "data-started",
+    "foreign", "order", "partial", "unknown-plan-identity",
+])
+def test_completed_metadata_cancel_refuses_unsafe_state_unchanged(tmp_path, fault):
+    gate = cancellation_gate(
+        tmp_path, completed_metadata_suffix=True,
+        unknown_plan_identity=fault == "unknown-plan-identity",
+    )
+    gate.claim()
+    slots = gate.snapshot()["plan"]["management"]["observation"]
+    for slot in slots[:-1] if fault == "partial" else slots:
+        gate.management_dispatch(
+            "observation", slot["id"],
+            lambda _deadline, slot=slot: (
+                tokeninfo_receipt() if slot["id"] == "oauth-tokeninfo" else receipt()
+            ),
+        )
+    with gate.locked() as state:
+        if fault == "unknown":
+            state["managementEvents"][5]["completed"] = False
+        elif fault == "unreaped":
+            state["managementEvents"][5]["workerReaped"] = False
+        elif fault == "http-error":
+            state["managementEvents"][5]["status"] = 500
+        elif fault == "inflight":
+            state["coordinatorInflight"] = True
+        elif fault == "data-started":
+            state["jobs"]["a"]["observation"] = 1
+        elif fault == "foreign":
+            state["jobs"]["a"]["pid"] = os.getpid() + 100000
+        elif fault == "order":
+            state["managementUsed"][-2:] = reversed(state["managementUsed"][-2:])
+        shared_gate._save(gate.path, state)
+    before = gate.snapshot()
+    with pytest.raises(ValueError):
+        gate.cancel_management_observation()
+    assert gate.snapshot() == before
+    with pytest.raises(ValueError):
+        gate.management_dispatch("recovery", "project", lambda _: pytest.fail("no REC"))
+    assert gate.snapshot() == before
 
 
 def reaped_unknown():

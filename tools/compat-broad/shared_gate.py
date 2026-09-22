@@ -31,6 +31,85 @@ INTERVAL_FLOOR_SECONDS = 0.25
 WALL_CAP_SECONDS = 1200
 PHASES = ("observation", "recovery")
 MANAGEMENT_SKIP_REASON = "management-not-run"
+LIMITS_PREPARATION_TRANSPORT = "limits-03-baseline-preparation-v2"
+LIMITS_PREPARATION_RECEIPT = "limits-03-baseline-preparation-receipt-v1"
+LIMITS_PREPARATION_SLOTS = ("refresh", "oauth-tokeninfo", "project", "database", "auth", "key")
+
+
+def validate_limits_preparation_plan(plan):
+    """Validate the sole empty-resource Shared Gate contract, without I/O."""
+    if (
+        plan.get("contract") != "shared-local-v2"
+        or plan.get("transport") != LIMITS_PREPARATION_TRANSPORT
+        or plan.get("receiptKind") != LIMITS_PREPARATION_RECEIPT
+        or plan.get("campaignId") != "FS-WRITE-LIMITS-03"
+        or plan.get("jobs") != {"limits": {
+            "resources": [], "observation": [], "recovery": [], "schedule": [],
+        }}
+        or plan.get("management") != {
+            "dispatchKind": "closed-v1",
+            "credentialIds": ["oauth-tokeninfo"],
+            "credentialSlots": ["oauth-tokeninfo"],
+            "observation": [{"id": slot, "timeout": 12} for slot in LIMITS_PREPARATION_SLOTS],
+            "recovery": [],
+        }
+        or any(type(plan.get(key, default)) is not int or plan.get(key, default) != expected
+               for key, default, expected in (
+                   ("observationRequests", None, 6), ("costMicrousd", None, 600),
+                   ("requestCostMicrousd", None, 100), ("fixedCostMicrousd", 0, 0),
+                   ("coordinatorRequests", 0, 0),
+               ))
+    ):
+        raise ValueError("closed limits preparation plan required")
+
+
+def validate_limits_preparation_success(state):
+    """Require every declared read to have completed and its worker reaped."""
+    validate_limits_preparation_plan(state["plan"])
+    expected = ["observation:" + slot for slot in LIMITS_PREPARATION_SLOTS]
+    events = state.get("managementEvents", [])
+    job = state.get("jobs", {}).get("limits", {})
+    if (
+        state.get("planDigest") != digest(state["plan"])
+        or state.get("managementUsed") != expected
+        or [event.get("id") for event in events] != expected
+        or state.get("managementSkipped") != []
+        or state.get("managementAbort") is not None
+        or state.get("noDataAbort") is not None
+        or state.get("credentialRejected")
+        or state.get("stopped") is not False
+        or state.get("coordinatorInflight") is not False
+        or state.get("events") != []
+        or state.get("total") != 6 or state.get("observation") != 6
+        or state.get("recovery") != 0 or state.get("reservedRecovery") != 0
+        or state.get("costMicrousd") != 600 or state.get("coordinatorDone") != 0
+        or set(state.get("jobs", {})) != {"limits"}
+        or any(job.get(key) != value for key, value in {
+            "resources": [], "observation": 0, "recovery": 0, "owned": [],
+            "creationProofs": {}, "absent": [], "captures": {}, "inflight": False,
+            "stopped": False, "scheduleDone": 0, "skippedByStop": 0,
+        }.items())
+        or any(
+            event.get("completed") is not True or event.get("complete") is not True
+            or event.get("workerReaped") is not True or event.get("status") != 200
+            or event.get("failure") is not None
+            for event in events
+        )
+    ):
+        raise ValueError("limits preparation completion proof required")
+    previous = state["started"] - state["plan"]["intervalSeconds"]
+    for event in events:
+        if (
+            any(type(event.get(key)) not in (int, float) or not math.isfinite(event[key])
+                for key in ("started", "ended", "deadline", "durationReserved"))
+            or event["durationReserved"] != 12
+            or event["started"] < previous + state["plan"]["intervalSeconds"]
+            or not event["started"] <= event["ended"] <= event["deadline"]
+            or event["deadline"] > event["started"] + 12
+            or event["deadline"] > state["started"] + state["plan"]["wallSeconds"] - state["plan"]["recoverySeconds"]
+        ):
+            raise ValueError("limits preparation event deadline proof required")
+        previous = event["started"]
 
 
 def request_seconds(plan, policy=None):
@@ -346,12 +425,17 @@ def _auth_uid_absence_operation_valid(operation, project, account_bindings=None)
 
 def _action_observation_delete_plan_allowed(plan, job, operation):
     """Recognize only the frozen AUTH-ACTION intentional delete slot."""
-    declared_resources = {
-        binding.get("resource")
+    candidates = [
+        candidate
         for candidate in plan.get("jobs", {}).values()
-        for binding in [candidate.get("accountBindings", {}).get("accountB", {})]
-        if isinstance(binding, dict)
-    }
+        if isinstance(candidate, dict)
+        and candidate.get("resources") == job.get("resources")
+    ]
+    if isinstance(job.get("accountBindings"), dict):
+        candidates = [job]
+    if len(candidates) != 1:
+        return False
+    declared = candidates[0].get("accountBindings", {}).get("accountB", {})
     return (
         plan.get("campaignId") == "AUTH-ACTION-OOB-DELIVERY-BOUNDARY-01"
         and plan.get("observationDeletePolicy") == "auth-action-account-b-delete-v1"
@@ -365,7 +449,9 @@ def _action_observation_delete_plan_allowed(plan, job, operation):
         and operation.get("uidBinding") == "accountBUid"
         and operation.get("body") == {"localId": "$binding:accountBUid"}
         and operation.get("resource") in set(job.get("resources", []))
-        and operation.get("resource") in declared_resources
+        and isinstance(declared, dict)
+        and operation.get("resource") == declared.get("resource")
+        and operation.get("uidBinding") == declared.get("uidBinding")
     )
 
 
@@ -401,10 +487,30 @@ def _auth_creation_ownership(state, job, operation):
     recipe = state["plan"].get("jobs", {}).get(job_name) if job_name is not None else None
     observation = recipe.get("observation", []) if isinstance(recipe, dict) else []
     observed_slot = event.get("index")
+    observed_operation = observation[observed_slot] if (
+        type(observed_slot) is int
+        and 0 <= observed_slot < len(observation)
+    ) else None
+    custom_creation = (
+        isinstance(observed_operation, dict)
+        and observed_operation.get("kind") == "custom-sign-in"
+        and observed_operation.get("account") == "custom"
+        and observed_operation.get("service") == "auth"
+        and observed_operation.get("method") == "POST"
+        and observed_operation.get("path") == "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken"
+        and observed_operation.get("form") is False
+        and observed_operation.get("body") == {
+            "token": "$binding:customToken",
+            "returnSecureToken": True,
+        }
+    )
     if (
         type(observed_slot) is not int
         or not 0 <= observed_slot < len(observation)
-        or observation[observed_slot].get("kind") != "sign-up"
+        or (
+            observation[observed_slot].get("kind") != "sign-up"
+            and not custom_creation
+        )
         or event.get("requestDigest") != digest(observation[observed_slot])
     ):
         return False
@@ -788,6 +894,9 @@ def _recovery_time(plan, seconds):
 
 def create(path, plan):
     path = Path(path)
+    preparation = plan.get("transport") == LIMITS_PREPARATION_TRANSPORT
+    if preparation:
+        validate_limits_preparation_plan(plan)
     policy = _stream_policy(plan)
     if policy:
         policy.validate_plan(plan)
@@ -858,7 +967,7 @@ def create(path, plan):
         or _observation_time(plan, seconds)
         > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))
-        or not resources
+        or (not resources and not preparation)
         or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= WALL_CAP_SECONDS
         or plan["recoverySeconds"] < recovery_time
         or not math.isfinite(plan["intervalSeconds"])
@@ -1138,6 +1247,61 @@ def _auth_noncreating_rpc(operation):
     )
 
 
+_ACTION_NONCREATING_CONTRACTS = {
+    "reset-link-generate": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "PASSWORD_RESET", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "reset-code-lookup": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode"}),
+    "reset-weak-password": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode", "newPassword": "$binding:weakPassword"}),
+    "reset-weak-password-retry": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode"}),
+    "reset-consume": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode", "newPassword": "$binding:accountA.nextPassword"}),
+    "reset-reuse": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCode", "newPassword": "$binding:accountA.thirdPassword"}),
+    "reset-wrong-code": ("/v1/accounts:resetPassword", {"oobCode": "$binding:wrongCode", "newPassword": "$binding:accountA.thirdPassword"}),
+    "reset-link-generate-second": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "PASSWORD_RESET", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "admin-password-update": ("/v1/projects/{project}/accounts:update", {"localId": "$binding:accountAUid", "password": "$binding:accountA.fourthPassword"}),
+    "reset-after-password-change": ("/v1/accounts:resetPassword", {"oobCode": "$binding:resetCodeSecond", "newPassword": "$binding:accountA.fifthPassword"}),
+    "account-a-readback": ("/v1/projects/{project}/accounts:lookup", {"localId": "$binding:accountAUid"}),
+    "verify-link-generate": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "VERIFY_EMAIL", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "verify-apply": ("/v1/accounts:update", {"oobCode": "$binding:verifyCode"}),
+    "verify-reuse": ("/v1/accounts:update", {"oobCode": "$binding:verifyCode"}),
+    "verify-wrong-code": ("/v1/accounts:update", {"oobCode": "$binding:wrongCode"}),
+    "email-link-generate": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "EMAIL_SIGNIN", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "email-link-signin": ("/v1/accounts:signInWithEmailLink", {"email": "$binding:accountA.email", "oobCode": "$binding:emailLinkCode"}),
+    "email-link-reuse": ("/v1/accounts:signInWithEmailLink", {"email": "$binding:accountA.email", "oobCode": "$binding:emailLinkCode"}),
+    "email-link-generate-second": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "EMAIL_SIGNIN", "email": "$binding:accountA.email", "returnOobLink": True}),
+    "email-link-mismatched-email": ("/v1/accounts:signInWithEmailLink", {"email": "$binding:accountB.email", "oobCode": "$binding:emailLinkCodeSecond"}),
+    "deleted-user-link-generate": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "PASSWORD_RESET", "email": "$binding:accountB.email", "returnOobLink": True}),
+    "account-b-delete": ("/v1/projects/{project}/accounts:delete", {"localId": "$binding:accountBUid"}),
+    "reset-after-delete": ("/v1/accounts:resetPassword", {"oobCode": "$binding:deletedUserCode", "newPassword": "$binding:accountB.nextPassword"}),
+    "link-generate-unknown-email": ("/v1/projects/{project}/accounts:sendOobCode", {"requestType": "PASSWORD_RESET", "email": "$binding:unknownEmail", "returnOobLink": True}),
+}
+
+
+def _action_noncreating_contract_matches(operation):
+    contract = _ACTION_NONCREATING_CONTRACTS.get(operation.get("id"))
+    if contract is None:
+        return False
+    suffix, expected_body = contract
+    path = operation.get("path")
+    if not isinstance(path, str) or not path.startswith("identitytoolkit.googleapis.com"):
+        return False
+    canonical_path = path.removeprefix("identitytoolkit.googleapis.com")
+    if "/projects/" in suffix:
+        resource = operation.get("resource")
+        project = operation.get("project")
+        if project != "fireemu-35fe6":
+            return False
+        if isinstance(resource, str) and resource.startswith("projects/"):
+            if resource.split("/", 2)[1] != project:
+                return False
+        if canonical_path != suffix.format(project=project):
+            return False
+    elif canonical_path != suffix:
+        return False
+    body = operation.get("body")
+    if not isinstance(body, dict) or set(body) != set(expected_body):
+        return False
+    return all(body[key] == value for key, value in expected_body.items())
+
+
 def can_create(operation):
     """Whether a request could bring a document into existence.
 
@@ -1153,6 +1317,13 @@ def can_create(operation):
     path = path if isinstance(path, str) else ""
     method = operation.get("method")
     body = operation.get("body")
+    if (
+        operation.get("kind") == "action-stage"
+        and operation.get("service") == "auth"
+        and method == "POST"
+        and _action_noncreating_contract_matches(operation)
+    ):
+        return False
     if _document_read_rpc(operation) or _auth_noncreating_rpc(operation):
         return False
     writes = _bulk_writes(operation)
@@ -1618,6 +1789,32 @@ def _management_cancel_prefix_valid(state, *, prefix_len=None):
         return False
     if used[apply_index] != apply_id:
         return False
+    # A collector may fail after the complete limits preflight, whose final
+    # metadata checks follow the index lifecycle. Only the fully settled,
+    # source-declared sequence can take this branch; partial cancellation
+    # retains the original lifecycle-only suffix rule below.
+    events = state.get("managementEvents", [])[:len(used)]
+    if (
+        used == identities
+        and len(events) == len(used)
+        and identities == [
+            "observation:" + slot for slot in (
+                "oauth-tokeninfo", "project", "database",
+                "index-lifecycle-before", "index-lifecycle-apply",
+                "index-lifecycle-poll", "index-lifecycle-after",
+                "index-exemption", "auth",
+            )
+        ]
+        and [event.get("id") for event in events] == identities
+        and all(
+            event.get("completed") is True
+            and event.get("workerReaped") is True
+            and type(event.get("status")) is int
+            and 200 <= event["status"] < 300
+            for event in events
+        )
+    ):
+        return True
     lifecycle_ids = {
         apply_id,
         "observation:index-lifecycle-poll",
@@ -2730,6 +2927,8 @@ class Gate:
 
     def finish(self):
         with self.locked() as state:
+            if state["plan"].get("transport") == LIMITS_PREPARATION_TRANSPORT:
+                validate_limits_preparation_success(state)
             job = state["jobs"][self.job]
             if (
                 state.get("noDataAbort") is not None

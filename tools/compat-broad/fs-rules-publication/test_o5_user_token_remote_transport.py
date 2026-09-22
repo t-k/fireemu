@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import http.server
 import json
@@ -197,6 +198,114 @@ def minimal_wire_plan(method="get", operation="create"):
         "observation": [row],
         "rulesets": {"A": {"source": "rules-a"}, "B": {"source": "rules-b"}},
     }, row, resource
+
+
+def _setup_fixture_plan():
+    resource = (
+        "projects/fireemu-35fe6/databases/(default)/documents/"
+        "o5-user-token/naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cases/setup-doc"
+    )
+    return {
+        "fixtures": [{"document": "setup-doc", "resource": resource, "fields": {}}],
+        "ownedAccounts": [
+            {
+                "ref": "owner-a",
+                "email": "owner@example.test",
+                "tenant": None,
+                "claims": {"owner": "yes"},
+            }
+        ],
+    }
+
+
+def test_setup_fixture_uses_bound_patch_and_official_loopback_response(fixture_origin):
+    plan = _setup_fixture_plan()
+    item = {
+        "id": "fixture/setup-doc",
+        "service": "firestore",
+        "route": "document-create",
+        "method": "PATCH",
+        "path": "/v1/" + plan["fixtures"][0]["resource"] + "?currentDocument.exists=false",
+        "document": "setup-doc",
+        "resource": plan["fixtures"][0]["resource"],
+        "fields": {},
+        "fieldsDigest": digest({}),
+        "precondition": {"exists": False},
+        "response": {
+            "name": plan["fixtures"][0]["resource"],
+            "fieldsDigest": digest({}),
+            "updateTime": "response-bound",
+        },
+    }
+    request = remote.prepare_setup_request(
+        plan, item, credentials={"administrator": "fixture-admin"}
+    )
+    assert request["path"].startswith("/v1/projects/fireemu-35fe6/")
+    result = {
+        "status": 200,
+        "body": {
+            "name": plan["fixtures"][0]["resource"],
+            "fields": {},
+            "updateTime": "2026-09-22T00:00:00Z",
+        },
+    }
+    got = remote.adapt_setup_result(item, result, endpoint="loopback", sequence=1)
+    assert got.receipt.name == plan["fixtures"][0]["resource"]
+    assert got.receipt.fields_digest == digest({})
+    assert "fixture-admin" not in json.dumps(got.receipt.as_dict())
+
+
+def test_setup_claim_update_requires_route_specific_owner_binding():
+    plan = _setup_fixture_plan()
+    item = {
+        "id": "account/owner-a/claim-update",
+        "service": "identity",
+        "route": "accounts:update",
+        "method": "POST",
+        "accountRef": "owner-a",
+        "tenant": None,
+        "claimsDigest": digest(plan["ownedAccounts"][0]["claims"]),
+        "response": {"localId": "response-bound"},
+    }
+    with pytest.raises(ValueError, match="owner UID binding required"):
+        remote.prepare_setup_request(
+            plan,
+            item,
+            credentials={"administrator": "fixture-admin"},
+            setup_secrets={"owner-a": "secret"},
+        )
+
+
+def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
+    item = {
+        "id": "account/owner-a/signin",
+        "service": "identity",
+        "route": "accounts:signInWithPassword",
+        "method": "POST",
+        "accountRef": "owner-a",
+        "tenant": None,
+        "response": {
+            "localId": "response-bound",
+            "idToken": "response-bound",
+            "expiresIn": "response-bound",
+        },
+    }
+    result = remote.adapt_setup_result(
+        item,
+        {"status": 200, "body": {"localId": "uid-owner-a", "idToken": "secret-token", "expiresIn": "3600"}},
+        endpoint="loopback",
+        sequence=1,
+        account_bindings={"owner-a": {"uid": "uid-owner-a"}},
+    )
+    assert result.receipt.local_id == "uid-owner-a"
+    assert result.private.token_for_followup() == "secret-token"
+    serialized = json.dumps(result.receipt.as_dict())
+    assert "secret-token" not in serialized
+    assert "password" not in serialized
+    assert "secret-token" not in repr(result)
+    assert "secret-token" not in repr(result.private)
+    with pytest.raises(TypeError):
+        dataclasses.asdict(result)
 
 
 def _fixture_token(uid, provider, tenant, claims):

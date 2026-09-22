@@ -150,7 +150,7 @@ def test_out_of_scope_cases_are_named_and_never_admitted() -> None:
 def test_budget_is_bounded_and_far_below_one_dollar() -> None:
     manifest = campaign_manifest(NONCE)
     budget = manifest["budget"]
-    assert budget["observationRequests"] == len(STAGE_IDS)
+    assert budget["observationRequests"] == len(STAGE_IDS) + 2
     assert budget["recoveryRequests"] == len(manifest["recovery"])
     assert budget["maxConcurrency"] == 1
     assert budget["requestRatePerSecondMax"] == 4
@@ -191,7 +191,7 @@ def test_recovery_proves_absence_by_address_not_by_runtime_identifier() -> None:
 def test_recovery_budget_is_the_frozen_observation_plus_six_rows() -> None:
     manifest = campaign_manifest(NONCE)
     assert len(manifest["stages"]) + len(manifest["recovery"]) == 32
-    assert manifest["budget"]["observationRequests"] == 26
+    assert manifest["budget"]["observationRequests"] == 28
     assert manifest["budget"]["recoveryRequests"] == 6
     rows = {row["id"]: row for row in manifest["recovery"]}
     for name in ("accountA", "accountB"):

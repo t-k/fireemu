@@ -331,7 +331,7 @@ def run_bound_setup(
             "version": receipt.get("updateTime"),
             "fieldsDigest": receipt.get("fieldsDigest"),
             "uid": receipt.get("localId"),
-            "tenant": item.get("tenant"),
+            "tenantId": item.get("tenant"),
         }
         journal.record("setup-acknowledged", proof)
         if journal.failures:

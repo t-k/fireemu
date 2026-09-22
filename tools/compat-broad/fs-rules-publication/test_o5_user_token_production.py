@@ -609,6 +609,8 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
             assert "setup-token" not in json.dumps(receipts)
             assert "setup-token" not in repr(private_handoffs)
             assert all(state["phase"] == "acknowledged" for state in ownership.values())
+            for account in plan["ownedAccounts"]:
+                assert ownership[account["ref"]]["tenantId"] == account.get("tenant")
             assert len(snapshot["managementUsed"]) == 19
             return
         assert snapshot["stopped"] is True

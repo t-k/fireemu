@@ -1268,6 +1268,67 @@ def make_setup_transport(
     return transmit
 
 
+def make_recovery_transport(
+    plan: dict[str, Any],
+    *,
+    credentials: dict[str, Any],
+    frozen_inputs: dict[str, Any],
+    identity_proofs: dict[str, IdentityProof],
+    capability: Any,
+    fixture_origin: str | None = None,
+    deadline: float | None = None,
+    timeout_seconds: float | None = None,
+):
+    """Dispatch only Gate-acknowledged recovery operations with a partial proof map."""
+    _plan_identity(plan)
+    _frozen_inputs(plan, frozen_inputs)
+    _credential(credentials, "administrator", "administrator")
+    if not isinstance(identity_proofs, dict) or not identity_proofs:
+        raise ValueError("acknowledged identity proofs required")
+    account_bindings: dict[str, dict[str, Any]] = {}
+    for ref, proof in identity_proofs.items():
+        if not isinstance(ref, str) or not isinstance(proof, IdentityProof) or proof.principal_ref != ref or not proof.trusted():
+            raise ValueError("trusted acknowledged identity proofs required")
+        account_bindings[ref] = {"uid": proof.uid, "provider": proof.provider, "tenant": proof.tenant, "claimsDigest": proof.claims_digest, "authTime": proof.auth_time}
+    if capability is None:
+        raise ValueError("active O8 production capability required")
+    if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+        raise ValueError("absolute transport deadline required")
+    if timeout_seconds is not None and (type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= MAX_SECONDS):
+        raise ValueError("bounded transport timeout required")
+    sequence = 0
+
+    def transmit(value: dict[str, Any], *, binding: bytes, binding_digest: str) -> dict[str, Any]:
+        nonlocal sequence
+        if not isinstance(value, dict) or value.get("phase") != "recovery":
+            raise ValueError("recovery-only transport refused non-recovery operation")
+        snapshot = _frozen_inputs(plan, frozen_inputs)
+        if getattr(capability, "inputs_digest", None) != snapshot["inputsDigest"]:
+            raise ValueError("capability inputs digest differs")
+        authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+        prepared = prepare_request(plan, copy.deepcopy(value), credentials=credentials, account_bindings=account_bindings, identity_proofs=identity_proofs)
+        seconds = MAX_SECONDS if timeout_seconds is None else float(timeout_seconds)
+        if deadline is not None:
+            seconds = min(seconds, deadline - time.monotonic())
+        if seconds <= 0:
+            raise WorkerExchangeError("recovery transport deadline exhausted", worker_reaped=False)
+        envelope = {key: prepared[key] for key in ("service", "route", "method", "path", "headers", "body")}
+        envelope["seconds"] = seconds
+        result = _run_worker(envelope, binding=binding, binding_digest=binding_digest, fixture_origin=fixture_origin)
+        sequence += 1
+        origin = fixture_origin.rstrip("/") if fixture_origin is not None else prepared["origin"]
+        endpoint = urlsplit(origin).netloc
+        if prepared["service"] == "firestore":
+            adapted = _adapt_firestore_result(prepared, result, sequence=sequence, endpoint=endpoint)
+            adapted["workerReaped"] = True
+            return adapted
+        if result["status"] < 200 or result["status"] >= 300 or not isinstance(result["body"], dict):
+            raise ValueError("recovery Auth response refused")
+        return {**result["body"], "httpStatus": result["status"], "complete": True, "workerReaped": True, "endpoint": endpoint, "wireSequence": sequence}
+
+    return transmit
+
+
 def make_transport(
     plan: dict[str, Any],
     *,
@@ -1412,6 +1473,7 @@ __all__ = [
     "WORKER_ENTRY",
     "make_transport",
     "make_setup_transport",
+    "make_recovery_transport",
     "prepare_request",
     "run_worker",
     "verify_worker_binding",

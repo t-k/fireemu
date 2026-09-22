@@ -236,6 +236,10 @@ def gate_plan(
         "planDigest": plan["planDigest"],
         "management": management,
         "rulesManagementContract": rules_management_contract(plan),
+        "rulesCompilerSources": {
+            name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
+            for name in ("o5_user_token_case.py", "o5_user_token_campaign.py")
+        },
         "observationRequests": len(management["observation"]),
         "dataRequests": len(plan["observation"]),
         "managementRequests": management["totalRequests"],

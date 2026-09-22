@@ -862,7 +862,13 @@ impl RestState {
         json::strict_keys(body, &["writes", "labels"]).map_err(|e| bad(&e))?;
         let req = pb::BatchWriteRequest {
             database: database_of(resource)?,
-            writes: writes_from_json(body)?,
+            writes: body
+                .get("writes")
+                .and_then(Value::as_array)
+                .map(|items| json::batch_writes_from_json(items))
+                .transpose()
+                .map_err(|error| bad(&error))?
+                .unwrap_or_default(),
             labels: std::collections::HashMap::new(),
             request_options: None,
         };

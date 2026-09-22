@@ -503,46 +503,54 @@ fn rest_requests_are_authorized_like_grpc() {
 }
 
 #[test]
-fn batch_write_rest_rejects_write_without_operation_before_dispatch() {
-    let s = state(None);
-    let control = "projects/demo-app/databases/(default)/documents/batch-shape/control";
-    let target = "projects/demo-app/databases/(default)/documents/batch-shape/target";
+fn malformed_batch_write_and_empty_commit_are_rejected_before_dispatch() {
+    for (method, invalid) in [
+        (
+            "batchWrite",
+            json!({"updateMask": {"fieldPaths": ["value"]}}),
+        ),
+        ("commit", json!({})),
+    ] {
+        let s = state(None);
+        let control = "projects/demo-app/databases/(default)/documents/batch-shape/control";
+        let target = "projects/demo-app/databases/(default)/documents/batch-shape/target";
 
-    let (status, created) = call(
-        &s,
-        "POST",
-        &format!("{DOCS}/batch-shape?documentId=control"),
-        json!({"fields": {"v": {"integerValue": "0"}}}),
-    );
-    assert_eq!(status, 200, "{created}");
-    let (status, before) = call(&s, "GET", &format!("/v1/{control}"), Value::Null);
-    assert_eq!(status, 200, "{before}");
+        let (status, created) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}/batch-shape?documentId=control"),
+            json!({"fields": {"v": {"integerValue": "0"}}}),
+        );
+        assert_eq!(status, 200, "{created}");
+        let (status, before) = call(&s, "GET", &format!("/v1/{control}"), Value::Null);
+        assert_eq!(status, 200, "{before}");
 
-    let (status, body) = call(
-        &s,
-        "POST",
-        &format!("{DOCS}:batchWrite"),
-        json!({
-            "writes": [
-                {},
-                {"update": {"name": target, "fields": {"v": {"integerValue": "1"}}}}
-            ]
-        }),
-    );
-    assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:{method}"),
+            json!({
+                "writes": [
+                    invalid,
+                    {"update": {"name": target, "fields": {"v": {"integerValue": "1"}}}}
+                ]
+            }),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
 
-    let (status, after) = call(&s, "GET", &format!("/v1/{control}"), Value::Null);
-    assert_eq!(status, 200, "{after}");
-    assert_eq!(
-        after, before,
-        "the malformed write changed the control document"
-    );
-    let (status, missing) = call(&s, "GET", &format!("/v1/{target}"), Value::Null);
-    assert_eq!(
-        status, 404,
-        "a malformed write dispatched its valid suffix: {missing}"
-    );
+        let (status, after) = call(&s, "GET", &format!("/v1/{control}"), Value::Null);
+        assert_eq!(status, 200, "{after}");
+        assert_eq!(
+            after, before,
+            "the malformed write changed the control document"
+        );
+        let (status, missing) = call(&s, "GET", &format!("/v1/{target}"), Value::Null);
+        assert_eq!(
+            status, 404,
+            "a malformed write dispatched its valid suffix: {missing}"
+        );
+    }
 }
 
 #[test]
@@ -751,9 +759,17 @@ fn security_rules_publication_waits_for_exclusive_snapshot_work() {
 #[test]
 fn rule_coverage_html_preserves_json_without_allowing_script_termination() {
     let payload = "</ScRiPt><script>alert(1)</script><!--&>\u{2028}\u{2029}";
-    let source = format!("rules_version = '2'; service cloud.firestore {{ match /databases/{{db}}/documents {{ match /notes/{{id}} {{ allow get: if id != 'secret'; }} }} }} // {payload}");
+    let source = format!("rules_version = '2'; service cloud.firestore {{ match /databases/{{db}}/documents {{ match /notes/{{id}} {{ allow get: if id != 'secret'; allow create: if request.resource.data.value != 'blocked'; }} }} }} // {payload}");
     let s = state(Some(&source));
     call_as(&s, "GET", &format!("{DOCS}/notes/a"), json!({}), None);
+    let (created, response) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}/notes?documentId=payload"),
+        json!({"fields": {"value": {"stringValue": payload}}}),
+        None,
+    );
+    assert_eq!(created, 200, "{response}");
     let (_, expected) = call_as(
         &s,
         "GET",

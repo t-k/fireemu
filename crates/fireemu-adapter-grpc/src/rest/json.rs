@@ -620,7 +620,7 @@ pub fn write_from_json(v: &Value) -> Result<pb::Write, JsonError> {
 
 /// JSON writes for `BatchWrite`.
 ///
-/// An empty write object is valid JSON and must reach the backend so BatchWrite can report its
+/// An empty write object is valid JSON and must reach the backend so `BatchWrite` can report its
 /// invalid operation in that row's status. Other operation-less objects remain malformed REST
 /// payloads and are rejected before execution.
 pub fn batch_writes_from_json(items: &[Value]) -> Result<Vec<pb::Write>, JsonError> {

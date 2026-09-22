@@ -9,8 +9,11 @@ production traffic.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -29,6 +32,15 @@ from test_credential_recovery_prepare import (
     _reviewed,
     _reviews,
     _source_inputs,
+)
+
+RUNTIME_CLOSURE = (
+    "tools/compat-broad/auth-credential-tokens/credential_recovery_executor.py",
+    "tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py",
+    "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
+    "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
+    "tools/compat-broad/shared_gate.py",
+    "tools/compat-broad/production-admission/reservations.py",
 )
 
 
@@ -65,8 +77,15 @@ class RecordingLedger(_ReadOnlyLedger):
 
 def _packet(tmp_path: Path):
     parent = _ledger_parent()
+    parent["claim"].pop("claimDigest", None)
+    parent["ticket"]["claimDigest"] = digest(parent["claim"])
     source_root, provenance = _source_inputs(tmp_path, parent)
+    _extend_runtime_closure(source_root, provenance, parent)
     permission, o7, o8 = _reviewed(parent, provenance)
+    permission.update(ownerIdentity="owner@example.com", recoveryOwner="recovery@example.com")
+    authority_digest = digest(permission)
+    o7["permissionDigest"] = authority_digest
+    o8["permissionDigest"] = authority_digest
     reviews = _reviews(permission, o7, o8)
     import credential_recovery_prepare as prepare
 
@@ -90,8 +109,15 @@ def _packet(tmp_path: Path):
 
 def _id_token_sub_packet(tmp_path: Path):
     parent = _real_signing_parent()
+    parent["claim"].pop("claimDigest", None)
+    parent["ticket"]["claimDigest"] = digest(parent["claim"])
     source_root, provenance = _source_inputs(tmp_path, parent)
+    _extend_runtime_closure(source_root, provenance, parent)
     permission, o7, o8 = _reviewed(parent, provenance)
+    permission.update(ownerIdentity="owner@example.com", recoveryOwner="recovery@example.com")
+    authority_digest = digest(permission)
+    o7["permissionDigest"] = authority_digest
+    o8["permissionDigest"] = authority_digest
     reviews = _reviews(permission, o7, o8)
     import credential_recovery_prepare as prepare
 
@@ -111,6 +137,26 @@ def _id_token_sub_packet(tmp_path: Path):
         authority_now=1001.0,
     )
     return parent, source_root, bundle
+
+
+def _extend_runtime_closure(source_root: Path, provenance: dict, parent: dict) -> None:
+    """Add the executor's reviewed runtime closure to the temporary checkout."""
+    for relative in RUNTIME_CLOSURE:
+        destination = source_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(HERE.parents[2] / relative, destination)
+        provenance.setdefault("sourceInputs", {})[relative] = hashlib.sha256(
+            destination.read_bytes()
+        ).hexdigest()
+    subprocess.run(["git", "-C", str(source_root), "add", "tools"], check=True)
+    subprocess.run(["git", "-C", str(source_root), "commit", "-qm", "runtime closure"], check=True)
+    commit = subprocess.check_output(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True
+    ).strip()
+    parent["generation"]["sourceCommit"] = commit
+    parent["immutableParent"]["sourceCommit"] = commit
+    provenance["sourceCommit"] = commit
+    provenance["generation"]["sourceCommit"] = commit
 
 
 def _credential_fd(tmp_path: Path) -> int:
@@ -150,6 +196,7 @@ def test_executor_registers_child_before_fd_read_and_runs_one_typed_empty_gate_r
             credential_fd=credential_fd,
             gate_path=tmp_path / "child-gate",
             now=1001.0,
+            clock=lambda: 1001.0,
             read_handoff=read_fd,
             transport=transport,
         )
@@ -185,6 +232,7 @@ def test_executor_reconstructs_the_real_signing_compiler_id_token_sub_parent(
             credential_fd=credential_fd,
             gate_path=tmp_path / "child-gate",
             now=1001.0,
+            clock=lambda: 1001.0,
             transport=lambda *_args, **_kwargs: (
                 200,
                 {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []},
@@ -198,6 +246,128 @@ def test_executor_reconstructs_the_real_signing_compiler_id_token_sub_parent(
             parent["immutableParent"]["eventIndex"]
         ]
     )
+
+
+def test_absolute_deadline_is_rechecked_before_private_fd_read(tmp_path: Path) -> None:
+    parent, source_root, packet = _packet(tmp_path)
+    ledger = RecordingLedger(parent)
+    credential_fd = _credential_fd(tmp_path)
+    reads: list[str] = []
+    try:
+        with pytest.raises(recovery.RecoveryRefusal, match="deadline"):
+            executor.execute_recovery(
+                packet,
+                parent=parent,
+                ledger=ledger,
+                source_root=source_root,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                now=1001.0,
+                clock=lambda: 1061.0,
+                read_handoff=lambda _fd: reads.append("read"),
+            )
+    finally:
+        os.close(credential_fd)
+    assert reads == []
+    assert ledger.lifecycle == ["begin-child"]
+
+
+def test_absolute_deadline_is_rechecked_before_gate_dispatch(tmp_path: Path) -> None:
+    parent, source_root, packet = _packet(tmp_path)
+    ledger = RecordingLedger(parent)
+    credential_fd = _credential_fd(tmp_path)
+    clock_values = iter((1001.0, 1061.0))
+    dispatched: list[str] = []
+    try:
+        with pytest.raises(recovery.RecoveryRefusal, match="deadline"):
+            executor.execute_recovery(
+                packet,
+                parent=parent,
+                ledger=ledger,
+                source_root=source_root,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                now=1001.0,
+                clock=lambda: next(clock_values),
+                transport=lambda *_args, **_kwargs: dispatched.append("wire"),
+            )
+    finally:
+        os.close(credential_fd)
+    assert dispatched == []
+    assert ledger.lifecycle == ["begin-child"]
+
+
+def test_packet_parent_ticket_binding_is_required(tmp_path: Path) -> None:
+    parent, source_root, packet = _packet(tmp_path)
+    packet["plan"]["parent"]["ticketDigest"] = "0" * 64
+    ledger = RecordingLedger(parent)
+    credential_fd = _credential_fd(tmp_path)
+    try:
+        with pytest.raises(recovery.RecoveryRefusal):
+            executor.execute_recovery(
+                packet,
+                parent=parent,
+                ledger=ledger,
+                source_root=source_root,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                now=1001.0,
+                clock=lambda: 1001.0,
+            )
+    finally:
+        os.close(credential_fd)
+    assert ledger.lifecycle == []
+
+
+def test_runtime_executor_source_must_be_in_reviewed_closure(tmp_path: Path) -> None:
+    parent, source_root, packet = _packet(tmp_path)
+    (source_root / executor.EXECUTOR_ENTRY).unlink()
+    ledger = RecordingLedger(parent)
+    credential_fd = _credential_fd(tmp_path)
+    try:
+        with pytest.raises(recovery.RecoveryRefusal, match="source"):
+            executor.execute_recovery(
+                packet,
+                parent=parent,
+                ledger=ledger,
+                source_root=source_root,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                now=1001.0,
+                clock=lambda: 1001.0,
+            )
+    finally:
+        os.close(credential_fd)
+    assert ledger.lifecycle == []
+
+
+def test_missing_reviewed_owner_identities_do_not_use_executor_defaults(
+    tmp_path: Path,
+) -> None:
+    parent, source_root, packet = _packet(tmp_path)
+    packet["permission"].pop("ownerIdentity")
+    packet["permission"].pop("recoveryOwner")
+    packet["o7"]["permissionDigest"] = digest(packet["permission"])
+    packet["o8"]["permissionDigest"] = digest(packet["permission"])
+    reviews = _reviews(packet["permission"], packet["o7"], packet["o8"])
+    packet["permissionReview"], packet["o7Review"], packet["o8Review"] = reviews
+    ledger = RecordingLedger(parent)
+    credential_fd = _credential_fd(tmp_path)
+    try:
+        with pytest.raises(recovery.RecoveryRefusal):
+            executor.execute_recovery(
+                packet,
+                parent=parent,
+                ledger=ledger,
+                source_root=source_root,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                now=1001.0,
+                clock=lambda: 1001.0,
+            )
+    finally:
+        os.close(credential_fd)
+    assert ledger.lifecycle == []
 
 
 @pytest.mark.parametrize(
@@ -231,6 +401,7 @@ def test_non_empty_malformed_or_timeout_result_keeps_parent_held(
                 credential_fd=credential_fd,
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,
+                clock=lambda: 1001.0,
                 transport=transport,
             )
     finally:
@@ -259,6 +430,7 @@ def test_invalid_packet_is_refused_before_private_fd_read_or_child_allocation(
                 credential_fd=credential_fd,
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,
+                clock=lambda: 1001.0,
                 read_handoff=lambda _fd: reads.append("read"),
                 transport=lambda *_args, **_kwargs: (200, {}),
             )

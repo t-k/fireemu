@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import select
@@ -39,6 +40,15 @@ from broad_contract import digest
 MAX_HANDOFF_BYTES = 16 * 1024
 HANDOFF_FIELDS = frozenset({"token", "apiKey"})
 PACKET_KIND = prepare.PACKET_KIND
+EXECUTOR_ENTRY = "tools/compat-broad/auth-credential-tokens/credential_recovery_executor.py"
+RUNTIME_CLOSURE = (
+    EXECUTOR_ENTRY,
+    "tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py",
+    "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
+    "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
+    "tools/compat-broad/shared_gate.py",
+    "tools/compat-broad/production-admission/reservations.py",
+)
 
 
 def _refuse(reason: str) -> None:
@@ -48,6 +58,26 @@ def _refuse(reason: str) -> None:
 def _same(left: Any, right: Any, reason: str) -> None:
     if left != right:
         _refuse(reason)
+
+
+def _verify_runtime_closure(provenance: Mapping[str, Any], source_root: Path) -> None:
+    """Require the executing runtime and clean reviewed checkout to be identical."""
+    source_inputs = provenance.get("sourceInputs")
+    if not isinstance(source_inputs, Mapping):
+        _refuse("reviewed runtime source closure required")
+    for relative in RUNTIME_CLOSURE:
+        expected = source_inputs.get(relative)
+        if not isinstance(expected, str):
+            _refuse("reviewed runtime source closure required")
+        approved = source_root / relative
+        running = ROOT / relative
+        try:
+            approved_digest = hashlib.sha256(approved.read_bytes()).hexdigest()
+            running_digest = hashlib.sha256(running.read_bytes()).hexdigest()
+        except OSError:
+            _refuse("reviewed runtime source closure required")
+        if approved_digest != expected or running_digest != expected:
+            _refuse("reviewed runtime source closure differs")
 
 
 def read_private_handoff(fd: int) -> dict[str, str]:
@@ -140,6 +170,7 @@ def _validate_packet(
             parent_snapshot["sourceCommit"],
             parent_snapshot["generation"],
         )
+        _verify_runtime_closure(packet["plan"]["provenance"], source_root)
         prepare._assert_fresh_nonce(ledger, plan["recoveryNonce"], state)
         permission, o7, o8, _reviews = prepare._validate_reviewed_authorities(
             plan,
@@ -154,6 +185,23 @@ def _validate_packet(
         _same(packet.get("permission"), permission, "permission review evidence changed")
         _same(packet.get("o7"), o7, "O7 review evidence changed")
         _same(packet.get("o8"), o8, "O8 review evidence changed")
+        parent_claim_digest = canonical_parent["claim"].get(
+            "claimDigest", digest(canonical_parent["claim"])
+        )
+        _same(plan["parent"].get("ticketDigest"), digest(canonical_parent["ticket"]), "parent ticket binding changed")
+        _same(plan["parent"].get("claimDigest"), parent_claim_digest, "parent claim binding changed")
+        _same(canonical_parent["ticket"].get("claimDigest"), parent_claim_digest, "parent ticket claim binding changed")
+        owner_identity = permission.get("ownerIdentity")
+        recovery_owner = permission.get("recoveryOwner")
+        if (
+            not isinstance(owner_identity, str)
+            or not owner_identity.strip()
+            or not isinstance(recovery_owner, str)
+            or not recovery_owner.strip()
+            or owner_identity == recovery_owner
+        ):
+            _refuse("reviewed recovery owner identities required")
+        _same(permission.get("parentClaimDigest"), parent_claim_digest, "permission parent binding changed")
         return (
             copy.deepcopy(dict(canonical_parent)),
             copy.deepcopy(dict(parent_snapshot)),
@@ -265,6 +313,7 @@ def execute_recovery(
     credential_fd: int,
     gate_path: Path,
     now: float | None = None,
+    clock: Callable[[], float] = time.time,
     read_handoff: Callable[[int], Mapping[str, str]] = read_private_handoff,
     transport: Callable[..., tuple[Any, Any]] = _production_transport,
 ) -> dict[str, Any]:
@@ -274,7 +323,9 @@ def execute_recovery(
     all errors retain the child and held parent; only a completed child Gate
     with the exact typed-empty response calls ``settle_and_close``.
     """
-    decision_now = time.time() if now is None else now
+    if not callable(clock):
+        _refuse("recovery wall clock required")
+    decision_now = clock() if now is None else now
     if type(decision_now) not in (int, float):
         _refuse("finite recovery execution time required")
     canonical_parent, _parent_snapshot_value, plan, permission, o7, o8 = _validate_packet(
@@ -296,8 +347,8 @@ def execute_recovery(
         o7=o7,
         o8=o8,
         gate_path=str(destination),
-        owner_identity=permission.get("ownerIdentity", "owner@example.invalid"),
-        recovery_owner=permission.get("recoveryOwner", "recovery@example.invalid"),
+        owner_identity=permission["ownerIdentity"],
+        recovery_owner=permission["recoveryOwner"],
         now=decision_now,
     )
     try:
@@ -307,14 +358,19 @@ def execute_recovery(
         shared_gate.create(destination, child_gate_plan)
         gate = shared_gate.Gate(destination, recovery.GATE_JOB)
         gate.claim()
+        if float(clock()) >= float(plan["deadlineAt"]):
+            _refuse("recovery deadline expired")
         handoff = dict(read_handoff(credential_fd))
         if set(handoff) != HANDOFF_FIELDS:
             _refuse("private credential handoff required")
         operation = copy.deepcopy(plan["operation"])
         body = {"localId": [plan["customUid"]]}
+        current_wall = float(clock())
+        if current_wall >= float(plan["deadlineAt"]):
+            _refuse("recovery request deadline expired")
         request_seconds = min(
             float(plan["gatePlan"]["requestSeconds"]),
-            float(plan["deadlineAt"]) - float(decision_now),
+            float(plan["deadlineAt"]) - current_wall,
         )
         if request_seconds <= 0:
             _refuse("recovery request deadline expired")
@@ -330,7 +386,7 @@ def execute_recovery(
             )
 
         status, response = gate.dispatch(operation, True, send)
-        if time.monotonic() >= deadline:
+        if float(clock()) >= float(plan["deadlineAt"]) or time.monotonic() >= deadline:
             _refuse("recovery request deadline expired")
         expected = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
         if type(status) is not int or status != 200 or response != expected:
@@ -353,7 +409,7 @@ def execute_recovery(
             plan=plan,
             child_gate=final_gate,
             worker_receipt=receipt,
-            now=time.time() if now is None else now,
+            now=float(clock()),
         )
         return {
             "kind": "auth-credential-recovery-result-v1",

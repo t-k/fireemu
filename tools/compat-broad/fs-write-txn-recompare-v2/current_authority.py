@@ -42,6 +42,10 @@ def sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def absolute(path: Path) -> Path:
+    return Path(os.path.abspath(path))
+
+
 def regular(path: Path) -> None:
     info = path.lstat()
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
@@ -249,10 +253,10 @@ process.stdout.write(JSON.stringify({
 def run(args: argparse.Namespace) -> dict:
     root = Path(args.root).resolve(strict=True)
     runtime_source = Path(args.runtime_source).resolve(strict=True)
-    artifact_path = Path(args.artifact or root / ARTIFACT_REL).resolve(strict=True)
-    manifest_path = Path(args.build_manifest or root / MANIFEST_REL).resolve(strict=True)
-    production_path = Path(args.production).resolve(strict=True)
-    receipt_path = Path(args.receipt or root / DEFAULT_RECEIPT_REL).resolve(strict=True)
+    artifact_path = absolute(Path(args.artifact or root / ARTIFACT_REL))
+    manifest_path = absolute(Path(args.build_manifest or root / MANIFEST_REL))
+    production_path = absolute(Path(args.production))
+    receipt_path = absolute(Path(args.receipt or root / DEFAULT_RECEIPT_REL))
     snapshots: dict[Path, bytes] = {}
     artifact_bytes = read(artifact_path, ARTIFACT_SHA, snapshots)
     manifest_bytes = read(manifest_path, MANIFEST_SHA, snapshots)

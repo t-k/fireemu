@@ -310,6 +310,8 @@ class RulesManagementSession:
         self.release_evidence: list[dict[str, Any]] = []
         self.observation_outcome = "coordinator-cancelled"
         self.observation_complete = False
+        self.recovery_allowed = True
+        self.journal = None
 
     def snapshot(self) -> dict[str, Any]:
         """Expose only response-derived lifecycle state for partial recovery."""
@@ -329,6 +331,23 @@ class RulesManagementSession:
         else:
             self.gate.cancel_management_observation()
 
+    def bind_journal(self, journal) -> None:
+        """Attach the collector's existing durable journal for ownership facts."""
+        self.journal = journal
+
+    def _record_ownership(self, label: str) -> None:
+        if self.journal is not None and label in self.owned:
+            state = self.owned[label]
+            self.journal.record(
+                "rules-management-ownership",
+                {
+                    "label": label,
+                    "name": state["name"],
+                    "sourceDigest": state["sourceDigest"],
+                    "phase": state["phase"],
+                },
+            )
+
     def _dispatch(self, phase: str, slot: str, operation: dict[str, Any], *, allow_status: frozenset[int] = frozenset()) -> dict[str, Any]:
         def send(deadline: float) -> dict[str, Any]:
             if self.ledger is not None:
@@ -340,7 +359,12 @@ class RulesManagementSession:
                 "managementSlot": slot,
                 **operation,
             }
-            raw = self.execute(request, deadline=deadline)
+            try:
+                raw = self.execute(request, deadline=deadline)
+            except BaseException:
+                self.observation_outcome = "may-have-landed"
+                self.recovery_allowed = False
+                raise
             if not isinstance(raw, dict):
                 raise ValueError("bounded Rules worker receipt required")
             endpoint = getattr(raw, "endpoint", None)
@@ -448,12 +472,14 @@ class RulesManagementSession:
                 "sourceDigest": source_digest,
                 "phase": "created-unverified",
             }
+            self._record_ownership(label)
             name = self._ruleset(self._dispatch("observation", f"create-{patch_base}-get", {"action": "get", "rulesetName": created["name"]}), source_digest, created["name"])
             self.created[label] = name
             self.owned[label]["phase"] = "created-verified"
             self.owned[label]["name"] = name
             self.owned[label]["sourceDigest"] = source_digest
             self.owned[label]["phase"] = "patch-uncertain"
+            self._record_ownership(label)
             self._dispatch("observation", f"patch-{patch_base}", {"action": "release-patch", "releaseName": release_name, "rulesetName": name})
             patch_receipt = self.receipts[-1]
             active_name, active_ruleset = self._release(self._dispatch("observation", f"patch-{patch_base}-get", {"action": "release-get", "releaseName": release_name}), release_name)
@@ -464,6 +490,7 @@ class RulesManagementSession:
                 raise ValueError("active executable differs")
             self.active[label] = name
             self.owned[label]["phase"] = "active-verified"
+            self._record_ownership(label)
             self.release_evidence.append(
                 {
                     "label": label,
@@ -497,17 +524,15 @@ class RulesManagementSession:
         }
         if current_target != self.baseline["rulesetName"] and current_target not in owned_names:
             raise ValueError("foreign current Ruleset refuses restore")
-        if current_target != self.baseline["rulesetName"]:
-            self._dispatch("recovery", "restore-get", {"action": "release-patch", "releaseName": release_name, "rulesetName": self.baseline["rulesetName"]})
-        else:
-            self._release(
-                self._dispatch(
-                    "recovery",
-                    "restore-get",
-                    {"action": "release-get", "releaseName": release_name},
-                ),
-                release_name,
-            )
+        self._dispatch(
+            "recovery",
+            "restore-get",
+            {
+                "action": "release-patch",
+                "releaseName": release_name,
+                "rulesetName": self.baseline["rulesetName"],
+            },
+        )
         restored_name, restored_target = self._release(
             self._dispatch("recovery", "restore-executable", {"action": "release-get", "releaseName": release_name}),
             release_name,
@@ -1076,6 +1101,7 @@ def collect(
         if management_session is not None:
             if bindings is None or role != ROLE_PRODUCTION:
                 raise ValueError("Rules management requires bound production acquisition")
+            management_session.bind_journal(journal)
             rules_management = management_session.snapshot()
             rules_management = management_session.run_observation()
             for receipt in management_session.receipts:
@@ -1168,12 +1194,12 @@ def collect(
         failures.append(getattr(error, "failure", None) or abort)
         if (
             management_session is not None
-            and management_session.receipts
             and not management_session.observation_complete
         ):
             try:
                 management_session.close_observation()
             except Exception as close_error:  # noqa: BLE001 - retain the original ownership facts
+                management_session.recovery_allowed = False
                 failures.append("rules-management-close:" + type(close_error).__name__)
             rules_management = management_session.snapshot()
     finally:
@@ -1188,7 +1214,18 @@ def collect(
                 )
                 if worker_state["unreaped"]:
                     cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
-            if management_session is not None and not worker_state["unreaped"]:
+            if management_session is not None and not management_session.recovery_allowed:
+                rules_management = management_session.snapshot()
+                rules_management["recovery"] = {
+                    "restored": False,
+                    "cleanupComplete": False,
+                    "held": [
+                        state["name"]
+                        for state in management_session.owned.values()
+                        if isinstance(state.get("name"), str)
+                    ],
+                }
+            if management_session is not None and management_session.recovery_allowed and not worker_state["unreaped"]:
                 try:
                     observed_receipts = len(rules_management.get("managementReceipts", [])) if rules_management is not None else 0
                     rules_management["recovery"] = management_session.run_recovery()

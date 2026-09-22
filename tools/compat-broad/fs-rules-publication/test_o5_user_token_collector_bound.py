@@ -146,7 +146,7 @@ def _management_executor(plan: dict, transport):
         action = request["action"]
         label = request.get("label") or ("A" if request.get("rulesetName") == names["A"] else "B")
         source_digest = digest(plan["rulesets"][label]["source"])
-        scripted = transport({"phase": "ruleset", "managementPhase": request.get("managementPhase", "observation"), "action": action, "ruleset": label, "sourceDigest": source_digest})
+        scripted = transport({"phase": "ruleset", "managementPhase": request.get("managementPhase", "observation"), "action": action, "ruleset": label, "rulesetName": request.get("rulesetName"), "sourceDigest": source_digest})
         endpoint = scripted.get("endpoint")
         wire_sequence = scripted.get("wireSequence")
         scripted_name = scripted.get("releaseName")
@@ -270,7 +270,7 @@ def test_a_bound_run_records_releases_wire_facts_and_observer_identity() -> None
     assert bundle["provenance"]["case"]["tenant"] == "o5-user-token-tenant"
 
 
-def test_partial_create_readback_keeps_unverified_ownership_held() -> None:
+def test_partial_create_readback_keeps_unverified_ownership_held(tmp_path) -> None:
     plan = plan_for(ROLE_PRODUCTION)
     base = bound_transport(plan, ROLE_PRODUCTION)
 
@@ -280,12 +280,23 @@ def test_partial_create_readback_keeps_unverified_ownership_held() -> None:
             receipt["complete"] = False
         return receipt
 
-    bundle = bound(ROLE_PRODUCTION, transport=lost_create_readback)[0]
+    journal_path = tmp_path / "rules-management.jsonl"
+    bundle = bound(
+        ROLE_PRODUCTION,
+        transport=lost_create_readback,
+        journal_path=journal_path,
+    )[0]
     management = bundle["transport"]["rulesManagement"]
     assert bundle["recordingComplete"] is False
     assert management["owned"]["A"]["phase"] == "created-unverified"
     assert management["recovery"]["held"] == [management["owned"]["A"]["name"]]
     assert not any(request.get("phase") == "ruleset" and request.get("action") == "delete" for request in base.requests)
+    ownership = [
+        json.loads(line)
+        for line in journal_path.read_text().splitlines()
+        if json.loads(line)["kind"] == "rules-management-ownership"
+    ]
+    assert ownership[-1]["phase"] == "created-unverified"
 
 
 def test_lost_patch_restores_only_after_current_release_proves_owned_target() -> None:
@@ -322,6 +333,57 @@ def test_foreign_current_release_refuses_partial_restore_and_retains_owned_names
     assert bundle["abort"] == "rules-management-recovery"
     assert management["recovery"]["held"]
     assert not any(request.get("phase") == "ruleset" and request.get("action") == "delete" for request in base.requests)
+
+
+def test_management_worker_exception_at_first_slot_keeps_uncertain_gate_state() -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    base = bound_transport(plan, ROLE_PRODUCTION)
+
+    def raises(request: dict) -> dict:
+        if request.get("phase") == "ruleset" and request.get("managementPhase") == "observation":
+            raise RuntimeError("worker lost")
+        return base(request)
+
+    bundle = bound(ROLE_PRODUCTION, transport=raises)[0]
+    management = bundle["transport"]["rulesManagement"]
+    assert bundle["recordingComplete"] is False
+    assert bundle["abort"] == "collector:RuntimeError"
+    assert management["recovery"]["cleanupComplete"] is False
+    assert management["recovery"]["held"] == []
+    assert not any(request.get("managementPhase") == "recovery" for request in base.requests)
+
+
+def test_management_worker_exception_after_create_retains_issued_name_without_delete() -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    base = bound_transport(plan, ROLE_PRODUCTION)
+
+    def raises_after_create(request: dict) -> dict:
+        if request.get("phase") == "ruleset" and request.get("managementPhase") == "observation" and request.get("action") == "get" and request.get("ruleset") == "A":
+            raise RuntimeError("readback lost")
+        return base(request)
+
+    bundle = bound(ROLE_PRODUCTION, transport=raises_after_create)[0]
+    management = bundle["transport"]["rulesManagement"]
+    assert management["owned"]["A"]["phase"] == "created-unverified"
+    assert management["recovery"]["held"] == [management["owned"]["A"]["name"]]
+    assert not any(request.get("phase") == "ruleset" and request.get("action") == "delete" for request in base.requests)
+
+
+def test_baseline_recovery_uses_patch_slot_then_release_readback() -> None:
+    bundle, transport = bound(ROLE_PRODUCTION)
+    management = bundle["transport"]["rulesManagement"]
+    recovery = [
+        request
+        for request in transport.requests
+        if request.get("phase") == "ruleset" and request.get("managementPhase") == "recovery"
+    ]
+    assert [request["action"] for request in recovery[:4]] == [
+        "release-get",
+        "release-patch",
+        "release-get",
+        "release-get-executable",
+    ]
+    assert recovery[1]["rulesetName"] == management["baseline"]["rulesetName"]
 
 
 def test_a_bound_run_is_admitted_by_the_acquisition_comparator() -> None:

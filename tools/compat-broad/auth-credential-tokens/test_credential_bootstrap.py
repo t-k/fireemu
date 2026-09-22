@@ -15,6 +15,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 
 import credential_bootstrap as bootstrap
+import credential_gate as gate_module
 
 ADC = {
     "type": "authorized_user",
@@ -119,6 +120,45 @@ def test_fixture_bootstrap_charges_exact_four_requests_and_returns_private_hando
     assert result.proof["project"] == {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
     assert result.proof["authConfigDigest"] == bootstrap.digest({"name": "projects/592603257417/config", "mfa": {"state": "DISABLED"}})
     assert result.charged_requests == 4
+
+
+def test_prepare_uses_real_gate_and_pinned_loopback_worker_without_retry(fixture_origin, tmp_path):
+    origin, requests = fixture_origin
+    permission = _permission()
+    plan = gate_module.bootstrap_plan(
+        gate_module.gate_plan(
+            bootstrap.PROJECT,
+            permission["nonce"],
+            signing=False,
+            wall_seconds=600,
+            recovery_seconds=90,
+            cost_microusd=200,
+            observation_window_seconds=510,
+        ),
+        permission_digest=bootstrap.digest(permission),
+    )
+    plan["permissionExpiresAt"] = __import__("time").time() + 3600
+    gate_path = tmp_path / "gate"
+    gate_module.create(gate_path, plan)
+    gate = gate_module.CredentialGate(gate_path)
+    gate.claim()
+    result = bootstrap.prepare(
+        permission, adc=ADC, api_key="api-key", fixture_origin=origin, gate=gate
+    )
+    assert result.charged_requests == len(gate.snapshot()["managementEvents"]) == 4
+    assert [path.split("?", 1)[0] for path in requests] == [
+        "/oauth2.googleapis.com/token",
+        "/oauth2.googleapis.com/tokeninfo",
+        "/cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config",
+    ]
+    journal = (gate_path / "state.json").read_text()
+    assert "fixture-access" not in journal and "fixture-secret" not in journal
+    with pytest.raises(ValueError, match="closed management sequence"):
+        bootstrap.prepare(
+            permission, adc=ADC, api_key="api-key", fixture_origin=origin, gate=gate
+        )
+    assert len(requests) == 4
 
 
 def test_bootstrap_rejects_foreign_principal_before_network(fixture_origin):

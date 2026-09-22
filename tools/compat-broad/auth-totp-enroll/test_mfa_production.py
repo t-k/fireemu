@@ -770,7 +770,7 @@ def test_adoption_is_refused_before_any_credential_while_the_owner_is_alive(
     assert built.fake.accounts
 
 
-def test_a_lost_signup_answer_is_discovered_and_the_account_deleted(tmp_path):
+def test_a_lost_signup_answer_is_held_when_email_only_readback_finds_presence(tmp_path):
     built = RehearsalAdmission(tmp_path)
     counters = {"signups": 0}
 
@@ -783,18 +783,20 @@ def test_a_lost_signup_answer_is_discovered_and_the_account_deleted(tmp_path):
     result = built.run(after=after)
     assert result["failure"] == "ValueError"
     assert result["stopPoint"] == "acquisition"
-    # The third signup created an account this process never saw; the address
-    # readback settled it as created and owned, and it was deleted with the rest.
-    assert result["cleanup"]["ownedAccounts"] == 3
+    # The third signup created an account this process never saw. Email-only
+    # readback identifies presence but cannot prove ownership, so it remains held.
+    assert result["cleanup"]["ownedAccounts"] == 2
     assert result["cleanup"]["complete"] is True
-    assert built.fake.accounts == {}
-    assert result["accountEvidence"]["createdAccounts"] == 3
-    assert not any(item["id"] == "recover:address-lookup" for item in result["managementEvidence"])
-    assert result["gateComplete"] is True
+    assert len(built.fake.accounts) == 1
+    assert result["accountEvidence"]["createdAccounts"] == 2
+    assert result["accountEvidence"]["unsettledSignups"] == 1
+    assert result["accountEvidence"]["complete"] is False
+    assert result["unprovenIntents"] == ["pending-age-450"]
+    assert result["gateComplete"] is False
     assert result["untrackedIntents"] == []
 
 
-def test_a_lost_signup_in_a_dead_process_is_recovered_by_abandon(tmp_path, monkeypatch):
+def test_a_lost_signup_in_a_dead_process_stays_held_on_abandon(tmp_path, monkeypatch):
     built = RehearsalAdmission(tmp_path)
     counters = {"signups": 0}
     dead = {"now": False}
@@ -813,17 +815,19 @@ def test_a_lost_signup_in_a_dead_process_is_recovered_by_abandon(tmp_path, monke
     assert len(built.fake.accounts) == 3
     dead["now"] = False
     recovered = built.run(abandon=True)
-    assert recovered["cleanup"]["ownedAccounts"] == 3
+    assert recovered["cleanup"]["ownedAccounts"] == 2
     assert recovered["cleanup"]["complete"] is True
-    assert built.fake.accounts == {}
+    assert len(built.fake.accounts) == 1
+    assert recovered["accountEvidence"]["unsettledSignups"] == 1
+    assert recovered["accountEvidence"]["complete"] is False
+    assert recovered["unprovenIntents"] == ["pending-age-450"]
     assert recovered["configuration"]["restoreStatus"] in (
         "restored-verified",
         "restored-verified-normalized",
     )
     assert not applied(built.fake.config)
     assert (
-        admission.classify_stop(recovered)["disposition"]
-        == "abandoned-cleanup-complete"
+        admission.classify_stop(recovered)["disposition"] == "owner-escalation"
     )
 
 

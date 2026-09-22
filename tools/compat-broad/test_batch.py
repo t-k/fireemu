@@ -136,6 +136,147 @@ def test_real_transport_bounds_redirect_body_and_total_deadline():
         thread.join(timeout=5)
 
 
+def test_optional_process_receipt_reports_real_reaped_worker_without_changing_default():
+    import http.server
+    import threading
+
+    import batch_adapter as adapter
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    try:
+        default = adapter.wire(origin + "/ok", "GET", None, {}, local=True)
+        assert default == [200, {"ok": True}, "application/json"]
+        observed = adapter.wire(
+            origin + "/ok",
+            "GET",
+            None,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+        assert observed["status"] == 200
+        assert observed["complete"] is True
+        assert observed["bodyKind"] == "json"
+        assert observed["body"] == {"ok": True}
+        assert observed["workerReaped"] is True
+        process = observed["process"]
+        assert process["pid"] > 0
+        assert isinstance(process["returncode"], int)
+        assert process["termination"] == "exited"
+        assert process["deadlineExceeded"] is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("worker_source", "returncode", "termination"),
+    [
+        ("import sys; sys.exit(7)", 7, "exited"),
+        ("print('not-json')", 0, "exited"),
+    ],
+)
+def test_process_receipt_failures_report_actual_terminal_state(
+    tmp_path, monkeypatch, worker_source, returncode, termination
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    (worker_dir / "batch_wire.py").write_text(worker_source + "\n", encoding="utf-8")
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    with pytest.raises(adapter.WorkerProcessError) as raised:
+        adapter.wire(
+            "http://127.0.0.1:18081/never",
+            "GET",
+            {"secret": "must-not-appear"},
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    error = raised.value
+    assert "must-not-appear" not in str(error)
+    assert error.process_receipt["returncode"] == returncode
+    assert error.process_receipt["workerReaped"] is True
+    assert error.process_receipt["termination"] == termination
+
+
+def test_process_receipt_start_failure_does_not_claim_a_worker_was_reaped(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    monkeypatch.setattr(adapter, "HERE", tmp_path / "missing-worker")
+    monkeypatch.setattr(adapter.sys, "executable", str(tmp_path / "missing-python"))
+    with pytest.raises(adapter.WorkerProcessError) as raised:
+        adapter.wire(
+            "http://127.0.0.1:18081/never",
+            "GET",
+            None,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    receipt = raised.value.process_receipt
+    assert receipt["started"] is False
+    assert receipt["pid"] is None
+    assert receipt["workerReaped"] is False
+    assert receipt["termination"] == "start-failed"
+
+
+def test_process_receipt_timeout_kills_and_reaps_owned_worker():
+    import http.server
+    import threading
+    import time
+
+    import batch_adapter as adapter
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_GET(self):
+            time.sleep(0.8)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(adapter.WorkerProcessError) as raised:
+            adapter.wire(
+                f"http://127.0.0.1:{server.server_port}/slow",
+                "GET",
+                None,
+                {},
+                local=True,
+                timeout=0.2,
+                process_receipt=True,
+            )
+        receipt = raised.value.process_receipt
+        assert receipt["deadlineExceeded"] is True
+        assert receipt["termination"] == "deadline"
+        assert receipt["workerReaped"] is True
+        assert receipt["returncode"] is not None
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
 def test_unjournaled_resources_and_foreign_auth_selectors_fail_before_transport(
     tmp_path,
 ):

@@ -386,7 +386,7 @@ def validate_authority_bundle(plan: Mapping[str, Any], *, permission: Mapping[st
         _refuse("fresh authority issue ordering differs")
     current = time.time() if now is None else now
     _finite(current, "authority check time")
-    if current < min(permission["issuedAt"], o7["issuedAt"], o8["issuedAt"]):
+    if any(current < issued_at for issued_at in (permission["issuedAt"], o7["issuedAt"], o8["issuedAt"])):
         _refuse("fresh O7/O8 authority is not active")
     if current >= min(permission["expiresAt"], o7["expiresAt"], o8["expiresAt"]):
         _refuse("fresh O7/O8 authority expired")

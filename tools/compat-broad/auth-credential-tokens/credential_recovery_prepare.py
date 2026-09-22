@@ -1,19 +1,23 @@
 """Prepare a secret-free Auth packet05 recovery bundle.
 
 This is an offline operator boundary. It reads a held parent and the shared
-Ledger, compiles a fresh lookup child, and writes detached authority documents.
-It never calls a transport, begins a child reservation, or closes a parent.
-The resulting files are inputs for a separately authorized execution process.
+Ledger, compiles a fresh lookup child, and writes a review request. A packet
+can only be assembled when separately reviewed permission/O7/O8 documents are
+supplied. It never calls a transport, begins a child reservation, or closes a
+parent.
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import secrets
+import subprocess
 import sys
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -27,10 +31,13 @@ sys.path.insert(0, str(HERE))
 import credential_recovery as recovery
 import reservations
 from broad_contract import digest
+from shared_gate import Gate
 
 PACKET_KIND = "auth-packet05-recovery-preparation-v1"
+REVIEW_REQUEST_KIND = "auth-packet05-recovery-review-request-v1"
 ARTIFACT_NAMES = (
     "packet.json",
+    "review-request.json",
     "plan.json",
     "permission.json",
     "o7.json",
@@ -67,7 +74,7 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def _parent_claim_matches_ledger(parent: Mapping[str, Any], ledger: Any) -> None:
+def _reconstruct_parent(parent: Mapping[str, Any], ledger: Any) -> tuple[dict[str, Any], Mapping[str, Any]]:
     ticket = parent.get("ticket")
     if not isinstance(ticket, Mapping):
         _refuse("parent Ledger ticket required")
@@ -80,35 +87,55 @@ def _parent_claim_matches_ledger(parent: Mapping[str, Any], ledger: Any) -> None
         raise recovery.RecoveryRefusal(
             f"parent Ledger claim refused: {type(error).__name__}"
         ) from None
-    if (
-        not isinstance(bound_claim, Mapping)
-        or bound_claim.get("campaignId") != recovery.CAMPAIGN
-    ):
+    if not isinstance(bound_claim, Mapping) or bound_claim.get("campaignId") != recovery.CAMPAIGN:
         _refuse("canonical Auth parent claim required")
     ticket_digest = ticket.get("claimDigest")
     if ticket_digest is not None and ticket_digest != digest(bound_claim):
         _refuse("parent Ledger claim binding changed")
-    supplied_claim = parent.get("claim")
-    if not isinstance(supplied_claim, Mapping):
-        _refuse("parent claim evidence required")
-    supplied_digest = supplied_claim.get("claimDigest")
-    claim_without_digest = {
-        key: value for key, value in supplied_claim.items() if key != "claimDigest"
-    }
-    if supplied_digest not in (None, digest(bound_claim), digest(claim_without_digest)):
-        _refuse("parent claim evidence differs from Ledger")
-
-
-def _assert_fresh_nonce(ledger: Any, parent: Mapping[str, Any], nonce: str) -> None:
     snapshot_method = getattr(ledger, "snapshot", None)
     if not callable(snapshot_method):
         _refuse("production-admission Ledger snapshot API required")
     try:
         state = snapshot_method()
     except Exception as error:  # noqa: BLE001 -- never expose Ledger details at this boundary.
-        raise recovery.RecoveryRefusal(
-            f"parent Ledger snapshot refused: {type(error).__name__}"
-        ) from None
+        raise recovery.RecoveryRefusal(f"parent Ledger snapshot refused: {type(error).__name__}") from None
+    reservation = ticket.get("reservation")
+    row = (state.get("reservations", {}) if isinstance(state, Mapping) else {}).get(reservation)
+    if not isinstance(row, Mapping) or row.get("state") != "held":
+        _refuse("canonical held Auth parent required")
+    if row.get("claimDigest") not in {digest(bound_claim), bound_claim.get("claimDigest")} or row.get("claim") != dict(bound_claim):
+        _refuse("parent Ledger claim binding changed")
+    generation = row.get("generation")
+    if not isinstance(generation, Mapping):
+        _refuse("canonical parent source generation required")
+    gate_path = bound_claim.get("gatePath")
+    gate_job = bound_claim.get("gateJob", "auth-credential")
+    try:
+        if isinstance(gate_path, str):
+            canonical_gate = Gate(gate_path, gate_job).snapshot()
+        else:
+            bound_gate = getattr(ledger, "bound_gate", None)
+            if not callable(bound_gate):
+                _refuse("canonical parent Gate API required")
+            canonical_gate = bound_gate(copy.deepcopy(dict(ticket)))
+    except recovery.RecoveryRefusal:
+        raise
+    except Exception as error:  # noqa: BLE001 -- never expose Gate details at this boundary.
+        raise recovery.RecoveryRefusal(f"parent Gate snapshot refused: {type(error).__name__}") from None
+    if not isinstance(canonical_gate, Mapping):
+        _refuse("canonical parent Gate evidence required")
+    canonical = copy.deepcopy(dict(parent))
+    canonical.update(
+        state="held",
+        claim=copy.deepcopy(dict(bound_claim)),
+        gate=copy.deepcopy(dict(canonical_gate)),
+        generation=copy.deepcopy(dict(generation)),
+    )
+    recovery._parent_snapshot(canonical)
+    return canonical, state
+
+
+def _assert_fresh_nonce(ledger: Any, nonce: str, state: Mapping[str, Any]) -> None:
     target = digest(nonce)
     if not isinstance(state, Mapping):
         _refuse("canonical Ledger snapshot required")
@@ -127,49 +154,83 @@ def _assert_fresh_nonce(ledger: Any, parent: Mapping[str, Any], nonce: str) -> N
                 _refuse("recovery nonce already reserved")
 
 
-def _authority_documents(
+def _verify_fixed_source(provenance: Mapping[str, Any], source_root: Path, expected_commit: str) -> None:
+    if source_root.is_symlink() or not source_root.is_dir():
+        _refuse("clean source checkout required")
+    try:
+        actual_commit = subprocess.check_output(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        dirty = subprocess.check_output(
+            ["git", "-C", str(source_root), "status", "--porcelain", "--untracked-files=all"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        _refuse("clean source checkout required")
+    if actual_commit != expected_commit or dirty:
+        _refuse("fixed source checkout differs")
+    source_inputs = provenance.get("sourceInputs") if isinstance(provenance, Mapping) else None
+    if not isinstance(source_inputs, Mapping) or not source_inputs:
+        _refuse("source input provenance required")
+    for relative, expected_digest in source_inputs.items():
+        path = source_root / relative
+        if not isinstance(relative, str) or not relative.startswith("tools/") or ".." in Path(relative).parts:
+            _refuse("source path provenance differs")
+        if path.is_symlink() or not path.is_file():
+            _refuse("source checkout input missing")
+        actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual_digest != expected_digest:
+            _refuse("source checkout digest differs")
+    generation = provenance.get("generation")
+    if not isinstance(generation, Mapping):
+        _refuse("source generation provenance required")
+    generation_paths = {
+        "worker.py": recovery.WORKER_ENTRY,
+        "transport.py": recovery.TRANSPORT_ENTRY,
+        "recovery.py": "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
+    }
+    declared_generation = generation.get("sourceDigests")
+    if not isinstance(declared_generation, Mapping) or set(declared_generation) != set(generation_paths):
+        _refuse("source generation closure differs")
+    for name, relative in generation_paths.items():
+        actual_digest = hashlib.sha256((source_root / relative).read_bytes()).hexdigest()
+        if declared_generation[name] != actual_digest:
+            _refuse("source generation digest differs")
+    if generation.get("collectorSourceDigest") != declared_generation["recovery.py"]:
+        _refuse("collector source digest differs")
+
+
+def _review_request(plan: Mapping[str, Any], parent: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": REVIEW_REQUEST_KIND,
+        "campaignId": recovery.CAMPAIGN,
+        "planDigest": plan["planDigest"],
+        "parentEvidenceDigest": parent["evidence"]["evidenceDigest"],
+        "sourceCommit": plan["provenance"]["sourceCommit"],
+        "recoveryNonceDigest": plan["recoveryNonceDigest"],
+        "requestedAuthorityKinds": [recovery.PERMISSION_KIND, recovery.O7_KIND, recovery.O8_KIND],
+        "reviewedArtifactsRequired": True,
+        "productionExecuted": False,
+    }
+
+
+def _validate_reviewed_authorities(
     plan: Mapping[str, Any],
+    permission: Mapping[str, Any] | None,
+    o7: Mapping[str, Any] | None,
+    o8: Mapping[str, Any] | None,
+    *,
+    now: float,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    expires_at = plan["deadlineAt"]
-    permission = {
-        "kind": recovery.PERMISSION_KIND,
-        "campaignId": recovery.CAMPAIGN,
-        "parentClaimDigest": plan["parent"]["claimDigest"],
-        "planDigest": plan["planDigest"],
-        "nonceDigest": plan["recoveryNonceDigest"],
-        "sourceInputsDigest": plan["provenance"]["sourceInputsDigest"],
-        "budget": copy.deepcopy(recovery.CHILD_BUDGET),
-        "issuedAt": plan["issuedAt"],
-        "expiresAt": expires_at,
-    }
-    permission_digest = digest(permission)
-    o7 = {
-        "kind": recovery.O7_KIND,
-        "status": "approved",
-        "campaignId": recovery.CAMPAIGN,
-        "planDigest": plan["planDigest"],
-        "permissionDigest": permission_digest,
-        "nonceDigest": plan["recoveryNonceDigest"],
-        "sourceInputsDigest": plan["provenance"]["sourceInputsDigest"],
-        "issuedAt": plan["issuedAt"],
-        "expiresAt": expires_at,
-    }
-    o8 = {
-        "kind": recovery.O8_KIND,
-        "status": "issued",
-        "campaignId": recovery.CAMPAIGN,
-        "planDigest": plan["planDigest"],
-        "permissionDigest": permission_digest,
-        "nonceDigest": plan["recoveryNonceDigest"],
-        "sourceInputsDigest": plan["provenance"]["sourceInputsDigest"],
-        "oneShot": True,
-        "consumed": False,
-        "issuedAt": plan["issuedAt"],
-        "expiresAt": expires_at,
-    }
-    recovery.validate_authority_bundle(
-        plan, permission=permission, o7=o7, o8=o8, now=plan["issuedAt"]
-    )
+    if not all(isinstance(value, Mapping) for value in (permission, o7, o8)):
+        _refuse("separately reviewed permission/O7/O8 artifacts required")
+    permission = copy.deepcopy(dict(permission))
+    o7 = copy.deepcopy(dict(o7))
+    o8 = copy.deepcopy(dict(o8))
+    recovery.validate_authority_bundle(plan, permission=permission, o7=o7, o8=o8, now=now)
     return permission, o7, o8
 
 
@@ -184,30 +245,105 @@ def _reject_secret_keys(value: Any) -> None:
             _reject_secret_keys(child)
 
 
+def _compile_context(
+    parent: Mapping[str, Any],
+    *,
+    ledger: Any,
+    provenance: Mapping[str, Any],
+    source_root: Path,
+    recovery_nonce: str | None,
+    now: float | None,
+    deadline_seconds: int,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    canonical_parent, ledger_state = _reconstruct_parent(parent, ledger)
+    parent_snapshot = recovery._parent_snapshot(canonical_parent)
+    _verify_fixed_source(provenance, source_root, parent_snapshot["sourceCommit"])
+    nonce = secrets.token_hex(16) if recovery_nonce is None else recovery_nonce
+    recovery._nonce(nonce, "recovery")
+    _assert_fresh_nonce(ledger, nonce, ledger_state)
+    plan = recovery.compile_recovery_plan(
+        canonical_parent,
+        recovery_nonce=nonce,
+        provenance=provenance,
+        now=now,
+        deadline_seconds=deadline_seconds,
+    )
+    return canonical_parent, parent_snapshot, plan
+
+
+def prepare_review_draft(
+    parent: Mapping[str, Any],
+    *,
+    ledger: Any,
+    provenance: Mapping[str, Any],
+    source_root: Path,
+    recovery_nonce: str | None = None,
+    now: float | None = None,
+    deadline_seconds: int = recovery.MAX_DEADLINE_SECONDS,
+) -> dict[str, Any]:
+    """Create a review request without fabricating permission or approvals."""
+    try:
+        canonical_parent, parent_snapshot, plan = _compile_context(
+            parent,
+            ledger=ledger,
+            provenance=provenance,
+            source_root=source_root,
+            recovery_nonce=recovery_nonce,
+            now=now,
+            deadline_seconds=deadline_seconds,
+        )
+    except recovery.RecoveryRefusal:
+        raise
+    except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+        raise recovery.RecoveryRefusal(f"malformed Auth packet05 parent ({type(error).__name__})") from None
+    draft = {
+        "kind": "auth-packet05-recovery-review-draft-v1",
+        "campaignId": recovery.CAMPAIGN,
+        "productionExecuted": False,
+        "productionAllowed": False,
+        "ledgerMutated": False,
+        "reviewRequest": _review_request(plan, parent_snapshot),
+        "immutableParent": copy.deepcopy(dict(canonical_parent["immutableParent"])),
+        "parentEvidence": copy.deepcopy(parent_snapshot["evidence"]),
+        "plan": plan,
+    }
+    _reject_secret_keys(draft)
+    return draft
+
+
 def prepare_packet(
     parent: Mapping[str, Any],
     *,
     ledger: Any,
     provenance: Mapping[str, Any],
+    source_root: Path,
+    permission: Mapping[str, Any] | None,
+    o7: Mapping[str, Any] | None,
+    o8: Mapping[str, Any] | None,
     recovery_nonce: str | None = None,
     now: float | None = None,
+    authority_now: float | None = None,
     deadline_seconds: int = recovery.MAX_DEADLINE_SECONDS,
 ) -> dict[str, Any]:
     """Compile detached recovery authorities without changing the Ledger."""
     try:
-        _parent_claim_matches_ledger(parent, ledger)
-        nonce = secrets.token_hex(16) if recovery_nonce is None else recovery_nonce
-        recovery._nonce(nonce, "recovery")
-        _assert_fresh_nonce(ledger, parent, nonce)
-        plan = recovery.compile_recovery_plan(
+        canonical_parent, parent_snapshot, plan = _compile_context(
             parent,
-            recovery_nonce=nonce,
+            ledger=ledger,
             provenance=provenance,
+            source_root=source_root,
+            recovery_nonce=recovery_nonce,
             now=now,
             deadline_seconds=deadline_seconds,
         )
-        permission, o7, o8 = _authority_documents(plan)
-        snapshot = recovery._parent_snapshot(parent)
+        permission, o7, o8 = _validate_reviewed_authorities(
+            plan,
+            permission,
+            o7,
+            o8,
+            now=time.time() if authority_now is None else authority_now,
+        )
+        review_request = _review_request(plan, parent_snapshot)
     except recovery.RecoveryRefusal:
         raise
     except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
@@ -220,8 +356,9 @@ def prepare_packet(
         "productionExecuted": False,
         "productionAllowed": False,
         "ledgerMutated": False,
-        "immutableParent": copy.deepcopy(dict(parent["immutableParent"])),
-        "parentEvidence": copy.deepcopy(snapshot["evidence"]),
+        "reviewRequest": review_request,
+        "immutableParent": copy.deepcopy(dict(canonical_parent["immutableParent"])),
+        "parentEvidence": copy.deepcopy(parent_snapshot["evidence"]),
         "plan": plan,
         "permission": permission,
         "o7": o7,
@@ -264,6 +401,7 @@ def write_packet(bundle: Mapping[str, Any], output: Path) -> Path:
     destination.mkdir(mode=0o700, parents=False)
     files = {
         "packet.json": dict(bundle),
+        "review-request.json": bundle["reviewRequest"],
         "plan.json": bundle["plan"],
         "permission.json": bundle["permission"],
         "o7.json": bundle["o7"],
@@ -276,6 +414,34 @@ def write_packet(bundle: Mapping[str, Any], output: Path) -> Path:
     try:
         for name in ARTIFACT_NAMES:
             _write_json(destination / name, files[name])
+    except Exception:
+        for path in destination.iterdir():
+            path.unlink()
+        destination.rmdir()
+        raise
+    return destination
+
+
+def write_review_draft(draft: Mapping[str, Any], output: Path) -> Path:
+    if not isinstance(draft, Mapping) or draft.get("kind") != "auth-packet05-recovery-review-draft-v1":
+        _refuse("Auth packet05 review draft required")
+    _reject_secret_keys(draft)
+    destination = output.resolve()
+    if destination.exists():
+        _refuse("new recovery output directory required")
+    destination.mkdir(mode=0o700, parents=False)
+    files = {
+        "draft.json": dict(draft),
+        "review-request.json": draft["reviewRequest"],
+        "plan.json": draft["plan"],
+        "parent-evidence.json": {
+            "immutableParent": draft["immutableParent"],
+            "parentEvidence": draft["parentEvidence"],
+        },
+    }
+    try:
+        for name, value in files.items():
+            _write_json(destination / name, value)
     except Exception:
         for path in destination.iterdir():
             path.unlink()
@@ -314,6 +480,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="canonical shared Ledger root (read-only)",
     )
     parser.add_argument(
+        "--source",
+        type=Path,
+        required=True,
+        help="clean checkout at the immutable parent sourceCommit",
+    )
+    parser.add_argument("--permission", type=Path, help="separately reviewed permission JSON")
+    parser.add_argument("--o7", type=Path, help="separately reviewed O7 approval JSON")
+    parser.add_argument("--o8", type=Path, help="separately reviewed O8 capability JSON")
+    parser.add_argument("--draft-only", action="store_true", help="write a review draft without authority artifacts")
+    parser.add_argument(
         "--output", type=Path, required=True, help="new private preparation directory"
     )
     parser.add_argument(
@@ -334,12 +510,32 @@ def main(argv: list[str] | None = None) -> int:
         args = build_parser().parse_args(argv)
         ledger = reservations.Ledger(args.ledger)
         _assert_output_detached(args.output, ledger)
+        if args.draft_only:
+            if any((args.permission, args.o7, args.o8)):
+                _refuse("draft-only cannot consume reviewed authority artifacts")
+            draft = prepare_review_draft(
+                _read_json(args.parent),
+                ledger=ledger,
+                provenance=_read_json(args.provenance),
+                source_root=args.source,
+                recovery_nonce=args.recovery_nonce,
+                now=args.now,
+                deadline_seconds=args.deadline_seconds,
+            )
+            output = write_review_draft(draft, args.output)
+            print(f"AUTH-CREDENTIAL packet05 review draft prepared offline at {output}.")
+            return 0
         bundle = prepare_packet(
             _read_json(args.parent),
             ledger=ledger,
             provenance=_read_json(args.provenance),
+            source_root=args.source,
+            permission=_read_json(args.permission) if args.permission else None,
+            o7=_read_json(args.o7) if args.o7 else None,
+            o8=_read_json(args.o8) if args.o8 else None,
             recovery_nonce=args.recovery_nonce,
             now=args.now,
+            authority_now=time.time(),
             deadline_seconds=args.deadline_seconds,
         )
         output = write_packet(bundle, args.output)
@@ -361,4 +557,13 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-__all__ = ["PACKET_KIND", "build_parser", "main", "prepare_packet", "write_packet"]
+__all__ = [
+    "PACKET_KIND",
+    "REVIEW_REQUEST_KIND",
+    "build_parser",
+    "main",
+    "prepare_packet",
+    "prepare_review_draft",
+    "write_packet",
+    "write_review_draft",
+]

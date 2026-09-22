@@ -20,7 +20,7 @@ This lane prepares a bounded production observation of the `AUTH-CREDENTIAL` con
 | `credential_remote_transport.py`, `credential_https_worker.py` | The digest-pinned HTTPS worker and the capability-bound transport (identitytoolkit, securetoken, iamcredentials only). |
 | `credential_production.py` | One admitted execution: reserve, Gate, preflight, cases, cleanup, receipt, release. |
 | `credential_o8.py` | The launcher. Exit 0 released, 1 held with a receipt, 2 refused before any wire call. |
-| `credential_recovery_prepare.py` | The offline packet05 recovery preparer. It reads the held parent and Ledger, creates a fresh child nonce plus permission/O7/O8 documents, and never sends a request or mutates the Ledger. |
+| `credential_recovery_prepare.py` | The offline packet05 recovery preparer. It reads the held parent and Ledger, creates a fresh child nonce and review request, validates separately reviewed permission/O7/O8 documents, and never sends a request or mutates the Ledger. |
 
 ## Offline packet05 recovery preparation
 
@@ -33,16 +33,29 @@ Ledger root; all files are mode `0600` in a mode `0700` directory.
 uv run --python 3.12 python tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py \
   --parent /private/auth-packet05/parent.json \
   --provenance /private/auth-packet05/provenance.json \
+  --source /private/auth-packet05/source-checkout \
   --ledger /private/auth-packet05/ledger \
+  --permission /private/auth-packet05/reviewed/permission.json \
+  --o7 /private/auth-packet05/reviewed/o7.json \
+  --o8 /private/auth-packet05/reviewed/o8.json \
   --output /private/auth-packet05/recovery-preparation
 ```
 
 The command prints only a status line. It produces `plan.json`,
-`permission.json`, `o7.json`, `o8.json`, `parent-evidence.json`, and the same
-redacted bundle as `packet.json`. It does not call `begin_child`, consume O8,
-send production traffic, read credentials, or close the held parent. The
-preparer checks the requested nonce against the Ledger history and preserves
-the immutable parent `sourceCommit` and exact packet05 parent evidence.
+`permission.json`, `o7.json`, `o8.json`, `parent-evidence.json`,
+`review-request.json`, and the same redacted bundle as `packet.json`. The
+permission/O7/O8 files must be supplied separately by the review process; the
+preparer never manufactures an approval or capability. It does not call
+`begin_child`, consume O8, send production traffic, read credentials, or close
+the held parent. The preparer checks the requested nonce against the Ledger
+history, verifies the clean source checkout and every declared source digest,
+and preserves the immutable parent `sourceCommit` and exact packet05 parent
+evidence.
+
+To create the review input before approvals exist, use the same command with
+`--draft-only` and omit `--permission`, `--o7`, and `--o8`. This writes only
+`draft.json`, `review-request.json`, `plan.json`, and `parent-evidence.json`;
+the draft contains no permission or approval claims.
 
 ## Signing dependence
 

@@ -1807,7 +1807,9 @@ def recover_owned(
             phase = state.get("phase") if isinstance(state, Mapping) else None
             if phase == "acknowledged":
                 acknowledged_resources.add(resource)
-            elif phase in {"creation-unconfirmed", "held", "patch-uncertain"}:
+            elif phase == "creation-unconfirmed":
+                unconfirmed.append(resource)
+            elif phase in {"held", "patch-uncertain"}:
                 held.append(resource)
             else:
                 not_attempted.append(resource)
@@ -1817,7 +1819,9 @@ def recover_owned(
             phase = state.get("phase") if isinstance(state, Mapping) else None
             if phase == "acknowledged":
                 acknowledged_accounts.add(ref)
-            elif phase in {"creation-unconfirmed", "held", "patch-uncertain"}:
+            elif phase == "creation-unconfirmed":
+                unconfirmed.append(ref)
+            elif phase in {"held", "patch-uncertain"}:
                 held.append(ref)
             else:
                 not_attempted.append(ref)

@@ -69,8 +69,8 @@ def owner_permission(plan, commit, artifact_digest, inputs) -> dict:
 class Admission:
     """A complete, locally built O7 artifact set for the credential campaign."""
 
-    def __init__(self, tmp_path: Path, *, signing: bool = True):
-        self.descriptor = campaign.descriptor()
+    def __init__(self, tmp_path: Path, *, signing: bool = True, preparation: bool = False):
+        self.descriptor = campaign.preparation_descriptor() if preparation else campaign.descriptor()
         self.source = frozen_checkout(tmp_path)
         self.commit = subprocess.check_output(
             ["git", "-C", str(self.source), "rev-parse", "HEAD"], text=True
@@ -81,14 +81,27 @@ class Admission:
         self.permission = owner_permission(
             self.plan, self.commit, hashlib.sha256(self.artifact_path.read_bytes()).hexdigest(), campaign.source_map()
         )
+        if preparation:
+            self.permission = {
+                **campaign.preparation_permission_bindings(self.plan, self.commit, hashlib.sha256(self.artifact_path.read_bytes()).hexdigest(), campaign.source_map()),
+                "ownerIdentity": "offline-fixture-not-production-permission",
+                "recoveryOwner": "offline-fixture-recovery",
+                "permissionReference": "synthetic-preparation-fixture-only",
+                "credentialPrincipal": {"clientId": "client-1", "verifiedEmail": "fixture@example.invalid", "requiredScopes": [campaign.PRINCIPAL_SCOPE]},
+                "authorizedUserDigest": digest({"type": "authorized_user", "client_id": "client-1", "client_secret": "fixture-secret", "refresh_token": "fixture-refresh"}),
+                "apiKeyDigest": digest("api-key"),
+                "issuedAt": time.time() - 1,
+                "expiresAt": time.time() + 4800,
+            }
         self.permission_path = tmp_path / "permission.json"
         self.permission_path.write_text(json.dumps(self.permission))
-        self.inputs = admission.freeze_inputs(
+        freeze = admission.freeze_preparation_inputs if preparation else admission.freeze_inputs
+        self.inputs = freeze(
             self.permission_path, self.plan, source_root=self.source, artifact_path=self.artifact_path
         )
         self.ledger = tmp_path / "ledger"
         reservations.Ledger.create(self.ledger)
-        self.manifest = {"kind": campaign.MANIFEST_KIND, "inputsDigest": self.inputs["inputsDigest"]}
+        self.manifest = {"kind": self.descriptor.manifest_kind, "inputsDigest": self.inputs["inputsDigest"]}
         self.manifest_bytes = json.dumps(self.manifest).encode()
         self.manifest_path = tmp_path / "manifest.json"
         self.manifest_path.write_bytes(self.manifest_bytes)
@@ -112,7 +125,7 @@ class Admission:
     def _approval(self) -> dict:
         now = time.time()
         return {
-            "kind": campaign.APPROVAL_KIND,
+            "kind": self.descriptor.approval_kind,
             "status": "approved",
             "manifestSha256": hashlib.sha256(self.manifest_bytes).hexdigest(),
             "inputsDigest": self.inputs["inputsDigest"],
@@ -192,7 +205,21 @@ def test_preparation_descriptor_is_separate_but_reuses_campaign_members() -> Non
     assert prep.frozen_inputs_kind == "auth-credential-bootstrap-frozen-inputs-v1"
     assert prep.approval_kind == "auth-credential-bootstrap-approval-v1"
     assert prep.manifest_kind == "auth-credential-bootstrap-manifest-v1"
-    assert campaign.preparation_transport_bound({"nonce": NONCE, "signing": True})
+    assert prep.transport_bound is campaign.preparation_transport_bound
+
+
+def test_preparation_real_issuer_binds_independent_fixture_authority(tmp_path):
+    fixture = Admission(tmp_path, preparation=True)
+    binding, binding_digest = campaign.remote.worker_binding()
+    capability = admission.issue_preparation_capability(**fixture.bindings(), binding=binding, binding_digest=binding_digest)
+    try:
+        assert admission.issued_capability(capability)
+        plan = admission.preparation_gate_plan_for(fixture.inputs, fixture.permission)
+        assert plan["bootstrap"]["permissionDigest"] == digest(fixture.permission)
+        assert plan["wallSeconds"] == 600 and plan["recoverySeconds"] == 60
+        assert plan["dataRequests"] + plan["managementRequests"] == 53
+    finally:
+        admission.revoke_production_capability(capability)
 
 
 def test_the_budget_is_the_lane_budget_with_management_slots_inside_it() -> None:

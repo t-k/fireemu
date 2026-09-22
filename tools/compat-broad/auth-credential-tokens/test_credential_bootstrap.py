@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -37,6 +38,8 @@ class _Fixture(BaseHTTPRequestHandler):
                 "azp": "client-1",
                 "aud": "client-1",
                 "sub": "subject-1",
+                "email": "fixture@example.invalid",
+                "email_verified": "true",
                 "scope": "https://www.googleapis.com/auth/cloud-platform",
                 "expires_in": 3600,
             }
@@ -51,6 +54,8 @@ class _Fixture(BaseHTTPRequestHandler):
                 "azp": "client-1",
                 "aud": "client-1",
                 "sub": "subject-1",
+                "email": "fixture@example.invalid",
+                "email_verified": "true",
                 "scope": "https://www.googleapis.com/auth/cloud-platform",
                 "expires_in": 3600,
             })
@@ -77,7 +82,7 @@ class _Fixture(BaseHTTPRequestHandler):
 @pytest.fixture
 def fixture_origin():
     _Fixture.requests = []
-    server = HTTPServer(("127.0.0.1", 0), _Fixture)
+    server = HTTPServer(("127.0.0.1", int(os.environ.get("PORT", "0"))), _Fixture)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -184,3 +189,33 @@ def test_bootstrap_rejects_budget_or_deadline_mutation():
         bootstrap.BootstrapBudget(max_requests=60, max_seconds=600, cost_microusd=50_001).validate()
     with pytest.raises(ValueError, match="deadline"):
         bootstrap.validate_deadline(bootstrap.PREP_REQUEST_SECONDS - 1)
+
+
+def test_real_preparation_admission_reserves_once_before_four_worker_calls(fixture_origin, tmp_path):
+    from test_credential_admission import Admission
+    import credential_admission as admission
+    import credential_descriptor as campaign
+    import reservations
+
+    fixture = Admission(tmp_path, preparation=True)
+    binding, binding_digest = campaign.remote.worker_binding()
+    capability = admission.issue_preparation_capability(**fixture.bindings(), binding=binding, binding_digest=binding_digest)
+    origin, requests = fixture_origin
+    result = bootstrap.execute_preparation(
+        capability=capability, inputs=fixture.inputs, permission=fixture.permission,
+        source_root=fixture.source, ledger_root=fixture.ledger, output=tmp_path / "prepared",
+        credential_reader=lambda: {"adc": ADC, "apiKey": "api-key"}, fixture_origin=origin,
+    )
+    state = reservations.Ledger(fixture.ledger).snapshot()
+    assert len(state["reservations"]) == 1
+    row = state["reservations"][result.ticket["reservation"]]
+    assert row["state"] == "held"
+    assert row["claim"]["budget"]["requests"] == 60
+    assert row["claim"]["budget"]["costMicrousd"] == 50_000
+    assert row["claim"]["durationSeconds"] == 600
+    assert result.proof["reservationDeadline"] == row["deadline"]
+    assert result.charged_requests == len(requests) == 4
+    assert result.gate.snapshot()["total"] == 4
+    for path in (tmp_path / "prepared").rglob("*.json"):
+        raw = path.read_text()
+        assert all(secret not in raw for secret in ("fixture-access", "fixture-secret", "fixture-refresh", '"api-key"'))

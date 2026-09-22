@@ -14,7 +14,7 @@ import hashlib
 import math
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -48,7 +48,8 @@ class BootstrapBudget:
 
     def validate(self) -> None:
         if (
-            self.max_requests < MIN_TASK_REQUESTS
+            any(type(value) is not int for value in (self.max_requests, self.max_seconds, self.cost_microusd))
+            or self.max_requests < MIN_TASK_REQUESTS
             or self.max_requests > TASK_MAX_REQUESTS
             or self.max_seconds <= RECOVERY_SECONDS
             or self.max_seconds > TASK_MAX_SECONDS
@@ -60,9 +61,11 @@ class BootstrapBudget:
 
 @dataclass(frozen=True)
 class BootstrapResult:
-    prepared: dict
+    prepared: dict = field(repr=False)
     proof: dict
     charged_requests: int
+    ticket: dict | None = None
+    gate: object = field(default=None, repr=False)
 
 
 def validate_deadline(seconds: float) -> None:
@@ -74,8 +77,8 @@ def _validate_permission(permission: dict, adc: dict) -> None:
     if not isinstance(permission, dict) or permission.get("kind") != PERMISSION_KIND:
         raise ValueError("bootstrap permission required")
     principal = permission.get("credentialPrincipal")
-    if not isinstance(principal, dict) or set(principal) != {"clientId", "subject", "requiredScopes"}:
-        raise ValueError("bootstrap principal required")
+    import credential_preflight
+    credential_preflight.validate_principal(principal)
     if not isinstance(principal["clientId"], str) or not principal["clientId"] or principal["requiredScopes"] != [SCOPE]:
         raise ValueError("bootstrap principal required")
     if principal["clientId"] != adc.get("client_id"):
@@ -100,30 +103,34 @@ def _origin_url(host: str, path: str, fixture_origin: str | None) -> str:
 
 
 def _request(slot: str, secret, *, fixture_origin: str | None, deadline: float | None = None):
+    slot = {"bootstrap-refresh": "refresh", "bootstrap-tokeninfo": "tokeninfo", "bootstrap-project": "project", "bootstrap-auth-config": "auth"}.get(slot, slot)
+    if slot not in {"refresh", "tokeninfo", "project", "auth"}:
+        raise ValueError("closed bootstrap slot required")
+    if deadline is not None and (not math.isfinite(deadline) or deadline <= time.monotonic()):
+        raise ValueError("bootstrap deadline already expired")
     seconds = PREP_REQUEST_SECONDS if deadline is None else min(
-        PREP_REQUEST_SECONDS, max(0.001, deadline - time.monotonic())
+        PREP_REQUEST_SECONDS, deadline - time.monotonic()
     )
     if slot == "refresh":
-        status, body = remote.request(
+        return remote.request_with_lifecycle(
             _origin_url("oauth2.googleapis.com", "/token", fixture_origin),
             {"grant_type": "refresh_token", "client_id": secret["client_id"], "client_secret": secret["client_secret"], "refresh_token": secret["refresh_token"]},
             headers={}, seconds=seconds, form=True, fixture_origin=fixture_origin,
         )
-        return status, body
     if slot == "tokeninfo":
-        return remote.request(
+        return remote.request_with_lifecycle(
             _origin_url("oauth2.googleapis.com", "/tokeninfo?access_token=" + secret, fixture_origin),
             None, headers={}, seconds=seconds, fixture_origin=fixture_origin,
         )
     if slot == "project":
-        return remote.request(
+        return remote.request_with_lifecycle(
             _origin_url("cloudresourcemanager.googleapis.com", "/v1/projects/" + PROJECT, fixture_origin),
             None,
             headers={"Authorization": "Bearer " + secret, "x-goog-user-project": PROJECT},
             seconds=seconds,
             fixture_origin=fixture_origin,
         )
-    return remote.request(
+    return remote.request_with_lifecycle(
         _origin_url("identitytoolkit.googleapis.com", "/admin/v2/projects/" + PROJECT + "/config", fixture_origin),
         None,
         headers={"Authorization": "Bearer " + secret, "x-goog-user-project": PROJECT},
@@ -132,7 +139,7 @@ def _request(slot: str, secret, *, fixture_origin: str | None, deadline: float |
     )
 
 
-def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | None = None, budget: BootstrapBudget | None = None, gate=None) -> BootstrapResult:
+def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | None = None, budget: BootstrapBudget | None = None, gate=None, ledger=None, ticket=None, capability=None, source_root=None, inputs=None, absolute_deadline=None) -> BootstrapResult:
     """Run exactly refresh, tokeninfo, project and Auth-config operations.
 
     `fixture_origin` is test-only; production leaves it unset so the pinned
@@ -144,8 +151,11 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
     validate_deadline(budget.max_seconds - RECOVERY_SECONDS)
     _validate_permission(permission, adc)
     _validate_handoff_input(permission, adc)
-    if not isinstance(api_key, str) or not api_key:
+    import credential_admission as admission
+    if not admission._private_string(api_key, 256) or any(not admission._private_string(adc[key], 8192) for key in ("client_id", "client_secret", "refresh_token")):
         raise ValueError("private Web API key required")
+    if permission.get("apiKeyDigest") is not None and permission["apiKeyDigest"] != digest(api_key):
+        raise ValueError("approved API key differs")
     if gate is None and fixture_origin is None:
         raise ValueError("production bootstrap Gate required")
     if gate is not None:
@@ -161,6 +171,8 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
     else:
         before_events = 0
 
+    evidence = []
+
     def dispatch(slot: str, secret):
         request_slot = {
             "bootstrap-refresh": "refresh",
@@ -169,14 +181,30 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
             "bootstrap-auth-config": "auth",
         }[slot]
         if gate is None:
-            return _request(request_slot, secret, fixture_origin=fixture_origin)
+            exchange = _request(request_slot, secret, fixture_origin=fixture_origin)
+            return exchange.status, exchange.body
 
+        private_response = []
         def send(deadline):
-            status_, body_ = _request(request_slot, secret, fixture_origin=fixture_origin, deadline=deadline)
-            return {"status": status_, "complete": status_ == 200, "workerReaped": True, "bodyKind": "json", "body": body_}
+            if absolute_deadline is not None:
+                deadline = min(deadline, absolute_deadline)
+            if capability is not None:
+                admission._provenance(source_root, inputs["sourceCommit"], inputs["sourceInputs"])
+                if ledger.bound_claim(ticket)["gatePlanDigest"] != snapshot["planDigest"]:
+                    raise ValueError("bootstrap reservation Gate differs")
+                ledger.validate(ticket, duration=math.ceil(PREP_REQUEST_SECONDS + RECOVERY_SECONDS))
+                exchange = capability._transmit({"kind": "preparation", "slot": slot, "secret": secret, "deadline": deadline, "fixtureOrigin": fixture_origin})
+            else:
+                exchange = _request(request_slot, secret, fixture_origin=fixture_origin, deadline=deadline)
+            if type(exchange) is not remote.WorkerExchange:
+                raise ValueError("typed worker lifecycle required")
+            private_response.append((exchange.status, exchange.body))
+            receipt = {"status": exchange.status, "complete": exchange.status == 200, "workerReaped": exchange.worker_reaped, "bodyKind": "json", "body": {"kind": "auth-bootstrap-attestation-v1", "slot": slot, "responseBodyDigest": digest(exchange.body)}}
+            evidence.append({"id": "observation:" + slot, "receipt": receipt})
+            return receipt
 
-        receipt = gate.management_dispatch("observation", slot, send)
-        return receipt.get("status"), receipt.get("body")
+        gate.management_dispatch("observation", slot, send)
+        return private_response[0]
 
     status, refresh = dispatch("bootstrap-refresh", adc)
     if status != 200 or not isinstance(refresh, dict) or not isinstance(refresh.get("access_token"), str):
@@ -189,10 +217,11 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
     expires_in = tokeninfo.get("expires_in")
     if isinstance(expires_in, str) and expires_in.isdecimal():
         expires_in = int(expires_in)
-    if tokeninfo.get("azp") != principal["clientId"] or tokeninfo.get("aud") != principal["clientId"] or tokeninfo.get("sub") != principal["subject"] or SCOPE not in str(tokeninfo.get("scope", "")).split() or type(expires_in) is not int or expires_in <= TASK_MAX_SECONDS:
+    identity_matches = tokeninfo.get("sub") == principal["subject"] if "subject" in principal else tokeninfo.get("email") == principal["verifiedEmail"] and (tokeninfo.get("email_verified") is True or tokeninfo.get("email_verified") == "true")
+    if tokeninfo.get("azp") != principal["clientId"] or tokeninfo.get("aud") != principal["clientId"] or not identity_matches or SCOPE not in str(tokeninfo.get("scope", "")).split() or type(expires_in) is not int or not TASK_MAX_SECONDS < expires_in <= 86400:
         raise ValueError("tokeninfo principal or lifetime differs")
     status, project = dispatch("bootstrap-project", token)
-    if status != 200 or project != {"projectId": PROJECT, "projectNumber": PROJECT_NUMBER}:
+    if status != 200 or not isinstance(project, dict) or project.get("projectId") != PROJECT or project.get("projectNumber") != PROJECT_NUMBER:
         raise ValueError("project identity differs")
     status, auth = dispatch("bootstrap-auth-config", token)
     if status != 200 or not isinstance(auth, dict):
@@ -210,8 +239,47 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
             raise ValueError("bootstrap Gate completion differs")
         proof["gatePlanDigest"] = snapshot["planDigest"]
         proof["managementJournalDigest"] = digest(events[before_events:])
+        proof["managementEvidence"] = evidence
     charged_requests = PREP_REQUESTS if gate is None else len(snapshot.get("managementEvents", [])) - before_events
     return BootstrapResult(prepared, proof, charged_requests)
+
+
+def execute_preparation(*, capability, inputs, permission, source_root, ledger_root, output, credential_reader, fixture_origin=None):
+    """Consume preparation authority and reserve the single combined attempt."""
+    import credential_admission as admission
+    import credential_descriptor as campaign
+    import credential_production as production
+    import o8_admission
+    import reservations
+
+    if not admission.issued_capability(capability):
+        raise ValueError("issued preparation O7 required")
+    admission.validate_preparation_permission(inputs, permission)
+    admission._provenance(source_root, inputs["sourceCommit"], inputs["sourceInputs"])
+    output = Path(output)
+    if output.exists() or output.is_symlink():
+        raise ValueError("fresh preparation output required")
+    gate_plan = admission.preparation_gate_plan_for(inputs, permission)
+    generation = o8_admission.abort_generation(campaign.preparation_descriptor(), inputs)
+    gate_plan["collectorSourceDigest"] = generation["collectorSourceDigest"]
+    claim = admission.reservation_claim(inputs, gate_path=output / "gate", gate_plan=gate_plan)
+    capability._consume(campaign_id=campaign.CAMPAIGN, inputs_digest=inputs["inputsDigest"], ledger_root=ledger_root)
+    ledger = reservations.Ledger(ledger_root)
+    ticket = ledger.reserve(production._envelope(permission, claim), claim, gate_plan, generation=generation)
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    absolute_deadline = time.monotonic() + row["deadline"] - time.time() - RECOVERY_SECONDS
+    output.mkdir(mode=0o700, parents=True, exist_ok=False)
+    gate_module.create(output / "gate", gate_plan)
+    gate = gate_module.CredentialGate(output / "gate")
+    gate.claim()
+    try:
+        private = credential_reader()
+        result = prepare(permission, adc=private["adc"], api_key=private["apiKey"], gate=gate, ledger=ledger, ticket=ticket, capability=capability, source_root=source_root, inputs=inputs, absolute_deadline=absolute_deadline, fixture_origin=fixture_origin)
+        proof = {**result.proof, "ticket": ticket, "claimDigest": digest(claim), "inputsDigest": inputs["inputsDigest"], "approvalDigest": capability.approval_digest, "generation": generation, "reservationDeadline": row["deadline"], "reservationStartedAt": row["deadline"] - claim["durationSeconds"]}
+        production._write_record(output / "preparation-proof.json", proof, [*private["adc"].values(), private["apiKey"], result.prepared["token"]])
+        return BootstrapResult(result.prepared, proof, result.charged_requests, ticket, gate)
+    finally:
+        admission.revoke_production_capability(capability)
 
 
 def finalize_handoff(prepared: dict, observation_permission_digest: str, proof: dict) -> dict:

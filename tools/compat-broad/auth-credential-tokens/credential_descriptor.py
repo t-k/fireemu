@@ -582,40 +582,37 @@ def preparation_descriptor() -> CampaignDescriptor:
         approval_kind=PREPARATION_APPROVAL_KIND,
         manifest_kind=PREPARATION_MANIFEST_KIND,
         permission_bindings=preparation_permission_bindings,
+        transport_bound=preparation_transport_bound,
     )
     return CampaignDescriptor(**members)
 
 
 def preparation_permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
     """Bindings for prep authority; no Auth baseline is invented pre-wire."""
+    bindings = permission_bindings(plan, source_commit, artifact_digest, inputs, baseline)
+    combined = gate_module.bootstrap_plan(execution_plan(plan), permission_digest="0" * 64)
     return {
-        "campaignId": CAMPAIGN,
-        "nonce": plan["nonce"],
-        "planDigest": inputs["planDigest"],
-        "sourceCommit": source_commit,
-        "artifactSha256": artifact_digest,
-        "sourceInputsDigest": digest(inputs["sourceInputs"]),
-        "authorizedUserDigest": plan.get("authorizedUserDigest"),
-        "project": PROJECT,
-        "projectNumber": "592603257417",
+        **bindings,
+        "kind": PREPARATION_PERMISSION_KIND,
+        "preparationPlanDigest": gate_module.bootstrap_plan_digest(combined),
+        "preparationOperations": combined["management"]["observation"][:4],
         "preparationRequests": 4,
         "combinedRequestCeiling": 60,
         "combinedCostMicrousd": ledger_budget()["costMicrousd"],
         "combinedWallSeconds": campaign_seconds(),
+        "observationAuthority": "separate-owner-permission-and-O7-required",
     }
 
 
-def preparation_transport_bound(plan) -> bool:
-    """Require the compiler's exact four closed bootstrap routes."""
-    try:
-        candidate = gate_module.bootstrap_plan(
-            compile_gate_plan(plan["nonce"], signing=bool(plan.get("signing", False))),
-            permission_digest="0" * 64,
-        )
-    except (KeyError, TypeError, ValueError):
-        return False
-    rows = candidate["management"]["observation"][:4]
-    return [row.get("id") for row in rows] == list(gate_module.bootstrap_management_ids())
+def preparation_transport_bound(value, *, capability, binding, binding_digest):
+    """Only the four preparation slots can pass this admitted transport."""
+    authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+    remote.verify_worker_binding(binding, binding_digest, None)
+    if not isinstance(value, dict) or set(value) != {"kind", "slot", "secret", "deadline", "fixtureOrigin"} or value["kind"] != "preparation" or value["slot"] not in gate_module.bootstrap_management_ids():
+        raise ValueError("closed preparation wire call required")
+    import credential_bootstrap
+
+    return credential_bootstrap._request(value["slot"], value["secret"], deadline=value["deadline"], fixture_origin=value["fixtureOrigin"])
 
 
 __all__ = [

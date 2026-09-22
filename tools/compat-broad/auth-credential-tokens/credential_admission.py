@@ -310,7 +310,7 @@ def bootstrap_reservation_claim(inputs, *, permission, gate_plan, gate_path):
 def preparation_gate_plan_for(inputs, permission) -> dict:
     """Recover the combined four-row Gate plan from frozen prep inputs."""
     validate_preparation_permission(inputs, permission)
-    plan = copy.deepcopy(inputs["plan"])
+    plan = gate_module.bootstrap_plan(campaign.execution_plan(inputs["plan"]), permission_digest=digest(permission))
     expiry = permission.get("expiresAt")
     if type(expiry) not in (int, float) or isinstance(expiry, bool):
         raise ValueError("preparation permission expiry required")
@@ -324,18 +324,38 @@ def validate_preparation_permission(inputs, permission) -> None:
         raise ValueError("preparation frozen inputs required")
     if inputs.get("permissionDigest") != digest(permission):
         raise ValueError("preparation permission differs from frozen inputs")
-    validate_bootstrap_permission(permission, plan=inputs["plan"])
+    o8_admission.validate_frozen_inputs(campaign.preparation_descriptor(), inputs)
+    _approve_preparation(permission, inputs["plan"], inputs["sourceCommit"], inputs["artifactSha256"], inputs["sourceInputs"])
+
+
+def _approve_preparation(permission, plan, commit, artifact, sources):
+    required = campaign.preparation_permission_bindings(plan, commit, artifact, sources)
+    if digest({key: permission.get(key) for key in required}) != digest(required):
+        raise ValueError("typed preparation permission binding differs")
+    for field in ("ownerIdentity", "recoveryOwner"):
+        validate_owner_identity(permission.get(field), field=field)
+    if not isinstance(permission.get("permissionReference"), str) or not permission["permissionReference"].strip():
+        raise ValueError("preparation permission reference required")
+    preflight.validate_principal(permission.get("credentialPrincipal"))
+    for field in ("authorizedUserDigest", "apiKeyDigest"):
+        value = permission.get(field)
+        if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError("preparation private input digest required")
+    issued, expiry = permission.get("issuedAt"), permission.get("expiresAt")
+    now = time.time()
+    if not bounded_number(issued) or not bounded_number(expiry) or not 0 <= now - issued <= 86400 or not now + campaign.campaign_seconds() <= expiry <= issued + 86400:
+        raise ValueError("preparation permission window differs")
 
 
 def freeze_preparation_inputs(permission_path, plan, *, source_root, artifact_path):
     """Freeze the independent prep permission without requiring Auth baseline."""
     permission = _read(permission_path)
-    campaign.preparation_transport_bound(plan)
+    campaign.execution_plan(plan)
     commit = subprocess.check_output(["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True).strip()
     artifact = _artifact(artifact_path)
     inputs = campaign.source_map()
     _provenance(source_root, commit, inputs)
-    validate_bootstrap_permission(permission, plan=plan)
+    _approve_preparation(permission, plan, commit, artifact, inputs)
     return o8_admission.freeze_inputs(
         campaign.preparation_descriptor(), permission, plan,
         source_commit=commit, artifact_sha256=artifact,
@@ -344,6 +364,7 @@ def freeze_preparation_inputs(permission_path, plan, *, source_root, artifact_pa
 
 def issue_preparation_capability(**bindings):
     """Issue the generic one-shot capability for the independent prep variant."""
+    validate_preparation_permission(bindings["inputs"], bindings["permission"])
     return o8_admission.issue_production_capability(campaign.preparation_descriptor(), **bindings)
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -31,9 +32,14 @@ from request_bytes_compiler import (
     DOCUMENT_COUNT,
     REQUEST_LIMIT,
     REQUEST_TARGETS,
+    RAW_16MIB_OVER_BYTES,
+    RAW_16MIB_OVER_CASE_ID,
+    RAW_16MIB_OVER_LABEL,
     compact_utf8,
     compile_request_bytes_plan,
+    compile_request_bytes_sentinel_plan,
     validate_request_bytes_plan,
+    validate_request_bytes_sentinel_plan,
 )
 from request_bytes_remote_transport import (
     NON_UPLOAD_RESERVE_SECONDS,
@@ -57,6 +63,7 @@ CASE_IDS = (
 READ_USD_PER_UNIT = 0.06 / 100_000
 WRITE_USD_PER_UNIT = 0.18 / 100_000
 DELETE_USD_PER_UNIT = 0.02 / 100_000
+SENTINEL_TRANSPORT_DEADLINE_SECONDS = 80.0
 
 # Request bodies are ingress. Firestore does not bill ingress, and the response
 # bodies for this campaign are kilobytes, so the network component is zero to
@@ -678,6 +685,252 @@ def compile_request_bytes_campaign(
         "claims": list(plan["claims"]),
     }
     return campaign
+
+
+def compile_request_bytes_sentinel_campaign(
+    project: str, database: str, nonce: str
+) -> dict[str, Any]:
+    """Compose the bounded one-case campaign without presuming the response."""
+    plan = compile_request_bytes_sentinel_plan(project, database, nonce)
+    validate_request_bytes_sentinel_plan(plan)
+    accounting = {
+        "documentReads": 80,
+        "documentWrites": 20,
+        "documentDeletes": 20,
+        "dataRequests": 101,
+        "managementRequests": len(MANAGEMENT_OBSERVATION_IDS)
+        + len(MANAGEMENT_RECOVERY_IDS),
+        "httpRequests": 101
+        + len(MANAGEMENT_OBSERVATION_IDS)
+        + len(MANAGEMENT_RECOVERY_IDS),
+        "uploadedBytes": RAW_16MIB_OVER_BYTES,
+    }
+    if accounting["dataRequests"] != plan["bounds"]["totalRequestBound"]:
+        raise AssertionError("sentinel accounting disagrees with its operation schedule")
+    read_cost = accounting["documentReads"] * READ_USD_PER_UNIT
+    write_cost = accounting["documentWrites"] * WRITE_USD_PER_UNIT
+    delete_cost = accounting["documentDeletes"] * DELETE_USD_PER_UNIT
+    estimated_cost_microusd = round(
+        (read_cost + write_cost + delete_cost) * 1_000_000
+    )
+    campaign = {
+        "schema": SCHEMA,
+        "campaignId": CAMPAIGN,
+        "catalogId": CAMPAIGN,
+        "condition": CAMPAIGN,
+        "caseMode": "single-exploratory-sentinel",
+        "caseIds": [RAW_16MIB_OVER_CASE_ID],
+        "catalogMaximum": REQUEST_LIMIT,
+        "protocol": "REST",
+        "operations": ["Commit"],
+        "boundary": {
+            "catalogMaximum": REQUEST_LIMIT,
+            "inputBytes": RAW_16MIB_OVER_BYTES,
+            "relationToCatalog": RAW_16MIB_OVER_BYTES - REQUEST_LIMIT,
+            "metric": plan["metric"],
+            "metricStatus": plan["metricStatus"],
+            "isCatalogBoundaryRevision": False,
+        },
+        "cases": [
+            {
+                "id": RAW_16MIB_OVER_CASE_ID,
+                "family": "firestore",
+                "probe": RAW_16MIB_OVER_LABEL,
+                "operation": "Commit",
+                "requestBytes": RAW_16MIB_OVER_BYTES,
+                "outcomeExpectation": "unknown",
+                "postState": {
+                    "readbackCount": 20,
+                    "accepted": "every owned resource has its expected field digest and Commit version",
+                    "refused": "every owned resource is absent",
+                    "intermediaryOrIncomplete": "inconclusive; no cleanup ownership is inferred",
+                },
+                "cleanup": {
+                    "ownershipRead": 20,
+                    "versionBoundDeletes": 20,
+                    "absenceProofs": 20,
+                    "maximumWrites": 20,
+                    "authority": "only a proven accepted Commit plus matching ownership read grants a version-bound delete; otherwise each delete is a zero-wire skip",
+                },
+            }
+        ],
+        "owner": {
+            "project": project,
+            "database": database,
+            "nonce": nonce,
+            "nonceDigest": _nonce_digest(nonce),
+            "scope": plan["ownedScope"],
+            "scopes": plan["ownedScopes"],
+            "resourceCount": 20,
+            "nonceHandling": "Fresh case-specific scope label; any preexisting resource stops at typed absence preflight.",
+        },
+        "accounting": accounting,
+        "maximumUsage": {
+            **accounting,
+            "peakLiveDocuments": 20,
+            "distinctResources": 20,
+            "basis": "the one Commit is accepted and all 20 resources require bounded cleanup",
+        },
+        "cost": {
+            "estimatedCostMicrousd": estimated_cost_microusd,
+            "hardCostCeilingMicrousd": 10_000,
+            "networkCostMicrousd": 0,
+            "unitPricesUsd": {
+                "documentRead": READ_USD_PER_UNIT,
+                "documentWrite": WRITE_USD_PER_UNIT,
+                "documentDelete": DELETE_USD_PER_UNIT,
+            },
+            "basis": "Firestore unit-price planning estimate; not a billing record.",
+        },
+        "transportDeadlineSeconds": SENTINEL_TRANSPORT_DEADLINE_SECONDS,
+        "transportDeadlineDerivation": {
+            "requestBits": RAW_16MIB_OVER_BYTES * 8,
+            "assumedSustainedBitsPerSecond": 5_000_000,
+            "uploadSeconds": round(RAW_16MIB_OVER_BYTES * 8 / 5_000_000, 3),
+            "nonUploadReserveSeconds": 10,
+            "publishedDeadlineSeconds": SENTINEL_TRANSPORT_DEADLINE_SECONDS,
+            "basis": "80 seconds retains a little over a 2x margin over upload plus the existing 10 second non-upload reserve.",
+        },
+        "budget": {
+            "maxRuns": 1,
+            "maxConcurrency": 1,
+            "maxInFlightRequests": 1,
+            "maxAccounts": 1,
+            "maxDocuments": 20,
+            "maxDistinctResources": 20,
+            "maxPeakLiveDocuments": 20,
+            "maxReads": 80,
+            "maxWrites": 20,
+            "maxDeletes": 20,
+            "maxHttpRequests": accounting["httpRequests"],
+            "maxDataRequests": accounting["dataRequests"],
+            "maxManagementRequests": accounting["managementRequests"],
+            "maxRequestBytes": RAW_16MIB_OVER_BYTES,
+            "maxResponseBytes": 2 * 1024 * 1024,
+            "perRequestTimeoutSeconds": SENTINEL_TRANSPORT_DEADLINE_SECONDS,
+            "smallRequestTimeoutSeconds": SMALL_REQUEST_TIMEOUT,
+            "maxDurationSeconds": 1150,
+            "observationWindowSeconds": 600,
+            "recoveryWindow": {
+                "reserveSeconds": 550,
+                "reserveReads": 40,
+                "reserveDeletes": 20,
+                "trigger": "uncertain Commit, observation failure or interrupted run",
+                "authority": "read-only unless this run proved the create and a matching version-bound ownership read",
+                "exitCondition": "typed NOT_FOUND for each of the 20 owned resources",
+                "onExhaustion": "stop and escalate with unresolved owned resources recorded; never retry the Commit or widen scope",
+            },
+        },
+        "planBounds": plan["bounds"],
+        "planDigest": hashlib.sha256(compact_utf8(plan)).hexdigest(),
+        "authorizesProductionExecution": False,
+        "productionExecuted": False,
+        "formalCompatibilityClaim": False,
+        "claims": list(plan["claims"]),
+    }
+    return campaign
+
+
+def validate_request_bytes_sentinel_campaign(campaign: dict[str, Any]) -> None:
+    """Independently enforce scope, neutral outcome and every resource bound."""
+    if not isinstance(campaign, dict):
+        raise TypeError("sentinel campaign must be an object")
+    expected = {
+        "schema": SCHEMA,
+        "campaignId": CAMPAIGN,
+        "catalogId": CAMPAIGN,
+        "condition": CAMPAIGN,
+        "caseMode": "single-exploratory-sentinel",
+        "caseIds": [RAW_16MIB_OVER_CASE_ID],
+        "catalogMaximum": REQUEST_LIMIT,
+        "protocol": "REST",
+        "operations": ["Commit"],
+        "authorizesProductionExecution": False,
+        "productionExecuted": False,
+        "formalCompatibilityClaim": False,
+    }
+    if any(campaign.get(key) != value for key, value in expected.items()):
+        raise ValueError("sentinel campaign contract drift")
+    boundary = campaign.get("boundary")
+    if boundary != {
+        "catalogMaximum": REQUEST_LIMIT,
+        "inputBytes": RAW_16MIB_OVER_BYTES,
+        "relationToCatalog": RAW_16MIB_OVER_BYTES - REQUEST_LIMIT,
+        "metric": "REST raw HTTP body UTF-8 bytes",
+        "metricStatus": "observation hypothesis",
+        "isCatalogBoundaryRevision": False,
+    }:
+        raise ValueError("sentinel campaign boundary drift")
+    cases = campaign.get("cases")
+    if not isinstance(cases, list) or len(cases) != 1:
+        raise ValueError("sentinel campaign must contain exactly one case")
+    case = cases[0]
+    if (
+        case.get("id") != RAW_16MIB_OVER_CASE_ID
+        or case.get("probe") != RAW_16MIB_OVER_LABEL
+        or case.get("operation") != "Commit"
+        or case.get("requestBytes") != RAW_16MIB_OVER_BYTES
+        or case.get("outcomeExpectation") != "unknown"
+        or "productionExpectation" in case
+        or "refusalShape" in case
+    ):
+        raise ValueError("sentinel case must remain outcome-neutral")
+    expected_accounting = {
+        "documentReads": 80,
+        "documentWrites": 20,
+        "documentDeletes": 20,
+        "dataRequests": 101,
+        "managementRequests": len(MANAGEMENT_OBSERVATION_IDS)
+        + len(MANAGEMENT_RECOVERY_IDS),
+        "httpRequests": 101
+        + len(MANAGEMENT_OBSERVATION_IDS)
+        + len(MANAGEMENT_RECOVERY_IDS),
+        "uploadedBytes": RAW_16MIB_OVER_BYTES,
+    }
+    if campaign.get("accounting") != expected_accounting:
+        raise ValueError("sentinel accounting drift")
+    maximum = campaign.get("maximumUsage")
+    if not isinstance(maximum, dict) or any(
+        maximum.get(key) != value for key, value in expected_accounting.items()
+    ) or maximum.get("distinctResources") != 20 or maximum.get("peakLiveDocuments") != 20:
+        raise ValueError("sentinel maximum usage budget drift")
+    budget = campaign.get("budget")
+    if not isinstance(budget, dict) or any(
+        budget.get(key) != value
+        for key, value in {
+            "maxRuns": 1,
+            "maxConcurrency": 1,
+            "maxInFlightRequests": 1,
+            "maxAccounts": 1,
+            "maxDocuments": 20,
+            "maxDistinctResources": 20,
+            "maxPeakLiveDocuments": 20,
+            "maxReads": 80,
+            "maxWrites": 20,
+            "maxDeletes": 20,
+            "maxHttpRequests": expected_accounting["httpRequests"],
+            "maxDataRequests": 101,
+            "maxManagementRequests": expected_accounting["managementRequests"],
+            "maxRequestBytes": RAW_16MIB_OVER_BYTES,
+            "maxResponseBytes": 2 * 1024 * 1024,
+            "perRequestTimeoutSeconds": SENTINEL_TRANSPORT_DEADLINE_SECONDS,
+            "smallRequestTimeoutSeconds": SMALL_REQUEST_TIMEOUT,
+        }.items()
+    ):
+        raise ValueError("sentinel budget does not cover the complete case")
+    if campaign.get("transportDeadlineSeconds") != SENTINEL_TRANSPORT_DEADLINE_SECONDS:
+        raise ValueError("sentinel transport deadline drift")
+    cost = campaign.get("cost")
+    if not isinstance(cost, dict) or cost.get("estimatedCostMicrousd") != 88:
+        raise ValueError("sentinel cost estimate drift")
+    if cost.get("hardCostCeilingMicrousd") != 10_000:
+        raise ValueError("sentinel task cost ceiling drift")
+    recovery = budget.get("recoveryWindow")
+    if not isinstance(recovery, dict) or any(
+        recovery.get(key) != value
+        for key, value in {"reserveSeconds": 550, "reserveReads": 40, "reserveDeletes": 20}.items()
+    ):
+        raise ValueError("sentinel recovery budget drift")
 
 
 def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:

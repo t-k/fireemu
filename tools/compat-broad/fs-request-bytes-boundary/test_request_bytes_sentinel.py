@@ -19,6 +19,10 @@ from request_bytes_compiler import (
     compile_request_bytes_sentinel_plan,
     validate_request_bytes_sentinel_plan,
 )
+from request_bytes_campaign import (
+    compile_request_bytes_sentinel_campaign,
+    validate_request_bytes_sentinel_campaign,
+)
 
 NONCE = "a" * 32
 
@@ -87,3 +91,40 @@ def test_sentinel_validator_rejects_create_precondition_and_schedule_drift() -> 
     plan["executionSchedule"].reverse()
     with pytest.raises(ValueError):
         validate_request_bytes_sentinel_plan(plan)
+
+
+def test_sentinel_campaign_is_finite_costed_and_does_not_predict_outcome() -> None:
+    campaign = compile_request_bytes_sentinel_campaign("demo", "(default)", NONCE)
+
+    assert campaign["caseIds"] == [RAW_16MIB_OVER_CASE_ID]
+    case = campaign["cases"][0]
+    assert case["id"] == RAW_16MIB_OVER_CASE_ID
+    assert case["requestBytes"] == RAW_16MIB_OVER_BYTES
+    assert case["outcomeExpectation"] == "unknown"
+    assert "productionExpectation" not in case
+    assert campaign["accounting"] == {
+        "documentReads": 80,
+        "documentWrites": 20,
+        "documentDeletes": 20,
+        "dataRequests": 101,
+        "managementRequests": 7,
+        "httpRequests": 108,
+        "uploadedBytes": RAW_16MIB_OVER_BYTES,
+    }
+    assert campaign["cost"]["estimatedCostMicrousd"] == 88
+    assert campaign["budget"]["maxRequestBytes"] == RAW_16MIB_OVER_BYTES
+    assert campaign["transportDeadlineSeconds"] == 80
+    assert campaign["budget"]["recoveryWindow"]["reserveDeletes"] == 20
+    validate_request_bytes_sentinel_campaign(campaign)
+
+
+def test_sentinel_campaign_validator_rejects_outcome_and_budget_drift() -> None:
+    campaign = compile_request_bytes_sentinel_campaign("demo", "(default)", NONCE)
+    campaign["cases"][0]["outcomeExpectation"] = "refused"
+    with pytest.raises(ValueError, match="outcome-neutral"):
+        validate_request_bytes_sentinel_campaign(campaign)
+
+    campaign = compile_request_bytes_sentinel_campaign("demo", "(default)", NONCE)
+    campaign["budget"]["maxDeletes"] = 19
+    with pytest.raises(ValueError, match="budget"):
+        validate_request_bytes_sentinel_campaign(campaign)

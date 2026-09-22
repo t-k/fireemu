@@ -24,6 +24,8 @@ import credential_https_worker as worker
 
 class _Echo(BaseHTTPRequestHandler):
     status = 200
+    delay = 0.0
+    malformed = False
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -45,7 +47,13 @@ class _Echo(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self):  # noqa: N802 - stdlib handler API
-        encoded = json.dumps({"path": self.path, "email": "owner@example.test", "scope": "scope"}).encode()
+        if self.__class__.delay:
+            time.sleep(self.__class__.delay)
+        encoded = (
+            b"not-json"
+            if self.__class__.malformed
+            else json.dumps({"path": self.path, "email": "owner@example.test", "scope": "scope"}).encode()
+        )
         self.send_response(self.server.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))
@@ -60,6 +68,8 @@ class _Echo(BaseHTTPRequestHandler):
 def fixture_origin():
     server = HTTPServer(("127.0.0.1", 0), _Echo)
     server.status = 200
+    _Echo.delay = 0.0
+    _Echo.malformed = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -193,6 +203,46 @@ def test_lifecycle_result_proves_worker_reaped(fixture_origin) -> None:
     )
     assert result.status == 200
     assert result.worker_reaped is True
+
+
+def test_real_worker_timeout_reports_reaped_failure(fixture_origin) -> None:
+    origin, _server = fixture_origin
+    _Echo.delay = 0.2
+    with pytest.raises(remote.WorkerFailure) as raised:
+        remote.request_with_lifecycle(
+            origin + "/" + IDENTITY + "/accounts:lookup",
+            None,
+            headers={},
+            seconds=0.01,
+            fixture_origin=origin,
+        )
+    assert raised.value.worker_reaped is True
+    assert "owner" not in repr(raised.value)
+
+
+def test_real_worker_nonzero_exit_reports_reaped_failure() -> None:
+    with pytest.raises(remote.WorkerFailure) as raised:
+        remote.request_with_lifecycle(
+            "https://example.com/not-allowed",
+            None,
+            headers={},
+            seconds=2,
+        )
+    assert raised.value.worker_reaped is True
+
+
+def test_real_worker_malformed_output_reports_reaped_failure(fixture_origin) -> None:
+    origin, _server = fixture_origin
+    _Echo.malformed = True
+    with pytest.raises(remote.WorkerFailure) as raised:
+        remote.request_with_lifecycle(
+            origin + "/" + IDENTITY + "/accounts:lookup",
+            None,
+            headers={},
+            seconds=5,
+            fixture_origin=origin,
+        )
+    assert raised.value.worker_reaped is True
 
 
 def test_the_worker_refuses_a_non_loopback_target_even_as_a_fixture_worker() -> None:

@@ -22,6 +22,7 @@ import action_codes_admission as admission
 import action_codes_descriptor as descriptor
 import action_codes_production as production
 import action_codes_plan as plan_module
+from action_codes_remote_transport import _tokeninfo_valid
 import reservations
 
 from broad_contract import digest
@@ -29,6 +30,24 @@ from test_action_codes_admission import _artifacts
 
 
 NONCE = "b" * 32
+
+
+@pytest.mark.parametrize("email_verified", [True, "1", "false", None, 1])
+def test_tokeninfo_requires_modern_string_email_verified(email_verified):
+    body = {
+        "email": "owner@example.test",
+        "email_verified": email_verified,
+        "scope": "https://www.googleapis.com/auth/identitytoolkit",
+        "expires_in": "600",
+    }
+    valid, _expires = _tokeninfo_valid(
+        200,
+        body,
+        principal="owner@example.test",
+        scope="https://www.googleapis.com/auth/identitytoolkit",
+        required_seconds=480,
+    )
+    assert valid is False
 
 
 class _ActionFixture(BaseHTTPRequestHandler):
@@ -58,7 +77,7 @@ class _ActionFixture(BaseHTTPRequestHandler):
             return
         route = self.path.split("?", 1)[0]
         if route.endswith("/tokeninfo"):
-            response = {"email": "owner@example.test", "scope": "https://www.googleapis.com/auth/identitytoolkit", "expires_in": "600"}
+            response = {"email": "owner@example.test", "email_verified": "true", "scope": "https://www.googleapis.com/auth/identitytoolkit", "expires_in": "600"}
         elif route.endswith("/v1/projects/fireemu-35fe6/config"):
             response = {"projectId": "fireemu-35fe6"}
         elif route.endswith("accounts:signUp"):

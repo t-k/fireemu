@@ -335,6 +335,27 @@ def forget_transport(inputs_digest: str) -> None:
     _BOUND_TRANSPORTS.pop(inputs_digest, None)
 
 
+def _tokeninfo_valid(status, body, *, principal: str, scope: str, required_seconds: float) -> tuple[bool, int | None]:
+    scopes = set(str(body.get("scope", "")).split()) if isinstance(body, dict) else set()
+    expires_value = body.get("expires_in") if isinstance(body, dict) else None
+    try:
+        expires = int(expires_value)
+        if isinstance(expires_value, float) and expires != expires_value:
+            raise ValueError
+    except (TypeError, ValueError, OverflowError):
+        expires = None
+    valid = (
+        status == 200
+        and isinstance(body, dict)
+        and body.get("email") == principal
+        and body.get("email_verified") == "true"
+        and scope in scopes
+        and type(expires) in (int, float)
+        and expires >= required_seconds
+    )
+    return valid, expires
+
+
 def management_receipt(*, slot_id, deadline, capability, binding, binding_digest, handoff, permission, required_seconds, fixture_origin=None):
     """Run one Action-specific live authority check through the pinned worker."""
     credential_remote.authorize_transport(capability, binding=binding, binding_digest=binding_digest)
@@ -354,20 +375,8 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
         principal = permission["credentialPrincipal"]["subject"]
         scope = permission["credentialPrincipal"]["requiredScopes"][0]
         scopes = set(str(body.get("scope", "")).split()) if isinstance(body, dict) else set()
-        expires_value = body.get("expires_in") if isinstance(body, dict) else None
-        try:
-            expires = int(expires_value)
-            if isinstance(expires_value, float) and expires != expires_value:
-                raise ValueError
-        except (TypeError, ValueError, OverflowError):
-            expires = None
-        valid = (
-            status == 200
-            and isinstance(body, dict)
-            and body.get("email") == principal
-            and scope in scopes
-            and type(expires) in (int, float)
-            and expires >= required_seconds
+        valid, expires = _tokeninfo_valid(
+            status, body, principal=principal, scope=scope, required_seconds=required_seconds
         )
         attestation = {
             "kind": "request-byte-token-attestation-v1",

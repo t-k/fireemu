@@ -10,15 +10,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from replay import CORPORA, digest, file_digest, require
+from replay import CORPORA, OWNED_RUNNERS, digest, file_digest, require
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNNERS = {
-    "auth-basic-v2": ROOT / "tools/auth-basic-v2/auth_v2_owned.py",
-    "auth-profile": ROOT / "tools/auth-profile/profile_owned.py",
-    "auth-display-name": ROOT / "tools/auth-display-name/display_name_owned.py",
-    "auth-password": ROOT / "tools/auth-password/password_owned.py",
-}
+RUNNERS = OWNED_RUNNERS
 
 
 def load_runner(path: Path):
@@ -36,7 +31,12 @@ def load_runner(path: Path):
 
 
 def run(output_root: Path) -> dict:
-    require(not output_root.exists(), "output root must not already exist")
+    os_module = __import__("os")
+    require(
+        not os_module.path.lexists(output_root),
+        "output root must not already exist",
+    )
+    output_root = output_root.resolve()
     output_root.mkdir(mode=0o700)
     # Import lazily so contract/evaluator tests do not build the Rust artifact.
     sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
@@ -52,45 +52,65 @@ def run(output_root: Path) -> dict:
     launch_path.parent.mkdir(mode=0o700)
     shutil.copyfile(source_path, launch_path)
     launch_path.chmod(0o500)
-    build = {
-        **build,
-        **artifact_binding(source_path, launch_path, build, build["inputs"]),
-    }
-
-    source_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-    ).strip()
-    reports = {}
-    for name in CORPORA:
-        runner = load_runner(RUNNERS[name])
-        runner.build_artifact = lambda: (launch_path, build)
-        report = runner.run(output_root / name)
-        require(
-            runner.complete(report),
-            f"{name}: owned replay failed or is incomplete",
+    verified_launch_fd = None
+    try:
+        binding = artifact_binding(
+            source_path, launch_path, build, build["inputs"]
         )
-        status = report.get("status")
-        require(status in {"passed", "failed"}, f"{name}: invalid report status")
-        reports[name] = {
-            "status": status,
-            "localReport": f"{name}/local.json",
-            "localReportSha256": file_digest(output_root / name / "local.json"),
-            "localReportBytes": (output_root / name / "local.json").stat().st_size,
-            "artifactSha256": report["artifact"]["sha256"],
-            "runtimeSourceCommit": report["runtimeSourceCommit"],
-            "cleanup": report["cleanup"],
-            "listenersClosed": report["ownedProcess"]["listenersClosed"],
-            "processExitCode": report["ownedProcess"]["exitCode"],
-            "probeInputsSha256": digest(report["probeInputs"]),
-            "configurationSha256": report["configuration"]["sha256"],
-            "configurationFileSha256": report["configuration"]["fileSha256"],
+        verified_launch_fd = binding.pop("_launchFd")
+        build = {
+            **build,
+            **binding,
         }
-        require(
-            report["artifact"]["sha256"] == build["artifactSha256"]
-            and report["runtimeSourceCommit"] == source_commit
-            and report["ownedProcess"]["listenersClosed"] is True,
-            f"{name}: fixed artifact or cleanup binding failed",
-        )
+    except BaseException:
+        if verified_launch_fd is not None:
+            os_module.close(verified_launch_fd)
+        raise
+
+    try:
+        source_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+    except BaseException:
+        os_module.close(verified_launch_fd)
+        raise
+    try:
+        reports = {}
+        for name in CORPORA:
+            runner = load_runner(RUNNERS[name])
+            runner.build_artifact = lambda: (
+                launch_path,
+                {**build, "_launchCopyFd": verified_launch_fd},
+            )
+            report = runner.run(output_root / name)
+            require(
+                runner.complete(report),
+                f"{name}: owned replay failed or is incomplete",
+            )
+            status = report.get("status")
+            require(status in {"passed", "failed"}, f"{name}: invalid report status")
+            reports[name] = {
+                "status": status,
+                "localReport": f"{name}/local.json",
+                "localReportSha256": file_digest(output_root / name / "local.json"),
+                "localReportBytes": (output_root / name / "local.json").stat().st_size,
+                "artifactSha256": report["artifact"]["sha256"],
+                "runtimeSourceCommit": report["runtimeSourceCommit"],
+                "cleanup": report["cleanup"],
+                "listenersClosed": report["ownedProcess"]["listenersClosed"],
+                "processExitCode": report["ownedProcess"]["exitCode"],
+                "probeInputsSha256": digest(report["probeInputs"]),
+                "configurationSha256": report["configuration"]["sha256"],
+                "configurationFileSha256": report["configuration"]["fileSha256"],
+            }
+            require(
+                report["artifact"]["sha256"] == build["artifactSha256"]
+                and report["runtimeSourceCommit"] == source_commit
+                and report["ownedProcess"]["listenersClosed"] is True,
+                f"{name}: fixed artifact or cleanup binding failed",
+            )
+    finally:
+        os_module.close(verified_launch_fd)
     manifest = {
         "schemaVersion": 2,
         "kind": "auth-saved-reference-replay-local-v2",

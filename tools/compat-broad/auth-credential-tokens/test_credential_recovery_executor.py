@@ -223,7 +223,7 @@ def _real_ledger_packet(tmp_path: Path):
         schedule=[{"phase": "observation", "index": 0, "seconds": 5.0}],
     )
     parent["gate"]["planDigest"] = digest(gate_plan)
-    parent["gate"]["observation"] = 1
+    parent["gate"].update(observation=1, recovery=0, total=1)
     parent["gate"]["jobs"]["auth-credential"].update(
         observation=1,
         recovery=0,

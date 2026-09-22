@@ -31,6 +31,85 @@ INTERVAL_FLOOR_SECONDS = 0.25
 WALL_CAP_SECONDS = 1200
 PHASES = ("observation", "recovery")
 MANAGEMENT_SKIP_REASON = "management-not-run"
+LIMITS_PREPARATION_TRANSPORT = "limits-03-baseline-preparation-v2"
+LIMITS_PREPARATION_RECEIPT = "limits-03-baseline-preparation-receipt-v1"
+LIMITS_PREPARATION_SLOTS = ("refresh", "oauth-tokeninfo", "project", "database", "auth", "key")
+
+
+def validate_limits_preparation_plan(plan):
+    """Validate the sole empty-resource Shared Gate contract, without I/O."""
+    if (
+        plan.get("contract") != "shared-local-v2"
+        or plan.get("transport") != LIMITS_PREPARATION_TRANSPORT
+        or plan.get("receiptKind") != LIMITS_PREPARATION_RECEIPT
+        or plan.get("campaignId") != "FS-WRITE-LIMITS-03"
+        or plan.get("jobs") != {"limits": {
+            "resources": [], "observation": [], "recovery": [], "schedule": [],
+        }}
+        or plan.get("management") != {
+            "dispatchKind": "closed-v1",
+            "credentialIds": ["oauth-tokeninfo"],
+            "credentialSlots": ["oauth-tokeninfo"],
+            "observation": [{"id": slot, "timeout": 12} for slot in LIMITS_PREPARATION_SLOTS],
+            "recovery": [],
+        }
+        or any(type(plan.get(key, default)) is not int or plan.get(key, default) != expected
+               for key, default, expected in (
+                   ("observationRequests", None, 6), ("costMicrousd", None, 600),
+                   ("requestCostMicrousd", None, 100), ("fixedCostMicrousd", 0, 0),
+                   ("coordinatorRequests", 0, 0),
+               ))
+    ):
+        raise ValueError("closed limits preparation plan required")
+
+
+def validate_limits_preparation_success(state):
+    """Require every declared read to have completed and its worker reaped."""
+    validate_limits_preparation_plan(state["plan"])
+    expected = ["observation:" + slot for slot in LIMITS_PREPARATION_SLOTS]
+    events = state.get("managementEvents", [])
+    job = state.get("jobs", {}).get("limits", {})
+    if (
+        state.get("planDigest") != digest(state["plan"])
+        or state.get("managementUsed") != expected
+        or [event.get("id") for event in events] != expected
+        or state.get("managementSkipped") != []
+        or state.get("managementAbort") is not None
+        or state.get("noDataAbort") is not None
+        or state.get("credentialRejected")
+        or state.get("stopped") is not False
+        or state.get("coordinatorInflight") is not False
+        or state.get("events") != []
+        or state.get("total") != 6 or state.get("observation") != 6
+        or state.get("recovery") != 0 or state.get("reservedRecovery") != 0
+        or state.get("costMicrousd") != 600 or state.get("coordinatorDone") != 0
+        or set(state.get("jobs", {})) != {"limits"}
+        or any(job.get(key) != value for key, value in {
+            "resources": [], "observation": 0, "recovery": 0, "owned": [],
+            "creationProofs": {}, "absent": [], "captures": {}, "inflight": False,
+            "stopped": False, "scheduleDone": 0, "skippedByStop": 0,
+        }.items())
+        or any(
+            event.get("completed") is not True or event.get("complete") is not True
+            or event.get("workerReaped") is not True or event.get("status") != 200
+            or event.get("failure") is not None
+            for event in events
+        )
+    ):
+        raise ValueError("limits preparation completion proof required")
+    previous = state["started"] - state["plan"]["intervalSeconds"]
+    for event in events:
+        if (
+            any(type(event.get(key)) not in (int, float) or not math.isfinite(event[key])
+                for key in ("started", "ended", "deadline", "durationReserved"))
+            or event["durationReserved"] != 12
+            or event["started"] < previous + state["plan"]["intervalSeconds"]
+            or not event["started"] <= event["ended"] <= event["deadline"]
+            or event["deadline"] > event["started"] + 12
+            or event["deadline"] > state["started"] + state["plan"]["wallSeconds"] - state["plan"]["recoverySeconds"]
+        ):
+            raise ValueError("limits preparation event deadline proof required")
+        previous = event["started"]
 
 
 def request_seconds(plan, policy=None):
@@ -815,6 +894,9 @@ def _recovery_time(plan, seconds):
 
 def create(path, plan):
     path = Path(path)
+    preparation = plan.get("transport") == LIMITS_PREPARATION_TRANSPORT
+    if preparation:
+        validate_limits_preparation_plan(plan)
     policy = _stream_policy(plan)
     if policy:
         policy.validate_plan(plan)
@@ -885,7 +967,7 @@ def create(path, plan):
         or _observation_time(plan, seconds)
         > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))
-        or not resources
+        or (not resources and not preparation)
         or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= WALL_CAP_SECONDS
         or plan["recoverySeconds"] < recovery_time
         or not math.isfinite(plan["intervalSeconds"])
@@ -2845,6 +2927,8 @@ class Gate:
 
     def finish(self):
         with self.locked() as state:
+            if state["plan"].get("transport") == LIMITS_PREPARATION_TRANSPORT:
+                validate_limits_preparation_success(state)
             job = state["jobs"][self.job]
             if (
                 state.get("noDataAbort") is not None

@@ -27,7 +27,10 @@ import stat
 
 from broad_contract import digest
 from shared_gate import (
+    LIMITS_PREPARATION_RECEIPT,
+    LIMITS_PREPARATION_TRANSPORT,
     Gate,
+    _management_receipt_valid,
     _save,
     abandoned_cleanup_complete,
     canonical_body_bytes,
@@ -35,6 +38,8 @@ from shared_gate import (
     typed_absence,
     unconfirmed_creates,
     validate_absence_proofs,
+    validate_limits_preparation_plan,
+    validate_limits_preparation_success,
 )
 
 DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
@@ -198,6 +203,7 @@ PARTITION_CURSOR_RECEIPT_KIND = "partition-cursor-acquisition-receipt-v1"
 LIMITS_03_RECEIPT_KIND = "limits-03-acquisition-receipt-v1"
 AUTH_CREDENTIAL_RECEIPT_KIND = "auth-credential-acquisition-receipt-v1"
 NO_DATA_RECEIPT_SCHEMAS = {
+    LIMITS_PREPARATION_RECEIPT: REQUEST_BYTES_NO_DATA_SCHEMA,
     DEFAULT_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
     TXN_EXPIRY_RECEIPT_KIND: COMMIT_NO_DATA_SCHEMA,
     # The partition/cursor lane emits the Commit vocabulary verbatim: one
@@ -584,6 +590,8 @@ def task_budget_check(
         or cap_microusd <= 0
     ):
         raise ValueError("closed integer task budget required")
+    if campaign_id == "FS-WRITE-LIMITS-03":
+        cap_microusd = min(cap_microusd, 1_000_000)
     projected = task_spent_microusd(ledger_state, campaign_id) + new_cost_microusd
     if projected > cap_microusd:
         raise ValueError(
@@ -1068,6 +1076,19 @@ class Ledger:
             raise ValueError(f"uncatalogued campaign id: {claim['campaignId']}")
         if generation is not None:
             _generation(generation)
+        preparation = gate_plan.get("transport") == LIMITS_PREPARATION_TRANSPORT
+        if preparation:
+            validate_limits_preparation_plan(gate_plan)
+            if (
+                claim["campaignId"] != "FS-WRITE-LIMITS-03"
+                or _gate_job(claim) != "limits"
+                or claim["budget"] != {"requests": 6, "accounts": 0, "resources": 0, "costMicrousd": 600}
+                or generation is None
+                or {key: gate_plan.get(key) for key in GENERATION_FIELDS} != generation
+                or claim["durationSeconds"] != gate_plan["wallSeconds"]
+                or any(lock["mode"] != "READ" for lock in claim["locks"])
+            ):
+                raise ValueError("closed limits preparation reservation required")
         if (
             digest(gate_plan) != claim["gatePlanDigest"]
             or digest(gate_plan["nonce"]) != claim["nonceDigest"]
@@ -1104,6 +1125,14 @@ class Ledger:
         with self._locked() as state:
             decision_now = time.time() if now is None else now
             _number(decision_now)
+            if preparation and (
+                type(gate_plan.get("permissionExpiresAt")) not in (int, float)
+                or not math.isfinite(gate_plan["permissionExpiresAt"])
+                or not decision_now < gate_plan["permissionExpiresAt"] <= min(
+                    envelope["expiresAt"], decision_now + claim["durationSeconds"]
+                )
+            ):
+                raise ValueError("limits preparation deadline cannot reset")
             if (
                 not envelope["issuedAt"] <= decision_now
                 or decision_now + claim["durationSeconds"] > envelope["expiresAt"]
@@ -1775,6 +1804,7 @@ class Ledger:
                 raise ValueError("registered Gate job is absent")
             if (
                 digest(gate["plan"]) != claim["gatePlanDigest"]
+                or gate["plan"].get("transport") == LIMITS_PREPARATION_TRANSPORT
                 or gate["coordinatorInflight"]
                 or any(
                     j["complete"] is not True
@@ -1896,6 +1926,97 @@ class Ledger:
             ):
                 raise ValueError("configuration before/after proof required")
         return gate
+
+    def finish_limits_preparation(self, ticket, record):
+        """Release the exact six-read preparation after its coordinator exits.
+
+        The immutable receipt and attached evidence bind the actual charged
+        journal. No data absence or failure is invented, and no cost is refunded.
+        """
+        fields = {"kind", "ticket", "receiptPath", "receiptDigest", "gateDigest", "collectionDigest", "generation"}
+        if (
+            not isinstance(record, dict) or set(record) != fields
+            or record["kind"] != "limits-03-baseline-preparation-release-v1"
+            or record["ticket"] != ticket
+        ):
+            raise ValueError("exact limits preparation release record required")
+        for key in ("receiptDigest", "gateDigest", "collectionDigest"):
+            _hash(record[key])
+        _generation(record["generation"])
+        receipt = self._read_bounded_json(record["receiptPath"])
+        if digest(receipt) != record["receiptDigest"]:
+            raise ValueError("limits preparation receipt digest changed")
+        with self._locked() as state:
+            row = self._row(state, ticket)
+            if row.get("recoveryChildren"):
+                raise ValueError("preparation cannot own a recovery child")
+            if row["state"] == "released":
+                if row.get("releaseRecordDigest") != digest(record):
+                    raise ValueError("different limits preparation release record")
+                return copy.deepcopy(row)
+            if row["state"] != "held":
+                raise ValueError("limits preparation reservation is not held")
+            claim = row["claim"]
+            gate = self._bound_gate(claim, record, receipt)
+            validate_limits_preparation_success(gate)
+            generation = row.get("generation")
+            if (
+                claim["campaignId"] != "FS-WRITE-LIMITS-03"
+                or _gate_job(claim) != "limits"
+                or claim["budget"] != {"requests": 6, "accounts": 0, "resources": 0, "costMicrousd": 600}
+                or gate["planDigest"] != claim["gatePlanDigest"]
+                or digest(gate["plan"].get("nonce")) != claim["nonceDigest"]
+                or generation is None or generation != record["generation"]
+                or {key: gate["plan"].get(key) for key in GENERATION_FIELDS} != generation
+                or receipt.get("generation") != generation
+                or receipt.get("kind") != LIMITS_PREPARATION_RECEIPT
+                or receipt.get("ticket") != ticket
+                or receipt.get("claimDigest") != row["claimDigest"]
+                or receipt.get("planDigest") != claim["gatePlanDigest"]
+                or receipt.get("gateDigest") != record["gateDigest"]
+                or receipt.get("reservationStateAtPublication") != "held"
+                or receipt.get("executionKind") != "fixed-production-wire"
+                or receipt.get("releaseEligible") is not True
+                or "failure" not in receipt or receipt["failure"] is not None
+                or receipt.get("chargedCalls") != 6 or receipt.get("ownedResources") != []
+                or not isinstance(receipt.get("collection"), dict)
+                or digest(receipt["collection"]) != record["collectionDigest"]
+                or row.get("evidence") != {
+                    "receiptSha256": record["receiptDigest"], "gateDigest": record["gateDigest"],
+                    "collectionDigest": record["collectionDigest"], "ledgerIdentity": self.identity,
+                }
+                or gate["jobs"]["limits"].get("complete") is not True
+                or Path(record["receiptPath"]) != Path(claim["gatePath"]).parent / "receipt.json"
+                or gate["plan"]["permissionExpiresAt"] > row["deadline"]
+            ):
+                raise ValueError("limits preparation release binding changed")
+            rows = receipt.get("managementEvidence")
+            if not isinstance(rows, list) or len(rows) != 6:
+                raise ValueError("six actual management receipts required")
+            for item, event in zip(rows, gate["managementEvents"], strict=True):
+                if (
+                    not isinstance(item, dict) or set(item) != MANAGEMENT_ROW_FIELDS
+                    or item["id"] != event["id"]
+                    or not _management_receipt_valid(item.get("response"), event["id"].removeprefix("observation:"))
+                    or item["responseDigest"] != digest(item["response"])
+                    or item["responseDigest"] != event["responseDigest"]
+                    or event["bodyDigest"] != digest(item["response"]["body"])
+                    or any(item["response"].get(key) != event.get(key) for key in ("status", "complete", "workerReaped", "bodyKind"))
+                ):
+                    raise ValueError("limits preparation management receipt changed")
+            for pid in (gate.get("coordinatorPid"), gate["jobs"]["limits"].get("pid")):
+                if type(pid) is not int or pid <= 0:
+                    raise ValueError("recorded preparation worker identity required")
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    continue
+                raise ValueError("preparation worker exit not proven")
+            row["state"] = "released"
+            row["releaseRecordDigest"] = digest(record)
+            row["finalGateDigest"] = record["gateDigest"]
+            self._save(state)
+            return copy.deepcopy(row)
 
     def finish_management_only(self, ticket, record):
         """Release a configuration-only reservation from its typed Gate proof.
@@ -2341,6 +2462,14 @@ class Ledger:
             # A receipt of another kind, or of a kind with no contract, binds
             # nothing.
             schema = _no_data_schema(gate_snapshot)
+            if gate_snapshot["plan"].get("transport") == LIMITS_PREPARATION_TRANSPORT:
+                validate_limits_preparation_plan(gate_snapshot["plan"])
+                self._terminal_binding(row, ticket, receipt, gate_snapshot, claim)
+                if gate_snapshot.get("coordinatorInflight") is not False or any(
+                    event.get("workerReaped") is not True
+                    for event in gate_snapshot.get("managementEvents", [])
+                ):
+                    raise ValueError("preparation workers must be reaped before abort")
             if (
                 record["planDigest"] != claim["gatePlanDigest"]
                 or gate_snapshot.get("planDigest") != claim["gatePlanDigest"]

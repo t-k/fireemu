@@ -85,7 +85,7 @@ class _ProducerHandler(_FixtureHandler):
         )
         if (
             self.__class__.fail_setup_after is not None
-            and setup_request_count > self.__class__.fail_setup_after
+            and setup_request_count == self.__class__.fail_setup_after + 1
             and (
                 "currentDocument.exists=false" in path
                 or "/v1/projects/" in path
@@ -358,13 +358,14 @@ def test_launcher_requires_canonical_ledger_and_gate_objects() -> None:
         production.run_approved(packet)
 
 
+@pytest.mark.parametrize("failure_after", [None, 1])
 def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, failure_after
 ) -> None:
     _ProducerHandler._plan = None
     _ProducerHandler.setup_uids = {}
     _ProducerHandler.requests = []
-    _ProducerHandler.fail_setup_after = None
+    _ProducerHandler.fail_setup_after = failure_after
     _ProducerHandler.documents = {}
     _ProducerHandler.account_state = {}
     _ProducerHandler.observation_index = 0
@@ -463,6 +464,16 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
             collector_module.ENVIRONMENT_LOCAL,
         )
         bundle = production.run_approved(packet)
+        if failure_after is not None:
+            assert bundle["abort"].startswith("setup:")
+            assert bundle["recordingComplete"] is False
+            assert bundle["cleanup"]["cleanupComplete"] is False
+            assert "other-b" in bundle["cleanup"]["held"]
+            assert "uid-owner-a" not in _ProducerHandler.account_state
+            assert gate.snapshot()["total"] == len(_ProducerHandler.requests) == 5
+            assert gate.snapshot()["recovery"] == 3
+            assert ledger.snapshot()["reservations"]
+            return
         assert bundle["recordingComplete"] is True, repr(
             {
                 "abort": bundle["abort"],

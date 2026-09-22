@@ -27,6 +27,7 @@ from o5_user_token_collector import (
     RulesManagementSession,
     open_ownership_journal,
     start_context,
+    recover_owned,
     OBSERVATION_RECEIPT_KEYS,
     RECOVERY_RECEIPT_KEYS,
 )
@@ -36,6 +37,7 @@ from o5_user_token_remote_transport import (
     WorkerExchangeError,
     adapt_setup_result,
     make_transport,
+    make_recovery_transport,
     prepare_setup_request,
     prepare_request,
     _decode_firestore_value,
@@ -754,6 +756,90 @@ def collection_dispatch(
     return dispatch
 
 
+def recover_setup_failure(
+    *,
+    plan,
+    gate,
+    context,
+    ownership,
+    identity_handoffs,
+    credentials,
+    frozen_inputs,
+    capability,
+    fixture_origin,
+    binding,
+    binding_digest,
+):
+    """Use the original context and canonical recovery slots after failed setup."""
+    refresh_ownership(gate, ownership)
+    context.attempted[:] = [
+        subject
+        for subject, state in ownership.items()
+        if state["phase"] != "not-attempted"
+    ]
+    if gate.snapshot()["coordinatorInflight"]:
+        return {
+            "cleanupComplete": False,
+            "held": list(ownership),
+            "blockedReason": "worker-reap-unconfirmed",
+        }
+    proofs = setup_identity_proofs(
+        plan, gate, identity_handoffs, fixture_origin=fixture_origin, partial=True
+    )
+    bindings = {
+        ref: {
+            "uid": proof.uid,
+            "tenant": proof.tenant,
+            "provider": proof.provider,
+            "claimsDigest": proof.claims_digest,
+            "authTime": proof.auth_time,
+        }
+        for ref, proof in proofs.items()
+    }
+    if proofs:
+        transport = make_recovery_transport(
+            plan,
+            credentials=credentials,
+            frozen_inputs=frozen_inputs,
+            identity_proofs=proofs,
+            capability=capability,
+            fixture_origin=fixture_origin,
+            timeout_seconds=SETUP_TIMEOUT_SECONDS,
+        )
+
+        def execute(operation, *, deadline=None):
+            return transport(
+                operation,
+                binding=binding,
+                binding_digest=binding_digest,
+                deadline=deadline,
+                timeout_seconds=worker_timeout(operation, deadline),
+            )
+    else:
+
+        def execute(operation, *, deadline=None):
+            raise ValueError("no acknowledged setup identity permits recovery wire")
+
+    dispatch = collection_dispatch(
+        plan,
+        gate,
+        execute,
+        credentials=credentials,
+        account_bindings=bindings,
+        identity_proofs=proofs,
+        ownership=ownership,
+    )
+    cleanup = recover_owned(
+        plan, dispatch, context=context, ownership=ownership, recovery_dispatch=dispatch
+    )
+    try:
+        skip_unused_recovery(gate)
+    except ValueError:
+        cleanup["cleanupComplete"] = False
+        cleanup["blockedReason"] = "canonical-recovery-not-terminal"
+    return cleanup
+
+
 def validate_compiled_accounting(plan: dict[str, Any]) -> dict[str, int]:
     """Require the compiler's complete 144-request accounting."""
     estimate = campaign_budget(plan)
@@ -934,21 +1020,51 @@ def run_bound_collection(
         recovery_deadline_seconds=600.0,
     )
     try:
-        setup_receipts = run_bound_setup(
-            plan=plan,
-            gate=gate,
-            credentials=credentials,
-            setup_secrets=setup_secrets,
-            account_bindings=account_bindings,
-            capability=capability,
-            fixture_origin=fixture_origin,
-            binding=binding,
-            binding_digest=binding_digest,
-            journal=journal,
-            ownership=ownership,
-            private_handoffs=private_handoffs,
-            identity_handoffs=identity_handoffs,
-        )
+        try:
+            setup_receipts = run_bound_setup(
+                plan=plan,
+                gate=gate,
+                credentials=credentials,
+                setup_secrets=setup_secrets,
+                account_bindings=account_bindings,
+                capability=capability,
+                fixture_origin=fixture_origin,
+                binding=binding,
+                binding_digest=binding_digest,
+                journal=journal,
+                ownership=ownership,
+                private_handoffs=private_handoffs,
+                identity_handoffs=identity_handoffs,
+            )
+        except Exception as error:
+            cleanup = recover_setup_failure(
+                plan=plan,
+                gate=gate,
+                context=context,
+                ownership=ownership,
+                identity_handoffs=identity_handoffs,
+                credentials=credentials,
+                frozen_inputs=frozen_inputs,
+                capability=capability,
+                fixture_origin=fixture_origin,
+                binding=binding,
+                binding_digest=binding_digest,
+            )
+            return {
+                "recordingComplete": False,
+                "abort": "setup:" + type(error).__name__,
+                "productionExecuted": False,
+                "productionReady": False,
+                "rows": [],
+                "cleanup": cleanup,
+                "setup": {
+                    "recordingComplete": False,
+                    "requestCount": sum(
+                        event["id"].startswith("observation:setup/")
+                        for event in gate.snapshot()["managementEvents"]
+                    ),
+                },
+            }
         identity_proofs = setup_identity_proofs(
             plan, gate, identity_handoffs, fixture_origin=fixture_origin
         )

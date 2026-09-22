@@ -1220,6 +1220,7 @@ class MfaGate(FrozenGate):
                         "resource": operation.get("resource"),
                     }
                     outcome = "created"
+                    evidence["uid"] = uid
                 elif not typed_refusal(status, body):
                     outcome = "unknown"
             elif status is None or (type(status) is int and status >= 500):

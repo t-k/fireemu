@@ -341,6 +341,24 @@ def test_a_changed_account_identity_is_refused(tmp_path):
         )
 
 
+def test_acknowledged_signup_records_uid_for_shared_cleanup_ownership(tmp_path):
+    gate = _claimed_gate(tmp_path)
+    _preflight(gate)
+    _sign_up(gate, uid="uid-ack")
+    snapshot = gate.snapshot()
+    record = snapshot["jobs"][mfa_gate.JOB]["authAccounts"]["pending-control"]
+    creation = snapshot["events"][record["createEvent"]]
+    assert creation["authEvidence"]["uid"] == "uid-ack"
+    delete = next(
+        operation
+        for operation in snapshot["plan"]["jobs"][mfa_gate.JOB]["recovery"]
+        if operation["kind"] == "delete" and operation["account"] == "pending-control"
+    )
+    assert shared_gate._auth_creation_ownership(
+        snapshot, snapshot["jobs"][mfa_gate.JOB], delete
+    ) is True
+
+
 def test_cleanup_of_an_account_the_run_never_created_is_refused(tmp_path):
     gate = _claimed_gate(tmp_path)
     delete = next(

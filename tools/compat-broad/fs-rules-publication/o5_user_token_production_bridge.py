@@ -32,6 +32,7 @@ RULES_REQUESTS = 23
 OBSERVATION_REQUESTS = 33
 RECOVERY_REQUESTS = 63
 WORKER_TIMEOUT_SECONDS = 8.0
+SETUP_TIMEOUT_SECONDS = 2.0
 
 
 def run_bound_setup(
@@ -51,7 +52,7 @@ def run_bound_setup(
     receipts: list[dict[str, Any]] = []
     for item in items:
         def send(deadline: float, item: dict[str, Any] = item) -> dict[str, Any]:
-            if deadline - time.monotonic() < WORKER_TIMEOUT_SECONDS:
+            if deadline - time.monotonic() < SETUP_TIMEOUT_SECONDS - 0.25:
                 raise TimeoutError("setup worker cannot fit within Gate deadline")
             prepared = prepare_setup_request(
                 plan,
@@ -65,7 +66,7 @@ def run_bound_setup(
                 key: prepared[key]
                 for key in ("service", "route", "method", "path", "headers", "body")
             }
-            envelope["seconds"] = WORKER_TIMEOUT_SECONDS
+            envelope["seconds"] = SETUP_TIMEOUT_SECONDS
             result = run_worker(
                 envelope,
                 binding=binding,

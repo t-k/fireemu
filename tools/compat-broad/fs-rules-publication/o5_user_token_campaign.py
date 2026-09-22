@@ -65,7 +65,7 @@ def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
     setup = setup_plan(plan)
     value = rules_management_plan()
     entries = [
-        {"id": "setup/" + item["id"], "timeout": 12.0}
+        {"id": "setup/" + item["id"], "timeout": 2.0}
         for item in (*setup["fixtures"], *setup["auth"])
     ]
     value["observation"] = entries + value["observation"]
@@ -89,18 +89,18 @@ def setup_recovery_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
         prefix = "setup-recovery/fixture/" + fixture["document"]
         entries.extend(
             [
-                {"id": prefix + "/read", "timeout": 12.0, "resource": resource, "kind": "document-read"},
-                {"id": prefix + "/delete", "timeout": 12.0, "resource": resource, "kind": "document-delete"},
-                {"id": prefix + "/absence", "timeout": 12.0, "resource": resource, "kind": "document-absence"},
+                {"id": prefix + "/read", "timeout": 2.0, "resource": resource, "kind": "document-read"},
+                {"id": prefix + "/delete", "timeout": 2.0, "resource": resource, "kind": "document-delete"},
+                {"id": prefix + "/absence", "timeout": 2.0, "resource": resource, "kind": "document-absence"},
             ]
         )
     for account in plan["ownedAccounts"]:
         prefix = "setup-recovery/account/" + account["ref"]
         entries.extend(
             [
-                {"id": prefix + "/read", "timeout": 12.0, "accountRef": account["ref"], "kind": "account-read"},
-                {"id": prefix + "/delete", "timeout": 12.0, "accountRef": account["ref"], "kind": "account-delete"},
-                {"id": prefix + "/absence", "timeout": 12.0, "accountRef": account["ref"], "kind": "account-absence"},
+                {"id": prefix + "/read", "timeout": 2.0, "accountRef": account["ref"], "kind": "account-read"},
+                {"id": prefix + "/delete", "timeout": 2.0, "accountRef": account["ref"], "kind": "account-delete"},
+                {"id": prefix + "/absence", "timeout": 2.0, "accountRef": account["ref"], "kind": "account-absence"},
             ]
         )
     return entries

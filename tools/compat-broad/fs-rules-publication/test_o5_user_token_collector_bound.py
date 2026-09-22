@@ -27,6 +27,8 @@ from o5_user_token_collector import (
     collect as _collect,
     RulesManagementReceipt,
     RulesManagementSession,
+    _management_cursor,
+    recover_owned,
     _scan_management_receipt,
 )
 from o5_user_token_descriptor import gate_plan
@@ -453,6 +455,74 @@ def test_management_scan_allows_only_validated_endpoint_domains() -> None:
     assert _scan_management_receipt({"endpoint": PRODUCTION_ENDPOINT}) is None
     assert _scan_management_receipt({"endpoint": LOCAL_ENDPOINT}) is None
     assert _scan_management_receipt({"note": "firestore.googleapis.com"}) == "credential-leak:token-shaped-value"
+
+
+def test_management_cursor_keeps_gate_skips_separate_from_receipts() -> None:
+    gate = type(
+        "Gate",
+        (),
+        {
+            "snapshot": lambda self: {
+                "managementUsed": ["observation:setup/one", "recovery:cleanup/document/x/read"],
+                "managementSkipped": [
+                    {"id": "recovery:cleanup/document/x/delete", "disposition": "held"}
+                ],
+            }
+        },
+    )()
+    cursor = _management_cursor(gate)
+    assert cursor == {
+        "used": ["observation:setup/one", "recovery:cleanup/document/x/read"],
+        "skipped": ["recovery:cleanup/document/x/delete"],
+    }
+
+
+def test_recover_owned_does_not_dispatch_unacknowledged_subjects(tmp_path) -> None:
+    plan = plan_for(ROLE_LOCAL_SHADOW)
+    calls: list[dict] = []
+
+    def execute(request: dict) -> dict:
+        calls.append(request)
+        receipt = {
+            "complete": True,
+            "status": "OK",
+            "documentPresent": False,
+            "endpoint": LOCAL_ENDPOINT,
+            "wireSequence": len(calls),
+        }
+        if request.get("account") is not None:
+            receipt.pop("documentPresent")
+            receipt["accountPresent"] = False
+        return receipt
+
+    from o5_user_token_collector import _Budget, _Journal, _Wire
+
+    budget = _Budget(
+        requests=1,
+        recovery=3 * (len(plan["ownedResources"]) + len(plan["ownedAccounts"])),
+        rulesets=0,
+        actions=0,
+        deadline_seconds=600,
+        recovery_deadline_seconds=900,
+        clock=time.monotonic,
+    )
+    journal = _Journal(tmp_path / "owned.jsonl")
+    try:
+        result = recover_owned(
+            plan,
+            execute,
+            budget,
+            _Wire(ENVIRONMENT_LOCAL),
+            [],
+            journal,
+            ownership={plan["ownedResources"][0]: {"phase": "acknowledged"}},
+        )
+    finally:
+        journal.close()
+    assert calls
+    assert all(request.get("resource") == plan["ownedResources"][0] for request in calls)
+    assert result["notAttempted"]
+    assert result["held"] == []
 
 
 def test_a_bound_run_is_admitted_by_the_acquisition_comparator() -> None:

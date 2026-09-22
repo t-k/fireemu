@@ -358,7 +358,7 @@ def test_launcher_requires_canonical_ledger_and_gate_objects() -> None:
         production.run_approved(packet)
 
 
-@pytest.mark.parametrize("failure_after", [None, 1])
+@pytest.mark.parametrize("failure_after", [None, 1, 7, 8, 18])
 def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
     tmp_path, monkeypatch, failure_after
 ) -> None:
@@ -465,13 +465,31 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
         )
         bundle = production.run_approved(packet)
         if failure_after is not None:
+            operations = setup_plan(plan)["operations"]
+            created = {
+                item.get("resource", item.get("accountRef"))
+                for item in operations[:failure_after]
+                if item["service"] == "firestore" or item["id"].endswith("/signup")
+            }
+            failed = operations[failure_after]
+            unknown = failed["route"] != "accounts:signInWithPassword"
+            held = failed.get("resource", failed.get("accountRef")) if unknown else None
+            recoverable = created - {held}
             assert bundle["abort"].startswith("setup:")
             assert bundle["recordingComplete"] is False
-            assert bundle["cleanup"]["cleanupComplete"] is False
-            assert "other-b" in bundle["cleanup"]["held"]
-            assert "uid-owner-a" not in _ProducerHandler.account_state
-            assert gate.snapshot()["total"] == len(_ProducerHandler.requests) == 5
-            assert gate.snapshot()["recovery"] == 3
+            assert bundle["cleanup"]["cleanupComplete"] is not unknown
+            if unknown:
+                assert held in bundle["cleanup"]["held"]
+            for subject in recoverable:
+                assert subject not in _ProducerHandler.documents
+                assert "uid-" + subject not in _ProducerHandler.account_state
+            expected_recovery = 3 * len(recoverable)
+            assert (
+                gate.snapshot()["total"]
+                == len(_ProducerHandler.requests)
+                == failure_after + 1 + expected_recovery
+            )
+            assert gate.snapshot()["recovery"] == expected_recovery
             assert gate.snapshot()["jobs"]["rules-management"]["pid"] == os.getpid()
             assert (
                 ledger.snapshot()["reservations"][ticket["reservation"]]["state"]

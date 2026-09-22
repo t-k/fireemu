@@ -1728,3 +1728,38 @@ def test_auth_recovery_rejects_forged_other_parent_event_digest(tmp_path):
             o7_binding=bindings["o7"], o8_binding=bindings["o8"],
             parent_evidence=forged_evidence, now=1000,
         )
+
+
+def test_real_compiler_stop_suffix_with_recorded_event_is_refused(tmp_path):
+    """An event inside the stop journal's abandoned suffix contradicts the stop.
+
+    Every count still agrees, so only the slot comparison can catch it. Review
+    R8D-01 found that comparison matching ``(phase, index)`` against the
+    ``(job, phase, index)`` event keys, so it never fired.
+    """
+    fixture = _real_abandoned_compiler_auth_recovery_fixture(tmp_path)
+    _ledger, _parent, child, _envelope, _child_plan, _bindings, _evidence, _resource, child_path = fixture
+    gate_path = Path(child_path).parent / "auth-parent-gate"
+    gate_state = Gate(gate_path, "auth-credential").snapshot()
+    operations = gate_state["plan"]["jobs"]["auth-credential"]["observation"]
+    job = gate_state["jobs"]["auth-credential"]
+    cursor = job["observation"]
+
+    def non_creating(index):
+        return operations[index].get("kind") not in {"sign-up", "custom-sign-in"}
+
+    event = next(
+        event for event in reversed(gate_state["events"])
+        if event["job"] == "auth-credential" and event["phase"] == "observation"
+        and event["index"] < cursor and non_creating(event["index"])
+    )
+    target = next(
+        index for index in range(cursor, cursor + job["skippedByStop"]) if non_creating(index)
+    )
+    event.update(
+        index=target, requestDigest=digest(operations[target]),
+        service=operations[target]["service"], method=operations[target]["method"],
+    )
+    _save(gate_path, gate_state)
+    with pytest.raises(ValueError, match="stop journal has an event"):
+        reservations._auth_parent_responsibility_projection(gate_state, child)

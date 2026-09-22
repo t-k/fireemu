@@ -1626,7 +1626,10 @@ def _auth_parent_responsibility_projection(gate, child_claim):
                 ("observation", observation_cursor + offset)
                 for offset in range(skipped_by_stop)
             }
-            if any(key in abandoned_observation_slots for key in event_by_slot):
+            if any(
+                (job_name, phase, index) in event_by_slot
+                for phase, index in abandoned_observation_slots
+            ):
                 raise ValueError("Auth parent responsibility stop journal has an event")
         created_accounts = set()
         for index in sorted(creating):

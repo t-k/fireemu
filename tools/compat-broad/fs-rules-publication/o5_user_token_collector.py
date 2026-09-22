@@ -564,6 +564,10 @@ class RulesManagementSession:
         status = receipt.get("status")
         if not isinstance(status, int) or not (200 <= status < 300 or status in allow_status):
             raise ValueError("Rules management HTTP failure")
+        persisted_proof = receipt.get("body")
+        if isinstance(persisted_proof, dict) and persisted_proof.get("kind") == "rules-management-proof-v1":
+            if raw_response_body is None or persisted_proof.get("responseDigest") != digest(raw_response_body):
+                raise ValueError("Rules management proof digest mismatch")
         body = raw_response_body
         if body is None and isinstance(receipt, RulesManagementReceipt):
             body = receipt.response_body

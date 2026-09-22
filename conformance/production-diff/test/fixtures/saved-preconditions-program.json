@@ -1,0 +1,538 @@
+{
+  "id": "writes/preconditions-and-masks",
+  "area": "writes",
+  "seed": [
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/existing",
+      "fields": {
+        "a": {
+          "integerValue": "1"
+        },
+        "nested": {
+          "mapValue": {
+            "fields": {
+              "keep": {
+                "stringValue": "k"
+              },
+              "drop": {
+                "stringValue": "d"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "steps": [
+    {
+      "id": "create-with-exists-false",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/new",
+              "fields": {
+                "a": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            "currentDocument": {
+              "exists": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "create-again-is-already-exists",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/new",
+              "fields": {
+                "a": {
+                  "integerValue": "2"
+                }
+              }
+            },
+            "currentDocument": {
+              "exists": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "update-missing-with-exists-true",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/none",
+              "fields": {
+                "a": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            "currentDocument": {
+              "exists": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "mask-sets-and-deletes",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/existing",
+              "fields": {
+                "b": {
+                  "integerValue": "2"
+                },
+                "nested": {
+                  "mapValue": {
+                    "fields": {
+                      "keep": {
+                        "stringValue": "k2"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "updateMask": {
+              "fieldPaths": [
+                "b",
+                "nested.drop",
+                "nested.keep"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "read-after-mask",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/existing"
+    },
+    {
+      "id": "mask-on-missing-document-creates-it",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/masked-new",
+              "fields": {
+                "a": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            "updateMask": {
+              "fieldPaths": [
+                "a"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "read-masked-new",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/masked-new"
+    },
+    {
+      "id": "mask-naming-an-absent-field-deletes-it",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/existing",
+              "fields": {}
+            },
+            "updateMask": {
+              "fieldPaths": [
+                "b"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "read-after-delete-by-mask",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/existing"
+    },
+    {
+      "id": "replace-without-mask",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/existing",
+              "fields": {
+                "only": {
+                  "booleanValue": true
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "read-after-replace",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/existing"
+    },
+    {
+      "id": "update-time-precondition-matches",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/existing",
+              "fields": {
+                "only": {
+                  "booleanValue": false
+                }
+              }
+            },
+            "currentDocument": {
+              "updateTime": {
+                "$from": "read-after-replace",
+                "path": "updateTime"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "update-time-precondition-is-stale",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/existing",
+              "fields": {
+                "only": {
+                  "stringValue": "stale"
+                }
+              }
+            },
+            "currentDocument": {
+              "updateTime": {
+                "$from": "read-after-replace",
+                "path": "updateTime"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "update-time-precondition-on-a-missing-document",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/none",
+              "fields": {
+                "a": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            "currentDocument": {
+              "updateTime": "2020-01-01T00:00:00Z"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "delete-missing-is-ok",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "delete": "projects/PROJECT/databases/(default)/documents/wr/none"
+          }
+        ]
+      }
+    },
+    {
+      "id": "delete-missing-with-exists-true",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "delete": "projects/PROJECT/databases/(default)/documents/wr/none",
+            "currentDocument": {
+              "exists": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "atomic-failure-writes-nothing",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/atomic-1",
+              "fields": {
+                "a": {
+                  "integerValue": "1"
+                }
+              }
+            }
+          },
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/none",
+              "fields": {
+                "a": {
+                  "integerValue": "1"
+                }
+              }
+            },
+            "currentDocument": {
+              "exists": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "atomic-1-is-absent",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/atomic-1"
+    },
+    {
+      "id": "same-document-twice-in-one-commit",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/twice",
+              "fields": {
+                "a": {
+                  "integerValue": "1"
+                },
+                "b": {
+                  "integerValue": "1"
+                }
+              }
+            }
+          },
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/twice",
+              "fields": {
+                "a": {
+                  "integerValue": "2"
+                }
+              }
+            },
+            "updateMask": {
+              "fieldPaths": [
+                "a"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "read-twice",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/twice"
+    },
+    {
+      "id": "empty-commit",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": []
+      }
+    },
+    {
+      "id": "verify-write",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "verify": "projects/PROJECT/databases/(default)/documents/wr/twice",
+            "currentDocument": {
+              "exists": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "verify-missing",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "verify": "projects/PROJECT/databases/(default)/documents/wr/none",
+            "currentDocument": {
+              "exists": true
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "no-op-set-keeps-update-time",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      "body": {
+        "writes": [
+          {
+            "update": {
+              "name": "projects/PROJECT/databases/(default)/documents/wr/twice",
+              "fields": {
+                "a": {
+                  "integerValue": "2"
+                },
+                "b": {
+                  "integerValue": "1"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "read-after-no-op",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/twice"
+    },
+    {
+      "id": "patch-with-mask-and-exists-precondition-on-missing",
+      "method": "PATCH",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/patched?updateMask.fieldPaths=a&currentDocument.exists=true",
+      "body": {
+        "fields": {
+          "a": {
+            "integerValue": "1"
+          }
+        }
+      }
+    },
+    {
+      "id": "patch-creates",
+      "method": "PATCH",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/patched?updateMask.fieldPaths=a",
+      "body": {
+        "fields": {
+          "a": {
+            "integerValue": "1"
+          },
+          "ignored": {
+            "integerValue": "9"
+          }
+        }
+      }
+    },
+    {
+      "id": "read-patched",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/patched"
+    },
+    {
+      "id": "create-document",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr?documentId=created",
+      "body": {
+        "fields": {
+          "a": {
+            "integerValue": "1"
+          }
+        }
+      }
+    },
+    {
+      "id": "create-document-again",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr?documentId=created",
+      "body": {
+        "fields": {
+          "a": {
+            "integerValue": "2"
+          }
+        }
+      }
+    },
+    {
+      "id": "create-document-with-generated-id",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr",
+      "body": {
+        "fields": {
+          "a": {
+            "integerValue": "1"
+          }
+        }
+      }
+    },
+    {
+      "id": "delete-document",
+      "method": "DELETE",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/created"
+    },
+    {
+      "id": "delete-document-again",
+      "method": "DELETE",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/created"
+    },
+    {
+      "id": "delete-with-exists-precondition",
+      "method": "DELETE",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/wr/created?currentDocument.exists=true"
+    }
+  ]
+}

@@ -11,6 +11,8 @@ import {
   blobSha,
   safeCode,
   validateProgram,
+  resolveRecordedValue,
+  expectedCleanupDocuments,
 } from "./core.mjs";
 import { publishJson, readSource } from "./io.mjs";
 import { localOrigin, assertUrl, installNetworkGuard, boundedText } from "./network.mjs";
@@ -68,6 +70,7 @@ const expected = [
   })),
 ];
 const requests = [];
+const rawReplies = new Map();
 let index = 0,
   totalBytes = 0;
 globalThis.fetch = async (url, init = {}) => {
@@ -78,9 +81,10 @@ globalThis.fetch = async (url, init = {}) => {
     "unexpected-recorder-operation",
   );
   const body = init.body === undefined ? undefined : JSON.parse(init.body);
+  const expectedBody = resolveRecordedValue(op.body, rawReplies);
   requireThat(
-    (op.body === undefined && body === undefined) ||
-      (op.body !== undefined && body !== undefined && equal(op.body, body)),
+    (expectedBody === undefined && body === undefined) ||
+      (expectedBody !== undefined && body !== undefined && equal(expectedBody, body)),
     "recorder-input-drift",
   );
   const authorization = new Headers(init.headers).get("authorization");
@@ -104,6 +108,17 @@ globalThis.fetch = async (url, init = {}) => {
   row.status = response.status;
   row.responseSha256 = sha256(text);
   if (op.phase === "reset" || op.phase === "seed") requireThat(response.ok, "setup-not-confirmed");
+  // Store only fully read replies, before the recorder normalizes server times.
+  if (op.phase !== "reset" && op.phase !== "seed") {
+    let raw = null;
+    try { raw = JSON.parse(text); } catch { /* The pinned recorder emits non-json. */ }
+    rawReplies.set(op.phase, raw);
+    if (Object.hasOwn(entry.generatedDocumentSteps ?? {}, op.phase) && response.ok) {
+      row.generatedDocument = raw?.name;
+      row.generatedResponseText = text;
+      expectedCleanupDocuments(entry, requests); // Reject foreign/malformed names before using them.
+    }
+  }
   // The legacy recorder consumes the same response bytes and performs its own normalization.
   return new Response(response.status === 204 ? null : text, {
     status: response.status,
@@ -128,7 +143,7 @@ try {
     });
     await boundedText(response);
     requireThat(response.ok, "cleanup-reset-failed");
-    for (const path of entry.ownedDocuments) {
+    for (const path of expectedCleanupDocuments(entry, requests)) {
       cleanup.requests++;
       const r = await guardedFetch(
         `${origin}/v1/projects/${entry.project}/databases/(default)/documents/${path}`,

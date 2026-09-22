@@ -14,6 +14,7 @@ import {
   requireThat,
   equal,
   safeCode,
+  expectedCleanupDocuments,
 } from "./core.mjs";
 import { prepare, stageLegacy, sourceUnchanged } from "./legacy.mjs";
 import {
@@ -177,10 +178,11 @@ export function verifySession(session, prepared, localBytes) {
     ),
     "local-operation-sequence",
   );
+  const cleanupDocuments = expectedCleanupDocuments(entry, session.requests);
   requireThat(
     session.cleanup?.state !== "confirmed" ||
-      (equal(session.cleanup.absent, entry.ownedDocuments) &&
-        session.cleanup.requests === entry.ownedDocuments.length + cleanupResetRequests),
+      (equal(session.cleanup.absent, cleanupDocuments) &&
+        session.cleanup.requests === cleanupDocuments.length + cleanupResetRequests),
     "local-cleanup-binding",
   );
 }

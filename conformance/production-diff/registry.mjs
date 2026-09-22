@@ -226,7 +226,75 @@ export const TRANSFORMS_CASE = Object.freeze({
   ]),
 });
 
-export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE]);
+// FS-EVID-PRECONDITIONS-022: the entire observed program, including the
+// runtime updateTime references and generated-id control. Evidence remains the
+// pinned normalized production matrix; the test fixture is NOT an oracle.
+export const PRECONDITIONS_CASE = Object.freeze({
+  ...CASE,
+  id: "fs.preconditions-and-masks.saved-20260907.v1",
+  programId: "writes/preconditions-and-masks",
+  programDigest: "cd4fc7df2a0173b797fc0b5b45ed430d36a1706db83c9cbef6c31b3c03616bae",
+  title: "Saved production preconditions, update masks, atomic refusal and CRUD",
+  allowedMethods: Object.freeze(["GET", "POST", "PATCH", "DELETE"]),
+  stepIds: Object.freeze([
+    "create-with-exists-false",
+    "create-again-is-already-exists",
+    "update-missing-with-exists-true",
+    "mask-sets-and-deletes",
+    "read-after-mask",
+    "mask-on-missing-document-creates-it",
+    "read-masked-new",
+    "mask-naming-an-absent-field-deletes-it",
+    "read-after-delete-by-mask",
+    "replace-without-mask",
+    "read-after-replace",
+    "update-time-precondition-matches",
+    "update-time-precondition-is-stale",
+    "update-time-precondition-on-a-missing-document",
+    "delete-missing-is-ok",
+    "delete-missing-with-exists-true",
+    "atomic-failure-writes-nothing",
+    "atomic-1-is-absent",
+    "same-document-twice-in-one-commit",
+    "read-twice",
+    "empty-commit",
+    "verify-write",
+    "verify-missing",
+    "no-op-set-keeps-update-time",
+    "read-after-no-op",
+    "patch-with-mask-and-exists-precondition-on-missing",
+    "patch-creates",
+    "read-patched",
+    "create-document",
+    "create-document-again",
+    "create-document-with-generated-id",
+    "delete-document",
+    "delete-document-again",
+    "delete-with-exists-precondition"
+]),
+  ownedDocuments: Object.freeze([
+    "wr/existing", "wr/new", "wr/none", "wr/masked-new",
+    "wr/atomic-1", "wr/twice", "wr/patched", "wr/created",
+  ]),
+  generatedDocumentSteps: Object.freeze({ "create-document-with-generated-id": "wr" }),
+  compared: Object.freeze([
+    "All 34 original HTTP status/canonical-code/normalized-success-body decisions",
+    "Update masks: nested deletion, preservation, creation and unmasked replacement",
+    "The matching and stale updateTime requests use the same earlier raw response value",
+    "The recorded atomic refusal and its subsequent unpublished-document absence read",
+    "Same-document Commit ordering, verify, empty/no-op Commit and recorded CRUD cases",
+  ]),
+  notEstablished: Object.freeze([
+    "Exact error messages/details or timestamp/commit-time relationships erased by the old recorder",
+    "No-op updateTime equality: both time values are independently normalized to <now>",
+    "Auto-ID entropy/collision behavior: the old recorder normalizes matching generated names",
+    "A post-state read immediately after every rejected operation, or complete atomicity coverage",
+    "Rules/user tokens, gRPC/SDK, concurrency, limits or a fresh production observation",
+    "Final-artifact parity or independent condition acceptance from registering/testing this adapter",
+  ]),
+});
+
+export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE]);
 
 export function selectCase(id = CASE.id) {
   const entry = CASES.find((c) => c.id === id);

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
-import { CASE, CASES, COMMIT_TRANSFORM_CASE, G0_CASE, selectCase } from "../registry.mjs";
+import { CASE, CASES, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, selectCase } from "../registry.mjs";
 import { buildExecArgs, main } from "../pilot.mjs";
 import { resultEnvelope } from "../core.mjs";
 
@@ -21,23 +21,23 @@ async function captureStdout(run) {
   return [lines, code];
 }
 
-test("registry exposes both cases and rejects an unknown id", () => {
+test("registry exposes registered cases and rejects an unknown id", () => {
   assert.deepEqual(
     CASES.map((c) => c.id),
-    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id],
+    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id, TRANSFORMS_CASE.id],
   );
   assert.equal(selectCase(COMMIT_TRANSFORM_CASE.id).adapter, "commit-transform");
   assert.equal(selectCase(G0_CASE.id).adapter, "g0");
   assert.throws(() => selectCase("not-a-case"), /unknown-case/);
 });
 
-test("pilot.mjs list reports both cases", async () => {
+test("pilot.mjs list reports registered cases", async () => {
   const [lines, code] = await captureStdout(() => main(["list"]));
   assert.equal(code, 0);
   const parsed = JSON.parse(lines[0]);
   assert.deepEqual(
     parsed.cases.map((c) => c.id),
-    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id],
+    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id, TRANSFORMS_CASE.id],
   );
 });
 
@@ -155,4 +155,16 @@ test("buildExecArgs uses only options supported by the fireemu exec interface", 
   assert.doesNotMatch(help, /--auth-port/);
   const args = buildExecArgs(binary, "/dir", "/entry.mjs", "/node", G0_CASE.project, "auth,firestore").args;
   assert.equal(args.some((arg) => arg === "--auth-port"), false);
+});
+
+// Requires the actual pinned matrix and historical Git objects, not a synthetic oracle.
+test("pilot.mjs plan joins the saved transforms program with its production evidence", async () => {
+  const [lines, code] = await captureStdout(() => main(["plan", "--case", TRANSFORMS_CASE.id]));
+  assert.equal(code, 0);
+  const planned = JSON.parse(lines[0]);
+  assert.equal(planned.case, TRANSFORMS_CASE.id);
+  assert.equal(planned.operations, 18);
+  assert.equal(planned.productionRequests, 0);
+  assert.equal(planned.evidenceKind, "saved-production-reference");
+  assert.equal(planned.oracleKind, "legacy-normalized-production-observation");
 });

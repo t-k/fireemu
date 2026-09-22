@@ -177,7 +177,56 @@ export const G0_CASE = Object.freeze({
   ]),
 });
 
-export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE]);
+// FS-EVID-TRANSFORMS-021: replay the WHOLE observed 18-step program. The
+// "batch-write" adapter names the existing pinned REST recorder, not an API
+// restriction. Do not rewrite malformed inputs or split a stateful program.
+export const TRANSFORMS_CASE = Object.freeze({
+  ...CASE,
+  id: "fs.transforms.saved-20260907.v1",
+  programId: "writes/transforms",
+  programDigest: "b6cf42bea907f63553c645a5a03b0aa3d60c346174c9f228c3056ee8d117a6c5",
+  title: "Saved production transforms, typed refusals and ordered post-state reads",
+  stepIds: Object.freeze([
+    "server-timestamp-and-increments",
+    "read-after-increments",
+    "maximum-and-minimum",
+    "read-after-max-min",
+    "array-transforms",
+    "read-after-array-transforms",
+    "transform-only-write-creates",
+    "read-transform-created",
+    "transform-write-with-exists-precondition",
+    "increment-with-non-numeric-operand",
+    "server-timestamp-on-a-delete",
+    "set-and-transform-same-field",
+    "read-set-and-transform",
+    "integer-increment-saturates",
+    "read-saturated",
+    "increment-on-nan",
+    "two-transforms-on-one-field-in-one-write",
+    "read-dup",
+  ]),
+  ownedDocuments: Object.freeze([
+    "tf/doc", "tf/created", "tf/none", "tf/sat", "tf/nan", "tf/dup",
+  ]),
+  compared: Object.freeze([
+    "HTTP status and canonical error code for all 18 historical steps",
+    "Normalized successful response bodies, including ordered transformResults",
+    "The seven recorded document readbacks, including post-state after invalid field-path refusal",
+    "Mixed numeric/missing/non-numeric increments, saturated int64, NaN and sequential same-field transforms in this exact program",
+    "The saved array union/removal sequence and its final document state",
+  ]),
+  notEstablished: Object.freeze([
+    "Successful maximum/minimum execution: that historical request is refused for unquoted max-missing",
+    "All numeric equality, array union/removal or independent transform equivalence classes",
+    "Error message/detail equality, exact timestamps or time relationships erased by the historical recorder",
+    "A separate readback immediately after each of the four refused requests",
+    "Rules/user-token authorization, browser/SDK/gRPC, concurrent histories or transform count limits",
+    "A fresh production observation, current-artifact execution or independent compatibility approval merely from registering this case",
+  ]),
+});
+
+export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE]);
 
 export function selectCase(id = CASE.id) {
   const entry = CASES.find((c) => c.id === id);

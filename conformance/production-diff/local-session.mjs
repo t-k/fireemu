@@ -2,7 +2,7 @@
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { CASE } from "./registry.mjs";
+import { CASE, selectCase } from "./registry.mjs";
 import {
   requireThat,
   equal,
@@ -17,7 +17,11 @@ import { localOrigin, assertUrl, installNetworkGuard, boundedText } from "./netw
 
 const directory = process.env.PILOT_RUN_DIR;
 requireThat(typeof directory === "string", "missing-run-directory");
-const entry = CASE;
+const entry = selectCase(process.env.PILOT_CASE_ID ?? CASE.id);
+requireThat(
+  entry.adapter === "batch-write" && entry.sessionScript === "local-session.mjs",
+  "wrong-local-session-adapter",
+);
 const legacyDir = join(directory, "legacy");
 const program = validateProgram(
   JSON.parse(await fs.readFile(join(directory, "program.json"))),

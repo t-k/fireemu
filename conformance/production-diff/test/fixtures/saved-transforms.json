@@ -1,0 +1,921 @@
+{
+  "role": "test-fixture-derived-from-published-normalized-production-decisions",
+  "newProductionObservation": false,
+  "source": {
+    "repository": "t-k/fireemu",
+    "observedSource": "2526c61eda5fc53ac91250307786127ae3c601be",
+    "matrixPath": "conformance/firestore-production-matrix.json",
+    "matrixBlob": "507a3412005c3b0a1b8c1f0a4a150dca101dac3b",
+    "corpusPath": "conformance/src/firestore-probe/programs.mjs",
+    "corpusBlob": "17f7d4c1ccaac2c114fc8cf0c8312e68151254d7",
+    "projection": "HTTP status, canonical error code, normalized success body. Error messages omitted just as by the existing comparator."
+  },
+  "program": {
+    "id": "writes/transforms",
+    "area": "writes",
+    "seed": [
+      {
+        "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc",
+        "fields": {
+          "n": {
+            "integerValue": "1"
+          },
+          "d": {
+            "doubleValue": 1.5
+          },
+          "s": {
+            "stringValue": "not a number"
+          },
+          "tags": {
+            "arrayValue": {
+              "values": [
+                {
+                  "stringValue": "a"
+                },
+                {
+                  "integerValue": "1"
+                }
+              ]
+            }
+          },
+          "m": {
+            "mapValue": {
+              "fields": {
+                "inner": {
+                  "integerValue": "5"
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "steps": [
+      {
+        "id": "server-timestamp-and-increments",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                "fields": {}
+              },
+              "updateMask": {
+                "fieldPaths": []
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "at",
+                  "setToServerValue": "REQUEST_TIME"
+                },
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "2"
+                  }
+                },
+                {
+                  "fieldPath": "d",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                },
+                {
+                  "fieldPath": "s",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                },
+                {
+                  "fieldPath": "missing",
+                  "increment": {
+                    "doubleValue": 0.5
+                  }
+                },
+                {
+                  "fieldPath": "m.inner",
+                  "increment": {
+                    "integerValue": "-10"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-after-increments",
+        "method": "GET",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+      },
+      {
+        "id": "maximum-and-minimum",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                "fields": {}
+              },
+              "updateMask": {
+                "fieldPaths": []
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "maximum": {
+                    "integerValue": "100"
+                  }
+                },
+                {
+                  "fieldPath": "d",
+                  "minimum": {
+                    "doubleValue": -1
+                  }
+                },
+                {
+                  "fieldPath": "s",
+                  "maximum": {
+                    "integerValue": "7"
+                  }
+                },
+                {
+                  "fieldPath": "max-missing",
+                  "maximum": {
+                    "integerValue": "3"
+                  }
+                },
+                {
+                  "fieldPath": "n",
+                  "minimum": {
+                    "doubleValue": 50.5
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-after-max-min",
+        "method": "GET",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+      },
+      {
+        "id": "array-transforms",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                "fields": {}
+              },
+              "updateMask": {
+                "fieldPaths": []
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "tags",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "stringValue": "a"
+                      },
+                      {
+                        "stringValue": "b"
+                      },
+                      {
+                        "doubleValue": 1
+                      },
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fieldPath": "s",
+                  "appendMissingElements": {
+                    "values": [
+                      {
+                        "stringValue": "x"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "fieldPath": "tags",
+                  "removeAllFromArray": {
+                    "values": [
+                      {
+                        "integerValue": "1"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-after-array-transforms",
+        "method": "GET",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+      },
+      {
+        "id": "transform-only-write-creates",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "transform": {
+                "document": "projects/PROJECT/databases/(default)/documents/tf/created",
+                "fieldTransforms": [
+                  {
+                    "fieldPath": "count",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  },
+                  {
+                    "fieldPath": "at",
+                    "setToServerValue": "REQUEST_TIME"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-transform-created",
+        "method": "GET",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/created"
+      },
+      {
+        "id": "transform-write-with-exists-precondition",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "transform": {
+                "document": "projects/PROJECT/databases/(default)/documents/tf/none",
+                "fieldTransforms": [
+                  {
+                    "fieldPath": "count",
+                    "increment": {
+                      "integerValue": "1"
+                    }
+                  }
+                ]
+              },
+              "currentDocument": {
+                "exists": true
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "increment-with-non-numeric-operand",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                "fields": {}
+              },
+              "updateMask": {
+                "fieldPaths": []
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "stringValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "server-timestamp-on-a-delete",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "delete": "projects/PROJECT/databases/(default)/documents/tf/doc",
+              "updateTransforms": [
+                {
+                  "fieldPath": "at",
+                  "setToServerValue": "REQUEST_TIME"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "set-and-transform-same-field",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "projects/PROJECT/databases/(default)/documents/tf/doc",
+                "fields": {
+                  "n": {
+                    "integerValue": "1000"
+                  }
+                }
+              },
+              "updateMask": {
+                "fieldPaths": [
+                  "n"
+                ]
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-set-and-transform",
+        "method": "GET",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/doc"
+      },
+      {
+        "id": "integer-increment-saturates",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "projects/PROJECT/databases/(default)/documents/tf/sat",
+                "fields": {
+                  "n": {
+                    "integerValue": "9223372036854775807"
+                  }
+                }
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-saturated",
+        "method": "GET",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/sat"
+      },
+      {
+        "id": "increment-on-nan",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "projects/PROJECT/databases/(default)/documents/tf/nan",
+                "fields": {
+                  "n": {
+                    "doubleValue": "NaN"
+                  }
+                }
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "two-transforms-on-one-field-in-one-write",
+        "method": "POST",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        "body": {
+          "writes": [
+            {
+              "update": {
+                "name": "projects/PROJECT/databases/(default)/documents/tf/dup",
+                "fields": {
+                  "n": {
+                    "integerValue": "1"
+                  }
+                }
+              },
+              "updateTransforms": [
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                },
+                {
+                  "fieldPath": "n",
+                  "increment": {
+                    "integerValue": "1"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "id": "read-dup",
+        "method": "GET",
+        "path": "/v1/projects/PROJECT/databases/(default)/documents/tf/dup"
+      }
+    ]
+  },
+  "production": {
+    "programs": [
+      {
+        "id": "writes/transforms",
+        "area": "writes",
+        "steps": {
+          "server-timestamp-and-increments": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "writeResults": [
+                  {
+                    "updateTime": "<now>",
+                    "transformResults": [
+                      {
+                        "timestampValue": "<now>"
+                      },
+                      {
+                        "integerValue": "3"
+                      },
+                      {
+                        "doubleValue": 2.5
+                      },
+                      {
+                        "integerValue": "1"
+                      },
+                      {
+                        "doubleValue": 0.5
+                      },
+                      {
+                        "integerValue": "-5"
+                      }
+                    ]
+                  }
+                ],
+                "commitTime": "<now>"
+              }
+            }
+          },
+          "read-after-increments": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
+                "fields": {
+                  "m": {
+                    "mapValue": {
+                      "fields": {
+                        "inner": {
+                          "integerValue": "-5"
+                        }
+                      }
+                    }
+                  },
+                  "at": {
+                    "timestampValue": "<now>"
+                  },
+                  "missing": {
+                    "doubleValue": 0.5
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "a"
+                        },
+                        {
+                          "integerValue": "1"
+                        }
+                      ]
+                    }
+                  },
+                  "d": {
+                    "doubleValue": 2.5
+                  },
+                  "n": {
+                    "integerValue": "3"
+                  },
+                  "s": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<now>",
+                "updateTime": "<now>"
+              }
+            }
+          },
+          "maximum-and-minimum": {
+            "production": {
+              "status": 400,
+              "code": "INVALID_ARGUMENT"
+            }
+          },
+          "read-after-max-min": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
+                "fields": {
+                  "m": {
+                    "mapValue": {
+                      "fields": {
+                        "inner": {
+                          "integerValue": "-5"
+                        }
+                      }
+                    }
+                  },
+                  "at": {
+                    "timestampValue": "<now>"
+                  },
+                  "missing": {
+                    "doubleValue": 0.5
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "a"
+                        },
+                        {
+                          "integerValue": "1"
+                        }
+                      ]
+                    }
+                  },
+                  "d": {
+                    "doubleValue": 2.5
+                  },
+                  "n": {
+                    "integerValue": "3"
+                  },
+                  "s": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<now>",
+                "updateTime": "<now>"
+              }
+            }
+          },
+          "array-transforms": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "writeResults": [
+                  {
+                    "updateTime": "<now>",
+                    "transformResults": [
+                      {
+                        "nullValue": null
+                      },
+                      {
+                        "nullValue": null
+                      },
+                      {
+                        "nullValue": null
+                      }
+                    ]
+                  }
+                ],
+                "commitTime": "<now>"
+              }
+            }
+          },
+          "read-after-array-transforms": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
+                "fields": {
+                  "m": {
+                    "mapValue": {
+                      "fields": {
+                        "inner": {
+                          "integerValue": "-5"
+                        }
+                      }
+                    }
+                  },
+                  "at": {
+                    "timestampValue": "<now>"
+                  },
+                  "missing": {
+                    "doubleValue": 0.5
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "a"
+                        },
+                        {
+                          "stringValue": "b"
+                        }
+                      ]
+                    }
+                  },
+                  "d": {
+                    "doubleValue": 2.5
+                  },
+                  "n": {
+                    "integerValue": "3"
+                  },
+                  "s": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "x"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "createTime": "<now>",
+                "updateTime": "<now>"
+              }
+            }
+          },
+          "transform-only-write-creates": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "writeResults": [
+                  {
+                    "updateTime": "<now>",
+                    "transformResults": [
+                      {
+                        "integerValue": "1"
+                      },
+                      {
+                        "timestampValue": "<now>"
+                      }
+                    ]
+                  }
+                ],
+                "commitTime": "<now>"
+              }
+            }
+          },
+          "read-transform-created": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/created",
+                "fields": {
+                  "at": {
+                    "timestampValue": "<now>"
+                  },
+                  "count": {
+                    "integerValue": "1"
+                  }
+                },
+                "createTime": "<now>",
+                "updateTime": "<now>"
+              }
+            }
+          },
+          "transform-write-with-exists-precondition": {
+            "production": {
+              "status": 404,
+              "code": "NOT_FOUND"
+            }
+          },
+          "increment-with-non-numeric-operand": {
+            "production": {
+              "status": 400,
+              "code": "INVALID_ARGUMENT"
+            }
+          },
+          "server-timestamp-on-a-delete": {
+            "production": {
+              "status": 400,
+              "code": "INVALID_ARGUMENT"
+            }
+          },
+          "set-and-transform-same-field": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "writeResults": [
+                  {
+                    "updateTime": "<now>",
+                    "transformResults": [
+                      {
+                        "integerValue": "1001"
+                      }
+                    ]
+                  }
+                ],
+                "commitTime": "<now>"
+              }
+            }
+          },
+          "read-set-and-transform": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/doc",
+                "fields": {
+                  "m": {
+                    "mapValue": {
+                      "fields": {
+                        "inner": {
+                          "integerValue": "-5"
+                        }
+                      }
+                    }
+                  },
+                  "at": {
+                    "timestampValue": "<now>"
+                  },
+                  "missing": {
+                    "doubleValue": 0.5
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "a"
+                        },
+                        {
+                          "stringValue": "b"
+                        }
+                      ]
+                    }
+                  },
+                  "d": {
+                    "doubleValue": 2.5
+                  },
+                  "n": {
+                    "integerValue": "1001"
+                  },
+                  "s": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "stringValue": "x"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "createTime": "<now>",
+                "updateTime": "<now>"
+              }
+            }
+          },
+          "integer-increment-saturates": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "writeResults": [
+                  {
+                    "updateTime": "<now>",
+                    "transformResults": [
+                      {
+                        "integerValue": "9223372036854775807"
+                      }
+                    ]
+                  }
+                ],
+                "commitTime": "<now>"
+              }
+            }
+          },
+          "read-saturated": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/sat",
+                "fields": {
+                  "n": {
+                    "integerValue": "9223372036854775807"
+                  }
+                },
+                "createTime": "<now>",
+                "updateTime": "<now>"
+              }
+            }
+          },
+          "increment-on-nan": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "writeResults": [
+                  {
+                    "updateTime": "<now>",
+                    "transformResults": [
+                      {
+                        "doubleValue": "NaN"
+                      }
+                    ]
+                  }
+                ],
+                "commitTime": "<now>"
+              }
+            }
+          },
+          "two-transforms-on-one-field-in-one-write": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "writeResults": [
+                  {
+                    "updateTime": "<now>",
+                    "transformResults": [
+                      {
+                        "integerValue": "2"
+                      },
+                      {
+                        "integerValue": "3"
+                      }
+                    ]
+                  }
+                ],
+                "commitTime": "<now>"
+              }
+            }
+          },
+          "read-dup": {
+            "production": {
+              "status": 200,
+              "code": "OK",
+              "body": {
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/tf/dup",
+                "fields": {
+                  "n": {
+                    "integerValue": "3"
+                  }
+                },
+                "createTime": "<now>",
+                "updateTime": "<now>"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

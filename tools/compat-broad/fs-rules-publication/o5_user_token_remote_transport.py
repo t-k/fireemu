@@ -1217,6 +1217,20 @@ def make_transport(
         raise ValueError("bounded transport timeout required")
     transport_deadline = deadline
     transport_timeout = timeout_seconds
+
+    def effective_seconds(
+        call_deadline: float | None, call_timeout: float | None
+    ) -> float:
+        deadlines = [value for value in (transport_deadline, call_deadline) if value is not None]
+        timeouts = [value for value in (transport_timeout, call_timeout) if value is not None]
+        if call_deadline is not None and (type(call_deadline) not in (int, float) or not math.isfinite(call_deadline)):
+            raise ValueError("absolute transport deadline required")
+        if call_timeout is not None and (type(call_timeout) not in (int, float) or not math.isfinite(call_timeout) or not 0 < call_timeout <= MAX_SECONDS):
+            raise ValueError("bounded transport timeout required")
+        seconds = min([MAX_SECONDS, *[float(value) for value in timeouts]])
+        if deadlines:
+            seconds = min(seconds, min(float(value) - time.monotonic() for value in deadlines))
+        return seconds
     frozen = copy.deepcopy(frozen_inputs)
     trusted_bindings = copy.deepcopy(account_bindings or {})
     if identity_proofs is not None:
@@ -1287,15 +1301,7 @@ def make_transport(
             key: prepared[key]
             for key in ("service", "route", "method", "path", "headers", "body")
         }
-        call_deadline = transport_deadline if deadline is None else deadline
-        call_timeout = transport_timeout if timeout_seconds is None else timeout_seconds
-        if call_deadline is not None and (type(call_deadline) not in (int, float) or not math.isfinite(call_deadline)):
-            raise ValueError("absolute transport deadline required")
-        if call_timeout is not None and (type(call_timeout) not in (int, float) or not math.isfinite(call_timeout) or not 0 < call_timeout <= MAX_SECONDS):
-            raise ValueError("bounded transport timeout required")
-        seconds = MAX_SECONDS if call_timeout is None else float(call_timeout)
-        if call_deadline is not None:
-            seconds = min(seconds, call_deadline - time.monotonic())
+        seconds = effective_seconds(deadline, timeout_seconds)
         if seconds <= 0:
             raise WorkerExchangeError("transport deadline exhausted", worker_reaped=False)
         envelope["seconds"] = seconds

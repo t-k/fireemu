@@ -353,6 +353,40 @@ def test_two_second_transport_deadline_reaps_loopback_worker():
         thread.join(timeout=2)
 
 
+def test_per_call_deadline_cannot_extend_factory_timeout():
+    plan, operation, _resource = minimal_wire_plan()
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _DelayedObservationHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=f"http://127.0.0.1:{server.server_port}",
+            timeout_seconds=0.1,
+        )
+        with pytest.raises(remote.WorkerExchangeError, match="walltime|reap reserve"):
+            transmit(
+                operation,
+                binding=source,
+                binding_digest=source_digest,
+                capability=capability,
+                timeout_seconds=2.0,
+                deadline=time.monotonic() + 3.0,
+            )
+    finally:
+        _ACTIVE.discard(capability)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
     item = {
         "id": "account/owner-a/signin",

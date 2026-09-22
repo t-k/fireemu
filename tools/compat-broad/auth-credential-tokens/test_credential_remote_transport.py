@@ -19,10 +19,13 @@ sys.path.insert(0, str(HERE))
 
 import credential_remote_transport as remote
 from credential_gate import IDENTITY, SECURE
+import credential_https_worker as worker
 
 
 class _Echo(BaseHTTPRequestHandler):
     status = 200
+    delay = 0.0
+    malformed = False
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
@@ -43,6 +46,20 @@ class _Echo(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        if self.__class__.delay:
+            time.sleep(self.__class__.delay)
+        encoded = (
+            b"not-json"
+            if self.__class__.malformed
+            else json.dumps({"path": self.path, "email": "owner@example.test", "scope": "scope"}).encode()
+        )
+        self.send_response(self.server.status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
     def log_message(self, *_args):
         pass
 
@@ -51,6 +68,8 @@ class _Echo(BaseHTTPRequestHandler):
 def fixture_origin():
     server = HTTPServer(("127.0.0.1", 0), _Echo)
     server.status = 200
+    _Echo.delay = 0.0
+    _Echo.malformed = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -138,6 +157,92 @@ def test_the_worker_refuses_any_host_outside_the_allowlist_in_production_mode() 
         )
         assert result.returncode == 2, url
         assert result.stdout == b"" and result.stderr == b""
+
+
+def test_tokeninfo_uses_only_the_documented_oauth_route() -> None:
+    exact = worker.validate_target(
+        "https://oauth2.googleapis.com/tokeninfo?access_token=opaque", fixture=False
+    )
+    assert exact.hostname == "oauth2.googleapis.com" and exact.path == "/tokeninfo"
+    for url in (
+        "https://oauth2.googleapis.com/oauth2/v1/tokeninfo?access_token=opaque",
+        "https://oauth2.googleapis.com/tokeninfo?access_token=opaque&extra=x",
+        "https://oauth2.googleapis.com/tokeninfo",
+    ):
+        with pytest.raises(ValueError):
+            worker.validate_target(url, fixture=False)
+
+
+def test_bootstrap_routes_are_closed_to_the_four_documented_operations() -> None:
+    accepted = (
+        "https://oauth2.googleapis.com/token",
+        "https://oauth2.googleapis.com/tokeninfo?access_token=opaque",
+        "https://cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6",
+        "https://identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config",
+    )
+    for url in accepted:
+        worker.validate_target(url, fixture=False)
+    for url in (
+        "https://oauth2.googleapis.com/oauth2/v1/tokeninfo?access_token=opaque",
+        "https://oauth2.googleapis.com/token?extra=x",
+        "https://cloudresourcemanager.googleapis.com/v1/projects/other",
+        "https://identitytoolkit.googleapis.com/admin/v2/projects/other/config",
+    ):
+        with pytest.raises(ValueError):
+            worker.validate_target(url, fixture=False)
+
+
+def test_lifecycle_result_proves_worker_reaped(fixture_origin) -> None:
+    origin, _server = fixture_origin
+    result = remote.request_with_lifecycle(
+        origin + "/" + IDENTITY + "/accounts:lookup",
+        {"localId": ["u"]},
+        headers={},
+        seconds=5,
+        fixture_origin=origin,
+    )
+    assert result.status == 200
+    assert result.worker_reaped is True
+
+
+def test_real_worker_timeout_reports_reaped_failure(fixture_origin) -> None:
+    origin, _server = fixture_origin
+    _Echo.delay = 0.2
+    with pytest.raises(remote.WorkerFailure) as raised:
+        remote.request_with_lifecycle(
+            origin + "/" + IDENTITY + "/accounts:lookup",
+            None,
+            headers={},
+            seconds=0.01,
+            fixture_origin=origin,
+        )
+    assert raised.value.worker_reaped is True
+    assert "owner" not in repr(raised.value)
+
+
+def test_real_worker_nonzero_exit_reports_reaped_failure() -> None:
+    with pytest.raises(remote.WorkerFailure) as raised:
+        remote.request_with_lifecycle(
+            "https://example.com/not-allowed",
+            None,
+            headers={},
+            seconds=2,
+        )
+    assert raised.value.worker_reaped is True
+
+
+def test_real_worker_malformed_output_reports_reaped_failure(fixture_origin) -> None:
+    origin, _server = fixture_origin
+    _Echo.malformed = True
+    with pytest.raises(remote.WorkerFailure) as raised:
+        remote.request_with_lifecycle(
+            origin + "/" + IDENTITY + "/accounts:lookup",
+            None,
+            headers={},
+            seconds=5,
+            fixture_origin=origin,
+        )
+    assert raised.value.worker_reaped is True
 
 
 def test_the_worker_refuses_a_non_loopback_target_even_as_a_fixture_worker() -> None:

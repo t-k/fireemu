@@ -101,6 +101,19 @@ def test_rules_finish_cannot_bypass_incomplete_management(tmp_path):
     assert gate.snapshot() == before
 
 
+def test_persisted_terminal_requires_the_claimed_coordinator_identity(tmp_path):
+    create(tmp_path / "gate", rules_plan())
+    gate = Gate(tmp_path / "gate", "rules-management")
+    gate.cancel_management_observation()
+    for slot in gate.snapshot()["plan"]["management"]["recovery"]:
+        skip_next(gate, slot["id"])
+    state = gate.snapshot()
+    state["jobs"]["rules-management"]["complete"] = True
+    shared_gate._save(gate.path, state)
+    with pytest.raises(ValueError):
+        gate.snapshot()
+
+
 def response(effects=(), *, status=200, complete=True, reaped=True):
     return {
         "status": status,
@@ -113,6 +126,102 @@ def response(effects=(), *, status=200, complete=True, reaped=True):
             "effects": list(effects),
         },
     }
+
+
+def atomic_refusal(row):
+    result = response(status=403)
+    result["body"]["refusal"] = {
+        "kind": "rules-atomic-commit-refusal-v1",
+        "slotId": "data/" + str(row["index"]),
+        "rowDigest": shared_gate.digest(row),
+        "principal": row["principal"],
+        "operation": "Commit",
+        "restCode": 403,
+        "status": "PERMISSION_DENIED",
+        "canonicalCode": 7,
+    }
+    return result
+
+
+def test_typed_atomic_commit_refusal_is_bound_to_recompiled_row():
+    plan = rules_plan()
+    canonical = shared_gate._validate_rules_management_plan(plan)
+    row = next(row for row in canonical["observation"] if row["index"] == 18)
+    slot = next(
+        slot for slot in plan["management"]["observation"] if slot["id"] == "data/18"
+    )
+    shared_gate._validate_rules_receipt(plan, "observation", slot, atomic_refusal(row))
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "get",
+        "batch-write",
+        "principal",
+        "row",
+        "slot",
+        "rest-code",
+        "canonical-code",
+        "error-status",
+        "http-status",
+        "incomplete",
+        "unreaped",
+        "effects",
+        "digest",
+        "text",
+    ],
+)
+def test_atomic_refusal_cannot_escape_its_typed_commit_boundary(fault):
+    plan = rules_plan()
+    canonical = shared_gate._validate_rules_management_plan(plan)
+    row = next(row for row in canonical["observation"] if row["index"] == 18)
+    slot = next(
+        slot for slot in plan["management"]["observation"] if slot["id"] == "data/18"
+    )
+    result = atomic_refusal(row)
+    refusal = result["body"]["refusal"]
+    if fault == "get":
+        row = next(row for row in canonical["observation"] if row["method"] == "get")
+        slot = next(
+            slot
+            for slot in plan["management"]["observation"]
+            if slot["id"] == "data/" + str(row["index"])
+        )
+        result = atomic_refusal(row)
+    elif fault == "batch-write":
+        refusal["operation"] = "BatchWrite"
+    elif fault == "principal":
+        refusal["principal"] = "other-b"
+    elif fault == "row":
+        refusal["rowDigest"] = "0" * 64
+    elif fault == "slot":
+        refusal["slotId"] = "data/17"
+    elif fault == "rest-code":
+        refusal["restCode"] = 7
+    elif fault == "canonical-code":
+        refusal["canonicalCode"] = 403
+    elif fault == "error-status":
+        refusal["status"] = "UNAUTHENTICATED"
+    elif fault == "http-status":
+        result["status"] = 500
+    elif fault == "incomplete":
+        result["complete"] = False
+    elif fault == "unreaped":
+        result["workerReaped"] = False
+    elif fault == "effects":
+        result["body"]["effects"] = [
+            {
+                "subject": slot["effects"][0]["subject"],
+                "proof": {"kind": "absence", "resource": "foreign"},
+            }
+        ]
+    elif fault == "digest":
+        result["body"]["responseDigest"] = None
+    elif fault == "text":
+        result["bodyKind"] = "text"
+    with pytest.raises(ValueError):
+        shared_gate._validate_rules_receipt(plan, "observation", slot, result)
 
 
 def skip_next(gate, slot):
@@ -349,15 +458,46 @@ def test_cancellation_binds_completed_observation_proof_bytes(tmp_path):
         gate.snapshot()
 
 
-@pytest.mark.parametrize("foreign_restore", [False, True])
+def test_failed_signup_cannot_gain_ownership_through_later_claim_update(tmp_path):
+    plan = rules_plan()
+    create(tmp_path / "gate", plan)
+    gate = Gate(tmp_path / "gate", "rules-management")
+    for index, slot in enumerate(plan["management"]["observation"][:7]):
+        subject = slot["effects"][0]["subject"]
+        ref = subject.removeprefix("account/")
+        proof = {
+            "kind": "account",
+            "accountRef": ref,
+            "tenantId": "tenant-test" if ref == "tenant-d" else None,
+            "uid": "response-" + ref,
+        }
+        result = response(
+            [] if index == 0 else [{"subject": subject, "proof": proof}],
+            status=500 if index == 0 else 200,
+        )
+        gate.management_dispatch(
+            "observation", slot["id"], lambda deadline, result=result: result
+        )
+    before = gate.snapshot()
+    with pytest.raises(ValueError):
+        gate.management_dispatch(
+            "observation",
+            plan["management"]["observation"][7]["id"],
+            lambda deadline: pytest.fail("unknown account must not be mutated"),
+        )
+    assert gate.snapshot() == before
+
+
+@pytest.mark.parametrize("mode", ["normal", "foreign-restore", "status-only-denial"])
 def test_full_rules_management_real_child_receipts_and_application_denial(
-    tmp_path, foreign_restore
+    tmp_path, mode
 ):
     plan = rules_plan()
     create(tmp_path / "gate", plan)
     gate = Gate(tmp_path / "gate", "rules-management")
     gate.claim()
     canonical = case.compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant-test")
+    rows = {"data/" + str(row["index"]): row for row in canonical["observation"]}
     tenants = {
         account["ref"]: account["tenant"] for account in canonical["ownedAccounts"]
     }
@@ -404,9 +544,14 @@ def test_full_rules_management_real_child_receipts_and_application_denial(
             stdout=subprocess.PIPE,
             text=True,
         )
-        raw, _ = child.communicate(
-            json.dumps(result), timeout=max(0.01, deadline - time.monotonic())
-        )
+        try:
+            raw, _ = child.communicate(
+                json.dumps(result), timeout=max(0.01, deadline - time.monotonic())
+            )
+        finally:
+            if child.poll() is None:
+                child.terminate()
+                child.communicate(timeout=5)
         assert child.returncode == 0
         return json.loads(raw)
 
@@ -458,11 +603,44 @@ def test_full_rules_management_real_child_receipts_and_application_denial(
             [] if slot["id"] == denied_id else effects,
             status=403 if slot["id"] == denied_id else 200,
         )
+        row = rows.get(slot["id"])
+        if (
+            row
+            and row["method"] == "commit"
+            and row["expect"]["status"] == "PERMISSION_DENIED"
+        ):
+            result = (
+                response(status=403)
+                if mode == "status-only-denial" and row["index"] == 17
+                else atomic_refusal(row)
+            )
+        before = gate.snapshot()
         gate.management_dispatch(
             "observation",
             slot["id"],
             lambda deadline, result=result: send_child(result, deadline),
         )
+        if result["body"].get("refusal"):
+            after = gate.snapshot()
+            assert after["total"] == before["total"] + 1
+            assert after["costMicrousd"] == before["costMicrousd"] + 1
+            assert (
+                after["managementEvents"][-1]["rulesReceipt"]["body"]["effects"] == []
+            )
+            if row["index"] == 18:
+                assert (
+                    shared_gate._rules_subject_states(after)["document/multiwrite-x"]
+                    == shared_gate._rules_subject_states(before)[
+                        "document/multiwrite-x"
+                    ]
+                )
+            with pytest.raises(ValueError):
+                gate.management_dispatch(
+                    "observation",
+                    slot["id"],
+                    lambda deadline: pytest.fail("consumed refusal must not replay"),
+                )
+            assert gate.snapshot() == after
     assert not gate.snapshot().get("credentialRejected")
     assert (
         next(
@@ -473,10 +651,24 @@ def test_full_rules_management_real_child_receipts_and_application_denial(
         == 403
     )
     gate.cancel_management_observation()
+    denied_subjects = {"document/getafter-control-target", "document/multiwrite-y"}
+    derived = shared_gate._rules_subject_states(gate.snapshot())
+    for subject in denied_subjects:
+        assert derived[subject]["proof"] is None
+        assert derived[subject]["status"] == (
+            "held"
+            if mode == "status-only-denial"
+            and subject == "document/getafter-control-target"
+            else "attempted-no-effect"
+        )
     restore_failed = False
     for slot in plan["management"]["recovery"]:
         subject, step = slot["dependency"]["subject"], slot["dependency"]["step"]
-        if subject == "account/deleted-g" or restore_failed:
+        if (
+            subject == "account/deleted-g"
+            or subject in denied_subjects
+            or restore_failed
+        ):
             skip_next(gate, slot["id"])
             continue
         status = 200
@@ -486,7 +678,7 @@ def test_full_rules_management_real_child_receipts_and_application_denial(
                 if step == "restore-patch"
                 else release
             )
-            if foreign_restore and step == "restore-patch":
+            if mode == "foreign-restore" and step == "restore-patch":
                 current = {
                     **release,
                     "rulesetName": "projects/fireemu-35fe6/rulesets/foreign",
@@ -517,15 +709,19 @@ def test_full_rules_management_real_child_receipts_and_application_denial(
             slot["id"],
             lambda deadline, result=result: send_child(result, deadline),
         )
-    if foreign_restore:
+    if mode != "normal":
         before = gate.snapshot()
         with pytest.raises(ValueError):
             gate.finish()
         assert gate.snapshot() == before
-        assert before["total"] == before["costMicrousd"] == 132
+        assert (
+            before["total"]
+            == before["costMicrousd"]
+            == (126 if mode == "foreign-restore" else 135)
+        )
         return
     gate.finish()
     final = gate.snapshot()
-    assert final["total"] == final["costMicrousd"] == 141
+    assert final["total"] == final["costMicrousd"] == 135
     assert final["reservedRecovery"] == 0
     assert final["jobs"]["rules-management"]["complete"] is True

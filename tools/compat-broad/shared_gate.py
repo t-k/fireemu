@@ -204,13 +204,53 @@ def _validate_rules_receipt(plan, phase, slot, result):
         return
     if (
         not isinstance(body, dict)
-        or set(body) != {"kind", "responseDigest", "effects"}
+        or set(body)
+        not in (
+            {"kind", "responseDigest", "effects"},
+            {"kind", "responseDigest", "effects", "refusal"},
+        )
         or body["kind"] != "rules-management-proof-v1"
         or not _preparation_hash(body["responseDigest"])
         or not isinstance(body["effects"], list)
     ):
         raise ValueError("Rules sanitized proof envelope required")
     canonical = _validate_rules_management_plan(plan)
+    if "refusal" in body:
+        row = next(
+            (
+                row
+                for row in canonical["observation"]
+                if slot["id"] == "data/" + str(row["index"])
+            ),
+            None,
+        )
+        if (
+            phase != "observation"
+            or row is None
+            or row["method"] != "commit"
+            or result["status"] != 403
+            or result["complete"] is not True
+            or result["workerReaped"] is not True
+            or result["bodyKind"] != "json"
+            or body["effects"] != []
+            or body["refusal"]
+            != {
+                "kind": "rules-atomic-commit-refusal-v1",
+                "slotId": slot["id"],
+                "rowDigest": digest(row),
+                "principal": row["principal"],
+                "operation": "Commit",
+                "restCode": 403,
+                "status": "PERMISSION_DENIED",
+                "canonicalCode": 7,
+            }
+        ):
+            raise ValueError(
+                "Rules refusal is not the actual typed canonical Commit denial"
+            )
+        # The source-bound synchronous transport validates the actual prepared
+        # request and REST error. This projection is not a cryptographic seal.
+        return
     allowed = _rules_proof_subjects(phase, slot)
     subjects = {
         subject["id"]: subject
@@ -356,6 +396,21 @@ def _rules_subject_states(state):
         proofs = {effect["subject"]: effect["proof"] for effect in effects}
         good = event.get("completed") is True and 200 <= event.get("status", 0) < 300
         if phase == "observation":
+            if (
+                event.get("completed") is True
+                and receipt
+                and receipt.get("body", {}).get("refusal") is not None
+            ):
+                # Atomic denial describes this attempt, never target absence.
+                # Earlier owned versions and unknown outcomes remain untouched.
+                for effect in slot["effects"]:
+                    subject = subjects[effect["subject"]]
+                    if (
+                        effect["action"] == "create"
+                        and subject["status"] == "not-attempted"
+                    ):
+                        subject["status"] = "attempted-no-effect"
+                continue
             for effect in slot["effects"]:
                 subject = subjects[effect["subject"]]
                 proof = proofs.get(effect["subject"])
@@ -372,7 +427,13 @@ def _rules_subject_states(state):
                         subject["status"] = "recovered"
                     continue
                 if good and proof is not None and proof["kind"] != "absence":
-                    subject.update(status="owned", proof=proof)
+                    prior = subject["proof"]
+                    if effect["action"] != "create" and (
+                        prior is None or (prior["kind"] == "account" and proof != prior)
+                    ):
+                        subject["status"] = "held"
+                    else:
+                        subject.update(status="owned", proof=proof)
                 elif (
                     good
                     and effect["action"] == "delete"
@@ -382,13 +443,6 @@ def _rules_subject_states(state):
                     # to issue the reserved read, which must establish absence.
                     subject["status"] = "owned"
                     subject["deleteAcknowledged"] = True
-                elif (
-                    event.get("completed") is True
-                    and event.get("status") in (401, 403)
-                    and slot["id"].startswith("data/")
-                    and effect["action"] != "create"
-                ):
-                    continue
                 elif (
                     effect["action"] == "create" or subject["status"] != "not-attempted"
                 ):
@@ -523,6 +577,8 @@ def _rules_skip_reason(subject, dependency):
         return "dependency-not-attempted"
     if subject["status"] == "recovered":
         return "typed-absence"
+    if subject["status"] == "attempted-no-effect":
+        return "atomic-commit-denied-no-effect"
     if subject["status"] == "held" and not (
         dependency["subject"] == "release/baseline"
         and subject.get("verified")
@@ -535,6 +591,16 @@ def _rules_skip_reason(subject, dependency):
 def _rules_dispatch_dependency(state, phase, slot):
     subjects = _rules_subject_states(state)
     if phase == "observation":
+        for effect in slot["effects"]:
+            if effect["action"] in ("write", "delete"):
+                subject = subjects[effect["subject"]]
+                if subject["proof"] is None or subject["status"] not in (
+                    "owned",
+                    "verified",
+                ):
+                    raise ValueError(
+                        "Rules mutation lacks acknowledged creation ownership"
+                    )
         if slot["id"] in ("patch-a", "patch-b"):
             if (
                 not subjects["release/baseline"].get("verified")
@@ -705,10 +771,14 @@ def _validate_rules_state(state, *, terminal=False):
     if terminal:
         _rules_settled(state)
         if (
-            state["reservedRecovery"] != 0
+            type(job["pid"]) is not int
+            or job["pid"] <= 0
+            or job["pid"] != state["coordinatorPid"]
+            or state["reservedRecovery"] != 0
             or count != len(declared)
             or any(
-                subject["status"] not in ("not-attempted", "recovered")
+                subject["status"]
+                not in ("not-attempted", "recovered", "attempted-no-effect")
                 for subject in _rules_subject_states(state).values()
             )
         ):

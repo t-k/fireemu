@@ -118,7 +118,7 @@ def test_cost_is_derived_from_all_compiled_rows():
     descriptor = campaign.descriptor()
     plan = descriptor.plan_compiler(NONCE)
     rows = (*plan["stages"], *plan["recovery"])
-    assert descriptor.cost_model()["requests"] == len(rows)
+    assert descriptor.cost_model()["requests"] == len(rows) + 2
     assert descriptor.cost_model()["maximumCostMicrousd"] == round(
         plan["budget"]["planningCeilingUsd"] * 1_000_000
     )

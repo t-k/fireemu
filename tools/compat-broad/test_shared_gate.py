@@ -13,6 +13,8 @@ from shared_gate import (
     create,
     unconfirmed_creates,
 )
+from shared_gate import _auth_creation_ownership
+from broad_contract import digest
 
 
 def plan():
@@ -37,6 +39,61 @@ def plan():
             for k in ("a", "b")
         },
     }
+
+
+def _custom_ownership_state(*, uid="custom-uid", resource="projects/p/auth/accounts/custom"):
+    operation = {
+        "id": "custom-sign-in",
+        "kind": "custom-sign-in",
+        "service": "auth",
+        "account": "custom",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
+        "form": False,
+        "body": {"token": "$binding:customToken", "returnSecureToken": True},
+        "resource": resource,
+    }
+    delete = {"kind": "delete", "account": "custom", "resource": resource}
+    state = {
+        "plan": {"jobs": {"job": {"observation": [operation]}}, "nonce": "a" * 32},
+        "events": [{
+            "phase": "observation",
+            "index": 0,
+            "completed": True,
+            "creationOutcome": "created",
+            "requestDigest": digest(operation),
+            "authEvidence": {
+                "kind": "custom-sign-in",
+                "account": "custom",
+                "uid": uid,
+                "resource": resource,
+                "creationOutcome": "created",
+            },
+        }],
+        "jobs": {
+            "job": {"authAccounts": {"custom": {"uid": uid, "resource": resource, "createEvent": 0}}}
+        },
+    }
+    return state, state["jobs"]["job"], delete
+
+
+def test_custom_signin_new_user_creation_projection_authorizes_exact_cleanup():
+    state, job, delete = _custom_ownership_state()
+    assert _auth_creation_ownership(state, job, delete) is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda operation: operation.update({"path": "identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"}),
+        lambda operation: operation["body"].update({"returnSecureToken": False}),
+        lambda operation: operation.update({"account": "other"}),
+    ],
+)
+def test_custom_signin_ownership_rejects_route_body_and_account_tampering(mutation):
+    state, job, delete = _custom_ownership_state()
+    mutation(state["plan"]["jobs"]["job"]["observation"][0])
+    assert _auth_creation_ownership(state, job, delete) is False
 
 
 def compete(path, key, ready, start, results, crash=False):
@@ -936,6 +993,62 @@ def test_transform_without_exists_precondition_remains_a_potential_create():
         "body": {
             "writes": [{"transform": {"document": "projects/p/databases/(default)/documents/owned/doc"}}]
         },
+    }
+    assert can_create(operation) is True
+
+
+def test_action_stage_creation_cannot_be_relabelled_as_noncreating():
+    signup = {
+        "kind": "action-stage",
+        "id": "signup-relabelled-readback",
+        "service": "auth",
+        "project": "fireemu-35fe6",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "body": {"email": "owner@example.invalid"},
+    }
+    assert can_create(signup) is True
+
+
+def test_known_action_stage_readback_is_noncreating():
+    readback = {
+        "kind": "action-stage",
+        "id": "account-a-readback",
+        "service": "auth",
+        "project": "fireemu-35fe6",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "resource": "projects/fireemu-35fe6/auth/accounts/o1-oob-" + ("a" * 32) + "-a",
+        "body": {"localId": "$binding:accountAUid"},
+    }
+    assert can_create(readback) is False
+
+
+@pytest.mark.parametrize("route", ("signUp", "import", "update", "create"))
+@pytest.mark.parametrize("identifier", ("account-a-readback", "reset-link-generate", "account-b-delete"))
+def test_action_noncreating_id_cannot_override_creation_route(route, identifier):
+    operation = {
+        "kind": "action-stage",
+        "id": identifier,
+        "service": "auth",
+        "project": "fireemu-35fe6",
+        "method": "POST",
+        "path": f"identitytoolkit.googleapis.com/v1/accounts:{route}",
+        "body": {"localId": "$binding:accountAUid"},
+    }
+    assert can_create(operation) is True
+
+
+def test_action_noncreating_route_cannot_derive_authority_from_foreign_resource():
+    operation = {
+        "kind": "action-stage",
+        "id": "account-a-readback",
+        "service": "auth",
+        "project": "fireemu-35fe6",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "resource": "projects/foreign/auth/accounts/owned",
+        "body": {"localId": "$binding:accountAUid"},
     }
     assert can_create(operation) is True
 

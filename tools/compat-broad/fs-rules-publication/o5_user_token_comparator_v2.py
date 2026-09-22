@@ -146,6 +146,13 @@ _PRODUCTION_RELEASE_NAME = re.compile(
 # The v1-shaped duplicates the collector writes under acquisition, each of
 # which must equal the canonical field it mirrors.
 _ACQUISITION_MIRRORS = ("endpoint", "observerDigest", "rulesetReleases", "wireCounts")
+_RULES_MANAGEMENT_IDS = (
+    "baseline-release-get", "baseline-ruleset-get", "baseline-executable-get",
+    "create-a", "create-a-get", "patch-a", "patch-a-get", "patch-a-executable",
+    "create-b", "create-b-get", "patch-b", "patch-b-get", "patch-b-executable",
+    "restore-patch", "restore-get", "restore-executable", "restore-get-executable",
+    "delete-a-get", "delete-a", "delete-a-absence", "delete-b-get", "delete-b", "delete-b-absence",
+)
 # Wall and monotonic clocks drift; more than this between their spans is a
 # contradiction, not drift.
 _CLOCK_TOLERANCE_SECONDS = 60.0
@@ -772,6 +779,36 @@ def _admit_actions(side: _Side, rows: list[Any] | None) -> list[dict[str, Any]]:
     return accepted
 
 
+def _admit_management_receipts(side: _Side) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    management = side.bundle.get("transport", {}).get("rulesManagement")
+    receipts = management.get("managementReceipts") if isinstance(management, Mapping) else None
+    if not isinstance(receipts, list) or len(receipts) != len(_RULES_MANAGEMENT_IDS):
+        side.fail("management-receipts:count")
+        return [], []
+    expected = ["observation:" + slot for slot in _RULES_MANAGEMENT_IDS[:13]] + [
+        "recovery:" + slot for slot in _RULES_MANAGEMENT_IDS[13:]
+    ]
+    actual: list[str] = []
+    accepted: list[dict[str, Any]] = []
+    for entry in receipts:
+        if not isinstance(entry, Mapping):
+            side.fail("management-receipts:shape")
+            continue
+        phase, slot = entry.get("phase"), entry.get("slot")
+        identity = f"{phase}:{slot}"
+        actual.append(identity)
+        if not isinstance(entry.get("endpoint"), str) or type(entry.get("wireSequence")) is not int:
+            side.fail("management-receipts:binding")
+        else:
+            _admit_endpoint(side, entry["endpoint"], "management")
+        accepted.append(dict(entry))
+    if actual != expected:
+        side.fail("management-receipts:order")
+    observation = accepted[:13]
+    recovery = accepted[13:]
+    return observation, recovery
+
+
 def _admit_transport(
     side: _Side,
     rows: list[Any] | None,
@@ -789,12 +826,18 @@ def _admit_transport(
     else:
         for endpoint in endpoints:
             _admit_endpoint(side, endpoint, "transport")
+    management_observation: list[dict[str, Any]] = []
+    management_recovery: list[dict[str, Any]] = []
+    if side.side == SIDE_PRODUCTION:
+        management_observation, management_recovery = _admit_management_receipts(side)
     # Wire sequence: every receipt carries the transport's own request counter,
-    # and the counters must increase strictly in the order the collector
-    # issued the requests: releases and rows first, recovery steps last.
+    # and the counters must increase strictly in the order the collector issued
+    # the requests. Production management records surround data work; local
+    # shadow records retain the legacy release path.
     sequenced: list[Any] = []
+    sequenced.extend(entry.get("wireSequence") for entry in management_observation)
     if rows is not None:
-        events = [(r["beforeIndex"], -2, r) for r in releases]
+        events = [] if side.side == SIDE_PRODUCTION else [(r["beforeIndex"], -2, r) for r in releases]
         events.extend((a["beforeIndex"], -1, a) for a in actions)
         events.extend((i, 0, row) for i, row in enumerate(rows))
         events.sort(key=lambda e: (e[0], e[1]))
@@ -803,6 +846,7 @@ def _admit_transport(
             for entry in events
         )
     sequenced.extend(step.get("wireSequence") for step in cleanup_steps)
+    sequenced.extend(entry.get("wireSequence") for entry in management_recovery)
     if any(type(value) is not int for value in sequenced):
         side.fail("missing-binding:wireCounts")
     elif any(b <= a for a, b in pairwise(sequenced)):

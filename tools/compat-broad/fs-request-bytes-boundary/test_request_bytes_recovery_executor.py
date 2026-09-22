@@ -64,6 +64,52 @@ def _server(owned, versions, fields):
     return server, f"http://127.0.0.1:{server.server_port}"
 
 
+def _redirect_server(target, status):
+    class RedirectHandler(BaseHTTPRequestHandler):
+        requests = 0
+
+        def do_GET(self):
+            type(self).requests += 1
+            self.send_response(status)
+            self.send_header("Location", target + "/v1/redirected")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_DELETE(self):
+            self.do_GET()
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, f"http://127.0.0.1:{server.server_port}", RedirectHandler
+
+
+def _counting_server():
+    class CountingHandler(BaseHTTPRequestHandler):
+        requests = 0
+
+        def do_GET(self):
+            type(self).requests += 1
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def do_DELETE(self):
+            self.do_GET()
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), CountingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, f"http://127.0.0.1:{server.server_port}", CountingHandler
+
+
 def _issued_fixture(tmp_path):
     o7, ledger, child_ticket, parent_plan, child_gate_plan, permission = _actual_child(tmp_path)
     inputs = issuer.freeze_inputs(
@@ -137,6 +183,33 @@ def test_real_executor_runs_85_slots_and_settles_child(tmp_path, owned_count):
     assert sum(operations_by_index[event["index"]]["kind"] == "recovery-inspection-read" and event["status"] == 404 for event in events) == 17 - owned_count
     assert sum(operations_by_index[event["index"]]["kind"] == "recovery-conditional-delete" and event["status"] == 200 for event in events) == owned_count
     assert sum(operations_by_index[event["index"]]["kind"] == "recovery-absence-read" and event["status"] == 404 for event in events) == 51
+
+
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+def test_redirect_response_is_rejected_without_following_destination(tmp_path, status):
+    _o7, ledger, child_ticket, parent_plan, child_gate_plan, permission, inputs, capability = _issued_fixture(tmp_path)
+    target_server, target_url, target_handler = _counting_server()
+    redirect_server, redirect_url, redirect_handler = _redirect_server(target_url, status)
+    try:
+        with pytest.raises(ValueError):
+            executor.execute_recovery(
+                ledger=ledger,
+                child_ticket=child_ticket,
+                canonical_parent_plan=parent_plan,
+                child_gate_plan=child_gate_plan,
+                capability=capability,
+                inputs=inputs,
+                permission=permission,
+                gate_path=tmp_path / "child-gate",
+                base_url=redirect_url,
+            )
+    finally:
+        redirect_server.shutdown()
+        redirect_server.server_close()
+        target_server.shutdown()
+        target_server.server_close()
+    assert redirect_handler.requests == 1
+    assert target_handler.requests == 0
 
 
 @pytest.mark.parametrize(

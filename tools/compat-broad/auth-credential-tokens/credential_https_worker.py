@@ -24,6 +24,7 @@ HOSTS = frozenset(
         "identitytoolkit.googleapis.com",
         "securetoken.googleapis.com",
         "iamcredentials.googleapis.com",
+        "oauth2.googleapis.com",
     }
 )
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
@@ -56,6 +57,10 @@ def validate_target(url, *, fixture):
         return parsed
     if parsed.scheme != "https" or parsed.hostname not in HOSTS or parsed.port is not None:
         raise ValueError("production host outside the allowlist")
+    if parsed.hostname == "oauth2.googleapis.com":
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        if parsed.path != "/tokeninfo" or len(query) != 1 or query[0][0] != "access_token" or not query[0][1]:
+            raise ValueError("token-info route must be exact")
     return parsed
 
 
@@ -85,7 +90,9 @@ def exchange(value, *, fixture):
     body = value["body"]
     if body is not None and (not isinstance(body, str) or len(body.encode()) > MAX_INPUT_BYTES):
         raise ValueError("bounded body required")
-    validate_target(value["url"], fixture=fixture)
+    parsed = validate_target(value["url"], fixture=fixture)
+    if not fixture and parsed.hostname == "oauth2.googleapis.com" and value["body"] is not None:
+        raise ValueError("token-info route must be GET")
     request = urllib.request.Request(
         value["url"],
         data=None if body is None else body.encode("utf-8"),

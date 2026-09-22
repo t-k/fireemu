@@ -19,6 +19,7 @@ sys.path.insert(0, str(HERE))
 
 import credential_remote_transport as remote
 from credential_gate import IDENTITY, SECURE
+import credential_https_worker as worker
 
 
 class _Echo(BaseHTTPRequestHandler):
@@ -37,6 +38,14 @@ class _Echo(BaseHTTPRequestHandler):
         if self.path.endswith(":signBlob"):
             body = {"keyId": "fixture-key", "signedBlob": base64.b64encode(b"fixture-signature").decode()}
         encoded = json.dumps(body).encode()
+        self.send_response(self.server.status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        encoded = json.dumps({"path": self.path, "email": "owner@example.test", "scope": "scope"}).encode()
         self.send_response(self.server.status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(encoded)))
@@ -138,6 +147,33 @@ def test_the_worker_refuses_any_host_outside_the_allowlist_in_production_mode() 
         )
         assert result.returncode == 2, url
         assert result.stdout == b"" and result.stderr == b""
+
+
+def test_tokeninfo_uses_only_the_documented_oauth_route() -> None:
+    exact = worker.validate_target(
+        "https://oauth2.googleapis.com/tokeninfo?access_token=opaque", fixture=False
+    )
+    assert exact.hostname == "oauth2.googleapis.com" and exact.path == "/tokeninfo"
+    for url in (
+        "https://oauth2.googleapis.com/oauth2/v1/tokeninfo?access_token=opaque",
+        "https://oauth2.googleapis.com/tokeninfo?access_token=opaque&extra=x",
+        "https://oauth2.googleapis.com/tokeninfo",
+    ):
+        with pytest.raises(ValueError, match="token-info route"):
+            worker.validate_target(url, fixture=False)
+
+
+def test_lifecycle_result_proves_worker_reaped(fixture_origin) -> None:
+    origin, _server = fixture_origin
+    result = remote.request_with_lifecycle(
+        origin + "/" + IDENTITY + "/accounts:lookup",
+        {"localId": ["u"]},
+        headers={},
+        seconds=5,
+        fixture_origin=origin,
+    )
+    assert result.status == 200
+    assert result.worker_reaped is True
 
 
 def test_the_worker_refuses_a_non_loopback_target_even_as_a_fixture_worker() -> None:

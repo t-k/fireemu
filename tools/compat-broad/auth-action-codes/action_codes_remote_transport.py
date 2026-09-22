@@ -342,18 +342,23 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
     token = handoff.get("token")
     if slot_id == "oauth-tokeninfo":
         base = fixture_origin.rstrip("/") if fixture_origin is not None else "https://oauth2.googleapis.com"
-        url = base + "/oauth2/v1/tokeninfo?access_token=" + urllib.parse.quote(token, safe="")
-        status, body = credential_remote.request(
+        url = base + "/tokeninfo?access_token=" + urllib.parse.quote(token, safe="")
+        exchange = credential_remote.request_with_lifecycle(
             url,
             None,
             headers={},
             seconds=credential_remote._seconds(deadline),
             fixture_origin=fixture_origin,
         )
+        status, body = exchange.status, exchange.body
         principal = permission["credentialPrincipal"]["subject"]
         scope = permission["credentialPrincipal"]["requiredScopes"][0]
         scopes = set(str(body.get("scope", "")).split()) if isinstance(body, dict) else set()
-        expires = body.get("expires_in") if isinstance(body, dict) else None
+        expires_value = body.get("expires_in") if isinstance(body, dict) else None
+        try:
+            expires = float(expires_value)
+        except (TypeError, ValueError):
+            expires = None
         valid = (
             status == 200
             and isinstance(body, dict)
@@ -373,19 +378,20 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
             "remainingSecondsAtVerification": expires if type(expires) in (int, float) else 0,
             "requiredSeconds": required_seconds,
             "complete": valid,
-            "workerReaped": True,
+            "workerReaped": exchange.worker_reaped,
         }
-        return {"status": status, "complete": valid, "workerReaped": True, "bodyKind": "json", "body": attestation}
+        return {"status": status, "complete": valid and exchange.worker_reaped, "workerReaped": exchange.worker_reaped, "bodyKind": "json", "body": attestation}
     if slot_id == "auth-project-readback":
         base = fixture_origin.rstrip("/") if fixture_origin is not None else "https://identitytoolkit.googleapis.com"
         url = base + "/v1/projects/" + AUTHORIZED_PROJECT + "/config"
-        status, body = credential_remote.request(
+        exchange = credential_remote.request_with_lifecycle(
             url,
             None,
             headers={"Authorization": "Bearer " + token, "x-goog-user-project": AUTHORIZED_PROJECT},
             seconds=credential_remote._seconds(deadline),
             fixture_origin=fixture_origin,
         )
+        status, body = exchange.status, exchange.body
         project_id = body.get("projectId") if isinstance(body, dict) else None
         if project_id is None and isinstance(body, dict) and isinstance(body.get("name"), str):
             project_id = body["name"].removeprefix("projects/")
@@ -393,7 +399,7 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
         return {
             "status": status,
             "complete": valid,
-            "workerReaped": True,
+            "workerReaped": exchange.worker_reaped,
             "bodyKind": "json",
             "body": {"kind": "auth-project-readback-v1", "projectId": project_id, "authorized": valid},
         }

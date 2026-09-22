@@ -57,8 +57,8 @@ class _ActionFixture(BaseHTTPRequestHandler):
             self.wfile.write(encoded)
             return
         route = self.path.split("?", 1)[0]
-        if route.endswith("/oauth2/v1/tokeninfo"):
-            response = {"email": "owner@example.test", "scope": "https://www.googleapis.com/auth/identitytoolkit", "expires_in": 600}
+        if route.endswith("/tokeninfo"):
+            response = {"email": "owner@example.test", "scope": "https://www.googleapis.com/auth/identitytoolkit", "expires_in": "600"}
         elif route.endswith("/v1/projects/fireemu-35fe6/config"):
             response = {"projectId": "fireemu-35fe6"}
         elif route.endswith("accounts:signUp"):
@@ -196,7 +196,7 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
         for row in (*frozen_plan["stages"], *frozen_plan["recovery"])
     ]
     management_paths = [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[:2]]
-    assert management_paths == ["oauth2/v1/tokeninfo", "v1/projects/fireemu-35fe6/config"]
+    assert management_paths == ["tokeninfo", "v1/projects/fireemu-35fe6/config"]
     actual_paths = [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[2:]]
     assert actual_paths == expected_paths
     assert _ActionFixture.calls[2]["body"] == {

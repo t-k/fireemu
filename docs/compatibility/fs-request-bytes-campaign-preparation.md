@@ -348,14 +348,17 @@ zero-wire skips are excluded, since they send nothing.
 
 **The published figures are a floor and not an estimate, and the record says so
 beside them.** A local shadow runs over loopback against an emulator on the same
-machine. In the published run the small-request median is 0.0010 s with a p99 of 0.0108 s, and the
-three boundary Commits ran 0.0245 s at the median. That is service time with no
-network in it at all; a production small read is an HTTPS round trip and
-will be one to two orders of magnitude higher. Citing the local p99 as a
-production per-slot figure would be wrong by that margin. It bounds the
-reservation from below and nothing more. No production observation or
-mathematical cleanup guarantee is claimed here; a real figure needs a
-production run, which the production transport can now record.
+machine. The current published b57 run records a small-request median of 0.0012
+s with a p99 of 0.0135 s, and the three boundary Commits ran 0.0269 s at the
+median. The earlier 1157/e064 run recorded 0.0010 s, 0.0108 s and 0.0245 s at
+the corresponding points; those are historical point-in-time figures, not the
+current published run. All of these are service times with no network in them at
+all; a production small read is an HTTPS round trip and will be one to two
+orders of magnitude higher. Citing a local p99 as a production per-slot figure
+would be wrong by that margin. It bounds the reservation from below and nothing
+more. No production observation or mathematical cleanup guarantee is claimed
+here; a real figure needs a production run, which the production transport can
+now record.
 
 ## Artifacts
 

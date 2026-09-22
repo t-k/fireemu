@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { digestJson, object, requireThat, sha256 } from "./core.mjs";
@@ -24,20 +24,87 @@ export function canonicalG0Origins(env) {
   return Object.fromEntries(Object.entries(validateG0Origins(env)).map(([service, host]) => [service, `http://${host}`]));
 }
 
-export function readOwnedProcessArgv(pid) {
+// Local probe limits, not OS/Firebase limits. G0 launches far fewer arguments.
+const PROCESS_ARGV_MAX_BYTES = 128 * 1024;
+const PROCESS_ARGV_MAX_COUNT = 4096;
+
+/** Decode observed arguments without dropping empty strings or inventing argv[0]. */
+export function decodeProcessArgv(raw, platform) {
+  requireThat(
+    Buffer.isBuffer(raw) && raw.length > 0 && raw.length <= PROCESS_ARGV_MAX_BYTES,
+    "g0-process-argv-invalid",
+  );
+  // A literal UTF-8 BOM belongs to an argument; never strip it or replace bad bytes.
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  if (platform === "linux") {
+    requireThat(raw.at(-1) === 0, "g0-process-argv-invalid");
+    const args = decoder.decode(raw.subarray(0, -1)).split("\0");
+    requireThat(args.length <= PROCESS_ARGV_MAX_COUNT, "g0-process-argv-invalid");
+    return args;
+  }
+  requireThat(platform === "darwin" && raw.length >= 4, "g0-process-argv-invalid");
+  const argc = raw.readInt32LE(0); // Supported macOS targets: native arm64/x64.
+  requireThat(argc > 0 && argc <= PROCESS_ARGV_MAX_COUNT, "g0-process-argv-invalid");
+  const execEnd = raw.indexOf(0, 4);
+  requireThat(execEnd > 4, "g0-process-argv-invalid");
+  // XNU exec_extract_strings pads (executable_path= + path + NUL) to the
+  // target pointer width. KERN_PROCARGS2 strips the 16-byte prefix and prepends
+  // argc. For 64-bit targets the argv area starts at this aligned offset.
+  // Do not skip arbitrary NULs: those may be leading empty arguments.
+  const pathBytes = execEnd - 4 + 1;
+  let offset = 4 + Math.ceil(pathBytes / 8) * 8;
+  requireThat(offset < raw.length, "g0-process-argv-invalid");
+  requireThat(raw.subarray(execEnd + 1, offset).every((b) => b === 0), "g0-process-argv-invalid");
+  const args = [];
+  for (let i = 0; i < argc; i++) {
+    const end = raw.indexOf(0, offset);
+    requireThat(end >= offset, "g0-process-argv-invalid");
+    args.push(decoder.decode(raw.subarray(offset, end)));
+    offset = end + 1;
+  }
+  // Bytes after argc strings may contain environment variables: never return them.
+  return args;
+}
+
+function readProcCmdline(pid) {
+  const fd = openSync(`/proc/${pid}/cmdline`, "r");
   try {
-    if (process.platform === "linux") return readFileSync(`/proc/${pid}/cmdline`).toString("utf8").split("\0").filter(Boolean);
-    if (process.platform === "darwin") {
+    const data = Buffer.alloc(PROCESS_ARGV_MAX_BYTES + 1);
+    let used = 0;
+    while (used < data.length) {
+      const count = readSync(fd, data, used, data.length - used, null);
+      if (count === 0) break;
+      used += count;
+    }
+    return data.subarray(0, used);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function readOwnedProcessArgv(pid) {
+  if (!Number.isInteger(pid) || pid <= 0 || pid > 2147483647) return null;
+  try {
+    if (process.platform === "linux") return decodeProcessArgv(readProcCmdline(pid), "linux");
+    if (process.platform === "darwin" && ["arm64", "x64"].includes(process.arch)) {
       const source = [
-        "import ctypes,json,struct,sys",
+        "import ctypes,sys",
         "pid=int(sys.argv[1]); libc=ctypes.CDLL(None); mib=(ctypes.c_int*3)(1,49,pid); size=ctypes.c_size_t(0)",
+        "libc.sysctl.argtypes=[ctypes.POINTER(ctypes.c_int),ctypes.c_uint,ctypes.c_void_p,ctypes.POINTER(ctypes.c_size_t),ctypes.c_void_p,ctypes.c_size_t]",
+        "libc.sysctl.restype=ctypes.c_int",
         "if libc.sysctl(mib,3,None,ctypes.byref(size),None,0)!=0: raise OSError()",
-        "buffer=ctypes.create_string_buffer(size.value)",
+        `if not 4 < size.value <= ${PROCESS_ARGV_MAX_BYTES}: raise ValueError()`,
+        "capacity=size.value; buffer=ctypes.create_string_buffer(capacity)",
         "if libc.sysctl(mib,3,buffer,ctypes.byref(size),None,0)!=0: raise OSError()",
-        "argc=struct.unpack_from('i',buffer.raw)[0]; parts=buffer.raw[4:].split(b'\\0'); first=parts[0]; rest=parts[1:]; start=next(i for i,value in enumerate(rest) if value); start=start+1 if rest[start]==first else start; values=[first]+rest[start:start+argc-1]",
-        "print(json.dumps([value.decode('utf-8') for value in values if value]))",
+        "if not 4 < size.value <= capacity: raise ValueError()",
+        "sys.stdout.buffer.write(buffer.raw[:size.value])",
       ].join("\n");
-      return JSON.parse(execFileSync("python3", ["-c", source, String(pid)], { encoding: "utf8", maxBuffer: 128 * 1024 }));
+      // Isolated Python; no shell, no stderr/body logging, bounded helper lifetime.
+      const raw = execFileSync("python3", ["-I", "-c", source, String(pid)], {
+        timeout: 5000, killSignal: "SIGKILL", maxBuffer: PROCESS_ARGV_MAX_BYTES,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return decodeProcessArgv(raw, "darwin");
     }
   } catch {}
   return null;

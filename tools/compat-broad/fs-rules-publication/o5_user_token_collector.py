@@ -1971,14 +1971,25 @@ def recover_owned(
     held: list[str] = []
     unconfirmed: list[str] = []
     not_attempted: list[str] = []
+    terminal: list[str] = []
+    no_effect: list[str] = []
     if ownership is not None:
         acknowledged_resources: set[str] = set()
         acknowledged_accounts: set[str] = set()
         for resource in plan["ownedResources"]:
             state = ownership.get(resource)
+            if state is None:
+                state = ownership.get("document/" + resource.rsplit("/cases/", 1)[-1])
             phase = state.get("phase") if isinstance(state, Mapping) else None
-            if phase == "acknowledged":
+            status = state.get("status") if isinstance(state, Mapping) else None
+            if phase == "acknowledged" or status == "owned":
                 acknowledged_resources.add(resource)
+            elif status == "recovered":
+                terminal.append(resource)
+            elif status == "attempted-no-effect":
+                no_effect.append(resource)
+            elif status == "not-attempted":
+                not_attempted.append(resource)
             elif phase == "creation-unconfirmed":
                 unconfirmed.append(resource)
             elif phase in {"held", "patch-uncertain"}:
@@ -1990,9 +2001,18 @@ def recover_owned(
         for entry in plan["ownedAccounts"]:
             ref = entry["ref"]
             state = ownership.get(ref)
+            if state is None:
+                state = ownership.get("account/" + ref)
             phase = state.get("phase") if isinstance(state, Mapping) else None
-            if phase == "acknowledged":
+            status = state.get("status") if isinstance(state, Mapping) else None
+            if phase == "acknowledged" or status == "owned":
                 acknowledged_accounts.add(ref)
+            elif status == "recovered":
+                terminal.append(ref)
+            elif status == "attempted-no-effect":
+                no_effect.append(ref)
+            elif status == "not-attempted":
+                not_attempted.append(ref)
             elif phase == "creation-unconfirmed":
                 unconfirmed.append(ref)
             elif phase in {"held", "patch-uncertain"}:
@@ -2018,7 +2038,7 @@ def recover_owned(
         worker_state=worker_state,
         ownership=ownership,
     )
-    result["recovered"] = [
+    result["recovered"] = terminal + [
         subject
         for subject in selected_plan["ownedResources"] + [entry["ref"] for entry in selected_plan["ownedAccounts"]]
         if subject not in result["outstandingResources"] and subject not in result["outstandingAccounts"]
@@ -2026,7 +2046,8 @@ def recover_owned(
     result["held"] = sorted(set(held + result["outstandingResources"] + result["outstandingAccounts"]))
     result["unconfirmed"] = sorted(set(unconfirmed))
     result["notAttempted"] = sorted(set(not_attempted))
-    result["cleanupComplete"] = not result["held"] and not result["unconfirmed"] and not result["notAttempted"]
+    result["attemptedNoEffect"] = sorted(set(no_effect))
+    result["cleanupComplete"] = not result["held"] and not result["unconfirmed"]
     return result
 
 

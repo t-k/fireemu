@@ -1210,14 +1210,15 @@ def _adapt_firestore_result(
         expected = prepared["path"][len("/v1/") :]
         if not isinstance(name, str) or name != expected or not isinstance(fields, dict) or not isinstance(body.get("updateTime"), str):
             raise ValueError("REST recovery Document response shape refused")
-        for value in fields.values():
-            _decode_firestore_value(value)
+        decoded_fields = {key: _decode_firestore_value(value) for key, value in fields.items()}
         return {
             "status": "OK",
             "code": 0,
             "httpStatus": status,
             "documentPresent": True,
+            "fields": decoded_fields,
             "version": body["updateTime"],
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }
@@ -1254,12 +1255,23 @@ def _adapt_firestore_result(
             )
         ):
             raise ValueError("REST Commit response shape refused")
+        effects = [
+            {
+                "index": index,
+                "writeDigest": digest(write),
+                "updateTime": result.get("updateTime"),
+                "transformResults": result.get("transformResults"),
+            }
+            for index, (write, result) in enumerate(zip(writes, write_results))
+        ]
         return {
             "status": "OK",
             "code": 0,
             "httpStatus": status,
             "documentPresent": True,
             "fields": None,
+            "effects": effects,
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }

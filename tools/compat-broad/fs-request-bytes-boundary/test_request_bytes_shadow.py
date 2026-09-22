@@ -25,6 +25,7 @@ from request_bytes_run_fixture import (
     UNTYPED_413,
     run_collector,
 )
+import request_bytes_shadow as shadow_module
 from request_bytes_shadow import classify_local_result, shadow_gates
 
 REFUSAL_400 = {
@@ -138,6 +139,121 @@ def test_classification_never_claims_production() -> None:
     verdict = classify_local_result(dict(BASELINE))
     assert verdict["productionExecuted"] is False
     assert verdict["formalCompatibilityClaim"] is False
+
+
+def test_sentinel_shadow_selector_is_separate_from_the_legacy_cli(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    calls = []
+
+    def run(output, *, sentinel=False):
+        calls.append((output, sentinel))
+        return {"status": "incomplete"}
+
+    monkeypatch.setattr(shadow_module, "run", run)
+    legacy = tmp_path / "legacy"
+    sentinel = tmp_path / "sentinel"
+    assert shadow_module.main(["--output", str(legacy)]) == 2
+    assert shadow_module.main(["--sentinel-raw-16mib-over", str(sentinel)]) == 2
+    assert calls == [(legacy, False), (sentinel, True)]
+    assert '"status": "incomplete"' in capsys.readouterr().out
+
+
+def test_sentinel_shadow_cannot_publish_a_legacy_comparison(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        shadow_module,
+        "run",
+        lambda *args, **kwargs: pytest.fail("must reject before starting the run"),
+    )
+    with pytest.raises(SystemExit) as error:
+        shadow_module.main(
+            ["--sentinel-raw-16mib-over", str(tmp_path / "sentinel"), "--publish"]
+        )
+    assert error.value.code == 2
+
+
+def test_sentinel_runner_holds_selector_for_owned_driver_and_cleans_it_up(
+    monkeypatch, tmp_path
+) -> None:
+    import types
+
+    output = tmp_path / "sentinel-run"
+    output.mkdir()
+    calls = []
+
+    def broad_run(path, **kwargs):
+        calls.append((path, kwargs, shadow_module.sentinel_selector_enabled(path)))
+        return {"status": "incomplete", "manifest": {"sourceInputs": {}}}
+
+    monkeypatch.setitem(
+        __import__("sys").modules, "broad", types.SimpleNamespace(run=broad_run)
+    )
+    monkeypatch.setattr(shadow_module, "source_inputs", lambda: {"source": "digest"})
+    shadow_module.run(output, sentinel=True)
+    assert calls[0][0] == output
+    assert (
+        calls[0][1]["child_script"]
+        == shadow_module.Path(shadow_module.__file__).resolve()
+    )
+    assert calls[0][2] is True
+    assert shadow_module.sentinel_selector_enabled(output) is False
+    binding = __import__("json").loads((output / "shadow-binding.json").read_bytes())
+    assert binding["bound"] is True
+
+
+def test_legacy_runner_does_not_select_sentinel_from_environment(monkeypatch, tmp_path) -> None:
+    import types
+
+    output = tmp_path / "legacy-run"
+    output.mkdir()
+    modes = []
+
+    def broad_run(_path, **_kwargs):
+        modes.append(shadow_module.sentinel_selector_enabled(output))
+        return {"status": "incomplete", "manifest": {"sourceInputs": {}}}
+
+    monkeypatch.setitem(
+        __import__("sys").modules, "broad", types.SimpleNamespace(run=broad_run)
+    )
+    monkeypatch.setattr(shadow_module, "source_inputs", lambda: {"source": "digest"})
+    monkeypatch.setenv("FIREEMU_REQUEST_BYTES_SHADOW_MODE", "sentinel")
+    shadow_module.run(output)
+    assert modes == [False]
+    assert __import__("os").environ["FIREEMU_REQUEST_BYTES_SHADOW_MODE"] == "sentinel"
+
+
+def test_sentinel_selection_reaches_a_child_with_the_real_sanitized_environment(
+    tmp_path,
+) -> None:
+    import os
+    import subprocess
+
+    import broad
+
+    output = tmp_path / "local-shadow"
+    marker = shadow_module.write_sentinel_selector(output)
+    child_code = (
+        "from pathlib import Path; import sys; sys.path.insert(0, sys.argv[2]); "
+        "import request_bytes_shadow as s; "
+        "print('sentinel' if s.sentinel_selector_enabled(Path(sys.argv[1])) else 'legacy')"
+    )
+    env = broad.sanitized_environment(dict(os.environ))
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            child_code,
+            str(output),
+            str(shadow_module.HERE),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert child.stdout.strip() == "sentinel"
+    shadow_module.remove_sentinel_selector(output, marker)
+    assert not marker.exists()
 
 
 def test_gates_pass_on_a_recognised_outcome_with_full_absence() -> None:

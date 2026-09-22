@@ -748,6 +748,9 @@ def test_collection_failure_after_index_apply_still_runs_reserved_recovery(
     receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
     management_ids = [row["id"] for row in receipt["managementEvidence"]]
     assert management_ids[-1] == "observation:auth"
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    assert "recovery:index-lifecycle-restored" in management_ids
     assert receipt["recoveryAttempted"] is True
     assert receipt["recoveryFailure"] == "ValueError"
     assert receipt["postflightComplete"] is False

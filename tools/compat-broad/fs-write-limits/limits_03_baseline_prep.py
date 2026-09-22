@@ -32,7 +32,7 @@ from limits_03_production import _write_receipt
 from o8_campaign import CampaignDescriptor
 from production_plan import baseline_preparation_plan
 from reservations import Ledger
-from shared_gate import Gate, create
+from shared_gate import Gate, create, validate_limits_preparation_response
 
 NONCE = re.compile(r"^[0-9a-f]{32}$")
 PREPARATION_KIND = "limits-03-baseline-preparation-v1"
@@ -51,6 +51,26 @@ def descriptor():
         manifest_kind="limits-03-preparation-o7-manifest-v1",
         campaign_seconds=300,
         recovery_seconds=120,
+        frozen_bounds={
+            "managementRequests": 6,
+            "dataRequests": 0,
+            "ownedResources": 0,
+            "costMicrousd": 600,
+            "perRequestTimeoutSeconds": 12,
+        },
+        budget={"requests": 6, "accounts": 0, "resources": 0, "costMicrousd": 600},
+        plan_compiler=preparation_plan,
+        lock_scopes=lambda plan: plan["resourceLocks"],
+        cost_model=lambda: {
+            "preparationCostMicrousd": 600,
+            "stableTaskCapMicrousd": 1_000_000,
+            "requests": 6,
+        },
+        abort_closure_sources=(
+            *campaign.ABORT_CLOSURE_SOURCES,
+            "tools/compat-broad/fs-write-limits/limits_03_baseline_prep.py",
+            "tools/compat-broad/fs-write-limits/production_plan.py",
+        ),
         binding_verifier=_verify_binding,
         transport_bound=_prep_transport,
     )
@@ -209,7 +229,15 @@ def permission_bindings(plan, *, source_commit, artifact_sha256):
         "planDigest": digest(plan),
         "wallSeconds": 300,
         "recoverySeconds": 120,
+        # This cap is cumulative across PREP, retries and the separate final
+        # observation. The exact six-request allocation below grants no data.
         "costCapMicrousd": 1_000_000,
+        "preparationLedgerBudget": {
+            "requests": 6,
+            "accounts": 0,
+            "resources": 0,
+            "costMicrousd": 600,
+        },
         "fixtureOrigin": None,
     }
 
@@ -501,7 +529,8 @@ def _run_preparation(bindings, output, handoff_fd):
                         {"slot": slot, "secret": secret, "deadline": deadline}
                     )
                     request_digests.append(raw["requestDigest"])
-                    _write_receipt(output / f"private-{slot}.json", raw)
+                    if slot not in ("refresh", "oauth-tokeninfo"):
+                        _write_receipt(output / f"private-{slot}.json", raw)
                     response = {
                         key: raw[key]
                         for key in ("status", "complete", "workerReaped", "bodyKind")
@@ -543,8 +572,12 @@ def _run_preparation(bindings, output, handoff_fd):
                         else:
                             response["body"] = _public_metadata(slot, raw)
                             values[slot] = response["body"]
+                        validate_limits_preparation_response(slot, response)
                     except (ValueError, TypeError, KeyError):
                         response["complete"] = False
+                        response["body"] = None
+                    if slot in ("refresh", "oauth-tokeninfo"):
+                        _write_receipt(output / f"credential-{slot}.json", response)
                     rows.append(
                         {
                             "id": "observation:" + slot,

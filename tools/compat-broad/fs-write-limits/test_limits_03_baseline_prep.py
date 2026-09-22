@@ -174,8 +174,43 @@ def test_real_generic_issuer_accepts_independent_prep_without_final_baselines(tm
         assert o8_admission.issued_capability(capability)
         assert "authConfigDigest" not in fixture["permission"]
         assert "databaseProjectionDigest" not in fixture["permission"]
+        assert fixture["permission"]["preparationLedgerBudget"] == {
+            "requests": 6,
+            "accounts": 0,
+            "resources": 0,
+            "costMicrousd": 600,
+        }
     finally:
         o8_admission.revoke_production_capability(capability)
+
+
+def test_prep_rejects_rehashed_four_row_plan_before_reservation(tmp_path):
+    import limits_03_baseline_prep as prep
+    from broad_contract import digest
+    from reservations import Ledger
+
+    fixture = _approved(tmp_path)
+    plan = fixture["inputs"]["plan"]
+    plan["gatePlan"]["management"]["observation"] = plan["gatePlan"]["management"][
+        "observation"
+    ][2:]
+    plan["gatePlan"]["observationRequests"] = 4
+    plan["gatePlan"]["costMicrousd"] = 400
+    fixture["inputs"]["planDigest"] = digest(plan)
+    fixture["permission"]["planDigest"] = digest(plan)
+    fixture["inputs"]["permissionDigest"] = digest(fixture["permission"])
+    fixture["inputs"]["inputsDigest"] = digest(
+        {
+            key: value
+            for key, value in fixture["inputs"].items()
+            if key != "inputsDigest"
+        }
+    )
+    ledger = Ledger(fixture["ledger_root"])
+    before = ledger.snapshot()
+    with pytest.raises(ValueError):
+        prep.approve_preparation(**fixture)
+    assert ledger.snapshot() == before
 
 
 @pytest.mark.parametrize(
@@ -507,7 +542,17 @@ def test_preparation_reserves_real_temporary_ledger_and_gate(tmp_path):
 
 @pytest.mark.parametrize(
     "fault",
-    [None, "project", "database", "auth", "key", "principal", "key-handoff", "timeout"],
+    [
+        None,
+        "project",
+        "database",
+        "auth",
+        "key",
+        "principal",
+        "key-handoff",
+        "timeout",
+        "unauthorized",
+    ],
 )
 def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path, fault):
     import limits_03_baseline_prep as prep
@@ -581,8 +626,11 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
             else:
                 body = {"name": "projects/592603257417/config", "signIn": {}}
             encoded = json.dumps(body).encode()
+            status = (
+                401 if fault == "unauthorized" and path.endswith("/config") else 200
+            )
             self.wfile.write(
-                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                f"HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\n".encode()
                 + f"Content-Length: {len(encoded)}\r\nConnection: close\r\n\r\n".encode()
                 + encoded
             )
@@ -617,6 +665,19 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         server.server_close()
         thread.join(timeout=2)
 
+    for evidence_file in (tmp_path / "run").rglob("*"):
+        if evidence_file.is_file():
+            retained = evidence_file.read_bytes()
+            assert all(
+                secret.encode() not in retained
+                for secret in (
+                    "fixture-token",
+                    "fixture-secret",
+                    "fixture-refresh",
+                    "fixture-key",
+                )
+            ), evidence_file.name
+
     if fault is not None:
         from reservations import Ledger, task_spent_microusd
 
@@ -633,6 +694,7 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
                 "key": 6,
                 "key-handoff": 0,
                 "timeout": 6,
+                "unauthorized": 5,
             }[fault]
         )
         state = Ledger(fixture["ledger_root"]).snapshot()
@@ -751,8 +813,37 @@ def _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet):
         "binding_digest": binding_digest,
     }
     capability = admission.issue_production_capability(**bindings)
+    from limits_03_production import _envelope
+    from reservations import Ledger, task_spent_microusd
+
+    gate_plan = admission.gate_plan_for(inputs, permission)
+    claim = admission.reservation_claim(
+        inputs, gate_path=tmp_path / "final-gate", gate_plan=gate_plan
+    )
+    capability._consume(
+        campaign_id=campaign.CAMPAIGN,
+        inputs_digest=inputs["inputsDigest"],
+        ledger_root=fixture["ledger_root"],
+    )
+    ledger = Ledger(fixture["ledger_root"])
+    ledger.reserve(
+        _envelope(permission, claim),
+        claim,
+        gate_plan,
+        generation=admission.abort_generation(inputs),
+    )
+    assert (
+        task_spent_microusd(ledger.snapshot(), campaign.CAMPAIGN)
+        == 600 + claim["budget"]["costMicrousd"]
+    )
     o8_admission.revoke_production_capability(capability)
-    for damage in ("missing-packet", "modified-packet", "same-nonce", "downgrade"):
+    for damage in (
+        "missing-packet",
+        "modified-packet",
+        "same-nonce",
+        "downgrade",
+        "four-rows",
+    ):
         changed = copy.deepcopy(permission)
         if damage == "missing-packet":
             del changed["baselinePreparation"]
@@ -760,6 +851,18 @@ def _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet):
             changed["baselinePreparation"]["packet"]["authConfigDigest"] = "0" * 64
         elif damage == "same-nonce":
             changed["nonce"] = packet["nonce"]
+        elif damage == "four-rows":
+            damaged_packet = changed["baselinePreparation"]["packet"]
+            for name in ("evidence", "slots", "requestDigests"):
+                damaged_packet[name] = damaged_packet[name][2:]
+            damaged_packet["chargedCalls"] = 4
+            damaged_packet["packetDigest"] = digest(
+                {
+                    key: value
+                    for key, value in damaged_packet.items()
+                    if key != "packetDigest"
+                }
+            )
         else:
             changed["kind"] = campaign.PERMISSION_KIND
             del changed["baselinePreparation"]

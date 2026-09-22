@@ -1,9 +1,11 @@
 import json
+import hashlib
 import shutil
 from pathlib import Path
 
 import pytest
 
+import request_bytes_bounded_compare as comparator
 from request_bytes_bounded_compare import ComparisonError, compare_runs
 
 
@@ -33,9 +35,119 @@ def _run(local: Path, output: Path) -> dict:
     )
 
 
+def _v3_fixture(tmp_path: Path, *, unsafe_cleanup: bool = False) -> Path:
+    from request_bytes_run_fixture import run_collector
+
+    run = tmp_path / "v3"
+    run.mkdir()
+    result = run_collector(run / "collection", over=None)
+    result_path = run / "collection/result.json"
+    if unsafe_cleanup:
+        result["resourceAbsence"] = False
+        result["cleanupSafetyComplete"] = False
+        result["failures"] = ["cleanup:final-absence:incomplete"]
+        result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    source_root = Path(__file__).resolve().parents[3]
+    source_paths = {
+        relative: hashlib.sha256((source_root / relative).read_bytes()).hexdigest()
+        for relative in (
+            "tools/compat-broad/fs-request-bytes-boundary/request_bytes_collector.py",
+            "tools/compat-broad/fs-request-bytes-boundary/request_bytes_bounded_compare.py",
+            "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py",
+            "tools/compat-broad/fs-request-bytes-boundary/request_bytes_local_transport.py",
+        )
+    }
+    expected = {
+        "kind": "requestbytes-immutable-saved-status-binding-v1",
+        "savedRun": "/private/immutable/requestbytes-production-2a1-fresh02",
+        "bodyBindings": result["localJournal"]["requestBindings"],
+        "statusByProbe": comparator.EXPECTED_STATUS,
+    }
+    (run / "immutable-expected.json").write_text(json.dumps(expected, indent=2, sort_keys=True) + "\n")
+    journal = result["localJournal"]
+    cases = {
+        "captureComplete": journal["captureComplete"],
+        "recordingComplete": not unsafe_cleanup,
+        "conditionIds": comparator.CONDITION_IDS,
+        "collectionResultSha256": hashlib.sha256(result_path.read_bytes()).hexdigest(),
+        "localJournalDigest": journal["entryDigest"],
+    }
+    (run / "cases.json").write_text(json.dumps(cases, indent=2, sort_keys=True) + "\n")
+    manifest = {
+        "partialResultSha256": hashlib.sha256((run / "cases.json").read_bytes()).hexdigest(),
+        "productionExecuted": False,
+        "productionEndpointUsed": False,
+        "formalCompatibilityClaim": False,
+        "artifactSha256": comparator.ARTIFACT_SHA256,
+        "sourceCheckoutCommit": "a" * 40,
+        "sourceModuleDigests": source_paths,
+        "ownedProcess": {"stopped": True, "listenersClosed": True},
+    }
+    (run / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    projection = {
+        "productionExecuted": False,
+        "productionEndpointUsed": False,
+        "immutableExpectedDigest": hashlib.sha256(
+            json.dumps(expected, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "actualStatusByProbe": comparator.EXPECTED_STATUS,
+        "typedFinalAbsence51": result["resourceAbsence"],
+        "legacyCollectorFailure": ["over:unexpected-success"],
+        "collectorCompleted": False,
+        "cleanupComplete": False,
+        "captureComplete": journal["captureComplete"],
+        "cleanupSafetyComplete": result["cleanupSafetyComplete"],
+        "sourceCheckoutCommit": "a" * 40,
+    }
+    (run / "v3-projection.json").write_text(json.dumps(projection, indent=2, sort_keys=True) + "\n")
+    anchor = {
+        "kind": "requestbytes-v3-local-journal-anchor-v1",
+        "producerJournal": journal,
+        "journalDigest": journal["entryDigest"],
+    }
+    (run / "local-journal-anchor.json").write_text(json.dumps(anchor, indent=2, sort_keys=True) + "\n")
+    freeze = {
+        "kind": "requestbytes-exact-replay-private-freeze-v3",
+        "localJournalFile": "local-journal-anchor.json",
+        "files": {
+            name: hashlib.sha256((run / name).read_bytes()).hexdigest()
+            for name in (
+                "manifest.json",
+                "cases.json",
+                "v3-projection.json",
+                "immutable-expected.json",
+                "collection/result.json",
+                "local-journal-anchor.json",
+            )
+        },
+    }
+    freeze_path = run / "freeze.json"
+    freeze_path.write_text(json.dumps(freeze, indent=2, sort_keys=True) + "\n")
+    return run
+
+
 def test_actual_saved_rows_produce_bounded_result(local_copy: Path, tmp_path: Path) -> None:
     with pytest.raises(ComparisonError, match="V3 local journal"):
         _run(local_copy, tmp_path / "result.json")
+
+
+def test_real_collector_journal_chain_is_accepted(tmp_path: Path) -> None:
+    run = _v3_fixture(tmp_path)
+    journal = comparator._validate_v3_capture(
+        run, run / "freeze.json", hashlib.sha256((run / "freeze.json").read_bytes()).hexdigest()
+    )
+    projection = comparator._validate_local_bindings(run, run / "immutable-expected.json")
+    assert journal["captureComplete"] is True
+    assert journal["entryDigest"]
+    assert projection["cleanupSafetyComplete"] is True
+
+
+def test_capture_without_cleanup_safety_is_refused(tmp_path: Path) -> None:
+    run = _v3_fixture(tmp_path, unsafe_cleanup=True)
+    with pytest.raises(ComparisonError, match="cleanup safety"):
+        comparator._validate_v3_capture(
+            run, run / "freeze.json", hashlib.sha256((run / "freeze.json").read_bytes()).hexdigest()
+        )
 
 
 @pytest.mark.parametrize(

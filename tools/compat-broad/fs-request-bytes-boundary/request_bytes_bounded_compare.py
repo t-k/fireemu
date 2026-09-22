@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 from typing import Any
@@ -29,11 +30,15 @@ PRODUCTION_RECEIPT_SHA256 = "10ff0f711c6b10e740d3620021f028d9ffd6891e4e5aa55dc62
 PRODUCTION_RESULT_SHA256 = "cb8ef1af7a630362b8d6b161d69dbe0b7bf2688b3fcc5ebdb0d9138cd6290450"
 PRODUCTION_GATE_STATE_SHA256 = "dda8f96ac2f8db4417dc3c56f5032467244952ef8656f627398d56e2d226afea"
 PRODUCTION_ROW_DIGEST = "0f44b5daf53e7474d1dd14865fee7404603f83dc23a1bcd2ff8740f19a105fb7"
-LOCAL_MANIFEST_SHA256 = "7afacb213758873229d3005d86791a503a468601fcc2dc1cc9f8a305fe5ee87e"
-LOCAL_PROJECTION_SHA256 = "1ab02dd1560c381b6f9987782d92b6d9850344ff1d7f805cf6d3ba282e945b19"
 FREEZE_MANIFEST_SHA256 = "9ea3479f2449244cd05ab9b62be33daf0259b357a0d837edf8357993edd3ed5b"
 PRODUCTION_RUN = "requestbytes-production-2a1-fresh02"
 RESULT_KIND = "requestbytes-bounded-response-sideeffect-comparison-v1"
+CONDITION_IDS = [
+    "FS-LIMIT-API-REQUEST-BYTES-UNDER",
+    "FS-LIMIT-API-REQUEST-BYTES-EXACT",
+    "FS-LIMIT-API-REQUEST-BYTES-OVER",
+]
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
 
 class ComparisonError(ValueError):
@@ -248,11 +253,29 @@ def _typed_not_found(collection: Path, row: dict[str, Any]) -> bool:
 
 
 def _validate_local_bindings(run: Path, immutable: Path) -> dict[str, Any]:
-    projection = _json(run / "v2-projection.json")
+    projection = _json(run / "v3-projection.json")
     manifest = _json(run / "manifest.json")
     if projection.get("immutableExpectedDigest") != _digest(_json(immutable)):
         raise ComparisonError("immutable expected digest binding")
-    if manifest.get("artifactSha256") != ARTIFACT_SHA256 or manifest.get("sourceCheckoutCommit") != HARNESS_COMMIT:
+    source_commit = manifest.get("sourceCheckoutCommit")
+    modules = manifest.get("sourceModuleDigests")
+    if (
+        manifest.get("artifactSha256") != ARTIFACT_SHA256
+        or not isinstance(source_commit, str)
+        or _COMMIT.fullmatch(source_commit) is None
+        or source_commit == HARNESS_COMMIT
+        or not isinstance(modules, dict)
+        or set(modules) != {
+            "tools/compat-broad/fs-request-bytes-boundary/request_bytes_collector.py",
+            "tools/compat-broad/fs-request-bytes-boundary/request_bytes_bounded_compare.py",
+            "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py",
+            "tools/compat-broad/fs-request-bytes-boundary/request_bytes_local_transport.py",
+        }
+        or any(
+            not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in modules.values()
+        )
+    ):
         raise ComparisonError("runtime artifact/source binding")
     if manifest.get("productionExecuted") is not False or manifest.get("productionEndpointUsed") is not False:
         raise ComparisonError("local replay production binding")
@@ -266,11 +289,57 @@ def _validate_local_bindings(run: Path, immutable: Path) -> dict[str, Any]:
         raise ComparisonError("legacy failure was altered")
     if projection.get("collectorCompleted") is not False or projection.get("cleanupComplete") is not False:
         raise ComparisonError("legacy incomplete state was altered")
+    if projection.get("captureComplete") is not True or projection.get("cleanupSafetyComplete") is not True:
+        raise ComparisonError("local cleanup safety binding")
+    if projection.get("sourceCheckoutCommit") != source_commit:
+        raise ComparisonError("projection/source commit binding")
     if manifest.get("formalCompatibilityClaim") is not False:
         raise ComparisonError("formal compatibility claim")
-    if _sha256(run / "manifest.json") != LOCAL_MANIFEST_SHA256 or _sha256(run / "v2-projection.json") != LOCAL_PROJECTION_SHA256:
-        raise ComparisonError("local frozen file binding")
     return projection
+
+
+def _journal_digest(entries: list[dict[str, Any]]) -> str:
+    encoded = json.dumps(entries, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_journal_files(run: Path, journal: dict[str, Any], expected: dict[str, Any]) -> None:
+    collection = run / "collection"
+    rows = journal.get("rowEntries")
+    sidecars = journal.get("sidecarEntries")
+    if (
+        not isinstance(rows, list)
+        or not isinstance(sidecars, list)
+        or len(rows) != 258
+        or len(sidecars) != 258
+        or [item.get("sequence") for item in rows] != list(range(258))
+    ):
+        raise ComparisonError("V3 journal sequence/count")
+    names = [item.get("name") for item in rows + sidecars]
+    if any(not isinstance(name, str) or Path(name).name != name for name in names) or len(set(names)) != len(names):
+        raise ComparisonError("V3 journal filename coverage")
+    for entry in rows + sidecars:
+        if type(entry.get("bytes")) is not int or not isinstance(entry.get("sha256"), str):
+            raise ComparisonError("V3 journal entry shape")
+        path = _regular_child(collection, entry["name"])
+        data = path.read_bytes()
+        if len(data) != entry["bytes"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
+            raise ComparisonError(f"V3 journal byte binding: {entry['name']}")
+    sidecar_names = {entry["name"] for entry in sidecars}
+    referenced = set()
+    for entry in rows:
+        row = _json(collection / entry["name"])
+        sidecar = row.get("responseBodyFile")
+        if not isinstance(sidecar, str) or sidecar not in sidecar_names:
+            raise ComparisonError("V3 row/sidecar coverage")
+        referenced.add(sidecar)
+    if referenced != sidecar_names:
+        raise ComparisonError("V3 sidecar reference coverage")
+    if journal.get("entryDigest") != _journal_digest(rows + sidecars):
+        raise ComparisonError("V3 journal digest")
+    bindings = journal.get("requestBindings")
+    if bindings != expected.get("bodyBindings"):
+        raise ComparisonError("V3 request binding")
 
 
 def _validate_v3_capture(run: Path, freeze: Path, freeze_sha256: str) -> dict[str, Any]:
@@ -280,14 +349,25 @@ def _validate_v3_capture(run: Path, freeze: Path, freeze_sha256: str) -> dict[st
     if frozen.get("kind") != "requestbytes-exact-replay-private-freeze-v3":
         raise ComparisonError("V3 freeze kind")
     files = frozen.get("files")
-    if not isinstance(files, dict) or not files:
+    required_files = {
+        "manifest.json",
+        "cases.json",
+        "v3-projection.json",
+        "immutable-expected.json",
+        "collection/result.json",
+        "local-journal-anchor.json",
+    }
+    if not isinstance(files, dict) or set(files) != required_files:
         raise ComparisonError("V3 freeze files")
     for relative, expected in files.items():
         path = _regular_child(run, relative)
         if _sha256(path) != expected:
             raise ComparisonError(f"V3 frozen file changed: {relative}")
     journal_path = _regular_child(run, frozen.get("localJournalFile", ""))
-    journal = _json(journal_path)
+    anchor = _json(journal_path)
+    journal = anchor.get("producerJournal")
+    if not isinstance(journal, dict):
+        raise ComparisonError("V3 producer journal missing")
     result_path = _regular_child(run, "collection/result.json")
     result = _json(result_path)
     if result.get("localJournal") != journal:
@@ -300,16 +380,23 @@ def _validate_v3_capture(run: Path, freeze: Path, freeze_sha256: str) -> dict[st
         raise ComparisonError("V3 supervisor/cases binding")
     if cases.get("collectionResultSha256") != _sha256(result_path) or cases.get("localJournalDigest") != journal.get("entryDigest"):
         raise ComparisonError("V3 cases/journal binding")
-    if cases.get("captureComplete") is not True or cases.get("conditionIds") != [
-        "FS-LIMIT-API-REQUEST-BYTES-UNDER",
-        "FS-LIMIT-API-REQUEST-BYTES-EXACT",
-        "FS-LIMIT-API-REQUEST-BYTES-OVER",
-    ]:
+    if cases.get("captureComplete") is not True or cases.get("conditionIds") != CONDITION_IDS:
         raise ComparisonError("V3 cases contract")
-    if manifest.get("productionExecuted") is not False or manifest.get("ownedProcess", {}).get("stopped") is not True or manifest.get("ownedProcess", {}).get("listenersClosed") is not True:
+    if (
+        manifest.get("productionExecuted") is not False
+        or manifest.get("productionEndpointUsed") is not False
+        or manifest.get("ownedProcess", {}).get("stopped") is not True
+        or manifest.get("ownedProcess", {}).get("listenersClosed") is not True
+    ):
         raise ComparisonError("V3 process/production closure")
-    if manifest.get("artifactSha256") != ARTIFACT_SHA256 or manifest.get("sourceCheckoutCommit") == HARNESS_COMMIT:
-        raise ComparisonError("V3 runtime/harness binding")
+    if result.get("productionExecuted") is not False or result.get("localOnly") is not True:
+        raise ComparisonError("V3 result production binding")
+    expected = _json(_regular_child(run, "immutable-expected.json"))
+    _validate_journal_files(run, journal, expected)
+    if result.get("cleanupSafetyComplete") is not True or result.get("resourceAbsence") is not True:
+        raise ComparisonError("V3 cleanup safety")
+    if cases.get("recordingComplete") is not True:
+        raise ComparisonError("V3 supervisor recording binding")
     return journal
 
 
@@ -379,7 +466,7 @@ def compare_runs(
         raise ComparisonError("anchored production row journal changed")
     production = {probe: _probe_result(production_run, probe) for probe in PROBES}
     local = {probe: _probe_result(local_run, probe) for probe in PROBES}
-    _validate_local_bindings(local_run, immutable)
+    local_projection = _validate_local_bindings(local_run, immutable)
     for probe in PROBES:
         for result in (production[probe], local[probe]):
             if result["requestBytes"] != EXPECTED_BODY_BYTES[probe] or result["requestSha256"] != EXPECTED_BODY_SHA256[probe]:
@@ -409,7 +496,7 @@ def compare_runs(
         "localRun": str(local_run),
         "immutableExpectedSha256": IMMUTABLE_EXPECTED_SHA256,
         "artifactSha256": ARTIFACT_SHA256,
-        "sourceCheckoutCommit": HARNESS_COMMIT,
+        "sourceCheckoutCommit": local_projection["sourceCheckoutCommit"],
         "bodyBindings": {
             probe: {"bytes": EXPECTED_BODY_BYTES[probe], "sha256": EXPECTED_BODY_SHA256[probe]}
             for probe in PROBES
@@ -423,7 +510,7 @@ def compare_runs(
         },
         "localEvidence": {
             "manifestSha256": _sha256(local_run / "manifest.json"),
-            "projectionSha256": _sha256(local_run / "v2-projection.json"),
+            "projectionSha256": _sha256(local_run / "v3-projection.json"),
         },
     }
     output.parent.mkdir(parents=True, exist_ok=True)

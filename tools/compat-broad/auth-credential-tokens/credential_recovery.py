@@ -40,6 +40,7 @@ SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 MAX_DEADLINE_SECONDS = 60
 CHILD_BUDGET = {"requests": 1, "accounts": 1, "resources": 1, "costMicrousd": 50_000}
+APPROVED_CHILD_SOURCE_EXTENSION = "recovery.py"
 HOST = {"platform": platform.system().lower(), "machine": platform.machine()}
 
 
@@ -95,6 +96,19 @@ def _validate_generation(value: Mapping[str, Any], field: str = "generation") ->
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name):
             _refuse(f"{field} source name differs")
         _sha(value_hash, f"{field} source")
+
+
+def _validate_generation_transition(parent: Mapping[str, Any], child: Mapping[str, Any]) -> None:
+    if child["sourceCommit"] != parent["sourceCommit"]:
+        _refuse("child source generation must retain parent source commit")
+    parent_sources = parent["sourceDigests"]
+    child_sources = child["sourceDigests"]
+    if any(child_sources.get(name) != value_hash for name, value_hash in parent_sources.items()):
+        _refuse("child source generation must retain parent source closure")
+    if set(child_sources) - set(parent_sources) != {APPROVED_CHILD_SOURCE_EXTENSION}:
+        _refuse("child source generation contains an unapproved extension")
+    if child_sources[APPROVED_CHILD_SOURCE_EXTENSION] != child["collectorSourceDigest"]:
+        _refuse("approved child source extension is not collector-bound")
 
 
 def _parent_evidence(gate: Mapping[str, Any], job: str, index: int, operation: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
@@ -300,12 +314,9 @@ def compile_recovery_plan(parent: Mapping[str, Any], *, recovery_nonce: str, pro
     if provenance_value["sourceCommit"] != snapshot["sourceCommit"]:
         _refuse("source commit must remain immutable-parent-linked")
     child_generation = provenance_value["generation"]
-    if child_generation == parent_generation or child_generation["sourceCommit"] != parent_generation["sourceCommit"]:
+    if child_generation == parent_generation:
         _refuse("child source generation must advance parent")
-    parent_sources = parent_generation["sourceDigests"]
-    child_sources = child_generation["sourceDigests"]
-    if any(child_sources.get(name) != value_hash for name, value_hash in parent_sources.items()) or set(child_sources) <= set(parent_sources):
-        _refuse("child source generation must retain and extend parent closure")
+    _validate_generation_transition(parent_generation, child_generation)
     resource = snapshot["resource"]
     operation = _operation(resource)
     gate_plan = {"campaignId": CAMPAIGN, "project": PROJECT, "nonce": recovery_nonce, "observationRequests": 0, "dataRequests": 1, "managementRequests": 0, "recoveryRequests": 1, "requestCostMicrousd": 1, "costMicrousd": 1, "wallSeconds": deadline_seconds, "jobs": {GATE_JOB: {"observation": [], "recovery": [operation], "resources": [resource], "accountBindings": {"custom": {"resource": resource, "uidBinding": "customUid"}}, "schedule": [{"phase": "recovery", "index": 0, "seconds": 5.0}]}}}
@@ -339,6 +350,7 @@ def _validate_child_source_binding(plan: Mapping[str, Any], snapshot: Mapping[st
     generation = provenance.get("generation") if isinstance(provenance, Mapping) else None
     if not isinstance(provenance, Mapping) or provenance.get("sourceCommit") != snapshot["sourceCommit"] or not isinstance(generation, Mapping) or generation.get("sourceCommit") != snapshot["sourceCommit"]:
         _refuse("child source commit must remain immutable-parent-linked")
+    _validate_generation_transition(snapshot["generation"], generation)
 
 
 def validate_plan(plan: Mapping[str, Any], parent: Mapping[str, Any]) -> dict[str, Any]:

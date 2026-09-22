@@ -170,6 +170,31 @@ def test_detached_child_source_commit_cannot_bypass_immutable_parent_binding() -
         recovery.validate_plan(tampered, parent)
 
 
+@pytest.mark.parametrize("mutation", ["replace", "remove", "extra"])
+def test_child_source_closure_rejects_unapproved_mutations_at_validation(mutation: str) -> None:
+    parent, plan, _permission, _o7, _o8 = _plan()
+    tampered = copy.deepcopy(plan)
+    sources = tampered["provenance"]["generation"]["sourceDigests"]
+    if mutation == "replace":
+        sources["worker.py"] = "c" * 64
+    elif mutation == "remove":
+        del sources["transport.py"]
+    else:
+        sources["unapproved.py"] = "d" * 64
+    tampered["planDigest"] = digest(recovery._stable_plan(tampered))
+    with pytest.raises(recovery.RecoveryRefusal, match="source closure|generation"):
+        recovery.validate_plan(tampered, parent)
+
+
+def test_child_source_closure_accepts_only_the_approved_recovery_extension() -> None:
+    parent, plan, _permission, _o7, _o8 = _plan()
+    assert recovery.validate_plan(plan, parent)["provenance"]["generation"]["sourceDigests"] == {
+        "worker.py": "a" * 64,
+        "transport.py": "b" * 64,
+        "recovery.py": "f" * 64,
+    }
+
+
 class _Ledger:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple, dict]] = []

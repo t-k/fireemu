@@ -863,6 +863,23 @@ def test_auth_recovery_rejects_lookup_route_escape(tmp_path, path):
         )
 
 
+def test_auth_recovery_rejects_gate_cost_above_child_budget(tmp_path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, _resource, _ = _auth_recovery_fixture(tmp_path)
+    expensive_plan = copy.deepcopy(child_plan)
+    expensive_plan["costMicrousd"] = 100_000
+    expensive_plan["requestCostMicrousd"] = 100_000
+    expensive_child = copy.deepcopy(child)
+    expensive_child["manifestDigest"] = digest(expensive_plan)
+    expensive_child["gatePlanDigest"] = digest(expensive_plan)
+    with pytest.raises(ValueError, match="Auth recovery Gate cost exceeds child budget"):
+        ledger.begin_auth_recovery_extension(
+            parent, expensive_child, envelope, expensive_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+            parent_evidence=evidence, now=1000,
+        )
+
+
 def test_auth_recovery_rejects_parent_change_between_gate_check_and_append(tmp_path, monkeypatch):
     ledger, parent, child, envelope, child_plan, bindings, evidence, _resource, _ = _auth_recovery_fixture(tmp_path)
     original_snapshot = reservations.Gate.snapshot

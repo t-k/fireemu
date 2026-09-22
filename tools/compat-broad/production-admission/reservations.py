@@ -930,6 +930,13 @@ def _auth_recovery_plan(child_plan, child_claim):
         if child_plan.get(field) != child_claim[field]:
             raise ValueError("Auth recovery Gate authority binding changed")
     if (
+        child_plan.get("costMicrousd") != child_claim["budget"]["costMicrousd"]
+        or child_plan.get("requestCostMicrousd") != child_claim["budget"]["costMicrousd"]
+        or child_plan.get("fixedCostMicrousd", 0) != 0
+        or child_plan.get("coordinatorRequests", 0) != 0
+    ):
+        raise ValueError("Auth recovery Gate cost exceeds child budget")
+    if (
         child_plan.get("observationRequests") != 0
         or child_plan.get("dataRequests") != 1
         or child_plan.get("managementRequests") != 0

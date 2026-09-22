@@ -97,6 +97,39 @@ DEFAULT_FIELD_BODY = {
 TOKEN = "offline-fixture-token"
 
 
+def _assert_lifecycle_operation(slot, operation, lifecycle_ops):
+    """Bind the fixture to the exact Firestore REST operation shape."""
+    assert isinstance(operation, dict)
+    expected_route = preflight.LIFECYCLE_ROUTE
+    expected_mask_route = expected_route + "?updateMask=indexConfig"
+    if slot in {"index-lifecycle-before", "index-lifecycle-after", "index-lifecycle-restored"}:
+        assert operation == {"method": "GET", "route": expected_route, "body": None}
+    elif slot == "index-lifecycle-apply":
+        assert operation == {
+            "method": "PATCH",
+            "route": expected_mask_route,
+            "body": {"name": preflight.LIFECYCLE_FIELD, "indexConfig": {"indexes": []}},
+        }
+    elif slot == "index-lifecycle-restore":
+        assert operation == {
+            "method": "PATCH",
+            "route": expected_mask_route,
+            "body": {"name": preflight.LIFECYCLE_FIELD},
+        }
+    elif slot == "index-lifecycle-poll":
+        assert operation == {
+            "method": "GET",
+            "route": "https://firestore.googleapis.com/v1/" + lifecycle_ops["apply"],
+            "body": None,
+        }
+    elif slot == "index-lifecycle-poll-restore":
+        assert operation == {
+            "method": "GET",
+            "route": "https://firestore.googleapis.com/v1/" + lifecycle_ops["restore"],
+            "body": None,
+        }
+
+
 class Clock:
     def __init__(self):
         self.now = 1000.0
@@ -127,8 +160,10 @@ def offline(monkeypatch):
     monkeypatch.setattr(preflight.shared, "time", clock)
     monkeypatch.setattr(production, "time", clock)
 
-    def management_fixture(slot, token, **_kwargs):
+    def management_fixture(slot, token, *, operation=None, **_kwargs):
         assert token == TOKEN
+        if slot.startswith("index-lifecycle-"):
+            _assert_lifecycle_operation(slot, operation, lifecycle_ops)
         body = {
             "project": PROJECT_BODY,
             "database": DATABASE_BODY,
@@ -447,6 +482,27 @@ def test_the_descriptor_is_complete_and_its_figures_come_from_the_compiler():
     )
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda operation: {**operation, "route": operation["route"].replace("firestore", "other")},
+        lambda operation: {**operation, "body": {"name": preflight.LIFECYCLE_FIELD}},
+    ],
+)
+def test_lifecycle_fixture_rejects_wrong_route_or_patch_body(mutation):
+    operation = {
+        "method": "PATCH",
+        "route": preflight.LIFECYCLE_ROUTE + "?updateMask=indexConfig",
+        "body": {"name": preflight.LIFECYCLE_FIELD, "indexConfig": {"indexes": []}},
+    }
+    with pytest.raises(AssertionError):
+        _assert_lifecycle_operation(
+            "index-lifecycle-apply",
+            mutation(operation),
+            {"apply": "projects/fireemu-35fe6/databases/(default)/operations/op-apply", "restore": "projects/fireemu-35fe6/databases/(default)/operations/op-restore"},
+        )
+
+
 def test_the_figures_do_not_depend_on_the_nonce():
     for nonce in ("1" * 32, "f" * 32):
         plan = compiler_03.compile_limits_plan(campaign.PROJECT, "(default)", nonce)
@@ -477,12 +533,12 @@ def test_the_gate_charges_management_around_the_schedule():
         "oauth-tokeninfo",
         "project",
         "database",
-        "index-exemption",
-        "auth",
         "index-lifecycle-before",
         "index-lifecycle-apply",
         "index-lifecycle-poll",
         "index-lifecycle-after",
+        "index-exemption",
+        "auth",
     ]
     assert [slot["id"] for slot in gate["management"]["recovery"]] == [
         "project",
@@ -676,8 +732,8 @@ def _run_full(built, tmp_path, monkeypatch):
         "observation:oauth-tokeninfo",
         "observation:project",
         "observation:database",
-        "observation:index-exemption",
-        "observation:auth",
+        "observation:index-lifecycle-before",
+        "observation:index-lifecycle-apply",
     ]
     assert TOKEN not in (output / "receipt.json").read_text()
     assert receipt["collection"]["expectationMismatches"] == []
@@ -730,6 +786,91 @@ def test_a_full_run_finishes_the_gate_and_releases_the_temporary_ledger(
         production.verify_saved(
             output, expected_inputs_digest="0" * 64, ledger_root=built.ledger
         )
+
+
+def test_collection_failure_after_index_apply_still_runs_reserved_recovery(
+    built, tmp_path, monkeypatch
+):
+    calls, _responder = wire_fixture(monkeypatch)
+
+    def fail_after_preflight(*_args, **_kwargs):
+        raise RuntimeError("collector fixture failure")
+
+    monkeypatch.setattr(production, "collect", fail_after_preflight)
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] == "RuntimeError"
+    assert calls == []
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert "observation:auth" in management_ids
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    assert "recovery:index-lifecycle-restored" in management_ids
+    assert management_ids[-1] == "recovery:index-lifecycle-restored"
+    assert receipt["recoveryAttempted"] is True
+    assert receipt["recoveryFailure"] is None
+    assert receipt["postflightComplete"] is True
+    assert receipt["reservationStateAtPublication"] == "held"
+
+
+def test_incomplete_collection_enters_reserved_recovery_and_reads_restored_state(
+    built, tmp_path, monkeypatch
+):
+    calls, _responder = wire_fixture(monkeypatch)
+
+    def incomplete_collection(*_args, **_kwargs):
+        return {"collectionComplete": False, "cleanupComplete": False}
+
+    monkeypatch.setattr(production, "collect", incomplete_collection)
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] == "ValueError"
+    assert calls == []
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    assert management_ids[-1] == "recovery:index-lifecycle-restored"
+    assert receipt["recoveryAttempted"] is True
+    assert receipt["recoveryFailure"] is None
+    assert receipt["postflightComplete"] is True
+    assert receipt["reservationStateAtPublication"] == "held"
+
+
+def test_restore_readback_failure_is_held_after_actual_recovery_attempt(
+    built, tmp_path, monkeypatch
+):
+    """A failed REC readback leaves the real reservation held."""
+    wire_fixture(monkeypatch)
+    original_transport = preflight.management_transport
+
+    def corrupt_restored_readback(slot, token, **kwargs):
+        response = original_transport(slot, token, **kwargs)
+        if slot == "index-lifecycle-restored":
+            response = copy.deepcopy(response)
+            response["body"] = copy.deepcopy(response["body"])
+            response["body"]["indexConfig"]["usesAncestorConfig"] = False
+        return response
+
+    monkeypatch.setattr(preflight, "management_transport", corrupt_restored_readback)
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] == "ValueError"
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    restored = next(
+        row
+        for row in receipt["managementEvidence"]
+        if row["id"] == "recovery:index-lifecycle-restored"
+    )
+    assert restored["response"]["body"]["indexConfig"]["usesAncestorConfig"] is False
+    assert receipt["recoveryAttempted"] is True
+    assert receipt["recoveryFailure"] == "ValueError"
+    assert receipt["postflightComplete"] is False
+    assert receipt["reservationStateAtPublication"] == "held"
 
 
 def test_head_gate_settles_the_malformed_item_batch(
@@ -800,6 +941,44 @@ def test_a_lost_create_response_is_never_retired_as_no_data(
         receipt["ticket"]["reservation"]
     ]
     assert row["state"] == "held"
+
+
+def test_a_real_incomplete_collector_restores_index_before_holding(
+    built, tmp_path, monkeypatch
+):
+    """A real DATA event still attempts REC before retaining ownership."""
+    calls, _responder = wire_fixture(monkeypatch, fault="create")
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] in ("RuntimeError", "ValueError")
+    assert any(op["method"] in ("PATCH", "POST") for _, _, op in calls)
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    assert "recovery:index-lifecycle-restored" in management_ids
+    assert receipt["postflightComplete"] is True
+    assert receipt["reservationStateAtPublication"] == "held"
+
+
+def test_a_real_cleanup_complete_mismatch_restores_index_before_holding(
+    built, tmp_path, monkeypatch, gate_accounts_the_empty_batch_item
+):
+    """A real DATA mismatch with completed cleanup still performs REC."""
+    calls, responder = wire_fixture(monkeypatch, fault="mismatch")
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["failure"] in ("RuntimeError", "ValueError")
+    assert responder.documents == {}
+    assert any(op["method"] in ("PATCH", "POST") for _, _, op in calls)
+    receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
+    assert receipt["collection"]["cleanupComplete"] is True
+    management_ids = [row["id"] for row in receipt["managementEvidence"]]
+    assert "recovery:index-lifecycle-restore" in management_ids
+    assert "recovery:index-lifecycle-poll-restore" in management_ids
+    assert management_ids[-1] == "recovery:index-lifecycle-restored"
+    assert receipt["postflightComplete"] is True
+    assert receipt["reservationStateAtPublication"] == "held"
 
 
 def test_a_stop_after_a_create_recovers_exactly_the_created_documents(

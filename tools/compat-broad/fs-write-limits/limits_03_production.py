@@ -163,6 +163,8 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
     result = None
     failure = None
     ready = False
+    recovery_attempted = False
+    recovery_failure = None
     snapshot = None
     management = None
     # The collector's Gate binding compares the created Gate's jobs with the
@@ -208,7 +210,12 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
                     gate.cancel_management_observation()
                 else:
                     gate.abort_management_observation()
-                management.run("recovery")
+                recovery_attempted = True
+                try:
+                    management.run("recovery")
+                except Exception as recovery_error:
+                    recovery_failure = type(recovery_error).__name__
+                    raise
             except Exception as recovery_error:  # noqa: BLE001 -- retain the reservation.
                 failure = type(recovery_error).__name__
             else:
@@ -259,12 +266,35 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         if failure is None:
             result = collect(gate, collector_plan, output / "collection", execute_wire)
             if result.get("collectionComplete") and result.get("cleanupComplete"):
-                management.run("recovery")
+                recovery_attempted = True
+                try:
+                    management.run("recovery")
+                except Exception as recovery_error:
+                    recovery_failure = type(recovery_error).__name__
+                    raise
                 ready = not management.lifecycle_failed
             else:
                 failure = "collection-incomplete"
+                raise ValueError("collection incomplete")
     except Exception as error:  # noqa: BLE001 -- preserve only a secret-free failure class.
         failure = type(error).__name__
+        if (
+            management is not None
+            and not recovery_attempted
+            and not management.postflight_complete
+            and (
+                management.preflight_complete
+                or "after" in getattr(management, "_lifecycle", {})
+            )
+        ):
+            recovery_attempted = True
+            try:
+                if not gate.snapshot().get("events"):
+                    gate.cancel_management_observation()
+                management.run("recovery")
+            except Exception as recovery_error:  # noqa: BLE001 -- retain held responsibility.
+                recovery_failure = type(recovery_error).__name__
+                failure = type(recovery_error).__name__
     finally:
         admission.revoke_production_capability(capability)
     if gate is not None:
@@ -308,6 +338,8 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         chargedCalls=snapshot["total"] if snapshot else 0,
         credentialEvidence=management.credential_evidence if management else [],
         managementEvidence=management.evidence if management else [],
+        recoveryAttempted=recovery_attempted,
+        recoveryFailure=recovery_failure,
         preflightComplete=bool(management and management.preflight_complete),
         postflightComplete=bool(management and management.postflight_complete),
         createdResources=created,

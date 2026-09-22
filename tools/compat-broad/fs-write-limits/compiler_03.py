@@ -1423,12 +1423,12 @@ MANAGEMENT_OBSERVATION_IDS = (
     "oauth-tokeninfo",
     "project",
     "database",
-    "index-exemption",
-    "auth",
     "index-lifecycle-before",
     "index-lifecycle-apply",
     "index-lifecycle-poll",
     "index-lifecycle-after",
+    "index-exemption",
+    "auth",
 )
 MANAGEMENT_RECOVERY_IDS = (
     "project",

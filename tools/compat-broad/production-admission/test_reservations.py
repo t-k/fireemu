@@ -48,6 +48,398 @@ def envelope():
     }
 
 
+def preparation_response(slot):
+    from batch_contract import DATABASE_PROJECTION
+
+    project = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+    projection = {
+        "name": "projects/fireemu-35fe6/databases/(default)", "uid": "fixture-database-uid",
+        "databaseEdition": "STANDARD", "type": "FIRESTORE_NATIVE", "locationId": "us-central1",
+    }
+    parent = "projects/592603257417/locations/global"
+    values = {
+        "project": project,
+        "database": {"projection": projection, "projectionDigest": digest({**projection, "concurrencyMode": "PESSIMISTIC"}), "identityProjectionDigest": digest(projection), "responseDigest": digest({**projection, "concurrencyMode": "PESSIMISTIC"}), "contractDigest": digest(DATABASE_PROJECTION)},
+        "auth": {"name": "projects/592603257417/config"},
+        "key": {"parent": parent, "name": parent + "/keys/fixture-key-id"},
+    }
+    if slot == "refresh":
+        body = {"kind": "limits-03-preparation-refresh-v1", "expiresInSeconds": 1200, "authorizedUserDigest": digest("authorized-user")}
+    elif slot == "oauth-tokeninfo":
+        body = token_attestation()
+    else:
+        body = {"kind": "limits-03-preparation-metadata-v1", "slot": slot, "responseDigest": digest(values[slot]), "value": values[slot]}
+        if slot == "database":
+            body["responseDigest"] = values[slot]["responseDigest"]
+    return {"status": 200, "complete": True, "workerReaped": True, "bodyKind": "json", "body": body}
+
+
+def _preparation_worker(gate_path, gate_plan, queue, fail=False):
+    create(gate_path, gate_plan)
+    gate = Gate(gate_path, "limits")
+    gate.claim()
+    rows = []
+    for slot in gate_plan["management"]["observation"]:
+        response = preparation_response(slot["id"])
+        if fail and slot["id"] == "key":
+            response = {"status": None, "complete": False, "workerReaped": True, "bodyKind": None, "body": None}
+        gate.management_dispatch("observation", slot["id"], lambda _deadline, response=response: response)
+        rows.append({"id": "observation:" + slot["id"], "response": response, "responseDigest": digest(response)})
+    if not fail:
+        gate.finish()
+    queue.put(rows)
+
+
+def preparation_reservation(tmp_path):
+    from test_shared_gate import limits_preparation_plan
+
+    value = limits_preparation_plan()
+    value["permissionDigest"] = "a" * 64
+    now = time.time()
+    value["permissionExpiresAt"] = now + value["wallSeconds"]
+    permission = envelope()
+    permission.update(issuedAt=now - 1, expiresAt=now + 600)
+    row = {
+        "campaignId": "FS-WRITE-LIMITS-03", "manifestDigest": digest("prep"),
+        "nonceDigest": digest(value["nonce"]), "gatePath": str((tmp_path / "run" / "gate").resolve()),
+        "gatePlanDigest": digest(value), "locks": [{"key": "project/p/config", "mode": "READ"}],
+        "budget": {"requests": 6, "accounts": 0, "resources": 0, "costMicrousd": 600},
+        "durationSeconds": value["wallSeconds"],
+    }
+    generation = {key: value[key] for key in ("sourceCommit", "collectorSourceDigest", "sourceDigests")}
+    ledger = Ledger.create(tmp_path / "ledger")
+    ticket = ledger.reserve(permission, row, value, generation=generation, now=now)
+    return ledger, ticket, row, value, generation
+
+
+def preparation_terminal(tmp_path, *, fail=False):
+    ledger, ticket, row, value, generation = preparation_reservation(tmp_path)
+    context = multiprocessing.get_context("spawn")
+    queue = context.Queue()
+    child = context.Process(target=_preparation_worker, args=(row["gatePath"], value, queue, fail))
+    child.start()
+    rows = queue.get(timeout=15)
+    child.join(15)
+    assert child.exitcode == 0
+    queue.close()
+    gate = Gate(row["gatePath"], "limits").snapshot()
+    collection = {
+        "kind": "limits-03-baseline-preparation-v1", "campaignId": "FS-WRITE-LIMITS-03",
+        "preparationId": value["nonce"], "nonce": value["nonce"], "permissionDigest": value["permissionDigest"],
+        "sourceCommit": generation["sourceCommit"], "sourceDigest": generation["collectorSourceDigest"],
+        "manifestDigest": digest("approved-manifest"), "ticketDigest": digest(ticket), "claimDigest": ticket["claimDigest"],
+        "ownerIdentityDigest": digest("owner"), "principalDigest": token_attestation()["principalDigest"],
+        "issuedAt": time.time() - 300, "expiresAt": value["permissionExpiresAt"],
+        "slots": gate["managementUsed"], "evidence": gate["managementEvents"],
+        "requestDigests": [digest({"slot": slot}) for slot in value["management"]["observation"]],
+        "chargedCalls": 6, "costMicrousd": 600, "completed": True, "failed": False, "failureClass": None,
+        "project": preparation_response("project")["body"]["value"],
+        "database": preparation_response("database")["body"]["value"],
+        "authConfigDigest": preparation_response("auth")["body"]["responseDigest"],
+        "apiKey": preparation_response("key")["body"],
+    }
+    collection["packetDigest"] = digest(collection)
+    receipt = {
+        "kind": value["receiptKind"], "ticket": ticket, "claimDigest": ticket["claimDigest"],
+        "planDigest": digest(value), "gateDigest": digest(gate), "generation": generation,
+        "reservationStateAtPublication": "held", "executionKind": "fixed-production-wire",
+        "releaseEligible": True, "failure": None, "chargedCalls": 6, "ownedResources": [],
+        "collection": collection, "managementEvidence": rows,
+    }
+    path = Path(row["gatePath"]).parent / "receipt.json"
+    path.write_text(json.dumps(receipt))
+    record = {
+        "kind": "limits-03-baseline-preparation-release-v1", "ticket": ticket,
+        "receiptPath": str(path), "receiptDigest": digest(receipt),
+        "gateDigest": digest(gate), "collectionDigest": digest(receipt["collection"]),
+        "generation": generation,
+    }
+    return ledger, ticket, record
+
+
+def test_limits_preparation_terminal_releases_real_exited_worker_and_keeps_cost(tmp_path):
+    ledger, ticket, record = preparation_terminal(tmp_path)
+    ledger.attach_evidence(ticket, record["receiptDigest"], record["gateDigest"], record["collectionDigest"])
+    result = ledger.finish_limits_preparation(ticket, record)
+    assert result["state"] == "released"
+    assert ledger.finish_limits_preparation(ticket, record) == result
+    state = ledger.snapshot()
+    assert state["reservations"][ticket["reservation"]]["claim"]["budget"]["costMicrousd"] == 600
+    assert state["envelopes"][ticket["envelopeDigest"]]["allocated"]["costMicrousd"] == 600
+
+
+@pytest.mark.parametrize("target", ["refresh", "oauth-tokeninfo", "project", "database", "auth", "key", "project-value", "database-projection", "auth-value", "key-value", "collection", "collection-project", "collection-database", "collection-event", "receipt"])
+def test_limits_preparation_refuses_rebound_secret_fields_without_release(tmp_path, target):
+    ledger, ticket, record = preparation_terminal(tmp_path)
+    gate = Gate(ledger.bound_claim(ticket)["gatePath"], "limits")
+    path = Path(record["receiptPath"])
+    receipt = json.loads(path.read_text())
+    with gate.locked() as state:
+        if target == "receipt":
+            destination = receipt
+        elif target.startswith("collection"):
+            destination = receipt["collection"]
+            if target == "collection-project":
+                destination = destination["project"]
+            elif target == "collection-database":
+                destination = destination["database"]["projection"]
+            elif target == "collection-event":
+                destination = destination["evidence"][0]
+                state["managementEvents"][0]["access_token"] = "SECRET"
+        else:
+            slot = target.split("-", 1)[0] if target.endswith(("-value", "-projection")) else target
+            index = next(index for index, row in enumerate(receipt["managementEvidence"]) if row["id"] == "observation:" + slot)
+            item = receipt["managementEvidence"][index]
+            destination = item["response"]["body"]
+            if target.endswith("-value"):
+                destination = destination["value"]
+            elif target == "database-projection":
+                destination = destination["value"]["projection"]
+        destination["access_token"] = "SECRET"
+        if not target.startswith("collection") and target != "receipt":
+            item["responseDigest"] = digest(item["response"])
+            state["managementEvents"][index]["responseDigest"] = item["responseDigest"]
+            state["managementEvents"][index]["bodyDigest"] = digest(item["response"]["body"])
+            receipt["collection"]["evidence"] = state["managementEvents"]
+        _save(gate.path, state)
+    receipt["gateDigest"] = digest(state)
+    receipt["collection"]["packetDigest"] = digest({key: value for key, value in receipt["collection"].items() if key != "packetDigest"})
+    path.write_text(json.dumps(receipt))
+    record.update(receiptDigest=digest(receipt), gateDigest=digest(state), collectionDigest=digest(receipt["collection"]))
+    ledger.attach_evidence(ticket, record["receiptDigest"], record["gateDigest"], record["collectionDigest"])
+    before = ledger.snapshot()
+    before_gate = gate.snapshot()
+    with pytest.raises(ValueError):
+        ledger.finish_limits_preparation(ticket, record)
+    assert ledger.snapshot() == before
+    assert gate.snapshot() == before_gate
+
+
+def test_limits_preparation_dispatch_never_persists_raw_refresh_response(tmp_path):
+    ledger, ticket, row, value, _generation = preparation_reservation(tmp_path)
+    create(row["gatePath"], value)
+    gate = Gate(row["gatePath"], "limits")
+    gate.claim()
+    response = preparation_response("refresh")
+    response["body"]["access_token"] = "SECRET"
+    with pytest.raises(ValueError, match="sanitized refresh"):
+        gate.management_dispatch("observation", "refresh", lambda _deadline: response)
+    state = gate.snapshot()
+    assert state["total"] == 1
+    assert state["managementEvents"][0]["completed"] is False
+    assert "SECRET" not in (gate.path / "state.json").read_text()
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
+
+
+def test_limits_preparation_cannot_use_generic_finish(tmp_path):
+    ledger, ticket, _record = preparation_terminal(tmp_path)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError):
+        ledger.finish(ticket)
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("fault", [
+    "live-worker", "unknown-worker", "unreaped", "partial", "http-error",
+    "inflight", "data", "resource", "cost", "generation", "nonce", "deadline",
+    "response", "receipt-kind", "unattached", "wrong-collection", "wrong-ticket", "late-event",
+])
+def test_limits_preparation_terminal_refusal_preserves_reservation(tmp_path, fault):
+    ledger, ticket, record = preparation_terminal(tmp_path)
+    row = ledger.bound_claim(ticket)
+    gate = Gate(row["gatePath"], "limits")
+    with gate.locked() as state:
+        if fault == "live-worker":
+            state["coordinatorPid"] = os.getpid()
+        elif fault == "unknown-worker":
+            state["coordinatorPid"] = None
+        elif fault == "unreaped":
+            state["managementEvents"][-1]["workerReaped"] = False
+        elif fault == "partial":
+            state["managementUsed"].pop()
+            state["managementEvents"].pop()
+        elif fault == "http-error":
+            state["managementEvents"][-1]["status"] = 500
+        elif fault == "inflight":
+            state["coordinatorInflight"] = True
+        elif fault == "data":
+            state["events"].append({"phase": "observation"})
+        elif fault == "resource":
+            state["jobs"]["limits"]["owned"] = ["forged"]
+        elif fault == "cost":
+            state["costMicrousd"] = 500
+        elif fault == "nonce":
+            state["plan"]["nonce"] = "9" * 32
+            state["planDigest"] = digest(state["plan"])
+        elif fault == "deadline":
+            state["plan"]["permissionExpiresAt"] += 100
+            state["planDigest"] = digest(state["plan"])
+        elif fault == "late-event":
+            state["managementEvents"][-1]["ended"] = state["managementEvents"][-1]["deadline"] + 1
+        _save(gate.path, state)
+    record["gateDigest"] = digest(state)
+    path = Path(record["receiptPath"])
+    receipt = json.loads(path.read_text())
+    receipt["gateDigest"] = record["gateDigest"]
+    if fault == "generation":
+        record["generation"]["collectorSourceDigest"] = "f" * 64
+        receipt["generation"] = record["generation"]
+    elif fault == "response":
+        receipt["managementEvidence"][-1]["response"]["body"] = {"forged": True}
+        receipt["managementEvidence"][-1]["responseDigest"] = digest(receipt["managementEvidence"][-1]["response"])
+    elif fault == "receipt-kind":
+        receipt["kind"] = "limits-03-production-receipt-v1"
+    elif fault == "wrong-collection":
+        receipt["collection"] = {"forged": True}
+    elif fault == "wrong-ticket":
+        receipt["ticket"] = {**ticket, "reservation": "0" * 64}
+    path.write_text(json.dumps(receipt))
+    record["receiptDigest"] = digest(receipt)
+    if fault != "unattached":
+        ledger.attach_evidence(ticket, record["receiptDigest"], record["gateDigest"], record["collectionDigest"])
+    before = ledger.snapshot()
+    before_gate = (gate.path / "state.json").read_bytes()
+    with pytest.raises(ValueError):
+        ledger.finish_limits_preparation(ticket, record)
+    assert ledger.snapshot() == before
+    assert (gate.path / "state.json").read_bytes() == before_gate
+
+
+def preparation_failure_terminal(tmp_path):
+    ledger, ticket, release_record = preparation_terminal(tmp_path, fail=True)
+    row = ledger.bound_claim(ticket)
+    gate = Gate(row["gatePath"], "limits").snapshot()
+    path = Path(release_record["receiptPath"])
+    old_receipt = json.loads(path.read_text())
+    responses = [(item["id"], item["response"]) for item in old_receipt["managementEvidence"]]
+    receipt = request_bytes_receipt(
+        gate, ticket, row["gatePlanDigest"], responses,
+        kind="limits-03-baseline-preparation-receipt-v1",
+        generation=release_record["generation"], failure="WorkerTimeout",
+        credentialEvidence=[response["body"] for identity, response in responses if identity == "observation:oauth-tokeninfo"],
+    )
+    path.write_text(json.dumps(receipt))
+    record = {
+        "kind": "shared-no-data-abort-v1", "ticket": ticket,
+        "planDigest": row["gatePlanDigest"], "gateDigest": digest(gate),
+        "receiptPath": str(path), "receiptDigest": digest(receipt), **release_record["generation"],
+    }
+    return ledger, ticket, record
+
+
+def test_limits_preparation_real_failure_uses_truthful_no_data_abort(tmp_path):
+    ledger, ticket, record = preparation_failure_terminal(tmp_path)
+    ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "aborted-no-data"
+    assert ledger.snapshot()["envelopes"][ticket["envelopeDigest"]]["allocated"]["costMicrousd"] == 600
+
+
+@pytest.mark.parametrize("fault", ["unreaped", "live-worker", "missing-worker", "false-failure"])
+def test_limits_preparation_failed_unknown_worker_retains_held_state(tmp_path, fault):
+    ledger, ticket, record = preparation_failure_terminal(tmp_path)
+    gate = Gate(ledger.bound_claim(ticket)["gatePath"], "limits")
+    path = Path(record["receiptPath"])
+    receipt = json.loads(path.read_text())
+    with gate.locked() as state:
+        if fault == "unreaped":
+            state["coordinatorInflight"] = True
+            state["managementEvents"][-1]["workerReaped"] = False
+            item = receipt["managementEvidence"][-1]
+            item["response"]["workerReaped"] = False
+            item["responseDigest"] = digest(item["response"])
+            state["managementEvents"][-1]["responseDigest"] = item["responseDigest"]
+        elif fault == "live-worker":
+            state["coordinatorPid"] = os.getpid()
+        elif fault == "missing-worker":
+            state["coordinatorPid"] = None
+        else:
+            receipt["failure"] = None
+        _save(gate.path, state)
+    receipt["gateDigest"] = digest(state)
+    record["gateDigest"] = digest(state)
+    record["receiptDigest"] = digest(receipt)
+    path.write_text(json.dumps(receipt))
+    before = ledger.snapshot()
+    gate_before = gate.snapshot()
+    with pytest.raises(ValueError):
+        ledger.abort_no_data(ticket, record)
+    assert ledger.snapshot() == before
+    assert gate.snapshot() == gate_before
+
+
+@pytest.mark.parametrize("fault", ["campaign", "resources", "requests", "generation", "lock", "deadline", "slot"])
+def test_limits_preparation_reservation_is_exact_and_atomic(tmp_path, fault):
+    _ledger, _ticket, row, value, generation = preparation_reservation(tmp_path)
+    fresh = Ledger.create(tmp_path / "fresh-ledger")
+    permission = envelope()
+    permission.update(issuedAt=time.time() - 1, expiresAt=time.time() + 600)
+    if fault == "campaign":
+        row["campaignId"] = "FS-DATA-WRITE-LIMITS-02"
+    elif fault == "resources":
+        row["budget"]["resources"] = 1
+    elif fault == "requests":
+        row["budget"]["requests"] = 7
+    elif fault == "generation":
+        generation["sourceCommit"] = "f" * 40
+    elif fault == "lock":
+        row["locks"][0]["mode"] = "WRITE"
+    elif fault == "deadline":
+        value["permissionExpiresAt"] += 600
+    elif fault == "slot":
+        value["management"]["observation"][-1]["id"] = "apply"
+    row["gatePlanDigest"] = digest(value)
+    before = fresh.snapshot()
+    with pytest.raises(ValueError):
+        fresh.reserve(permission, row, value, generation=generation)
+    assert fresh.snapshot() == before
+
+
+def test_limits_preparation_released_nonce_cannot_be_reused(tmp_path):
+    ledger, ticket, record = preparation_terminal(tmp_path)
+    ledger.attach_evidence(ticket, record["receiptDigest"], record["gateDigest"], record["collectionDigest"])
+    ledger.finish_limits_preparation(ticket, record)
+    row = ledger.bound_claim(ticket)
+    value = Gate(row["gatePath"], "limits").snapshot()["plan"]
+    row["gatePath"] = str((tmp_path / "replayed-gate").resolve())
+    permission = envelope()
+    permission.update(issuedAt=time.time() - 1, expiresAt=time.time() + 600, permissionDigest="e" * 64)
+    value["permissionDigest"] = permission["permissionDigest"]
+    row["gatePlanDigest"] = digest(value)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="reuse"):
+        ledger.reserve(permission, row, value, generation=record["generation"])
+    assert ledger.snapshot() == before
+
+
+def test_limits_preparation_and_final_observation_share_one_dollar_cap(tmp_path):
+    ledger, ticket, record = preparation_terminal(tmp_path)
+    ledger.attach_evidence(ticket, record["receiptDigest"], record["gateDigest"], record["collectionDigest"])
+    ledger.finish_limits_preparation(ticket, record)
+    final_plan = plan("b")
+    final_claim = claim(tmp_path, "b")
+    final_claim["campaignId"] = "FS-WRITE-LIMITS-03"
+    final_claim["budget"]["costMicrousd"] = 999_401
+    permission = envelope()
+    permission["permissionDigest"] = "e" * 64
+    permission["limits"]["costMicrousd"] = 2_000_000
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="task-budget-exceeded"):
+        ledger.reserve(permission, final_claim, final_plan, now=1100)
+    assert ledger.snapshot() == before
+    final_claim["budget"]["costMicrousd"] = 999_400
+    ledger.reserve(permission, final_claim, final_plan, now=1100)
+    retry_plan = plan("c")
+    retry_claim = claim(tmp_path, "c")
+    retry_claim["campaignId"] = "FS-WRITE-LIMITS-03"
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="task-budget-exceeded"):
+        ledger.reserve(permission, retry_claim, retry_plan, now=1100)
+    assert ledger.snapshot() == before
+    from reservations import task_budget_check
+    with pytest.raises(ValueError, match="task-budget-exceeded"):
+        task_budget_check(before, "FS-WRITE-LIMITS-03", 1)
+
+
 def plan(label="a"):
     operation = {
         "service": "firestore",

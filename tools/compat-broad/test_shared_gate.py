@@ -5,16 +5,16 @@ import os
 from urllib.parse import quote
 
 import pytest
+from broad_contract import digest
 from shared_gate import (
     Gate,
+    _auth_creation_ownership,
     body_reference,
     can_create,
     canonical_body_bytes,
     create,
     unconfirmed_creates,
 )
-from shared_gate import _auth_creation_ownership
-from broad_contract import digest
 
 
 def plan():
@@ -39,6 +39,81 @@ def plan():
             for k in ("a", "b")
         },
     }
+
+
+def limits_preparation_plan():
+    import time
+
+    return {
+        "contract": "shared-local-v2",
+        "transport": "limits-03-baseline-preparation-v2",
+        "receiptKind": "limits-03-baseline-preparation-receipt-v1",
+        "campaignId": "FS-WRITE-LIMITS-03",
+        "nonce": "a" * 32,
+        "sourceCommit": "b" * 40,
+        "collectorSourceDigest": "c" * 64,
+        "sourceDigests": {"worker.py": "d" * 64},
+        "permissionExpiresAt": time.time() + 600,
+        "wallSeconds": 180,
+        "recoverySeconds": 30,
+        "observationRequests": 6,
+        "costMicrousd": 600,
+        "requestCostMicrousd": 100,
+        "intervalSeconds": 0.25,
+        "jobs": {"limits": {
+            "resources": [], "observation": [], "recovery": [], "schedule": [],
+        }},
+        "management": {
+            "dispatchKind": "closed-v1",
+            "credentialIds": ["oauth-tokeninfo"],
+            "credentialSlots": ["oauth-tokeninfo"],
+            "observation": [
+                {"id": slot, "timeout": 12}
+                for slot in ("refresh", "oauth-tokeninfo", "project", "database", "auth", "key")
+            ],
+            "recovery": [],
+        },
+    }
+
+
+def test_limits_preparation_allows_only_typed_empty_data_plan(tmp_path):
+    value = limits_preparation_plan()
+    create(tmp_path / "gate", value)
+    gate = Gate(tmp_path / "gate", "limits")
+    gate.claim()
+    before = gate.snapshot()
+    with pytest.raises(ValueError):
+        gate.finish()
+    assert gate.snapshot() == before
+    with pytest.raises(ValueError):
+        gate.dispatch(plan()["jobs"]["a"]["observation"][0], False, lambda: pytest.fail("no data"))
+    assert gate.snapshot() == before
+
+
+@pytest.mark.parametrize("fault", ["untyped", "campaign", "receipt", "slot", "order", "recovery", "data", "resource", "cost"])
+def test_limits_preparation_rejects_mixed_contract_before_creation(tmp_path, fault):
+    value = limits_preparation_plan()
+    if fault == "untyped":
+        value.pop("transport")
+    elif fault == "campaign":
+        value["campaignId"] = "FS-DATA-WRITE-LIMITS-02"
+    elif fault == "receipt":
+        value["receiptKind"] = "limits-03-production-receipt-v1"
+    elif fault == "slot":
+        value["management"]["observation"][-1]["id"] = "index-lifecycle-apply"
+    elif fault == "order":
+        value["management"]["observation"].reverse()
+    elif fault == "recovery":
+        value["management"]["recovery"] = [{"id": "restore", "timeout": 12}]
+    elif fault == "data":
+        value["jobs"]["limits"]["observation"] = plan()["jobs"]["a"]["observation"]
+    elif fault == "resource":
+        value["jobs"]["limits"]["resources"] = ["fake"]
+    elif fault == "cost":
+        value["costMicrousd"] = 601
+    with pytest.raises(ValueError):
+        create(tmp_path / "gate", value)
+    assert not (tmp_path / "gate").exists()
 
 
 def _custom_ownership_state(*, uid="custom-uid", resource="projects/p/auth/accounts/custom"):

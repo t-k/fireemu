@@ -834,19 +834,93 @@ def _admit_transport(
     # and the counters must increase strictly in the order the collector issued
     # the requests. Production management records surround data work; local
     # shadow records retain the legacy release path.
-    sequenced: list[Any] = []
-    sequenced.extend(entry.get("wireSequence") for entry in management_observation)
-    if rows is not None:
-        events = [] if side.side == SIDE_PRODUCTION else [(r["beforeIndex"], -2, r) for r in releases]
-        events.extend((a["beforeIndex"], -1, a) for a in actions)
-        events.extend((i, 0, row) for i, row in enumerate(rows))
-        events.sort(key=lambda e: (e[0], e[1]))
-        sequenced.extend(
-            entry[2].get("wireSequence") if isinstance(entry[2], Mapping) else None
-            for entry in events
+    # The production collector interleaves management and data work: the A
+    # lifecycle prefix precedes row zero, the B prefix is emitted at its
+    # compiled transition boundary, and recovery follows cleanup.  The old
+    # comparator concatenated all management receipts before all rows, which
+    # rejected the collector's genuine wire sequence (1..8, 9..41, 42..46).
+    # Build the compiled event order first, then compare the transport's
+    # sequence numbers in that order.  Sorting receipts by sequence would hide
+    # a receipt attached to the wrong event, so only the sequence values are
+    # used to validate the already-derived event order.
+    events: list[tuple[str, Any]] = []
+    if side.side == SIDE_PRODUCTION:
+        boundary = next(
+            (release.get("beforeIndex") for release in releases if release.get("label") == "B"),
+            0,
         )
-    sequenced.extend(step.get("wireSequence") for step in cleanup_steps)
-    sequenced.extend(entry.get("wireSequence") for entry in management_recovery)
+        for entry in management_observation:
+            slot = entry.get("slot")
+            events.append((f"management:{entry.get('phase')}:{slot}", entry.get("wireSequence")))
+        # Move the B prefix to its compiled boundary without relying on a
+        # caller-supplied order field.
+        prefix = [
+            event
+            for event in events
+            if ":create-b" not in event[0] and ":patch-b" not in event[0]
+        ]
+        suffix = [event for event in events if event not in prefix]
+        ordered_management = prefix + suffix
+        events = []
+        for event in ordered_management:
+            events.append(event)
+        if rows is not None:
+            # Rebuild around the first B management slot. The compiled Rules
+            # transition is the only management/data boundary.
+            before_b = next(
+                (
+                    i
+                    for i, event in enumerate(ordered_management)
+                    if ":create-b" in event[0]
+                ),
+                len(ordered_management),
+            )
+            events = ordered_management[:before_b]
+            data_events: list[tuple[int, int, str, Any]] = []
+            for i, row in enumerate(rows):
+                data_events.append(
+                    (
+                        i,
+                        0,
+                        f"row:{i}",
+                        row.get("wireSequence") if isinstance(row, Mapping) else None,
+                    )
+                )
+            for action in actions:
+                data_events.append(
+                    (
+                        action.get("beforeIndex", -1),
+                        -1,
+                        f"action:{action.get('ref')}",
+                        action.get("wireSequence"),
+                    )
+                )
+            data_events.sort(key=lambda event: (event[0], event[1]))
+            events.extend((label, sequence) for index, _, label, sequence in data_events if index < boundary)
+            events.extend(ordered_management[before_b:])
+            events.extend((label, sequence) for index, _, label, sequence in data_events if index >= boundary)
+    else:
+        if rows is not None:
+            data_events = [(i, 0, f"row:{i}", row.get("wireSequence") if isinstance(row, Mapping) else None) for i, row in enumerate(rows)]
+            data_events.extend((a.get("beforeIndex", -1), -1, f"action:{a.get('ref')}", a.get("wireSequence")) for a in actions)
+            data_events.extend((r.get("beforeIndex", -1), -2, f"release:{r.get('label')}", r.get("wireSequence")) for r in releases)
+            data_events.sort(key=lambda event: (event[0], event[1]))
+            events.extend((label, sequence) for _, _, label, sequence in data_events)
+    events.extend(
+        (
+            f"cleanup:{step.get('kind')}:{step.get('resource', step.get('accountRef'))}",
+            step.get("wireSequence"),
+        )
+        for step in cleanup_steps
+    )
+    events.extend(
+        (
+            f"management:{entry.get('phase')}:{entry.get('slot')}",
+            entry.get("wireSequence"),
+        )
+        for entry in management_recovery
+    )
+    sequenced = [sequence for _, sequence in events]
     if any(type(value) is not int for value in sequenced):
         side.fail("missing-binding:wireCounts")
     elif any(b <= a for a, b in pairwise(sequenced)):

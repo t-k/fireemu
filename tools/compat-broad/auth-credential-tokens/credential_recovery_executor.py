@@ -16,8 +16,10 @@ import copy
 import hashlib
 import json
 import os
+import re
 import select
 import stat
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
@@ -40,15 +42,19 @@ from broad_contract import digest
 MAX_HANDOFF_BYTES = 16 * 1024
 HANDOFF_FIELDS = frozenset({"token", "apiKey"})
 PACKET_KIND = prepare.PACKET_KIND
-EXECUTOR_ENTRY = "tools/compat-broad/auth-credential-tokens/credential_recovery_executor.py"
+EXECUTOR_ENTRY = (
+    "tools/compat-broad/auth-credential-tokens/credential_recovery_executor.py"
+)
 RUNTIME_CLOSURE = (
     EXECUTOR_ENTRY,
     "tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py",
     "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
     "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
+    recovery.WORKER_ENTRY,
     "tools/compat-broad/shared_gate.py",
     "tools/compat-broad/production-admission/reservations.py",
 )
+EXECUTION_SOURCE_KIND = "auth-recovery-executor-source-v1"
 
 
 def _refuse(reason: str) -> None:
@@ -60,24 +66,66 @@ def _same(left: Any, right: Any, reason: str) -> None:
         _refuse(reason)
 
 
-def _verify_runtime_closure(provenance: Mapping[str, Any], source_root: Path) -> None:
-    """Require the executing runtime and clean reviewed checkout to be identical."""
-    source_inputs = provenance.get("sourceInputs")
-    if not isinstance(source_inputs, Mapping):
-        _refuse("reviewed runtime source closure required")
+def _verify_runtime_closure(
+    execution_source: Mapping[str, Any], execution_root: Path
+) -> None:
+    """Require the running executor and separate reviewed child checkout to match."""
+    if (
+        not isinstance(execution_source, Mapping)
+        or set(execution_source)
+        != {"kind", "sourceCommit", "sourceInputs", "sourceInputsDigest"}
+        or execution_source.get("kind") != EXECUTION_SOURCE_KIND
+        or not isinstance(execution_source.get("sourceCommit"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", execution_source["sourceCommit"]) is None
+        or execution_source.get("sourceInputsDigest")
+        != digest(execution_source.get("sourceInputs"))
+    ):
+        _refuse("reviewed executor source closure required")
+    source_inputs = execution_source.get("sourceInputs")
+    if not isinstance(source_inputs, Mapping) or set(source_inputs) != set(
+        RUNTIME_CLOSURE
+    ):
+        _refuse("reviewed executor source closure required")
+    if execution_root.is_symlink() or not execution_root.is_dir():
+        _refuse("reviewed executor source checkout required")
+    try:
+        actual_commit = subprocess.check_output(
+            ["git", "-C", str(execution_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        dirty = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(execution_root),
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        _refuse("reviewed executor source checkout required")
+    if actual_commit != execution_source["sourceCommit"] or dirty:
+        _refuse("reviewed executor source checkout differs")
     for relative in RUNTIME_CLOSURE:
         expected = source_inputs.get(relative)
-        if not isinstance(expected, str):
-            _refuse("reviewed runtime source closure required")
-        approved = source_root / relative
+        if (
+            not isinstance(expected, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected) is None
+        ):
+            _refuse("reviewed executor source closure required")
+        approved = execution_root / relative
         running = ROOT / relative
         try:
             approved_digest = hashlib.sha256(approved.read_bytes()).hexdigest()
             running_digest = hashlib.sha256(running.read_bytes()).hexdigest()
         except OSError:
-            _refuse("reviewed runtime source closure required")
+            _refuse("reviewed executor source closure required")
         if approved_digest != expected or running_digest != expected:
-            _refuse("reviewed runtime source closure differs")
+            _refuse("reviewed executor source closure differs")
 
 
 def read_private_handoff(fd: int) -> dict[str, str]:
@@ -145,8 +193,17 @@ def _validate_packet(
     parent: Mapping[str, Any],
     ledger: Any,
     source_root: Path,
+    execution_root: Path,
     now: float,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+]:
     if (
         not isinstance(packet, Mapping)
         or packet.get("kind") != PACKET_KIND
@@ -158,8 +215,16 @@ def _validate_packet(
     try:
         canonical_parent, state = prepare._reconstruct_parent(parent, ledger)
         parent_snapshot = recovery._parent_snapshot(canonical_parent)
-        _same(packet.get("immutableParent"), canonical_parent.get("immutableParent"), "immutable parent changed")
-        _same(packet.get("parentEvidence"), parent_snapshot["evidence"], "parent evidence changed")
+        _same(
+            packet.get("immutableParent"),
+            canonical_parent.get("immutableParent"),
+            "immutable parent changed",
+        )
+        _same(
+            packet.get("parentEvidence"),
+            parent_snapshot["evidence"],
+            "parent evidence changed",
+        )
         plan = packet.get("plan")
         if not isinstance(plan, Mapping):
             _refuse("recovery plan required")
@@ -170,7 +235,8 @@ def _validate_packet(
             parent_snapshot["sourceCommit"],
             parent_snapshot["generation"],
         )
-        _verify_runtime_closure(packet["plan"]["provenance"], source_root)
+        execution_source = packet.get("executionSource")
+        _verify_runtime_closure(execution_source, execution_root)
         prepare._assert_fresh_nonce(ledger, plan["recoveryNonce"], state)
         permission, o7, o8, _reviews = prepare._validate_reviewed_authorities(
             plan,
@@ -182,15 +248,36 @@ def _validate_packet(
             packet.get("o8Review"),
             now=now,
         )
-        _same(packet.get("permission"), permission, "permission review evidence changed")
+        _same(
+            packet.get("permission"), permission, "permission review evidence changed"
+        )
         _same(packet.get("o7"), o7, "O7 review evidence changed")
         _same(packet.get("o8"), o8, "O8 review evidence changed")
+        execution_source_digest = digest(execution_source)
+        for authority in (permission, o7, o8):
+            _same(
+                authority.get("executionSourceDigest"),
+                execution_source_digest,
+                "reviewed executor source binding changed",
+            )
         parent_claim_digest = canonical_parent["claim"].get(
             "claimDigest", digest(canonical_parent["claim"])
         )
-        _same(plan["parent"].get("ticketDigest"), digest(canonical_parent["ticket"]), "parent ticket binding changed")
-        _same(plan["parent"].get("claimDigest"), parent_claim_digest, "parent claim binding changed")
-        _same(canonical_parent["ticket"].get("claimDigest"), parent_claim_digest, "parent ticket claim binding changed")
+        _same(
+            plan["parent"].get("ticketDigest"),
+            digest(canonical_parent["ticket"]),
+            "parent ticket binding changed",
+        )
+        _same(
+            plan["parent"].get("claimDigest"),
+            parent_claim_digest,
+            "parent claim binding changed",
+        )
+        _same(
+            canonical_parent["ticket"].get("claimDigest"),
+            parent_claim_digest,
+            "parent ticket claim binding changed",
+        )
         owner_identity = permission.get("ownerIdentity")
         recovery_owner = permission.get("recoveryOwner")
         if (
@@ -201,7 +288,11 @@ def _validate_packet(
             or owner_identity == recovery_owner
         ):
             _refuse("reviewed recovery owner identities required")
-        _same(permission.get("parentClaimDigest"), parent_claim_digest, "permission parent binding changed")
+        _same(
+            permission.get("parentClaimDigest"),
+            parent_claim_digest,
+            "permission parent binding changed",
+        )
         return (
             copy.deepcopy(dict(canonical_parent)),
             copy.deepcopy(dict(parent_snapshot)),
@@ -209,6 +300,7 @@ def _validate_packet(
             copy.deepcopy(dict(permission)),
             copy.deepcopy(dict(o7)),
             copy.deepcopy(dict(o8)),
+            copy.deepcopy(dict(execution_source)),
         )
     except recovery.RecoveryRefusal:
         raise
@@ -310,6 +402,7 @@ def execute_recovery(
     parent: Mapping[str, Any],
     ledger: Any,
     source_root: Path,
+    execution_root: Path,
     credential_fd: int,
     gate_path: Path,
     now: float | None = None,
@@ -328,16 +421,28 @@ def execute_recovery(
     decision_now = clock() if now is None else now
     if type(decision_now) not in (int, float):
         _refuse("finite recovery execution time required")
-    canonical_parent, _parent_snapshot_value, plan, permission, o7, o8 = _validate_packet(
+    (
+        canonical_parent,
+        _parent_snapshot_value,
+        plan,
+        permission,
+        o7,
+        o8,
+        _execution_source,
+    ) = _validate_packet(
         packet,
         parent=parent,
         ledger=ledger,
         source_root=source_root,
+        execution_root=execution_root,
         now=float(decision_now),
     )
     destination = Path(gate_path)
     if destination.exists() or destination.is_symlink():
         _refuse("new recovery Gate path required")
+    allocation_now = float(clock())
+    if allocation_now >= float(plan["deadlineAt"]):
+        _refuse("recovery deadline expired")
     child_ticket = recovery.begin_child(
         ledger,
         parent_ticket=canonical_parent["ticket"],
@@ -349,12 +454,10 @@ def execute_recovery(
         gate_path=str(destination),
         owner_identity=permission["ownerIdentity"],
         recovery_owner=permission["recoveryOwner"],
-        now=decision_now,
+        now=allocation_now,
     )
     try:
-        child_gate_plan = _bound_child_gate_plan(
-            plan, o7=o7, o8=o8, now=float(decision_now)
-        )
+        child_gate_plan = _bound_child_gate_plan(plan, o7=o7, o8=o8, now=allocation_now)
         shared_gate.create(destination, child_gate_plan)
         gate = shared_gate.Gate(destination, recovery.GATE_JOB)
         gate.claim()
@@ -392,6 +495,8 @@ def execute_recovery(
         if type(status) is not int or status != 200 or response != expected:
             _refuse("typed-empty Auth recovery response required")
         gate.finish()
+        if float(clock()) >= float(plan["deadlineAt"]) or time.monotonic() >= deadline:
+            _refuse("recovery request deadline expired")
         final_gate = gate.snapshot()
         receipt = {
             "kind": "auth-credential-recovery-worker-receipt-v1",
@@ -429,11 +534,14 @@ def execute_recovery(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Execute one reviewed Auth packet05 recovery child.")
+    parser = argparse.ArgumentParser(
+        description="Execute one reviewed Auth packet05 recovery child."
+    )
     parser.add_argument("--packet", type=Path, required=True)
     parser.add_argument("--parent", type=Path, required=True)
     parser.add_argument("--ledger", type=Path, required=True)
     parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--execution-source", type=Path, required=True)
     parser.add_argument("--gate", type=Path, required=True)
     parser.add_argument("--credential-fd", type=int, required=True)
     return parser
@@ -450,13 +558,17 @@ def main(argv: list[str] | None = None) -> int:
             parent=parent,
             ledger=ledger,
             source_root=args.source,
+            execution_root=args.execution_source,
             credential_fd=args.credential_fd,
             gate_path=args.gate,
         )
     except SystemExit:
         raise
     except Exception as error:  # noqa: BLE001 -- commander output is secret-free.
-        print(f"AUTH-CREDENTIAL packet05 recovery held ({type(error).__name__}).", file=sys.stderr)
+        print(
+            f"AUTH-CREDENTIAL packet05 recovery held ({type(error).__name__}).",
+            file=sys.stderr,
+        )
         return 1
     print("AUTH-CREDENTIAL packet05 recovery closed after typed-empty lookup.")
     return 0 if result.get("settlement") == "closed-after-auth-recovery-child" else 1

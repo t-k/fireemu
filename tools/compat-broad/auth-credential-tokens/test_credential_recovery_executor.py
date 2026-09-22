@@ -24,6 +24,8 @@ sys.path.insert(0, str(HERE.parent))
 
 import credential_recovery as recovery
 import credential_recovery_executor as executor
+import reservations
+import shared_gate
 from broad_contract import digest
 from test_credential_recovery_prepare import (
     _ledger_parent,
@@ -39,9 +41,11 @@ RUNTIME_CLOSURE = (
     "tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py",
     "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
     "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
+    "tools/compat-broad/auth-credential-tokens/credential_https_worker.py",
     "tools/compat-broad/shared_gate.py",
     "tools/compat-broad/production-admission/reservations.py",
 )
+EXECUTION_SOURCE_KIND = "auth-recovery-executor-source-v1"
 
 
 class RecordingLedger(_ReadOnlyLedger):
@@ -55,24 +59,35 @@ class RecordingLedger(_ReadOnlyLedger):
             "reservation": "child-ticket",
         }
 
-    def begin_auth_recovery_extension(self, parent_ticket, child_claim, envelope, gate_plan, **kwargs):
+    def begin_auth_recovery_extension(
+        self, parent_ticket, child_claim, envelope, gate_plan, **kwargs
+    ):
         self.lifecycle.append("begin-child")
         assert parent_ticket == self.parent["ticket"]
         assert child_claim["gatePlanDigest"] == digest(gate_plan)
         return copy.deepcopy(self.child_ticket)
 
-    def settle_auth_recovery_child(self, child_ticket, *, absence_proof, receipt_digest, now=None):
+    def settle_auth_recovery_child(
+        self, child_ticket, *, absence_proof, receipt_digest, now=None
+    ):
         self.lifecycle.append("settle-child")
         assert child_ticket == self.child_ticket
         assert absence_proof["kind"] == recovery.ABSENCE_KIND
         assert isinstance(receipt_digest, str)
         return copy.deepcopy(child_ticket)
 
-    def close_after_auth_recovery_child(self, parent_ticket, child_ticket, *, receipt_digest, now=None):
+    def close_after_auth_recovery_child(
+        self, parent_ticket, child_ticket, *, receipt_digest, now=None
+    ):
         self.lifecycle.append("close-parent")
         assert parent_ticket == self.parent["ticket"]
         assert child_ticket == self.child_ticket
         return {"state": "closed-after-auth-recovery-child"}
+
+
+def _dead_pid() -> int:
+    """Return a positive PID outside the platform's live process range."""
+    return 2_000_000_000
 
 
 def _packet(tmp_path: Path):
@@ -80,12 +95,22 @@ def _packet(tmp_path: Path):
     parent["claim"].pop("claimDigest", None)
     parent["ticket"]["claimDigest"] = digest(parent["claim"])
     source_root, provenance = _source_inputs(tmp_path, parent)
-    _extend_runtime_closure(source_root, provenance, parent)
+    execution_root, execution_source = _execution_source(tmp_path)
     permission, o7, o8 = _reviewed(parent, provenance)
-    permission.update(ownerIdentity="owner@example.com", recoveryOwner="recovery@example.com")
+    permission.update(
+        ownerIdentity="owner@example.com",
+        recoveryOwner="recovery@example.com",
+        executionSourceDigest=digest(execution_source),
+    )
     authority_digest = digest(permission)
-    o7["permissionDigest"] = authority_digest
-    o8["permissionDigest"] = authority_digest
+    o7.update(
+        permissionDigest=authority_digest,
+        executionSourceDigest=digest(execution_source),
+    )
+    o8.update(
+        permissionDigest=authority_digest,
+        executionSourceDigest=digest(execution_source),
+    )
     reviews = _reviews(permission, o7, o8)
     import credential_recovery_prepare as prepare
 
@@ -104,7 +129,8 @@ def _packet(tmp_path: Path):
         now=1000.0,
         authority_now=1001.0,
     )
-    return parent, source_root, bundle
+    bundle["executionSource"] = execution_source
+    return parent, source_root, execution_root, bundle
 
 
 def _id_token_sub_packet(tmp_path: Path):
@@ -112,12 +138,22 @@ def _id_token_sub_packet(tmp_path: Path):
     parent["claim"].pop("claimDigest", None)
     parent["ticket"]["claimDigest"] = digest(parent["claim"])
     source_root, provenance = _source_inputs(tmp_path, parent)
-    _extend_runtime_closure(source_root, provenance, parent)
+    execution_root, execution_source = _execution_source(tmp_path)
     permission, o7, o8 = _reviewed(parent, provenance)
-    permission.update(ownerIdentity="owner@example.com", recoveryOwner="recovery@example.com")
+    permission.update(
+        ownerIdentity="owner@example.com",
+        recoveryOwner="recovery@example.com",
+        executionSourceDigest=digest(execution_source),
+    )
     authority_digest = digest(permission)
-    o7["permissionDigest"] = authority_digest
-    o8["permissionDigest"] = authority_digest
+    o7.update(
+        permissionDigest=authority_digest,
+        executionSourceDigest=digest(execution_source),
+    )
+    o8.update(
+        permissionDigest=authority_digest,
+        executionSourceDigest=digest(execution_source),
+    )
     reviews = _reviews(permission, o7, o8)
     import credential_recovery_prepare as prepare
 
@@ -136,27 +172,212 @@ def _id_token_sub_packet(tmp_path: Path):
         now=1000.0,
         authority_now=1001.0,
     )
-    return parent, source_root, bundle
+    bundle["executionSource"] = execution_source
+    return parent, source_root, execution_root, bundle
 
 
-def _extend_runtime_closure(source_root: Path, provenance: dict, parent: dict) -> None:
-    """Add the executor's reviewed runtime closure to the temporary checkout."""
+def _real_ledger_packet(tmp_path: Path):
+    """Prepare a packet whose held parent is persisted by the real Ledger."""
+    parent = _ledger_parent()
+    parent["claim"].pop("claimDigest", None)
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    execution_root, execution_source = _execution_source(tmp_path)
+    gate_path = (tmp_path / "parent-gate").resolve()
+    resource = parent["gate"]["plan"]["jobs"]["auth-credential"]["observation"][0][
+        "resource"
+    ]
+    gate_plan = parent["gate"]["plan"]
+    gate_plan.update(
+        contract="shared-local-v1",
+        project=recovery.PROJECT,
+        signing=True,
+        jobSlots=1,
+        requestSeconds=5.0,
+        wallSeconds=120,
+        recoverySeconds=0,
+        intervalSeconds=0.25,
+        observationRequests=1,
+        dataRequests=1,
+        managementRequests=0,
+        recoveryRequests=0,
+        requestCostMicrousd=1,
+        costMicrousd=1,
+        receiptKind="auth-credential-receipt-v1",
+        plannedAccounts=["custom"],
+        accountResources=[resource],
+        mintedBindings=[],
+        management={
+            "dispatchKind": "closed-v1",
+            "observation": [],
+            "recovery": [],
+            "credentialIds": [],
+            "credentialSlots": [],
+            "slotSeconds": 0,
+            "intervalSeconds": 0.25,
+            "totalRequests": 0,
+            "observationWindowSeconds": 0,
+            "recoveryWindowSeconds": 0,
+            "permissionExpiryBound": True,
+        },
+    )
+    gate_plan["jobs"]["auth-credential"].update(
+        resources=[resource],
+        accountBindings={"custom": {"resource": resource, "uidBinding": "localId"}},
+        schedule=[{"phase": "observation", "index": 0, "seconds": 5.0}],
+    )
+    parent["gate"]["planDigest"] = digest(gate_plan)
+    parent["gate"]["observation"] = 1
+    parent["gate"]["jobs"]["auth-credential"].update(
+        observation=1,
+        recovery=0,
+        scheduleDone=1,
+        skippedByStop=0,
+        complete=False,
+        stopped=False,
+        resources=[resource],
+        authAccounts={},
+        owned=[],
+        creationProofs={},
+        absenceProofs={},
+        captures={},
+    )
+    operation = gate_plan["jobs"]["auth-credential"]["observation"][0]
+    parent["gate"]["events"] = [
+        {
+            "job": "auth-credential",
+            "phase": "observation",
+            "index": 0,
+            "requestDigest": digest(operation),
+            "service": operation["service"],
+            "method": operation["method"],
+            "completed": False,
+            "creationOutcome": "unknown",
+            "ended": 999.0,
+        }
+    ]
+    parent["claim"].update(
+        manifestDigest=digest(parent["gate"]["plan"]),
+        nonceDigest=digest(parent["gate"]["plan"]["nonce"]),
+        gatePath=str(gate_path),
+        gateJob="auth-credential",
+        gatePlanDigest=digest(parent["gate"]["plan"]),
+        locks=[{"key": "project/fireemu-35fe6/auth/accounts/*", "mode": "WRITE"}],
+        budget={"requests": 1, "accounts": 1, "resources": 1, "costMicrousd": 1},
+        durationSeconds=120,
+    )
+    gate_path.mkdir(mode=0o700, parents=True, exist_ok=False)
+    (gate_path / "lock").touch(mode=0o600, exist_ok=False)
+    shared_gate._save(gate_path, parent["gate"])
+    parent["claim"]["gatePlanDigest"] = digest(gate_plan)
+    parent["immutableParent"].update(
+        gateDigest=digest(parent["gate"]),
+        gatePlanDigest=digest(gate_plan),
+        resource=resource,
+        eventIndex=0,
+        requestDigest=digest(operation),
+    )
+    ledger = reservations.Ledger.create(tmp_path / "ledger")
+    envelope = {
+        "permissionDigest": "9" * 64,
+        "issuedAt": 900.0,
+        "expiresAt": 2000.0,
+        "limits": parent["claim"]["budget"],
+        "concurrency": 1,
+        "scopes": [{"key": "project/fireemu-35fe6/auth/accounts/*", "mode": "WRITE"}],
+    }
+    envelope_digest = digest(envelope)
+    claim_digest = digest(parent["claim"])
+    parent["ticket"] = {
+        "ledgerPath": str(ledger.path),
+        "ledgerIdentity": ledger.identity,
+        "reservation": "p" * 64,
+        "claimDigest": claim_digest,
+        "envelopeDigest": envelope_digest,
+    }
+    state = ledger.snapshot()
+    state["envelopes"][envelope_digest] = {
+        "envelope": envelope,
+        "allocated": copy.deepcopy(parent["claim"]["budget"]),
+    }
+    state["reservations"][parent["ticket"]["reservation"]] = {
+        "claim": copy.deepcopy(parent["claim"]),
+        "claimDigest": claim_digest,
+        "envelopeDigest": envelope_digest,
+        "state": "held",
+        "deadline": 1100.0,
+        "generation": copy.deepcopy(parent["generation"]),
+    }
+    reservations._save(ledger.path, state)
+    permission, o7, o8 = _reviewed(parent, provenance)
+    permission.update(
+        ownerIdentity="owner@example.com",
+        recoveryOwner="recovery@example.com",
+        executionSourceDigest=digest(execution_source),
+    )
+    authority_digest = digest(permission)
+    o7.update(
+        permissionDigest=authority_digest,
+        executionSourceDigest=digest(execution_source),
+    )
+    o8.update(
+        permissionDigest=authority_digest,
+        executionSourceDigest=digest(execution_source),
+    )
+    reviews = _reviews(permission, o7, o8)
+    import credential_recovery_prepare as prepare
+
+    packet = prepare.prepare_packet(
+        parent,
+        ledger=RecordingLedger(parent),
+        provenance=provenance,
+        source_root=source_root,
+        permission=permission,
+        o7=o7,
+        o8=o8,
+        permission_review=reviews[0],
+        o7_review=reviews[1],
+        o8_review=reviews[2],
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        now=1000.0,
+        authority_now=1001.0,
+    )
+    packet["executionSource"] = execution_source
+    return parent, source_root, execution_root, packet, ledger
+
+
+def _execution_source(tmp_path: Path) -> tuple[Path, dict]:
+    """Create a separate reviewed child checkout for the executing closure."""
+    source_root = tmp_path / "executor-source"
     for relative in RUNTIME_CLOSURE:
         destination = source_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(HERE.parents[2] / relative, destination)
-        provenance.setdefault("sourceInputs", {})[relative] = hashlib.sha256(
-            destination.read_bytes()
-        ).hexdigest()
+    subprocess.run(["git", "-C", str(source_root), "init", "-q"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source_root), "config", "user.email", "test@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(source_root), "config", "user.name", "Auth test"], check=True
+    )
     subprocess.run(["git", "-C", str(source_root), "add", "tools"], check=True)
-    subprocess.run(["git", "-C", str(source_root), "commit", "-qm", "runtime closure"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source_root), "commit", "-qm", "runtime closure"], check=True
+    )
     commit = subprocess.check_output(
         ["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True
     ).strip()
-    parent["generation"]["sourceCommit"] = commit
-    parent["immutableParent"]["sourceCommit"] = commit
-    provenance["sourceCommit"] = commit
-    provenance["generation"]["sourceCommit"] = commit
+    source_inputs = {
+        relative: hashlib.sha256((source_root / relative).read_bytes()).hexdigest()
+        for relative in RUNTIME_CLOSURE
+    }
+    execution_source = {
+        "kind": EXECUTION_SOURCE_KIND,
+        "sourceCommit": commit,
+        "sourceInputs": source_inputs,
+        "sourceInputsDigest": digest(source_inputs),
+    }
+    return source_root, execution_source
 
 
 def _credential_fd(tmp_path: Path) -> int:
@@ -169,7 +390,7 @@ def _credential_fd(tmp_path: Path) -> int:
 def test_executor_registers_child_before_fd_read_and_runs_one_typed_empty_gate_request(
     tmp_path: Path,
 ) -> None:
-    parent, source_root, packet = _packet(tmp_path)
+    parent, source_root, execution_root, packet = _packet(tmp_path)
     ledger = RecordingLedger(parent)
     order: list[str] = []
     credential_fd = _credential_fd(tmp_path)
@@ -193,6 +414,7 @@ def test_executor_registers_child_before_fd_read_and_runs_one_typed_empty_gate_r
             parent=parent,
             ledger=ledger,
             source_root=source_root,
+            execution_root=execution_root,
             credential_fd=credential_fd,
             gate_path=tmp_path / "child-gate",
             now=1001.0,
@@ -220,7 +442,7 @@ def test_executor_registers_child_before_fd_read_and_runs_one_typed_empty_gate_r
 def test_executor_reconstructs_the_real_signing_compiler_id_token_sub_parent(
     tmp_path: Path,
 ) -> None:
-    parent, source_root, packet = _id_token_sub_packet(tmp_path)
+    parent, source_root, execution_root, packet = _id_token_sub_packet(tmp_path)
     ledger = RecordingLedger(parent)
     credential_fd = _credential_fd(tmp_path)
     try:
@@ -229,6 +451,7 @@ def test_executor_reconstructs_the_real_signing_compiler_id_token_sub_parent(
             parent=parent,
             ledger=ledger,
             source_root=source_root,
+            execution_root=execution_root,
             credential_fd=credential_fd,
             gate_path=tmp_path / "child-gate",
             now=1001.0,
@@ -248,11 +471,60 @@ def test_executor_reconstructs_the_real_signing_compiler_id_token_sub_parent(
     )
 
 
+def test_executor_settles_and_closes_a_real_temp_ledger(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent, source_root, execution_root, packet, ledger = _real_ledger_packet(tmp_path)
+    assert (
+        packet["executionSource"]["sourceCommit"]
+        != parent["immutableParent"]["sourceCommit"]
+    )
+    assert not (source_root / executor.EXECUTOR_ENTRY).exists()
+    credential_fd = _credential_fd(tmp_path)
+    original_finish = shared_gate.Gate.finish
+
+    def finish_with_reaped_worker(gate):
+        result = original_finish(gate)
+        state_path = tmp_path / "child-gate" / "state.json"
+        state = json.loads(state_path.read_text())
+        dead = _dead_pid()
+        state["coordinatorPid"] = dead
+        state["jobs"][recovery.GATE_JOB]["pid"] = dead
+        shared_gate._save(tmp_path / "child-gate", state)
+        return result
+
+    monkeypatch.setattr(shared_gate.Gate, "finish", finish_with_reaped_worker)
+    try:
+
+        def transport(*_args, **_kwargs):
+            return 200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+
+        result = executor.execute_recovery(
+            packet,
+            parent=parent,
+            ledger=ledger,
+            source_root=source_root,
+            execution_root=execution_root,
+            credential_fd=credential_fd,
+            gate_path=tmp_path / "child-gate",
+            now=1001.0,
+            clock=lambda: 1001.0,
+            transport=transport,
+        )
+    finally:
+        os.close(credential_fd)
+    row = ledger.snapshot()["reservations"][parent["ticket"]["reservation"]]
+    assert result["settlement"] == "closed-after-auth-recovery-child"
+    assert row["state"] == "closed-after-auth-recovery-child"
+    assert row["recoveryChildren"][0]["state"] == "settled"
+
+
 def test_absolute_deadline_is_rechecked_before_private_fd_read(tmp_path: Path) -> None:
-    parent, source_root, packet = _packet(tmp_path)
+    parent, source_root, execution_root, packet = _packet(tmp_path)
     ledger = RecordingLedger(parent)
     credential_fd = _credential_fd(tmp_path)
     reads: list[str] = []
+    clock_values = iter((1001.0, 1061.0))
     try:
         with pytest.raises(recovery.RecoveryRefusal, match="deadline"):
             executor.execute_recovery(
@@ -260,10 +532,11 @@ def test_absolute_deadline_is_rechecked_before_private_fd_read(tmp_path: Path) -
                 parent=parent,
                 ledger=ledger,
                 source_root=source_root,
+                execution_root=execution_root,
                 credential_fd=credential_fd,
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,
-                clock=lambda: 1061.0,
+                clock=lambda: next(clock_values),
                 read_handoff=lambda _fd: reads.append("read"),
             )
     finally:
@@ -272,8 +545,32 @@ def test_absolute_deadline_is_rechecked_before_private_fd_read(tmp_path: Path) -
     assert ledger.lifecycle == ["begin-child"]
 
 
+def test_source_validation_elapsed_past_deadline_does_not_allocate_child(
+    tmp_path: Path,
+) -> None:
+    parent, source_root, execution_root, packet = _packet(tmp_path)
+    ledger = RecordingLedger(parent)
+    credential_fd = _credential_fd(tmp_path)
+    try:
+        with pytest.raises(recovery.RecoveryRefusal, match="deadline"):
+            executor.execute_recovery(
+                packet,
+                parent=parent,
+                ledger=ledger,
+                source_root=source_root,
+                execution_root=execution_root,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                now=1001.0,
+                clock=lambda: 1061.0,
+            )
+    finally:
+        os.close(credential_fd)
+    assert ledger.lifecycle == []
+
+
 def test_absolute_deadline_is_rechecked_before_gate_dispatch(tmp_path: Path) -> None:
-    parent, source_root, packet = _packet(tmp_path)
+    parent, source_root, execution_root, packet = _packet(tmp_path)
     ledger = RecordingLedger(parent)
     credential_fd = _credential_fd(tmp_path)
     clock_values = iter((1001.0, 1061.0))
@@ -285,6 +582,7 @@ def test_absolute_deadline_is_rechecked_before_gate_dispatch(tmp_path: Path) -> 
                 parent=parent,
                 ledger=ledger,
                 source_root=source_root,
+                execution_root=execution_root,
                 credential_fd=credential_fd,
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,
@@ -297,8 +595,37 @@ def test_absolute_deadline_is_rechecked_before_gate_dispatch(tmp_path: Path) -> 
     assert ledger.lifecycle == ["begin-child"]
 
 
+def test_absolute_deadline_is_rechecked_after_gate_finish_before_settlement(
+    tmp_path: Path,
+) -> None:
+    parent, source_root, execution_root, packet = _packet(tmp_path)
+    ledger = RecordingLedger(parent)
+    credential_fd = _credential_fd(tmp_path)
+    clock_values = iter((1001.0, 1001.0, 1001.0, 1001.0, 1061.0))
+    try:
+        with pytest.raises(recovery.RecoveryRefusal, match="deadline"):
+            executor.execute_recovery(
+                packet,
+                parent=parent,
+                ledger=ledger,
+                source_root=source_root,
+                execution_root=execution_root,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                now=1001.0,
+                clock=lambda: next(clock_values),
+                transport=lambda *_args, **_kwargs: (
+                    200,
+                    {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []},
+                ),
+            )
+    finally:
+        os.close(credential_fd)
+    assert ledger.lifecycle == ["begin-child"]
+
+
 def test_packet_parent_ticket_binding_is_required(tmp_path: Path) -> None:
-    parent, source_root, packet = _packet(tmp_path)
+    parent, source_root, execution_root, packet = _packet(tmp_path)
     packet["plan"]["parent"]["ticketDigest"] = "0" * 64
     ledger = RecordingLedger(parent)
     credential_fd = _credential_fd(tmp_path)
@@ -309,6 +636,7 @@ def test_packet_parent_ticket_binding_is_required(tmp_path: Path) -> None:
                 parent=parent,
                 ledger=ledger,
                 source_root=source_root,
+                execution_root=execution_root,
                 credential_fd=credential_fd,
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,
@@ -319,9 +647,12 @@ def test_packet_parent_ticket_binding_is_required(tmp_path: Path) -> None:
     assert ledger.lifecycle == []
 
 
-def test_runtime_executor_source_must_be_in_reviewed_closure(tmp_path: Path) -> None:
-    parent, source_root, packet = _packet(tmp_path)
-    (source_root / executor.EXECUTOR_ENTRY).unlink()
+@pytest.mark.parametrize("relative", [executor.EXECUTOR_ENTRY, recovery.WORKER_ENTRY])
+def test_runtime_executor_source_must_be_in_reviewed_closure(
+    tmp_path: Path, relative: str
+) -> None:
+    parent, source_root, execution_root, packet = _packet(tmp_path)
+    (execution_root / relative).unlink()
     ledger = RecordingLedger(parent)
     credential_fd = _credential_fd(tmp_path)
     try:
@@ -331,6 +662,7 @@ def test_runtime_executor_source_must_be_in_reviewed_closure(tmp_path: Path) -> 
                 parent=parent,
                 ledger=ledger,
                 source_root=source_root,
+                execution_root=execution_root,
                 credential_fd=credential_fd,
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,
@@ -344,7 +676,7 @@ def test_runtime_executor_source_must_be_in_reviewed_closure(tmp_path: Path) -> 
 def test_missing_reviewed_owner_identities_do_not_use_executor_defaults(
     tmp_path: Path,
 ) -> None:
-    parent, source_root, packet = _packet(tmp_path)
+    parent, source_root, execution_root, packet = _packet(tmp_path)
     packet["permission"].pop("ownerIdentity")
     packet["permission"].pop("recoveryOwner")
     packet["o7"]["permissionDigest"] = digest(packet["permission"])
@@ -360,6 +692,7 @@ def test_missing_reviewed_owner_identities_do_not_use_executor_defaults(
                 parent=parent,
                 ledger=ledger,
                 source_root=source_root,
+                execution_root=execution_root,
                 credential_fd=credential_fd,
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,
@@ -373,7 +706,13 @@ def test_missing_reviewed_owner_identities_do_not_use_executor_defaults(
 @pytest.mark.parametrize(
     "response",
     [
-        (200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": [{"localId": "foreign"}]}),
+        (
+            200,
+            {
+                "kind": "identitytoolkit#GetAccountInfoResponse",
+                "users": [{"localId": "foreign"}],
+            },
+        ),
         (200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": "malformed"}),
         (504, {}),
     ],
@@ -381,7 +720,7 @@ def test_missing_reviewed_owner_identities_do_not_use_executor_defaults(
 def test_non_empty_malformed_or_timeout_result_keeps_parent_held(
     tmp_path: Path, response: tuple[int, dict]
 ) -> None:
-    parent, source_root, packet = _packet(tmp_path)
+    parent, source_root, execution_root, packet = _packet(tmp_path)
     ledger = RecordingLedger(parent)
     credential_fd = _credential_fd(tmp_path)
 
@@ -398,6 +737,7 @@ def test_non_empty_malformed_or_timeout_result_keeps_parent_held(
                 parent=parent,
                 ledger=ledger,
                 source_root=source_root,
+                execution_root=execution_root,
                 credential_fd=credential_fd,
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,
@@ -408,13 +748,15 @@ def test_non_empty_malformed_or_timeout_result_keeps_parent_held(
         os.close(credential_fd)
 
     assert ledger.lifecycle == ["begin-child"]
-    assert not ("settle-child" in ledger.lifecycle or "close-parent" in ledger.lifecycle)
+    assert not (
+        "settle-child" in ledger.lifecycle or "close-parent" in ledger.lifecycle
+    )
 
 
 def test_invalid_packet_is_refused_before_private_fd_read_or_child_allocation(
     tmp_path: Path,
 ) -> None:
-    parent, source_root, packet = _packet(tmp_path)
+    parent, source_root, execution_root, packet = _packet(tmp_path)
     packet["o8"]["consumed"] = True
     ledger = RecordingLedger(parent)
     credential_fd = _credential_fd(tmp_path)
@@ -427,6 +769,7 @@ def test_invalid_packet_is_refused_before_private_fd_read_or_child_allocation(
                 parent=parent,
                 ledger=ledger,
                 source_root=source_root,
+                execution_root=execution_root,
                 credential_fd=credential_fd,
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,

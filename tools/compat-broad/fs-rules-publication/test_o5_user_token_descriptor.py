@@ -1,23 +1,17 @@
 """Offline dry run of the user-token O8 descriptor.
 
-Nothing here reaches production: no credential, no origin, no Ledger and no
-process. The synthetic approval is built from local files in tmp_path, and the
-production adapter is exercised only against bounded loopback fixtures.
+Nothing here reaches production. Synthetic approval and private Ledger state
+are built in tmp_path; bounded worker processes reach only loopback fixtures.
 """
 
 from __future__ import annotations
 
 import hashlib
-import http.server
 import json
 import os
-import socketserver
-import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 
@@ -43,7 +37,6 @@ from o5_user_token_case import CAMPAIGN, compile_case
 from o5_user_token_collector import (
     ROLE_LOCAL_SHADOW,
     ROLE_PRODUCTION,
-    RulesManagementSession,
     collect,
 )
 from o5_user_token_comparator_v2 import REFUSED
@@ -509,9 +502,12 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
     assert "production:recording-aborted" in result["errors"]
 
 
-def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_ledger(
+def test_rules_session_refuses_foreign_claim_before_any_wire_exchange(
     tmp_path,
 ) -> None:
+    from o5_user_token_collector import open_ownership_journal
+    from o5_user_token_production_bridge import management_session
+
     plan = lane.plan_compiler(NONCE)
     gate_plan = lane.gate_plan(plan, permission_expires_at=time.time() + 3600)
     gate_path = tmp_path / "gate"
@@ -522,7 +518,7 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
         "permissionDigest": digest(permission),
         "issuedAt": now - 1,
         "expiresAt": now + 3600,
-        "limits": {"requests": 56, "accounts": 0, "resources": 1, "costMicrousd": 23},
+        "limits": {"requests": 144, "accounts": 7, "resources": 14, "costMicrousd": 144},
         "concurrency": 1,
         "scopes": [{"key": "project/fireemu-35fe6", "mode": "EXCLUSIVE"}],
     }
@@ -539,259 +535,41 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
     ticket = ledger.reserve(envelope, claim, gate_plan)
     shared_gate.create(gate_path, gate_plan)
     gate = shared_gate.Gate(gate_path, CAMPAIGN)
-    acquisition = acquisition_for(plan, ROLE_PRODUCTION)
-    data = Transport(
-        plan,
-        endpoint="firestore.googleapis.com:443",
-        fingerprints={
-            ref: value["uidFingerprint"]
-            for ref, value in acquisition["principals"].items()
-        },
-    )
-    names = {
-        "A": "projects/fireemu-35fe6/rulesets/server-a",
-        "B": "projects/fireemu-35fe6/rulesets/server-b",
-    }
-    baseline = "projects/fireemu-35fe6/rulesets/pre-existing"
 
-    class Handler(http.server.BaseHTTPRequestHandler):
-        active = baseline
-        deleted: ClassVar[set[str]] = set()
-        requests: ClassVar[list[tuple[str, str, dict]]] = []
+    def execute(*_args, **_kwargs):
+        pytest.fail("Foreign claim must be rejected before dispatch")
 
-        def do_any(self):
-            size = int(self.headers.get("Content-Length", "0"))
-            body = json.loads(self.rfile.read(size) or b"{}")
-            path = self.path
-            self.__class__.requests.append((self.command, path, body))
-            status = 200
-            if path.endswith(":getExecutable"):
-                payload = {"rulesetName": self.__class__.active}
-            elif path.endswith("/releases/cloud.firestore"):
-                if self.command == "PATCH":
-                    self.__class__.active = body["release"]["rulesetName"]
-                payload = {
-                    "name": "projects/fireemu-35fe6/releases/cloud.firestore",
-                    "rulesetName": self.__class__.active,
-                }
-            elif (
-                path == "/v1/projects/fireemu-35fe6/rulesets" and self.command == "POST"
-            ):
-                label = (
-                    "A"
-                    if body["source"]["files"][0]["content"]
-                    == plan["rulesets"]["A"]["source"]
-                    else "B"
-                )
-                payload = {"name": names[label]}
-            elif "/rulesets/" in path:
-                name = (
-                    "projects/fireemu-35fe6/"
-                    + path.split("/v1/projects/fireemu-35fe6/", 1)[1]
-                )
-                if name in self.__class__.deleted:
-                    status, payload = 404, {"error": {"code": 404}}
-                elif self.command == "DELETE":
-                    self.__class__.deleted.add(name)
-                    payload = {}
-                else:
-                    label = "A" if name == names["A"] else "B"
-                    payload = {
-                        "name": name,
-                        "source": {
-                            "files": [
-                                {
-                                    "name": "firestore.rules",
-                                    "content": plan["rulesets"][label]["source"],
-                                }
-                            ]
-                        },
-                    }
-            else:
-                status, payload = 404, {"error": {"code": 404}}
-            raw = json.dumps(payload, separators=(",", ":")).encode()
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
-
-        do_GET = do_any
-        do_POST = do_any
-        do_PATCH = do_any
-        do_DELETE = do_any
-
-        def log_message(self, *_args):
-            return
-
-    reservation = None
-    portctl = os.environ.get("FIREEMU_PORTCTL")
-    if portctl:
-        claim = subprocess.run(
-            [
-                sys.executable,
-                portctl,
-                "claim",
-                "--service",
-                "o5-user-token-rules-management",
-                "--preferred",
-                "10000",
-                "--range",
-                "10000-19999",
-                "--ttl",
-                "10m",
-                "--format",
-                "json",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        reservation = json.loads(claim.stdout)
-        server = socketserver.TCPServer(
-            ("127.0.0.1", int(reservation["port"])), Handler
-        )
-    else:
-        server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    source, source_digest = remote.worker_binding()
-    origin = f"http://127.0.0.1:{server.server_address[1]}"
-
-    def execute(operation, **_kwargs):
-        if operation.get("kind") != "rules-lifecycle":
-            return data(operation)
-        prepared = remote.prepare_request(
-            plan, operation, credentials={"administrator": "fixture-admin"}
-        )
-        envelope = {
-            key: prepared[key]
-            for key in ("service", "route", "method", "path", "headers", "body")
-        }
-        envelope["seconds"] = 8.0
-        result = remote.run_worker(
-            envelope,
-            binding=source,
-            binding_digest=source_digest,
-            fixture_origin=origin,
-        )
-        return {"status": result["status"], "body": result["body"]}
-
-    assert gate.snapshot()["managementUsed"] == []
     wrong_ticket = dict(ticket)
     wrong_ticket["reservation"] = "foreign-reservation"
-    with pytest.raises(ValueError, match="Ledger claim binding"):
-        RulesManagementSession(
-            gate=gate, ledger=ledger, ticket=wrong_ticket, execute=execute, plan=plan
-        )
     wrong_plan = json.loads(json.dumps(plan))
     wrong_plan["nonce"] = "b" * 32
-    with pytest.raises(ValueError, match="Ledger claim binding"):
-        RulesManagementSession(
-            gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=wrong_plan
-        )
-    assert gate.snapshot()["managementUsed"] == []
-    assert Handler.requests == []
-    session = RulesManagementSession(
-        gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=plan
+    journal = open_ownership_journal(
+        tmp_path / "ownership.jsonl", run_id="claim-negative", plan_digest=plan["planDigest"]
     )
     try:
-        bundle = lane.collector(
-            plan,
-            execute,
-            run_id="real-o5",
-            acquisition=acquisition,
-            management_session=session,
-        )
-        assert bundle["recordingComplete"] is True, (
-            bundle["abort"],
-            bundle["infrastructureFailures"],
-            bundle["transport"].get("rulesManagement"),
-        )
-        assert bundle["transport"]["rulesManagement"]["recovery"]["restored"] is True
-        assert len(gate.snapshot()["managementUsed"]) == 23
-        release = "projects/fireemu-35fe6/releases/cloud.firestore"
-        expected = [
-            ("GET", f"/v1/{release}", {}),
-            ("GET", "/v1/projects/fireemu-35fe6/rulesets/pre-existing", {}),
-            ("GET", f"/v1/{release}:getExecutable", {}),
-            (
-                "POST",
-                "/v1/projects/fireemu-35fe6/rulesets",
-                {
-                    "source": {
-                        "files": [
-                            {
-                                "name": "firestore.rules",
-                                "content": plan["rulesets"]["A"]["source"],
-                            }
-                        ]
-                    }
-                },
-            ),
-            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
-            (
-                "PATCH",
-                f"/v1/{release}",
-                {
-                    "release": {"name": release, "rulesetName": names["A"]},
-                    "updateMask": "rulesetName",
-                },
-            ),
-            ("GET", f"/v1/{release}", {}),
-            ("GET", f"/v1/{release}:getExecutable", {}),
-            (
-                "POST",
-                "/v1/projects/fireemu-35fe6/rulesets",
-                {
-                    "source": {
-                        "files": [
-                            {
-                                "name": "firestore.rules",
-                                "content": plan["rulesets"]["B"]["source"],
-                            }
-                        ]
-                    }
-                },
-            ),
-            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
-            (
-                "PATCH",
-                f"/v1/{release}",
-                {
-                    "release": {"name": release, "rulesetName": names["B"]},
-                    "updateMask": "rulesetName",
-                },
-            ),
-            ("GET", f"/v1/{release}", {}),
-            ("GET", f"/v1/{release}:getExecutable", {}),
-            ("GET", f"/v1/{release}", {}),
-            (
-                "PATCH",
-                f"/v1/{release}",
-                {
-                    "release": {"name": release, "rulesetName": baseline},
-                    "updateMask": "rulesetName",
-                },
-            ),
-            ("GET", f"/v1/{release}", {}),
-            ("GET", f"/v1/{release}:getExecutable", {}),
-            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
-            ("DELETE", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
-            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-a", {}),
-            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
-            ("DELETE", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
-            ("GET", "/v1/projects/fireemu-35fe6/rulesets/server-b", {}),
-        ]
-        assert Handler.requests == expected
+        for candidate_ticket, candidate_plan in ((wrong_ticket, plan), (ticket, wrong_plan)):
+            with pytest.raises(ValueError, match="Ledger claim binding"):
+                management_session(
+                    gate=gate, ledger=ledger, ticket=candidate_ticket, execute=execute,
+                    plan=candidate_plan, journal=journal, ownership={},
+                )
     finally:
-        server.shutdown()
-        server.server_close()
-        if reservation is not None:
-            subprocess.run(
-                [sys.executable, portctl, "release", "--token", reservation["token"]],
-                check=True,
-            )
+        journal.close()
+    assert gate.snapshot()["managementUsed"] == []
+
+
+def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_ledger(
+    tmp_path, monkeypatch
+) -> None:
+    from test_o5_user_token_production import (
+        test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts,
+    )
+
+    # Exercise the descriptor through the complete canonical bridge, including
+    # setup, every data/action call, typed recovery skips, and Ledger release.
+    test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
+        tmp_path, monkeypatch, None
+    )
 
 
 def test_preserved_local_runner_acquisition_remains_accepted_without_management_session() -> (

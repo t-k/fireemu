@@ -162,9 +162,14 @@ def _validate_handoff(handoff: dict, permission: dict) -> None:
     if set(handoff) != HANDOFF_FIELDS or any(not _private(handoff[key]) for key in ("token", "apiKey")):
         raise ValueError("private credential handoff required")
     principal = permission.get("credentialPrincipal")
+    expected_principal = (
+        principal.get("verifiedEmail")
+        if isinstance(principal, dict) and "verifiedEmail" in principal
+        else principal.get("subject") if isinstance(principal, dict) else None
+    )
     if (
         not isinstance(principal, dict)
-        or principal.get("subject") != handoff["principal"]
+        or expected_principal != handoff["principal"]
         or principal.get("requiredScopes") != [IDENTITY_SCOPE]
         or handoff["scope"] != IDENTITY_SCOPE
         or handoff["permissionDigest"] != digest(permission)
@@ -335,7 +340,18 @@ def forget_transport(inputs_digest: str) -> None:
     _BOUND_TRANSPORTS.pop(inputs_digest, None)
 
 
-def _tokeninfo_valid(status, body, *, principal: str, scope: str, required_seconds: float) -> tuple[bool, int | None]:
+def _principal_identity(principal: dict) -> tuple[str | None, str | None]:
+    if isinstance(principal, dict):
+        email = principal.get("verifiedEmail") or principal.get("subject")
+        client_id = principal.get("clientId")
+        if isinstance(email, str) and isinstance(client_id, str):
+            return email, client_id
+        return None, None
+    return None, None
+
+
+def _tokeninfo_valid(status, body, *, principal: dict, scope: str, required_seconds: float) -> tuple[bool, int | None]:
+    expected_email, expected_client_id = _principal_identity(principal)
     scopes = set(str(body.get("scope", "")).split()) if isinstance(body, dict) else set()
     expires_value = body.get("expires_in") if isinstance(body, dict) else None
     try:
@@ -347,9 +363,13 @@ def _tokeninfo_valid(status, body, *, principal: str, scope: str, required_secon
     valid = (
         status == 200
         and isinstance(body, dict)
-        and body.get("email") == principal
+        and body.get("email") == expected_email
         and body.get("email_verified") == "true"
         and scope in scopes
+        and (
+            expected_client_id is None
+            or (body.get("azp") == expected_client_id and body.get("aud") == expected_client_id)
+        )
         and type(expires) in (int, float)
         and expires >= required_seconds
     )
@@ -372,8 +392,11 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
             fixture_origin=fixture_origin,
         )
         status, body = exchange.status, exchange.body
-        principal = permission["credentialPrincipal"]["subject"]
-        scope = permission["credentialPrincipal"]["requiredScopes"][0]
+        principal = permission["credentialPrincipal"]
+        expected_email, expected_client_id = _principal_identity(principal)
+        if expected_email is None or expected_client_id is None:
+            raise ValueError("verified-email credential principal required")
+        scope = principal["requiredScopes"][0]
         scopes = set(str(body.get("scope", "")).split()) if isinstance(body, dict) else set()
         valid, expires = _tokeninfo_valid(
             status, body, principal=principal, scope=scope, required_seconds=required_seconds
@@ -383,8 +406,12 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
             "principalDigest": digest(principal),
             "requiredScopeVerified": scope in scopes,
             "identityMode": "verified-email",
-            "identityVerified": body.get("email") == principal if isinstance(body, dict) else False,
-            "oauthClientVerified": True,
+            "identityVerified": body.get("email") == expected_email if isinstance(body, dict) else False,
+            "oauthClientVerified": (
+                isinstance(body, dict)
+                and body.get("azp") == expected_client_id
+                and body.get("aud") == expected_client_id
+            ),
             "expiresInSeconds": expires if type(expires) in (int, float) else 0,
             "remainingSecondsAtVerification": expires if type(expires) in (int, float) else 0,
             "requiredSeconds": required_seconds,
@@ -394,7 +421,7 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
         return {"status": status, "complete": valid and exchange.worker_reaped, "workerReaped": exchange.worker_reaped, "bodyKind": "json", "body": attestation}
     if slot_id == "auth-project-readback":
         base = fixture_origin.rstrip("/") if fixture_origin is not None else "https://identitytoolkit.googleapis.com"
-        url = base + "/v1/projects/" + AUTHORIZED_PROJECT + "/config"
+        url = base + "/admin/v2/projects/" + AUTHORIZED_PROJECT + "/config"
         exchange = credential_remote.request_with_lifecycle(
             url,
             None,

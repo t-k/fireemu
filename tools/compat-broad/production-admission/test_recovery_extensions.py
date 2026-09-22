@@ -4,6 +4,8 @@ import copy
 import json
 import multiprocessing
 import os
+import subprocess
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -14,6 +16,8 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "fs-request-bytes-boundary"))
+sys.path.insert(0, str(HERE.parent / "auth-credential-tokens"))
+import credential_gate
 import request_bytes_admission
 import request_bytes_compiler
 import request_bytes_descriptor
@@ -621,7 +625,7 @@ def _auth_recovery_fixture(tmp_path):
         "kind": "custom-sign-in",
         "account": "custom",
         "resource": resource,
-        "binds": {"customUid": "localId"},
+        "binds": {"customUid": "idToken.sub"},
     }
     parent_plan = {
         "contract": "shared-local-v1", "campaignId": "AUTH-CREDENTIAL-TOKENS-01",
@@ -714,6 +718,288 @@ def _auth_recovery_fixture(tmp_path):
         "expiresAt": 2_000, "limits": {"requests": 1, "accounts": 1, "resources": 1, "costMicrousd": 1},
         "concurrency": 1, "scopes": child_claim["locks"]}
     return ledger, parent_ticket, child_claim, child_envelope, child_plan, bindings, evidence, resource, child_path
+
+
+def _compiler_auth_projection_fixture(tmp_path, *, management_count=0, malformed_management=None, variant_outcome=None, variant_slot=1, foreign_body=False):
+    """Build a real compiler plan and Gate journal with a stopped custom create."""
+    nonce = "a" * 32
+    plan = credential_gate.gate_plan(
+        "demo", nonce, signing=True, wall_seconds=600, recovery_seconds=60,
+        cost_microusd=50_000, observation_window_seconds=500,
+    )
+    plan["permissionExpiresAt"] = time.time() + 3_600
+    if foreign_body:
+        normal_operation = next(
+            operation for operation in plan["jobs"]["auth-credential"]["observation"]
+            if operation.get("kind") == "custom-sign-in"
+            and operation["body"].get("token") == "$binding:customToken"
+        )
+        normal_operation["body"] = {**normal_operation["body"], "tenantId": "attacker-tenant"}
+    resources = plan["jobs"]["auth-credential"]["resources"]
+    parent_path = (tmp_path / "compiler-auth-parent-gate").resolve()
+    locks = [
+        {"key": resource.replace("projects/", "project/"), "mode": "WRITE"}
+        for resource in resources
+    ]
+    claim = {
+        "campaignId": plan["campaignId"], "manifestDigest": digest(plan),
+        "nonceDigest": digest(nonce), "gatePath": str(parent_path),
+        "gatePlanDigest": digest(plan), "gateJob": "auth-credential", "locks": locks,
+        "budget": {"requests": 100, "accounts": 3, "resources": 3, "costMicrousd": 50_000},
+        "durationSeconds": 600,
+    }
+    envelope = {
+        "permissionDigest": "1" * 64, "issuedAt": 900, "expiresAt": 2_000,
+        "limits": claim["budget"], "concurrency": 1, "scopes": locks,
+    }
+    ledger = reservations.Ledger.create(tmp_path / "compiler-auth-ledger")
+    ledger.reserve(envelope, claim, plan, now=1000)
+    credential_gate.create(parent_path, plan)
+    gate = credential_gate.CredentialGate(parent_path, "auth-credential")
+    gate.claim()
+    receipt = {
+        "status": 200, "complete": True, "workerReaped": True,
+        "bodyKind": "json", "body": {},
+    }
+    attestation = {
+        "kind": "request-byte-token-attestation-v1", "principalDigest": "a" * 64,
+        "requiredScopeVerified": True, "identityMode": "subject", "identityVerified": True,
+        "oauthClientVerified": True, "expiresInSeconds": 600,
+        "remainingSecondsAtVerification": 600, "requiredSeconds": 600,
+        "complete": True, "workerReaped": True,
+    }
+    for slot in plan["management"]["observation"][:management_count]:
+        result = dict(receipt)
+        if slot["id"] == "oauth-tokeninfo":
+            result["body"] = attestation
+        gate.management_dispatch("observation", slot["id"], lambda _deadline, result=result: result)
+    operations = plan["jobs"]["auth-credential"]["observation"]
+    signups = [
+        (index, operation) for index, operation in enumerate(operations)
+        if operation.get("kind") == "sign-up"
+    ]
+    custom = [
+        (index, operation) for index, operation in enumerate(operations)
+        if operation.get("kind") == "custom-sign-in"
+    ]
+    assert len(signups) == 2 and len(custom) == 3
+    events = []
+    for index, operation in signups:
+        events.append({
+            "job": "auth-credential", "phase": "observation", "index": index,
+            "requestDigest": digest(operation), "service": "auth", "method": "POST",
+            "completed": True, "creationOutcome": "refused", "status": 400,
+            "failure": None, "authEvidence": {
+                "account": operation["account"], "creationOutcome": "refused",
+            },
+        })
+    normal_index, normal_operation = custom[0]
+    events.append({
+        "job": "auth-credential", "phase": "observation", "index": normal_index,
+        "requestDigest": digest(normal_operation), "service": "auth", "method": "POST",
+        "completed": False, "creationOutcome": "unknown", "ended": 2,
+    })
+    schedule_done = normal_index + 1
+    if variant_outcome is not None:
+        if variant_slot == 2:
+            reserved_index, reserved_operation = custom[1]
+            events.append({
+                "job": "auth-credential", "phase": "observation", "index": reserved_index,
+                "requestDigest": digest(reserved_operation), "service": "auth", "method": "POST",
+                "completed": True, "creationOutcome": "refused", "status": 400,
+                "failure": None, "ended": 2,
+                "authEvidence": {"account": "custom", "creationOutcome": "refused"},
+            })
+        variant_index, variant_operation = custom[variant_slot]
+        events.append({
+            "job": "auth-credential", "phase": "observation", "index": variant_index,
+            "requestDigest": digest(variant_operation), "service": "auth", "method": "POST",
+            "completed": variant_outcome == "refused", "creationOutcome": variant_outcome,
+            "status": 400 if variant_outcome == "refused" else None,
+            "failure": None, "ended": 2,
+            "authEvidence": {"account": "custom", "creationOutcome": variant_outcome},
+        })
+        schedule_done = variant_index + 1
+    state = gate.snapshot()
+    state["events"] = events
+    state["observation"] = management_count + len(events)
+    state["total"] = management_count + len(events)
+    job = state["jobs"]["auth-credential"]
+    job["observation"] = len(events)
+    job["scheduleDone"] = schedule_done
+    dead = _dead_pid()
+    state["coordinatorPid"] = dead
+    state["jobs"]["auth-credential"]["pid"] = dead
+    state["stopped"] = True
+    if malformed_management == "order":
+        state["managementUsed"] = list(reversed(state["managementUsed"]))
+    elif malformed_management == "event":
+        state["managementEvents"][0]["id"] = "observation:wrong" if state["managementEvents"] else "observation:wrong"
+    elif malformed_management == "phase":
+        if state["managementEvents"]:
+            state["managementEvents"][0]["id"] = "recovery:" + state["managementEvents"][0]["id"].split(":", 1)[1]
+    _save(parent_path, state)
+    child_claim = {
+        "parentGateJob": "auth-credential", "parentEventIndex": normal_index,
+        "parentRequestDigest": digest(normal_operation), "ownedResources": [normal_operation["resource"]],
+    }
+    return ledger, parent_path, child_claim
+
+
+def _full_compiler_auth_recovery_fixture(tmp_path):
+    """Bind the real compiler plan to the Ledger child-admission fixture."""
+    fixture = _auth_recovery_fixture(tmp_path)
+    ledger, parent, child, envelope, child_plan, bindings, _evidence, resource, child_path = fixture
+    parent_path = Path(parent["ledgerPath"]).parent / "auth-parent-gate"
+    shutil.rmtree(parent_path)
+    plan = credential_gate.gate_plan(
+        "demo", "a" * 32, signing=True, wall_seconds=600, recovery_seconds=60,
+        cost_microusd=50_000, observation_window_seconds=500,
+    )
+    plan["permissionExpiresAt"] = time.time() + 3_600
+    resources = plan["jobs"]["auth-credential"]["resources"]
+    locks = [{"key": item.replace("projects/", "project/"), "mode": "WRITE"} for item in resources]
+    state = ledger.snapshot()
+    row = state["reservations"][parent["reservation"]]
+    claim = copy.deepcopy(row["claim"])
+    claim.update(
+        gatePath=str(parent_path), gatePlanDigest=digest(plan), manifestDigest=digest(plan), locks=locks,
+    )
+    row["claim"] = claim
+    row["claimDigest"] = digest(claim)
+    parent["claimDigest"] = row["claimDigest"]
+    envelope["scopes"] = locks
+    _save(ledger.path, state)
+    credential_gate.create(parent_path, plan)
+    gate = credential_gate.CredentialGate(parent_path, "auth-credential")
+    gate.claim()
+    operations = plan["jobs"]["auth-credential"]["observation"]
+    signups = [(index, item) for index, item in enumerate(operations) if item.get("kind") == "sign-up"]
+    custom = [(index, item) for index, item in enumerate(operations) if item.get("kind") == "custom-sign-in"]
+    normal_index, normal_operation = custom[0]
+    events = [
+        {
+            "job": "auth-credential", "phase": "observation", "index": index,
+            "requestDigest": digest(operation), "service": "auth", "method": "POST",
+            "completed": True, "creationOutcome": "refused", "status": 400, "failure": None,
+            "authEvidence": {"account": operation["account"], "creationOutcome": "refused"},
+        }
+        for index, operation in signups
+    ]
+    events.append({
+        "job": "auth-credential", "phase": "observation", "index": normal_index,
+        "requestDigest": digest(normal_operation), "service": "auth", "method": "POST",
+        "completed": False, "creationOutcome": "unknown", "ended": 2,
+    })
+    gate_state = gate.snapshot()
+    gate_state["events"] = events
+    gate_state["observation"] = len(events)
+    gate_state["total"] = len(events)
+    gate_state["jobs"]["auth-credential"]["observation"] = len(events)
+    gate_state["jobs"]["auth-credential"]["scheduleDone"] = normal_index + 1
+    dead = _dead_pid()
+    gate_state["coordinatorPid"] = dead
+    gate_state["jobs"]["auth-credential"]["pid"] = dead
+    gate_state["stopped"] = True
+    _save(parent_path, gate_state)
+    child["parentClaimDigest"] = parent["claimDigest"]
+    child["parentPlanDigest"] = digest(plan)
+    child["parentEventIndex"] = normal_index
+    child["parentRequestDigest"] = digest(normal_operation)
+    child["locks"] = locks
+    evidence = reservations._auth_parent_projection(gate_state, child)
+    child["parentGateDigest"] = evidence["gateDigest"]
+    child["parentEvidenceDigest"] = evidence["evidenceDigest"]
+    return ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path
+
+
+def _real_abandoned_compiler_auth_recovery_fixture(tmp_path):
+    """Produce the parent journal through a real CredentialGate subprocess."""
+    fixture = _auth_recovery_fixture(tmp_path / "template")
+    ledger, parent, child, envelope, child_plan, bindings, _evidence, resource, child_path = fixture
+    parent_path = Path(parent["ledgerPath"]).parent / "auth-parent-gate"
+    shutil.rmtree(parent_path)
+    plan = credential_gate.gate_plan(
+        "demo", "a" * 32, signing=True, wall_seconds=600, recovery_seconds=60,
+        cost_microusd=50_000, observation_window_seconds=500,
+    )
+    plan["permissionExpiresAt"] = time.time() + 3_600
+    resources = plan["jobs"]["auth-credential"]["resources"]
+    locks = [{"key": item.replace("projects/", "project/"), "mode": "WRITE"} for item in resources]
+    state = ledger.snapshot()
+    row = state["reservations"][parent["reservation"]]
+    claim = copy.deepcopy(row["claim"])
+    claim.update(
+        gatePath=str(parent_path), gatePlanDigest=digest(plan),
+        manifestDigest=digest(plan), locks=locks,
+    )
+    row["claim"] = claim
+    row["claimDigest"] = digest(claim)
+    parent["claimDigest"] = row["claimDigest"]
+    envelope["scopes"] = locks
+    _save(ledger.path, state)
+
+    child_program = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, 'tools/compat-broad/auth-credential-tokens')
+import credential_gate as c
+v = json.loads(sys.stdin.read())
+path, plan = Path(v['path']), v['plan']
+c.create(path, plan)
+g = c.CredentialGate(path)
+g.claim()
+receipt = {'status': 200, 'complete': True, 'workerReaped': True, 'bodyKind': 'json', 'body': {}}
+attestation = {'kind': 'request-byte-token-attestation-v1', 'principalDigest': 'a' * 64,
+    'requiredScopeVerified': True, 'identityMode': 'subject', 'identityVerified': True,
+    'oauthClientVerified': True, 'expiresInSeconds': 600,
+    'remainingSecondsAtVerification': 600, 'requiredSeconds': 600,
+    'complete': True, 'workerReaped': True}
+for slot in plan['management']['observation']:
+    result = dict(receipt)
+    if slot['id'] == 'oauth-tokeninfo':
+        result['body'] = attestation
+    g.management_dispatch('observation', slot['id'], lambda _deadline, result=result: result)
+for operation in plan['jobs']['auth-credential']['observation']:
+    if operation['kind'] == 'custom-sign-in':
+        try:
+            g.dispatch(operation, False, lambda: (_ for _ in ()).throw(TimeoutError('controlled response loss')))
+        except TimeoutError:
+            pass
+        break
+    body = ({'localId': 'uid-' + operation['account'], 'idToken': 'dummy-id', 'refreshToken': 'dummy-refresh'}
+            if operation['kind'] == 'sign-up' else {'error': {'message': 'CONTROLLED_REFUSAL'}})
+    status = 200 if operation['kind'] == 'sign-up' else 400
+    g.dispatch(operation, False, lambda status=status, body=body: (status, body))
+g.abandon_observation('controlled custom uncertainty')
+for operation in plan['jobs']['auth-credential']['recovery']:
+    if operation['account'] == 'custom':
+        break
+    body = {} if operation['kind'] == 'delete' else {'kind': 'identitytoolkit#GetAccountInfoResponse', 'users': []}
+    g.dispatch(operation, True, lambda body=body: (200, body))
+"""
+    run = subprocess.run(
+        [sys.executable, "-c", child_program],
+        input=json.dumps({"path": str(parent_path), "plan": plan}),
+        text=True, capture_output=True, check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    gate_state = Gate(parent_path, "auth-credential").snapshot()
+    operations = plan["jobs"]["auth-credential"]["observation"]
+    normal_index, normal_operation = next(
+        (index, operation) for index, operation in enumerate(operations)
+        if operation["kind"] == "custom-sign-in"
+    )
+    assert gate_state["jobs"]["auth-credential"]["scheduleDone"] == 40
+    assert gate_state["jobs"]["auth-credential"]["skippedByStop"] == 20
+    child.update(
+        parentClaimDigest=parent["claimDigest"], parentPlanDigest=digest(plan),
+        parentEventIndex=normal_index, parentRequestDigest=digest(normal_operation),
+        locks=locks,
+    )
+    evidence = reservations._auth_parent_projection(gate_state, child)
+    child.update(parentGateDigest=evidence["gateDigest"], parentEvidenceDigest=evidence["evidenceDigest"])
+    return ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path
 
 
 def _auth_child_gate(path, child_plan, resource, *, body=None, status=200):
@@ -856,7 +1142,7 @@ def _auth_recovery_fixture_with_two_account_cleanup(tmp_path):
     envelope["scopes"] = claim["locks"]
     parent_gate["plan"] = plan
     parent_gate["planDigest"] = digest(plan)
-    parent_gate["total"] = 2
+    parent_gate["total"] = 4
     parent_gate["observation"] = 2
     parent_gate["recovery"] = 2
     parent_gate["jobs"]["auth-credential"].update(
@@ -959,6 +1245,159 @@ def test_auth_recovery_child_is_durable_lookup_only_and_closes_parent_on_typed_a
     assert len(ledger.snapshot()["reservations"][parent["reservation"]]["authRecoveryCloseResponsibilitiesDigest"]) == 64
     assert ledger.close_after_auth_recovery_child(parent, child_ticket,
         receipt_digest=digest(proof), now=1000) == parent
+
+
+def test_full_compiler_custom_token_parent_begins_and_settles(tmp_path):
+    fixture = _full_compiler_auth_recovery_fixture(tmp_path)
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
+    child_ticket = ledger.begin_auth_recovery_extension(
+        parent, child, envelope, child_plan,
+        source_binding=bindings["source"], transport_binding=bindings["transport"],
+        o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+        parent_evidence=evidence, now=1000,
+    )
+    _auth_child_gate(child_path, child_plan, resource)
+    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+    proof = {
+        "kind": "auth-uid-absence-proof-v1", "resource": resource, "status": 200,
+        "bodyShape": body, "bodyDigest": digest(body), "responseDigest": digest(body),
+        "eventIndex": 0, "requestDigest": digest(child_plan["jobs"]["auth-recovery"]["recovery"][0]),
+    }
+    ledger.settle_auth_recovery_child(child_ticket, absence_proof=proof,
+        receipt_digest=digest(proof), now=1000)
+    assert ledger.snapshot()["reservations"][parent["reservation"]]["recoveryChildren"][0]["state"] == "settled"
+
+
+def test_real_compiler_abandonment_closes_parent_and_reopens_ledger(tmp_path):
+    fixture = _real_abandoned_compiler_auth_recovery_fixture(tmp_path)
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
+    child_ticket, proof = _settle_auth_child_for_fixture(
+        ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path,
+    )
+    assert ledger.close_after_auth_recovery_child(
+        parent, child_ticket, receipt_digest=digest(proof), now=1000,
+    ) == parent
+    reopened = reservations.Ledger(ledger.path)
+    fresh = _fresh_auth_reservation_after_close(reopened, parent, envelope, tmp_path)
+    assert fresh["reservation"] != parent["reservation"]
+    assert reopened.close_after_auth_recovery_child(
+        parent, child_ticket, receipt_digest=digest(proof), now=1000,
+    ) == parent
+
+
+@pytest.mark.parametrize("control", ["missing-stop", "wrong-cursor"])
+def test_real_compiler_abandonment_evidence_controls_refuse(tmp_path, control):
+    fixture = _real_abandoned_compiler_auth_recovery_fixture(tmp_path)
+    _ledger, _parent, child, _envelope, _child_plan, _bindings, _evidence, _resource, child_path = fixture
+    gate_path = Path(child_path).parent / "auth-parent-gate"
+    gate_state = Gate(gate_path, "auth-credential").snapshot()
+    job = gate_state["jobs"]["auth-credential"]
+    if control == "missing-stop":
+        job.pop("stopReason", None)
+    else:
+        job["skippedByStop"] = 19
+    _save(gate_path, gate_state)
+    with pytest.raises(ValueError, match="stop"):
+        reservations._auth_parent_responsibility_projection(gate_state, child)
+
+
+def test_real_compiler_prior_uncertain_create_is_not_a_skipped_suffix(tmp_path):
+    fixture = _real_abandoned_compiler_auth_recovery_fixture(tmp_path)
+    _ledger, _parent, child, _envelope, _child_plan, _bindings, _evidence, _resource, child_path = fixture
+    gate_path = Path(child_path).parent / "auth-parent-gate"
+    gate_state = Gate(gate_path, "auth-credential").snapshot()
+    plan = gate_state["plan"]["jobs"]["auth-credential"]
+    index, operation = next(
+        (index, operation) for index, operation in enumerate(plan["observation"])
+        if operation.get("kind") == "custom-sign-in"
+        and operation.get("body", {}).get("token") == "$binding:customTokenReserved"
+    )
+    gate_state["events"].append({
+        "job": "auth-credential", "phase": "observation", "index": index,
+        "requestDigest": digest(operation), "service": "auth", "method": "POST",
+        "completed": False, "creationOutcome": "unknown", "ended": 2,
+    })
+    gate_state["observation"] += 1
+    gate_state["total"] += 1
+    job = gate_state["jobs"]["auth-credential"]
+    job["observation"] += 1
+    job["skippedByStop"] -= 1
+    _save(gate_path, gate_state)
+    with pytest.raises(ValueError, match="unresolved"):
+        reservations._auth_parent_responsibility_projection(gate_state, child)
+
+
+@pytest.mark.parametrize("management_count", [0, 1, 3])
+def test_auth_parent_projection_counts_validated_management_observations(tmp_path, management_count):
+    ledger, parent_path, child_claim = _compiler_auth_projection_fixture(
+        tmp_path, management_count=management_count,
+    )
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    projection = reservations._auth_parent_responsibility_projection(gate, child_claim)
+    assert projection["kind"] == "auth-parent-responsibility-close-v1"
+    assert gate["observation"] == management_count + gate["jobs"]["auth-credential"]["observation"]
+    assert ledger.snapshot()["reservations"]
+
+
+@pytest.mark.parametrize("malformed_management,management_count", [("order", 2), ("event", 1), ("phase", 1)])
+def test_auth_parent_projection_rejects_malformed_management_journal(tmp_path, malformed_management, management_count):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(
+        tmp_path, management_count=management_count, malformed_management=malformed_management,
+    )
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    with pytest.raises(ValueError, match="management"):
+        reservations._auth_parent_responsibility_projection(gate, child_claim)
+
+
+def test_auth_parent_projection_accepts_compiler_custom_token_negative_slots(tmp_path):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(tmp_path)
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    projection = reservations._auth_parent_responsibility_projection(gate, child_claim)
+    dispositions = {
+        (item["phase"], item["index"]): item["disposition"]
+        for item in projection["responsibilities"]
+    }
+    custom = [
+        index for index, operation in enumerate(gate["plan"]["jobs"]["auth-credential"]["observation"])
+        if operation.get("kind") == "custom-sign-in"
+    ]
+    assert dispositions[("observation", custom[1])] == "not-dispatched"
+    assert dispositions[("observation", custom[2])] == "not-dispatched"
+
+
+@pytest.mark.parametrize("variant_slot", [1, 2])
+def test_auth_parent_projection_accepts_typed_custom_token_refusal(tmp_path, variant_slot):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(
+        tmp_path, variant_outcome="refused", variant_slot=variant_slot,
+    )
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    projection = reservations._auth_parent_responsibility_projection(gate, child_claim)
+    custom = [
+        index for index, operation in enumerate(gate["plan"]["jobs"]["auth-credential"]["observation"])
+        if operation.get("kind") == "custom-sign-in"
+    ]
+    dispositions = {
+        (item["phase"], item["index"]): item["disposition"]
+        for item in projection["responsibilities"]
+    }
+    assert dispositions[("observation", custom[1])] == "refused"
+
+
+@pytest.mark.parametrize("variant_slot", [1, 2])
+def test_auth_parent_projection_retains_unresolved_custom_token_responsibility(tmp_path, variant_slot):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(
+        tmp_path, variant_outcome="unknown", variant_slot=variant_slot,
+    )
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    with pytest.raises(ValueError, match="creating event unresolved"):
+        reservations._auth_parent_responsibility_projection(gate, child_claim)
+
+
+def test_auth_parent_projection_rejects_foreign_custom_token_body(tmp_path):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(tmp_path, foreign_body=True)
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    with pytest.raises(ValueError, match="creating operation semantics"):
+        reservations._auth_parent_responsibility_projection(gate, child_claim)
 
 
 def test_valid_auth_recovery_close_releases_parent_lock_for_new_reservation(tmp_path):

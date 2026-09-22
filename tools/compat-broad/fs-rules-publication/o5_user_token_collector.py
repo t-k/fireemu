@@ -1406,22 +1406,6 @@ def collect(
                 failures.append(f"{operation['caseId']}:incomplete")
                 abort = "incomplete-receipt"
                 break
-            if ownership is not None:
-                for document in operation["createdDocuments"]:
-                    resource = _resource_for(plan, document)
-                    ownership[resource] = {
-                        "phase": "acknowledged",
-                        "version": raw.get("version"),
-                        "fieldsDigest": digest(raw.get("fields")),
-                    }
-                    journal.record(
-                        "ownership-acknowledged",
-                        {
-                            "subject": resource,
-                            "version": raw.get("version"),
-                            "fieldsDigest": digest(raw.get("fields")),
-                        },
-                    )
 
     except Exception as error:  # noqa: BLE001 -- processing must not skip recovery
         abort = getattr(error, "reason", None) or "collector:" + type(error).__name__
@@ -1871,14 +1855,37 @@ def _row(
     return row
 
 
+class RulesRecoveryContext:
+    """Opaque one-run recovery resources shared across setup and collection."""
+
+    def __init__(self, *, budget: Any, wire: Any, journal: Any, attempted: list[str], worker_state: dict[str, bool] | None = None):
+        self.budget = budget
+        self.wire = wire
+        self.journal = journal
+        self.attempted = attempted
+        self.worker_state = worker_state or {"unreaped": False}
+
+
+def make_recovery_context(*, budget: Any, wire: Any, journal: Any, attempted: list[str], worker_state: dict[str, bool] | None = None) -> RulesRecoveryContext:
+    """Bind recovery to existing run counters; this never creates a new budget."""
+    return RulesRecoveryContext(
+        budget=budget,
+        wire=wire,
+        journal=journal,
+        attempted=attempted,
+        worker_state=worker_state,
+    )
+
+
 def recover_owned(
     plan: Mapping[str, Any],
     execute: Callable[[dict[str, Any]], Any],
-    budget: _Budget,
-    wire: _Wire,
-    attempted: list[str],
-    journal: _Journal,
+    budget: _Budget | None = None,
+    wire: _Wire | None = None,
+    attempted: list[str] | None = None,
+    journal: _Journal | None = None,
     *,
+    context: RulesRecoveryContext | None = None,
     ownership: Mapping[str, Mapping[str, Any]] | None = None,
     recovery_dispatch: Callable[[dict[str, Any]], Any] | None = None,
     worker_state: dict[str, bool] | None = None,
@@ -1891,6 +1898,16 @@ def recover_owned(
     or absence receipt.  ``recovery_dispatch`` is an orchestrator-owned
     adapter for the same bounded Gate session, not a second cleanup pass.
     """
+    if context is not None:
+        budget, wire, journal, attempted, worker_state = (
+            context.budget,
+            context.wire,
+            context.journal,
+            context.attempted,
+            context.worker_state,
+        )
+    if budget is None or wire is None or journal is None or attempted is None:
+        raise ValueError("shared recovery context required")
     if ownership is None:
         subjects = list(plan["ownedResources"]) + [entry["ref"] for entry in plan["ownedAccounts"]]
         return {

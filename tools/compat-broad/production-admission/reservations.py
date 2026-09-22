@@ -2357,6 +2357,29 @@ class Ledger:
             row["finalGateDigest"] = record["gateDigest"]
             self._save(state)
 
+    def close_after_source_refusal(self, ticket, record):
+        """Retire only the reviewed Auth pre-network refusal; never rewrite history."""
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "auth-credential-tokens"))
+        import credential_source_refusal as refusal
+
+        with self._locked() as state:
+            receipt = self._terminal_receipt(
+                ticket, record, refusal.FIELDS, refusal.KIND, "Auth source-refusal"
+            )
+            active = self._terminal_row(state, ticket, record,
+                digest_key="sourceRefusalRecordDigest", final="closed-after-escalation")
+            row = self._row(state, ticket)
+            gate = self._terminal_gate(row, ticket, receipt, record)
+            refusal.validate_resolution(record, receipt=receipt, gate=gate, row=row,
+                now=time.time(), replay=active is None)
+            if active is None:
+                return
+            row["state"] = "closed-after-escalation"
+            row["resolutionDisposition"] = "source-proven-unsent"
+            row["sourceRefusalRecordDigest"] = digest(record)
+            row["finalGateDigest"] = record["gateDigest"]
+            self._save(state)
+
     def close_after_escalation(self, ticket, record):
         """Retire a reservation whose run may have written, after the owner proves it did not persist.
 

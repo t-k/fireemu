@@ -795,7 +795,7 @@
     "implemented": [
       "--only decides the lifecycle: an unselected Firestore, Storage or Functions binds no listener at all and its port stays free for whatever else wants it",
       "the child environment carries exactly the canonical variables of the selected services, in the firebase-tools@15.28.2 env.ts formats: FIRESTORE_EMULATOR_HOST and FIREBASE_FIRESTORE_EMULATOR_ADDRESS as host:port, FIREBASE_AUTH_EMULATOR_HOST as host:port, FIREBASE_STORAGE_EMULATOR_HOST as host:port next to STORAGE_EMULATOR_HOST as http://host:port, FIREBASE_EMULATOR_HUB as host:port, and a synthesised FIREBASE_CONFIG",
-      "the variables of unselected services are removed from the command environment, so a stale value in the shell cannot point a suite at a service this run is not serving",
+      "inherited emulator endpoints for unselected services are preserved; endpoints for selected services are overridden, so removing a routing variable cannot silently restore production routing",
       "an official service fireemu does not serve (database, hosting, apphosting, dataconnect, extensions) is refused by --only with its scope status before anything binds; eventarc and tasks are accepted support-service selections and are no-ops without a Functions codebase, matching firebase-tools 15.28.2",
       "--only functions:<codebase> selects one codebase, as the official CLI spells it",
       "the functions runner sees the same selection: an unselected product leaves its variable unset there too"
@@ -803,7 +803,7 @@
     "notes": [
       "there is no CLOUD_STORAGE_EMULATOR_HOST variable: the firebase-tools constant of that name emits STORAGE_EMULATOR_HOST, and fireemu sets that one",
       "FIREBASE_DATABASE_EMULATOR_HOST is never set, because fireemu serves no Realtime Database; it is cleared from the child environment for the same reason",
-      "two published divergences from the official CLI: fireemu also sets GOOGLE_CLOUD_PROJECT (the official CLI sets only GCLOUD_PROJECT), and it clears the variables of unselected services where the official CLI only adds",
+      "fireemu also sets GOOGLE_CLOUD_PROJECT (the official CLI sets only GCLOUD_PROJECT); both preserve inherited emulator endpoints for unselected services",
       "the Identity Toolkit socket also carries the control API, the App Check exchange and the UI API; when auth is not selected the control plane moves to an ephemeral loopback port and the configured Auth port is left free"
     ]
   },
@@ -953,6 +953,8 @@
     "status": "implemented",
     "implemented": [
       "under the emulator profile, the runner inherits ordinary SCREAMING_SNAKE variables from the daemon process before dotenv, system and emulator overrides, matching wrappers such as dotenv -- firebase emulators:exec while emulator-owned names and ambient Google credentials stay isolated; the strict profile keeps the entire parent environment isolated",
+      "bound Pub/Sub and Emulator Hub listeners are exported to the runner as PUBSUB_EMULATOR_HOST and FIREBASE_EMULATOR_HUB using bare host:port values",
+      "reload snapshots retain runtime files including .env.local and .secret.local even when deployment or watcher ignore patterns match; configured ignores still control change detection",
       "the dotenv chain in the official order and dialect (firebase-tools lib/functions/env.js): .env, .env.<projectId>, .env.<alias>, and emulator-only .env.local, later files overriding earlier ones",
       "the official refusals, with their sentences: both a projectId and an alias file present, a line that is not an assignment, a reserved key, a key that is not SCREAMING_SNAKE, a key under a reserved prefix",
       "the official quoting: single-quoted literal, double-quoted expanding \\n \\r \\t \\v \\\\ \\' \\\", unquoted ending at the first #, and a quoted value allowed to cross lines",

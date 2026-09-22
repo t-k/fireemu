@@ -32,9 +32,10 @@ use crate::gateway::Gateway;
 use crate::local::LocalBackend;
 use crate::rules::{self, Principal, RulesEnforcer};
 use json::{
-    aggregation_query_from_json, base64_decode_field, base64_encode, commit_to_json,
-    document_from_json, document_to_json, explain_options_from_json, mask_from_json,
-    mask_from_paths, optional_timestamp_to_json, precondition_from_json, request_options_from_json,
+    aggregation_query_from_json, base64_decode_field, base64_encode,
+    batch_writes_from_json as batch_write_rows_from_json, commit_to_json, document_from_json,
+    document_to_json, explain_options_from_json, mask_from_json, mask_from_paths,
+    optional_timestamp_to_json, precondition_from_json, request_options_from_json,
     structured_query_from_json, transaction_options_from_json, value_to_json, write_from_json,
     write_result_to_json, FieldPath, JsonError,
 };
@@ -1275,7 +1276,7 @@ impl RestState {
         json::strict_keys(body, &["writes", "labels"]).map_err(|e| bad(&e))?;
         let req = pb::BatchWriteRequest {
             database: database_of(resource)?,
-            writes: writes_from_json(body)?,
+            writes: batch_writes_from_json(body)?,
             labels: labels_from_json(body)?,
             request_options: None,
         };
@@ -1672,6 +1673,14 @@ fn writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| bad(&e))
         }
+        Some(_) => Err(Status::invalid_argument("writes must be an array")),
+    }
+}
+
+fn batch_writes_from_json(body: &Value) -> Result<Vec<pb::Write>, Status> {
+    match body.get("writes") {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(items)) => batch_write_rows_from_json(items).map_err(|e| bad(&e)),
         Some(_) => Err(Status::invalid_argument("writes must be an array")),
     }
 }

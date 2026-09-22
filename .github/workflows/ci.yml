@@ -166,6 +166,7 @@ jobs:
             # The private Quint authority and its traceability CLI supervise Unix process groups;
             # production libraries remain in this native Windows test run.
             cargo nextest run --workspace --exclude fireemu-verification-quint --exclude traceability-check --lib --profile pr
+            cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr
           else
             cargo nextest run --workspace --profile pr
           fi

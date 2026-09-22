@@ -1526,6 +1526,8 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                         eventarc: eventarc_addr.map(|a| a.to_string()),
                         tasks: tasks_addr.map(|a| a.to_string()),
                         logging: logging_addr.map(|a| a.to_string()),
+                        pubsub: pubsub_addr.map(|a| a.to_string()),
+                        hub: hub_addr.map(|a| a.to_string()),
                     },
                     &runner_secret,
                     callable_trusted_protocol,

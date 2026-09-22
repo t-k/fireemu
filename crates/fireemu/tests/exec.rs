@@ -505,27 +505,39 @@ fn a_background_job_the_command_leaves_behind_is_swept() {
 }
 
 #[test]
-fn inherited_emulator_variables_do_not_reach_the_command_unless_selected() {
-    let dir = scratch("scrub");
+fn inherited_unselected_emulator_endpoints_are_preserved_and_selected_ones_are_overridden() {
+    let dir = scratch("inherited-routing");
     let out = dir.join("env.txt");
+    let inherited = [
+        ("FIRESTORE_EMULATOR_HOST", "127.0.0.1:19081"),
+        ("FIREBASE_FIRESTORE_EMULATOR_ADDRESS", "127.0.0.1:19081"),
+        ("STORAGE_EMULATOR_HOST", "http://127.0.0.1:19082"),
+        ("FIREBASE_STORAGE_EMULATOR_HOST", "127.0.0.1:19082"),
+        ("FIREBASE_DATABASE_EMULATOR_HOST", "127.0.0.1:19083"),
+        ("PUBSUB_EMULATOR_HOST", "127.0.0.1:19084"),
+        ("FIREEMU_FUNCTIONS_HOST", "127.0.0.1:19085"),
+    ];
     let output = daemon()
-        .env("FIRESTORE_EMULATOR_HOST", "leaked.example:1")
-        .env("STORAGE_EMULATOR_HOST", "http://leaked.example:2")
-        .env("FIREEMU_FUNCTIONS_HOST", "leaked.example:3")
+        .envs(inherited)
+        .env("FIREBASE_AUTH_EMULATOR_HOST", "127.0.0.1:19086")
         .args(["--only", "auth", "--", "sh", "-c"])
         .arg(format!("env > {}", out.display()))
         .output()
         .unwrap();
     assert!(output.status.success());
     let env = env_file(&out);
-    assert!(env.contains_key("FIREBASE_AUTH_EMULATOR_HOST"));
-    for key in [
-        "FIRESTORE_EMULATOR_HOST",
-        "STORAGE_EMULATOR_HOST",
-        "FIREBASE_STORAGE_EMULATOR_HOST",
-        "FIREEMU_FUNCTIONS_HOST",
-    ] {
-        assert!(!env.contains_key(key), "{key} leaked into the command");
+    let auth = env.get("FIREBASE_AUTH_EMULATOR_HOST").unwrap();
+    assert_ne!(
+        auth, "127.0.0.1:19086",
+        "selected service must override the inherited endpoint"
+    );
+    assert!(auth.starts_with("127.0.0.1:"));
+    for (key, value) in inherited {
+        assert_eq!(
+            env.get(key).map(String::as_str),
+            Some(value),
+            "{key} must not silently fall back to production"
+        );
     }
 }
 

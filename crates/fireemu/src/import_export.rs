@@ -4033,6 +4033,7 @@ mod tests {
     use fireemu_core_auth::store::{ProjectAuthConfig, TenantMetadata};
     use fireemu_core_export::auth::{AuthConfig, AuthSettingsNamespace, AuthSettingsRecord};
     use fireemu_core_types::time::{days_from_civil, LogicalInstant};
+    #[cfg(unix)]
     use fireemu_export_publication::PublicationStage;
 
     #[cfg(unix)]
@@ -4043,14 +4044,13 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn export_entry_fails_before_creating_a_destination_on_windows() {
-        use std::sync::{Arc, Mutex, RwLock};
+        use std::sync::{Arc, Mutex};
 
         use fireemu_adapter_grpc::gateway::Gateway;
         use fireemu_adapter_grpc::local::LocalBackend;
         use fireemu_core_auth::mfa::TotpPolicy;
         use fireemu_core_auth::store::{AuthRegistry, AuthStore};
         use fireemu_core_firestore::index::{IndexSet, IndexValidationPolicy, PlanningContext};
-        use fireemu_core_rules::runtime::RulesetSlot;
         use fireemu_core_session::clock::VirtualClock;
         use fireemu_core_types::determinism::SplitMix64;
         use fireemu_core_types::edition::{FirestoreApiMode, FirestoreEdition};

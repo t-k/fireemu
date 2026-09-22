@@ -665,9 +665,6 @@ def _validate_rules_state(state, *, terminal=False):
     ):
         raise ValueError("Rules held recovery disposition changed")
     declared, count = _rules_cursor(state)
-    consumed = set(state["managementUsed"]) | {
-        item["id"] for item in state["managementSkipped"]
-    }
     account_subjects = {
         subject["id"]
         for subject in state["plan"]["rulesManagementContract"]["subjects"]
@@ -681,15 +678,24 @@ def _validate_rules_state(state, *, terminal=False):
             raise ValueError("Rules held recovery subject must be an account")
         if before_hold_subjects[subject_id]["status"] not in {"owned", "verified"}:
             raise ValueError("Rules held recovery subject lacks pre-recovery ownership")
-        read_slots = {
+        subject_slots = {
             identity
             for identity, phase, slot in declared
-            if phase == "recovery"
-            and slot["dependency"]["subject"] == subject_id
-            and slot["dependency"]["step"] == "read"
+            if phase == "recovery" and slot["dependency"]["subject"] == subject_id
         }
-        if consumed & read_slots:
+        used_subject_slots = set(state["managementUsed"]) & subject_slots
+        if used_subject_slots:
             raise ValueError("Rules held recovery subject already entered recovery")
+        skipped_by_id = {
+            item["id"]: item
+            for item in state["managementSkipped"]
+            if item["id"] in subject_slots
+        }
+        if any(
+            item.get("reason") != "dependency-held"
+            for item in skipped_by_id.values()
+        ):
+            raise ValueError("Rules held recovery skip disposition changed")
     slots = {identity: (phase, slot) for identity, phase, slot in declared}
     for event in state["managementEvents"]:
         receipt = event.get("rulesReceipt")
@@ -3233,10 +3239,9 @@ class Gate:
                 if phase == "recovery"
                 and slot["dependency"] == dependencies[0]
             )
-            consumed = set(state["managementUsed"]) | {
-                item["id"] for item in state["managementSkipped"]
-            }
-            if read_identity in consumed:
+            used = set(state["managementUsed"])
+            skipped = {item["id"] for item in state["managementSkipped"]}
+            if read_identity in used or read_identity in skipped:
                 raise ValueError("Rules held recovery subject already entered recovery")
             before_holds = dict(state)
             before_holds["rulesRecoveryHeld"] = {}

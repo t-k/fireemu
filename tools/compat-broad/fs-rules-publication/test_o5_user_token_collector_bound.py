@@ -27,6 +27,8 @@ from o5_user_token_collector import (
     collect as _collect,
     RulesManagementReceipt,
     RulesManagementSession,
+    open_ownership_journal,
+    start_context,
     _rules_management_proof,
     _management_cursor,
     recover_owned,
@@ -477,6 +479,20 @@ def test_rules_management_proof_persists_only_typed_projection() -> None:
     assert receipt["body"]["kind"] == "rules-management-proof-v1"
     assert "privateToken" not in json.dumps(receipt["body"])
     assert receipt.response_body == raw
+
+
+def test_start_context_is_reused_without_budget_reset(tmp_path) -> None:
+    plan = plan_for(ROLE_LOCAL_SHADOW)
+    journal = open_ownership_journal(
+        tmp_path / "run.jsonl", run_id="context-run", plan_digest=plan["planDigest"]
+    )
+    context = start_context(plan, environment=ENVIRONMENT_LOCAL, journal=journal)
+    assert context.journal is journal
+    assert context.attempted == []
+    budget = context.budget
+    context.attempted.append(plan["ownedResources"][0])
+    assert context.budget is budget
+    journal.close()
 
 
 def test_management_cursor_keeps_gate_skips_separate_from_receipts() -> None:

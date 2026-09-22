@@ -34,6 +34,7 @@ from test_o5_user_token_collector_bound import (
     LOCAL_ENDPOINT,
     LOCAL_TENANT,
     acquisition_for,
+    bound as bound_collection,
     bound_transport,
 )
 
@@ -63,12 +64,9 @@ def bound_local(plan: dict, run_id: str = "local-1") -> dict:
 def bound_pair() -> tuple[dict, dict, dict]:
     """Two fully bound, agreeing bundles and the production plan."""
     plan = production_plan()
-    production = collect(
-        plan,
-        bound_transport(plan, ROLE_PRODUCTION),
-        role=ROLE_PRODUCTION,
-        run_id="production-1",
-        acquisition=acquisition_for(plan, ROLE_PRODUCTION),
+    production, _ = bound_collection(
+        ROLE_PRODUCTION,
+        transport=bound_transport(plan, ROLE_PRODUCTION),
     )
     return production, bound_local(local_plan()), plan
 
@@ -736,6 +734,32 @@ def test_a_missing_release_is_named() -> None:
         error.startswith("production:ruleset-generation-order:")
         for error in result["errors"]
     )
+
+
+def test_a_missing_management_receipt_is_named_before_wire_admission() -> None:
+    production, local, plan = bound_pair()
+    production["transport"]["rulesManagement"]["managementReceipts"].pop()
+    result = compare(production, local, plan)
+    assert result["classification"] != MATCH
+    assert "production:management-receipts:count" in result["errors"]
+
+
+def test_a_duplicate_management_receipt_is_named() -> None:
+    production, local, plan = bound_pair()
+    receipts = production["transport"]["rulesManagement"]["managementReceipts"]
+    receipts[-1] = copy.deepcopy(receipts[-2])
+    result = compare(production, local, plan)
+    assert result["classification"] != MATCH
+    assert "production:management-receipts:order" in result["errors"]
+
+
+def test_out_of_order_management_receipts_are_named() -> None:
+    production, local, plan = bound_pair()
+    receipts = production["transport"]["rulesManagement"]["managementReceipts"]
+    receipts[0], receipts[1] = receipts[1], receipts[0]
+    result = compare(production, local, plan)
+    assert result["classification"] != MATCH
+    assert "production:management-receipts:order" in result["errors"]
 
 
 def test_a_row_under_the_wrong_ruleset_label_is_named() -> None:

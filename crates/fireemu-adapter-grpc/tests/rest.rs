@@ -190,12 +190,7 @@ fn batch_write_reports_an_unspecified_operation_per_row() {
     assert_eq!(response["status"][0]["code"], 0);
     assert_eq!(response["status"][1]["code"], 3);
 
-    let (status, document) = call(
-        &s,
-        "GET",
-        &format!("{DOCS}/items/one"),
-        json!({}),
-    );
+    let (status, document) = call(&s, "GET", &format!("{DOCS}/items/one"), json!({}));
     assert_eq!(status, 200, "{document}");
 }
 
@@ -220,12 +215,7 @@ fn batch_write_rest_keeps_valid_rows_around_an_unspecified_operation() {
     assert_eq!(response["status"][2]["code"], 0);
 
     for (name, value) in [("prefix", "1"), ("suffix", "3")] {
-        let (status, document) = call(
-            &s,
-            "GET",
-            &format!("{DOCS}/rows/{name}"),
-            json!({}),
-        );
+        let (status, document) = call(&s, "GET", &format!("{DOCS}/rows/{name}"), json!({}));
         assert_eq!(status, 200, "{document}");
         assert_eq!(document["fields"]["value"]["integerValue"], value);
     }
@@ -756,6 +746,54 @@ fn security_rules_publication_waits_for_exclusive_snapshot_work() {
         .expect("publication resumes after snapshot work");
     assert_eq!(status, 200, "{body}");
     worker.join().expect("publication worker exits");
+}
+
+#[test]
+fn rule_coverage_html_preserves_json_without_allowing_script_termination() {
+    let payload = "</ScRiPt><script>alert(1)</script><!--&>\u{2028}\u{2029}";
+    let source = format!("rules_version = '2'; service cloud.firestore {{ match /databases/{{db}}/documents {{ match /notes/{{id}} {{ allow get: if id != 'secret'; }} }} }} // {payload}");
+    let s = state(Some(&source));
+    call_as(&s, "GET", &format!("{DOCS}/notes/a"), json!({}), None);
+    let (_, expected) = call_as(
+        &s,
+        "GET",
+        &format!("{EMULATOR}:ruleCoverage"),
+        json!({}),
+        None,
+    );
+    let (status, response) = call_as(
+        &s,
+        "GET",
+        &format!("{EMULATOR}:ruleCoverage.html"),
+        json!({}),
+        None,
+    );
+    assert_eq!(status, 200);
+    let html = response[fireemu_adapter_grpc::rest::coverage::HTML_KEY]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        html.to_ascii_lowercase().matches("</script").count(),
+        1,
+        "only the template may close the JSON element"
+    );
+    let embedded = html
+        .split("type=\"application/json\">")
+        .nth(1)
+        .unwrap()
+        .split("</script>")
+        .next()
+        .unwrap();
+    for forbidden in ['<', '>', '&', '\u{2028}', '\u{2029}'] {
+        assert!(
+            !embedded.contains(forbidden),
+            "raw HTML-sensitive character: {forbidden:?}"
+        );
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(embedded).unwrap(),
+        expected
+    );
 }
 
 #[test]

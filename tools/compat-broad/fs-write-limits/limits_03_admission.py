@@ -43,6 +43,7 @@ from o8_admission import (
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 MISSING_APPROVAL = "a fresh owner approval for an unreserved nonce is required"
+PREPARED_PERMISSION_KIND = "limits-03-prepared-owner-execution-permission-v1"
 
 __all__ = [
     "MISSING_APPROVAL",
@@ -72,8 +73,23 @@ __all__ = [
 ]
 
 
-def descriptor():
-    return campaign.descriptor()
+def descriptor(permission=None):
+    value = campaign.descriptor()
+    if (
+        isinstance(permission, dict)
+        and permission.get("kind") == PREPARED_PERMISSION_KIND
+    ):
+        from o8_campaign import CampaignDescriptor
+
+        members = value.members()
+        members.update(
+            permission_kind=PREPARED_PERMISSION_KIND,
+            frozen_inputs_kind="limits-03-prepared-frozen-inputs-v1",
+            approval_kind="limits-03-prepared-o8-approval-v1",
+            manifest_kind="limits-03-prepared-o8-manifest-v1",
+        )
+        return CampaignDescriptor(**members)
+    return value
 
 
 def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
@@ -83,7 +99,9 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
 
 
 def validate_frozen_inputs(inputs) -> None:
-    o8_admission.validate_frozen_inputs(descriptor(), inputs)
+    permission = inputs.get("permission", {}) if isinstance(inputs, dict) else {}
+    o8_admission.validate_frozen_inputs(descriptor(permission), inputs)
+    _validate_preparation_permission(permission)
 
 
 def abort_generation(inputs):
@@ -91,11 +109,93 @@ def abort_generation(inputs):
 
 
 def validate_o7_admission(**bindings):
-    return o8_admission.validate_o7_admission(descriptor(), **bindings)
+    _validate_preparation_permission(
+        bindings["permission"], ledger_root=bindings["ledger_root"]
+    )
+    return o8_admission.validate_o7_admission(
+        descriptor(bindings["permission"]), **bindings
+    )
 
 
 def issue_production_capability(**bindings):
-    return o8_admission.issue_production_capability(descriptor(), **bindings)
+    _validate_preparation_permission(
+        bindings["permission"], ledger_root=bindings["ledger_root"]
+    )
+    return o8_admission.issue_production_capability(
+        descriptor(bindings["permission"]), **bindings
+    )
+
+
+def _validate_preparation_permission(permission, *, ledger_root=None):
+    """Bind the prepared variant to an actually released same-family baseline."""
+    reference = permission.get("baselinePreparation")
+    if permission.get("kind") != PREPARED_PERMISSION_KIND:
+        if reference is not None:
+            raise ValueError("PREP baseline requires prepared permission kind")
+        return
+    if not isinstance(reference, dict) or set(reference) != {
+        "packet",
+        "ticket",
+        "receiptPath",
+    }:
+        raise ValueError("terminal PREP baseline required")
+    from limits_03_baseline_prep import validate_packet
+    from reservations import Ledger
+
+    packet, ticket = reference["packet"], reference["ticket"]
+    validate_packet(packet)
+    if not isinstance(ticket, dict) or digest(ticket) != packet["ticketDigest"]:
+        raise ValueError("terminal PREP baseline ticket differs")
+    if ledger_root is not None and ticket.get("ledgerPath") != str(
+        Path(ledger_root).resolve()
+    ):
+        raise ValueError("terminal PREP baseline Ledger differs")
+    ledger = Ledger(ticket["ledgerPath"])
+    state = ledger.snapshot()
+    if ticket.get("ledgerIdentity") != state["identity"]:
+        raise ValueError("terminal PREP baseline Ledger identity differs")
+    row = state["reservations"].get(ticket.get("reservation"))
+    if (
+        not isinstance(row, dict)
+        or row.get("state") != "released"
+        or row.get("claimDigest") != ticket.get("claimDigest")
+        or row.get("envelopeDigest") != ticket.get("envelopeDigest")
+        or row.get("claim", {}).get("campaignId") != campaign.CAMPAIGN
+        or row.get("claim", {}).get("nonceDigest") != digest(packet["nonce"])
+        or row.get("generation", {}).get("sourceCommit") != packet["sourceCommit"]
+        or row.get("generation", {}).get("collectorSourceDigest")
+        != packet["sourceDigest"]
+    ):
+        raise ValueError("terminal PREP baseline was not released")
+    receipt_path = Path(reference["receiptPath"])
+    if (
+        str(receipt_path.resolve()) != str(receipt_path)
+        or str(receipt_path.parent / "gate") != row["claim"]["gatePath"]
+    ):
+        raise ValueError("terminal PREP baseline receipt path differs")
+    receipt = ledger._read_bounded_json(receipt_path)
+    original_packet = {
+        key: value
+        for key, value in packet.items()
+        if key not in {"packetDigest", "reservationReleased", "terminalReceiptDigest"}
+    }
+    original_packet["packetDigest"] = digest(original_packet)
+    if (
+        digest(receipt) != packet["terminalReceiptDigest"]
+        or receipt.get("ticket") != ticket
+        or receipt.get("collection") != original_packet
+        or receipt.get("releaseEligible") is not True
+        or receipt.get("failure") is not None
+        or row.get("evidence", {}).get("receiptSha256") != digest(receipt)
+        or row.get("evidence", {}).get("collectionDigest") != digest(original_packet)
+        or permission.get("nonce") == packet["nonce"]
+        or permission.get("authConfigDigest") != packet["authConfigDigest"]
+        or permission.get("databaseProjectionDigest")
+        != packet["database"]["projectionDigest"]
+        or digest(permission.get("credentialPrincipal")) != packet["principalDigest"]
+        or digest(permission.get("ownerIdentity")) != packet["ownerIdentityDigest"]
+    ):
+        raise ValueError("terminal PREP baseline binding differs")
 
 
 management_call = preflight.management_call
@@ -197,12 +297,19 @@ def _validate_index_lifecycle_contract(permission) -> None:
     expected = campaign.lifecycle_contract()
     if not isinstance(declared, dict) or digest(declared) != digest(expected):
         raise ValueError("declared index lifecycle contract differs")
-    if declared.get("pollLimit") != 1 or declared.get("observationSlots") != 4 or declared.get("recoverySlots") != 3:
+    if (
+        declared.get("pollLimit") != 1
+        or declared.get("observationSlots") != 4
+        or declared.get("recoverySlots") != 3
+    ):
         raise ValueError("one-poll lifecycle reservation required")
 
 
 def _approve(permission, plan, source_commit, artifact_digest, inputs) -> None:
     required = permission_bindings(plan, source_commit, artifact_digest, inputs)
+    if permission.get("kind") == PREPARED_PERMISSION_KIND:
+        required["kind"] = PREPARED_PERMISSION_KIND
+    _validate_preparation_permission(permission)
     if digest({key: permission.get(key) for key in required}) != digest(required):
         raise ValueError("typed owner permission binding differs")
     _validate_owner_window(permission)
@@ -248,7 +355,20 @@ def freeze_inputs(permission_path, plan, *, source_root, artifact_path):
     _provenance(source_root, commit, inputs)
     _approve(permission, plan, commit, artifact, inputs)
     return o8_admission.freeze_inputs(
-        descriptor(), permission, plan, source_commit=commit, artifact_sha256=artifact
+        descriptor(permission),
+        permission,
+        plan,
+        source_commit=commit,
+        artifact_sha256=artifact,
+    )
+
+
+def freeze_prepared_inputs(permission_path, plan, *, source_root, artifact_path):
+    """The strict final-permission freeze for a newly captured PREP packet."""
+    if _read(permission_path).get("kind") != PREPARED_PERMISSION_KIND:
+        raise ValueError("prepared owner permission kind required")
+    return freeze_inputs(
+        permission_path, plan, source_root=source_root, artifact_path=artifact_path
     )
 
 

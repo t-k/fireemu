@@ -61,3 +61,57 @@ def production_plan(nonce: str) -> dict:
             "global envelope reservation and resource lock admission",
         ],
     }
+
+
+def baseline_preparation_plan(nonce: str) -> dict:
+    """Return the same-campaign Gate allocation for pre-O7 metadata capture.
+
+    Preparation owns no document. Its six closed requests are two isolated
+    OAuth exchanges followed by four authenticated metadata GETs.
+    """
+    import compiler_03
+
+    compiled = compiler_03.compile_limits_plan(PROJECT, DATABASE, nonce)
+    plan = compiled["localGatePlan"]
+    slots = [
+        {"id": name, "timeout": 12}
+        for name in ("refresh", "oauth-tokeninfo", "project", "database", "auth", "key")
+    ]
+    plan["jobs"] = {
+        "limits": {
+            "resources": [],
+            "observation": [],
+            "recovery": [],
+            "schedule": [],
+        }
+    }
+    plan.update(
+        campaignId=compiler_03.CAMPAIGN,
+        transport="limits-03-baseline-preparation-v2",
+        receiptKind="limits-03-baseline-preparation-receipt-v1",
+        wallSeconds=300,
+        recoverySeconds=120,
+        observationRequests=6,
+        fixedCostMicrousd=0,
+        costMicrousd=600,
+        management={
+            "dispatchKind": "closed-v1",
+            "observation": slots,
+            "recovery": [],
+            "credentialIds": ["oauth-tokeninfo"],
+            "credentialSlots": ["oauth-tokeninfo"],
+        },
+    )
+    return {
+        "kind": "fs-write-limits-baseline-preparation-v1",
+        "campaignId": compiler_03.CAMPAIGN,
+        "gatePlan": plan,
+        "managementIds": ["observation:" + item["id"] for item in slots],
+        "dataDispatchAllowed": False,
+        "indexMutationAllowed": False,
+        "resourceLocks": [
+            {"key": f"project/{PROJECT}/firestore/{DATABASE}/database", "mode": "READ"},
+            {"key": f"project/{PROJECT}/auth/config", "mode": "READ"},
+            {"key": f"project/{PROJECT}/api-key-binding", "mode": "READ"},
+        ],
+    }

@@ -301,6 +301,16 @@ def test_setup_signup_and_signin_use_client_api_key_routes():
         assert request["body"]["returnSecureToken"] is True
 
 
+def test_transport_accepts_bounded_deadline_and_timeout_parameters():
+    plan, _operation, _resource = minimal_wire_plan()
+    with pytest.raises(ValueError, match="bounded transport timeout"):
+        remote.make_transport(plan, credentials={}, timeout_seconds=remote.MAX_SECONDS + 0.01)
+    with pytest.raises(ValueError, match="absolute transport deadline"):
+        remote.make_transport(plan, credentials={}, deadline=float("nan"))
+    transport = remote.make_transport(plan, credentials={}, timeout_seconds=2.0, deadline=time.monotonic() + 3.0)
+    assert callable(transport)
+
+
 def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
     item = {
         "id": "account/owner-a/signin",

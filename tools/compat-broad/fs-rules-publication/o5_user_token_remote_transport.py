@@ -1202,8 +1202,14 @@ def make_transport(
     account_bindings: dict[str, Any] | None = None,
     identity_proofs: dict[str, IdentityProof] | None = None,
     fixture_origin: str | None = None,
+    deadline: float | None = None,
+    timeout_seconds: float | None = None,
 ):
     _plan_identity(plan)
+    if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+        raise ValueError("absolute transport deadline required")
+    if timeout_seconds is not None and (type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= MAX_SECONDS):
+        raise ValueError("bounded transport timeout required")
     frozen = copy.deepcopy(frozen_inputs)
     trusted_bindings = copy.deepcopy(account_bindings or {})
     if identity_proofs is not None:
@@ -1272,7 +1278,12 @@ def make_transport(
             key: prepared[key]
             for key in ("service", "route", "method", "path", "headers", "body")
         }
-        envelope["seconds"] = MAX_SECONDS
+        seconds = MAX_SECONDS if timeout_seconds is None else float(timeout_seconds)
+        if deadline is not None:
+            seconds = min(seconds, deadline - time.monotonic())
+        if seconds <= 0:
+            raise WorkerExchangeError("transport deadline exhausted", worker_reaped=False)
+        envelope["seconds"] = seconds
         result = _run_worker(
             envelope,
             binding=binding,

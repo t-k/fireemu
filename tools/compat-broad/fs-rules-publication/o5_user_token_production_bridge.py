@@ -27,6 +27,8 @@ from o5_user_token_collector import (
     RulesManagementSession,
     open_ownership_journal,
     start_context,
+    OBSERVATION_RECEIPT_KEYS,
+    RECOVERY_RECEIPT_KEYS,
 )
 from o5_user_token_descriptor import CAMPAIGN, collector, gate_plan
 from o5_user_token_identity_proof import mint_acknowledged_setup_proof
@@ -35,6 +37,8 @@ from o5_user_token_remote_transport import (
     adapt_setup_result,
     make_transport,
     prepare_setup_request,
+    prepare_request,
+    _decode_firestore_value,
     run_worker,
     verify_worker_binding,
     worker_binding,
@@ -501,6 +505,248 @@ def setup_identity_proofs(plan, gate, handoffs, *, fixture_origin=None):
     return proofs
 
 
+def refresh_ownership(gate, ownership):
+    """Project immutable Gate replay into the collector's shared run inventory."""
+    states = gate.rules_management_ownership()
+    subjects = gate.snapshot()["plan"]["rulesManagementContract"]["subjects"]
+    for subject in subjects:
+        state = states[subject["id"]]
+        status, proof = state["status"], state["proof"]
+        value = {
+            "phase": "acknowledged" if status == "owned" else status,
+            "gateDisposition": "never-attempted"
+            if status == "not-attempted"
+            else status,
+        }
+        if proof is not None:
+            if subject["kind"] == "document":
+                value.update(
+                    version=proof["updateTime"], fieldsDigest=proof["fieldsDigest"]
+                )
+            else:
+                value.update(uid=proof["uid"], tenantId=proof["tenantId"])
+        ownership[subject["resource"]] = value
+    return states
+
+
+def collection_dispatch(
+    plan, gate, execute, *, credentials, account_bindings, identity_proofs, ownership
+):
+    """Admit every data, action, and cleanup exchange through its unique slot."""
+    accounts = {account["ref"]: account for account in plan["ownedAccounts"]}
+
+    def dispatch_one(operation, phase, slot, *, subject=None, step=None):
+        if phase == "recovery":
+            skip_unused_recovery(gate, stop_before=slot)
+        captured = {}
+
+        def send(deadline):
+            prepared = prepare_request(
+                plan,
+                operation,
+                credentials=credentials,
+                account_bindings=account_bindings,
+                identity_proofs=identity_proofs,
+            )
+            raw = execute(operation, deadline=deadline)
+            captured["raw"] = raw
+            if "index" in operation:
+                effects = []
+                if operation["method"] == "commit" and 200 <= raw["httpStatus"] < 300:
+                    writes = prepared["body"]["writes"]
+                    if len(raw.get("effects", [])) != len(writes):
+                        raise ValueError("actual per-write acknowledgements required")
+                    for index, (write, proof) in enumerate(zip(writes, raw["effects"])):
+                        if proof.get("index") != index or proof.get(
+                            "writeDigest"
+                        ) != digest(write):
+                            raise ValueError("prepared write acknowledgement differs")
+                        document = write["update"]
+                        fields = {
+                            key: _decode_firestore_value(value)
+                            for key, value in document["fields"].items()
+                        }
+                        effects.append(
+                            {
+                                "subject": "document/"
+                                + document["name"].rsplit("/", 1)[1],
+                                "proof": {
+                                    "kind": "document",
+                                    "name": document["name"],
+                                    "fieldsDigest": digest(fields),
+                                    "updateTime": proof["updateTime"],
+                                },
+                            }
+                        )
+                return data_gate_receipt(
+                    plan, operation["index"], {**raw, "effects": effects}
+                )
+            effects = []
+            response_digest = raw.get("responseDigest")
+            if not isinstance(response_digest, str):
+                raise ValueError("actual resource response digest required")
+            if 200 <= raw["httpStatus"] < 300 or raw["httpStatus"] == 404:
+                if subject.startswith("document/"):
+                    if step != "delete":
+                        if raw.get("documentPresent") is True:
+                            proof = {
+                                "kind": "document",
+                                "name": operation["resource"],
+                                "fieldsDigest": digest(raw["fields"]),
+                                "updateTime": raw["version"],
+                            }
+                        elif (
+                            raw["httpStatus"] == 404
+                            and raw.get("status") == "NOT_FOUND"
+                        ):
+                            proof = {
+                                "kind": "absence",
+                                "resource": operation["resource"],
+                            }
+                        else:
+                            raise ValueError("typed document readback required")
+                        effects.append({"subject": subject, "proof": proof})
+                else:
+                    ref = subject.removeprefix("account/")
+                    uid = account_bindings[ref]["uid"]
+                    if step == "write":
+                        if raw.get("localId") != uid:
+                            raise ValueError("account mutation acknowledgement differs")
+                        user = {"localId": uid}
+                    elif step != "delete":
+                        users = raw.get("users")
+                        if not isinstance(users, list) or len(users) > 1:
+                            raise ValueError("typed account lookup required")
+                        user = users[0] if users else None
+                    else:
+                        user = None
+                    if step != "delete":
+                        if user is None:
+                            proof = {"kind": "absence", "resource": ref}
+                        else:
+                            if user.get("localId") != uid:
+                                raise ValueError("account readback UID differs")
+                            proof = {
+                                "kind": "account",
+                                "accountRef": ref,
+                                "tenantId": accounts[ref]["tenant"],
+                                "uid": uid,
+                            }
+                        effects.append({"subject": subject, "proof": proof})
+                    captured["account"] = user
+            return {
+                "status": raw["httpStatus"],
+                "complete": raw["complete"],
+                "workerReaped": raw["workerReaped"],
+                "bodyKind": "json",
+                "body": {
+                    "kind": "rules-management-proof-v1",
+                    "responseDigest": response_digest,
+                    "effects": effects,
+                },
+            }
+
+        gate.management_dispatch(phase, slot, send)
+        refresh_ownership(gate, ownership)
+        return captured
+
+    def dispatch(operation):
+        if "index" in operation:
+            result = dispatch_one(
+                operation, "observation", f"data/{operation['index']}"
+            )["raw"]
+            return {
+                key: value
+                for key, value in result.items()
+                if key in OBSERVATION_RECEIPT_KEYS
+            }
+        if operation.get("phase") == "recovery":
+            ref = operation.get("accountRef")
+            subject = (
+                "account/" + ref
+                if ref is not None
+                else "document/" + operation["resource"].rsplit("/", 1)[1]
+            )
+            kind = operation["kind"]
+            step = (
+                "read"
+                if kind.endswith("readback")
+                else "absence"
+                if kind.endswith("absence")
+                else "delete"
+            )
+            captured = dispatch_one(
+                operation,
+                "recovery",
+                f"cleanup/{subject}/{step}",
+                subject=subject,
+                step=step,
+            )
+            raw = captured["raw"]
+            if ref is not None:
+                user = captured.get("account")
+                raw = {
+                    **raw,
+                    "status": "OK",
+                    "code": 0,
+                    "accountPresent": user is not None,
+                    "uid": user["localId"] if user else None,
+                    "tenantId": accounts[ref]["tenant"],
+                }
+            return {
+                key: value for key, value in raw.items() if key in RECOVERY_RECEIPT_KEYS
+            }
+        if operation.get("kind") == "principal-action":
+            ref, action = operation["principalRef"], operation["action"]
+            row = next(
+                row
+                for row in plan["observation"]
+                if row.get("principalAction") == {"ref": ref, "action": action}
+            )
+            prefix, subject = f"action/{row['index']}", "account/" + ref
+            dispatch_one(
+                operation,
+                "observation",
+                prefix + "/mutation",
+                subject=subject,
+                step="delete" if action == "delete" else "write",
+            )
+            readback = {
+                "kind": "principal-action-readback",
+                "phase": "principal",
+                "principalRef": ref,
+                "credentialRef": "administrator",
+                "credentialClass": "administrator",
+            }
+            captured = dispatch_one(
+                readback,
+                "observation",
+                prefix + "/readback",
+                subject=subject,
+                step="read",
+            )
+            raw, user = captured["raw"], captured["account"]
+            return {
+                "action": action,
+                "complete": raw["complete"],
+                "httpStatus": raw["httpStatus"],
+                "authTime": identity_proofs[ref].auth_time,
+                "validSince": int(user["validSince"])
+                if action == "revoke" and user
+                else None,
+                "present": user is not None,
+                "disabled": user.get("disabled", False) if user else None,
+                "uidFingerprint": digest(
+                    ["uid", plan["nonce"], account_bindings[ref]["uid"]]
+                )[:16],
+                "endpoint": raw["endpoint"],
+                "wireSequence": raw["wireSequence"],
+            }
+        raise ValueError("closed collection slot required")
+
+    return dispatch
+
+
 def validate_compiled_accounting(plan: dict[str, Any]) -> dict[str, int]:
     """Require the compiler's complete 144-request accounting."""
     estimate = campaign_budget(plan)
@@ -583,7 +829,13 @@ def management_session(*, plan, gate, ledger, ticket, execute, journal, ownershi
             if slot["id"] not in lifecycle["recoveryIds"]
         ],
     }
-    return RulesManagementSession(
+
+    class ResourceFirstSession(RulesManagementSession):
+        def run_recovery(self):
+            skip_unused_recovery(self.gate, stop_before=RULES_MANAGEMENT_RECOVERY[0])
+            return super().run_recovery()
+
+    return ResourceFirstSession(
         gate=gate,
         ledger=ledger,
         ticket=ticket,
@@ -726,6 +978,16 @@ def run_bound_collection(
             capability=capability,
             fixture_origin=fixture_origin,
         )
+        dispatch = collection_dispatch(
+            plan,
+            gate,
+            execute,
+            credentials=credentials,
+            account_bindings=account_bindings,
+            identity_proofs=identity_proofs,
+            ownership=ownership,
+        )
+        refresh_ownership(gate, ownership)
         session = management_session(
             gate=gate,
             ledger=ledger,
@@ -737,13 +999,14 @@ def run_bound_collection(
         )
         bundle = collector(
             plan,
-            execute,
+            dispatch,
             run_id=run_id,
             acquisition=acquisition,
             journal=journal,
             ownership=ownership,
             management_session=session,
             context=context,
+            recovery_dispatch=dispatch,
         )
     finally:
         journal.close()

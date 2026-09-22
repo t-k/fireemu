@@ -193,6 +193,7 @@ def _validate_preparation_permission(permission, *, ledger_root=None):
         or permission.get("databaseProjectionDigest")
         != packet["database"]["projectionDigest"]
         or digest(permission.get("credentialPrincipal")) != packet["principalDigest"]
+        or digest(permission.get("ownerIdentity")) != packet["ownerIdentityDigest"]
     ):
         raise ValueError("terminal PREP baseline binding differs")
 

@@ -760,6 +760,7 @@ def _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet):
     receipt = json.loads(receipt_path.read_bytes())
     permission.update(
         kind=admission.PREPARED_PERMISSION_KIND,
+        ownerIdentity=fixture["permission"]["ownerIdentity"],
         credentialPrincipal=fixture["permission"]["credentialPrincipal"],
         databaseProjectionDigest=packet["database"]["projectionDigest"],
         authConfigDigest=packet["authConfigDigest"],
@@ -778,6 +779,9 @@ def _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet):
         artifact_path=fixture["artifact_path"],
     )
     admission.validate_frozen_inputs(inputs)
+    changed_owner = {**permission, "ownerIdentity": "different-owner"}
+    with pytest.raises(ValueError, match="baseline binding"):
+        admission._validate_preparation_permission(changed_owner)
     descriptor = admission.descriptor(permission)
     manifest = {
         "kind": descriptor.manifest_kind,

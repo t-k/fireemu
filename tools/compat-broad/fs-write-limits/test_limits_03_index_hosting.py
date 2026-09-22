@@ -36,12 +36,14 @@ def test_one_poll_lifecycle_is_compiled_as_seven_charged_slots() -> None:
 
 def test_lifecycle_management_ids_are_closed_and_ordered() -> None:
     contract = compiler_03.management_contract()
-    assert [slot["id"] for slot in contract["observation"]][-4:] == [
+    observation = [slot["id"] for slot in contract["observation"]]
+    assert observation[3:7] == [
         "index-lifecycle-before",
         "index-lifecycle-apply",
         "index-lifecycle-poll",
         "index-lifecycle-after",
     ]
+    assert observation[7:] == ["index-exemption", "auth"]
     assert [slot["id"] for slot in contract["recovery"]][-3:] == [
         "index-lifecycle-restore",
         "index-lifecycle-poll-restore",
@@ -302,25 +304,11 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
                         and "/collectionGroups/nx/fields/" in entry[1]
                     ]
                 )
-                expected_states = (
-                    {1: "before", 2: "before", 3: "after", 4: "before"}
-                    if fault in ("lost-apply", "poll-invalid", "foreign-operation")
-                    else {
-                        1: "before",
-                        2: "before",
-                        3: "after",
-                        4: "after",
-                        5: "before",
-                    }
-                )
-                expected_state = expected_states[field_reads]
-                assert state["field"] == expected_state
-                exempt_reads = (
-                    (1, 3)
-                    if fault in ("lost-apply", "poll-invalid", "foreign-operation")
-                    else (1, 4)
-                )
-                if field_reads in exempt_reads:
+                if state["field"] == "before":
+                    inherited = True
+                elif fault in ("normal", "after-mismatch") and field_reads == 2:
+                    inherited = False
+                else:
                     self._respond(
                         {
                             "name": preflight.INDEX_FIELD,
@@ -332,7 +320,6 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
                         }
                     )
                     return
-                inherited = state["field"] == "before"
                 self._respond(
                     {
                         "name": preflight.LIFECYCLE_FIELD,
@@ -540,22 +527,21 @@ def test_management_session_runs_real_gate_lifecycle_over_loopback(
         assert receipt["releaseEligible"] is False
         assert gate["managementAbort"]["applyOutcome"] == "may-have-landed"
         assert len(wire_observations) == 0
-        assert len(lifecycle_paths) == 7
+        assert len(lifecycle_paths) == 6
         assert lifecycle_paths[0].endswith("/collectionGroups/nx/fields/*")
-        assert lifecycle_paths[1].endswith("/collectionGroups/nx/fields/*")
-        assert lifecycle_paths[2].endswith("?updateMask=indexConfig")
-        assert lifecycle_paths[3].endswith("/collectionGroups/nx/fields/*")
-        assert lifecycle_paths[4].endswith("?updateMask=indexConfig")
-        assert lifecycle_paths[5].endswith("/operations/op-restore")
-        assert lifecycle_paths[6].endswith("/collectionGroups/nx/fields/*")
+        assert lifecycle_paths[1].endswith("?updateMask=indexConfig")
+        assert lifecycle_paths[2].endswith("/collectionGroups/nx/fields/*")
+        assert lifecycle_paths[3].endswith("?updateMask=indexConfig")
+        assert lifecycle_paths[4].endswith("/operations/op-restore")
+        assert lifecycle_paths[5].endswith("/collectionGroups/nx/fields/*")
         assert state["field"] == "before"
     elif fault == "normal":
         assert result["failure"] is None
         assert result["reservationReleased"] is True
         assert len(gate["managementEvents"]) == 16
         assert len(lifecycle_paths) == 9
-        assert lifecycle_paths[2].endswith("?updateMask=indexConfig")
-        assert lifecycle_paths[3].endswith("/operations/op-apply")
+        assert lifecycle_paths[1].endswith("?updateMask=indexConfig")
+        assert lifecycle_paths[2].endswith("/operations/op-apply")
         assert lifecycle_paths[6].endswith("?updateMask=indexConfig")
         assert lifecycle_paths[7].endswith("/operations/op-restore")
     else:

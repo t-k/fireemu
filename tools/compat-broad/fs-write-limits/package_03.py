@@ -510,8 +510,7 @@ def manifest(
     shadow_profile = value["indexConfiguration"]["shadowRanUnder"]["ALL"].get(
         "profile", "historical"
     )
-    if shadow_profile == "nx-local":
-        value["indexConfiguration"]["shadowDifference"] = False
+    value["indexConfiguration"]["shadowDifference"] = shadow_profile != "nx-local"
     for case in value["cases"]:
         if case.get("limitId") == "FS-LIMIT-DOCUMENT-NAME-BYTES":
             prefix = len("projects/fireemu-35fe6/databases/(default)/documents/")

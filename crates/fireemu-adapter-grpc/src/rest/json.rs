@@ -59,18 +59,33 @@ pub fn base64_encode(data: &[u8]) -> String {
 }
 
 /// Standard or URL-safe base64, padding optional.
+///
+/// Padding, when present, must terminate the last quantum and have its complete
+/// length. A single remaining sextet is truncated input, not an empty byte string.
 pub fn base64_decode(text: &str) -> Result<Vec<u8>, JsonError> {
     let mut out = Vec::with_capacity(text.len() * 3 / 4);
     let mut acc: u32 = 0;
     let mut bits = 0u32;
+    let mut padding = 0u32;
     for c in text.bytes() {
+        match c {
+            b'\n' | b'\r' => continue,
+            b'=' => {
+                padding += 1;
+                if padding > 2 {
+                    return err("invalid base64");
+                }
+                continue;
+            }
+            _ if padding != 0 => return err("invalid base64"),
+            _ => {}
+        }
         let v = match c {
             b'A'..=b'Z' => c - b'A',
             b'a'..=b'z' => c - b'a' + 26,
             b'0'..=b'9' => c - b'0' + 52,
             b'+' | b'-' => 62,
             b'/' | b'_' => 63,
-            b'=' | b'\n' | b'\r' => continue,
             _ => return err("invalid base64"),
         };
         acc = (acc << 6) | u32::from(v);
@@ -79,6 +94,15 @@ pub fn base64_decode(text: &str) -> Result<Vec<u8>, JsonError> {
             bits -= 8;
             out.push(u8::try_from((acc >> bits) & 0xFF).unwrap_or(0));
         }
+    }
+    let expected_padding = match bits {
+        0 => 0,
+        2 => 1,
+        4 => 2,
+        _ => return err("invalid base64"),
+    };
+    if padding != 0 && padding != expected_padding {
+        return err("invalid base64");
     }
     Ok(out)
 }

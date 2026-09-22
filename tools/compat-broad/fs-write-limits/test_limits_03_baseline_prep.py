@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from typing import ClassVar
 
@@ -77,6 +78,289 @@ def test_private_handoff_rejects_pipe_and_duplicate_json_keys():
         private.seek(0)
         with pytest.raises(ValueError, match="duplicate"):
             prep._read_private_json(private.fileno())
+
+
+def _custody_permission():
+    import limits_03_baseline_prep as prep
+    from broad_contract import digest
+
+    permission = {
+        "credentialPrincipal": {
+            "clientId": "fixture-client",
+            "subject": "fixture-subject",
+            "requiredScopes": [prep.campaign.PRINCIPAL_SCOPE],
+        },
+    }
+    return permission, digest(permission)
+
+
+def _custody_value():
+    import limits_03_baseline_prep as prep
+    from broad_contract import digest
+
+    permission, permission_digest = _custody_permission()
+    return permission, {
+        "kind": prep.CUSTODY_KIND,
+        "token": "fixture-token",
+        "project": prep.campaign.PROJECT,
+        "principalDigest": digest(permission["credentialPrincipal"]),
+        "expiresAt": time.time() + 600,
+        "preparationPermissionDigest": permission_digest,
+    }
+
+
+def test_custody_pipe_is_bounded_and_validated_before_private_publication():
+    import limits_03_baseline_prep as prep
+
+    permission, custody = _custody_value()
+    read_fd, write_fd = os.pipe()
+    try:
+        prep._write_custody_pipe(write_fd, custody)
+        os.close(write_fd)
+        write_fd = None
+        received = prep._read_custody_pipe(read_fd)
+        assert prep._validate_custody(received, permission) == custody
+    finally:
+        os.close(read_fd)
+        if write_fd is not None:
+            os.close(write_fd)
+
+
+def test_custody_destination_requires_empty_owned_regular_0600_file(tmp_path):
+    import limits_03_baseline_prep as prep
+
+    permission, custody = _custody_value()
+    path = tmp_path / "custody"
+    path.touch(mode=0o600)
+    with path.open("r+b") as stream:
+        prep._validate_custody_destination(stream.fileno())
+        prep._publish_custody(stream.fileno(), custody)
+        stream.seek(0)
+        assert prep._validate_custody(json.loads(stream.read()), permission) == custody
+        with pytest.raises(ValueError, match="empty owned"):
+            prep._publish_custody(stream.fileno(), custody)
+    nonempty = tmp_path / "nonempty"
+    nonempty.write_bytes(b"x")
+    nonempty.chmod(0o600)
+    with nonempty.open("r+b") as stream, pytest.raises(ValueError, match="empty owned"):
+        prep._validate_custody_destination(stream.fileno())
+
+
+@pytest.mark.parametrize("mode", (0o000, 0o200, 0o400, 0o700, 0o640, 0o1600))
+def test_custody_destination_requires_exact_0600_mode(tmp_path, mode):
+    import limits_03_baseline_prep as prep
+
+    path = tmp_path / "custody"
+    path.touch(mode=0o600)
+    with path.open("r+b") as stream, pytest.raises(ValueError, match="empty owned"):
+        path.chmod(mode)
+        prep._validate_custody_destination(stream.fileno())
+
+
+def _capture_failure_bindings(tmp_path):
+    permission, _ = _custody_value()
+    return {
+        "permission": permission,
+        "inputs": {},
+        "approval": {},
+        "manifest": {},
+        "source_root": tmp_path,
+        "manifest_path": tmp_path / "manifest.json",
+        "manifest_bytes": b"{}",
+        "artifact_path": tmp_path / "artifact",
+        "ledger_root": tmp_path / "ledger",
+    }
+
+
+def test_capture_closes_custody_fds_when_worker_launch_fails(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    monkeypatch.setattr(prep, "approve_preparation", lambda **bindings: object())
+    monkeypatch.setattr(prep.o8_admission, "revoke_production_capability", lambda _: None)
+    recorded = []
+    real_pipe = prep.os.pipe
+
+    def record_pipe():
+        pair = real_pipe()
+        recorded.extend(pair)
+        return pair
+
+    monkeypatch.setattr(prep.os, "pipe", record_pipe)
+    monkeypatch.setattr(prep.subprocess, "Popen", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("launch")))
+    with tempfile.TemporaryFile() as handoff, tempfile.TemporaryFile() as custody, pytest.raises(RuntimeError, match="launch"):
+        prep.capture_baseline(
+            bindings=_capture_failure_bindings(tmp_path),
+            output=tmp_path / "run",
+            handoff_fd=handoff.fileno(),
+            custody_output_fd=custody.fileno(),
+        )
+    for fd in recorded:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+def test_capture_closes_custody_fds_after_worker_timeout(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    monkeypatch.setattr(prep, "approve_preparation", lambda **bindings: object())
+    monkeypatch.setattr(prep.o8_admission, "revoke_production_capability", lambda _: None)
+    recorded = []
+    real_pipe = prep.os.pipe
+
+    def record_pipe():
+        pair = real_pipe()
+        recorded.extend(pair)
+        return pair
+
+    monkeypatch.setattr(prep.os, "pipe", record_pipe)
+
+    class TimedOut:
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, payload, timeout):
+            raise subprocess.TimeoutExpired("prep", timeout)
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout):
+            self.waited = True
+
+    monkeypatch.setattr(prep.subprocess, "Popen", lambda *args, **kwargs: TimedOut())
+    with tempfile.TemporaryFile() as handoff, tempfile.TemporaryFile() as custody, pytest.raises(ValueError, match="coordinator deadline"):
+        prep.capture_baseline(
+            bindings=_capture_failure_bindings(tmp_path),
+            output=tmp_path / "run",
+            handoff_fd=handoff.fileno(),
+            custody_output_fd=custody.fileno(),
+        )
+    for fd in recorded:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+def test_capture_reaps_real_child_after_unexpected_communicate_failure(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    monkeypatch.setattr(prep, "approve_preparation", lambda **bindings: object())
+    monkeypatch.setattr(prep.o8_admission, "revoke_production_capability", lambda _: None)
+    real_child = subprocess.Popen([os.sys.executable, "-c", "import time; time.sleep(60)"])
+
+    class BrokenCommunicate:
+        def poll(self):
+            return real_child.poll()
+
+        def communicate(self, payload, timeout):
+            raise OSError("stdin transport failed")
+
+        def kill(self):
+            real_child.kill()
+
+        def wait(self, timeout=None):
+            return real_child.wait(timeout=timeout)
+
+    monkeypatch.setattr(prep.subprocess, "Popen", lambda *args, **kwargs: BrokenCommunicate())
+    try:
+        with tempfile.TemporaryFile() as handoff, tempfile.TemporaryFile() as custody, pytest.raises(OSError, match="stdin transport"):
+            prep.capture_baseline(
+                bindings=_capture_failure_bindings(tmp_path),
+                output=tmp_path / "run",
+                handoff_fd=handoff.fileno(),
+                custody_output_fd=custody.fileno(),
+            )
+    finally:
+        assert real_child.poll() is not None
+
+
+def test_default_capture_path_does_not_require_custody(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    monkeypatch.setattr(prep, "approve_preparation", lambda **bindings: object())
+    monkeypatch.setattr(prep.o8_admission, "revoke_production_capability", lambda _: None)
+
+    class Completed:
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, payload, timeout):
+            return b"", b""
+
+    monkeypatch.setattr(prep.subprocess, "Popen", lambda *args, **kwargs: Completed())
+    packet = {"completed": True}
+    called = []
+    monkeypatch.setattr(
+        prep,
+        "retire_preparation",
+        lambda **kwargs: called.append(kwargs) or packet,
+    )
+    with tempfile.TemporaryFile() as handoff:
+        assert prep.capture_baseline(
+            bindings=_capture_failure_bindings(tmp_path),
+            output=tmp_path / "run",
+            handoff_fd=handoff.fileno(),
+        ) == packet
+    assert called
+
+
+def test_partial_publication_clears_output_without_touching_released_proof(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    permission, custody = _custody_value()
+    path = tmp_path / "custody"
+    path.touch(mode=0o600)
+    proof = tmp_path / "baseline-packet.json"
+    proof.write_bytes(b'{"reservationReleased":true}')
+    with path.open("r+b") as stream:
+        real_write = prep.os.write
+
+        def partial_write(fd, data):
+            if fd == stream.fileno():
+                real_write(fd, b"partial")
+                raise OSError("simulated publication failure")
+            return real_write(fd, data)
+
+        monkeypatch.setattr(prep.os, "write", partial_write)
+        with pytest.raises(OSError, match="simulated publication"):
+            prep._publish_custody_or_clear(stream.fileno(), custody)
+        stream.seek(0)
+        assert stream.read() == b""
+    assert proof.read_bytes() == b'{"reservationReleased":true}'
+    assert prep._validate_custody(custody, permission)
+
+
+def test_custody_refuses_empty_pipe_expiry_or_wrong_permission():
+    import limits_03_baseline_prep as prep
+
+    permission, custody = _custody_value()
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    try:
+        assert prep._read_custody_pipe(read_fd) is None
+    finally:
+        os.close(read_fd)
+    with pytest.raises(ValueError, match="verified private custody"):
+        prep._validate_custody({**custody, "expiresAt": time.time() - 1}, permission)
+    with pytest.raises(ValueError, match="verified private custody"):
+        prep._validate_custody(custody, {"credentialPrincipal": permission["credentialPrincipal"], "x": 1})
+
+
+def test_partial_private_custody_is_cleared(tmp_path):
+    import limits_03_baseline_prep as prep
+
+    path = tmp_path / "custody"
+    path.touch(mode=0o600)
+    with path.open("r+b") as stream:
+        stream.write(b'{"kind":"partial')
+        stream.flush()
+        prep._clear_custody(stream.fileno())
+        stream.seek(0)
+        assert stream.read() == b""
 
 
 def _approved(tmp_path, *, fixture_origin=None):
@@ -555,8 +839,14 @@ def test_preparation_reserves_real_temporary_ledger_and_gate(tmp_path):
         "disconnect",
     ],
 )
-def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path, fault):
+@pytest.mark.parametrize("custody_enabled", (True, False))
+def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(
+    tmp_path, fault, custody_enabled
+):
     import limits_03_baseline_prep as prep
+
+    if not custody_enabled and fault is not None:
+        pytest.skip("default compatibility is exercised only on the successful path")
 
     database = {
         "name": "projects/fireemu-35fe6/databases/(default)",
@@ -659,7 +949,13 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         from broad_contract import digest
 
         fixture = _approved(tmp_path, fixture_origin=origin)
-        with tempfile.TemporaryFile() as handoff:
+        with ExitStack() as stack:
+            handoff = stack.enter_context(tempfile.TemporaryFile())
+            custody = (
+                stack.enter_context(tempfile.TemporaryFile())
+                if custody_enabled
+                else None
+            )
             handoff.write(
                 json.dumps(
                     {
@@ -674,8 +970,15 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
             )
             handoff.seek(0)
             packet = prep.capture_baseline(
-                bindings=fixture, output=tmp_path / "run", handoff_fd=handoff.fileno()
+                bindings=fixture,
+                output=tmp_path / "run",
+                handoff_fd=handoff.fileno(),
+                custody_output_fd=custody.fileno() if custody is not None else None,
             )
+            custody_bytes = b""
+            if custody is not None:
+                custody.seek(0)
+                custody_bytes = custody.read()
     finally:
         server.shutdown()
         server.server_close()
@@ -701,6 +1004,7 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         assert packet["completed"] is False
         assert packet["failed"] is True
         assert packet["reservationReleased"] is True
+        assert custody_bytes == b""
         assert (
             len(Handler.seen)
             == {
@@ -723,6 +1027,13 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         return
 
     assert packet["completed"] is True
+    if custody_enabled:
+        custody_value = json.loads(custody_bytes)
+        assert custody_value["kind"] == prep.CUSTODY_KIND
+        assert custody_value["project"] == prep.campaign.PROJECT
+        assert custody_value["preparationPermissionDigest"] == digest(fixture["permission"])
+    else:
+        assert custody_bytes == b""
     from batch_contract import database_evidence
 
     assert (

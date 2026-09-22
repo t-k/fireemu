@@ -61,3 +61,53 @@ def production_plan(nonce: str) -> dict:
             "global envelope reservation and resource lock admission",
         ],
     }
+
+
+def baseline_preparation_plan(nonce: str) -> dict:
+    """Return the same-campaign Gate allocation for pre-O7 metadata capture.
+
+    The preparation has no data or index operation authority.  It deliberately
+    retains the compiler's resource-shaped job so the existing Gate/Ledger
+    validators can bind the reservation, while its management schedule is the
+    six credential/metadata slots only.  The final O7 permission is separate.
+    """
+    import compiler_03
+
+    compiled = compiler_03.compile_limits_plan(PROJECT, DATABASE, nonce)
+    plan = compiled["localGatePlan"]
+    baseline_resource = (
+        f"projects/{PROJECT}/databases/{DATABASE}/documents/oracle/"
+        f"{nonce}/limits-03-baseline/packet"
+    )
+    plan["jobs"] = {
+        "limits": {
+            "resources": [baseline_resource],
+            "observation": [],
+            "recovery": [],
+            "schedule": [],
+        }
+    }
+    plan.update(
+        campaignId=compiler_03.CAMPAIGN,
+        transport="limits-baseline-preparation-v1",
+        wallSeconds=300,
+        recoverySeconds=120,
+        observationRequests=len(management()),
+        fixedCostMicrousd=0,
+        costMicrousd=len(management()) * 100,
+        management={"observation": management(), "recovery": []},
+    )
+    return {
+        "kind": "fs-write-limits-baseline-preparation-v1",
+        "campaignId": compiler_03.CAMPAIGN,
+        "gatePlan": plan,
+        "managementIds": ["observation:" + item["id"] for item in management()],
+        "dataDispatchAllowed": False,
+        "indexMutationAllowed": False,
+        "resourceLocks": [
+            {"key": f"project/{PROJECT}/firestore/{DATABASE}/documents/oracle/{nonce}/limits-03-baseline/packet", "mode": "WRITE"},
+            {"key": f"project/{PROJECT}/firestore/{DATABASE}/database", "mode": "READ"},
+            {"key": f"project/{PROJECT}/auth/config", "mode": "READ"},
+            {"key": f"project/{PROJECT}/api-key-binding", "mode": "READ"},
+        ],
+    }

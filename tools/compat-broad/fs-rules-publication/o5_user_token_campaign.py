@@ -69,9 +69,8 @@ def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
         for item in (*setup["fixtures"], *setup["auth"])
     ]
     value["observation"] = entries + value["observation"]
-    setup_recovery = setup_recovery_plan(plan)
-    value["recovery"] = setup_recovery + value["recovery"]
-    value["totalRequests"] += setup["totalRequests"] + len(setup_recovery)
+    value["recovery"] = setup_recovery_plan(plan) + value["recovery"]
+    value["totalRequests"] += setup["totalRequests"]
     return value
 
 

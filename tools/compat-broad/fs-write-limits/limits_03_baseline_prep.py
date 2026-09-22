@@ -532,8 +532,6 @@ def _run_preparation(bindings, output, handoff_fd):
                         {"slot": slot, "secret": secret, "deadline": deadline}
                     )
                     request_digests.append(raw["requestDigest"])
-                    if slot not in ("refresh", "oauth-tokeninfo"):
-                        _write_receipt(output / f"private-{slot}.json", raw)
                     response = {
                         key: raw[key]
                         for key in ("status", "complete", "workerReaped", "bodyKind")

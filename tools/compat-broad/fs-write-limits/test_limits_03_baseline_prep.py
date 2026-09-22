@@ -628,6 +628,19 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
                     body["projectNumber"] = "1"
             else:
                 body = {"name": "projects/592603257417/config", "signIn": {}}
+            if path != "/token" and "tokeninfo" not in path:
+                endpoint = (
+                    "database"
+                    if "/databases/" in path
+                    else "key"
+                    if "/keys:lookupKey" in path
+                    else "auth"
+                    if path.endswith("/config")
+                    else "project"
+                )
+                body["unexpectedPrivateMetadata"] = {
+                    "nested": [{"secret": "unexpected-metadata-secret-" + endpoint}]
+                }
             encoded = json.dumps(body).encode()
             status = (
                 401 if fault == "unauthorized" and path.endswith("/config") else 200
@@ -678,6 +691,7 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
                     "fixture-secret",
                     "fixture-refresh",
                     "fixture-key",
+                    "unexpected-metadata-secret-",
                 )
             ), evidence_file.name
 
@@ -709,6 +723,13 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         return
 
     assert packet["completed"] is True
+    from batch_contract import database_evidence
+
+    assert (
+        packet["database"]["projectionDigest"]
+        == database_evidence(database)["projectionDigest"]
+    )
+    assert not list((tmp_path / "run").glob("private-*.json"))
     assert packet["database"]["projectionDigest"]
     assert packet["authConfigDigest"]
     assert packet["slots"] == [
@@ -866,7 +887,11 @@ def _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet):
         else:
             damaged_packet["terminalReceiptDigest"] = "0" * 64
         damaged_packet["packetDigest"] = digest(
-            {key: value for key, value in damaged_packet.items() if key != "packetDigest"}
+            {
+                key: value
+                for key, value in damaged_packet.items()
+                if key != "packetDigest"
+            }
         )
         with pytest.raises(ValueError, match="terminal PREP baseline"):
             admission._validate_preparation_permission(changed)

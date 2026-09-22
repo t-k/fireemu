@@ -312,3 +312,40 @@ def test_selector_construction_failure_reaps_spawned_worker(monkeypatch):
     assert process.poll() is not None
     assert process.stdin is not None and process.stdin.closed
     assert process.stdout is not None and process.stdout.closed
+
+
+def test_process_frame_admits_the_bounded_sentinel_request_payload():
+    source = b"""import json, struct, sys
+sys.stdin.buffer.readline()
+sys.stdin.buffer.read()
+header = b'{\"status\":200,\"contentType\":\"application/json\"}'
+sys.stdout.buffer.write(b'H' + struct.pack('>I', len(header)) + header)
+sys.stdout.buffer.write(b'E' + struct.pack('>I', 0))
+sys.stdout.buffer.flush()
+"""
+    body_bytes = 16_777_217
+    overhead = 8192 + 4096 + 8
+    payload = b"{}\n" + b"x" * (body_bytes + overhead - 3)
+
+    result = transport._run_process_exchange(
+        worker_source=source,
+        request_payload=payload,
+        deadline=time.monotonic() + 20,
+        response_cap=1024,
+        worker_sha256=hashlib.sha256(source).hexdigest(),
+    )
+
+    assert result == (200, "application/json", b"", None)
+
+
+def test_process_frame_rejects_one_byte_above_the_sentinel_request_cap():
+    source = b"raise SystemExit(0)\n"
+    payload = b"x" * (16_777_217 + 8192 + 4096 + 8 + 1)
+    with pytest.raises(ValueError, match="invalid request payload"):
+        transport._run_process_exchange(
+            worker_source=source,
+            request_payload=payload,
+            deadline=time.monotonic() + 20,
+            response_cap=1024,
+            worker_sha256=hashlib.sha256(source).hexdigest(),
+        )

@@ -45,8 +45,12 @@ from request_bytes_campaign import campaign_digest, compile_request_bytes_campai
 from request_bytes_collector import collect_local
 from request_bytes_compiler import (
     CAMPAIGN,
+    RAW_16MIB_OVER_CASE_ID,
+    RAW_16MIB_OVER_LABEL,
     compile_request_bytes_plan,
+    compile_request_bytes_sentinel_plan,
     validate_request_bytes_plan,
+    validate_request_bytes_sentinel_plan,
 )
 from request_bytes_shadow import classify_local_result
 from shared_gate import body_reference
@@ -241,8 +245,14 @@ def recovery_seconds() -> int:
     return int(_budget_numbers()[1]["recoveryWindow"]["reserveSeconds"])
 
 
-def transport_deadline_seconds() -> float:
+def transport_deadline_seconds(case_id: str | None = None) -> float:
     """The per-request wire ceiling, taken from the spec and checked against code."""
+    if case_id == RAW_16MIB_OVER_CASE_ID:
+        if request_bytes_remote_transport.SENTINEL_TIMEOUT != 80.0:
+            raise ValueError("sentinel transport deadline differs from enforcement")
+        return request_bytes_remote_transport.SENTINEL_TIMEOUT
+    if case_id is not None:
+        raise ValueError("unsupported closed request-byte case selector")
     published = budget_document()
     declared = published["transportDeadline"]["perRequestSeconds"]
     enforced = request_bytes_remote_transport.TIMEOUT
@@ -270,8 +280,12 @@ def small_request_timeout_seconds() -> float:
     return float(declared)
 
 
-def budget() -> dict:
+def budget(case_id: str | None = None) -> dict:
     """The published budget object, unmodified."""
+    if case_id == RAW_16MIB_OVER_CASE_ID:
+        return campaign.sentinel_budget()
+    if case_id is not None:
+        raise ValueError("unsupported closed request-byte case selector")
     return copy.deepcopy(budget_document()["budget"])
 
 
@@ -322,7 +336,7 @@ def recovery_reserve_microusd() -> int:
     return math.ceil(usd * 1_000_000)
 
 
-def ledger_budget() -> dict:
+def ledger_budget(case_id: str | None = None) -> dict:
     """The four Ledger dimensions, with recovery already inside every one.
 
     `requests` is 258 because the compiled schedule is 105 observation slots
@@ -334,6 +348,15 @@ def ledger_budget() -> dict:
     reserve, and not the expected forecast, which the published budget says
     binds nothing.
     """
+    if case_id == RAW_16MIB_OVER_CASE_ID:
+        return {
+            "requests": 108,
+            "accounts": 1,
+            "resources": 20,
+            "costMicrousd": 123,
+        }
+    if case_id is not None:
+        raise ValueError("unsupported closed request-byte case selector")
     _published, published_budget, cost, _micro = _budget_numbers()
     maximum = math.ceil(cost["maximumCostUsd"] * 1_000_000)
     return {
@@ -350,8 +373,29 @@ def ledger_budget() -> dict:
     }
 
 
-def frozen_bounds() -> dict:
+def frozen_bounds(case_id: str | None = None) -> dict:
     """The bounded shape of one run, every figure taken from the published budget."""
+    if case_id == RAW_16MIB_OVER_CASE_ID:
+        return {
+            "dataRequests": 101,
+            "managementRequests": 7,
+            "observationRequests": 41,
+            "recoveryRequests": 60,
+            "documentWrites": 20,
+            "documentReads": 80,
+            "documentDeletes": 20,
+            "uploadedBytes": 16_777_217,
+            "expectedWrites": 20,
+            "expectedDeletes": 20,
+            "totalRequests": 108,
+            "distinctResources": 20,
+            "peakLiveDocuments": 20,
+            "maxRequestBytes": 16_777_217,
+            "maxResponseBytes": 2 * 1024 * 1024,
+            "perRequestTimeoutSeconds": transport_deadline_seconds(case_id),
+        }
+    if case_id is not None:
+        raise ValueError("unsupported closed request-byte case selector")
     published, published_budget, _cost, _micro = _budget_numbers()
     # The maximum, every probe accepted, is what a bound must cover; the
     # published `accounting` is the forecast under the expected outcome, and the
@@ -378,8 +422,26 @@ def frozen_bounds() -> dict:
     }
 
 
-def cost_model() -> dict:
+def cost_model(case_id: str | None = None) -> dict:
     """Planning ceilings from the published budget, never a quoted tariff."""
+    if case_id == RAW_16MIB_OVER_CASE_ID:
+        return {
+            "campaignId": CAMPAIGN,
+            "estimatedCostMicrousd": 88,
+            "maximumCostMicrousd": 88,
+            "recoveryReserveMicrousd": 28,
+            "hardCeilingMicrousd": 10_000,
+            "unitPricesUsd": {
+                "documentRead": campaign.READ_USD_PER_UNIT,
+                "documentWrite": campaign.WRITE_USD_PER_UNIT,
+                "documentDelete": campaign.DELETE_USD_PER_UNIT,
+            },
+            "totalCostMicrousd": ledger_budget(case_id)["costMicrousd"],
+            "requests": 108,
+            "basis": "Firestore unit-price planning estimate; not a billing record.",
+        }
+    if case_id is not None:
+        raise ValueError("unsupported closed request-byte case selector")
     _published, published_budget, cost, micro = _budget_numbers()
     return {
         "campaignId": CAMPAIGN,
@@ -394,10 +456,12 @@ def cost_model() -> dict:
     }
 
 
-_PLAN_CACHE: dict[str, tuple[dict, str]] = {}
+_PLAN_CACHE: dict[tuple[str, str | None], tuple[dict, str]] = {}
 
 
-def compile_execution_plan(nonce: str) -> tuple[dict, str]:
+def compile_execution_plan(
+    nonce: str, case_id: str | None = None
+) -> tuple[dict, str]:
     """The lane's real compiled plan and its published digest, for one nonce.
 
     The plan carries the three canonical request bodies and is about 63 MB of
@@ -405,11 +469,18 @@ def compile_execution_plan(nonce: str) -> tuple[dict, str]:
     nonce, which is the only free variable, and checked against the digest the
     record froze.
     """
-    cached = _PLAN_CACHE.get(nonce)
+    if case_id not in (None, RAW_16MIB_OVER_CASE_ID):
+        raise ValueError("unsupported closed request-byte case selector")
+    key = (nonce, case_id)
+    cached = _PLAN_CACHE.get(key)
     if cached is None:
-        plan = compile_request_bytes_plan(PROJECT, DATABASE, nonce)
+        plan = (
+            compile_request_bytes_plan(PROJECT, DATABASE, nonce)
+            if case_id is None
+            else compile_request_bytes_sentinel_plan(PROJECT, DATABASE, nonce)
+        )
         cached = (plan, _plan_digest(plan))
-        _PLAN_CACHE[nonce] = cached
+        _PLAN_CACHE[key] = cached
     return cached
 
 
@@ -421,14 +492,14 @@ def _plan_digest(plan: dict) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def plan_compiler(nonce: str) -> dict:
+def plan_compiler(nonce: str, *, case_id: str | None = None) -> dict:
     """The plan as the admission sees it: a reference, not 63 MB of request bodies.
 
     Every field here is derived from the nonce by the reviewed compiler, so the
     reference names exactly one compiled plan and an executor can rebuild it.
     """
-    plan, plan_digest = compile_execution_plan(nonce)
-    return {
+    plan, plan_digest = compile_execution_plan(nonce, case_id)
+    reference = {
         "schemaVersion": plan["schemaVersion"],
         "campaignId": plan["campaignId"],
         "catalogId": plan["catalogId"],
@@ -440,6 +511,11 @@ def plan_compiler(nonce: str) -> dict:
         "ownedResourceCount": len(plan["ownedResources"]),
         "bounds": copy.deepcopy(plan["bounds"]),
     }
+    if case_id is not None:
+        reference["caseId"] = case_id
+        reference["caseMode"] = plan["caseMode"]
+        reference["ownedScopes"] = copy.deepcopy(plan["ownedScopes"])
+    return reference
 
 
 def execution_plan(reference: dict) -> dict:
@@ -447,11 +523,15 @@ def execution_plan(reference: dict) -> dict:
     nonce = reference.get("nonce") if isinstance(reference, dict) else None
     if not isinstance(nonce, str) or _NONCE.fullmatch(nonce) is None:
         raise ValueError("frozen request-byte plan reference required")
-    canonical = plan_compiler(nonce)
-    plan, plan_digest = compile_execution_plan(nonce)
+    case_id = reference.get("caseId")
+    canonical = plan_compiler(nonce, case_id=case_id)
+    plan, plan_digest = compile_execution_plan(nonce, case_id)
     if digest(reference) != digest(canonical) or reference["planDigest"] != plan_digest:
         raise ValueError("frozen request-byte plan reference differs")
-    validate_request_bytes_plan(plan)
+    if case_id is None:
+        validate_request_bytes_plan(plan)
+    else:
+        validate_request_bytes_sentinel_plan(plan)
     return plan
 
 
@@ -460,9 +540,14 @@ def lock_scopes(plan: dict) -> list[dict]:
     nonce = plan["nonce"]
     scope = f"project/{PROJECT}"
     firestore = f"{scope}/firestore/{DATABASE}"
+    case_scope = (
+        f"{firestore}/documents/oracle/{nonce}/request-bytes-02/probe-r16m1/*"
+        if plan.get("caseMode") == "single-exploratory-sentinel"
+        else f"{firestore}/documents/oracle/{nonce}/request-bytes-01/*"
+    )
     return [
         {
-            "key": (f"{firestore}/documents/oracle/{nonce}/request-bytes-01/*"),
+            "key": case_scope,
             "mode": "WRITE",
         },
         {"key": f"{scope}/identity", "mode": "READ"},
@@ -494,16 +579,23 @@ def gate_job_name(probe: str) -> str:
     return f"request-bytes-{probe}"
 
 
+def gate_scope_for_probe(plan: dict, probe: dict) -> str:
+    if plan.get("caseMode") == "single-exploratory-sentinel":
+        return probe["label"]
+    return PROBE_SCOPES[["under", "exact", "over"].index(probe["label"])]
+
+
 def _probe_slice(plan, probe_index):
-    """One probe's own operations, in the compiler's fixed per-probe order."""
-    observation = plan["observation"][
-        probe_index * PROBE_OBSERVATIONS : (probe_index + 1) * PROBE_OBSERVATIONS
+    """One probe's operations, preserving the compiler's phase-local order."""
+    probe = plan["probes"][probe_index]
+    observation = [
+        item for item in plan["observation"] if item.get("probe") == probe["label"]
     ]
-    recovery = plan["recovery"][
-        probe_index * PROBE_RECOVERY : (probe_index + 1) * PROBE_RECOVERY
+    recovery = [
+        item for item in plan["recovery"] if item.get("probe") == probe["label"]
     ]
-    if len(observation) != PROBE_OBSERVATIONS or len(recovery) != PROBE_RECOVERY:
-        raise ValueError("compiled plan does not carry three equal probes")
+    if not observation or not recovery:
+        raise ValueError("compiled plan does not carry complete probe operations")
     return observation, recovery
 
 
@@ -524,13 +616,31 @@ def _probe_schedule(
     per probe carries a body and can write; the 17 ownership reads, the 17
     readbacks and every recovery read and delete cannot.
     """
-    bounds = {"observation": PROBE_OBSERVATIONS, "recovery": PROBE_RECOVERY}
+    probe = plan["probes"][probe_index]
+    observation, recovery = _probe_slice(plan, probe_index)
+    local_indices = {
+        "observation": {
+            index: local
+            for local, index in enumerate(
+                index
+                for index, operation in enumerate(plan["observation"])
+                if operation.get("probe") == probe["label"]
+            )
+        },
+        "recovery": {
+            index: local
+            for local, index in enumerate(
+                index
+                for index, operation in enumerate(plan["recovery"])
+                if operation.get("probe") == probe["label"]
+            )
+        },
+    }
     entries = []
     for entry in plan["executionSchedule"]:
-        span = bounds[entry["phase"]]
-        if entry["index"] // span != probe_index:
-            continue
         operation = plan[entry["phase"]][entry["index"]]
+        if operation.get("probe") != probe["label"]:
+            continue
         carries_body = operation.get("body") is not None
         small = (
             observation_slot_seconds
@@ -539,7 +649,7 @@ def _probe_schedule(
         )
         slot = {
             "phase": entry["phase"],
-            "index": entry["index"] % span,
+            "index": local_indices[entry["phase"]][entry["index"]],
             "seconds": upload_seconds if carries_body else small,
         }
         if operation["method"] != "POST":
@@ -571,10 +681,16 @@ def gate_plan(
     ):
         if type(value) not in (int, float) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"declared {name} required")
-    if upload_seconds > transport_deadline_seconds():
+    transport_ceiling = (
+        campaign.SENTINEL_TRANSPORT_DEADLINE_SECONDS
+        if plan.get("caseMode") == "single-exploratory-sentinel"
+        else transport_deadline_seconds()
+    )
+    if upload_seconds > transport_ceiling:
         raise ValueError("upload reservation above the enforced transport ceiling")
     jobs = {}
-    for index, probe in enumerate(PROBE_SCOPES):
+    probes = plan["probes"]
+    for index, probe in enumerate(probes):
         observation, recovery = _probe_slice(plan, index)
         schedule = _probe_schedule(
             plan,
@@ -587,10 +703,8 @@ def gate_plan(
         for operation in observation:
             if operation.get("body") is not None:
                 operation["bodyRef"] = body_reference(operation.pop("body"))
-        jobs[gate_job_name(probe)] = {
-            "resources": [
-                name for name in plan["ownedResources"] if f"/{probe}/" in name
-            ],
+        jobs[gate_job_name(gate_scope_for_probe(plan, probe))] = {
+            "resources": list(probe["resources"]),
             "observation": copy.deepcopy(observation),
             "recovery": copy.deepcopy(recovery),
             "schedule": schedule,
@@ -650,7 +764,7 @@ def gate_plan(
         "contract": GATE_CONTRACT,
         "campaignId": CAMPAIGN,
         "nonce": plan["nonce"],
-        "jobSlots": len(PROBE_SCOPES),
+        "jobSlots": len(probes),
         "ownershipMarker": {"field": "_owner", "binding": "nonce"},
         # The plan-wide fallback for a slot that declares none; every slot in
         # this schedule declares its own, so this is the floor, not the figure.
@@ -658,19 +772,24 @@ def gate_plan(
         "wallSeconds": wall,
         "recoverySeconds": recovery_time,
         "intervalSeconds": GATE_INTERVAL_SECONDS,
-        "observationRequests": len(PROBE_SCOPES) * PROBE_OBSERVATIONS
+        "observationRequests": sum(len(job["observation"]) for job in jobs.values())
         + len(campaign.MANAGEMENT_OBSERVATION_IDS),
-        "dataRequests": len(PROBE_SCOPES) * PROBE_OBSERVATIONS
-        + len(PROBE_SCOPES) * PROBE_RECOVERY,
+        "dataRequests": sum(
+            len(job["observation"]) + len(job["recovery"]) for job in jobs.values()
+        ),
         "managementRequests": len(campaign.MANAGEMENT_OBSERVATION_IDS)
         + len(campaign.MANAGEMENT_RECOVERY_IDS),
         "requestCostMicrousd": GATE_REQUEST_COST_MICROUSD,
-        "costMicrousd": ledger_budget()["costMicrousd"],
+        "costMicrousd": ledger_budget(
+            RAW_16MIB_OVER_CASE_ID
+            if plan.get("caseMode") == "single-exploratory-sentinel"
+            else None
+        )["costMicrousd"],
         "receiptKind": RECEIPT_KIND,
         # The wire ceiling every body-carrying slot must reserve, so the 60 on
         # the three Commits is checkable rather than conventional and a later
         # edit cannot quietly shrink it.
-        "transportCeilingSeconds": transport_deadline_seconds(),
+        "transportCeilingSeconds": transport_ceiling,
         # The owner supplies the bearer token, so this campaign acquires no
         # credential and takes no management slot at all.
         "management": {
@@ -856,9 +975,20 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
         binding_digest=binding_digest,
     )
     verify_worker_binding(binding, binding_digest, None)
-    bounds = budget_document()["budget"]
+    plan = value["plan"]
+    case_id = (
+        RAW_16MIB_OVER_CASE_ID
+        if plan.get("caseMode") == "single-exploratory-sentinel"
+        else None
+    )
+    bounds = budget(case_id)
+    request_cap = (
+        request_bytes_remote_transport.MAX_SENTINEL_REQUEST_BYTES
+        if case_id is not None
+        else request_bytes_remote_transport.MAX_REQUEST_BYTES
+    )
     if (
-        request_bytes_remote_transport.MAX_REQUEST_BYTES != bounds["maxRequestBytes"]
+        request_cap != bounds["maxRequestBytes"]
         or request_bytes_remote_transport.RESPONSE_BYTES != bounds["maxResponseBytes"]
     ):
         raise ValueError("transport byte caps differ from the published budget")
@@ -868,7 +998,7 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
         raise ValueError("finite absolute deadline required")
     operation = value["operation"]
     timeout = (
-        transport_deadline_seconds()
+        transport_deadline_seconds(case_id)
         if isinstance(operation, dict) and operation.get("body") is not None
         else small_request_timeout_seconds()
     )
@@ -941,9 +1071,17 @@ def forbidden_transports():
     )
 
 
-def campaign_digest_for(nonce: str) -> str:
+def campaign_digest_for(nonce: str, case_id: str | None = None) -> str:
     """The lane's own campaign digest for one nonce, computed by the lane."""
-    return campaign_digest(compile_request_bytes_campaign(PROJECT, DATABASE, nonce))
+    if case_id == RAW_16MIB_OVER_CASE_ID:
+        value = campaign.compile_request_bytes_sentinel_campaign(
+            PROJECT, DATABASE, nonce
+        )
+    elif case_id is None:
+        value = compile_request_bytes_campaign(PROJECT, DATABASE, nonce)
+    else:
+        raise ValueError("unsupported closed request-byte case selector")
+    return campaign_digest(value)
 
 
 def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
@@ -954,10 +1092,11 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
     produced. A literal that no recorded observation produces is refused here,
     offline, rather than after a run spends its budget discovering it.
     """
-    canonical = plan_compiler(plan["nonce"])
+    case_id = plan.get("caseId")
+    canonical = plan_compiler(plan["nonce"], case_id=case_id)
     if digest(plan) != digest(canonical):
         raise ValueError("fixed production project/database required")
-    published_budget = budget_document()["budget"]
+    published_budget = budget(case_id)
     required = {
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
@@ -974,9 +1113,9 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "collectorSha256": inputs[COLLECTOR_ENTRY],
         "comparatorSha256": inputs[COMPARATOR_ENTRY],
         "workerSha256": inputs[WORKER_ENTRY],
-        "campaignDigest": campaign_digest_for(plan["nonce"]),
-        "budget": budget(),
-        "ledgerBudget": ledger_budget(),
+        "campaignDigest": campaign_digest_for(plan["nonce"], case_id),
+        "budget": budget(case_id),
+        "ledgerBudget": ledger_budget(case_id),
         "ownedScope": plan["ownedScope"],
         "ownedResourceCount": plan["ownedResourceCount"],
         # `wallSeconds` is the name the shared admission core checks; the
@@ -985,12 +1124,12 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "wallSeconds": campaign_seconds(),
         "campaignSeconds": campaign_seconds(),
         "recoverySeconds": recovery_seconds(),
-        "perRequestTimeoutSeconds": transport_deadline_seconds(),
+        "perRequestTimeoutSeconds": transport_deadline_seconds(case_id),
         "maxRequestBytes": int(published_budget["maxRequestBytes"]),
         "maxResponseBytes": int(published_budget["maxResponseBytes"]),
         "concurrency": 1,
         "tariffsConfirmedBelowPlanningCeilings": True,
-        "costModel": cost_model(),
+        "costModel": cost_model(case_id),
         "artifactProfileBasis": artifact_profile_basis(),
         "credentialPrincipalContract": {
             "alternatives": [
@@ -1018,6 +1157,8 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
             "source": PREFLIGHT_ENTRY,
         },
     }
+    if case_id is not None:
+        required.update(caseId=case_id, caseMode="single-exploratory-sentinel")
     if baseline is not None:
         required.update(commit_baseline.permission_baseline(baseline))
         required["baselineProvenance"] = baseline["provenance"]

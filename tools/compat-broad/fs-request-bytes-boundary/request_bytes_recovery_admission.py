@@ -37,6 +37,19 @@ CHILD_FIELDS = {
     "absence": 51,
     "costMicrousd": 85,
 }
+SENTINEL_CHILD_BUDGET = {
+    "requests": 60,
+    "accounts": 0,
+    "resources": 20,
+    "costMicrousd": 60,
+}
+SENTINEL_CHILD_FIELDS = {
+    "requests": 60,
+    "inspection": 20,
+    "delete": 20,
+    "absence": 20,
+    "costMicrousd": 60,
+}
 _RECOVERY_SOURCE = "tools/compat-broad/fs-request-bytes-boundary/request_bytes_recovery_admission.py"
 
 
@@ -47,9 +60,18 @@ def _source_map() -> dict[str, str]:
     return sources
 
 
-def _plan_compiler(nonce: str) -> dict[str, Any]:
+def _plan_compiler(nonce: str, case_id: str | None = None) -> dict[str, Any]:
     if not isinstance(nonce, str) or len(nonce) != 32:
         raise ValueError("recovery nonce required")
+    if case_id == parent_compiler.RAW_16MIB_OVER_CASE_ID:
+        return {
+            "campaignId": CAMPAIGN,
+            "nonce": nonce,
+            "caseId": case_id,
+            **SENTINEL_CHILD_BUDGET,
+        }
+    if case_id is not None:
+        raise ValueError("unsupported closed recovery case selector")
     return {
         "campaignId": CAMPAIGN,
         "nonce": nonce,
@@ -74,14 +96,20 @@ def _permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=
         "sourceInputs": inputs,
         "collectorSourceDigest": digest(inputs),
         "artifactSha256": artifact_digest,
-        "budget": copy.deepcopy(CHILD_BUDGET),
+        "budget": copy.deepcopy(
+            SENTINEL_CHILD_BUDGET if plan.get("caseId") == parent_compiler.RAW_16MIB_OVER_CASE_ID else CHILD_BUDGET
+        ),
         "wallSeconds": parent_descriptor.descriptor().campaign_seconds,
         "recoverySeconds": parent_descriptor.descriptor().recovery_seconds,
     }
 
 
-def descriptor() -> CampaignDescriptor:
+def descriptor(case_id: str | None = None) -> CampaignDescriptor:
     base = parent_descriptor.descriptor()
+    if case_id not in (None, parent_compiler.RAW_16MIB_OVER_CASE_ID):
+        raise ValueError("unsupported closed recovery case selector")
+    budget = SENTINEL_CHILD_BUDGET if case_id else CHILD_BUDGET
+    fields = SENTINEL_CHILD_FIELDS if case_id else CHILD_FIELDS
     return CampaignDescriptor(
         campaign_id=CAMPAIGN,
         frozen_inputs_kind=base.frozen_inputs_kind,
@@ -93,24 +121,24 @@ def descriptor() -> CampaignDescriptor:
         recovery_seconds=base.recovery_seconds,
         approval_fields=base.approval_fields,
         source_map=_source_map,
-        plan_compiler=_plan_compiler,
+        plan_compiler=lambda nonce: _plan_compiler(nonce, case_id),
         lock_scopes=base.lock_scopes,
         collector=base.collector,
         comparator=base.comparator,
-        cost_model=lambda: copy.deepcopy(CHILD_BUDGET),
+        cost_model=lambda: copy.deepcopy(budget),
         permission_bindings=_permission_bindings,
         transport_bound=base.transport_bound,
         binding_verifier=base.binding_verifier,
         retained_artifact_validator=base.retained_artifact_validator,
         forbidden_transports=base.forbidden_transports,
-        frozen_bounds=copy.deepcopy(CHILD_FIELDS),
-        budget=copy.deepcopy(CHILD_BUDGET),
+        frozen_bounds=copy.deepcopy(fields),
+        budget=copy.deepcopy(budget),
         abort_closure_sources=(*base.abort_closure_sources, _RECOVERY_SOURCE),
         required_source_entries=(*base.required_source_entries, _RECOVERY_SOURCE),
     )
 
 
-def validate_bound_child(bound: dict[str, Any]) -> dict[str, Any]:
+def validate_bound_child(bound: dict[str, Any], case_id: str | None = None) -> dict[str, Any]:
     """Validate the detached result of ``Ledger.bound_recovery_claim``."""
     required = {
         "ticket",
@@ -157,8 +185,9 @@ def validate_bound_child(bound: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("recovery parent claim binding changed")
     if claim.get("campaignId") != CAMPAIGN:
         raise ValueError("stable recovery campaign required")
-    if claim.get("budget") != CHILD_BUDGET:
-        raise ValueError("exact 85-request child budget required")
+    expected_budget = SENTINEL_CHILD_BUDGET if case_id else CHILD_BUDGET
+    if claim.get("budget") != expected_budget:
+        raise ValueError("exact recovery child budget required")
     if claim.get("permissionDigest") != envelope.get("permissionDigest"):
         raise ValueError("recovery permission binding changed")
     if not isinstance(parent_claim, dict) or not parent_claim:
@@ -190,7 +219,7 @@ def _validate_current_binding(bound, inputs, permission, plan):
         raise ValueError("recovery source digests differ")
     if claim.get("executionHost") != o8_admission.execution_host():
         raise ValueError("recovery execution host differs")
-    expected_permission = descriptor().permission_bindings(
+    expected_permission = descriptor(plan.get("caseId")).permission_bindings(
         plan,
         inputs["sourceCommit"],
         inputs["artifactSha256"],
@@ -204,9 +233,15 @@ def _validate_current_binding(bound, inputs, permission, plan):
 
 
 def _canonical_plans(parent_plan, *, selected_probe: str, recovery_nonce: str):
-    actual_parent = parent_compiler.compile_request_bytes_plan(
-        parent_plan["project"], parent_plan["database"], parent_plan["nonce"]
-    )
+    sentinel = selected_probe == parent_compiler.RAW_16MIB_OVER_LABEL
+    if sentinel:
+        actual_parent = parent_compiler.compile_request_bytes_sentinel_plan(
+            parent_plan["project"], parent_plan["database"], parent_plan["nonce"]
+        )
+    else:
+        actual_parent = parent_compiler.compile_request_bytes_plan(
+            parent_plan["project"], parent_plan["database"], parent_plan["nonce"]
+        )
     if digest(actual_parent) != digest(parent_plan):
         raise ValueError("canonical parent compiler plan differs")
     recovery_plan = recovery_campaign.compile_recovery_plan(
@@ -235,8 +270,10 @@ def freeze_inputs(
     source_commit: str,
     artifact_sha256: str,
 ) -> dict[str, Any]:
+    sentinel = selected_probe == parent_compiler.RAW_16MIB_OVER_LABEL
+    case_id = parent_compiler.RAW_16MIB_OVER_CASE_ID if sentinel else None
     bound = ledger.bound_recovery_claim(child_ticket)
-    validated = validate_bound_child(bound)
+    validated = validate_bound_child(bound, case_id)
     claim = validated["childClaim"]
     _, recovery_plan, expected_gate = _canonical_plans(
         parent_plan, selected_probe=selected_probe, recovery_nonce=claim["recoveryNonce"]
@@ -248,7 +285,7 @@ def freeze_inputs(
     recovery_plan["childClaimDigest"] = digest(claim)
     recovery_plan["childTicketDigest"] = digest(validated["ticket"])
     return o8_admission.freeze_inputs(
-        descriptor(),
+        descriptor(case_id),
         permission,
         recovery_plan,
         source_commit=source_commit,
@@ -266,8 +303,11 @@ def issue_production_capability(
     **bindings,
 ) -> Any:
     """Re-read the persisted child immediately before the real O7 issuer."""
+    selected_probe = bindings["inputs"].get("plan", {}).get("selectedProbe", "under")
+    sentinel = selected_probe == parent_compiler.RAW_16MIB_OVER_LABEL
+    case_id = parent_compiler.RAW_16MIB_OVER_CASE_ID if sentinel else None
     bound = ledger.bound_recovery_claim(child_ticket)
-    validated = validate_bound_child(bound)
+    validated = validate_bound_child(bound, case_id)
     claim = validated["childClaim"]
     _, recovery_plan, expected_gate = _canonical_plans(
         parent_plan,
@@ -284,7 +324,7 @@ def issue_production_capability(
     if inputs.get("permissionDigest") != claim.get("permissionDigest"):
         raise ValueError("frozen child permission binding differs")
     _validate_current_binding(validated, inputs, bindings["permission"], recovery_plan)
-    return o8_admission.issue_production_capability(descriptor(), **bindings)
+    return o8_admission.issue_production_capability(descriptor(case_id), **bindings)
 
 
 __all__ = [

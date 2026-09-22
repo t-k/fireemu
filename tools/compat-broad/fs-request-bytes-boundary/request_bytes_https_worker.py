@@ -12,6 +12,8 @@ _PATH = re.compile(
     r"/v1/projects/[a-z][a-z0-9-]{4,61}[a-z0-9]/databases/\(default\)/documents"
     r"(?::commit|/oracle/[0-9a-f]{32}/request-bytes-01/probe-[ueo]01/items/"
     r"(?:control|payload-(?:0[0-9]|1[0-5]))"
+    r"|/oracle/[0-9a-f]{32}/request-bytes-02/probe-r16m1/items/"
+    r"(?:control|payload-(?:0[0-9]|1[0-8]))"
     r"(?:\?currentDocument\.updateTime=[A-Za-z0-9%:.-]+)?)\Z"
 )
 _TOKEN = re.compile(r"Bearer [A-Za-z0-9._~+/-]{1,8192}=*\Z")
@@ -49,6 +51,7 @@ def run():
         project = message["project"]
         count = message["bodyBytes"]
         deadline = message["deadline"]
+        deadline_ceiling = 80 if count > 10_485_761 else 60
         if (
             method not in ("GET", "POST", "DELETE")
             or not isinstance(path, str)
@@ -58,9 +61,9 @@ def run():
             or not isinstance(project, str)
             or not _PROJECT.fullmatch(project)
             or type(count) is not int
-            or not 0 <= count <= 10_485_761
+            or not 0 <= count <= 16_777_217
             or type(deadline) not in (int, float)
-            or not 0 < deadline - time.monotonic() <= 60
+            or not 0 < deadline - time.monotonic() <= deadline_ceiling
         ):
             raise ValueError
         if path.split("/", 4)[3] != project:

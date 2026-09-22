@@ -25,6 +25,7 @@ RECOVERY_JOB = "request-bytes-recovery-extension"
 PROJECT = parent_descriptor.PROJECT
 DATABASE = parent_descriptor.DATABASE
 PROBES = ("under", "exact", "over")
+SENTINEL_CASE_ID = parent_compiler.RAW_16MIB_OVER_CASE_ID
 DOCUMENTS_PER_PROBE = 17
 ALL_RESOURCES = DOCUMENTS_PER_PROBE * len(PROBES)
 INSPECTION_READS = DOCUMENTS_PER_PROBE
@@ -57,14 +58,19 @@ def compile_recovery_plan(
     parent_plan: dict[str, Any], *, selected_probe: str, recovery_nonce: str
 ) -> dict[str, Any]:
     """Compile 17 selected ownership/delete pairs plus all 51 absence reads."""
-    parent_compiler.validate_request_bytes_plan(parent_plan)
+    sentinel = parent_plan.get("caseMode") == "single-exploratory-sentinel"
+    if sentinel:
+        parent_compiler.validate_request_bytes_sentinel_plan(parent_plan)
+    else:
+        parent_compiler.validate_request_bytes_plan(parent_plan)
     if (
         parent_plan.get("campaignId") != parent_compiler.CAMPAIGN
         or parent_plan.get("project") != PROJECT
         or parent_plan.get("database") != DATABASE
     ):
         raise ValueError("canonical parent campaign required")
-    if selected_probe not in PROBES:
+    valid_probes = (parent_compiler.RAW_16MIB_OVER_LABEL,) if sentinel else PROBES
+    if selected_probe not in valid_probes:
         raise ValueError("unknown recovery probe")
     parent_nonce = parent_plan.get("nonce")
     if not isinstance(parent_nonce, str) or not parent_nonce:
@@ -74,7 +80,7 @@ def compile_recovery_plan(
     if recovery_nonce == parent_nonce:
         raise ValueError("recovery nonce must be distinct")
     probes = {probe["label"]: probe for probe in parent_plan.get("probes", [])}
-    if set(probes) != set(PROBES):
+    if set(probes) != set(valid_probes):
         raise ValueError("parent probe set required")
     source_by_kind = {
         (operation["probe"], operation["resource"], operation["kind"]): operation
@@ -89,7 +95,7 @@ def compile_recovery_plan(
         operations.append(
             _operation(delete, kind="recovery-conditional-delete", version_from="recovery-inspection-read")
         )
-    for probe in PROBES:
+    for probe in valid_probes:
         for resource in probes[probe]["resources"]:
             source = source_by_kind[(probe, resource, "cleanup-verify-absence")]
             operations.append(_operation(source, kind="recovery-absence-read"))
@@ -102,14 +108,22 @@ def compile_recovery_plan(
         "parentNonce": parent_nonce,
         "recoveryNonce": recovery_nonce,
         "selectedProbe": selected_probe,
+        **({"caseId": SENTINEL_CASE_ID} if sentinel else {}),
         "parentPlanDigest": _sha(parent_plan),
         "resourceNamesDigest": _sha([op["resource"] for op in operations]),
         "bounds": {
-            "inspectionReads": INSPECTION_READS,
-            "conditionalDeletes": CONDITIONAL_DELETES,
-            "absenceReads": ABSENCE_READS,
-            "maximumRequests": MAXIMUM_REQUESTS,
-            "tariffEstimateMicrousd": tariff_cost_microusd(),
+            "inspectionReads": len(selected),
+            "conditionalDeletes": len(selected),
+            "absenceReads": sum(len(probe["resources"]) for probe in probes.values()),
+            "maximumRequests": len(operations),
+            "tariffEstimateMicrousd": math.ceil(
+                (len(selected) + sum(len(probe["resources"]) for probe in probes.values()))
+                * parent_descriptor.budget_document()["cost"]["unitPricesUsd"]["documentRead"]
+                * 1_000_000
+                + len(selected)
+                * parent_descriptor.budget_document()["cost"]["unitPricesUsd"]["documentDelete"]
+                * 1_000_000
+            ),
         },
         "operations": operations,
     }
@@ -130,11 +144,12 @@ def compile_gate_plan(
         raise ValueError("canonical recovery provenance required")
     recovery_plan = canonical_plan
     operations = recovery_plan.get("operations")
-    if not isinstance(operations, list) or len(operations) != MAXIMUM_REQUESTS:
+    maximum_requests = recovery_plan.get("bounds", {}).get("maximumRequests")
+    if not isinstance(operations, list) or len(operations) != maximum_requests:
         raise ValueError("recovery operation count drifted")
     resources = sorted({operation["resource"] for operation in operations})
-    if len(resources) != ALL_RESOURCES:
-        raise ValueError("full parent resource scope required")
+    if len(resources) != recovery_plan["bounds"]["absenceReads"]:
+        raise ValueError("full selected parent resource scope required")
     schedule = [
         {"phase": "recovery", "index": index, "seconds": 3.0, "creates": False}
         for index in range(len(operations))
@@ -151,9 +166,9 @@ def compile_gate_plan(
         "recoverySeconds": 1190,
         "intervalSeconds": shared_gate.INTERVAL_FLOOR_SECONDS,
         "observationRequests": 0,
-        "recoveryRequests": MAXIMUM_REQUESTS,
+        "recoveryRequests": maximum_requests,
         "requestCostMicrousd": parent_descriptor.GATE_REQUEST_COST_MICROUSD,
-        "costMicrousd": MAXIMUM_REQUESTS * parent_descriptor.GATE_REQUEST_COST_MICROUSD,
+        "costMicrousd": maximum_requests * parent_descriptor.GATE_REQUEST_COST_MICROUSD,
         "tariffEstimateMicrousd": recovery_plan["bounds"]["tariffEstimateMicrousd"],
         "jobs": {
             RECOVERY_JOB: {

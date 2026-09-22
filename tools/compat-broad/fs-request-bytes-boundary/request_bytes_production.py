@@ -29,6 +29,7 @@ from request_bytes_collector import (
     cleanup_safety_complete,
     collect_local,
     complete,
+    typed_firestore_refusal,
     typed_over_refusal,
 )
 
@@ -71,10 +72,11 @@ def _stop_point(snapshot, plan, ready):
         return None
     if snapshot is None or not snapshot.get("events"):
         return "schedule-not-started"
-    for probe in campaign.PROBE_SCOPES:
-        name = campaign.gate_job_name(probe)
+    for probe in plan["probes"]:
+        scope = campaign.gate_scope_for_probe(plan, probe)
+        name = campaign.gate_job_name(scope)
         if shared_gate.unconfirmed_creates(snapshot, name):
-            return f"{probe}-commit-deadline"
+            return f"{scope}-commit-deadline"
     last = snapshot["events"][-1]
     operation = snapshot["plan"]["jobs"][last["job"]][last["phase"]][last["index"]]
     probe = next(item for item in plan["probes"] if item["label"] == operation["probe"])
@@ -159,7 +161,8 @@ def execute(
     management = None
     try:
         shared_gate.create(output / "gate", gate_plan)
-        for probe, scope in zip(plan["probes"], campaign.PROBE_SCOPES, strict=True):
+        for probe in plan["probes"]:
+            scope = campaign.gate_scope_for_probe(plan, probe)
             gate = shared_gate.Gate(output / "gate", campaign.gate_job_name(scope))
             gate.claim()
             gates[probe["label"]] = gate
@@ -433,26 +436,50 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
     ):
         raise ValueError("saved route journal differs")
     actual_semantic_outcome = None
+    plan = campaign.execution_plan(inputs["plan"])
+    job_names = [
+        campaign.gate_job_name(campaign.gate_scope_for_probe(plan, probe))
+        for probe in plan["probes"]
+    ]
+    sequence_offset = 0
     for route, event in zip(routes, snapshot["events"], strict=True):
         # Job order in canonical JSON is alphabetical, so recover the compiler
-        # order from its fixed scope names rather than serialized object order.
-        probe = [
-            campaign.gate_job_name(scope) for scope in campaign.PROBE_SCOPES
-        ].index(event["job"])
-        span = (
-            campaign.PROBE_RECOVERY
-            if event["phase"] == "recovery"
-            else campaign.PROBE_OBSERVATIONS
-        )
-        operation = snapshot["plan"]["jobs"][event["job"]][event["phase"]][
-            event["index"]
+        # order from the frozen probe list rather than serialized object order.
+        probe_index = job_names.index(event["job"])
+        probe = plan["probes"][probe_index]
+        gate_job = snapshot["plan"]["jobs"][event["job"]]
+        operation = gate_job[event["phase"]][event["index"]]
+        probe_operations = [
+            item
+            for item in plan[event["phase"]]
+            if item.get("probe") == probe["label"]
         ]
-        sequence = (
-            probe * (campaign.PROBE_OBSERVATIONS + campaign.PROBE_RECOVERY)
-            + event["index"]
+        global_index = next(
+            index
+            for index, item in enumerate(plan[event["phase"]])
+            if item.get("probe") == probe["label"]
+            and sum(
+                1
+                for prior in plan[event["phase"]][:index]
+                if prior.get("probe") == probe["label"]
+            )
+            == event["index"]
         )
+        phase_lengths = {
+            phase: len(
+                [
+                    item
+                    for item in plan[phase]
+                    if item.get("probe") == probe["label"]
+                ]
+            )
+            for phase in ("observation", "recovery")
+        }
+        sequence = sequence_offset + event["index"]
         if event["phase"] == "recovery":
-            sequence += campaign.PROBE_OBSERVATIONS
+            sequence += phase_lengths["observation"]
+        if event["index"] == phase_lengths[event["phase"]] - 1 and event["phase"] == "recovery":
+            sequence_offset += phase_lengths["observation"] + phase_lengths["recovery"]
         row_name, response_name = (
             f"collection/row-{sequence:03d}.json",
             f"collection/response-{sequence:03d}.body",
@@ -496,7 +523,7 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
             expected_path += "?currentDocument.updateTime=" + quote(version, safe="")
         if (
             route["phase"] != event["phase"]
-            or route["index"] != probe * span + event["index"]
+            or route["index"] != global_index
             or route["requestDigest"] != event["requestDigest"]
             or route["responseDigest"] != event["responseDigest"]
             or route["status"] != event["status"]
@@ -504,10 +531,7 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
             or route["route"] != expected_path
         ):
             raise ValueError("saved routes differ from charged Gate events")
-        if (
-            operation.get("probe") == "over"
-            and operation.get("kind") == "conditional-create-commit"
-        ):
+        if operation.get("kind") == "conditional-create-commit":
             response = {
                 "complete": event.get("completed") is True,
                 "failure": None,
@@ -517,11 +541,20 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
                 "bodyBytes": len(raw),
             }
             resources = snapshot["jobs"][event["job"]]["resources"]
-            if typed_over_refusal(response):
+            if plan.get("caseMode") == "single-exploratory-sentinel":
+                if commit_versions(response, probe["resources"]) is not None:
+                    actual_semantic_outcome = "sentinel-accepted"
+                elif typed_firestore_refusal(response):
+                    actual_semantic_outcome = "sentinel-typed-refusal"
+                else:
+                    actual_semantic_outcome = "sentinel-inconclusive"
+            elif operation.get("probe") == "over" and typed_over_refusal(response):
                 actual_semantic_outcome = "typed-over-refusal"
-            elif commit_versions(response, resources) is not None:
+            elif operation.get("probe") == "over" and commit_versions(
+                response, probe["resources"]
+            ) is not None:
                 actual_semantic_outcome = "unexpected-over-success"
-            else:
+            elif operation.get("probe") == "over":
                 actual_semantic_outcome = "unknown-over-outcome"
     if actual_semantic_outcome is None:
         raise ValueError("saved over-boundary semantic event missing")
@@ -529,7 +562,17 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
         raise ValueError("saved semantic outcome differs from Gate event")
     if collection["formalCompatibilityClaim"] is not False:
         raise ValueError("saved compatibility claim differs")
-    if actual_semantic_outcome == "unexpected-over-success":
+    if actual_semantic_outcome.startswith("sentinel-"):
+        if actual_semantic_outcome in {
+            "sentinel-accepted",
+            "sentinel-typed-refusal",
+        } and (
+            collection.get("failures") != []
+            or collection.get("completed") is not True
+            or collection.get("cleanupComplete") is not True
+        ):
+            raise ValueError("saved sentinel observation and cleanup evidence differs")
+    elif actual_semantic_outcome == "unexpected-over-success":
         if (
             collection.get("failures") != ["over:unexpected-success"]
             or collection.get("completed") is not False

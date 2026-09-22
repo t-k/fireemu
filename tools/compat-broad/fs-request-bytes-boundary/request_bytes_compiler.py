@@ -9,6 +9,9 @@ from typing import Any
 
 REQUEST_TARGETS = (10_485_759, 10_485_760, 10_485_761)
 REQUEST_LIMIT = 10_485_760
+RAW_16MIB_OVER_BYTES = 16_777_217
+RAW_16MIB_OVER_CASE_ID = "FS-LIMIT-API-REQUEST-BYTES-RAW-16MIB-OVER"
+RAW_16MIB_OVER_LABEL = "raw-16mib-over"
 DOCUMENT_SAFETY_MARGIN = 900 * 1024
 PAYLOAD_DOCUMENT_COUNT = 16
 DOCUMENT_COUNT = 17
@@ -82,9 +85,9 @@ def _fields(nonce: str, blob: str) -> dict[str, dict[str, str]]:
     return {"_owner": {"stringValue": nonce}, "blob": {"stringValue": blob}}
 
 
-def _resources(scope: str) -> list[str]:
+def _resources(scope: str, payload_count: int = PAYLOAD_DOCUMENT_COUNT) -> list[str]:
     return [f"{scope}/items/control"] + [
-        f"{scope}/items/payload-{index:02d}" for index in range(PAYLOAD_DOCUMENT_COUNT)
+        f"{scope}/items/payload-{index:02d}" for index in range(payload_count)
     ]
 
 
@@ -103,13 +106,15 @@ def _body(resources: list[str], lengths: list[int], nonce: str) -> dict[str, Any
     return {"writes": writes}
 
 
-def _balanced_lengths(resources: list[str], target: int, nonce: str) -> list[int]:
-    empty = _body(resources, [7] + [0] * PAYLOAD_DOCUMENT_COUNT, nonce)
+def _balanced_lengths(
+    resources: list[str], target: int, nonce: str, *, payload_count: int = PAYLOAD_DOCUMENT_COUNT
+) -> list[int]:
+    empty = _body(resources, [7] + [0] * payload_count, nonce)
     total = target - len(compact_utf8(empty))
     if total <= 0:
         raise ValueError("fixed request shape exceeds target")
-    quotient, remainder = divmod(total, PAYLOAD_DOCUMENT_COUNT)
-    return [quotient + (index < remainder) for index in range(PAYLOAD_DOCUMENT_COUNT)]
+    quotient, remainder = divmod(total, payload_count)
+    return [quotient + (index < remainder) for index in range(payload_count)]
 
 
 def _op(
@@ -321,6 +326,377 @@ def compile_request_bytes_plan(
             "does not claim document, depth, transform, or operation-count limits",
         ],
     }
+
+
+def compile_request_bytes_sentinel_plan(
+    project: str, database: str, nonce: str
+) -> dict[str, Any]:
+    """Compile the separately scoped, outcome-neutral 16 MiB follow-up case."""
+    _validate_target(project, database, nonce)
+    root = f"projects/{project}/databases/{database}/documents/oracle/{nonce}/request-bytes-02"
+    scope = root + "/probe-r16m1"
+    endpoint = f"/v1/projects/{project}/databases/{database}/documents:commit"
+    resources = _resources(scope, payload_count=19)
+    lengths = [7] + _balanced_lengths(
+        resources, RAW_16MIB_OVER_BYTES, nonce, payload_count=19
+    )
+    body = _body(resources, lengths, nonce)
+    if len(compact_utf8(body)) != RAW_16MIB_OVER_BYTES:
+        raise AssertionError("sentinel body did not reach requested size")
+
+    documents: dict[str, dict[str, Any]] = {}
+    expected_documents = []
+    for resource, length in zip(resources, lengths):
+        fields = _fields(
+            nonce, "control" if resource.endswith("/control") else "x" * length
+        )
+        logical = document_size_bytes(resource, fields)
+        if logical >= DOCUMENT_SAFETY_MARGIN:
+            raise ValueError("document safety margin exceeded")
+        entry = {
+            "resource": resource,
+            "fieldsSha256": logical_fields_digest(fields),
+            "logicalBytes": logical,
+        }
+        documents[resource] = entry
+        expected_documents.append(
+            {"name": resource, "fieldsSha256": entry["fieldsSha256"]}
+        )
+
+    expected = {
+        "prior": "all-absent",
+        "accepted": {"all": expected_documents},
+        "refused": {"all": "absent"},
+        "outcome": "capture-without-semantic-expectation",
+    }
+    probe = {
+        "label": RAW_16MIB_OVER_LABEL,
+        "caseId": RAW_16MIB_OVER_CASE_ID,
+        "scope": scope,
+        "resources": resources,
+        "body": body,
+        "bodyBytes": RAW_16MIB_OVER_BYTES,
+        "path": endpoint,
+        "expected": expected,
+    }
+    observation = [
+        _op(
+            "preflight-typed-absence",
+            "GET",
+            "/v1/" + resource,
+            RAW_16MIB_OVER_LABEL,
+            {"status": 404, "typed": "NOT_FOUND", "owned": False},
+            resource,
+        )
+        for resource in resources
+    ]
+    observation.append(
+        _op(
+            "conditional-create-commit",
+            "POST",
+            endpoint,
+            RAW_16MIB_OVER_LABEL,
+            expected,
+            body=body,
+        )
+    )
+    observation.extend(
+        _op(
+            "probe-readback",
+            "GET",
+            "/v1/" + resource,
+            RAW_16MIB_OVER_LABEL,
+            {
+                "accepted": expected["accepted"],
+                "refused": expected["refused"],
+                "sameProbe": True,
+            },
+            resource,
+        )
+        for resource in resources
+    )
+    recovery = []
+    for resource in resources:
+        recovery.extend(
+            [
+                _op(
+                    "cleanup-ownership-read",
+                    "GET",
+                    "/v1/" + resource,
+                    RAW_16MIB_OVER_LABEL,
+                    {"statuses": [200, 404], "owned": True, "versionRequired": True},
+                    resource,
+                ),
+                {
+                    **_op(
+                        "cleanup-version-bound-delete",
+                        "DELETE",
+                        "/v1/" + resource,
+                        RAW_16MIB_OVER_LABEL,
+                        {"status": 200, "owned": True, "versionBound": True},
+                        resource,
+                    ),
+                    "versionFrom": "cleanup-ownership-read",
+                },
+                _op(
+                    "cleanup-verify-absence",
+                    "GET",
+                    "/v1/" + resource,
+                    RAW_16MIB_OVER_LABEL,
+                    {"status": 404, "typed": "NOT_FOUND"},
+                    resource,
+                ),
+            ]
+        )
+    schedule = [
+        *({"phase": "observation", "index": index} for index in range(len(observation))),
+        *({"phase": "recovery", "index": index} for index in range(len(recovery))),
+    ]
+    return {
+        "schemaVersion": 3,
+        "caseMode": "single-exploratory-sentinel",
+        "caseId": RAW_16MIB_OVER_CASE_ID,
+        "campaignId": CAMPAIGN,
+        "catalogId": CAMPAIGN,
+        "catalogMaximum": REQUEST_LIMIT,
+        "project": project,
+        "database": database,
+        "nonce": nonce,
+        "protocol": "REST",
+        "metric": "REST raw HTTP body UTF-8 bytes",
+        "metricStatus": "observation hypothesis",
+        "unicodeNormalization": "none",
+        "gRPCScope": "separate case required",
+        "ownedScope": root,
+        "ownedScopes": [scope],
+        "ownedResources": resources,
+        "documents": documents,
+        "probes": [probe],
+        "observation": observation,
+        "recovery": recovery,
+        "executionSchedule": schedule,
+        "probeTransition": "one Commit only; complete typed cleanup required before close",
+        "ownershipRequirements": [
+            "preflight typed absence",
+            "every Commit write has currentDocument.exists=false",
+            "successful conditional-creation proof required before cleanup",
+            "version-bound conditional cleanup",
+        ],
+        "readbackRequirements": [
+            "capture accepted or refused state without predicting either outcome",
+            "accepted state compares every document with its own expected snapshot and Commit version",
+            "refused state requires every document absent",
+            "mixed publication is indeterminate",
+        ],
+        "bounds": {
+            "probeCount": 1,
+            "maxInFlight": 1,
+            "requestBytes": RAW_16MIB_OVER_BYTES,
+            "distinctDocumentCount": 20,
+            "peakLiveDocumentCount": 20,
+            "observationRequests": len(observation),
+            "recoveryRequests": len(recovery),
+            "totalRequestBound": len(observation) + len(recovery),
+            "responseByteCap": 2 * 1024 * 1024,
+        },
+        "claims": [
+            "one exploratory REST Commit input only",
+            "does not infer a service threshold or quota metric",
+            "does not claim gRPC coverage",
+            "does not claim document, depth, transform, or operation-count limits",
+        ],
+    }
+
+
+def validate_request_bytes_sentinel_plan(plan: dict[str, Any]) -> None:
+    """Validate the one-case sentinel without borrowing historical probe rules."""
+    if not isinstance(plan, dict) or plan.get("caseMode") != "single-exploratory-sentinel":
+        raise ValueError("sentinel plan mode required")
+    expected_contract = {
+        "schemaVersion": 3,
+        "caseId": RAW_16MIB_OVER_CASE_ID,
+        "campaignId": CAMPAIGN,
+        "catalogId": CAMPAIGN,
+        "catalogMaximum": REQUEST_LIMIT,
+        "protocol": "REST",
+        "metric": "REST raw HTTP body UTF-8 bytes",
+        "metricStatus": "observation hypothesis",
+        "unicodeNormalization": "none",
+        "gRPCScope": "separate case required",
+    }
+    if any(plan.get(key) != value for key, value in expected_contract.items()):
+        raise ValueError("sentinel metric contract drift")
+    project, database, nonce = plan.get("project"), plan.get("database"), plan.get("nonce")
+    _validate_target(project, database, nonce)
+    root = f"projects/{project}/databases/{database}/documents/oracle/{nonce}/request-bytes-02"
+    scope = root + "/probe-r16m1"
+    endpoint = f"/v1/projects/{project}/databases/{database}/documents:commit"
+    probes = plan.get("probes")
+    if not isinstance(probes, list) or len(probes) != 1:
+        raise ValueError("sentinel requires exactly one probe")
+    probe = probes[0]
+    resources = _resources(scope, payload_count=19)
+    if (
+        probe.get("label") != RAW_16MIB_OVER_LABEL
+        or probe.get("caseId") != RAW_16MIB_OVER_CASE_ID
+        or probe.get("scope") != scope
+        or probe.get("resources") != resources
+        or probe.get("path") != endpoint
+    ):
+        raise ValueError("sentinel identity or scope drift")
+    body = probe.get("body")
+    if not isinstance(body, dict) or set(body) != {"writes"}:
+        raise ValueError("sentinel Commit body shape drift")
+    writes = body["writes"]
+    if not isinstance(writes, list) or len(writes) != 20:
+        raise ValueError("sentinel requires twenty Commit writes")
+    docs: dict[str, dict[str, Any]] = {}
+    accepted = []
+    for resource, write in zip(resources, writes):
+        if (
+            not isinstance(write, dict)
+            or set(write) != {"update", "currentDocument"}
+            or write["currentDocument"] != {"exists": False}
+        ):
+            raise ValueError("sentinel requires exists-false ownership preconditions")
+        update = write["update"]
+        if (
+            not isinstance(update, dict)
+            or set(update) != {"name", "fields"}
+            or update["name"] != resource
+        ):
+            raise ValueError("sentinel write identity drift")
+        fields = update["fields"]
+        if (
+            not isinstance(fields, dict)
+            or set(fields) != {"_owner", "blob"}
+            or fields["_owner"] != {"stringValue": nonce}
+            or set(fields["blob"]) != {"stringValue"}
+            or not isinstance(fields["blob"]["stringValue"], str)
+        ):
+            raise ValueError("sentinel payload ownership or field drift")
+        logical = document_size_bytes(resource, fields)
+        if logical >= DOCUMENT_SAFETY_MARGIN:
+            raise ValueError("sentinel document safety margin exceeded")
+        entry = {
+            "resource": resource,
+            "fieldsSha256": logical_fields_digest(fields),
+            "logicalBytes": logical,
+        }
+        docs[resource] = entry
+        accepted.append({"name": resource, "fieldsSha256": entry["fieldsSha256"]})
+    if len(compact_utf8(body)) != RAW_16MIB_OVER_BYTES or probe.get("bodyBytes") != RAW_16MIB_OVER_BYTES:
+        raise ValueError("sentinel byte length drift")
+    expected = {
+        "prior": "all-absent",
+        "accepted": {"all": accepted},
+        "refused": {"all": "absent"},
+        "outcome": "capture-without-semantic-expectation",
+    }
+    if probe.get("expected") != expected:
+        raise ValueError("sentinel outcome-neutral expectation drift")
+    if (
+        plan.get("ownedScope") != root
+        or plan.get("ownedScopes") != [scope]
+        or plan.get("ownedResources") != resources
+        or plan.get("documents") != docs
+    ):
+        raise ValueError("sentinel owned resource manifest drift")
+    observation, recovery = plan.get("observation"), plan.get("recovery")
+    if not isinstance(observation, list) or len(observation) != 41:
+        raise ValueError("sentinel observation schedule drift")
+    if not isinstance(recovery, list) or len(recovery) != 60:
+        raise ValueError("sentinel recovery schedule drift")
+    expected_observation = [
+        _op(
+            "preflight-typed-absence",
+            "GET",
+            "/v1/" + resource,
+            RAW_16MIB_OVER_LABEL,
+            {"status": 404, "typed": "NOT_FOUND", "owned": False},
+            resource,
+        )
+        for resource in resources
+    ]
+    expected_observation.append(
+        _op(
+            "conditional-create-commit",
+            "POST",
+            endpoint,
+            RAW_16MIB_OVER_LABEL,
+            expected,
+            body=body,
+        )
+    )
+    expected_observation.extend(
+        _op(
+            "probe-readback",
+            "GET",
+            "/v1/" + resource,
+            RAW_16MIB_OVER_LABEL,
+            {
+                "accepted": expected["accepted"],
+                "refused": expected["refused"],
+                "sameProbe": True,
+            },
+            resource,
+        )
+        for resource in resources
+    )
+    expected_recovery = []
+    for resource in resources:
+        expected_recovery.extend(
+            [
+                _op(
+                    "cleanup-ownership-read",
+                    "GET",
+                    "/v1/" + resource,
+                    RAW_16MIB_OVER_LABEL,
+                    {"statuses": [200, 404], "owned": True, "versionRequired": True},
+                    resource,
+                ),
+                {
+                    **_op(
+                        "cleanup-version-bound-delete",
+                        "DELETE",
+                        "/v1/" + resource,
+                        RAW_16MIB_OVER_LABEL,
+                        {"status": 200, "owned": True, "versionBound": True},
+                        resource,
+                    ),
+                    "versionFrom": "cleanup-ownership-read",
+                },
+                _op(
+                    "cleanup-verify-absence",
+                    "GET",
+                    "/v1/" + resource,
+                    RAW_16MIB_OVER_LABEL,
+                    {"status": 404, "typed": "NOT_FOUND"},
+                    resource,
+                ),
+            ]
+        )
+    if observation != expected_observation or recovery != expected_recovery:
+        raise ValueError("sentinel observation or recovery operation drift")
+    schedule = [
+        *({"phase": "observation", "index": index} for index in range(41)),
+        *({"phase": "recovery", "index": index} for index in range(60)),
+    ]
+    if plan.get("executionSchedule") != schedule:
+        raise ValueError("sentinel execution schedule drift")
+    bounds = {
+        "probeCount": 1,
+        "maxInFlight": 1,
+        "requestBytes": RAW_16MIB_OVER_BYTES,
+        "distinctDocumentCount": 20,
+        "peakLiveDocumentCount": 20,
+        "observationRequests": 41,
+        "recoveryRequests": 60,
+        "totalRequestBound": 101,
+        "responseByteCap": 2 * 1024 * 1024,
+    }
+    if plan.get("bounds") != bounds:
+        raise ValueError("sentinel request bounds drift")
 
 
 def validate_request_bytes_plan(plan: dict[str, Any]) -> None:

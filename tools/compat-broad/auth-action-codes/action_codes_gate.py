@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -85,6 +87,7 @@ def _operation(row: dict, project: str, nonce: str, *, recovery: bool) -> dict:
     operation = {
         "id": row["id"],
         "service": "auth",
+        "project": project,
         "method": "POST",
         "path": row["path"].format(project=project).lstrip("/"),
         "body": body,
@@ -130,7 +133,12 @@ def gate_plan(project: str, nonce: str) -> dict:
         for account in ("accountA", "accountB")
     }
     schedule = [
-        {"phase": "observation", "index": index, "seconds": 1}
+        {
+            "phase": "observation",
+            "index": index,
+            "seconds": 1,
+            "creates": index in (0, 1),
+        }
         for index in range(len(observation))
     ] + [
         {"phase": "recovery", "index": index, "seconds": 1}
@@ -146,15 +154,24 @@ def gate_plan(project: str, nonce: str) -> dict:
         "wallSeconds": 300,
         "recoverySeconds": 180,
         "intervalSeconds": 0.25,
-        "observationRequests": len(observation),
+        "observationRequests": len(observation) + 2,
         "dataRequests": len(observation) + len(recovery),
-        "managementRequests": 0,
+        "managementRequests": 2,
         "requestCostMicrousd": 1,
-        "costMicrousd": len(observation) + len(recovery),
+        "costMicrousd": len(observation) + len(recovery) + 2,
+        "management": {
+            "dispatchKind": "closed-v1",
+            "observation": [
+                {"id": "oauth-tokeninfo", "timeout": 12},
+                {"id": "auth-project-readback", "timeout": 12},
+            ],
+            "recovery": [],
+        },
         "receiptKind": "auth-action-codes-production-receipt-v1",
         "ownershipMarker": {"field": "resource", "binding": "resource-name"},
         "observationDeletePolicy": "auth-action-account-b-delete-v1",
         "publishedAllocation": {"wallSeconds": 300, "recoverySeconds": 180},
+        "permissionExpiresAt": time.time() + 600,
         "jobs": {
             JOB: {
                 "resources": resources,
@@ -179,6 +196,46 @@ def create(path: Path, plan: dict) -> None:
 
 class ActionGate(shared_gate.Gate):
     """Gate handle; runtime binding/creation evidence is supplied by the adapter."""
+
+    def _skip_unowned_recovery_delete(self, operation, index):
+        with self.locked() as state:
+            job = state["jobs"][self.job]
+            schedule = shared_gate.job_schedule(state["plan"]["jobs"][self.job])
+            if (
+                not schedule
+                or job["pid"] != os.getpid()
+                or job["inflight"]
+                or job["recovery"] != index
+                or schedule[job["scheduleDone"]]["phase"] != "recovery"
+                or schedule[job["scheduleDone"]]["index"] != index
+                or operation != state["plan"]["jobs"][self.job]["recovery"][index]
+            ):
+                raise ValueError("Action recovery skip outside frozen schedule")
+            resource = operation.get("resource")
+            account = operation.get("account")
+            record = job.get("authAccounts", {}).get(account)
+            if not isinstance(record, dict) or not shared_gate._auth_creation_ownership(
+                state, job, operation
+            ):
+                job["recovery"] += 1
+                job["scheduleDone"] += 1
+                state["reservedRecovery"] -= 1
+                state.setdefault("skips", []).append(
+                    {"job": self.job, "index": index, "reason": "auth-ownership-unproven"}
+                )
+                shared_gate._save(self.path, state)
+                return (None, {"skipped": "auth-ownership-unproven", "resource": resource})
+        raise ValueError("Action recovery ownership unexpectedly changed")
+
+    def dispatch(self, operation, recovery, send):
+        if recovery and operation.get("kind") == "delete":
+            state = self.snapshot()
+            record = state["jobs"][self.job].get("authAccounts", {}).get(operation.get("account"))
+            if not isinstance(record, dict) or not shared_gate._auth_creation_ownership(
+                state, state["jobs"][self.job], operation
+            ):
+                return self._skip_unowned_recovery_delete(operation, state["jobs"][self.job]["recovery"])
+        return super().dispatch(operation, recovery, send)
 
     def _allow_observation_auth_delete(self, state, job, operation, index):
         plan = state["plan"]
@@ -233,7 +290,20 @@ class ActionGate(shared_gate.Gate):
                 and isinstance(body.get("refreshToken"), str)
             )
             if not valid:
-                event["authEvidence"] = {"account": operation["account"], "creationOutcome": "refused", "status": status}
+                event["creationOutcome"] = "unknown"
+                event["authEvidence"] = {
+                    "account": operation["account"],
+                    "creationOutcome": "unknown",
+                    "status": status,
+                }
+                state.setdefault("jobs", {}).setdefault(self.job, {}).setdefault("authAccounts", {})[
+                    operation["account"]
+                ] = {
+                    "resource": operation["resource"],
+                    "createEvent": len(state["events"]) - 1,
+                    "requestDigest": event["requestDigest"],
+                    "creationOutcome": "unknown",
+                }
                 return
             records = job = state["jobs"][self.job]
             accounts = job.setdefault("authAccounts", {})

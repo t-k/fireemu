@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote, urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "production-admission"))
@@ -25,6 +25,14 @@ import shared_gate
 from broad_contract import digest
 
 RECOVERY_JOB = recovery_campaign.RECOVERY_JOB
+
+
+class _RejectRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, *_args, **_kwargs):
+        return None
+
+
+_LOOPBACK_OPENER = build_opener(ProxyHandler({}), _RejectRedirect())
 
 
 def _validate_loopback_url(base_url: str) -> None:
@@ -83,10 +91,12 @@ def _response(base_url: str, operation: dict, versions: dict[str, str]):
         path += "?currentDocument.updateTime=" + quote(version, safe="")
     request = Request(base_url.rstrip("/") + path, method=operation["method"])
     try:
-        response = urlopen(request, timeout=3.0)
+        response = _LOOPBACK_OPENER.open(request, timeout=3.0)
     except HTTPError as error:
         response = error
     with response:
+        if 300 <= response.status < 400:
+            raise ValueError("redirect response rejected")
         raw = response.read(2 * 1024 * 1024 + 1)
         if len(raw) > 2 * 1024 * 1024:
             raise ValueError("loopback response exceeds bounded receipt")

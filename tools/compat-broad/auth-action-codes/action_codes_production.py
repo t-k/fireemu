@@ -179,26 +179,21 @@ def execute(
                 handoff=credential_handoff,
                 permission=permission,
                 required_seconds=gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
+                fixture_origin=fixture_origin,
             )
     else:
         def management(slot_id, deadline):
-            if slot_id == "oauth-tokeninfo":
-                body = {
-                    "kind": "request-byte-token-attestation-v1",
-                    "principalDigest": digest(permission["credentialPrincipal"]["subject"]),
-                    "requiredScopeVerified": True,
-                    "identityMode": "verified-email",
-                    "identityVerified": True,
-                    "oauthClientVerified": True,
-                    "expiresInSeconds": gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
-                    "remainingSecondsAtVerification": gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
-                    "requiredSeconds": gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
-                    "complete": True,
-                    "workerReaped": True,
-                }
-            else:
-                body = {"kind": "auth-project-readback-v1", "projectId": project, "authorized": True}
-            return {"status": 200, "complete": True, "workerReaped": True, "bodyKind": "json", "body": body}
+            return remote.management_receipt(
+                slot_id=slot_id,
+                deadline=deadline,
+                capability=capability,
+                binding=binding,
+                binding_digest=binding_digest,
+                handoff=credential_handoff,
+                permission=permission,
+                required_seconds=gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
+                fixture_origin=fixture_origin,
+            )
 
     handle.management_dispatch(
         "observation", "oauth-tokeninfo", lambda deadline: management("oauth-tokeninfo", deadline)

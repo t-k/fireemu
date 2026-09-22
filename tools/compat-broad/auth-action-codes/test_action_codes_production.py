@@ -50,7 +50,11 @@ class _ActionFixture(BaseHTTPRequestHandler):
             self.wfile.write(encoded)
             return
         route = self.path.split("?", 1)[0]
-        if route.endswith("accounts:signUp"):
+        if route.endswith("/oauth2/v1/tokeninfo"):
+            response = {"email": "owner@example.test", "scope": "https://www.googleapis.com/auth/identitytoolkit", "expires_in": 600}
+        elif route.endswith("/v1/projects/fireemu-35fe6/config"):
+            response = {"projectId": "fireemu-35fe6"}
+        elif route.endswith("accounts:signUp"):
             suffix = "a" if body["email"].endswith("-a@example.invalid") else "b"
             response = {"localId": "uid-" + suffix, "idToken": "token-" + suffix, "refreshToken": "refresh-" + suffix}
         elif route.endswith("accounts:lookup"):

@@ -335,18 +335,20 @@ def forget_transport(inputs_digest: str) -> None:
     _BOUND_TRANSPORTS.pop(inputs_digest, None)
 
 
-def management_receipt(*, slot_id, deadline, capability, binding, binding_digest, handoff, permission, required_seconds):
+def management_receipt(*, slot_id, deadline, capability, binding, binding_digest, handoff, permission, required_seconds, fixture_origin=None):
     """Run one Action-specific live authority check through the pinned worker."""
     credential_remote.authorize_transport(capability, binding=binding, binding_digest=binding_digest)
     credential_remote.verify_worker_binding(binding, binding_digest, None)
     token = handoff.get("token")
     if slot_id == "oauth-tokeninfo":
-        url = "https://oauth2.googleapis.com/tokeninfo?access_token=" + urllib.parse.quote(token, safe="")
+        base = fixture_origin.rstrip("/") if fixture_origin is not None else "https://oauth2.googleapis.com"
+        url = base + "/oauth2/v1/tokeninfo?access_token=" + urllib.parse.quote(token, safe="")
         status, body = credential_remote.request(
             url,
             None,
             headers={},
             seconds=credential_remote._seconds(deadline),
+            fixture_origin=fixture_origin,
         )
         principal = permission["credentialPrincipal"]["subject"]
         scope = permission["credentialPrincipal"]["requiredScopes"][0]
@@ -375,12 +377,14 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
         }
         return {"status": status, "complete": valid, "workerReaped": True, "bodyKind": "json", "body": attestation}
     if slot_id == "auth-project-readback":
-        url = "https://identitytoolkit.googleapis.com/v1/projects/" + AUTHORIZED_PROJECT + "/config"
+        base = fixture_origin.rstrip("/") if fixture_origin is not None else "https://identitytoolkit.googleapis.com"
+        url = base + "/v1/projects/" + AUTHORIZED_PROJECT + "/config"
         status, body = credential_remote.request(
             url,
             None,
             headers={"Authorization": "Bearer " + token, "x-goog-user-project": AUTHORIZED_PROJECT},
             seconds=credential_remote._seconds(deadline),
+            fixture_origin=fixture_origin,
         )
         project_id = body.get("projectId") if isinstance(body, dict) else None
         if project_id is None and isinstance(body, dict) and isinstance(body.get("name"), str):

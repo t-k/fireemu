@@ -111,7 +111,7 @@ def cost_model() -> dict:
     return {
         "campaignId": CAMPAIGN,
         "maximumCostMicrousd": round(plan["budget"]["planningCeilingUsd"] * 1_000_000),
-        "requests": len(rows),
+        "requests": len(rows) + 2,
     }
 
 

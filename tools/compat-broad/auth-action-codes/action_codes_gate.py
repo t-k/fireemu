@@ -156,7 +156,7 @@ def gate_plan(project: str, nonce: str) -> dict:
         "intervalSeconds": 0.25,
         "observationRequests": len(observation) + 2,
         "dataRequests": len(observation) + len(recovery),
-        "managementRequests": 0,
+        "managementRequests": 2,
         "requestCostMicrousd": 1,
         "costMicrousd": len(observation) + len(recovery) + 2,
         "management": {

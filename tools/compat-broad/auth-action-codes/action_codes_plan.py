@@ -663,8 +663,10 @@ def campaign_manifest(
         "unobservedConditions": unobserved_conditions(),
         "secretFields": list(SECRET_FIELDS),
         "budget": {
-            "observationRequests": len(stages),
+            "observationRequests": len(stages) + 2,
             "recoveryRequests": len(recovery),
+            "managementRequests": 2,
+            "totalRequests": len(stages) + len(recovery) + 2,
             "maxConcurrency": 1,
             "requestRatePerSecondMax": 4,
             "requestRateEnforced": True,

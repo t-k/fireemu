@@ -110,7 +110,7 @@ def _request(slot: str, secret, *, fixture_origin: str | None, deadline: float |
         return status, body
     if slot == "tokeninfo":
         return remote.request(
-            _origin_url("www.googleapis.com", "/oauth2/v1/tokeninfo?access_token=" + secret, fixture_origin),
+            _origin_url("oauth2.googleapis.com", "/tokeninfo?access_token=" + secret, fixture_origin),
             None, headers={}, seconds=seconds, fixture_origin=fixture_origin,
         )
     if slot == "project":

@@ -31,7 +31,7 @@ class _Fixture(BaseHTTPRequestHandler):
         self.__class__.requests.append(self.path)
         if self.path == "/oauth2.googleapis.com/token":
             body = {"access_token": "fixture-access", "expires_in": 3600, "token_type": "Bearer"}
-        elif self.path.startswith("/www.googleapis.com/oauth2/v1/tokeninfo"):
+        elif self.path.startswith("/oauth2.googleapis.com/tokeninfo"):
             body = {
                 "azp": "client-1",
                 "aud": "client-1",
@@ -45,7 +45,7 @@ class _Fixture(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.__class__.requests.append(self.path)
-        if self.path.startswith("/www.googleapis.com/oauth2/v1/tokeninfo"):
+        if self.path.startswith("/oauth2.googleapis.com/tokeninfo"):
             self._reply({
                 "azp": "client-1",
                 "aud": "client-1",
@@ -102,7 +102,7 @@ def _permission():
 def test_fixture_bootstrap_charges_exact_four_requests_and_returns_private_handoff(fixture_origin):
     origin, requests = fixture_origin
     result = bootstrap.prepare(_permission(), adc=ADC, api_key="api-key", fixture_origin=origin)
-    assert requests == ["/oauth2.googleapis.com/token", "/www.googleapis.com/oauth2/v1/tokeninfo?access_token=fixture-access", "/cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6", "/identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config"]
+    assert requests == ["/oauth2.googleapis.com/token", "/oauth2.googleapis.com/tokeninfo?access_token=fixture-access", "/cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6", "/identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config"]
     assert result.prepared == {
         "token": "fixture-access",
         "apiKey": "api-key",

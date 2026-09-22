@@ -123,8 +123,8 @@ def _bootstrap_management(ids: tuple[str, ...]) -> list[dict[str, Any]]:
         },
         "bootstrap-tokeninfo": {
             "method": "GET",
-            "host": "www.googleapis.com",
-            "path": "https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=$binding:accessToken",
+            "host": "oauth2.googleapis.com",
+            "path": "https://oauth2.googleapis.com/tokeninfo?access_token=$binding:accessToken",
             "form": False,
         },
         "bootstrap-project": {

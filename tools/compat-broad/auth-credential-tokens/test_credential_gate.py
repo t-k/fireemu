@@ -160,8 +160,8 @@ def test_bootstrap_plan_adds_four_modern_oauth_management_slots(tmp_path: Path) 
     assert [item["method"] for item in management["observation"][:4]] == [
         "POST", "GET", "GET", "GET"
     ]
-    assert management["observation"][1]["path"].startswith(
-        "https://www.googleapis.com/oauth2/v1/tokeninfo?access_token="
+    assert management["observation"][1]["path"] == (
+        "https://oauth2.googleapis.com/tokeninfo?access_token=$binding:accessToken"
     )
     assert plan["observationRequests"] == 44
     assert plan["managementRequests"] == 11

@@ -337,6 +337,7 @@ def mint_acknowledged_setup_proof(
     *,
     private_handoff: Any,
     setup_receipt: Any,
+    gate_authority: Any,
     gate_acknowledgment: dict[str, Any],
     expected_provider: str,
     expected_tenant: str | None,
@@ -346,6 +347,10 @@ def mint_acknowledged_setup_proof(
     now: int | None = None,
 ) -> IdentityProof:
     """Mint a proof from a durably acknowledged setup exchange without network I/O."""
+    from shared_gate import Gate
+
+    if not isinstance(gate_authority, Gate):
+        raise ValueError("durable Gate authority required")
     if not isinstance(principal_ref, str) or not principal_ref or expected_provider not in {"password", "anonymous"}:
         raise ValueError("closed principal proof binding required")
     if not isinstance(request_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", request_digest):
@@ -364,6 +369,14 @@ def mint_acknowledged_setup_proof(
         raise ValueError("setup acknowledgment nonce required")
     if not isinstance(gate_acknowledgment["slotId"], str) or not gate_acknowledgment["slotId"]:
         raise ValueError("setup acknowledgment slot required")
+    state = gate_authority.snapshot()
+    if state.get("planDigest") != gate_acknowledgment["planDigest"]:
+        raise ValueError("setup Gate plan binding differs")
+    event = next((candidate for candidate in state.get("managementEvents", []) if isinstance(candidate, dict) and candidate.get("id") == gate_acknowledgment["slotId"]), None)
+    if not isinstance(event, dict) or event.get("completed") is not True or event.get("workerReaped") is not True:
+        raise ValueError("setup Gate event is not durably completed")
+    if event.get("responseDigest") != gate_acknowledgment["responseDigest"] or digest(event) != gate_acknowledgment["eventDigest"]:
+        raise ValueError("setup Gate event binding differs")
     token_reader = getattr(private_handoff, "token_for_followup", None)
     token = token_reader() if callable(token_reader) else None
     uid = getattr(setup_receipt, "local_id", None)

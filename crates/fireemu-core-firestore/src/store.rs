@@ -4706,7 +4706,7 @@ fn apply_write<'a>(
         WriteOp::Delete { .. } => {
             if !write.transforms.is_empty() {
                 return Err(FirestoreError::InvalidArgument(
-                    "transforms on a delete".into(),
+                    "a delete must not specify a update transform.".into(),
                 ));
             }
             // Firestore never reports an update time for a delete.
@@ -5318,7 +5318,7 @@ fn apply_transform(
         TransformKind::Increment(delta) => {
             if !is_number(delta) {
                 return Err(FirestoreError::InvalidArgument(
-                    "increment operand must be numeric".into(),
+                    "Input must be a number.".into(),
                 ));
             }
             match current {

@@ -88,6 +88,18 @@ class _FixtureHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
+class _DelayedObservationHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        time.sleep(2.2)
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
 @pytest.fixture
 def fixture_origin():
     reservation = None
@@ -311,6 +323,36 @@ def test_transport_accepts_bounded_deadline_and_timeout_parameters():
     assert callable(transport)
 
 
+def test_two_second_transport_deadline_reaps_loopback_worker():
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _DelayedObservationHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        source, source_digest = remote.worker_binding()
+        envelope = {
+            "service": "firestore",
+            "route": "observation-get",
+            "method": "GET",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cases/owned-a",
+            "headers": {"x-goog-user-project": "fireemu-35fe6"},
+            "body": None,
+            "seconds": 2.0,
+        }
+        with pytest.raises(remote.WorkerExchangeError, match="walltime") as error:
+            remote.run_worker(
+                envelope,
+                binding=source,
+                binding_digest=source_digest,
+                fixture_origin=f"http://127.0.0.1:{server.server_port}",
+            )
+        assert error.value.worker_reaped is True
+        assert not remote._OWNED_CHILDREN
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
     item = {
         "id": "account/owner-a/signin",
@@ -341,6 +383,28 @@ def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
     assert "secret-token" not in repr(result.private)
     with pytest.raises(TypeError):
         dataclasses.asdict(result)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"localId": "uid-owner-a", "idToken": "", "expiresIn": "3600"},
+        {"localId": "uid-owner-a", "idToken": "token", "expiresIn": "0"},
+        {"localId": "uid-owner-a", "idToken": "token", "expiresIn": "not-a-duration"},
+    ],
+)
+def test_setup_auth_token_response_requires_nonempty_token_and_positive_expiry(body):
+    item = {
+        "id": "account/owner-a/signin",
+        "service": "identity",
+        "route": "accounts:signInWithPassword",
+        "method": "POST",
+        "accountRef": "owner-a",
+        "tenant": None,
+        "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"},
+    }
+    with pytest.raises(ValueError, match="setup token response refused"):
+        remote.adapt_setup_result(item, {"status": 200, "body": body}, endpoint="loopback", sequence=1, account_bindings={"owner-a": {"uid": "uid-owner-a"}})
 
 
 def _fixture_token(uid, provider, tenant, claims):

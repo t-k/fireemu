@@ -706,7 +706,12 @@ def adapt_setup_result(
     if isinstance(bound, dict) and isinstance(bound.get("uid"), str) and body["localId"] != bound["uid"]:
         raise ValueError("setup localId binding refused")
     expected = item["response"]
-    if item["route"] != "accounts:update" and (not isinstance(body.get("idToken"), str) or not isinstance(body.get("expiresIn"), str)):
+    if item["route"] != "accounts:update" and (
+        not isinstance(body.get("idToken"), str)
+        or not body["idToken"]
+        or not isinstance(body.get("expiresIn"), str)
+        or not re.fullmatch(r"[1-9][0-9]*", body["expiresIn"])
+    ):
         raise ValueError("setup token response refused")
     return SetupResult(
         receipt=SetupPublicReceipt(
@@ -1210,6 +1215,8 @@ def make_transport(
         raise ValueError("absolute transport deadline required")
     if timeout_seconds is not None and (type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= MAX_SECONDS):
         raise ValueError("bounded transport timeout required")
+    transport_deadline = deadline
+    transport_timeout = timeout_seconds
     frozen = copy.deepcopy(frozen_inputs)
     trusted_bindings = copy.deepcopy(account_bindings or {})
     if identity_proofs is not None:
@@ -1257,6 +1264,8 @@ def make_transport(
         binding: bytes,
         binding_digest: str,
         capability: Any = None,
+        deadline: float | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         nonlocal sequence
         if capability is None:
@@ -1278,9 +1287,15 @@ def make_transport(
             key: prepared[key]
             for key in ("service", "route", "method", "path", "headers", "body")
         }
-        seconds = MAX_SECONDS if timeout_seconds is None else float(timeout_seconds)
-        if deadline is not None:
-            seconds = min(seconds, deadline - time.monotonic())
+        call_deadline = transport_deadline if deadline is None else deadline
+        call_timeout = transport_timeout if timeout_seconds is None else timeout_seconds
+        if call_deadline is not None and (type(call_deadline) not in (int, float) or not math.isfinite(call_deadline)):
+            raise ValueError("absolute transport deadline required")
+        if call_timeout is not None and (type(call_timeout) not in (int, float) or not math.isfinite(call_timeout) or not 0 < call_timeout <= MAX_SECONDS):
+            raise ValueError("bounded transport timeout required")
+        seconds = MAX_SECONDS if call_timeout is None else float(call_timeout)
+        if call_deadline is not None:
+            seconds = min(seconds, call_deadline - time.monotonic())
         if seconds <= 0:
             raise WorkerExchangeError("transport deadline exhausted", worker_reaped=False)
         envelope["seconds"] = seconds

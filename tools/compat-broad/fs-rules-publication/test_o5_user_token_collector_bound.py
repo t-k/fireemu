@@ -125,7 +125,15 @@ def bound(
         gate_path = root / "gate"
         ledger = Ledger.create(root / "ledger")
         plan_gate = gate_plan(plan, permission_expires_at=time.time() + 3600)
-        limits = {"requests": 56, "accounts": 0, "resources": 1, "costMicrousd": 23}
+        required_requests = plan_gate["observationRequests"] + sum(
+            len(job["recovery"]) for job in plan_gate["jobs"].values()
+        ) + len(plan_gate["management"]["recovery"]) + plan_gate.get("coordinatorRequests", 0)
+        limits = {
+            "requests": required_requests,
+            "accounts": 0,
+            "resources": 1,
+            "costMicrousd": plan_gate["costMicrousd"],
+        }
         envelope = {"permissionDigest": digest({"kind": "bound-test"}), "issuedAt": time.time() - 1, "expiresAt": time.time() + 3600, "limits": limits, "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}]}
         claim = {"campaignId": plan["campaignId"], "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str(gate_path.resolve()), "gatePlanDigest": digest(plan_gate), "locks": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}], "budget": limits, "durationSeconds": 600}
         ticket = ledger.reserve(envelope, claim, plan_gate)
@@ -211,7 +219,15 @@ def collect(plan, execute, *, role, run_id, acquisition=None, management_session
         gate_path = root / "gate"
         ledger = Ledger.create(root / "ledger")
         plan_gate = gate_plan(plan, permission_expires_at=time.time() + 3600)
-        limits = {"requests": 56, "accounts": 0, "resources": 1, "costMicrousd": 23}
+        required_requests = plan_gate["observationRequests"] + sum(
+            len(job["recovery"]) for job in plan_gate["jobs"].values()
+        ) + len(plan_gate["management"]["recovery"]) + plan_gate.get("coordinatorRequests", 0)
+        limits = {
+            "requests": required_requests,
+            "accounts": 0,
+            "resources": 1,
+            "costMicrousd": plan_gate["costMicrousd"],
+        }
         envelope = {"permissionDigest": digest({"kind": "bound-test"}), "issuedAt": time.time() - 1, "expiresAt": time.time() + 3600, "limits": limits, "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}]}
         claim = {"campaignId": plan["campaignId"], "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str(gate_path.resolve()), "gatePlanDigest": digest(plan_gate), "locks": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}], "budget": limits, "durationSeconds": 600}
         ticket = ledger.reserve(envelope, claim, plan_gate)

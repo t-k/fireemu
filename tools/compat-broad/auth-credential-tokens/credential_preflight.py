@@ -123,8 +123,7 @@ def modern_management_transport(slot, token, *, deadline, fixture_origin=None):
             "audience": body.get("aud"),
             "user_id": body.get("sub"),
             "email": body.get("email"),
-            "verified_email": body.get("email_verified") is True
-            or body.get("email_verified") == "true",
+            "verified_email": body.get("email_verified") == "true",
             "scope": body.get("scope"),
             "expires_in": expiry,
         }
@@ -319,20 +318,28 @@ class ManagementSession:
                     }
                     public["body"] = None
                     try:
-                        remaining = self.permission["wallSeconds"]
+                        verified_monotonic, verified_at = time.monotonic(), time.time()
+                        remaining = (
+                            self.permission["wallSeconds"]
+                            if self.reservation_deadline is None
+                            else max(
+                                self.reservation_deadline - verified_at,
+                                self.monotonic_deadline - verified_monotonic,
+                            )
+                        )
                         self.credential = shared_preflight.verify_token(
                             token,
                             response,
                             self.permission["credentialPrincipal"],
                             sent=sent,
-                            now=time.monotonic(),
+                            now=verified_monotonic,
                             required_seconds=remaining,
                         )
                         public["body"] = shared_preflight.credential_evidence(
                             response,
                             self.permission["credentialPrincipal"],
                             sent=sent,
-                            now=time.monotonic(),
+                            now=verified_monotonic,
                             required_seconds=remaining,
                         )
                         self.credential_evidence.append(public["body"])
@@ -505,7 +512,22 @@ def validate_saved_management(
             not isinstance(body, dict)
             or body.get("principalDigest")
             != digest(permission.get("credentialPrincipal"))
-            or body.get("requiredSeconds") != permission["wallSeconds"]
+            or (
+                proof is None
+                and body.get("requiredSeconds") != permission["wallSeconds"]
+            )
+            or (
+                proof is not None
+                and (
+                    type(body.get("requiredSeconds")) not in (int, float)
+                    or not math.isfinite(body["requiredSeconds"])
+                    or not proof["reservationMonotonicDeadline"] - event["ended"]
+                    <= body["requiredSeconds"]
+                    <= permission["wallSeconds"]
+                    or body.get("remainingSecondsAtVerification", 0)
+                    < body["requiredSeconds"]
+                )
+            )
             or type(body.get("remainingSecondsAtVerification")) not in (int, float)
             or not math.isfinite(body["remainingSecondsAtVerification"])
             or receipt.get("credentialEvidence") != [body]

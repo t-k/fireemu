@@ -137,6 +137,10 @@ class _Fixture(BaseHTTPRequestHandler):
         return {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
 
     def _reply(self, value, status=200):
+        if value.get("email_verified") == "__missing__":
+            value = {
+                key: item for key, item in value.items() if key != "email_verified"
+            }
         raw = json.dumps(value).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -380,9 +384,14 @@ def test_real_preparation_admission_reserves_once_before_four_worker_calls(
         "managementJournalDigest",
         "claimDigest",
         "reservationDeadline",
+        "tokeninfoExpiresInSeconds",
     ):
         changed = copy.deepcopy(result.proof)
-        changed[field] = 0 if field == "reservationDeadline" else "0" * 64
+        changed[field] = (
+            0
+            if field in {"reservationDeadline", "tokeninfoExpiresInSeconds"}
+            else "0" * 64
+        )
         with pytest.raises(ValueError, match="proof|evidence"):
             bootstrap.validate_proof(
                 changed,
@@ -738,6 +747,13 @@ def test_actual_cli_waits_for_independent_final_artifacts(
     from test_credential_shadow import _service
 
     fixture, command, observation = _cli_fixture(tmp_path, fixture_origin[0])
+    _Fixture.tokeninfo_overrides = {"expires_in": "600"}
+
+    def delay_auth_readback(path):
+        if path.endswith("/config"):
+            time.sleep(1.05)
+
+    _Fixture.before_request = delay_auth_readback
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         proof_path = tmp_path / "prepared" / "preparation-proof.json"
@@ -750,6 +766,12 @@ def test_actual_cli_waits_for_independent_final_artifacts(
             time.sleep(0.05)
         assert proof_path.exists()
         proof = json.loads(proof_path.read_text())
+        assert proof["tokenLifetime"]["expiresInSeconds"] == 600
+        assert proof["tokeninfoExpiresInSeconds"] < 600
+        assert (
+            proof["tokenLifetime"]
+            == proof["managementEvidence"][1]["response"]["body"]["tokenLifetime"]
+        )
         assert len(fixture_origin[1]) == 4
         time.sleep(0.25)
         assert len(fixture_origin[1]) == 4
@@ -801,6 +823,7 @@ def test_actual_cli_waits_for_independent_final_artifacts(
             )
             assert receipt["ticket"] == proof["ticket"]
             assert receipt["chargedCalls"] == 53
+            assert receipt["credentialEvidence"][0]["requiredSeconds"] < 600
         else:
             assert (
                 bootstrap.retire_no_data(
@@ -818,3 +841,96 @@ def test_actual_cli_waits_for_independent_final_artifacts(
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("claim", [True, 1, False, "false", None, "__missing__"])
+def test_modern_verified_email_rejects_non_string_true_claims(fixture_origin, claim):
+    import credential_preflight as preflight
+
+    _Fixture.tokeninfo_overrides = {"email_verified": claim}
+    permission = _permission()
+    permission["credentialPrincipal"] = {
+        "clientId": "client-1",
+        "verifiedEmail": "fixture@example.invalid",
+        "requiredScopes": [bootstrap.SCOPE],
+    }
+    with pytest.raises(ValueError, match="principal"):
+        bootstrap.prepare(
+            permission,
+            adc=ADC,
+            api_key="fixture-bootstrap-api-key",
+            fixture_origin=fixture_origin[0],
+        )
+    assert len(fixture_origin[1]) == 2
+    response = preflight.modern_management_transport(
+        "oauth-tokeninfo",
+        "fixture-access",
+        deadline=time.monotonic() + 5,
+        fixture_origin=fixture_origin[0],
+    )
+    assert response["body"]["verified_email"] is False
+
+
+def test_lifetime_boundary_covers_original_deadline_including_recovery():
+    lifetime = bootstrap.token_lifetime(
+        {"expires_in": "600"}, sent_monotonic=100.0, sent_at=1000.0
+    )
+    bootstrap.require_lifetime(
+        lifetime,
+        deadline_monotonic=700.0,
+        deadline_at=1600.0,
+        now_monotonic=130.0,
+        now_at=1030.0,
+    )
+    with pytest.raises(ValueError, match="lifetime"):
+        bootstrap.require_lifetime(
+            lifetime,
+            deadline_monotonic=700.001,
+            deadline_at=1600.0,
+            now_monotonic=130.0,
+            now_at=1030.0,
+        )
+    with pytest.raises(ValueError, match="lifetime"):
+        bootstrap.require_lifetime(
+            lifetime,
+            deadline_monotonic=700.0,
+            deadline_at=1600.001,
+            now_monotonic=130.0,
+            now_at=1030.0,
+        )
+    with pytest.raises(ValueError, match="lifetime"):
+        bootstrap.require_lifetime(
+            lifetime,
+            deadline_monotonic=700.0,
+            deadline_at=1600.0,
+            now_monotonic=700.0,
+            now_at=1600.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "kind", ["regular", "symlink", "public", "fifo", "oversized", "malformed"]
+)
+def test_private_input_is_bounded_regular_private_owned_fd(tmp_path, kind):
+    path = tmp_path / "private.json"
+    value = {"adc": ADC, "apiKey": "fixture-bootstrap-api-key"}
+    if kind == "fifo":
+        os.mkfifo(path, 0o600)
+    else:
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+    if kind == "symlink":
+        link = tmp_path / "link.json"
+        link.symlink_to(path)
+        path = link
+    elif kind == "public":
+        path.chmod(0o644)
+    elif kind == "oversized":
+        path.write_bytes(b"x" * 65537)
+    elif kind == "malformed":
+        path.write_text("fixture-secret invalid JSON")
+    if kind == "regular":
+        assert bootstrap.read_private_input(path) == value
+    else:
+        with pytest.raises(ValueError, match="private input"):
+            bootstrap.read_private_input(path)

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import copy
 import math
+import os
+import stat
 import sys
 import time
 import urllib.parse
@@ -81,6 +83,109 @@ def validate_deadline(seconds: float) -> None:
         or seconds <= PREP_REQUEST_SECONDS
     ):
         raise ValueError("bootstrap deadline must cover four bounded requests")
+
+
+def token_lifetime(body, *, sent_monotonic, sent_at):
+    """Conservative expiry from the response, anchored before its worker send."""
+    seconds = body.get("expires_in") if isinstance(body, dict) else None
+    if isinstance(seconds, str) and seconds.isascii() and seconds.isdecimal():
+        seconds = int(seconds)
+    if (
+        type(seconds) is not int
+        or not 1 < seconds <= 3600
+        or any(
+            type(value) not in (int, float) or not math.isfinite(value) or value < 0
+            for value in (sent_monotonic, sent_at)
+        )
+    ):
+        raise ValueError("typed token lifetime required")
+    return {
+        "expiresInSeconds": seconds,
+        "sentMonotonic": sent_monotonic,
+        "sentAt": sent_at,
+        "expiresMonotonic": sent_monotonic + seconds,
+        "expiresAt": sent_at + seconds,
+    }
+
+
+def require_lifetime(
+    lifetime, *, deadline_monotonic, deadline_at, now_monotonic, now_at
+):
+    """Cover the original total deadline, including its recovery tail, once."""
+    if not isinstance(lifetime, dict) or set(lifetime) != {
+        "expiresInSeconds",
+        "sentMonotonic",
+        "sentAt",
+        "expiresMonotonic",
+        "expiresAt",
+    }:
+        raise ValueError("bound token lifetime required")
+    expected = token_lifetime(
+        {"expires_in": lifetime["expiresInSeconds"]},
+        sent_monotonic=lifetime["sentMonotonic"],
+        sent_at=lifetime["sentAt"],
+    )
+    if (
+        lifetime != expected
+        or any(
+            type(value) not in (int, float) or not math.isfinite(value)
+            for value in (deadline_monotonic, deadline_at, now_monotonic, now_at)
+        )
+        or not lifetime["sentMonotonic"]
+        <= now_monotonic
+        < deadline_monotonic
+        <= lifetime["expiresMonotonic"]
+        or not lifetime["sentAt"] <= now_at < deadline_at <= lifetime["expiresAt"]
+    ):
+        raise ValueError("token lifetime cannot cover original reservation")
+
+
+def read_private_input(path):
+    """Inspect and read the same owned private regular FD without following links."""
+    import json
+
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        before = os.fstat(fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_mode & 0o077
+            or not 0 < before.st_size <= 65536
+        ):
+            raise ValueError("bounded private input required")
+        raw = bytearray()
+        while len(raw) <= 65536:
+            chunk = os.read(fd, min(8192, 65537 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        after = os.fstat(fd)
+        fields = (
+            "st_dev",
+            "st_ino",
+            "st_uid",
+            "st_mode",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        if (
+            len(raw) != before.st_size
+            or len(raw) > 65536
+            or any(getattr(before, name) != getattr(after, name) for name in fields)
+        ):
+            raise ValueError("stable bounded private input required")
+        value = json.loads(raw)
+        if not isinstance(value, dict) or set(value) != {"adc", "apiKey"}:
+            raise ValueError("closed private input required")
+        return value
+    except (OSError, ValueError, UnicodeError):
+        raise ValueError("bounded regular owned private input required") from None
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _validate_permission(permission: dict, adc: dict) -> None:
@@ -225,6 +330,7 @@ def prepare(
     returns private prepared values and typed proof, not a finalized handoff or O7 capability.
     """
     budget = budget or BootstrapBudget()
+    prepared_start_monotonic, prepared_start_at = time.monotonic(), time.time()
     budget.validate()
     validate_deadline(budget.max_seconds - RECOVERY_SECONDS)
     _validate_permission(permission, adc)
@@ -263,6 +369,17 @@ def prepare(
         before_events = 0
 
     evidence = [] if management_evidence is None else management_evidence
+    lifetime = None
+
+    def record_lifetime(slot, exchange, sent_monotonic, sent_at):
+        nonlocal lifetime
+        if slot == "bootstrap-tokeninfo":
+            try:
+                lifetime = token_lifetime(
+                    exchange.body, sent_monotonic=sent_monotonic, sent_at=sent_at
+                )
+            except ValueError:
+                lifetime = None
 
     def dispatch(slot: str, secret):
         request_slot = {
@@ -272,7 +389,9 @@ def prepare(
             "bootstrap-auth-config": "auth",
         }[slot]
         if gate is None:
+            sent_monotonic, sent_at = time.monotonic(), time.time()
             exchange = _request(request_slot, secret, fixture_origin=fixture_origin)
+            record_lifetime(slot, exchange, sent_monotonic, sent_at)
             return exchange.status, exchange.body
 
         private_response = []
@@ -293,6 +412,7 @@ def prepare(
                     ticket, duration=math.ceil(PREP_REQUEST_SECONDS + RECOVERY_SECONDS)
                 )
                 try:
+                    sent_monotonic, sent_at = time.monotonic(), time.time()
                     exchange = capability._transmit(
                         {
                             "kind": "preparation",
@@ -322,6 +442,7 @@ def prepare(
                     private_response.append((None, None))
                     return receipt
             else:
+                sent_monotonic, sent_at = time.monotonic(), time.time()
                 exchange = _request(
                     request_slot,
                     secret,
@@ -330,6 +451,7 @@ def prepare(
                 )
             if type(exchange) is not remote.WorkerExchange:
                 raise ValueError("typed worker lifecycle required")
+            record_lifetime(slot, exchange, sent_monotonic, sent_at)
             private_response.append((exchange.status, exchange.body))
             receipt = {
                 "status": exchange.status,
@@ -342,6 +464,8 @@ def prepare(
                     "responseBodyDigest": digest(exchange.body),
                 },
             }
+            if slot == "bootstrap-tokeninfo":
+                receipt["body"]["tokenLifetime"] = lifetime
             evidence.append(
                 {
                     "id": "observation:" + slot,
@@ -362,32 +486,41 @@ def prepare(
     ):
         raise ValueError("OAuth refresh refused")
     token = refresh["access_token"]
-    tokeninfo_sent = time.monotonic()
     status, tokeninfo = dispatch("bootstrap-tokeninfo", token)
     if status != 200 or not isinstance(tokeninfo, dict):
         raise ValueError("tokeninfo refused")
     principal = permission["credentialPrincipal"]
-    expires_in = tokeninfo.get("expires_in")
-    if isinstance(expires_in, str) and expires_in.isdecimal():
-        expires_in = int(expires_in)
     identity_matches = (
         tokeninfo.get("sub") == principal["subject"]
         if "subject" in principal
         else tokeninfo.get("email") == principal["verifiedEmail"]
-        and (
-            tokeninfo.get("email_verified") is True
-            or tokeninfo.get("email_verified") == "true"
-        )
+        and tokeninfo.get("email_verified") == "true"
     )
     if (
         tokeninfo.get("azp") != principal["clientId"]
         or tokeninfo.get("aud") != principal["clientId"]
         or not identity_matches
         or SCOPE not in str(tokeninfo.get("scope", "")).split()
-        or type(expires_in) is not int
-        or not TASK_MAX_SECONDS < expires_in <= 3600
+        or lifetime is None
     ):
         raise ValueError("tokeninfo principal or lifetime differs")
+    total_deadline = (
+        absolute_deadline + RECOVERY_SECONDS
+        if absolute_deadline is not None
+        else prepared_start_monotonic + budget.max_seconds
+    )
+    wall_deadline = (
+        ledger.snapshot()["reservations"][ticket["reservation"]]["deadline"]
+        if ledger is not None
+        else prepared_start_at + budget.max_seconds
+    )
+    require_lifetime(
+        lifetime,
+        deadline_monotonic=total_deadline,
+        deadline_at=wall_deadline,
+        now_monotonic=time.monotonic(),
+        now_at=time.time(),
+    )
     status, project = dispatch("bootstrap-project", token)
     if (
         status != 200
@@ -399,6 +532,14 @@ def prepare(
     status, auth = dispatch("bootstrap-auth-config", token)
     if status != 200 or not isinstance(auth, dict):
         raise ValueError("Auth config readback refused")
+    prepared_monotonic, prepared_at = time.monotonic(), time.time()
+    require_lifetime(
+        lifetime,
+        deadline_monotonic=total_deadline,
+        deadline_at=wall_deadline,
+        now_monotonic=prepared_monotonic,
+        now_at=prepared_at,
+    )
     prepared = {
         "token": token,
         "apiKey": api_key,
@@ -417,7 +558,10 @@ def prepare(
             "projectNumber": project["projectNumber"],
         },
         "authConfigDigest": digest(auth),
-        "tokeninfoExpiresInSeconds": expires_in - (time.monotonic() - tokeninfo_sent),
+        "tokeninfoExpiresInSeconds": lifetime["expiresMonotonic"] - prepared_monotonic,
+        "tokenLifetime": lifetime,
+        "preparedMonotonic": prepared_monotonic,
+        "preparedAt": prepared_at,
         "requestCount": PREP_REQUESTS,
         "taskMaxRequests": TASK_MAX_REQUESTS,
         "taskMaxSeconds": TASK_MAX_SECONDS,
@@ -664,6 +808,25 @@ def validate_proof(proof, *, snapshot, reservation, inputs):
         "authConfigDigest"
     ):
         raise ValueError("preparation baseline evidence differs")
+    lifetime = evidence[1]["response"]["body"].get("tokenLifetime")
+    if (
+        proof.get("tokenLifetime") != lifetime
+        or not isinstance(lifetime, dict)
+        or not events[1]["started"]
+        <= lifetime.get("sentMonotonic", -1)
+        <= events[1]["ended"]
+        or not events[-1]["ended"] <= proof.get("preparedMonotonic", -1)
+        or proof.get("tokeninfoExpiresInSeconds")
+        != lifetime["expiresMonotonic"] - proof["preparedMonotonic"]
+    ):
+        raise ValueError("anchored token lifetime evidence differs")
+    require_lifetime(
+        lifetime,
+        deadline_monotonic=proof["reservationMonotonicDeadline"],
+        deadline_at=reservation["deadline"],
+        now_monotonic=proof["preparedMonotonic"],
+        now_at=proof["preparedAt"],
+    )
 
 
 def observation_binding(proof):
@@ -722,6 +885,13 @@ def finalize_handoff(
             "independent observation permission and anchored proof required"
         )
     validate_proof(proof, snapshot=snapshot, reservation=reservation, inputs=inputs)
+    require_lifetime(
+        proof["tokenLifetime"],
+        deadline_monotonic=proof["reservationMonotonicDeadline"],
+        deadline_at=reservation["deadline"],
+        now_monotonic=time.monotonic(),
+        now_at=time.time(),
+    )
     if (
         observation_permission.get("bootstrap") != observation_binding(proof)
         or observation_permission.get("authConfigDigest") != proof["authConfigDigest"]
@@ -893,12 +1063,7 @@ def main(argv=None):
         )
 
         def private_reader():
-            if args.credential_file.stat().st_mode & 0o077:
-                raise ValueError("private credential input permissions required")
-            private = admission._read(args.credential_file)
-            if set(private) != {"adc", "apiKey"}:
-                raise ValueError("closed private bootstrap input required")
-            return private
+            return read_private_input(args.credential_file)
 
         preparation = execute_preparation(
             capability=capability,

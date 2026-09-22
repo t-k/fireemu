@@ -849,13 +849,24 @@ class CredentialGate(FrozenGate):
             )
         for name, field in operation.get("binds", {}).items():
             if kind == "custom-sign-in":
-                if name == "customUid" and field != "idToken.sub":
+                if (
+                    custom_uid is None
+                    and operation.get("binds", {}).get("customUid") == "idToken.sub"
+                ):
+                    continue
+                if (
+                    name == "customUid"
+                    and field != "idToken.sub"
+                    and custom_uid is not None
+                ):
                     raise ValueError("custom identity binding contract differs")
-                if custom_uid is None:
+                if custom_uid is None and field == "idToken.sub":
                     continue
             value = (
                 custom_uid
-                if kind == "custom-sign-in" and name == "customUid"
+                if kind == "custom-sign-in"
+                and name == "customUid"
+                and field == "idToken.sub"
                 else _field(body, field) if status == 200 else None
             )
             if not _text(value) or len(value) > 8192:
@@ -874,6 +885,7 @@ class CredentialGate(FrozenGate):
                 uid = (
                     custom_uid
                     if kind == "custom-sign-in"
+                    and operation.get("binds", {}).get("customUid") == "idToken.sub"
                     else body.get("localId") if isinstance(body, dict) else None
                 )
                 identified_success = (

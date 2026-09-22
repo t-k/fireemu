@@ -385,6 +385,8 @@ def _service(*, cookie_subject: str | None = None) -> dict:
             {
                 "iss": TOKEN_ISSUER,
                 "sub": session["uid"],
+                "aud": "demo-app",
+                "firebase": {"sign_in_provider": "custom"},
                 "auth_time": session["authTime"],
                 "iat": state["now"],
                 "exp": state["now"] + 3600,

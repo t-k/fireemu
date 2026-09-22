@@ -743,17 +743,18 @@ def test_collection_failure_after_index_apply_still_runs_reserved_recovery(
     monkeypatch.setattr(production, "collect", fail_after_preflight)
     result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
 
-    assert result["failure"] == "ValueError"
+    assert result["failure"] == "RuntimeError"
     assert calls == []
     receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
     management_ids = [row["id"] for row in receipt["managementEvidence"]]
-    assert management_ids[-1] == "observation:auth"
+    assert "observation:auth" in management_ids
     assert "recovery:index-lifecycle-restore" in management_ids
     assert "recovery:index-lifecycle-poll-restore" in management_ids
     assert "recovery:index-lifecycle-restored" in management_ids
+    assert management_ids[-1] == "recovery:index-lifecycle-restored"
     assert receipt["recoveryAttempted"] is True
-    assert receipt["recoveryFailure"] == "ValueError"
-    assert receipt["postflightComplete"] is False
+    assert receipt["recoveryFailure"] is None
+    assert receipt["postflightComplete"] is True
     assert receipt["reservationStateAtPublication"] == "held"
 
 

@@ -127,6 +127,42 @@ def _parent_evidence(gate: Mapping[str, Any], job: str, index: int, operation: M
     return evidence
 
 
+def _select_unresolved_custom_event(
+    gate_plan: Mapping[str, Any], gate: Mapping[str, Any], parent_job: str
+) -> tuple[int, Mapping[str, Any], Mapping[str, Any]]:
+    jobs = gate_plan.get("jobs")
+    job = jobs.get(parent_job) if isinstance(jobs, Mapping) else None
+    operations = job.get("observation") if isinstance(job, Mapping) else None
+    events = gate.get("events")
+    if not isinstance(operations, list) or not isinstance(events, list):
+        _refuse("parent observation events required")
+    unresolved: list[tuple[int, Mapping[str, Any], Mapping[str, Any]]] = []
+    for index, candidate in enumerate(operations):
+        if not isinstance(candidate, Mapping) or candidate.get("kind") != "custom-sign-in" or candidate.get("account") != "custom":
+            continue
+        event = next(
+            (
+                item
+                for item in events
+                if isinstance(item, Mapping)
+                and item.get("job") == parent_job
+                and item.get("phase") == "observation"
+                and item.get("index") == index
+            ),
+            None,
+        )
+        if (
+            isinstance(event, Mapping)
+            and event.get("requestDigest") == digest(candidate)
+            and event.get("completed") is False
+            and event.get("creationOutcome") in {"pending", "unknown"}
+        ):
+            unresolved.append((index, candidate, event))
+    if len(unresolved) != 1:
+        _refuse("one unresolved Auth custom event is required")
+    return unresolved[0]
+
+
 def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
     """Validate the held packet and return only its canonical Gate projection."""
     if not isinstance(parent, Mapping) or parent.get("state") != "held":
@@ -170,30 +206,22 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
         _refuse("immutable parent source commit changed")
     if immutable["gateDigest"] != digest(gate) or immutable["gatePlanDigest"] != digest(gate_plan) or immutable["nonce"] != nonce or claim.get("gatePlanDigest") != immutable["gatePlanDigest"]:
         _refuse("immutable parent Gate changed")
-    operations = plan_job.get("observation")
-    if not isinstance(operations, list):
-        _refuse("parent observation plan required")
     if type(immutable.get("eventIndex")) is not int or immutable["eventIndex"] < 0:
         _refuse("immutable parent event index required")
-    event_index = immutable["eventIndex"]
-    operation = operations[event_index] if event_index < len(operations) else None
-    if not isinstance(operation, Mapping) or operation.get("kind") != "custom-sign-in" or operation.get("account") != "custom":
-        _refuse("immutable parent custom event required")
+    event_index, operation, event = _select_unresolved_custom_event(gate_plan, gate, parent_job)
+    if event_index != immutable["eventIndex"]:
+        _refuse("immutable parent event index changed")
     expected_resource = operation.get("resource")
     if not isinstance(expected_resource, str):
         expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{nonce}"
     expected_parent_path = f"{IDENTITY}/accounts:signInWithCustomToken"
     expected_parent_body = {"token": "$binding:customToken", "returnSecureToken": True}
     binds = operation.get("binds")
-    if not isinstance(binds, Mapping) or binds.get("customUid") != "localId":
+    if not isinstance(binds, Mapping) or binds.get("customUid") not in {"localId", "idToken.sub"}:
         _refuse("parent custom identity binding differs")
     if operation.get("service") != "auth" or operation.get("method") != "POST" or operation.get("path") != expected_parent_path or operation.get("form") is not False or operation.get("body") != expected_parent_body or operation.get("owner") is not False or operation.get("resource") != expected_resource or immutable["resource"] != expected_resource or immutable["requestDigest"] != digest(operation):
         _refuse("parent custom resource binding differs")
-    event = next(
-        (item for item in gate.get("events", []) if isinstance(item, Mapping) and item.get("job") == parent_job and item.get("phase") == "observation" and item.get("index") == event_index),
-        None,
-    )
-    if not isinstance(event, Mapping) or event.get("requestDigest") != digest(operation) or event.get("service") != operation["service"] or event.get("method") != operation["method"] or event.get("completed") is not False or event.get("creationOutcome") not in {"pending", "unknown"}:
+    if event.get("service") != operation["service"] or event.get("method") != operation["method"]:
         _refuse("parent custom event is not unresolved")
     _finite(event.get("ended"), "parent event end")
     custom = responsibility.get("custom") or responsibility.get("custom-signin")
@@ -224,6 +252,16 @@ def _provenance(value: Mapping[str, Any]) -> dict[str, Any]:
         _sha(value_hash, "source")
         normalized_inputs[path] = value_hash
     normalized: dict[str, Any] = {"sourceCommit": source_commit, "sourceInputs": normalized_inputs, "sourceInputsDigest": digest(normalized_inputs)}
+    generation_paths = value.get("generationPaths")
+    if generation_paths is not None:
+        if not isinstance(generation_paths, Mapping):
+            _refuse("source generation paths required")
+        normalized_paths: dict[str, str] = {}
+        for name, path in generation_paths.items():
+            if not isinstance(name, str) or not isinstance(path, str) or not path.startswith("tools/") or ".." in path.split("/"):
+                _refuse("source generation paths differ")
+            normalized_paths[name] = path
+        normalized["generationPaths"] = normalized_paths
     for name, expected_path in (("worker", WORKER_ENTRY), ("transport", TRANSPORT_ENTRY), ("launcher", LAUNCHER_ENTRY)):
         binding = value.get(name)
         if not isinstance(binding, Mapping) or set(binding) != {"path", "sha256"} or binding["path"] != expected_path:

@@ -132,18 +132,9 @@ def _reconstruct_parent(parent: Mapping[str, Any], ledger: Any) -> tuple[dict[st
     if not isinstance(gate_plan, Mapping):
         _refuse("canonical parent Gate plan required")
     parent_job = bound_claim.get("gateJob", "auth-credential")
-    job = gate_plan.get("jobs", {}).get(parent_job) if isinstance(gate_plan.get("jobs"), Mapping) else None
-    operations = job.get("observation") if isinstance(job, Mapping) else None
-    candidates = [
-        (index, operation)
-        for index, operation in enumerate(operations or [])
-        if isinstance(operation, Mapping)
-        and operation.get("kind") == "custom-sign-in"
-        and operation.get("account") == "custom"
-    ]
-    if len(candidates) != 1:
-        _refuse("canonical parent custom event required")
-    event_index, operation = candidates[0]
+    event_index, operation, _event = recovery._select_unresolved_custom_event(
+        gate_plan, canonical_gate, parent_job
+    )
     immutable = {
         "kind": "auth-packet05-parent-binding-v1",
         "gateDigest": digest(canonical_gate),
@@ -235,9 +226,23 @@ def _verify_fixed_source(
         _refuse("source generation closure differs")
     if any(declared_generation.get(name) != value for name, value in canonical_sources.items()):
         _refuse("source generation closure differs")
-    verified_digests = set(source_inputs.values())
-    if any(value not in verified_digests for value in declared_generation.values()):
-        _refuse("source generation digest differs")
+    generation_paths = provenance.get("generationPaths")
+    if not isinstance(generation_paths, Mapping) or set(generation_paths) != set(declared_generation):
+        _refuse("source generation paths required")
+    if len(set(generation_paths.values())) != len(generation_paths):
+        _refuse("source generation paths differ")
+    for name, expected_digest in declared_generation.items():
+        relative = generation_paths.get(name)
+        if not isinstance(relative, str) or source_inputs.get(relative) != expected_digest:
+            _refuse("source generation path binding differs")
+        path = source_root / relative
+        if path.is_symlink() or not path.is_file():
+            _refuse("source generation input missing")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected_digest:
+            _refuse("source generation digest differs")
+    recovery_path = generation_paths.get(recovery.APPROVED_CHILD_SOURCE_EXTENSION)
+    if recovery_path != "tools/compat-broad/auth-credential-tokens/credential_recovery.py":
+        _refuse("collector source path differs")
     if generation.get("collectorSourceDigest") != declared_generation.get(recovery.APPROVED_CHILD_SOURCE_EXTENSION):
         _refuse("collector source digest differs")
 

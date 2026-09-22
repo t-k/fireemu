@@ -15,6 +15,7 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
+import credential_gate
 import credential_recovery as recovery
 import credential_recovery_prepare as prepare
 import credential_recovery_runner as runner
@@ -70,6 +71,53 @@ def _ledger_parent() -> dict:
     return parent
 
 
+def _real_signing_parent() -> dict:
+    parent = _ledger_parent()
+    nonce = parent["gate"]["plan"]["nonce"]
+    gate_plan = credential_gate.gate_plan(
+        recovery.PROJECT,
+        nonce,
+        signing=True,
+        wall_seconds=600,
+        recovery_seconds=60,
+        cost_microusd=100,
+        observation_window_seconds=540,
+    )
+    custom_index = next(
+        index
+        for index, operation in enumerate(gate_plan["jobs"][credential_gate.JOB]["observation"])
+        if operation.get("kind") == "custom-sign-in" and operation.get("account") == "custom"
+    )
+    operation = gate_plan["jobs"][credential_gate.JOB]["observation"][custom_index]
+    operation["binds"] = {
+        "customUid": "idToken.sub",
+        "customIdToken": "idToken",
+        "customRefresh": "refreshToken",
+    }
+    parent["gate"]["plan"] = gate_plan
+    parent["gate"]["planDigest"] = digest(gate_plan)
+    parent["gate"]["events"] = [{
+        "job": credential_gate.JOB,
+        "phase": "observation",
+        "index": custom_index,
+        "requestDigest": digest(operation),
+        "service": operation["service"],
+        "method": operation["method"],
+        "completed": False,
+        "creationOutcome": "unknown",
+        "ended": 999.0,
+    }]
+    parent["claim"]["gatePlanDigest"] = digest(gate_plan)
+    parent["immutableParent"].update(
+        gateDigest=digest(parent["gate"]),
+        gatePlanDigest=digest(gate_plan),
+        resource=operation["resource"],
+        eventIndex=custom_index,
+        requestDigest=digest(operation),
+    )
+    return parent
+
+
 def _source_inputs(tmp_path: Path, parent: dict) -> tuple[Path, dict]:
     source_root = tmp_path / "clean-source"
     for relative in {
@@ -112,6 +160,11 @@ def _source_inputs(tmp_path: Path, parent: dict) -> tuple[Path, dict]:
         "worker.py": source_inputs[recovery.WORKER_ENTRY],
         "transport.py": source_inputs[recovery.TRANSPORT_ENTRY],
         "recovery.py": recovery_digest,
+    }
+    provenance["generationPaths"] = {
+        "worker.py": recovery.WORKER_ENTRY,
+        "transport.py": recovery.TRANSPORT_ENTRY,
+        "recovery.py": "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
     }
     provenance["generation"]["collectorSourceDigest"] = recovery_digest
     return source_root, provenance
@@ -244,6 +297,11 @@ def test_preparation_derives_source_closure_from_canonical_parent(tmp_path: Path
         **renamed,
         "recovery.py": provenance["generation"]["sourceDigests"]["recovery.py"],
     }
+    provenance["generationPaths"] = {
+        "auth-worker": recovery.WORKER_ENTRY,
+        "auth-transport": recovery.TRANSPORT_ENTRY,
+        "recovery.py": "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
+    }
     permission, o7, o8 = _reviewed(parent, provenance)
     permission_review, o7_review, o8_review = _reviews(permission, o7, o8)
 
@@ -347,6 +405,35 @@ def test_preparation_refuses_source_checkout_digest_drift(tmp_path: Path) -> Non
             permission=permission,
             o7=o7,
             o8=o8,
+            recovery_nonce="fedcba9876543210fedcba9876543210",
+            now=1000.0,
+            authority_now=1001.0,
+        )
+
+
+def test_preparation_refuses_generation_hash_permutation_and_collector_alias(
+    tmp_path: Path,
+) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    worker_digest = provenance["generation"]["sourceDigests"]["worker.py"]
+    provenance["generation"]["sourceDigests"]["recovery.py"] = worker_digest
+    provenance["generation"]["collectorSourceDigest"] = worker_digest
+    permission, o7, o8 = _reviewed(parent, provenance)
+    reviews = _reviews(permission, o7, o8)
+
+    with pytest.raises(recovery.RecoveryRefusal, match="generation|collector"):
+        prepare.prepare_packet(
+            parent,
+            ledger=_ReadOnlyLedger(parent),
+            provenance=provenance,
+            source_root=source_root,
+            permission=permission,
+            o7=o7,
+            o8=o8,
+            permission_review=reviews[0],
+            o7_review=reviews[1],
+            o8_review=reviews[2],
             recovery_nonce="fedcba9876543210fedcba9876543210",
             now=1000.0,
             authority_now=1001.0,
@@ -552,3 +639,68 @@ def test_bounded_runner_refuses_tampered_detached_review_evidence(tmp_path: Path
             source_root=source_root,
             now=1001.0,
         )
+
+
+def test_prepare_cli_accepts_real_signing_parent_and_full_identity_bindings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = _real_signing_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    permission, o7, o8 = _reviewed(parent, provenance)
+    expiry = __import__("time").time() + 3600
+    for authority in (permission, o7, o8):
+        authority["expiresAt"] = expiry
+    o7["permissionDigest"] = digest(permission)
+    o8["permissionDigest"] = digest(permission)
+    reviews = _reviews(permission, o7, o8)
+    paths = {
+        "parent": tmp_path / "parent.json",
+        "provenance": tmp_path / "provenance.json",
+        "permission": tmp_path / "permission.json",
+        "o7": tmp_path / "o7.json",
+        "o8": tmp_path / "o8.json",
+        "permission-review": tmp_path / "permission-review.json",
+        "o7-review": tmp_path / "o7-review.json",
+        "o8-review": tmp_path / "o8-review.json",
+    }
+    values = {
+        "parent": parent,
+        "provenance": provenance,
+        "permission": permission,
+        "o7": o7,
+        "o8": o8,
+        "permission-review": reviews[0],
+        "o7-review": reviews[1],
+        "o8-review": reviews[2],
+    }
+    for name, path in paths.items():
+        path.write_text(json.dumps(values[name]))
+    ledger = _ReadOnlyLedger(parent)
+    monkeypatch.setattr(prepare.reservations, "Ledger", lambda _path: ledger)
+    output = tmp_path / "cli-output"
+
+    result = prepare.main([
+        "--parent", str(paths["parent"]),
+        "--provenance", str(paths["provenance"]),
+        "--ledger", str(ledger.path),
+        "--source", str(source_root),
+        "--permission", str(paths["permission"]),
+        "--o7", str(paths["o7"]),
+        "--o8", str(paths["o8"]),
+        "--permission-review", str(paths["permission-review"]),
+        "--o7-review", str(paths["o7-review"]),
+        "--o8-review", str(paths["o8-review"]),
+        "--recovery-nonce", "fedcba9876543210fedcba9876543210",
+        "--now", "1000",
+        "--output", str(output),
+    ])
+
+    assert result == 0
+    packet = json.loads((output / "packet.json").read_text())
+    assert packet["plan"]["parent"]["eventIndex"] == parent["immutableParent"]["eventIndex"]
+    assert packet["immutableParent"]["sourceCommit"] == parent["immutableParent"]["sourceCommit"]
+    parent_operation = parent["gate"]["plan"]["jobs"][credential_gate.JOB]["observation"][
+        parent["immutableParent"]["eventIndex"]
+    ]
+    assert packet["plan"]["parent"]["requestDigest"] == digest(parent_operation)
+    assert parent_operation["binds"]["customUid"] == "idToken.sub"

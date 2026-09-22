@@ -207,6 +207,17 @@ def test_forged_worker_receipt_never_reaches_ledger() -> None:
     assert ledger.calls == []
 
 
+def test_child_gate_cannot_extend_past_admitted_deadline() -> None:
+    parent, plan, _permission, o7, o8 = _plan()
+    gate = _terminal_gate(plan, o7, o8)
+    gate["plan"]["wallSeconds"] = 10_000
+    gate["planDigest"] = digest(gate["plan"])
+    ledger = _Ledger()
+    with pytest.raises(recovery.RecoveryRefusal, match="deadline"):
+        recovery.settle_and_close(ledger, parent_ticket=parent["ticket"], child_ticket={"child": "ticket"}, parent=parent, plan=plan, child_gate=gate, worker_receipt=_worker_receipt(gate))
+    assert ledger.calls == []
+
+
 def test_diagnostic_projection_is_secret_free_and_typed() -> None:
     projection = recovery.custom_sign_in_diagnostic(200, {"localId": "uid", "isNewUser": False, "idToken": "secret", "refreshToken": "secret"})
     assert projection == {"status": 200, "bodyType": "object", "localId": "present", "isNewUser": "boolean-false", "tokens": {"idToken": "present", "refreshToken": "present"}}

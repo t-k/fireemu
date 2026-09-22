@@ -458,6 +458,9 @@ def _derive_absence_proof(child_gate: Mapping[str, Any], plan: Mapping[str, Any]
         expected_gate[key] = child_gate["plan"].get(key)
     expected_gate["wallSeconds"] = child_gate["plan"].get("wallSeconds")
     expected_gate["jobs"][GATE_JOB]["schedule"][0]["seconds"] = child_gate["plan"]["jobs"][GATE_JOB]["schedule"][0].get("seconds")
+    wall_seconds = child_gate["plan"].get("wallSeconds")
+    if type(wall_seconds) not in (int, float) or isinstance(wall_seconds, bool) or not 1 <= wall_seconds <= plan["deadlineSeconds"]:
+        _refuse("child Gate deadline exceeds admitted bound")
     if child_gate["plan"] != expected_gate:
         _refuse("bound child Gate plan differs")
     job = child_gate.get("jobs", {}).get(GATE_JOB)

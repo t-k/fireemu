@@ -336,6 +336,40 @@ def test_the_reservation_claim_binds_the_gate_plan_and_the_lane_budget(built, tm
     reservations._claim(claim)
 
 
+def test_bootstrap_permission_has_a_separate_typed_claim_contract(built, tmp_path) -> None:
+    base = admission.gate_plan_for(built.inputs, built.permission)
+    template = gate_module.bootstrap_plan(base, permission_digest="0" * 64)
+    prep = {
+        "kind": "auth-credential-bootstrap-permission-v1",
+        "project": campaign.PROJECT,
+        "projectNumber": "592603257417",
+        "nonce": built.plan["nonce"],
+        "credentialPrincipal": built.permission["credentialPrincipal"],
+        "authorizedUserDigest": digest({"type": "authorized_user", "client_id": "offline-client"}),
+        "preparationPlanDigest": gate_module.bootstrap_plan_digest(template),
+        "issuedAt": time.time() - 1,
+        "expiresAt": time.time() + 900,
+    }
+    plan = gate_module.bootstrap_plan(base, permission_digest=digest(prep))
+    validated = admission.validate_bootstrap_permission(prep, plan=plan)
+    assert validated["kind"] == "auth-credential-bootstrap-permission-v1"
+    claim = admission.bootstrap_reservation_claim(
+        built.inputs, permission=validated, gate_plan=plan,
+        gate_path=tmp_path / "bootstrap-gate",
+    )
+    reservations._claim(claim)
+    envelope = {
+        "permissionDigest": digest(validated),
+        "issuedAt": validated["issuedAt"],
+        "expiresAt": validated["expiresAt"],
+        "limits": dict(claim["budget"]),
+        "concurrency": 1,
+        "scopes": list(claim["locks"]),
+    }
+    ticket = reservations.Ledger(built.ledger).reserve(envelope, claim, plan)
+    assert ticket["reservation"] in reservations.Ledger(built.ledger).snapshot()["reservations"]
+
+
 def test_the_shared_ledger_hosts_the_account_shaped_gate_plan(built, tmp_path) -> None:
     gate_plan = admission.gate_plan_for(built.inputs, built.permission)
     claim = admission.reservation_claim(built.inputs, gate_path=tmp_path / "gate", gate_plan=gate_plan)

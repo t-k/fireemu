@@ -180,6 +180,16 @@ def bootstrap_plan(plan: dict[str, Any], *, permission_digest: str) -> dict[str,
     return result
 
 
+def bootstrap_plan_digest(plan: dict[str, Any]) -> str:
+    """Digest the preparation plan independently of its permission binding."""
+    if not isinstance(plan, dict) or not isinstance(plan.get("bootstrap"), dict):
+        raise ValueError("bootstrap plan required")
+    value = copy.deepcopy(plan)
+    value.pop("permissionDigest", None)
+    value["bootstrap"].pop("permissionDigest", None)
+    return digest(value)
+
+
 def management_ids(signing: bool) -> dict[str, tuple[str, ...]]:
     """The closed management slots of a run, by phase."""
     observation = SHARED_MANAGEMENT_IDS + (SIGN_MANAGEMENT_IDS if signing else ())
@@ -1056,6 +1066,7 @@ __all__ = [
     "account_resource",
     "bootstrap_management_ids",
     "bootstrap_plan",
+    "bootstrap_plan_digest",
     "create",
     "gate_environment",
     "gate_plan",

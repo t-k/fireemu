@@ -46,6 +46,7 @@ from o8_admission import (
 
 MAX_INPUT_BYTES = 8 * 1024 * 1024
 HANDOFF_KIND = "auth-credential-handoff-v1"
+BOOTSTRAP_PERMISSION_KIND = "auth-credential-bootstrap-permission-v1"
 HANDOFF_FIELDS = frozenset({"kind", "permissionDigest", "token", "apiKey", "signing"})
 SIGNING_FIELDS = frozenset({"serviceAccount"})
 MISSING_APPROVAL = "a fresh owner approval for an unreserved nonce is required"
@@ -55,6 +56,8 @@ __all__ = [
     "MISSING_APPROVAL",
     "ProductionWireCapability",
     "abort_generation",
+    "bootstrap_reservation_claim",
+    "validate_bootstrap_permission",
     "build_receipt",
     "descriptor",
     "execution_host",
@@ -250,6 +253,55 @@ def reservation_claim(inputs, *, gate_path, gate_plan):
         "budget": campaign.ledger_budget(),
         "durationSeconds": descriptor_.campaign_seconds,
     }
+
+
+def validate_bootstrap_permission(permission, *, plan) -> dict:
+    """Validate the independent four-request preparation authority.
+
+    This does not issue the observation permission or an O8 capability. Its
+    only authority is the preparation Gate/Ledger claim bound to this nonce and
+    this exact compiler-produced four-row plan.
+    """
+    if not isinstance(permission, dict) or set(permission) != {
+        "kind", "project", "projectNumber", "nonce", "credentialPrincipal",
+        "authorizedUserDigest", "preparationPlanDigest", "issuedAt", "expiresAt",
+    } or permission.get("kind") != BOOTSTRAP_PERMISSION_KIND:
+        raise ValueError("independent bootstrap permission required")
+    bootstrap = plan.get("bootstrap") if isinstance(plan, dict) else None
+    if (
+        plan.get("project") != campaign.PROJECT
+        or plan.get("nonce") != permission.get("nonce")
+        or not isinstance(bootstrap, dict)
+        or bootstrap.get("kind") != "auth-credential-bootstrap-v1"
+        or bootstrap.get("permissionDigest") != digest(permission)
+        or permission.get("project") != campaign.PROJECT
+        or permission.get("projectNumber") != "592603257417"
+        or permission.get("preparationPlanDigest") != gate_module.bootstrap_plan_digest(plan)
+    ):
+        raise ValueError("bootstrap plan binding differs")
+    principal = permission.get("credentialPrincipal")
+    if not isinstance(principal, dict) or set(principal) != {"clientId", "subject", "requiredScopes"}:
+        raise ValueError("bootstrap principal required")
+    preflight.validate_principal(principal)
+    if (
+        not isinstance(permission.get("authorizedUserDigest"), str)
+        or len(permission["authorizedUserDigest"]) != 64
+        or type(permission.get("issuedAt")) not in (int, float)
+        or type(permission.get("expiresAt")) not in (int, float)
+        or permission["expiresAt"] - permission["issuedAt"] < plan["wallSeconds"]
+        + plan["recoverySeconds"]
+        or permission["expiresAt"] < time.time()
+    ):
+        raise ValueError("bootstrap permission window or ADC binding differs")
+    return copy.deepcopy(permission)
+
+
+def bootstrap_reservation_claim(inputs, *, permission, gate_plan, gate_path):
+    """Derive a separate stable-task Ledger claim for preparation."""
+    validate_bootstrap_permission(permission, plan=gate_plan)
+    claim = reservation_claim(inputs, gate_path=gate_path, gate_plan=gate_plan)
+    claim["manifestDigest"] = digest(permission)
+    return claim
 
 
 def _private_string(value, maximum):

@@ -27,10 +27,11 @@ PERMISSION_KIND = "auth-action-codes-owner-permission-v1"
 APPROVAL_KIND = "auth-action-codes-o8-approval-v1"
 MANIFEST_KIND = "auth-action-codes-o8-manifest-v1"
 ARTIFACT_PROFILE = "auth-action-codes-local-shadow-v1"
+IDENTITY_SCOPE = action_codes_remote_transport.IDENTITY_SCOPE
 LANE_DIRECTORY = "tools/compat-broad/auth-action-codes"
 COLLECTOR_ENTRY = f"{LANE_DIRECTORY}/action_codes_collector.py"
 COMPARATOR_ENTRY = f"{LANE_DIRECTORY}/action_codes_comparator.py"
-WORKER_ENTRY = f"{LANE_DIRECTORY}/action_codes_remote_transport.py"
+WORKER_ENTRY = "tools/compat-broad/auth-credential-tokens/credential_https_worker.py"
 GATE_ENTRY = f"{LANE_DIRECTORY}/action_codes_plan.py"
 SHARED_SOURCES = (
     "tools/compat-broad/broad_contract.py",
@@ -38,6 +39,8 @@ SHARED_SOURCES = (
     "tools/compat-broad/production-admission/reservations.py",
     "tools/compat-broad/o8-core/o8_admission.py",
     "tools/compat-broad/o8-core/o8_campaign.py",
+    "tools/compat-broad/auth-credential-tokens/credential_https_worker.py",
+    "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
 )
 ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/shared_gate.py",
@@ -45,6 +48,12 @@ ABORT_CLOSURE_SOURCES = (
     "tools/compat-broad/o8-core/o8_admission.py",
     f"{LANE_DIRECTORY}/action_codes_plan.py",
     f"{LANE_DIRECTORY}/action_codes_admission.py",
+    f"{LANE_DIRECTORY}/action_codes_gate.py",
+    f"{LANE_DIRECTORY}/action_codes_o8.py",
+    f"{LANE_DIRECTORY}/action_codes_descriptor.py",
+    f"{LANE_DIRECTORY}/action_codes_remote_transport.py",
+    f"{LANE_DIRECTORY}/action_codes_production.py",
+    f"{LANE_DIRECTORY}/action_codes_collector.py",
 )
 
 
@@ -71,11 +80,11 @@ def lock_scopes(plan: dict) -> list[dict]:
     project = plan["localProject"]
     return [
         {
-            "key": f"project/{project}/auth/accounts/{nonce}/accountA",
+            "key": f"project/{project}/auth/accounts/o1-oob-{nonce}-a",
             "mode": "WRITE",
         },
         {
-            "key": f"project/{project}/auth/accounts/{nonce}/accountB",
+            "key": f"project/{project}/auth/accounts/o1-oob-{nonce}-b",
             "mode": "WRITE",
         },
     ]
@@ -102,7 +111,7 @@ def cost_model() -> dict:
     return {
         "campaignId": CAMPAIGN,
         "maximumCostMicrousd": round(plan["budget"]["planningCeilingUsd"] * 1_000_000),
-        "requests": len(rows),
+        "requests": len(rows) + 2,
     }
 
 
@@ -115,8 +124,16 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
         "projectId": AUTHORIZED_PROJECT,
+        "logicalAccounts": {
+            account: {"resource": f"projects/{AUTHORIZED_PROJECT}/auth/accounts/o1-oob-{plan['nonce']}-{'a' if account == 'accountA' else 'b'}"}
+            for account in ("accountA", "accountB")
+        },
         "role": plan["permissionEnvelope"]["role"],
         "scope": plan["permissionEnvelope"]["scope"],
+        "credentialPrincipal": {
+            "subject": "owner@example.test",
+            "requiredScopes": [action_codes_remote_transport.IDENTITY_SCOPE],
+        },
         "methods": list(plan["permissionEnvelope"]["methods"]),
         "nonce": plan["nonce"],
         "planDigest": digest(plan),
@@ -137,8 +154,16 @@ def validate_permission(permission, plan, *, source_inputs=None, source_commit=N
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
         "projectId": AUTHORIZED_PROJECT,
+        "logicalAccounts": {
+            account: {"resource": f"projects/{AUTHORIZED_PROJECT}/auth/accounts/o1-oob-{plan['nonce']}-{'a' if account == 'accountA' else 'b'}"}
+            for account in ("accountA", "accountB")
+        },
         "role": envelope["role"],
         "scope": envelope["scope"],
+        "credentialPrincipal": {
+            "subject": "owner@example.test",
+            "requiredScopes": [action_codes_remote_transport.IDENTITY_SCOPE],
+        },
         "methods": list(envelope["methods"]),
         "nonce": plan["nonce"],
         "planDigest": digest(plan),
@@ -155,7 +180,17 @@ def validate_permission(permission, plan, *, source_inputs=None, source_commit=N
 
 
 def transport_bound(value, *, binding, binding_digest, capability=None):
-    raise ValueError("production Action transport remains closed")
+    if capability is None or not isinstance(value, dict):
+        raise ValueError("closed Action wire call required")
+    required = {"stageId", "project", "nonce", "body", "deadline", "inputsDigest"}
+    if set(value) != required:
+        raise ValueError("closed Action credential envelope required")
+    return action_codes_remote_transport._transmit_bound(
+        capability,
+        value,
+        binding=binding,
+        binding_digest=binding_digest,
+    )
 
 
 def binding_verifier(binding, binding_digest, frozen):

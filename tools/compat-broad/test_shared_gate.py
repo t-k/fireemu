@@ -940,6 +940,62 @@ def test_transform_without_exists_precondition_remains_a_potential_create():
     assert can_create(operation) is True
 
 
+def test_action_stage_creation_cannot_be_relabelled_as_noncreating():
+    signup = {
+        "kind": "action-stage",
+        "id": "signup-relabelled-readback",
+        "service": "auth",
+        "project": "fireemu-35fe6",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "body": {"email": "owner@example.invalid"},
+    }
+    assert can_create(signup) is True
+
+
+def test_known_action_stage_readback_is_noncreating():
+    readback = {
+        "kind": "action-stage",
+        "id": "account-a-readback",
+        "service": "auth",
+        "project": "fireemu-35fe6",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "resource": "projects/fireemu-35fe6/auth/accounts/o1-oob-" + ("a" * 32) + "-a",
+        "body": {"localId": "$binding:accountAUid"},
+    }
+    assert can_create(readback) is False
+
+
+@pytest.mark.parametrize("route", ("signUp", "import", "update", "create"))
+@pytest.mark.parametrize("identifier", ("account-a-readback", "reset-link-generate", "account-b-delete"))
+def test_action_noncreating_id_cannot_override_creation_route(route, identifier):
+    operation = {
+        "kind": "action-stage",
+        "id": identifier,
+        "service": "auth",
+        "project": "fireemu-35fe6",
+        "method": "POST",
+        "path": f"identitytoolkit.googleapis.com/v1/accounts:{route}",
+        "body": {"localId": "$binding:accountAUid"},
+    }
+    assert can_create(operation) is True
+
+
+def test_action_noncreating_route_cannot_derive_authority_from_foreign_resource():
+    operation = {
+        "kind": "action-stage",
+        "id": "account-a-readback",
+        "service": "auth",
+        "project": "fireemu-35fe6",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/accounts:lookup",
+        "resource": "projects/foreign/auth/accounts/owned",
+        "body": {"localId": "$binding:accountAUid"},
+    }
+    assert can_create(operation) is True
+
+
 def commit_plan(marker="shared", writes=2, alias=True):
     """A campaign that creates its documents with one conditional POST :commit."""
     scope = "projects/p/databases/(default)/documents/owned/" + NONCE

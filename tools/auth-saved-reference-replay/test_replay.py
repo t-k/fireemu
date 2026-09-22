@@ -336,7 +336,7 @@ def test_manifest_rejects_launch_replacement_after_path_recheck(tmp_path, monkey
         return result
 
     monkeypatch.setattr(replay.os, "stat", replace_after_launch_stat)
-    with pytest.raises(ValueError, match="hardlink|after verification"):
+    with pytest.raises(ValueError, match="hardlink|after verification|before opening"):
         validate_artifact_binding(
             manifest["build"], manifest["artifactSha256"], bundle
         )
@@ -361,7 +361,7 @@ def test_manifest_rejects_launch_replacement_after_final_stat(tmp_path, monkeypa
         return result
 
     monkeypatch.setattr(replay.os, "stat", replace_after_final_stat)
-    with pytest.raises(ValueError, match="hardlink|while reading|before use"):
+    with pytest.raises(ValueError, match="hardlink|while reading|before use|after verification"):
         validate_artifact_binding(
             manifest["build"], manifest["artifactSha256"], bundle
         )
@@ -387,7 +387,7 @@ def test_manifest_rejects_launch_replacement_after_bound_descriptor_stat(
         return result
 
     monkeypatch.setattr(replay.os, "fstat", replace_after_bound_fstat)
-    with pytest.raises(ValueError, match="hardlink|while reading|before use"):
+    with pytest.raises(ValueError, match="hardlink|while reading|before use|before opening"):
         validate_artifact_binding(
             manifest["build"], manifest["artifactSha256"], bundle
         )

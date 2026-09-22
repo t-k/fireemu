@@ -21,6 +21,7 @@ from owned_runner import (
     child_identity_matches,
     copy_verified_artifact,
     local_addresses,
+    open_verified_artifact,
     observation_complete,
     run_build,
     run_owned,
@@ -213,6 +214,45 @@ def test_verified_fd_copy_rejects_preexisting_hardlink(tmp_path):
         os.close(verified_fd)
 
 
+def test_open_verified_artifact_anchors_parent_before_path_swap(tmp_path, monkeypatch):
+    parent = tmp_path / "validated-parent"
+    attacker = tmp_path / "attacker-parent"
+    artifact = parent / "fireemu"
+    parent.mkdir()
+    attacker.mkdir()
+    artifact.write_bytes(b"wanted")
+    (attacker / artifact.name).write_bytes(b"wrong")
+    original_open = owned_runner.os.open
+    swapped = False
+
+    def swap_parent_before_file_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if not swapped and Path(path).name == artifact.name:
+            parent.rename(tmp_path / "preserved-parent")
+            parent.symlink_to(attacker, target_is_directory=True)
+            swapped = True
+        if dir_fd is None:
+            return original_open(path, flags, mode)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(owned_runner.os, "open", swap_parent_before_file_open)
+    try:
+        descriptor = open_verified_artifact(artifact)
+    except ValueError:
+        descriptor = None
+    try:
+        assert swapped
+        if descriptor is not None:
+            assert os.pread(descriptor, 1024, 0) == b"wanted"
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        parent.unlink(missing_ok=True)
+        if parent.is_symlink():
+            parent.unlink()
+        (tmp_path / "preserved-parent").rename(parent)
+
+
 def test_artifact_binding_rejects_launch_replacement_during_descriptor_read(
     tmp_path, monkeypatch
 ):
@@ -324,7 +364,7 @@ def test_artifact_binding_rejects_launch_replacement_after_path_recheck(
         return result
 
     monkeypatch.setattr(owned_runner.os, "stat", replace_after_launch_stat)
-    with pytest.raises(ValueError, match="hardlink|after verification"):
+    with pytest.raises(ValueError, match="hardlink|after verification|before opening"):
         artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 
@@ -362,7 +402,7 @@ def test_artifact_binding_rejects_launch_replacement_after_final_stat(
         return result
 
     monkeypatch.setattr(owned_runner.os, "stat", replace_after_final_stat)
-    with pytest.raises(ValueError, match="hardlink|while reading|before use"):
+    with pytest.raises(ValueError, match="hardlink|while reading|before use|after verification"):
         artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 
@@ -399,7 +439,7 @@ def test_artifact_binding_rejects_launch_replacement_after_bound_descriptor_stat
         return result
 
     monkeypatch.setattr(owned_runner.os, "fstat", replace_after_bound_fstat)
-    with pytest.raises(ValueError, match="hardlink|while reading|before use"):
+    with pytest.raises(ValueError, match="hardlink|while reading|before use|before opening"):
         artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 

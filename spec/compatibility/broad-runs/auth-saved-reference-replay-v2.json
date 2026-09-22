@@ -4,7 +4,7 @@
     "cleanupBound": true,
     "configurationComparison": "separate-evidence",
     "tool": "tools/auth-saved-reference-replay/replay.py",
-    "toolSha256": "a5e8d7e9cec4c28834ce0706f4d6cba986a751f2493420a22fabec1b334a2296",
+    "toolSha256": "acdd3aac4b9e8d8b4c57f096a8509ed71ba2edc6d4517e71e523e53e6880de30",
     "typedScalarComparison": true
   },
   "corpora": [
@@ -64,10 +64,10 @@
     "productionCommunication": false,
     "singleArtifactRequired": true,
     "tool": "tools/auth-saved-reference-replay/run_replay.py",
-    "toolSha256": "9e770de4a64ae3a3d779cd496fb80f8a4bbcc968d8da2240a49dfea21a0d4892",
+    "toolSha256": "124b6cc4b6bfd8b7826f347ae5ba68f33356c2190d76c14a84c5af5e03c76449",
     "ownedRunnerHelper": {
       "tool": "tools/compat-inventory/owned_runner.py",
-      "toolSha256": "589ee5a198f7417340ea4a6a633330c89a27ddfb16b55249574e450b12f0804c"
+      "toolSha256": "8a59b2d08b9ec9d65c7bd70a01a6ccd71b4f091e726b68c24cf6e9e7d5822c2d"
     },
     "ownedRunners": [
       {

@@ -189,32 +189,128 @@ def artifact_binding(
     os_module = __import__("os")
     stat_module = __import__("stat")
 
-    def read_stable(
-        path: Path, role: str, supplied_fd: int | None = None
-    ) -> tuple[Path, str, tuple[int, int], int]:
+    def open_anchored(path: Path, role: str) -> tuple[Path, int]:
         require(".." not in path.parts, f"artifact binding {role} path contains '..'")
+        absolute = path.absolute()
         try:
-            resolved = path.resolve(strict=True)
+            resolved = absolute.resolve(strict=True)
         except OSError as exc:
             raise ValueError(f"artifact binding {role} path is unavailable") from exc
         require(
-            resolved == path.absolute(),
+            resolved == absolute,
             f"artifact binding {role} path must be canonical and must not use a symlink parent",
         )
-        flags = os_module.O_RDONLY | getattr(os_module, "O_CLOEXEC", 0)
-        flags |= getattr(os_module, "O_NOFOLLOW", 0)
-        if supplied_fd is None:
+        parts = absolute.parts
+        require(len(parts) >= 2, f"artifact binding {role} path must name a file")
+        directory_flags = (
+            os_module.O_RDONLY
+            | getattr(os_module, "O_DIRECTORY", 0)
+            | getattr(os_module, "O_CLOEXEC", 0)
+            | getattr(os_module, "O_NOFOLLOW", 0)
+        )
+        file_flags = os_module.O_RDONLY | getattr(os_module, "O_CLOEXEC", 0) | getattr(
+            os_module, "O_NOFOLLOW", 0
+        )
+
+        def identity(metadata):
+            return metadata.st_dev, metadata.st_ino, stat_module.S_IFMT(metadata.st_mode)
+
+        expected_directories = []
+        prefix = Path(absolute.anchor)
+        try:
+            root_metadata = os_module.stat(prefix, follow_symlinks=False)
+            require(
+                stat_module.S_ISDIR(root_metadata.st_mode),
+                f"artifact binding {role} root is not a directory",
+            )
+            for component in parts[1:-1]:
+                prefix /= component
+                metadata = os_module.stat(prefix, follow_symlinks=False)
+                require(
+                    stat_module.S_ISDIR(metadata.st_mode),
+                    f"artifact binding {role} path component is not a directory",
+                )
+                expected_directories.append(metadata)
+            expected_file = os_module.stat(absolute, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path is unavailable") from exc
+        require(
+            stat_module.S_ISREG(expected_file.st_mode),
+            f"artifact binding {role} path must be a regular file",
+        )
+        require(
+            expected_file.st_nlink == 1,
+            f"artifact binding {role} path must not be a hardlink",
+        )
+        try:
+            directory_descriptor = os_module.open(absolute.anchor, directory_flags)
+        except OSError as exc:
+            raise ValueError(
+                f"artifact binding {role} root is unavailable or is a symlink"
+            ) from exc
+        try:
+            opened_root = os_module.fstat(directory_descriptor)
+            require(
+                stat_module.S_ISDIR(opened_root.st_mode)
+                and identity(opened_root) == identity(root_metadata),
+                f"artifact binding {role} root changed before opening",
+            )
+            for index, component in enumerate(parts[1:-1]):
+                next_descriptor = os_module.open(
+                    component, directory_flags, dir_fd=directory_descriptor
+                )
+                try:
+                    opened = os_module.fstat(next_descriptor)
+                    require(
+                        stat_module.S_ISDIR(opened.st_mode)
+                        and identity(opened) == identity(expected_directories[index]),
+                        f"artifact binding {role} path component changed before opening",
+                    )
+                except BaseException:
+                    os_module.close(next_descriptor)
+                    raise
+                os_module.close(directory_descriptor)
+                directory_descriptor = next_descriptor
+            descriptor = os_module.open(
+                parts[-1], file_flags, dir_fd=directory_descriptor
+            )
             try:
-                descriptor = os_module.open(path, flags)
-            except OSError as exc:
-                raise ValueError(
-                    f"artifact binding {role} path is unavailable or is a symlink"
-                ) from exc
-        else:
+                opened = os_module.fstat(descriptor)
+                require(
+                    stat_module.S_ISREG(opened.st_mode)
+                    and opened.st_nlink == 1
+                    and identity(opened) == identity(expected_file),
+                    f"artifact binding {role} path changed before opening",
+                )
+            except BaseException:
+                os_module.close(descriptor)
+                raise
+        except OSError as exc:
+            raise ValueError(
+                f"artifact binding {role} path is unavailable or is a symlink"
+            ) from exc
+        finally:
+            os_module.close(directory_descriptor)
+        return absolute, descriptor
+
+    def read_stable(
+        path: Path, role: str, supplied_fd: int | None = None
+    ) -> tuple[Path, str, tuple[int, int], int]:
+        resolved, descriptor = open_anchored(path, role)
+        if supplied_fd is not None:
             try:
-                descriptor = os_module.dup(supplied_fd)
+                supplied = os_module.fstat(supplied_fd)
+                opened = os_module.fstat(descriptor)
+                require(
+                    (supplied.st_dev, supplied.st_ino) == (opened.st_dev, opened.st_ino),
+                    f"artifact binding {role} descriptor does not match its path",
+                )
             except OSError as exc:
+                os_module.close(descriptor)
                 raise ValueError(f"artifact binding {role} descriptor is unavailable") from exc
+            except BaseException:
+                os_module.close(descriptor)
+                raise
         try:
             before = os_module.fstat(descriptor)
             require(
@@ -268,28 +364,9 @@ def artifact_binding(
             and identity(final) == identity(after),
             f"artifact binding {role} path changed after verification",
         )
-        try:
-            bound_resolved = path.resolve(strict=True)
-        except OSError as exc:
-            raise ValueError(f"artifact binding {role} path disappeared") from exc
-        require(
-            bound_resolved == path.absolute(),
-            f"artifact binding {role} path must be canonical and must not use a symlink parent",
-        )
-        try:
-            bound_descriptor = os_module.open(path, flags)
-        except OSError as exc:
-            raise ValueError(f"artifact binding {role} path is unavailable") from exc
+        bound_resolved, bound_descriptor = open_anchored(path, role)
         try:
             bound = os_module.fstat(bound_descriptor)
-            try:
-                bound_path = os_module.stat(path, follow_symlinks=False)
-            except OSError as exc:
-                raise ValueError(f"artifact binding {role} path disappeared") from exc
-        except BaseException:
-            os_module.close(bound_descriptor)
-            raise
-        try:
             require(
                 stat_module.S_ISREG(bound.st_mode)
                 and bound.st_nlink == 1
@@ -297,9 +374,7 @@ def artifact_binding(
                 f"artifact binding {role} path changed before use",
             )
             require(
-                stat_module.S_ISREG(bound_path.st_mode)
-                and bound_path.st_nlink == 1
-                and identity(bound_path) == identity(bound),
+                bound_resolved == resolved,
                 f"artifact binding {role} path changed before use",
             )
         except BaseException:
@@ -338,6 +413,7 @@ def artifact_binding(
 def open_verified_artifact(path: Path) -> int:
     """Open a canonical, regular, independently linked artifact for FD use."""
     require(".." not in path.parts, "artifact path contains '..'")
+    path = path.absolute()
     try:
         resolved = path.resolve(strict=True)
     except OSError as exc:
@@ -346,24 +422,82 @@ def open_verified_artifact(path: Path) -> int:
         resolved == path.absolute(),
         "artifact path must be canonical and must not use a symlink parent",
     )
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    parts = path.parts
+    require(len(parts) >= 2, "artifact path must name a file")
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    file_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+    def identity(metadata):
+        return metadata.st_dev, metadata.st_ino, stat.S_IFMT(metadata.st_mode)
+
+    expected_directories = []
+    prefix = Path(path.anchor)
     try:
-        descriptor = os.open(path, flags)
+        root_metadata = os.stat(prefix, follow_symlinks=False)
+        require(stat.S_ISDIR(root_metadata.st_mode), "artifact root is not a directory")
+        for component in parts[1:-1]:
+            prefix /= component
+            metadata = os.stat(prefix, follow_symlinks=False)
+            require(
+                stat.S_ISDIR(metadata.st_mode),
+                "artifact path component is not a directory",
+            )
+            expected_directories.append(metadata)
+        expected_file = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise ValueError("artifact path is unavailable") from exc
+    require(stat.S_ISREG(expected_file.st_mode), "artifact path is not a regular file")
+    require(expected_file.st_nlink == 1, "artifact path must name an independent file")
+
+    try:
+        directory_descriptor = os.open(path.anchor, directory_flags)
+    except OSError as exc:
+        raise ValueError("artifact root is unavailable or is a symlink") from exc
+    try:
+        root_opened = os.fstat(directory_descriptor)
+        require(
+            stat.S_ISDIR(root_opened.st_mode) and identity(root_opened) == identity(root_metadata),
+            "artifact root changed before opening",
+        )
+        for index, component in enumerate(parts[1:-1]):
+            next_descriptor = os.open(
+                component, directory_flags, dir_fd=directory_descriptor
+            )
+            try:
+                opened = os.fstat(next_descriptor)
+                require(
+                    stat.S_ISDIR(opened.st_mode)
+                    and identity(opened) == identity(expected_directories[index]),
+                    "artifact path component changed before opening",
+                )
+            except BaseException:
+                os.close(next_descriptor)
+                raise
+            os.close(directory_descriptor)
+            directory_descriptor = next_descriptor
+        descriptor = os.open(parts[-1], file_flags, dir_fd=directory_descriptor)
+        try:
+            metadata = os.fstat(descriptor)
+            require(
+                stat.S_ISREG(metadata.st_mode)
+                and metadata.st_nlink == 1
+                and identity(metadata) == identity(expected_file),
+                "artifact descriptor changed before opening",
+            )
+        except BaseException:
+            os.close(descriptor)
+            raise
     except OSError as exc:
         raise ValueError("artifact path is unavailable or is a symlink") from exc
-    try:
-        metadata = os.fstat(descriptor)
-        require(
-            stat.S_ISREG(metadata.st_mode),
-            "artifact descriptor is not a regular file",
-        )
-        require(
-            metadata.st_nlink == 1,
-            "artifact descriptor must name an independent file",
-        )
     except BaseException:
-        os.close(descriptor)
         raise
+    finally:
+        os.close(directory_descriptor)
     return descriptor
 
 

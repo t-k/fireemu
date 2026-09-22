@@ -192,100 +192,6 @@ def execute(
     gate_module.create(output / "gate", gate_plan)
     handle = gate_module.ActionGate(output / "gate", gate_module.JOB)
     handle.claim()
-    transport_bindings = copy.deepcopy(bindings)
-    for stage_bindings in transport_bindings.values():
-        for name in tuple(stage_bindings):
-            if name in remote.GENERATED_BINDINGS and not name.endswith(".localId"):
-                stage_bindings[name] = "$generated:" + name
-    remote.make_transport(
-        frozen_inputs=inputs,
-        declared_bindings=transport_bindings,
-        credential_handoff=credential_handoff,
-        verify_handoff=verify_handoff,
-        fixture_origin=fixture_origin,
-        production=production,
-    )
-    binding = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
-    binding_digest = hashlib.sha256(binding).hexdigest()
-    runtime = {
-        name: value
-        for stage_bindings in bindings.values()
-        for name, value in stage_bindings.items()
-    }
-    for account in ("accountA", "accountB"):
-        if account + ".localId" in runtime:
-            runtime[account + "Uid"] = runtime[account + ".localId"]
-    observations = gate_plan["jobs"][gate_module.JOB]["observation"]
-    recovery = gate_plan["jobs"][gate_module.JOB]["recovery"]
-    run_started = time.monotonic()
-
-    if production:
-        def management(slot_id, deadline):
-            return remote.management_receipt(
-                slot_id=slot_id,
-                deadline=deadline,
-                capability=capability,
-                binding=binding,
-                binding_digest=binding_digest,
-                handoff=credential_handoff,
-                permission=permission,
-                required_seconds=gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
-                fixture_origin=fixture_origin,
-            )
-    else:
-        def management(slot_id, deadline):
-            return remote.management_receipt(
-                slot_id=slot_id,
-                deadline=deadline,
-                capability=capability,
-                binding=binding,
-                binding_digest=binding_digest,
-                handoff=credential_handoff,
-                permission=permission,
-                required_seconds=gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
-                fixture_origin=fixture_origin,
-            )
-
-    handle.management_dispatch(
-        "observation", "oauth-tokeninfo", lambda deadline: management("oauth-tokeninfo", deadline)
-    )
-    handle.management_dispatch(
-        "observation", "auth-project-readback", lambda deadline: management("auth-project-readback", deadline)
-    )
-
-    def dispatch_one(operation, is_recovery):
-        body = _wire_body(plan, operation, runtime)
-        deadline = _operation_deadline(
-            time.monotonic(),
-            run_started,
-            is_recovery=is_recovery,
-            wall_seconds=gate_plan["wallSeconds"],
-            recovery_seconds=gate_plan["recoverySeconds"],
-        )
-        result = handle.dispatch(
-            operation,
-            is_recovery,
-            lambda: remote.send(
-                capability,
-                stage_id=operation["id"],
-                project=project,
-                nonce=nonce,
-                body=body,
-                deadline=deadline,
-                binding=binding,
-                binding_digest=binding_digest,
-                inputs_digest=inputs["inputsDigest"],
-            ),
-        )
-        status, response = result
-        if status == 200 and operation.get("kind") == "sign-up":
-            account = operation["account"]
-            runtime[account + ".localId"] = response["localId"]
-            runtime[account + "Uid"] = response["localId"]
-        for name in operation.get("binds", {}):
-            if isinstance(response, dict) and isinstance(response.get(operation["binds"][name]), str):
-                runtime[name] = response[operation["binds"][name]]
-        return result
 
     snapshot = {}
     primary_error = None
@@ -345,6 +251,106 @@ def execute(
                 primary_error = error
                 primary_traceback = error.__traceback__
 
+    def finish_terminal():
+        try:
+            remote.forget_transport(inputs["inputsDigest"])
+        except Exception as error:  # noqa: BLE001 -- transport cleanup cannot replace primary failure.
+            remember_primary(error, "transport-forget", "action-transport-cleanup-failure")
+        record_terminal()
+
+    def prepare():
+        transport_bindings = copy.deepcopy(bindings)
+        for stage_bindings in transport_bindings.values():
+            for name in tuple(stage_bindings):
+                if name in remote.GENERATED_BINDINGS and not name.endswith(".localId"):
+                    stage_bindings[name] = "$generated:" + name
+        remote.make_transport(
+            frozen_inputs=inputs,
+            declared_bindings=transport_bindings,
+            credential_handoff=credential_handoff,
+            verify_handoff=verify_handoff,
+            fixture_origin=fixture_origin,
+            production=production,
+        )
+        binding = (ROOT / descriptor.WORKER_ENTRY).read_bytes()
+        binding_digest = hashlib.sha256(binding).hexdigest()
+        runtime = {
+            name: value
+            for stage_bindings in bindings.values()
+            for name, value in stage_bindings.items()
+        }
+        for account in ("accountA", "accountB"):
+            if account + ".localId" in runtime:
+                runtime[account + "Uid"] = runtime[account + ".localId"]
+        observations = gate_plan["jobs"][gate_module.JOB]["observation"]
+        recovery = gate_plan["jobs"][gate_module.JOB]["recovery"]
+        run_started = time.monotonic()
+
+        def management(slot_id, deadline):
+            return remote.management_receipt(
+                slot_id=slot_id,
+                deadline=deadline,
+                capability=capability,
+                binding=binding,
+                binding_digest=binding_digest,
+                handoff=credential_handoff,
+                permission=permission,
+                required_seconds=gate_plan["wallSeconds"] + gate_plan["recoverySeconds"],
+                fixture_origin=fixture_origin,
+            )
+
+        handle.management_dispatch(
+            "observation", "oauth-tokeninfo", lambda deadline: management("oauth-tokeninfo", deadline)
+        )
+        handle.management_dispatch(
+            "observation", "auth-project-readback", lambda deadline: management("auth-project-readback", deadline)
+        )
+
+        def dispatch_one(operation, is_recovery):
+            body = _wire_body(plan, operation, runtime)
+            deadline = _operation_deadline(
+                time.monotonic(),
+                run_started,
+                is_recovery=is_recovery,
+                wall_seconds=gate_plan["wallSeconds"],
+                recovery_seconds=gate_plan["recoverySeconds"],
+            )
+            result = handle.dispatch(
+                operation,
+                is_recovery,
+                lambda: remote.send(
+                    capability,
+                    stage_id=operation["id"],
+                    project=project,
+                    nonce=nonce,
+                    body=body,
+                    deadline=deadline,
+                    binding=binding,
+                    binding_digest=binding_digest,
+                    inputs_digest=inputs["inputsDigest"],
+                ),
+            )
+            status, response = result
+            if status == 200 and operation.get("kind") == "sign-up":
+                account = operation["account"]
+                runtime[account + ".localId"] = response["localId"]
+                runtime[account + "Uid"] = response["localId"]
+            for name in operation.get("binds", {}):
+                if isinstance(response, dict) and isinstance(
+                    response.get(operation["binds"][name]), str
+                ):
+                    runtime[name] = response[operation["binds"][name]]
+            return result
+
+        return observations, recovery, dispatch_one
+
+    try:
+        observations, recovery, dispatch_one = prepare()
+    except Exception as error:  # noqa: BLE001 -- preserve preflight/setup failure.
+        remember_primary(error, "preflight", "action-preflight-failure")
+        finish_terminal()
+        raise primary_error.with_traceback(primary_traceback)
+
     try:
         try:
             for operation in observations:
@@ -386,11 +392,7 @@ def execute(
                 except Exception as error:  # noqa: BLE001 -- never imply an unverified release.
                     remember_primary(error, "ledger-finish", "action-ledger-finish-failure")
     finally:
-        try:
-            remote.forget_transport(inputs["inputsDigest"])
-        except Exception as error:  # noqa: BLE001 -- transport cleanup cannot replace primary failure.
-            remember_primary(error, "transport-forget", "action-transport-cleanup-failure")
-        record_terminal()
+        finish_terminal()
 
     if primary_error is not None:
         raise primary_error.with_traceback(primary_traceback)

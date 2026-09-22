@@ -364,6 +364,7 @@ class _F4TerminalHarness:
         self.released = False
         self.gate_finished = False
         self.remote_forgotten = False
+        self.transport_open = False
         self.output = tmp_path / "output"
         self.ledger_root = tmp_path / "ledger"
         self.ledger_root.mkdir(parents=True)
@@ -405,6 +406,8 @@ class _F4TerminalHarness:
                 return None
 
             def management_dispatch(self, _phase, _slot, send):
+                if harness.failure == "management-preflight":
+                    raise ValueError("management-preflight-refused")
                 return send(999.0)
 
             def dispatch(self, operation, recovery, send):
@@ -443,6 +446,9 @@ class _F4TerminalHarness:
 
             @staticmethod
             def make_transport(**_kwargs):
+                harness.transport_open = True
+                if harness.failure == "transport-setup":
+                    raise ValueError("transport-setup-refused")
                 return None
 
             @staticmethod
@@ -462,6 +468,7 @@ class _F4TerminalHarness:
 
             @staticmethod
             def forget_transport(_inputs_digest):
+                harness.transport_open = False
                 harness.remote_forgotten = True
 
         self.Capability = Capability
@@ -479,11 +486,15 @@ def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
         "recovery-timeout": ("recovery", "TimeoutError"),
         "gate-finish": ("gate-finish", "ValueError"),
         "ledger-finish": ("ledger-finish", "ValueError"),
+        "transport-setup": ("preflight", "ValueError"),
+        "management-preflight": ("preflight", "ValueError"),
+        "binding-setup": ("preflight", "FileNotFoundError"),
     }
     for failure, (expected_phase, expected_error) in expected.items():
         case = _F4TerminalHarness(tmp_path / failure, failure)
         worker = case.output.parent / "worker.fixture"
-        worker.write_bytes(b"fixture worker")
+        if failure != "binding-setup":
+            worker.write_bytes(b"fixture worker")
         monkeypatch.setattr(production, "ROOT", case.output.parent)
         monkeypatch.setattr(
             production,
@@ -564,7 +575,7 @@ def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
             "permissionDigest": digest(permission),
             "inputsDigest": "fixture",
         }
-        with pytest.raises((TimeoutError, ValueError)):
+        with pytest.raises((TimeoutError, ValueError, FileNotFoundError)):
             production.execute(
                 capability=case.Capability(),
                 inputs=inputs,
@@ -584,3 +595,4 @@ def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
         assert receipt["terminal"]["phase"] == expected_phase
         assert receipt["terminal"]["primaryError"] == expected_error
         assert case.remote_forgotten
+        assert case.transport_open is False

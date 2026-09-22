@@ -2891,6 +2891,23 @@ class Gate:
         with self.locked() as state:
             return state
 
+    def rules_management_ownership(self):
+        """Return an immutable replay projection, never caller-owned authority."""
+        state = self.snapshot()
+        if not _rules_management(state["plan"]):
+            raise ValueError("canonical Rules management plan required")
+
+        def freeze(value):
+            if isinstance(value, dict):
+                return types.MappingProxyType(
+                    {key: freeze(item) for key, item in value.items()}
+                )
+            if isinstance(value, list):
+                return tuple(freeze(item) for item in value)
+            return value
+
+        return freeze(_rules_subject_states(state))
+
     def coordinator_call(self, index, send):
         """Two prepaid local ownership-control calls, before worker claims."""
         with self.locked() as state:

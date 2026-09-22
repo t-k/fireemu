@@ -261,6 +261,52 @@ def first_creation(gate):
     return slot, subject, {"subject": subject_id, "proof": proof}
 
 
+def test_public_rules_ownership_is_immutable_and_replays_actual_acknowledgement(
+    tmp_path,
+):
+    create(tmp_path / "gate", rules_plan())
+    gate = Gate(tmp_path / "gate", "rules-management")
+    slot, subject, effect = first_creation(gate)
+    initial = gate.rules_management_ownership()
+    assert initial[subject["id"]] == {"status": "not-attempted", "proof": None}
+    gate.management_dispatch(
+        "observation", slot["id"], lambda deadline: response([effect])
+    )
+    before = gate.snapshot()
+    owned = gate.rules_management_ownership()
+    assert owned[subject["id"]]["status"] == "owned"
+    assert owned[subject["id"]]["proof"] == effect["proof"]
+    assert initial[subject["id"]]["status"] == "not-attempted"
+    with pytest.raises(TypeError):
+        owned[subject["id"]]["status"] = "recovered"
+    with pytest.raises(TypeError):
+        owned[subject["id"]]["proof"]["uid"] = "foreign"
+    assert gate.snapshot() == before
+
+
+def test_public_rules_ownership_validates_persisted_evidence_before_projection(
+    tmp_path,
+):
+    create(tmp_path / "gate", rules_plan())
+    gate = Gate(tmp_path / "gate", "rules-management")
+    state = gate.snapshot()
+    state["total"] += 1
+    shared_gate._save(gate.path, state)
+    with pytest.raises(ValueError):
+        gate.rules_management_ownership()
+
+
+def test_public_rules_ownership_refuses_other_campaigns_without_mutation(tmp_path):
+    from test_shared_gate import plan as local_plan
+
+    create(tmp_path / "gate", local_plan())
+    gate = Gate(tmp_path / "gate", "a")
+    before = gate.snapshot()
+    with pytest.raises(ValueError):
+        gate.rules_management_ownership()
+    assert gate.snapshot() == before
+
+
 def test_partial_creation_typed_absence_releases_without_delete_or_refund(tmp_path):
     create(tmp_path / "gate", rules_plan())
     gate = Gate(tmp_path / "gate", "rules-management")
@@ -405,6 +451,7 @@ def test_held_subject_never_becomes_absent_or_terminal(tmp_path, outcome):
             skip_next(gate, recovery["id"])
     before = gate.snapshot()
     assert before["reservedRecovery"] == 0
+    assert gate.rules_management_ownership()[subject["id"]]["status"] == "held"
     with pytest.raises(ValueError):
         gate.finish()
     assert gate.snapshot() == before
@@ -652,7 +699,7 @@ def test_full_rules_management_real_child_receipts_and_application_denial(
     )
     gate.cancel_management_observation()
     denied_subjects = {"document/getafter-control-target", "document/multiwrite-y"}
-    derived = shared_gate._rules_subject_states(gate.snapshot())
+    derived = gate.rules_management_ownership()
     for subject in denied_subjects:
         assert derived[subject]["proof"] is None
         assert derived[subject]["status"] == (

@@ -310,6 +310,9 @@ def collector(
     acquisition: dict[str, Any],
     journal_path: Any = None,
     management_session: Any = None,
+    journal: Any = None,
+    ownership: Any = None,
+    recovery_dispatch: Any = None,
 ) -> dict[str, Any]:
     """Drive the lane's collector as the production side, bound.
 
@@ -327,6 +330,9 @@ def collector(
         journal_path=journal_path,
         acquisition=acquisition,
         management_session=management_session,
+        journal=journal,
+        ownership=ownership,
+        recovery_dispatch=recovery_dispatch,
     )
 
 

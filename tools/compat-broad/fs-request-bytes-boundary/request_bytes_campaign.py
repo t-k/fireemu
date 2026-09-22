@@ -46,6 +46,9 @@ from request_bytes_remote_transport import (
     SMALL_REQUEST_TIMEOUT,
 )
 from request_bytes_remote_transport import (
+    SENTINEL_TIMEOUT as SENTINEL_TRANSPORT_DEADLINE_SECONDS,
+)
+from request_bytes_remote_transport import (
     TIMEOUT as TRANSPORT_TIMEOUT_SECONDS,
 )
 
@@ -63,7 +66,6 @@ CASE_IDS = (
 READ_USD_PER_UNIT = 0.06 / 100_000
 WRITE_USD_PER_UNIT = 0.18 / 100_000
 DELETE_USD_PER_UNIT = 0.02 / 100_000
-SENTINEL_TRANSPORT_DEADLINE_SECONDS = 80.0
 
 # Request bodies are ingress. Firestore does not bill ingress, and the response
 # bodies for this campaign are kilobytes, so the network component is zero to

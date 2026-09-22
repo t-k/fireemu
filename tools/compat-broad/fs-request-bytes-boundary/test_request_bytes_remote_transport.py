@@ -16,6 +16,10 @@ sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
 import request_bytes_remote_transport
 from request_bytes_collector import collect_local
 from request_bytes_compiler import compile_request_bytes_plan
+from request_bytes_compiler import (
+    RAW_16MIB_OVER_BYTES,
+    compile_request_bytes_sentinel_plan,
+)
 from request_bytes_compiler import validate_request_bytes_plan as validate_plan
 from request_bytes_remote_transport import (
     MAX_REQUEST_BYTES,
@@ -193,6 +197,37 @@ def plan_and_commit():
     return plan, next(
         row for row in plan["observation"] if row["kind"] == "conditional-create-commit"
     )
+
+
+def test_sentinel_body_reaches_exchange_with_its_case_specific_deadline():
+    plan = compile_request_bytes_sentinel_plan(
+        "fireemu-35fe6", "(default)", NONCE
+    )
+    operation = next(
+        row for row in plan["observation"] if row["kind"] == "conditional-create-commit"
+    )
+    seen = {}
+
+    def exchange(url, method, body, headers, timeout, response_cap):
+        seen.update(
+            url=url,
+            method=method,
+            body_bytes=len(body),
+            body_digest=hashlib.sha256(body).hexdigest(),
+            timeout=timeout,
+        )
+        return response(200, {"Content-Type": "application/json"}, b"{}")
+
+    receipt = request(
+        plan, "observation", 20, operation, "token", exchange=exchange
+    )
+
+    assert receipt["complete"] is True
+    assert receipt["requestBytes"] == RAW_16MIB_OVER_BYTES
+    assert seen["body_bytes"] == RAW_16MIB_OVER_BYTES
+    assert seen["body_digest"] == receipt["requestSha256"]
+    assert seen["timeout"] > 75
+    assert seen["timeout"] <= 80
 
 
 def test_request_binds_exact_plan_slot_and_canonical_commit_bytes():
@@ -714,6 +749,97 @@ def test_boundary_body_survives_the_real_process_exchange_and_worker(loopback_se
     assert received["bytes"] == MAX_REQUEST_BYTES
     assert received["sha256"] == hashlib.sha256(body).hexdigest()
     assert elapsed < TIMEOUT
+
+
+def test_sentinel_body_survives_the_real_worker_and_exact_case_route(loopback_server):
+    from request_bytes_process_exchange import _run_process_exchange
+
+    host, received = loopback_server
+    source = _loopback_worker_source(host)
+    plan = compile_request_bytes_sentinel_plan(
+        "fireemu-35fe6", "(default)", NONCE
+    )
+    operation = next(
+        row for row in plan["observation"] if row["kind"] == "conditional-create-commit"
+    )
+    body = json.dumps(
+        operation["body"], separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    assert len(body) == RAW_16MIB_OVER_BYTES
+    message = (
+        json.dumps(
+            {
+                "method": "POST",
+                "path": operation["path"],
+                "authorization": "Bearer loopback-test-token",
+                "project": "fireemu-35fe6",
+                "bodyBytes": len(body),
+                "deadline": time.monotonic() + 80,
+            },
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+
+    status, _content_type, raw, failure = _run_process_exchange(
+        worker_source=source,
+        request_payload=message + body,
+        deadline=time.monotonic() + 80,
+        response_cap=RESPONSE_BYTES,
+        worker_sha256=hashlib.sha256(source).hexdigest(),
+    )
+
+    assert failure is None, failure
+    assert status == 200
+    assert json.loads(raw) == {"received": RAW_16MIB_OVER_BYTES}
+    assert received["bytes"] == RAW_16MIB_OVER_BYTES
+    assert received["sha256"] == hashlib.sha256(body).hexdigest()
+
+
+def test_real_worker_rejects_one_byte_above_sentinel_body_ceiling(loopback_server):
+    from request_bytes_process_exchange import _run_process_exchange
+
+    host, _ = loopback_server
+    source = _loopback_worker_source(host)
+    message = (
+        json.dumps(
+            {
+                "method": "POST",
+                "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit",
+                "authorization": "Bearer loopback-test-token",
+                "project": "fireemu-35fe6",
+                "bodyBytes": RAW_16MIB_OVER_BYTES + 1,
+                "deadline": time.monotonic() + 80,
+            },
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+
+    result = _run_process_exchange(
+        worker_source=source,
+        request_payload=message,
+        deadline=time.monotonic() + 80,
+        response_cap=RESPONSE_BYTES,
+        worker_sha256=hashlib.sha256(source).hexdigest(),
+    )
+
+    assert result == (None, "", b"", "worker-failure")
+
+
+def test_real_worker_path_is_closed_to_the_twenty_sentinel_resources():
+    import request_bytes_https_worker as worker
+
+    valid = (
+        "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+        + NONCE
+        + "/request-bytes-02/probe-r16m1/items/payload-18"
+        "?currentDocument.updateTime=2026-09-23T01%3A02%3A03Z"
+    )
+    invalid = valid.replace("payload-18", "payload-19")
+
+    assert worker._PATH.fullmatch(valid)
+    assert worker._PATH.fullmatch(invalid) is None
 
 
 def test_the_real_worker_refuses_a_deadline_above_the_published_ceiling(

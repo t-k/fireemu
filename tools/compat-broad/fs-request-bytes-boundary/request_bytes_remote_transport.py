@@ -27,11 +27,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "o8-core"))
 
 from o8_admission import authorize_transport
-from request_bytes_compiler import validate_request_bytes_plan
+from request_bytes_compiler import (
+    RAW_16MIB_OVER_BYTES,
+    validate_request_bytes_plan,
+    validate_request_bytes_sentinel_plan,
+)
 from request_bytes_process_exchange import _run_process_exchange
 
 ORIGIN = "https://firestore.googleapis.com"
 MAX_REQUEST_BYTES = 10_485_761
+MAX_SENTINEL_REQUEST_BYTES = RAW_16MIB_OVER_BYTES
 RESPONSE_BYTES = 2 * 1024 * 1024
 # One total wire deadline covering connection setup, TLS, the upload, server
 # processing and the response. It is sized for the 10,485,761-byte boundary
@@ -50,6 +55,7 @@ RESPONSE_BYTES = 2 * 1024 * 1024
 # A slower link yields an incomplete receipt and an uncertain Commit; see
 # `request_bytes_campaign.TRANSPORT_DEADLINE` for the consequence that binds.
 TIMEOUT = 60.0
+SENTINEL_TIMEOUT = 80.0
 SMALL_REQUEST_TIMEOUT = 2.5
 #: Bits in the largest compiled request body, used by the derivation above.
 BOUNDARY_REQUEST_BITS = MAX_REQUEST_BYTES * 8
@@ -58,7 +64,7 @@ NON_UPLOAD_RESERVE_SECONDS = 10.0
 _TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{1,8192}=*")
 _VERSION = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z")
 _DIAGNOSTIC_LIMIT = 512
-_WORKER_SHA256 = "b302a96910b6a1a996e462094980a8ac2e8ba7a9a584062da6be7361a83e01aa"
+_WORKER_SHA256 = "fafaf76364bf144fd1b9f05cf4c0c7c8178c66369a44840b884f961cf9298dda"
 
 Exchange = Callable[[str, str, bytes | None, dict[str, str], float, int], Any]
 Clock = Callable[[], float]
@@ -120,7 +126,7 @@ def prepare(
         raise TypeError("request plan required")
     snapshot = copy.deepcopy(plan)
     try:
-        validate_request_bytes_plan(snapshot)
+        _validate_plan(snapshot)
     except (TypeError, ValueError, KeyError) as error:
         raise ValueError(
             f"request plan validation failed: {type(error).__name__}"
@@ -128,7 +134,12 @@ def prepare(
     expected = _operation_for_slot(snapshot, phase, index, operation)
     credential = _token(token)
     body = None if expected["body"] is None else _compact(expected["body"])
-    if body is not None and len(body) > MAX_REQUEST_BYTES:
+    request_limit = (
+        MAX_SENTINEL_REQUEST_BYTES
+        if plan.get("caseMode") == "single-exploratory-sentinel"
+        else MAX_REQUEST_BYTES
+    )
+    if body is not None and len(body) > request_limit:
         raise ValueError("request exceeds bounded byte ceiling")
     headers = {
         "Authorization": "Bearer " + credential,
@@ -325,6 +336,31 @@ def _status(value: Any) -> int:
     return value
 
 
+def _validate_plan(plan: dict[str, Any]) -> None:
+    if plan.get("caseMode") == "single-exploratory-sentinel":
+        validate_request_bytes_sentinel_plan(plan)
+    else:
+        validate_request_bytes_plan(plan)
+
+
+def _operation_timeout(plan: dict[str, Any], operation: dict[str, Any]) -> float:
+    if operation.get("body") is None:
+        return SMALL_REQUEST_TIMEOUT
+    return (
+        SENTINEL_TIMEOUT
+        if plan.get("caseMode") == "single-exploratory-sentinel"
+        else TIMEOUT
+    )
+
+
+def _plan_timeout_ceiling(plan: dict[str, Any]) -> float:
+    return (
+        SENTINEL_TIMEOUT
+        if plan.get("caseMode") == "single-exploratory-sentinel"
+        else TIMEOUT
+    )
+
+
 def _request_impl(
     plan: dict[str, Any],
     phase: str,
@@ -333,7 +369,7 @@ def _request_impl(
     token: str,
     *,
     exchange: Exchange | None = None,
-    timeout: float = TIMEOUT,
+    timeout: float | None = None,
     deadline: float | None = None,
     clock: Clock = time.monotonic,
     capability=None,
@@ -379,7 +415,7 @@ def _dispatch(
     token: str,
     *,
     exchange: Exchange | None = None,
-    timeout: float = TIMEOUT,
+    timeout: float | None = None,
     deadline: float | None = None,
     clock: Clock = time.monotonic,
     capability=None,
@@ -392,11 +428,14 @@ def _dispatch(
     deadline. It exists so tests can drive the deadline with simulated time;
     production always uses ``time.monotonic``.
     """
+    ceiling = _plan_timeout_ceiling(plan)
+    if timeout is None:
+        timeout = ceiling
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        raise TypeError(f"timeout must be a finite number in 0..{TIMEOUT:g} seconds")
-    if not math.isfinite(timeout) or not 0 < timeout <= TIMEOUT:
-        raise ValueError(f"timeout must be a finite number in 0..{TIMEOUT:g} seconds")
-    cap = TIMEOUT if operation.get("body") is not None else SMALL_REQUEST_TIMEOUT
+        raise TypeError(f"timeout must be a finite number in 0..{ceiling:g} seconds")
+    if not math.isfinite(timeout) or not 0 < timeout <= ceiling:
+        raise ValueError(f"timeout must be a finite number in 0..{ceiling:g} seconds")
+    cap = _operation_timeout(plan, operation)
     local_deadline = clock() + min(timeout, cap)
     if deadline is not None:
         if type(deadline) not in (int, float) or not math.isfinite(deadline):

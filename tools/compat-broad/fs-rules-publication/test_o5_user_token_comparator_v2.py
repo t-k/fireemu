@@ -762,6 +762,24 @@ def test_out_of_order_management_receipts_are_named() -> None:
     assert "production:management-receipts:order" in result["errors"]
 
 
+def test_management_and_data_receipts_must_follow_the_compiled_interleaving() -> None:
+    production, local, plan = bound_pair()
+    receipts = production["transport"]["rulesManagement"]["managementReceipts"]
+    create_b = next(entry for entry in receipts if entry["slot"] == "create-b")
+    row_zero = production["rows"][0]
+    # Keep both entries individually well-shaped, but attach the B management
+    # request to row-zero's sequence and row zero to the B boundary. A
+    # comparator that concatenates or sorts streams can incorrectly accept this
+    # mutation; the compiled event order must reject it.
+    create_b["wireSequence"], row_zero["wireSequence"] = (
+        row_zero["wireSequence"],
+        create_b["wireSequence"],
+    )
+    result = compare(production, local, plan)
+    assert result["classification"] == INDETERMINATE
+    assert "production:count-contradiction:wire-sequence" in result["errors"]
+
+
 def test_a_row_under_the_wrong_ruleset_label_is_named() -> None:
     production, local, plan = bound_pair()
     production["rows"][30]["ruleset"] = "A"

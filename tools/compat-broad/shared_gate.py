@@ -569,6 +569,14 @@ def _rules_subject_states(state):
         for key, subject in subjects.items():
             if key.startswith("ruleset/") and subject["status"] != "not-attempted":
                 subject["status"] = "held"
+    for subject_id, disposition in state.get("rulesRecoveryHeld", {}).items():
+        if (
+            isinstance(disposition, dict)
+            and disposition.get("kind") == "identity-proof-unavailable-v1"
+            and subject_id in subjects
+            and subjects[subject_id]["status"] in {"owned", "verified"}
+        ):
+            subjects[subject_id]["status"] = "held"
     return subjects
 
 
@@ -640,7 +648,54 @@ def _rules_dispatch_dependency(state, phase, slot):
 
 def _validate_rules_state(state, *, terminal=False):
     _validate_rules_management_plan(state["plan"])
+    held = state.get("rulesRecoveryHeld", {})
+    subject_ids = {
+        subject["id"]
+        for subject in state["plan"]["rulesManagementContract"]["subjects"]
+    }
+    if not isinstance(held, dict) or any(
+        subject_id not in subject_ids
+        or not isinstance(disposition, dict)
+        or set(disposition) != {"kind", "failure"}
+        or disposition["kind"] != "identity-proof-unavailable-v1"
+        or not isinstance(disposition["failure"], str)
+        or not disposition["failure"]
+        or len(disposition["failure"]) > 80
+        for subject_id, disposition in held.items()
+    ):
+        raise ValueError("Rules held recovery disposition changed")
     declared, count = _rules_cursor(state)
+    account_subjects = {
+        subject["id"]
+        for subject in state["plan"]["rulesManagementContract"]["subjects"]
+        if subject.get("kind") == "account"
+    }
+    before_holds = dict(state)
+    before_holds["rulesRecoveryHeld"] = {}
+    before_hold_subjects = _rules_subject_states(before_holds)
+    for subject_id in held:
+        if subject_id not in account_subjects:
+            raise ValueError("Rules held recovery subject must be an account")
+        if before_hold_subjects[subject_id]["status"] not in {"owned", "verified"}:
+            raise ValueError("Rules held recovery subject lacks pre-recovery ownership")
+        subject_slots = {
+            identity
+            for identity, phase, slot in declared
+            if phase == "recovery" and slot["dependency"]["subject"] == subject_id
+        }
+        used_subject_slots = set(state["managementUsed"]) & subject_slots
+        if used_subject_slots:
+            raise ValueError("Rules held recovery subject already entered recovery")
+        skipped_by_id = {
+            item["id"]: item
+            for item in state["managementSkipped"]
+            if item["id"] in subject_slots
+        }
+        if any(
+            item.get("reason") != "dependency-held"
+            for item in skipped_by_id.values()
+        ):
+            raise ValueError("Rules held recovery skip disposition changed")
     slots = {identity: (phase, slot) for identity, phase, slot in declared}
     for event in state["managementEvents"]:
         receipt = event.get("rulesReceipt")
@@ -1879,6 +1934,7 @@ def create(path, plan):
         "managementUsed": [],
         "managementEvents": [],
         "managementSkipped": [],
+        "rulesRecoveryHeld": {},
         "managementAbort": None,
         "coordinatorInflight": False,
         "events": [],
@@ -3136,6 +3192,70 @@ class Gate:
                                                "reason": reason, "prefixDigest": prefix_digest,
                                                "eventsDigest": digest(state["managementEvents"])})
             state["reservedRecovery"] -= 1
+            _validate_rules_state(state)
+            _save(self.path, state)
+            return state
+
+    def hold_management_recovery(
+        self,
+        subject_id,
+        *,
+        expected_plan_digest,
+        expected_prefix_digest,
+        failure,
+    ):
+        """Record a Gate-owned held disposition before skipping its recovery suffix.
+
+        A local identity-proof failure is not a recovery wire fact and therefore
+        cannot be represented as a synthetic response.  This operation records
+        that bounded disposition in the Gate journal.  The normal recovery skip
+        path consumes the subject's reserved slots after the durable held state
+        is replayed.
+        """
+        with self.locked() as state:
+            if not _rules_management(state["plan"]) or state["coordinatorPid"] != os.getpid():
+                raise ValueError("Rules coordinator ownership required")
+            _rules_settled(state)
+            declared, _count = _rules_cursor(state)
+            prefix_digest = digest(
+                {"used": state["managementUsed"], "skipped": state["managementSkipped"]}
+            )
+            if expected_plan_digest != state["planDigest"] or expected_prefix_digest != prefix_digest:
+                raise ValueError("Rules recovery hold binding mismatch")
+            if not isinstance(subject_id, str) or not subject_id.startswith("account/"):
+                raise ValueError("Rules identity-proof hold requires an account")
+            dependencies = [
+                entry[2]["dependency"]
+                for entry in declared
+                if entry[1] == "recovery"
+                and entry[2]["dependency"]["subject"] == subject_id
+                and entry[2]["dependency"]["step"] == "read"
+            ]
+            if len(dependencies) != 1:
+                raise ValueError("Rules held disposition subject is not canonical")
+            read_identity = next(
+                identity
+                for identity, phase, slot in declared
+                if phase == "recovery"
+                and slot["dependency"] == dependencies[0]
+            )
+            used = set(state["managementUsed"])
+            skipped = {item["id"] for item in state["managementSkipped"]}
+            if read_identity in used or read_identity in skipped:
+                raise ValueError("Rules held recovery subject already entered recovery")
+            before_holds = dict(state)
+            before_holds["rulesRecoveryHeld"] = {}
+            current = _rules_subject_states(before_holds)[subject_id]
+            if current["status"] not in {"owned", "verified"}:
+                raise ValueError("Rules held disposition requires acknowledged ownership")
+            if not isinstance(failure, str) or not failure or len(failure) > 80:
+                raise ValueError("bounded identity proof failure required")
+            held = dict(state.get("rulesRecoveryHeld", {}))
+            held[subject_id] = {
+                "kind": "identity-proof-unavailable-v1",
+                "failure": failure,
+            }
+            state["rulesRecoveryHeld"] = held
             _validate_rules_state(state)
             _save(self.path, state)
             return state

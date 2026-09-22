@@ -531,7 +531,7 @@ def test_independent_observation_continues_all_53_calls_on_original_reservation(
     capability = admission.issue_production_capability(
         **fixture.bindings(), binding=binding, binding_digest=binding_digest
     )
-    _Fixture.service = _service()
+    _Fixture.service = _service(project="fireemu-35fe6")
     result = production.execute_reserved(
         capability=capability,
         inputs=fixture.inputs,
@@ -808,7 +808,7 @@ def test_actual_cli_waits_for_independent_final_artifacts(
             fixture.approval["status"] = "denied"
         if approved == "preflight-refused":
             _Fixture.tokeninfo_overrides["email_verified"] = "false"
-        _Fixture.service = _service()
+        _Fixture.service = _service(project="fireemu-35fe6")
         (observation / "approval.json").write_text(json.dumps(fixture.approval))
         stdout, stderr = process.communicate(timeout=90)
         completed = approved is True

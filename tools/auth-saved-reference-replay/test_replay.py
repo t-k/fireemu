@@ -8,6 +8,7 @@ import types
 from pathlib import Path
 
 import pytest
+import replay
 import run_replay
 from replay import (
     BUILD_COMMAND,
@@ -144,6 +145,13 @@ def test_replay_spec_binds_runtime_to_the_run_manifest():
     assert "sourceCommit" not in spec
 
 
+def test_run_rejects_dangling_output_root_symlink(tmp_path):
+    output_root = tmp_path / "output-alias"
+    output_root.symlink_to(tmp_path / "missing-output")
+    with pytest.raises(ValueError, match="output root must not already exist"):
+        run_replay.run(output_root)
+
+
 def test_manifest_requires_durable_artifact_path_and_hash_binding(tmp_path):
     bundle, _source = write_complete_failed_bundle(tmp_path)
     manifest_path = bundle / "run-manifest.json"
@@ -168,6 +176,218 @@ def test_manifest_rejects_launch_copy_substitution_or_postcopy_mutation(tmp_path
     else:
         Path(manifest["build"]["launchCopyPath"]).write_bytes(b"changed-after-launch")
     with pytest.raises(ValueError, match=message):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_symlinked_artifact_copy(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    target = launch_path.with_name("real-fireemu")
+    launch_path.rename(target)
+    launch_path.symlink_to(target)
+    with pytest.raises(ValueError, match="symlink"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_hardlinked_artifact_copy(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    launch_path.unlink()
+    launch_path.hardlink_to(source_path)
+    with pytest.raises(ValueError, match="hardlink"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_parent_path_alias_for_artifact_copy(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    manifest["build"]["launchCopyPath"] = str(
+        launch_path.parent / ".." / launch_path.parent.name / launch_path.name
+    )
+    with pytest.raises(ValueError, match="contains '..'"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_parent_directory_symlink_alias(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    real_directory = launch_path.parent.with_name("launch-real")
+    launch_path.parent.rename(real_directory)
+    launch_path.parent.symlink_to(real_directory, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink parent"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_accepts_independent_shutil_copyfile_artifact(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    launch_path.unlink()
+    shutil.copyfile(source_path, launch_path)
+    validate_artifact_binding(manifest["build"], manifest["artifactSha256"], bundle)
+
+
+def test_manifest_returns_fd_capability_for_path_replacement(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    binding = validate_artifact_binding(
+        manifest["build"], manifest["artifactSha256"], bundle
+    )
+    verified_fd = binding.pop("_launchFd")
+    try:
+        preserved = launch_path.with_name("preserved-launch-fireemu")
+        launch_path.rename(preserved)
+        launch_path.hardlink_to(source_path)
+        assert replay.os.fstat(verified_fd).st_ino != source_path.stat().st_ino
+        assert replay.os.pread(verified_fd, 1024, 0) == source_path.read_bytes()
+    finally:
+        replay.os.close(verified_fd)
+
+
+def test_manifest_rejects_launch_replacement_during_descriptor_read(
+    tmp_path, monkeypatch
+):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_read = replay.os.read
+    replaced = False
+
+    def replace_after_source_read(fd, size):
+        nonlocal replaced
+        chunk = original_read(fd, size)
+        if not replaced and chunk:
+            launch_path.unlink()
+            launch_path.hardlink_to(source_path)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(replay.os, "read", replace_after_source_read)
+    with pytest.raises(ValueError, match="hardlink|changed"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_independent_launch_replacement_during_read(
+    tmp_path, monkeypatch
+):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_inode = launch_path.stat().st_ino
+    original_read = replay.os.read
+    replaced = False
+
+    def replace_after_launch_read(fd, size):
+        nonlocal replaced
+        before = replay.os.fstat(fd)
+        chunk = original_read(fd, size)
+        if not replaced and chunk and before.st_ino == original_inode:
+            replacement = launch_path.with_name("replacement-fireemu")
+            shutil.copyfile(source_path, replacement)
+            launch_path.unlink()
+            replacement.rename(launch_path)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(replay.os, "read", replace_after_launch_read)
+    with pytest.raises(ValueError, match="changed"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_launch_replacement_after_path_recheck(tmp_path, monkeypatch):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_stat = replay.os.stat
+    replaced = False
+
+    def replace_after_launch_stat(path, *args, **kwargs):
+        nonlocal replaced
+        result = original_stat(path, *args, **kwargs)
+        if not replaced and Path(path) == launch_path:
+            launch_path.unlink()
+            launch_path.hardlink_to(source_path)
+            replaced = True
+        return result
+
+    monkeypatch.setattr(replay.os, "stat", replace_after_launch_stat)
+    with pytest.raises(ValueError, match="hardlink|after verification|before opening"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_launch_replacement_after_final_stat(tmp_path, monkeypatch):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_stat = replay.os.stat
+    launch_stats = 0
+
+    def replace_after_final_stat(path, *args, **kwargs):
+        nonlocal launch_stats
+        result = original_stat(path, *args, **kwargs)
+        if Path(path) == launch_path:
+            launch_stats += 1
+            if launch_stats == 2:
+                launch_path.unlink()
+                launch_path.hardlink_to(source_path)
+        return result
+
+    monkeypatch.setattr(replay.os, "stat", replace_after_final_stat)
+    with pytest.raises(ValueError, match="hardlink|while reading|before use|after verification"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_launch_replacement_after_bound_descriptor_stat(
+    tmp_path, monkeypatch
+):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_fstat = replay.os.fstat
+    fstats = 0
+
+    def replace_after_bound_fstat(fd):
+        nonlocal fstats
+        result = original_fstat(fd)
+        fstats += 1
+        if fstats == 5:
+            launch_path.unlink()
+            launch_path.hardlink_to(source_path)
+        return result
+
+    monkeypatch.setattr(replay.os, "fstat", replace_after_bound_fstat)
+    with pytest.raises(ValueError, match="hardlink|while reading|before use|before opening"):
         validate_artifact_binding(
             manifest["build"], manifest["artifactSha256"], bundle
         )

@@ -301,7 +301,59 @@ export const PRECONDITIONS_CASE = Object.freeze({
   ]),
 });
 
-export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE]);
+// FS-EVID-PROJECTION-LISTING-027: the original complete 18-step read program.
+// Reuses the pinned REST recorder and the production column only. The raw page
+// token is taken from the preceding response, never from its normalized <token>.
+export const PROJECTION_CASE = Object.freeze({
+  ...CASE,
+  id: "fs.projection-and-listing.saved-20260907.v1",
+  programId: "queries/projection-and-listing",
+  programArea: "queries",
+  seedCount: 3,
+  programDigest: "e8c30e076d75f6783e0fe3eba3157d36f05c5ba92caa7f43cb5a4d7e0d678589",
+  title: "Saved production projection, listing, raw page-token handoff and masked BatchGet",
+  sessionSetupPhases: Object.freeze(["reset", "seed", "seed", "seed"]),
+  stepIds: Object.freeze([
+    "select-fields",
+    "select-missing-field",
+    "select-with-empty-list",
+    "list-documents",
+    "list-documents-page-size-one",
+    "list-documents-next-page",
+    "list-documents-with-mask",
+    "list-documents-descending",
+    "list-documents-show-missing",
+    "list-missing-parents",
+    "list-subcollection-of-missing-parent",
+    "list-empty-collection",
+    "list-collection-ids-root",
+    "list-collection-ids-of-a-missing-document",
+    "list-collection-ids-paged",
+    "get-with-mask",
+    "get-missing-parent-document",
+    "batch-get-mixed",
+  ]),
+  ownedDocuments: Object.freeze([
+    "prj/a", "prj/b", "prj/missing-parent/sub/x", "prj/missing-parent", "prj/none",
+  ]),
+  compared: Object.freeze([
+    "All 18 original status/canonical-code/normalized-success-body decisions",
+    "Query projection of nested/missing fields and an explicitly empty projection list",
+    "ListDocuments first/next page, masks, descending order and showMissing responses",
+    "Subcollections below a missing parent and ListCollectionIds on the recorded paths",
+    "GetDocument response mask, absent parent and masked BatchGet found/missing responses",
+  ]),
+  notEstablished: Object.freeze([
+    "Opaque page-token bytes, token validation/expiry or pagination under concurrent changes",
+    "Every pagination boundary: only the original first and next page are replayed",
+    "Error message/details, timestamp relationships or values erased by the historical normalizer",
+    "General BatchGet ordering guarantees beyond comparison of this recorded sequence",
+    "Rules/user-token authorization, SDK/gRPC, concurrent histories or query-index parity as a whole",
+    "A fresh production observation or independent current-artifact acceptance from registering this case",
+  ]),
+});
+
+export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE, PROJECTION_CASE]);
 
 export function selectCase(id = CASE.id) {
   const entry = CASES.find((c) => c.id === id);

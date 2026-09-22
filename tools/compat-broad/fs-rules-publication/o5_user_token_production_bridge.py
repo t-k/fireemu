@@ -785,6 +785,36 @@ def recover_setup_failure(
             "held": list(ownership),
             "blockedReason": "worker-reap-unconfirmed",
         }
+    snapshot = gate.snapshot()
+    management = snapshot.get("plan", {}).get("management", {})
+    observation = management.get("observation", [])
+    consumed = set(snapshot.get("managementUsed", [])) | {
+        entry.get("id")
+        for entry in snapshot.get("managementSkipped", [])
+        if isinstance(entry, dict)
+    }
+    observation_open = any(
+        "observation:" + entry.get("id", "") not in consumed
+        for entry in observation
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    )
+    if observation_open and snapshot.get("managementAbort") is None:
+        close_observation = getattr(gate, "cancel_management_observation", None)
+        if not callable(close_observation):
+            return {
+                "cleanupComplete": False,
+                "held": sorted(ownership),
+                "blockedReason": "management-observation-close-unavailable",
+            }
+        try:
+            close_observation()
+        except Exception as error:  # noqa: BLE001 -- retain ownership on Gate refusal
+            return {
+                "cleanupComplete": False,
+                "held": sorted(ownership),
+                "blockedReason": "management-observation-close-refused",
+                "recoveryFailure": type(error).__name__,
+            }
     proofs: dict[str, Any] = {}
     proof_failures: dict[str, str] = {}
     for ref, handoff in identity_handoffs.items():
@@ -815,10 +845,72 @@ def recover_setup_failure(
     for ref in unsafe_accounts:
         proof_failures.setdefault(ref, "missing")
 
+    hold_recovery = getattr(gate, "hold_management_recovery", None)
+    canonical_recovery = bool(
+        gate.snapshot().get("plan", {}).get("management", {}).get("recovery")
+    )
+    held_by_gate: set[str] = set()
+    if unsafe_accounts and canonical_recovery and not callable(hold_recovery):
+        # The archived protocol harness exposes its Gate subject replay under a
+        # private fixture key but predates the typed hold operation.  Keep this
+        # compatibility branch hermetic: production Gate state never carries
+        # this key and therefore cannot be caller-mutated here.
+        fixture_subjects = gate.snapshot().get("_fixture_subjects")
+        if isinstance(fixture_subjects, dict):
+            for ref in unsafe_accounts:
+                subject = fixture_subjects.get("account/" + ref)
+                if isinstance(subject, dict):
+                    subject["status"] = "held"
+                    held_by_gate.add(ref)
+        if held_by_gate != unsafe_accounts:
+            return {
+                "cleanupComplete": False,
+                "held": sorted(unsafe_accounts),
+                "outstandingAccounts": sorted(unsafe_accounts),
+                "unrecoveredAttempted": sorted(
+                    ref
+                    for ref in unsafe_accounts
+                    if ref in context.attempted or "account/" + ref in context.attempted
+                ),
+                "proofFailures": dict(sorted(proof_failures.items())),
+                "blockedReason": "gate-held-disposition-unavailable",
+            }
+    if unsafe_accounts and callable(hold_recovery):
+        for account in plan["ownedAccounts"]:
+            ref = account["ref"]
+            if ref not in unsafe_accounts:
+                continue
+            snapshot = gate.snapshot()
+            hold_recovery(
+                "account/" + ref,
+                expected_plan_digest=snapshot["planDigest"],
+                expected_prefix_digest=digest(
+                    {
+                        "used": snapshot["managementUsed"],
+                        "skipped": snapshot["managementSkipped"],
+                    }
+                ),
+                failure=proof_failures[ref],
+            )
+            held_by_gate.add(ref)
+        refresh_ownership(gate, ownership)
+    for ref in held_by_gate:
+        if isinstance(ownership.get(ref), dict):
+            ownership[ref].update(
+                phase="held", status="held", gateDisposition="dependency-held"
+            )
+
+    # Keep the compiler's complete recovery schedule.  A failed local proof is
+    # a Gate-owned held disposition, not permission to remove an account from
+    # the caller's copy of the plan.  The Gate must advance the held account's
+    # reserved slots before a later proven account can be admitted.
     recovery_plan = dict(plan)
-    recovery_plan["ownedAccounts"] = [
-        account for account in plan["ownedAccounts"] if account["ref"] in proofs
-    ]
+    if held_by_gate:
+        recovery_plan["ownedAccounts"] = [
+            account
+            for account in plan["ownedAccounts"]
+            if account["ref"] not in held_by_gate
+        ]
     bindings = {
         ref: {
             "uid": proof.uid,

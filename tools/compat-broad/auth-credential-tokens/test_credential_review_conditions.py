@@ -127,6 +127,7 @@ def _service(clock, *, cookie_subject="same") -> SimpleNamespace:
                 "iss": f"https://securetoken.google.com/{shadow.PROJECT}",
                 "aud": shadow.PROJECT,
                 "sub": uid,
+                "firebase": {"sign_in_provider": "custom"},
                 "iat": now,
                 "exp": now + 3600,
                 "auth_time": now if auth_time is None else auth_time,

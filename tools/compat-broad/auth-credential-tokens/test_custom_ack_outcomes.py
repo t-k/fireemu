@@ -1,12 +1,15 @@
 """Creation-outcome regressions for the AUTH-CREDENTIAL response boundary.
 
 No network, credentials, canonical Ledger, or cleanup requests are used here.
-A valid custom-token REST success need not contain localId. Until the existing
-identity-proof path supports that shape, it must stay UNKNOWN, never REFUSED.
+A custom-token REST success may omit localId when the ID token proves the
+expected identity and isNewUser is true; malformed legacy responses remain
+UNKNOWN, never REFUSED.
 """
 from __future__ import annotations
 
 import copy
+import base64
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +21,21 @@ NONCE = "0123456789abcdef0123456789abcdef"
 PROJECT = "demo-ack-contract"
 JOB = "auth-credential"
 UID = account_identifier(NONCE, "custom")
+
+
+def formal_id_token(uid: str = UID, project: str = PROJECT) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    payload = json.dumps(
+        {
+            "sub": uid,
+            "aud": project,
+            "iss": f"https://securetoken.google.com/{project}",
+            "firebase": {"sign_in_provider": "custom"},
+        },
+        separators=(",", ":"),
+    ).encode()
+    encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
+    return f"{header}.{encoded}."
 MISSING = object()
 
 
@@ -39,15 +57,15 @@ def scenario():
         "jobs": {JOB: {"authAccounts": {}, "resources": [resource], "absent": []}},
     }
     operation = {"kind": "custom-sign-in", "account": "custom", "resource": resource,
-                 "binds": {"customUid": "localId", "customIdToken": "idToken",
+                 "binds": {"customUid": "idToken.sub", "customIdToken": "idToken",
                            "customRefresh": "refreshToken"}}
     return gate, state, operation
 
 
 def success(*, new=True):
-    # Deliberately fake token strings: these tests do not verify JWT signatures
-    # and do not create cleanup authority outside this response-classification unit.
-    return {"localId": UID, "idToken": "test-id-token", "refreshToken": "test-refresh",
+    # The envelope is synthetic and unsigned; the projection still requires the
+    # production identity claims before it can grant ownership.
+    return {"localId": UID, "idToken": formal_id_token(), "refreshToken": "test-refresh",
             "expiresIn": "3600", "isNewUser": new}
 
 
@@ -80,10 +98,13 @@ class CustomAckOutcomes(unittest.TestCase):
         self.assertEqual(operation, original_operation, "do not rewrite the frozen slot")
         return gate, state, operation, event
 
-    def test_documented_success_without_local_id_is_unknown_not_reused(self):
+    def test_documented_success_without_local_id_is_accepted_when_identity_is_proven(self):
+        gate, state, operation = scenario()
         body = success()
         del body["localId"]
-        self.assert_unknown(body)
+        event = apply_response(gate, state, operation, body)
+        self.assertEqual(event["creationOutcome"], "created")
+        self.assertEqual(state["jobs"][JOB]["authAccounts"]["custom"]["uid"], UID)
 
     def test_missing_new_user_flag_does_not_prove_reuse(self):
         body = success()
@@ -110,30 +131,32 @@ class CustomAckOutcomes(unittest.TestCase):
         self.assertEqual(state["jobs"][JOB]["authAccounts"], {})
         self.assertFalse(gate._all_accounts_absent(state))
 
-    def test_existing_user_without_identity_stays_unknown(self):
+    def test_existing_user_without_local_id_is_refused_when_identity_is_proven(self):
+        gate, state, operation = scenario()
         body = success(new=False)
         del body["localId"]
-        self.assert_unknown(body)
+        event = apply_response(gate, state, operation, body)
+        self.assertEqual(event["creationOutcome"], "refused")
+        self.assertEqual(state["jobs"][JOB]["authAccounts"], {})
 
     def test_existing_user_for_another_identity_stays_unknown(self):
         body = success(new=False)
         body["localId"] = "another-account"
         self.assert_unknown(body)
 
-    def test_new_user_for_another_identity_still_raises_and_stops(self):
+    def test_new_user_for_another_identity_stays_unknown(self):
         gate, state, operation = scenario()
         body = success()
         body["localId"] = "another-account"
-        with self.assertRaisesRegex(ValueError, "outside the plan"):
-            apply_response(gate, state, operation, body)
-        self.assertTrue(state["jobs"][JOB]["stopped"])
-        self.assertEqual(state["events"][-1]["creationOutcome"], "pending")
-        self.assertEqual(state["events"][-1]["failure"], "InvalidCredentialCampaignResponse")
+        body["idToken"] = formal_id_token("another-account")
+        event = apply_response(gate, state, operation, body)
+        self.assertEqual(event["creationOutcome"], "unknown")
         self.assertEqual(state["jobs"][JOB]["authAccounts"], {})
 
     def test_unknown_ack_does_not_allow_recording_a_cleanup_delete(self):
         body = success()
         del body["localId"]
+        body["idToken"] = formal_id_token(project=PROJECT + "-other")
         gate, state, operation, first = self.assert_unknown(body)
         recovery = {**operation, "kind": "delete", "binds": {}}
         with self.assertRaisesRegex(ValueError, "never created"):
@@ -144,6 +167,7 @@ class CustomAckOutcomes(unittest.TestCase):
     def test_unknown_ack_is_not_cleared_by_a_later_absence(self):
         body = success()
         del body["localId"]
+        body["idToken"] = "legacy-id-token"
         gate, state, operation, first = self.assert_unknown(body)
         recovery = {**operation, "kind": "uid-absence", "binds": {}}
         with self.assertRaisesRegex(ValueError, "never created"):
@@ -192,6 +216,7 @@ class CustomAckOutcomes(unittest.TestCase):
         state["jobs"][JOB]["authAccounts"]["acct0"] = copy.deepcopy(prior)
         body = success()
         del body["localId"]
+        body["idToken"] = formal_id_token(project=PROJECT + "-other")
         event = apply_response(gate, state, operation, body)
         self.assertEqual(event["creationOutcome"], "unknown")
         self.assertEqual(state["jobs"][JOB]["authAccounts"], {"acct0": prior})

@@ -45,7 +45,7 @@ def offline(monkeypatch):
 
 def wire_fixture(monkeypatch, *, tokeninfo_status=200, service=None):
     """Answer every bound wire call from the in-memory Identity service."""
-    service = service or _service()
+    service = service or _service(project=PROJECT_BODY["projectId"])
     calls = {"management": [], "sign": [], "data": []}
 
     def management_fixture(slot, token, **_kwargs):

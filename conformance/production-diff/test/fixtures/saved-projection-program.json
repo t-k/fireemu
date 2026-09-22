@@ -1,0 +1,231 @@
+{
+  "id": "queries/projection-and-listing",
+  "area": "queries",
+  "seed": [
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/a",
+      "fields": {
+        "a": {
+          "integerValue": "1"
+        },
+        "b": {
+          "mapValue": {
+            "fields": {
+              "c": {
+                "integerValue": "2"
+              },
+              "d": {
+                "integerValue": "3"
+              }
+            }
+          }
+        },
+        "e": {
+          "arrayValue": {
+            "values": [
+              {
+                "integerValue": "1"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/b",
+      "fields": {
+        "a": {
+          "integerValue": "2"
+        }
+      }
+    },
+    {
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/missing-parent/sub/x",
+      "fields": {
+        "z": {
+          "integerValue": "1"
+        }
+      }
+    }
+  ],
+  "steps": [
+    {
+      "id": "select-fields",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+      "body": {
+        "structuredQuery": {
+          "from": [
+            {
+              "collectionId": "prj"
+            }
+          ],
+          "select": {
+            "fields": [
+              {
+                "fieldPath": "a"
+              },
+              {
+                "fieldPath": "b.c"
+              }
+            ]
+          },
+          "orderBy": [
+            {
+              "field": {
+                "fieldPath": "__name__"
+              },
+              "direction": "ASCENDING"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "select-missing-field",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+      "body": {
+        "structuredQuery": {
+          "from": [
+            {
+              "collectionId": "prj"
+            }
+          ],
+          "select": {
+            "fields": [
+              {
+                "fieldPath": "nothing"
+              }
+            ]
+          },
+          "orderBy": [
+            {
+              "field": {
+                "fieldPath": "__name__"
+              },
+              "direction": "ASCENDING"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "select-with-empty-list",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+      "body": {
+        "structuredQuery": {
+          "from": [
+            {
+              "collectionId": "prj"
+            }
+          ],
+          "select": {
+            "fields": []
+          },
+          "orderBy": [
+            {
+              "field": {
+                "fieldPath": "__name__"
+              },
+              "direction": "ASCENDING"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "list-documents",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj"
+    },
+    {
+      "id": "list-documents-page-size-one",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?pageSize=1"
+    },
+    {
+      "id": "list-documents-next-page",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?pageSize=1&pageToken={{list-documents-page-size-one.nextPageToken}}"
+    },
+    {
+      "id": "list-documents-with-mask",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?mask.fieldPaths=a"
+    },
+    {
+      "id": "list-documents-descending",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?orderBy=a%20desc"
+    },
+    {
+      "id": "list-documents-show-missing",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?showMissing=true"
+    },
+    {
+      "id": "list-missing-parents",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj?showMissing=true&pageSize=10"
+    },
+    {
+      "id": "list-subcollection-of-missing-parent",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/missing-parent/sub"
+    },
+    {
+      "id": "list-empty-collection",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/nothing"
+    },
+    {
+      "id": "list-collection-ids-root",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:listCollectionIds",
+      "body": {}
+    },
+    {
+      "id": "list-collection-ids-of-a-missing-document",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/missing-parent:listCollectionIds",
+      "body": {}
+    },
+    {
+      "id": "list-collection-ids-paged",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:listCollectionIds",
+      "body": {
+        "pageSize": 1
+      }
+    },
+    {
+      "id": "get-with-mask",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/a?mask.fieldPaths=b.d&mask.fieldPaths=e"
+    },
+    {
+      "id": "get-missing-parent-document",
+      "method": "GET",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents/prj/missing-parent"
+    },
+    {
+      "id": "batch-get-mixed",
+      "method": "POST",
+      "path": "/v1/projects/PROJECT/databases/(default)/documents:batchGet",
+      "body": {
+        "documents": [
+          "projects/PROJECT/databases/(default)/documents/prj/b",
+          "projects/PROJECT/databases/(default)/documents/prj/none",
+          "projects/PROJECT/databases/(default)/documents/prj/a"
+        ],
+        "mask": {
+          "fieldPaths": [
+            "a"
+          ]
+        }
+      }
+    }
+  ]
+}

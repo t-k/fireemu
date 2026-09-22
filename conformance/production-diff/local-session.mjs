@@ -12,6 +12,7 @@ import {
   safeCode,
   validateProgram,
   resolveRecordedValue,
+  resolveRecordedPath,
   expectedCleanupDocuments,
 } from "./core.mjs";
 import { publishJson, readSource } from "./io.mjs";
@@ -76,8 +77,9 @@ let index = 0,
 globalThis.fetch = async (url, init = {}) => {
   const parsed = assertUrl(url, origin);
   const op = expected[index];
+  const path = op ? resolveRecordedPath(op.path, rawReplies) : null;
   requireThat(
-    op && op.method === (init.method ?? "GET") && op.path === parsed.pathname + parsed.search,
+    op && op.method === (init.method ?? "GET") && path === parsed.pathname + parsed.search,
     "unexpected-recorder-operation",
   );
   const body = init.body === undefined ? undefined : JSON.parse(init.body);
@@ -96,7 +98,7 @@ globalThis.fetch = async (url, init = {}) => {
   const row = {
     phase: op.phase,
     method: op.method,
-    path: op.path,
+    path,
     bodySha256: init.body === undefined ? null : sha256(init.body),
     status: null,
   };

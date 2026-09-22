@@ -95,18 +95,34 @@ class SetupPublicReceipt:
         }
 
 
-@dataclass(frozen=True)
 class SetupPrivateHandoff:
     """Transient credential handoff; never use this object as a receipt."""
 
-    id_token: str | None = None
-    expires_in: str | None = None
+    __slots__ = ("_id_token", "_expires_in")
+
+    def __init__(self, *, id_token: str | None = None, expires_in: str | None = None):
+        self._id_token = id_token
+        self._expires_in = expires_in
+
+    def __repr__(self) -> str:
+        return "SetupPrivateHandoff(<redacted>)"
+
+    def token_for_followup(self) -> str | None:
+        return self._id_token
+
+    def expires_in_for_followup(self) -> str | None:
+        return self._expires_in
 
 
-@dataclass(frozen=True)
 class SetupResult:
-    receipt: SetupPublicReceipt
-    private: SetupPrivateHandoff
+    __slots__ = ("receipt", "private")
+
+    def __init__(self, *, receipt: SetupPublicReceipt, private: SetupPrivateHandoff):
+        self.receipt = receipt
+        self.private = private
+
+    def __repr__(self) -> str:
+        return f"SetupResult(receipt={self.receipt!r}, private=<redacted>)"
 
 
 def _reap_owned(

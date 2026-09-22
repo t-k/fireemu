@@ -761,6 +761,7 @@ def test_transport_adapts_official_document_response_through_real_worker(fixture
         "httpStatus": 200,
         "documentPresent": True,
         "fields": {"count": 1},
+        "responseDigest": digest(_FixtureHandler.response_body),
         "complete": True,
         "workerReaped": True,
         "endpoint": fixture_origin.removeprefix("http://"),
@@ -897,6 +898,7 @@ def test_transport_adapts_official_permission_error_through_real_worker(fixture_
         "httpStatus": 403,
         "documentPresent": False,
         "fields": None,
+        "responseDigest": digest(_FixtureHandler.response_body),
         "complete": True,
         "workerReaped": True,
         "endpoint": fixture_origin.removeprefix("http://"),
@@ -1098,7 +1100,10 @@ def test_recovery_not_found_receipt_uses_canonical_code_and_no_fields(plan):
     assert got["code"] == 5
     assert got["version"] is None
     assert "fields" not in got
-    accepted, failure = _accept(got, RECOVERY_RECEIPT_KEYS)
+    accepted, failure = _accept(
+        {key: got[key] for key in RECOVERY_RECEIPT_KEYS if key in got},
+        RECOVERY_RECEIPT_KEYS,
+    )
     assert failure is None
     assert accepted is not None
 

@@ -1191,6 +1191,7 @@ def _adapt_firestore_result(
                 "httpStatus": 404,
                 "documentPresent": False,
                 "version": None,
+                "responseDigest": digest(body),
                 "complete": True,
                 **wire,
             }
@@ -1200,6 +1201,7 @@ def _adapt_firestore_result(
             "httpStatus": status,
             "documentPresent": False,
             "fields": None,
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }
@@ -1234,6 +1236,7 @@ def _adapt_firestore_result(
             "httpStatus": status,
             "documentPresent": True,
             "fields": {key: _decode_firestore_value(value) for key, value in fields.items()},
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }
@@ -1281,6 +1284,7 @@ def _adapt_firestore_result(
             "code": 0,
             "httpStatus": status,
             "documentPresent": False,
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }
@@ -1387,7 +1391,28 @@ def make_recovery_transport(
         raise ValueError("bounded transport timeout required")
     sequence = 0
 
-    def transmit(value: dict[str, Any], *, binding: bytes, binding_digest: str) -> dict[str, Any]:
+    def effective_seconds(
+        call_deadline: float | None, call_timeout: float | None, service: str
+    ) -> float:
+        if call_deadline is not None and (type(call_deadline) not in (int, float) or not math.isfinite(call_deadline)):
+            raise ValueError("absolute transport deadline required")
+        if call_timeout is not None and (type(call_timeout) not in (int, float) or not math.isfinite(call_timeout) or not 0 < call_timeout <= MAX_SECONDS):
+            raise ValueError("bounded transport timeout required")
+        deadlines = [value for value in (deadline, call_deadline) if value is not None]
+        timeouts = [value for value in (timeout_seconds, call_timeout) if value is not None]
+        seconds = min([MAX_SECONDS if service == "rules" else DEFAULT_SECONDS, *[float(value) for value in timeouts]])
+        if deadlines:
+            seconds = min(seconds, min(float(value) - time.monotonic() for value in deadlines))
+        return seconds
+
+    def transmit(
+        value: dict[str, Any],
+        *,
+        binding: bytes,
+        binding_digest: str,
+        deadline: float | None = None,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
         nonlocal sequence
         if not isinstance(value, dict) or value.get("phase") != "recovery":
             raise ValueError("recovery-only transport refused non-recovery operation")
@@ -1396,9 +1421,7 @@ def make_recovery_transport(
             raise ValueError("capability inputs digest differs")
         authorize_transport(capability, binding=binding, binding_digest=binding_digest)
         prepared = prepare_request(plan, copy.deepcopy(value), credentials=credentials, account_bindings=account_bindings, identity_proofs=identity_proofs)
-        seconds = DEFAULT_SECONDS if timeout_seconds is None else float(timeout_seconds)
-        if deadline is not None:
-            seconds = min(seconds, deadline - time.monotonic())
+        seconds = effective_seconds(deadline, timeout_seconds, prepared["service"])
         if seconds <= 0:
             raise WorkerExchangeError("recovery transport deadline exhausted", worker_reaped=False)
         envelope = {key: prepared[key] for key in ("service", "route", "method", "path", "headers", "body")}
@@ -1411,9 +1434,26 @@ def make_recovery_transport(
             adapted = _adapt_firestore_result(prepared, result, sequence=sequence, endpoint=endpoint)
             adapted["workerReaped"] = True
             return adapted
-        if result["status"] < 200 or result["status"] >= 300 or not isinstance(result["body"], dict):
+        if not isinstance(result["body"], dict):
             raise ValueError("recovery Auth response refused")
-        return {**result["body"], "httpStatus": result["status"], "complete": True, "workerReaped": True, "endpoint": endpoint, "wireSequence": sequence}
+        body = result["body"]
+        if result["status"] < 200 or result["status"] >= 300:
+            error = body.get("error")
+            if not isinstance(error, dict) or not isinstance(error.get("message"), str):
+                raise ValueError("recovery Auth error response shape refused")
+            return {
+                "status": error.get("status", "AUTH_ERROR"),
+                "code": error.get("code", result["status"]),
+                "httpStatus": result["status"],
+                "documentPresent": False,
+                "fields": None,
+                "responseDigest": digest(body),
+                "complete": True,
+                "workerReaped": True,
+                "endpoint": endpoint,
+                "wireSequence": sequence,
+            }
+        return {**body, "httpStatus": result["status"], "responseDigest": digest(body), "complete": True, "workerReaped": True, "endpoint": endpoint, "wireSequence": sequence}
 
     return transmit
 

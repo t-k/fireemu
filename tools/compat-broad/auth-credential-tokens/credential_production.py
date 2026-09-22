@@ -6,10 +6,8 @@ before any data request; the case runner and the collector's cleanup are then dr
 through the Gate facade, one frozen slot per request. Failed or uncertain cleanup
 retains the reservation.
 
-On the current tree the shared Ledger refuses this campaign's Gate plan at
-`reserve`, because it admits only Firestore document resources; the refusal lands
-before any directory, Gate or wire is touched and is reported as an admission
-refusal. See the lane README for the shared extension this needs.
+The bootstrap continuation reuses the original reservation, Gate, budget and
+deadline after a separately issued observation capability approves its proof.
 """
 
 from __future__ import annotations
@@ -17,6 +15,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import secrets
 import tempfile
@@ -63,9 +62,13 @@ def _envelope(permission: dict, claim: dict) -> dict:
     }
 
 
-def _write_record(path: Path, value: dict, secrets_held: list[str] | None = None) -> None:
+def _write_record(
+    path: Path, value: dict, secrets_held: list[str] | None = None
+) -> None:
     """Persist one immutable record, refusing it if it carries a secret this run held."""
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
     if len(encoded) > reservations.MAX_BYTES:
         raise ValueError("bounded immutable production evidence required")
     if secrets_held:
@@ -92,7 +95,9 @@ def _mint_password() -> str:
     return "Aa9!" + secrets.token_urlsafe(24)
 
 
-def production_environment(management: preflight.ManagementSession, *, signing: bool) -> dict:
+def production_environment(
+    management: preflight.ManagementSession, *, signing: bool
+) -> dict:
     """The runner environment of a production run: Gate paths and minted secrets."""
     return {
         **shadow.local_environment(),
@@ -105,7 +110,20 @@ def production_environment(management: preflight.ManagementSession, *, signing: 
     }
 
 
-def collect_hosted(gate, gate_plan, output, *, transmit, environment, nonce, binding, before=None, after=None):
+def collect_hosted(
+    gate,
+    gate_plan,
+    output,
+    *,
+    transmit,
+    environment,
+    nonce,
+    binding,
+    before=None,
+    after=None,
+    started_monotonic=None,
+    existing_budget=None,
+):
     """Run every case and the cleanup through the facade, journaling each route.
 
     `transmit(declared, body, timeout)` performs the bound wire call; `before` and
@@ -118,7 +136,9 @@ def collect_hosted(gate, gate_plan, output, *, transmit, environment, nonce, bin
 
     def journaled(declared, body, timeout):
         entry = {
-            "phase": "recovery" if declared["kind"] in RECOVERY_KINDS else "observation",
+            "phase": "recovery"
+            if declared["kind"] in RECOVERY_KINDS
+            else "observation",
             "route": declared["path"],
             "kind": declared["kind"],
             "requestDigest": digest(declared),
@@ -131,13 +151,19 @@ def collect_hosted(gate, gate_plan, output, *, transmit, environment, nonce, bin
         return status, response
 
     poster = gate_poster(gate, journaled, before=before, after=after)
-    budget = new_budget(
-        BUDGET["maxRequests"],
-        BUDGET["maxWallSeconds"],
-        BUDGET["maxCostUsd"],
-        started_monotonic=time.monotonic(),
-        recovery_requests=BUDGET["recoveryRequests"],
-        recovery_wall_seconds=BUDGET["recoveryWallSeconds"],
+    budget = (
+        existing_budget
+        if existing_budget is not None
+        else new_budget(
+            BUDGET["maxRequests"],
+            BUDGET["maxWallSeconds"],
+            BUDGET["maxCostUsd"],
+            started_monotonic=time.monotonic()
+            if started_monotonic is None
+            else started_monotonic,
+            recovery_requests=BUDGET["recoveryRequests"],
+            recovery_wall_seconds=BUDGET["recoveryWallSeconds"],
+        )
     )
     tracker = new_tracker(nonce)
     responsibility.attach(tracker, Path(output) / "responsibility", binding)
@@ -155,8 +181,14 @@ def collect_hosted(gate, gate_plan, output, *, transmit, environment, nonce, bin
         except ValueError:
             pass
     enter_recovery(budget, time.monotonic())
+    if existing_budget is not None and budget["recoveryDeadlineMonotonic"] is not None:
+        budget["recoveryDeadlineMonotonic"] = min(
+            budget["recoveryDeadlineMonotonic"], budget["totalDeadlineMonotonic"]
+        )
     try:
-        problems = shadow.cleanup("", budget, tracker, poster=poster, environment=environment)
+        problems = shadow.cleanup(
+            "", budget, tracker, poster=poster, environment=environment
+        )
     except Exception as error:  # noqa: BLE001 -- the failure class is recorded, never its text.
         problems = ["cleanup: " + type(error).__name__]
     finally:
@@ -206,7 +238,11 @@ def _stop_point(snapshot, ready, cause=None):
     if cause in STOP_CAUSES:
         return STOP_CAUSES[cause]
     job = snapshot["jobs"][gate_module.JOB]
-    return "cleanup-incomplete" if job["observation"] == len(observation) else "observation-incomplete"
+    return (
+        "cleanup-incomplete"
+        if job["observation"] == len(observation)
+        else "observation-incomplete"
+    )
 
 
 def execute(*, capability, inputs, permission, credential_reader, ledger_root, output):
@@ -224,28 +260,183 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
     plan = inputs["plan"]
     gate_plan = admission.gate_plan_for(inputs, permission)
     generation = admission.abort_generation(inputs)
-    gate_plan.update(permissionDigest=digest(permission), collectorSourceDigest=generation["collectorSourceDigest"])
-    claim = admission.reservation_claim(inputs, gate_path=output / "gate", gate_plan=gate_plan)
+    gate_plan.update(
+        permissionDigest=digest(permission),
+        collectorSourceDigest=generation["collectorSourceDigest"],
+    )
+    claim = admission.reservation_claim(
+        inputs, gate_path=output / "gate", gate_plan=gate_plan
+    )
     capability._consume(
-        campaign_id=claim["campaignId"], inputs_digest=inputs["inputsDigest"], ledger_root=ledger_root
+        campaign_id=claim["campaignId"],
+        inputs_digest=inputs["inputsDigest"],
+        ledger_root=ledger_root,
     )
     # The reservation is taken before the Gate exists and before the handoff is
-    # read, so a refused claim leaves only the frozen inputs and a refusal record
-    # behind. On the current tree this is where the shared Ledger refuses the
-    # campaign's account-shaped Gate resources.
+    # read, so a refused claim leaves only frozen inputs and a refusal record.
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     output = output.resolve()
     _write_record(output / "inputs.json", inputs)
     try:
-        ticket = ledger.reserve(_envelope(permission, claim), claim, gate_plan, generation=generation)
+        ticket = ledger.reserve(
+            _envelope(permission, claim), claim, gate_plan, generation=generation
+        )
     except Exception as error:
         admission.revoke_production_capability(capability)
         _write_record(
             output / "refusal.json",
-            {"kind": "auth-credential-admission-refusal-v1", "stage": "ledger-reserve", "failure": type(error).__name__, "message": str(error)[:200]},
+            {
+                "kind": "auth-credential-admission-refusal-v1",
+                "stage": "ledger-reserve",
+                "failure": type(error).__name__,
+                "message": str(error)[:200],
+            },
         )
         raise
-    gate = None
+    return _execute_after_reservation(
+        capability=capability,
+        inputs=inputs,
+        permission=permission,
+        credential_reader=credential_reader,
+        ledger=ledger,
+        output=output,
+        plan=plan,
+        gate_plan=gate_plan,
+        generation=generation,
+        claim=claim,
+        ticket=ticket,
+    )
+
+
+def execute_reserved(
+    *,
+    capability,
+    inputs,
+    permission,
+    preparation,
+    preparation_inputs,
+    source_root,
+    ledger_root,
+    output,
+):
+    """Continue only with an independent observation capability on the same Gate."""
+    import credential_bootstrap as bootstrap
+
+    if (
+        not admission.issued_capability(capability)
+        or not isinstance(inputs, dict)
+        or not isinstance(permission, dict)
+    ):
+        raise ValueError("independent observation O7 required")
+    admission.validate_frozen_inputs(inputs)
+    admission._approve(
+        permission,
+        inputs["plan"],
+        inputs["sourceCommit"],
+        inputs["artifactSha256"],
+        inputs["sourceInputs"],
+    )
+    admission._provenance(source_root, inputs["sourceCommit"], inputs["sourceInputs"])
+    if (
+        inputs["sourceInputs"] != preparation_inputs["sourceInputs"]
+        or inputs["sourceCommit"] != preparation_inputs["sourceCommit"]
+        or inputs["plan"] != preparation_inputs["plan"]
+    ):
+        raise ValueError("observation source or plan differs from preparation")
+    ledger = reservations.Ledger(ledger_root)
+    ticket, gate = preparation.ticket, preparation.gate
+    claim = ledger.bound_claim(ticket)
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    snapshot = gate.snapshot()
+    output = Path(output).resolve()
+    if (
+        str(output / "gate") != claim["gatePath"]
+        or snapshot["total"] != 4
+        or snapshot["events"]
+    ):
+        raise ValueError("fresh continuation on original Gate required")
+    if digest(permission) != inputs["permissionDigest"]:
+        raise ValueError("observation permission differs")
+    if (
+        preparation.proof.get("ticket") != ticket
+        or _read_saved(output / "preparation-proof.json") != preparation.proof
+        or _read_saved(output / "preparation-inputs.json") != preparation_inputs
+    ):
+        raise ValueError("retained preparation proof differs")
+    task_budget = preparation.budget
+    if (
+        not isinstance(task_budget, dict)
+        or task_budget["requests"] != 4
+        or task_budget["maxRequests"] != 60
+        or task_budget["maxWallSeconds"] != 600
+        or task_budget["totalDeadlineMonotonic"]
+        != preparation.proof["reservationMonotonicDeadline"]
+    ):
+        raise ValueError("original preparation budget required")
+    handoff = bootstrap.finalize_handoff(
+        preparation.prepared,
+        permission,
+        preparation.proof,
+        snapshot=snapshot,
+        reservation=row,
+        inputs=preparation_inputs,
+    )
+    ledger.validate(ticket, duration=61)
+    if time.monotonic() + 61 >= preparation.proof["reservationMonotonicDeadline"]:
+        raise ValueError("original monotonic reservation deadline expired")
+    capability._consume(
+        campaign_id=campaign.CAMPAIGN,
+        inputs_digest=inputs["inputsDigest"],
+        ledger_root=ledger_root,
+    )
+    _write_record(output / "inputs.json", inputs)
+    _write_record(
+        output / "observation-admission.json",
+        {
+            "inputsDigest": inputs["inputsDigest"],
+            "approvalDigest": capability.approval_digest,
+            "bootstrap": permission["bootstrap"],
+        },
+    )
+    return _execute_after_reservation(
+        capability=capability,
+        inputs=inputs,
+        permission=permission,
+        credential_reader=lambda: admission.validate_handoff(
+            handoff, permission, inputs["plan"]
+        ),
+        ledger=ledger,
+        output=output,
+        plan=inputs["plan"],
+        gate_plan=snapshot["plan"],
+        generation=row["generation"],
+        claim=claim,
+        ticket=ticket,
+        gate=gate,
+        preparation_proof=preparation.proof,
+        source_root=source_root,
+        existing_budget=task_budget,
+    )
+
+
+def _execute_after_reservation(
+    *,
+    capability,
+    inputs,
+    permission,
+    credential_reader,
+    ledger,
+    output,
+    plan,
+    gate_plan,
+    generation,
+    claim,
+    ticket,
+    gate=None,
+    preparation_proof=None,
+    source_root=None,
+    existing_budget=None,
+):
     management = None
     collected = None
     failure = None
@@ -255,9 +446,10 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
     secrets_held: list[str] = []
     binding, binding_digest = capability._binding, capability.binding_digest
     try:
-        gate_module.create(output / "gate", gate_plan)
-        gate = CredentialGate(output / "gate")
-        gate.claim()
+        if gate is None:
+            gate_module.create(output / "gate", gate_plan)
+            gate = CredentialGate(output / "gate")
+            gate.claim()
         handoff = credential_reader()
         secrets_held = [handoff["token"], handoff["apiKey"]]
         management = preflight.ManagementSession(
@@ -270,12 +462,44 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             handoff=handoff,
             binding=binding,
             binding_digest=binding_digest,
+            reservation_deadline=preparation_proof["reservationDeadline"]
+            if preparation_proof
+            else None,
+            monotonic_deadline=preparation_proof["reservationMonotonicDeadline"]
+            if preparation_proof
+            else None,
+            source_check=(
+                lambda: admission._provenance(
+                    source_root, inputs["sourceCommit"], inputs["sourceInputs"]
+                )
+            )
+            if preparation_proof
+            else None,
         )
         handoff = None
         management.run("observation")
+        if existing_budget is not None:
+            existing_budget["requests"] = gate.snapshot()["total"]
 
         def transmit(declared, body, timeout):
             deadline = time.monotonic() + timeout
+            if preparation_proof is not None:
+                admission._provenance(
+                    source_root, inputs["sourceCommit"], inputs["sourceInputs"]
+                )
+                ledger.validate(ticket, duration=max(1, math.ceil(timeout)))
+                remaining = min(
+                    preparation_proof["reservationDeadline"] - time.time(),
+                    preparation_proof["reservationMonotonicDeadline"]
+                    - time.monotonic(),
+                    permission["expiresAt"] - time.time(),
+                    capability.window_expires_at - time.time(),
+                )
+                if declared["kind"] not in RECOVERY_KINDS:
+                    remaining -= campaign.recovery_seconds()
+                deadline = min(deadline, time.monotonic() + remaining)
+                if deadline <= time.monotonic():
+                    raise ValueError("original reservation deadline expired")
             return capability._transmit(
                 {
                     "kind": "data",
@@ -306,9 +530,17 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             transmit=transmit,
             environment=environment,
             nonce=plan["nonce"],
-            binding={"inputsDigest": inputs["inputsDigest"], "sourceCommit": inputs["sourceCommit"]},
+            binding={
+                "inputsDigest": inputs["inputsDigest"],
+                "sourceCommit": inputs["sourceCommit"],
+            },
             before=management.require_bearer,
             after=after,
+            started_monotonic=preparation_proof["reservationMonotonicDeadline"]
+            - campaign.campaign_seconds()
+            if preparation_proof is not None
+            else None,
+            existing_budget=existing_budget,
         )
         if (
             collected["failure"] is None
@@ -316,6 +548,8 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             and cleanup_report(collected["tracker"])["cleanupComplete"]
         ):
             management.run("recovery")
+            if existing_budget is not None:
+                existing_budget["requests"] = gate.snapshot()["total"]
             gate.finish()
             ready = True
         else:
@@ -339,7 +573,9 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
                 case["id"],
                 shadow.not_run_row(
                     case,
-                    shadow.SIGNING_ABSENT_REASON if not plan["signing"] and case["requiresSigning"] else None,
+                    shadow.SIGNING_ABSENT_REASON
+                    if not plan["signing"] and case["requiresSigning"]
+                    else None,
                 ),
             )
             for case in observation_cases()
@@ -349,22 +585,37 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             rows=ordered,
             tracker=collected["tracker"],
             budget=collected["budget"],
-            source_binding={"commit": inputs["sourceCommit"], "artifactSha256": inputs["artifactSha256"]},
+            source_binding={
+                "commit": inputs["sourceCommit"],
+                "artifactSha256": inputs["artifactSha256"],
+            },
             production_executed=True,
         )
         (output / "collection").mkdir(mode=0o700)
         _write_record(output / "collection" / "receipt.json", result, secrets_held)
     evidence = {}
-    for path in [output / "inputs.json", output / "routes.json", output / "gate-snapshot.json", output / "collection" / "receipt.json"]:
+    for path in [
+        output / "inputs.json",
+        output / "routes.json",
+        output / "gate-snapshot.json",
+        output / "collection" / "receipt.json",
+        output / "preparation-inputs.json",
+        output / "preparation-proof.json",
+        output / "observation-admission.json",
+    ]:
         if path.is_file():
-            evidence[str(path.relative_to(output))] = hashlib.sha256(path.read_bytes()).hexdigest()
+            evidence[str(path.relative_to(output))] = hashlib.sha256(
+                path.read_bytes()
+            ).hexdigest()
     receipt = admission.build_receipt(
         inputs,
         result,
         rows=rows,
         generation=generation,
         failure=failure,
-        stop_point=_stop_point(snapshot, ready, collected["stopCause"] if collected else None),
+        stop_point=_stop_point(
+            snapshot, ready, collected["stopCause"] if collected else None
+        ),
     )
     receipt.update(
         ticket=ticket,
@@ -387,8 +638,15 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         productionExecuted=bool(rows),
         workerSha256=inputs["sourceInputs"][campaign.WORKER_ENTRY],
         mayHaveCreated=bool(snapshot and account_evidence(snapshot)["createdAccounts"]),
-        comparison=campaign.comparator(result) if ready and result is not None else None,
+        comparison=campaign.comparator(result)
+        if ready and result is not None
+        else None,
     )
+    if preparation_proof is not None:
+        receipt["preparationProof"] = preparation_proof
+        receipt["observationApprovalDigest"] = digest(
+            _read_saved(output / "observation-admission.json")
+        )
     _write_record(output / "receipt.json", receipt, secrets_held)
     released = False
     release = None
@@ -402,14 +660,25 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
             "receiptDigest": digest(receipt),
             "ticket": ticket,
             "failure": failure,
-            "reservationFinal": ledger.snapshot()["reservations"][ticket["reservation"]],
+            "reservationFinal": ledger.snapshot()["reservations"][
+                ticket["reservation"]
+            ],
         }
         _write_record(output / "release.json", release, secrets_held)
-    return {**receipt, "failure": failure, "reservationReleased": released, "release": release}
+    return {
+        **receipt,
+        "failure": failure,
+        "reservationReleased": released,
+        "release": release,
+    }
 
 
 def _read_saved(path):
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > reservations.MAX_BYTES:
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size > reservations.MAX_BYTES
+    ):
         raise ValueError("bounded regular saved evidence required")
     return json.loads(path.read_bytes())
 
@@ -432,7 +701,10 @@ def verify_saved(output, *, expected_inputs_digest, ledger_root):
     collection = _read_saved(output / "collection" / "receipt.json")
     if (
         inputs.get("inputsDigest") != expected_inputs_digest
-        or digest({key: value for key, value in inputs.items() if key != "inputsDigest"}) != expected_inputs_digest
+        or digest(
+            {key: value for key, value in inputs.items() if key != "inputsDigest"}
+        )
+        != expected_inputs_digest
         or receipt.get("inputsDigest") != expected_inputs_digest
         or receipt.get("permissionDigest") != digest(inputs["permission"])
         or receipt.get("campaignPlanDigest") != inputs["planDigest"]
@@ -450,10 +722,31 @@ def verify_saved(output, *, expected_inputs_digest, ledger_root):
         or collection.get("cleanup", {}).get("cleanupComplete") is not True
     ):
         raise ValueError("saved acquisition binding differs")
-    preflight.validate_saved_management(receipt, snapshot, inputs["permission"], signing=inputs["plan"]["signing"])
+    preflight.validate_saved_management(
+        receipt, snapshot, inputs["permission"], signing=inputs["plan"]["signing"]
+    )
     ledger = reservations.Ledger(ledger_root)
     ledger.bound_claim(receipt["ticket"])
     final = ledger.snapshot()["reservations"].get(receipt["ticket"]["reservation"])
+    if receipt.get("preparationProof") is not None:
+        import credential_bootstrap as bootstrap
+
+        prep_inputs = _read_saved(output / "preparation-inputs.json")
+        proof = _read_saved(output / "preparation-proof.json")
+        observation = _read_saved(output / "observation-admission.json")
+        bootstrap.validate_proof(
+            proof, snapshot=snapshot, reservation=final, inputs=prep_inputs
+        )
+        if (
+            receipt["preparationProof"] != proof
+            or inputs["permission"].get("bootstrap")
+            != bootstrap.observation_binding(proof)
+            or inputs["permission"].get("authConfigDigest") != proof["authConfigDigest"]
+            or observation.get("inputsDigest") != expected_inputs_digest
+            or observation.get("bootstrap") != inputs["permission"]["bootstrap"]
+            or digest(observation) != receipt.get("observationApprovalDigest")
+        ):
+            raise ValueError("saved independent observation authority differs")
     if (
         final is None
         or final != release["reservationFinal"]
@@ -468,7 +761,12 @@ def verify_saved(output, *, expected_inputs_digest, ledger_root):
         raise ValueError("saved Ledger release binding differs")
     for name, expected in receipt.get("evidenceFiles", {}).items():
         path = output / name
-        if ".." in Path(name).parts or path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        if (
+            ".." in Path(name).parts
+            or path.is_symlink()
+            or not path.is_file()
+            or hashlib.sha256(path.read_bytes()).hexdigest() != expected
+        ):
             raise ValueError("saved evidence file differs")
     accounts = account_evidence(snapshot)
     if (
@@ -476,7 +774,8 @@ def verify_saved(output, *, expected_inputs_digest, ledger_root):
         or accounts["deletedAccounts"] != accounts["createdAccounts"]
         or accounts["uidAbsenceReadbacks"] != accounts["createdAccounts"]
         or receipt.get("accountEvidence") != accounts
-        or len(receipt.get("metadata", [])) + len(snapshot.get("managementEvents", [])) != snapshot["total"]
+        or len(receipt.get("metadata", [])) + len(snapshot.get("managementEvents", []))
+        != snapshot["total"]
     ):
         raise ValueError("saved account evidence differs")
     return receipt

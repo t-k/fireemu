@@ -55,7 +55,9 @@ PREPARATION_FROZEN_INPUTS_KIND = "auth-credential-bootstrap-frozen-inputs-v1"
 PREPARATION_PERMISSION_KIND = "auth-credential-bootstrap-permission-v1"
 PREPARATION_APPROVAL_KIND = "auth-credential-bootstrap-approval-v1"
 PREPARATION_MANIFEST_KIND = "auth-credential-bootstrap-manifest-v1"
-SHADOW_RECORD = "spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260921.json"
+SHADOW_RECORD = (
+    "spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260921.json"
+)
 PRINCIPAL_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 SERVICE_ACCOUNT = "fireemu-oracle@fireemu-35fe6.iam.gserviceaccount.com"
 SIGNING_PERMISSION = "iam.serviceAccounts.signBlob"
@@ -131,7 +133,9 @@ ARTIFACT_PROFILE_BASIS = {
 
 
 def artifact_profile() -> str:
-    return "auth-credential-" + shadow_record()["receipt"]["sourceBinding"]["commit"][:9]
+    return (
+        "auth-credential-" + shadow_record()["receipt"]["sourceBinding"]["commit"][:9]
+    )
 
 
 def artifact_profile_basis() -> dict:
@@ -199,8 +203,12 @@ def cost_model() -> dict:
 def frozen_bounds() -> dict:
     """The bounded shape of one run, every figure taken from the published budget."""
     signing = gate_module.gate_plan(
-        PROJECT, "0" * 32, signing=True, wall_seconds=campaign_seconds(),
-        recovery_seconds=recovery_seconds(), cost_microusd=ledger_budget()["costMicrousd"],
+        PROJECT,
+        "0" * 32,
+        signing=True,
+        wall_seconds=campaign_seconds(),
+        recovery_seconds=recovery_seconds(),
+        cost_microusd=ledger_budget()["costMicrousd"],
         observation_window_seconds=observation_window_seconds(),
     )
     return {
@@ -264,7 +272,9 @@ def plan_compiler(nonce: str, *, signing: bool) -> dict:
         "nonce": nonce,
         "signing": signing,
         "planDigest": _ops_digest(plan),
-        "gatePlanShapeDigest": digest({key: value for key, value in plan.items() if key != "jobs"}),
+        "gatePlanShapeDigest": digest(
+            {key: value for key, value in plan.items() if key != "jobs"}
+        ),
         "casesSha256": cases_digest(),
         "runnableCases": gate_module.runnable_case_ids(signing),
         "plannedAccounts": list(gate_module.planned_accounts(signing)),
@@ -282,7 +292,11 @@ def execution_plan(reference: dict) -> dict:
     """Recompile the Gate plan a frozen reference names, and refuse any other."""
     nonce = reference.get("nonce") if isinstance(reference, dict) else None
     signing = reference.get("signing") if isinstance(reference, dict) else None
-    if not isinstance(nonce, str) or _NONCE.fullmatch(nonce) is None or type(signing) is not bool:
+    if (
+        not isinstance(nonce, str)
+        or _NONCE.fullmatch(nonce) is None
+        or type(signing) is not bool
+    ):
         raise ValueError("frozen credential plan reference required")
     canonical = plan_compiler(nonce, signing=signing)
     if digest(reference) != digest(canonical):
@@ -301,7 +315,10 @@ def lock_scopes(plan: dict) -> list[dict]:
     scope = f"project/{PROJECT}"
     locks = [{"key": f"{scope}/auth/accounts/*", "mode": "WRITE"}]
     locks += [
-        {"key": f"{scope}/auth/accounts/{gate_module.account_identifier(nonce, account)}", "mode": "WRITE"}
+        {
+            "key": f"{scope}/auth/accounts/{gate_module.account_identifier(nonce, account)}",
+            "mode": "WRITE",
+        }
         for account in gate_module.planned_accounts(plan["signing"])
     ]
     locks += [
@@ -310,13 +327,20 @@ def lock_scopes(plan: dict) -> list[dict]:
         {"key": f"{scope}/api-key-binding", "mode": "READ"},
     ]
     if plan["signing"]:
-        locks.append({"key": f"{scope}/iam/serviceAccounts/{SERVICE_ACCOUNT}/signBlob", "mode": "READ"})
+        locks.append(
+            {
+                "key": f"{scope}/iam/serviceAccounts/{SERVICE_ACCOUNT}/signBlob",
+                "mode": "READ",
+            }
+        )
     return locks
 
 
 def lane_sources() -> tuple[str, ...]:
     directory = ROOT / LANE_DIRECTORY
-    return tuple(sorted(f"{LANE_DIRECTORY}/{path.name}" for path in directory.glob("*.py")))
+    return tuple(
+        sorted(f"{LANE_DIRECTORY}/{path.name}" for path in directory.glob("*.py"))
+    )
 
 
 def source_map() -> dict[str, str]:
@@ -349,7 +373,15 @@ def management_contract(signing: bool) -> dict:
                 ["clientId", "subject", "requiredScopes"],
                 ["clientId", "verifiedEmail", "requiredScopes"],
             ],
-            "claims": ["issued_to", "audience", "user_id", "email", "verified_email", "scope", "expires_in"],
+            "claims": [
+                "issued_to",
+                "audience",
+                "user_id",
+                "email",
+                "verified_email",
+                "scope",
+                "expires_in",
+            ],
         },
     }
 
@@ -396,7 +428,15 @@ def comparator(result, shadow=None):
     }
 
 
-def transport_bound(value, *, binding, binding_digest, capability=None):
+def transport_bound(
+    value,
+    *,
+    binding,
+    binding_digest,
+    capability=None,
+    fixture_origin=None,
+    modern_management=False,
+):
     """Adapt one bound wire call to the reviewed transport's own signature.
 
     Three closed shapes reach the wire: a shared management slot (tokeninfo, project
@@ -412,8 +452,18 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
     if kind == "management":
         if set(value) != {"kind", "phase", "slot", "token", "deadline"}:
             raise ValueError("closed management wire call required")
-        if value["slot"] not in preflight.SHARED_SLOTS or value["phase"] not in ("observation", "recovery"):
+        if value["slot"] not in preflight.SHARED_SLOTS or value["phase"] not in (
+            "observation",
+            "recovery",
+        ):
             raise ValueError("closed management slot required")
+        if modern_management:
+            return preflight.modern_management_transport(
+                value["slot"],
+                value["token"],
+                deadline=value["deadline"],
+                fixture_origin=fixture_origin,
+            )
         return preflight.shared_preflight.management_transport(
             value["slot"],
             value["token"],
@@ -435,6 +485,9 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
             capability=capability,
             binding=binding,
             binding_digest=binding_digest,
+            **(
+                {"fixture_origin": fixture_origin} if fixture_origin is not None else {}
+            ),
         )
     if kind == "data":
         if set(value) != {"kind", "declared", "body", "token", "apiKey", "deadline"}:
@@ -448,6 +501,9 @@ def transport_bound(value, *, binding, binding_digest, capability=None):
             capability=capability,
             binding=binding,
             binding_digest=binding_digest,
+            **(
+                {"fixture_origin": fixture_origin} if fixture_origin is not None else {}
+            ),
         )
     raise ValueError("closed credential wire call required")
 
@@ -457,7 +513,10 @@ def retained_artifact_validator(artifact_path, manifest_path, profile):
     if profile != artifact_profile():
         raise ValueError("retained artifact profile differs")
     values = {}
-    for key, path in (("artifactSha256", artifact_path), ("retainedManifestSha256", manifest_path)):
+    for key, path in (
+        ("artifactSha256", artifact_path),
+        ("retainedManifestSha256", manifest_path),
+    ):
         path = Path(path)
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
             raise ValueError("retained regular artifact required")
@@ -557,7 +616,13 @@ def descriptor() -> CampaignDescriptor:
         recovery_seconds=recovery_seconds(),
         source_map=source_map,
         abort_closure_sources=ABORT_CLOSURE_SOURCES,
-        required_source_entries=(COLLECTOR_ENTRY, COMPARATOR_ENTRY, WORKER_ENTRY, TRANSPORT_ENTRY, GATE_ENTRY),
+        required_source_entries=(
+            COLLECTOR_ENTRY,
+            COMPARATOR_ENTRY,
+            WORKER_ENTRY,
+            TRANSPORT_ENTRY,
+            GATE_ENTRY,
+        ),
         frozen_bounds=frozen_bounds(),
         budget=budget(),
         plan_compiler=plan_compiler,
@@ -587,10 +652,16 @@ def preparation_descriptor() -> CampaignDescriptor:
     return CampaignDescriptor(**members)
 
 
-def preparation_permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
+def preparation_permission_bindings(
+    plan, source_commit, artifact_digest, inputs, baseline=None
+):
     """Bindings for prep authority; no Auth baseline is invented pre-wire."""
-    bindings = permission_bindings(plan, source_commit, artifact_digest, inputs, baseline)
-    combined = gate_module.bootstrap_plan(execution_plan(plan), permission_digest="0" * 64)
+    bindings = permission_bindings(
+        plan, source_commit, artifact_digest, inputs, baseline
+    )
+    combined = gate_module.bootstrap_plan(
+        execution_plan(plan), permission_digest="0" * 64
+    )
     return {
         **bindings,
         "kind": PREPARATION_PERMISSION_KIND,
@@ -604,15 +675,29 @@ def preparation_permission_bindings(plan, source_commit, artifact_digest, inputs
     }
 
 
-def preparation_transport_bound(value, *, capability, binding, binding_digest):
+def preparation_transport_bound(
+    value, *, capability, binding, binding_digest, fixture_origin=None
+):
     """Only the four preparation slots can pass this admitted transport."""
     authorize_transport(capability, binding=binding, binding_digest=binding_digest)
     remote.verify_worker_binding(binding, binding_digest, None)
-    if not isinstance(value, dict) or set(value) != {"kind", "slot", "secret", "deadline", "fixtureOrigin"} or value["kind"] != "preparation" or value["slot"] not in gate_module.bootstrap_management_ids():
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"kind", "slot", "secret", "deadline", "fixtureOrigin"}
+        or value["kind"] != "preparation"
+        or value["slot"] not in gate_module.bootstrap_management_ids()
+    ):
         raise ValueError("closed preparation wire call required")
+    if value["fixtureOrigin"] != fixture_origin:
+        raise ValueError("approved preparation origin differs")
     import credential_bootstrap
 
-    return credential_bootstrap._request(value["slot"], value["secret"], deadline=value["deadline"], fixture_origin=value["fixtureOrigin"])
+    return credential_bootstrap._request(
+        value["slot"],
+        value["secret"],
+        deadline=value["deadline"],
+        fixture_origin=value["fixtureOrigin"],
+    )
 
 
 __all__ = [
@@ -624,14 +709,14 @@ __all__ = [
     "collect",
     "compile_gate_plan",
     "descriptor",
-    "preparation_descriptor",
-    "preparation_permission_bindings",
-    "preparation_transport_bound",
     "execution_plan",
     "ledger_budget",
     "lock_scopes",
     "permission_bindings",
     "plan_compiler",
+    "preparation_descriptor",
+    "preparation_permission_bindings",
+    "preparation_transport_bound",
     "run_cases",
     "source_map",
     "transport_bound",

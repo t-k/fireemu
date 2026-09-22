@@ -16,6 +16,7 @@ recorded as not run.
 from __future__ import annotations
 
 import copy
+import functools
 import hashlib
 import json
 import math
@@ -57,25 +58,25 @@ __all__ = [
     "ProductionWireCapability",
     "abort_generation",
     "bootstrap_reservation_claim",
-    "freeze_preparation_inputs",
-    "issue_preparation_capability",
-    "preparation_gate_plan_for",
-    "validate_bootstrap_permission",
-    "validate_preparation_permission",
     "build_receipt",
     "descriptor",
     "execution_host",
     "freeze_inputs",
+    "freeze_preparation_inputs",
     "gate_plan_for",
+    "issue_preparation_capability",
     "issue_production_capability",
     "issued_capability",
     "permission_bindings",
+    "preparation_gate_plan_for",
     "reservation_claim",
     "revoke_production_capability",
+    "validate_bootstrap_permission",
     "validate_fresh_admission",
     "validate_frozen_inputs",
     "validate_handoff",
     "validate_o7_admission",
+    "validate_preparation_permission",
 ]
 
 
@@ -84,7 +85,9 @@ def descriptor():
 
 
 def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
-    return campaign.permission_bindings(plan, source_commit, artifact_digest, inputs, baseline)
+    return campaign.permission_bindings(
+        plan, source_commit, artifact_digest, inputs, baseline
+    )
 
 
 def validate_frozen_inputs(inputs) -> None:
@@ -100,7 +103,17 @@ def validate_o7_admission(**bindings):
 
 
 def issue_production_capability(**bindings):
-    return o8_admission.issue_production_capability(descriptor(), **bindings)
+    selected = descriptor()
+    if "bootstrap" in bindings["permission"]:
+        members = selected.members()
+        origin = bindings["permission"].get("fixtureOrigin")
+        if origin is not None:
+            campaign.remote._origin(origin)
+        members["transport_bound"] = functools.partial(
+            campaign.transport_bound, fixture_origin=origin, modern_management=True
+        )
+        selected = campaign.CampaignDescriptor(**members)
+    return o8_admission.issue_production_capability(selected, **bindings)
 
 
 def _read(path):
@@ -155,13 +168,25 @@ def _validate_owner_window(permission) -> None:
     """An owner permission is short-lived and must still cover the whole run."""
     issued, expiry = permission.get("issuedAt"), permission.get("expiresAt")
     now = time.time()
+    required_end = now + campaign.campaign_seconds() + campaign.recovery_seconds()
+    if "bootstrap" in permission:
+        required_end = (
+            permission["bootstrap"].get("reservationDeadline")
+            if isinstance(permission["bootstrap"], dict)
+            else None
+        )
+        if (
+            not bounded_number(required_end)
+            or required_end <= now + campaign.recovery_seconds()
+        ):
+            raise ValueError("original observation reservation expired")
     if (
         type(issued) not in (int, float)
         or type(expiry) not in (int, float)
         or isinstance(issued, bool)
         or isinstance(expiry, bool)
         or not 0 <= now - issued <= 86400
-        or not now + campaign.campaign_seconds() + campaign.recovery_seconds() <= expiry <= issued + 86400
+        or not required_end <= expiry <= issued + 86400
     ):
         raise ValueError("owner permission expired or too short for recovery")
 
@@ -244,7 +269,10 @@ def reservation_claim(inputs, *, gate_path, gate_plan):
     """The shared Ledger claim for this campaign, with its Gate binding."""
     descriptor_ = descriptor()
     plan = inputs["plan"]
-    if digest(gate_plan.get("nonce")) != digest(plan["nonce"]) or gate_plan.get("campaignId") != descriptor_.campaign_id:
+    if (
+        digest(gate_plan.get("nonce")) != digest(plan["nonce"])
+        or gate_plan.get("campaignId") != descriptor_.campaign_id
+    ):
         raise ValueError("Gate plan belongs to another campaign or nonce")
     return {
         "campaignId": descriptor_.campaign_id,
@@ -260,57 +288,56 @@ def reservation_claim(inputs, *, gate_path, gate_plan):
 
 
 def validate_bootstrap_permission(permission, *, plan) -> dict:
-    """Validate the independent four-request preparation authority.
-
-    This does not issue the observation permission or an O8 capability. Its
-    only authority is the preparation Gate/Ledger claim bound to this nonce and
-    this exact compiler-produced four-row plan.
-    """
-    if not isinstance(permission, dict) or set(permission) != {
-        "kind", "project", "projectNumber", "nonce", "credentialPrincipal",
-        "authorizedUserDigest", "preparationPlanDigest", "issuedAt", "expiresAt",
-    } or permission.get("kind") != BOOTSTRAP_PERMISSION_KIND:
+    """Require full preparation authority, never the historical nine-field stub."""
+    if not isinstance(permission, dict) or any(
+        key not in permission
+        for key in (
+            "sourceInputs",
+            "sourceCommit",
+            "artifactSha256",
+            "signing",
+            "nonce",
+        )
+    ):
         raise ValueError("independent bootstrap permission required")
-    bootstrap = plan.get("bootstrap") if isinstance(plan, dict) else None
-    if (
-        plan.get("project") != campaign.PROJECT
-        or plan.get("nonce") != permission.get("nonce")
-        or not isinstance(bootstrap, dict)
-        or bootstrap.get("kind") != "auth-credential-bootstrap-v1"
-        or bootstrap.get("permissionDigest") != digest(permission)
-        or permission.get("project") != campaign.PROJECT
-        or permission.get("projectNumber") != "592603257417"
-        or permission.get("preparationPlanDigest") != gate_module.bootstrap_plan_digest(plan)
-    ):
-        raise ValueError("bootstrap plan binding differs")
-    principal = permission.get("credentialPrincipal")
-    if not isinstance(principal, dict) or set(principal) != {"clientId", "subject", "requiredScopes"}:
-        raise ValueError("bootstrap principal required")
-    preflight.validate_principal(principal)
-    if (
-        not isinstance(permission.get("authorizedUserDigest"), str)
-        or len(permission["authorizedUserDigest"]) != 64
-        or type(permission.get("issuedAt")) not in (int, float)
-        or type(permission.get("expiresAt")) not in (int, float)
-        or permission["expiresAt"] - permission["issuedAt"] < plan["wallSeconds"]
-        or permission["expiresAt"] < time.time()
-    ):
-        raise ValueError("bootstrap permission window or ADC binding differs")
+    reference = campaign.plan_compiler(
+        permission["nonce"], signing=permission["signing"]
+    )
+    _approve_preparation(
+        permission,
+        reference,
+        permission["sourceCommit"],
+        permission["artifactSha256"],
+        permission["sourceInputs"],
+    )
+    expected = gate_module.bootstrap_plan(
+        campaign.execution_plan(reference), permission_digest=digest(permission)
+    )
+    expected["permissionExpiresAt"] = permission["expiresAt"]
+    if "collectorSourceDigest" in plan:
+        expected["collectorSourceDigest"] = digest(permission["sourceInputs"])
+    if plan != expected:
+        raise ValueError("complete preparation Gate plan differs")
     return copy.deepcopy(permission)
 
 
 def bootstrap_reservation_claim(inputs, *, permission, gate_plan, gate_path):
-    """Derive a separate stable-task Ledger claim for preparation."""
-    validate_bootstrap_permission(permission, plan=gate_plan)
-    claim = reservation_claim(inputs, gate_path=gate_path, gate_plan=gate_plan)
-    claim["manifestDigest"] = digest(permission)
-    return claim
-
-
-def preparation_gate_plan_for(inputs, permission) -> dict:
-    """Recover the combined four-row Gate plan from frozen prep inputs."""
+    """Bind the complete combined Gate to one stable-task preparation claim."""
     validate_preparation_permission(inputs, permission)
-    plan = gate_module.bootstrap_plan(campaign.execution_plan(inputs["plan"]), permission_digest=digest(permission))
+    validate_bootstrap_permission(permission, plan=gate_plan)
+    expected = preparation_gate_plan_for(inputs, permission)
+    expected["collectorSourceDigest"] = digest(inputs["sourceInputs"])
+    if gate_plan != expected:
+        raise ValueError("complete preparation Gate plan differs")
+    return reservation_claim(inputs, gate_path=gate_path, gate_plan=gate_plan)
+
+
+def preparation_gate_plan_for(inputs, permission, *, check_window=True) -> dict:
+    """Recover the combined four-row Gate plan from frozen prep inputs."""
+    validate_preparation_permission(inputs, permission, check_window=check_window)
+    plan = gate_module.bootstrap_plan(
+        campaign.execution_plan(inputs["plan"]), permission_digest=digest(permission)
+    )
     expiry = permission.get("expiresAt")
     if type(expiry) not in (int, float) or isinstance(expiry, bool):
         raise ValueError("preparation permission expiry required")
@@ -319,31 +346,62 @@ def preparation_gate_plan_for(inputs, permission) -> dict:
     return plan
 
 
-def validate_preparation_permission(inputs, permission) -> None:
-    if not isinstance(inputs, dict) or inputs.get("kind") != campaign.PREPARATION_FROZEN_INPUTS_KIND:
+def validate_preparation_permission(inputs, permission, *, check_window=True) -> None:
+    if (
+        not isinstance(inputs, dict)
+        or inputs.get("kind") != campaign.PREPARATION_FROZEN_INPUTS_KIND
+    ):
         raise ValueError("preparation frozen inputs required")
     if inputs.get("permissionDigest") != digest(permission):
         raise ValueError("preparation permission differs from frozen inputs")
     o8_admission.validate_frozen_inputs(campaign.preparation_descriptor(), inputs)
-    _approve_preparation(permission, inputs["plan"], inputs["sourceCommit"], inputs["artifactSha256"], inputs["sourceInputs"])
+    _approve_preparation(
+        permission,
+        inputs["plan"],
+        inputs["sourceCommit"],
+        inputs["artifactSha256"],
+        inputs["sourceInputs"],
+        check_window=check_window,
+    )
 
 
-def _approve_preparation(permission, plan, commit, artifact, sources):
+def _approve_preparation(
+    permission, plan, commit, artifact, sources, *, initial=False, check_window=True
+):
     required = campaign.preparation_permission_bindings(plan, commit, artifact, sources)
     if digest({key: permission.get(key) for key in required}) != digest(required):
         raise ValueError("typed preparation permission binding differs")
     for field in ("ownerIdentity", "recoveryOwner"):
         validate_owner_identity(permission.get(field), field=field)
-    if not isinstance(permission.get("permissionReference"), str) or not permission["permissionReference"].strip():
+    if (
+        not isinstance(permission.get("permissionReference"), str)
+        or not permission["permissionReference"].strip()
+    ):
         raise ValueError("preparation permission reference required")
     preflight.validate_principal(permission.get("credentialPrincipal"))
     for field in ("authorizedUserDigest", "apiKeyDigest"):
         value = permission.get(field)
-        if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(char not in "0123456789abcdef" for char in value)
+        ):
             raise ValueError("preparation private input digest required")
     issued, expiry = permission.get("issuedAt"), permission.get("expiresAt")
     now = time.time()
-    if not bounded_number(issued) or not bounded_number(expiry) or not 0 <= now - issued <= 86400 or not now + campaign.campaign_seconds() <= expiry <= issued + 86400:
+    if (
+        not bounded_number(issued)
+        or not bounded_number(expiry)
+        or issued < 0
+        or not campaign.campaign_seconds() <= expiry - issued <= 86400
+        or (
+            check_window
+            and (
+                not 0 <= now - issued <= 86400
+                or now + (campaign.campaign_seconds() if initial else 0) > expiry
+            )
+        )
+    ):
         raise ValueError("preparation permission window differs")
 
 
@@ -351,21 +409,36 @@ def freeze_preparation_inputs(permission_path, plan, *, source_root, artifact_pa
     """Freeze the independent prep permission without requiring Auth baseline."""
     permission = _read(permission_path)
     campaign.execution_plan(plan)
-    commit = subprocess.check_output(["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True).strip()
+    commit = subprocess.check_output(
+        ["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True
+    ).strip()
     artifact = _artifact(artifact_path)
     inputs = campaign.source_map()
     _provenance(source_root, commit, inputs)
-    _approve_preparation(permission, plan, commit, artifact, inputs)
+    _approve_preparation(permission, plan, commit, artifact, inputs, initial=True)
     return o8_admission.freeze_inputs(
-        campaign.preparation_descriptor(), permission, plan,
-        source_commit=commit, artifact_sha256=artifact,
+        campaign.preparation_descriptor(),
+        permission,
+        plan,
+        source_commit=commit,
+        artifact_sha256=artifact,
     )
 
 
 def issue_preparation_capability(**bindings):
     """Issue the generic one-shot capability for the independent prep variant."""
     validate_preparation_permission(bindings["inputs"], bindings["permission"])
-    return o8_admission.issue_production_capability(campaign.preparation_descriptor(), **bindings)
+    selected = campaign.preparation_descriptor()
+    origin = bindings["permission"].get("fixtureOrigin")
+    if origin is not None:
+        campaign.remote._origin(origin)
+    members = selected.members()
+    members["transport_bound"] = functools.partial(
+        campaign.preparation_transport_bound, fixture_origin=origin
+    )
+    return o8_admission.issue_production_capability(
+        campaign.CampaignDescriptor(**members), **bindings
+    )
 
 
 def _private_string(value, maximum):
@@ -373,7 +446,9 @@ def _private_string(value, maximum):
         isinstance(value, str)
         and 0 < len(value) <= maximum
         and value.isascii()
-        and not any(char.isspace() or ord(char) < 33 or ord(char) == 127 for char in value)
+        and not any(
+            char.isspace() or ord(char) < 33 or ord(char) == 127 for char in value
+        )
     )
 
 
@@ -387,11 +462,17 @@ def validate_handoff(handoff, permission, plan) -> dict:
     Nothing here reaches the wire; the tokeninfo slot verifies the bearer's
     principal, scope and lifetime before any data call.
     """
-    if not isinstance(handoff, dict) or set(handoff) != HANDOFF_FIELDS or handoff["kind"] != HANDOFF_KIND:
+    if (
+        not isinstance(handoff, dict)
+        or set(handoff) != HANDOFF_FIELDS
+        or handoff["kind"] != HANDOFF_KIND
+    ):
         raise ValueError("bound credential handoff required")
     if handoff["permissionDigest"] != digest(permission):
         raise ValueError("bound credential handoff required")
-    if not _private_string(handoff["token"], 8192) or not _private_string(handoff["apiKey"], 256):
+    if not _private_string(handoff["token"], 8192) or not _private_string(
+        handoff["apiKey"], 256
+    ):
         raise ValueError("bound credential handoff required")
     signing = handoff["signing"]
     if signing is not None and (
@@ -402,7 +483,12 @@ def validate_handoff(handoff, permission, plan) -> dict:
         raise ValueError("signing declaration must name the campaign service account")
     if bool(signing) != bool(plan.get("signing")):
         raise ValueError("signing capability differs from the frozen plan")
-    return {"kind": handoff["kind"], "token": handoff["token"], "apiKey": handoff["apiKey"], "signing": signing}
+    return {
+        "kind": handoff["kind"],
+        "token": handoff["token"],
+        "apiKey": handoff["apiKey"],
+        "signing": signing,
+    }
 
 
 # The points a run can stop at with nothing of its own left behind: before the first
@@ -444,4 +530,8 @@ def build_receipt(inputs, result, *, rows, generation, failure=None, stop_point=
 
 
 def bounded_number(value) -> bool:
-    return type(value) in (int, float) and not isinstance(value, bool) and math.isfinite(value)
+    return (
+        type(value) in (int, float)
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )

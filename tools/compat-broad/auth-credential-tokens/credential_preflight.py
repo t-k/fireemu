@@ -48,7 +48,9 @@ def _load(name: str, path: Path):
     return module
 
 
-SHARED_PREFLIGHT_MODULE = "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py"
+SHARED_PREFLIGHT_MODULE = (
+    "tools/compat-broad/fs-request-bytes-boundary/request_bytes_preflight.py"
+)
 shared_preflight = _load("_credential_shared_preflight", ROOT / SHARED_PREFLIGHT_MODULE)
 
 SCOPE = shared_preflight.SCOPE
@@ -73,7 +75,9 @@ class ApiKeyRefused(ValueError):
 
 def validate_frozen_baseline(permission: Any) -> None:
     """The Auth config digest must be frozen before the slot that reads it is charged."""
-    if not isinstance(permission, dict) or not isinstance(permission.get("authConfigDigest"), str):
+    if not isinstance(permission, dict) or not isinstance(
+        permission.get("authConfigDigest"), str
+    ):
         raise ValueError("frozen Auth config digest required")  # noqa: TRY004 -- refusal class, not a type report
     if len(permission["authConfigDigest"]) != 64:
         raise ValueError("frozen Auth config digest required")
@@ -81,6 +85,56 @@ def validate_frozen_baseline(permission: Any) -> None:
 
 def validate_principal(principal: Any) -> None:
     shared_preflight.validate_principal(principal)
+
+
+def modern_management_transport(slot, token, *, deadline, fixture_origin=None):
+    """Use the pinned Auth worker and normalize the modern tokeninfo schema."""
+    import credential_bootstrap as bootstrap
+    import credential_remote_transport as remote
+
+    operation = {
+        "oauth-tokeninfo": "tokeninfo",
+        "project": "project",
+        "auth": "auth",
+    }.get(slot)
+    if operation is None:
+        raise ValueError("closed management slot required")
+    try:
+        exchange = bootstrap._request(
+            operation, token, deadline=deadline, fixture_origin=fixture_origin
+        )
+    except remote.WorkerFailure as error:
+        if not error.worker_reaped:
+            raise
+        return {
+            "status": None,
+            "complete": False,
+            "workerReaped": True,
+            "bodyKind": None,
+            "body": None,
+        }
+    body = exchange.body
+    if slot == "oauth-tokeninfo" and exchange.status == 200:
+        expiry = body.get("expires_in")
+        if isinstance(expiry, str) and expiry.isascii() and expiry.isdecimal():
+            expiry = int(expiry)
+        body = {
+            "issued_to": body.get("azp"),
+            "audience": body.get("aud"),
+            "user_id": body.get("sub"),
+            "email": body.get("email"),
+            "verified_email": body.get("email_verified") is True
+            or body.get("email_verified") == "true",
+            "scope": body.get("scope"),
+            "expires_in": expiry,
+        }
+    return {
+        "status": exchange.status,
+        "complete": exchange.status == 200,
+        "workerReaped": exchange.worker_reaped,
+        "bodyKind": "json",
+        "body": body,
+    }
 
 
 def signature_attestation(public: Any) -> dict[str, Any]:
@@ -130,6 +184,9 @@ class ManagementSession:
         binding,
         binding_digest,
         transmit=None,
+        reservation_deadline=None,
+        monotonic_deadline=None,
+        source_check=None,
     ):
         self.gate, self.ledger, self.ticket = gate, ledger, ticket
         self.capability, self.inputs, self.permission = capability, inputs, permission
@@ -145,6 +202,9 @@ class ManagementSession:
         self.postflight_complete = False
         self._minted: dict[str, str] = {}
         self._transmit = transmit
+        self.reservation_deadline = reservation_deadline
+        self.monotonic_deadline = monotonic_deadline
+        self.source_check = source_check
         validate_principal(permission.get("credentialPrincipal"))
         validate_frozen_baseline(permission)
         if bool(self.signing) != bool(inputs["plan"].get("signing")):
@@ -154,11 +214,27 @@ class ManagementSession:
     def signs(self) -> bool:
         return self.signing is not None
 
-    def _shared_call(self, phase: str, slot: str, token: str, deadline: float) -> dict[str, Any]:
+    def _shared_call(
+        self, phase: str, slot: str, token: str, deadline: float
+    ) -> dict[str, Any]:
         if self._transmit is not None:
-            return self._transmit({"kind": "management", "phase": phase, "slot": slot, "token": token, "deadline": deadline})
+            return self._transmit(
+                {
+                    "kind": "management",
+                    "phase": phase,
+                    "slot": slot,
+                    "token": token,
+                    "deadline": deadline,
+                }
+            )
         return self.capability._transmit(
-            {"kind": "management", "phase": phase, "slot": slot, "token": token, "deadline": deadline}
+            {
+                "kind": "management",
+                "phase": phase,
+                "slot": slot,
+                "token": token,
+                "deadline": deadline,
+            }
         )
 
     def _sign(self, slot: str, deadline: float) -> dict[str, Any]:
@@ -177,7 +253,9 @@ class ManagementSession:
             "deadline": deadline,
         }
         token, public = (
-            self._transmit(value) if self._transmit is not None else self.capability._transmit(value)
+            self._transmit(value)
+            if self._transmit is not None
+            else self.capability._transmit(value)
         )
         if not isinstance(token, str) or token.count(".") != 2:
             raise ValueError("signing slot returned no compact token")
@@ -191,9 +269,35 @@ class ManagementSession:
         for slot in slots:
 
             def send(deadline, slot=slot):
-                self.ledger.validate(self.ticket, duration=13)
+                if self.source_check is not None:
+                    self.source_check()
+                self.ledger.validate(
+                    self.ticket,
+                    duration=13
+                    + (
+                        60
+                        if self.reservation_deadline is not None
+                        and phase == "observation"
+                        else 0
+                    ),
+                )
+                if self.reservation_deadline is not None:
+                    remaining = min(
+                        self.reservation_deadline - time.time(),
+                        self.monotonic_deadline - time.monotonic(),
+                    ) - (60 if phase == "observation" else 0)
+                    deadline = min(deadline, time.monotonic() + remaining)
+                    deadline = min(
+                        deadline,
+                        time.monotonic()
+                        + self.capability.window_expires_at
+                        - time.time(),
+                    )
                 now = time.monotonic()
-                if now >= deadline or time.time() + (deadline - now) > self.permission["expiresAt"]:
+                if (
+                    now >= deadline
+                    or time.time() + (deadline - now) > self.permission["expiresAt"]
+                ):
                     raise ValueError("management deadline after shared wait")
                 if slot in SIGN_SLOTS:
                     return self._sign(slot, deadline)
@@ -205,10 +309,13 @@ class ManagementSession:
                 sent = time.monotonic()
                 response = self._shared_call(phase, slot, token, deadline)
                 if self.credential is not None:
-                    shared_preflight.observe_status(self.credential, response.get("status"))
+                    shared_preflight.observe_status(
+                        self.credential, response.get("status")
+                    )
                 if slot == "oauth-tokeninfo":
                     public = {
-                        key: response.get(key) for key in ("complete", "workerReaped", "status", "bodyKind")
+                        key: response.get(key)
+                        for key in ("complete", "workerReaped", "status", "bodyKind")
                     }
                     public["body"] = None
                     try:
@@ -233,21 +340,31 @@ class ManagementSession:
                         public["complete"] = False
                     self._token = None
                     return public
-                return shared_preflight.metadata_attestation(slot, response, self.permission)
+                return shared_preflight.metadata_attestation(
+                    slot, response, self.permission
+                )
 
             response = self.gate.management_dispatch(phase, slot, send)
-            row = {"id": phase + ":" + slot, "response": response, "responseDigest": digest(response)}
+            row = {
+                "id": phase + ":" + slot,
+                "response": response,
+                "responseDigest": digest(response),
+            }
             self.evidence.append(row)
             event = self.gate.snapshot()["managementEvents"][-1]
             if event.get("id") != row["id"] or event.get("completed") is not True:
-                raise ValueError("management slot did not complete inside its reservation")
+                raise ValueError(
+                    "management slot did not complete inside its reservation"
+                )
             if slot == "oauth-tokeninfo":
                 if self.credential is None or response.get("complete") is not True:
                     raise ValueError("credential attestation failed")
             elif slot in SIGN_SLOTS:
                 self.signature_evidence.append(response["body"])
             else:
-                shared_preflight.validate_metadata_attestation(slot, response, self.permission)
+                shared_preflight.validate_metadata_attestation(
+                    slot, response, self.permission
+                )
         if phase == "observation":
             self.preflight_complete = True
         else:
@@ -271,7 +388,9 @@ class ManagementSession:
 
     def require_bearer(self, declared: dict[str, Any]) -> None:
         """Refuse an owner slot before it is charged when the bearer is latched."""
-        if declared.get("owner") is True and (self.credential is None or self.credential.failed):
+        if declared.get("owner") is True and (
+            self.credential is None or self.credential.failed
+        ):
             raise CredentialRefused("bearer latched; slot not attempted")
 
     def data_token(self, deadline: float) -> str:
@@ -295,7 +414,11 @@ class ManagementSession:
     def forget(self) -> list[str]:
         """Drop every secret this session held; the values are returned only so the
         caller can refuse any evidence record that still carries one of them."""
-        held = [value for value in (self._token, self._api_key, *self._minted.values()) if value]
+        held = [
+            value
+            for value in (self._token, self._api_key, *self._minted.values())
+            if value
+        ]
         if self.credential is not None:
             if self.credential.token:
                 held.append(self.credential.token)
@@ -306,7 +429,13 @@ class ManagementSession:
         return held
 
 
-def validate_saved_management(receipt: dict[str, Any], snapshot: dict[str, Any], permission: dict[str, Any], *, signing: bool) -> None:
+def validate_saved_management(
+    receipt: dict[str, Any],
+    snapshot: dict[str, Any],
+    permission: dict[str, Any],
+    *,
+    signing: bool,
+) -> None:
     """Bind saved pre/postflight evidence to the charged Gate response digests."""
     ids = management_ids(signing)
     expected = ["observation:" + slot for slot in ids["observation"]] + [
@@ -314,6 +443,30 @@ def validate_saved_management(receipt: dict[str, Any], snapshot: dict[str, Any],
     ]
     rows = receipt.get("managementEvidence")
     events = snapshot.get("managementEvents")
+    proof = receipt.get("preparationProof")
+    if proof is not None:
+        from credential_gate import bootstrap_management_ids
+
+        prefix = ["observation:" + slot for slot in bootstrap_management_ids()]
+        if (
+            not isinstance(events, list)
+            or [event.get("id") for event in events[:4]] != prefix
+            or proof.get("managementJournalDigest") != digest(events[:4])
+        ):
+            raise ValueError("saved preparation prefix differs")
+        for row, event in zip(
+            proof.get("managementEvidence", []), events[:4], strict=True
+        ):
+            response = row.get("response")
+            if (
+                row.get("id") != event.get("id")
+                or event.get("responseDigest") != digest(response)
+                or event.get("bodyDigest") != digest(response.get("body"))
+                or event.get("completed") is not True
+                or event.get("workerReaped") is not True
+            ):
+                raise ValueError("saved preparation response differs")
+        events = events[4:]
     if (
         receipt.get("preflightComplete") is not True
         or receipt.get("postflightComplete") is not True
@@ -350,7 +503,8 @@ def validate_saved_management(receipt: dict[str, Any], snapshot: dict[str, Any],
         body = response.get("body")
         if (
             not isinstance(body, dict)
-            or body.get("principalDigest") != digest(permission.get("credentialPrincipal"))
+            or body.get("principalDigest")
+            != digest(permission.get("credentialPrincipal"))
             or body.get("requiredSeconds") != permission["wallSeconds"]
             or type(body.get("remainingSecondsAtVerification")) not in (int, float)
             or not math.isfinite(body["remainingSecondsAtVerification"])

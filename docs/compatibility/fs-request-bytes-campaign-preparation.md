@@ -350,7 +350,7 @@ zero-wire skips are excluded, since they send nothing.
 beside them.** A local shadow runs over loopback against an emulator on the same
 machine. The current published b57 run records a small-request median of 0.0012
 s with a p99 of 0.0135 s, and the three boundary Commits ran 0.0269 s at the
-median. The earlier 1157/e064 run recorded 0.0010 s, 0.0108 s and 0.0245 s at
+median. The earlier 1157/e064 run recorded 0.0016 s, 0.0184 s and 0.0350 s at
 the corresponding points; those are historical point-in-time figures, not the
 current published run. All of these are service times with no network in them at
 all; a production small read is an HTTPS round trip and will be one to two

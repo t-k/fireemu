@@ -59,7 +59,7 @@ class BootstrapBudget:
 
 @dataclass(frozen=True)
 class BootstrapResult:
-    handoff: dict
+    prepared: dict
     proof: dict
     charged_requests: int
 
@@ -121,7 +121,7 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
 
     `fixture_origin` is test-only; production leaves it unset so the pinned
     transport enforces its reviewed HTTPS allowlist. This function intentionally
-    returns a private handoff object and typed proof, not an O7 capability.
+    returns private prepared values and typed proof, not a finalized handoff or O7 capability.
     """
     budget = budget or BootstrapBudget()
     budget.validate()
@@ -147,7 +147,16 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
     if status != 200 or not isinstance(auth, dict):
         raise ValueError("Auth config readback refused")
     proof = {"kind": "auth-credential-bootstrap-proof-v1", "principalDigest": digest(principal), "project": copy.deepcopy(project), "authConfigDigest": digest(auth), "tokeninfoExpiresInSeconds": tokeninfo["expires_in"], "requestCount": PREP_REQUESTS, "taskMaxRequests": TASK_MAX_REQUESTS, "taskMaxSeconds": TASK_MAX_SECONDS, "recoverySeconds": RECOVERY_SECONDS}
-    return BootstrapResult({"kind": HANDOFF_KIND, "permissionDigest": permission["permissionDigest"], "token": token, "apiKey": api_key, "signing": {"serviceAccount": SERVICE_ACCOUNT}}, proof, PREP_REQUESTS)
+    return BootstrapResult({"token": token, "apiKey": api_key, "signing": {"serviceAccount": SERVICE_ACCOUNT}}, proof, PREP_REQUESTS)
 
 
-__all__ = ["BootstrapBudget", "BootstrapResult", "HANDOFF_KIND", "PERMISSION_KIND", "PREP_REQUESTS", "SCOPE", "SERVICE_ACCOUNT", "prepare", "validate_deadline"]
+def finalize_handoff(prepared: dict, observation_permission_digest: str) -> dict:
+    """Bind the private prepared values only after observation permission exists."""
+    if not isinstance(observation_permission_digest, str) or not observation_permission_digest:
+        raise ValueError("observation permission digest required")
+    if not isinstance(prepared, dict) or set(prepared) != {"token", "apiKey", "signing"}:
+        raise ValueError("prepared credential required")
+    return {"kind": HANDOFF_KIND, "permissionDigest": observation_permission_digest, **copy.deepcopy(prepared)}
+
+
+__all__ = ["BootstrapBudget", "BootstrapResult", "HANDOFF_KIND", "PERMISSION_KIND", "PREP_REQUESTS", "SCOPE", "SERVICE_ACCOUNT", "finalize_handoff", "prepare", "validate_deadline"]

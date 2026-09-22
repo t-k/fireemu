@@ -94,9 +94,14 @@ def test_fixture_bootstrap_charges_exact_four_requests_and_returns_private_hando
     origin, requests = fixture_origin
     result = bootstrap.prepare(_permission(), adc=ADC, api_key="api-key", fixture_origin=origin)
     assert requests == ["/token", "/oauth2/v1/tokeninfo?access_token=fixture-access", "/v1/projects/fireemu-35fe6", "/admin/v2/projects/fireemu-35fe6/config"]
-    assert result.handoff == {
+    assert result.prepared == {
+        "token": "fixture-access",
+        "apiKey": "api-key",
+        "signing": {"serviceAccount": bootstrap.SERVICE_ACCOUNT},
+    }
+    assert bootstrap.finalize_handoff(result.prepared, "observation-permission-digest") == {
         "kind": bootstrap.HANDOFF_KIND,
-        "permissionDigest": "permission-digest",
+        "permissionDigest": "observation-permission-digest",
         "token": "fixture-access",
         "apiKey": "api-key",
         "signing": {"serviceAccount": bootstrap.SERVICE_ACCOUNT},

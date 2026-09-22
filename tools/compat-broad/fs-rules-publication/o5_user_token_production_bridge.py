@@ -540,6 +540,23 @@ def refresh_ownership(gate, ownership):
     return states
 
 
+def validated_cleanup_gate(plan: dict[str, Any], gate: Any) -> Any:
+    """Return the live Gate only after validating the comparator handoff."""
+    if gate is None or not callable(getattr(gate, "snapshot", None)):
+        raise ValueError("live Rules Gate required")
+    snapshot = gate.snapshot()
+    gate_plan = snapshot.get("plan") if isinstance(snapshot, dict) else None
+    if not isinstance(gate_plan, dict) or any(
+        gate_plan.get(key) != plan.get(key)
+        for key in ("campaignId", "project", "database")
+    ):
+        raise ValueError("Rules Gate case binding differs")
+    if not callable(getattr(gate, "rules_management_ownership", None)):
+        raise ValueError("Rules Gate ownership replay required")
+    gate.rules_management_ownership()
+    return gate
+
+
 def collection_dispatch(
     plan, gate, execute, *, credentials, account_bindings, identity_proofs, ownership
 ):
@@ -1355,4 +1372,9 @@ def run_bound_collection(
     return bundle
 
 
-__all__ = ["bound_execute", "run_bound_collection", "validate_compiled_accounting"]
+__all__ = [
+    "bound_execute",
+    "run_bound_collection",
+    "validate_compiled_accounting",
+    "validated_cleanup_gate",
+]

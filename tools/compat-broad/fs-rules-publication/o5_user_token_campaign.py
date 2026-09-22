@@ -86,8 +86,7 @@ def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
     setup = setup_plan(plan)
     value = rules_management_plan()
     entries = [
-        {"id": "setup/" + item["id"], "timeout": 2.0}
-        for item in (*setup["fixtures"], *setup["auth"])
+        {"id": "setup/" + item["id"], "timeout": 2.0} for item in setup["operations"]
     ]
     entries.extend(value["observation"][:3])
     active = None
@@ -127,7 +126,7 @@ def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
     value["recovery"] = cleanup + value["recovery"]
     value["totalRequests"] = len(entries) + len(value["recovery"])
     effects = {}
-    for item in (*setup["fixtures"], *setup["auth"]):
+    for item in setup["operations"]:
         subject = (
             "document/" + item["document"]
             if item["service"] == "firestore"
@@ -406,6 +405,7 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "contract": "o5-user-token-setup-plan-v1",
         "fixtures": fixtures,
         "auth": auth,
+        "operations": [*auth, *fixtures],
         "totalRequests": len(fixtures) + len(auth),
     }
 

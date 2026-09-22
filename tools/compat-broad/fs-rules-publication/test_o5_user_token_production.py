@@ -585,7 +585,7 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
                 setup_secrets={
                     row["ref"]: "fixture-password" for row in plan["ownedAccounts"]
                 },
-                account_bindings=account_bindings(plan),
+                account_bindings={},
                 capability=capability,
                 fixture_origin=origin,
                 binding=binding,
@@ -598,12 +598,17 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
         assert len(snapshot["managementUsed"]) == failure_after + 1
         assert snapshot["managementEvents"][-1].get("failure")
         assert ledger.snapshot()["reservations"]
+        operations = setup_plan(plan)["operations"]
+        creates = [
+            item["service"] == "firestore" or item["id"].endswith("/signup")
+            for item in operations
+        ]
         assert sum(
             state["phase"] == "acknowledged" for state in ownership.values()
-        ) == min(failure_after, 17)
+        ) == sum(creates[:failure_after])
         assert sum(
             state["phase"] == "creation-unconfirmed" for state in ownership.values()
-        ) == int(failure_after < 17)
+        ) == int(creates[failure_after])
         serialized = json.dumps(snapshot)
         assert "fixture-password" not in serialized
         assert "idToken" not in serialized

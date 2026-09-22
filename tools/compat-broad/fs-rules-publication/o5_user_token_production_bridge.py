@@ -55,7 +55,7 @@ def run_bound_setup(
         raise ValueError("durable setup journal required")
     if ownership is None:
         raise ValueError("shared setup ownership required")
-    items = [*setup_plan(plan)["fixtures"], *setup_plan(plan)["auth"]]
+    items = setup_plan(plan)["operations"]
     receipts: list[dict[str, Any]] = []
     for item in items:
         subject = item.get("resource", item.get("accountRef"))
@@ -67,13 +67,13 @@ def run_bound_setup(
         )
         if journal.failures:
             raise ValueError("setup journal intent failed")
-        if creating:
-            ownership[subject] = {"phase": "creation-unconfirmed", "slot": slot_id}
         pending: dict[str, Any] = {}
 
         def send(deadline: float, item: dict[str, Any] = item) -> dict[str, Any]:
             if deadline - time.monotonic() < SETUP_TIMEOUT_SECONDS - 0.25:
                 raise TimeoutError("setup worker cannot fit within Gate deadline")
+            if creating:
+                ownership[subject] = {"phase": "creation-unconfirmed", "slot": slot_id}
             prepared = prepare_setup_request(
                 plan,
                 item,
@@ -154,6 +154,8 @@ def run_bound_setup(
             "subject": subject,
             "planDigest": plan["planDigest"],
             "gateEventDigest": digest(event),
+            "gatePlanDigest": gate.snapshot()["planDigest"],
+            "nonce": plan["nonce"],
             "receiptDigest": digest(receipt),
             "version": receipt.get("updateTime"),
             "fieldsDigest": receipt.get("fieldsDigest"),

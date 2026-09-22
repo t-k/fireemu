@@ -396,12 +396,8 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
         bindings = synthetic(tmp_path, descriptor)
         plan = bindings["inputs"]["plan"]
         _ProducerHandler._plan = plan
-        proofs = _fixture_proofs(plan, origin)
-        accounts = account_bindings(plan)
-        for ref, proof in proofs.items():
-            accounts[ref]["uid"] = proof.uid
-            accounts[ref]["authTime"] = proof.auth_time
-        credentials = {ref: proof.token for ref, proof in proofs.items()}
+        accounts = {account["ref"]: {} for account in plan["ownedAccounts"]}
+        credentials = {}
         credentials["administrator"] = "fixture-admin"
         credentials["api-key"] = "fixture-key"
         credentials.update(
@@ -459,8 +455,8 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
             "credentials": credentials,
             "setupSecrets": {ref: "fixture-password" for ref in accounts},
             "frozenInputs": bindings["inputs"],
-            "accountBindings": accounts,
-            "identityProofs": proofs,
+            "accountBindings": {},
+            "identityProofs": {},
             "fixtureOrigin": origin,
             "gate": gate,
             "ledger": ledger,

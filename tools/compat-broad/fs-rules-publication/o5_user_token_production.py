@@ -19,7 +19,7 @@ sys.path.insert(0, str(HERE.parent / "o8-core"))
 
 from o5_user_token_campaign import validate_production_packet
 from o5_user_token_descriptor import descriptor
-from o5_user_token_production_bridge import bound_execute, run_bound_collection
+from o5_user_token_production_bridge import run_bound_collection
 from o8_admission import issue_production_capability, revoke_production_capability
 from reservations import Ledger
 from shared_gate import Gate
@@ -128,21 +128,12 @@ def run_approved(packet: dict[str, Any]) -> dict[str, Any]:
             inputs_digest=inputs["inputsDigest"],
             ledger_root=values["ledgerRoot"],
         )
-        execute = bound_execute(
-            values["plan"],
-            credentials=values["credentials"],
-            frozen_inputs=values["frozenInputs"],
-            account_bindings=values["accountBindings"],
-            identity_proofs=values["identityProofs"],
-            capability=capability,
-            fixture_origin=values["fixtureOrigin"],
-        )
         return run_bound_collection(
             plan=values["plan"],
             gate=values["gate"],
             ledger=values["ledger"],
             ticket=values["ticket"],
-            execute=execute,
+            frozen_inputs=values["frozenInputs"],
             acquisition=values["acquisition"],
             run_id=values["runId"],
             permission_expires_at=values["approval"].get("windowExpiresAt"),

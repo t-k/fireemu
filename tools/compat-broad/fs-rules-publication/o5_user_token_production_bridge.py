@@ -527,7 +527,7 @@ def run_bound_collection(
     gate: Any,
     ledger: Any,
     ticket: dict[str, Any],
-    execute: Callable[..., dict[str, Any]],
+    frozen_inputs: dict[str, Any],
     acquisition: dict[str, Any],
     run_id: str,
     permission_expires_at: float | None = None,
@@ -584,6 +584,7 @@ def run_bound_collection(
     )
     ownership: dict[str, dict[str, Any]] = {}
     private_handoffs: dict[str, Any] = {}
+    identity_handoffs: dict[str, Any] = {}
     try:
         setup_receipts = run_bound_setup(
             plan=plan,
@@ -598,6 +599,39 @@ def run_bound_collection(
             journal=journal,
             ownership=ownership,
             private_handoffs=private_handoffs,
+            identity_handoffs=identity_handoffs,
+        )
+        identity_proofs = setup_identity_proofs(
+            plan, gate, identity_handoffs, fixture_origin=fixture_origin
+        )
+        for ref, proof in identity_proofs.items():
+            account_bindings[ref] = {
+                "uid": proof.uid,
+                "provider": proof.provider,
+                "tenant": proof.tenant,
+                "claimsDigest": proof.claims_digest,
+                "authTime": proof.auth_time,
+            }
+        acquisition = {
+            **acquisition,
+            "principals": {
+                ref: {
+                    "uidFingerprint": digest(["uid", plan["nonce"], proof.uid])[:16],
+                    "provider": proof.provider,
+                    "tenant": proof.tenant,
+                    "claimsDigest": proof.claims_digest,
+                }
+                for ref, proof in identity_proofs.items()
+            },
+        }
+        execute = bound_execute(
+            plan,
+            credentials=credentials,
+            frozen_inputs=frozen_inputs,
+            account_bindings=account_bindings,
+            identity_proofs=identity_proofs,
+            capability=capability,
+            fixture_origin=fixture_origin,
         )
         session = management_session(
             gate=gate,

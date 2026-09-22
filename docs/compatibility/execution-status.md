@@ -2,6 +2,12 @@
 
 Auth claim-source, MFA and Limits native updates remain local-only; executor `571d5a6bb63289893661d88470d47e8ffb4870a2` is source-only evidence. The Auth05 held attempt remains unresolved.
 
+## Current saved REST condition revalidation (`648`)
+
+The bounded conditions `FS-EVID-TRANSFORMS-021` (`fs.transforms.saved-20260907.v1`) and `FS-EVID-PRECONDITIONS-022` (`fs.preconditions-and-masks.saved-20260907.v1`) are independently approved at the current source `648aabe56cf6147128ffadf565d93ca7a92013c1`. The transforms replay has 18 MATCH, 0 MISMATCH and 0 INDETERMINATE rows; the preconditions replay has 34 MATCH, 0 MISMATCH and 0 INDETERMINATE rows. Both use shared artifact SHA-256 `7737f6c389aff0a0f280757591af3b81f11edfbc8438cb69268da0f4c2237026` and the complete 430-entry runtime-input map digest `7e2b0bc7037e0caf9f979f052c69a3820a398c8df72de8dbd19f1aac2f524331`. The retained replay result digests are `927fad38101718973d23d3c892e51a7a3d4e6d07666764f28cb922e000c0f54d` and `88360d849d0b7c13f7fb72a32dc2a5adc8a9a2dad2421976463415e6a8ea7c01`; their comparison digests are `122c64f4c11e20ddb1784225239d3269002e0291d1a70657b989fc83b8f3e284` and `a9ca19a62b9a599522ae60d5dfbe22e2cedfb26a41d151ca4e48fb62f91dad19`.
+
+These are finite revalidations of the retained saved-production matrix and program pins, using REST strict-profile normalized projections. They made no production requests, do not assert error-text or timestamp equivalence, and do not add to the global condition count or promote a parent. The independent reviews are [`saved-transforms-native-648-review.md`](../../docs.local/reviews/saved-transforms-native-648-review.md) and [`saved-preconditions-native-648.md`](../../docs.local/reviews/saved-preconditions-native-648.md). Earlier `e896`/`8245` evidence remains historical and immutable. `COMPAT_VERIFIED` remains `0 / 14`; Auth and MFA evidence on other named sources, including the ongoing Auth47f run, is not re-bound to this checkpoint.
+
 ## Checkpoint 8d7: finite production and local progress
 
 This checkpoint is source `8d7a02de0d60564184d0cf80292e2278cd6e9d2c`; the request-byte exact-replay runtime source is `ba4a026363d6ec05267cf646439c10d729ab805f`, and the retained artifact SHA-256 is `903728746e512d158363c092196e015f79805ab513757a5924d319c8dac0996d`.

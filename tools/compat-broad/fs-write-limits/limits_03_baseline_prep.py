@@ -12,6 +12,7 @@ import re
 import stat
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -38,6 +39,11 @@ NONCE = re.compile(r"^[0-9a-f]{32}$")
 PREPARATION_KIND = "limits-03-baseline-preparation-v1"
 MAX_INPUT_BYTES = 64 * 1024
 MAX_CUSTODY_BYTES = 16 * 1024
+# The coordinator's whole preparation, including its six authenticated requests.
+COORDINATOR_DEADLINE_SECONDS = 420
+# How long an exited coordinator's custody pipe may stay open before the
+# handoff is treated as lost; only a leaked descriptor keeps it open.
+CUSTODY_CLOSE_SECONDS = 5
 CAMPAIGN = "FS-WRITE-LIMITS-03"
 METADATA_IDS = ("project", "database", "auth", "key")
 CUSTODY_KIND = "limits-03-preparation-custody-v1"
@@ -533,6 +539,21 @@ def _validate_custody(value, permission):
     return value
 
 
+def _drain_custody_pipe(fd, outcome):
+    """Read the custody pipe on its own thread while the coordinator runs.
+
+    The coordinator writes the whole bounded handoff synchronously before it
+    exits, so a parent that only reads after the exit waits for a writer that
+    is waiting for it whenever the handoff exceeds the pipe capacity (review
+    CUSTODY-PIPE-01). The bound and the deadline are unchanged; only the order
+    of reading and waiting is.
+    """
+    try:
+        outcome["value"] = _read_custody_pipe(fd)
+    except BaseException as error:  # noqa: BLE001
+        outcome["error"] = error
+
+
 def _read_custody_pipe(fd):
     raw = bytearray()
     while len(raw) <= MAX_CUSTODY_BYTES:
@@ -843,6 +864,8 @@ def capture_baseline(*, bindings, output, handoff_fd, custody_output_fd=None):
         }
     ).encode()
     child = None
+    reader = None
+    drained = {}
     try:
         child = subprocess.Popen(
             [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), "--worker"],
@@ -852,22 +875,35 @@ def capture_baseline(*, bindings, output, handoff_fd, custody_output_fd=None):
             pass_fds=tuple(fd for fd in (handoff_fd, custody_write_fd) if fd is not None),
             env={"PATH": os.defpath, "LANG": "C"},
         )
+        # The child holds its own copy of the write end; closing ours makes the
+        # child's exit the end of the handoff.
+        if custody_write_fd is not None:
+            os.close(custody_write_fd)
+            custody_write_fd = None
+        if custody_read_fd is not None:
+            reader = threading.Thread(
+                target=_drain_custody_pipe,
+                args=(custody_read_fd, drained),
+                name="limits-03-custody-reader",
+                daemon=True,
+            )
+            reader.start()
         try:
-            child.communicate(payload, timeout=420)
+            child.communicate(payload, timeout=COORDINATOR_DEADLINE_SECONDS)
         except subprocess.TimeoutExpired:
             raise ValueError(
                 "PREP coordinator deadline; retained recovery context"
             ) from None
-        if custody_write_fd is not None:
-            os.close(custody_write_fd)
-            custody_write_fd = None
         custody = None
-        if custody_read_fd is not None:
-            try:
-                custody = _read_custody_pipe(custody_read_fd)
-            finally:
-                os.close(custody_read_fd)
-                custody_read_fd = None
+        if reader is not None:
+            reader.join(timeout=CUSTODY_CLOSE_SECONDS)
+            if reader.is_alive():
+                raise ValueError("custody handoff still open after coordinator exit")
+            os.close(custody_read_fd)
+            custody_read_fd = None
+            if "error" in drained:
+                raise drained["error"]
+            custody = drained.get("value")
             if custody is not None:
                 _validate_custody(custody, bindings["permission"])
         if child.returncode != 0:
@@ -885,6 +921,10 @@ def capture_baseline(*, bindings, output, handoff_fd, custody_output_fd=None):
     finally:
         if child is not None:
             _reap_child(child)
+        if reader is not None:
+            # A reaped child has closed its write end, so the reader ends before
+            # its descriptor is closed underneath it.
+            reader.join(timeout=CUSTODY_CLOSE_SECONDS)
         for fd_name in ("custody_read_fd", "custody_write_fd"):
             fd = locals()[fd_name]
             if fd is not None:

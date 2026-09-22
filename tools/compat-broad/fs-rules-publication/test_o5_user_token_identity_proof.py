@@ -193,6 +193,7 @@ def test_proof_rejects_wrong_identity_and_claims(fixture_origin):
         {},
         {"o5role": "editor"},
         {"name": "Owner", "picture": "https://example.invalid/owner.png"},
+        {"phone_number": "+15551234567"},
     ],
 )
 def test_standard_email_claims_are_not_developer_claims(fixture_origin, custom):
@@ -225,15 +226,17 @@ def test_standard_email_claims_are_not_developer_claims(fixture_origin, custom):
     assert issued.claims_digest == digest(custom)
 
 
-@pytest.mark.parametrize("field", ["name", "picture"])
+@pytest.mark.parametrize("field", ["name", "picture", "phone_number"])
 def test_proof_rejects_unexpected_profile_claims(fixture_origin, field):
     token = _token(
         custom={
             "email": "owner@example.invalid",
             "email_verified": False,
-            field: "https://example.invalid/owner.png"
-            if field == "picture"
-            else "Owner",
+            field: {
+                "name": "Owner",
+                "picture": "https://example.invalid/owner.png",
+                "phone_number": "+15551234567",
+            }[field],
         }
     )
     _Handler.body = {"localId": "uid-a", "idToken": token}
@@ -444,7 +447,7 @@ def test_acknowledged_setup_ignores_standard_email_claims(acknowledged_setup):
     assert issued.claims_digest == digest(args["expected_claims"])
 
 
-@pytest.mark.parametrize("field", ["name", "picture"])
+@pytest.mark.parametrize("field", ["name", "picture", "phone_number"])
 def test_acknowledged_setup_rejects_unexpected_profile_claims(
     acknowledged_setup, field
 ):
@@ -458,9 +461,11 @@ def test_acknowledged_setup_rejects_unexpected_profile_claims(
         custom={
             "email": "owner@example.invalid",
             "email_verified": False,
-            field: "https://example.invalid/owner.png"
-            if field == "picture"
-            else "Owner",
+            field: {
+                "name": "Owner",
+                "picture": "https://example.invalid/owner.png",
+                "phone_number": "+15551234567",
+            }[field],
             **args["expected_claims"],
         },
     )

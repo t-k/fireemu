@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 import statistics
 import sys
 from pathlib import Path
@@ -73,6 +74,7 @@ OBSERVATION_MODULES = (
 #: Response bodies at or below this size are republished verbatim in the record.
 #: A successful Commit response is larger and is represented by its digest.
 RESPONSE_EXCERPT_BYTES = 4096
+SENTINEL_SELECTOR_CONTENT = b"fs-request-bytes-sentinel-local-shadow-v1\n"
 
 #: Why the published timings are a floor and not an estimate. This travels with
 #: the numbers so a reader cannot pick them up without it.
@@ -101,6 +103,50 @@ def save(path: Path, value: Any) -> None:
     with path.open("x") as stream:
         json.dump(value, stream, indent=2, allow_nan=False, sort_keys=True)
         stream.write("\n")
+
+
+def _sentinel_selector_path(output: Path) -> Path:
+    return output.parent / f".{output.name}.request-bytes-sentinel"
+
+
+def write_sentinel_selector(output: Path) -> Path:
+    """Create an exclusive private marker that survives child env sanitizing."""
+    marker = _sentinel_selector_path(output)
+    descriptor = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(SENTINEL_SELECTOR_CONTENT)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        marker.unlink(missing_ok=True)
+        raise
+    return marker
+
+
+def sentinel_selector_enabled(output: Path) -> bool:
+    """Recognize only the private regular marker for this exact output path."""
+    marker = _sentinel_selector_path(output)
+    try:
+        descriptor = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
+            return False
+        return (
+            stream.read(len(SENTINEL_SELECTOR_CONTENT) + 1)
+            == SENTINEL_SELECTOR_CONTENT
+        )
+
+
+def remove_sentinel_selector(output: Path, marker: Path) -> None:
+    """Remove only the marker created for this output, if it remains unchanged."""
+    if marker != _sentinel_selector_path(output):
+        raise ValueError("sentinel selector path mismatch")
+    if sentinel_selector_enabled(output):
+        marker.unlink()
 
 
 def source_inputs() -> dict[str, str]:
@@ -896,7 +942,7 @@ def _child(output: Path, nonce: str) -> None:
         },
     )
 
-    if os.environ.get("FIREEMU_REQUEST_BYTES_SHADOW_MODE") == "sentinel":
+    if sentinel_selector_enabled(output):
         plan = compile_request_bytes_sentinel_plan(project, DATABASE, nonce)
         validate_request_bytes_sentinel_plan(plan)
         result = collect_local(plan, _executor(firestore, plan), output / "collection")
@@ -1020,11 +1066,7 @@ def run(output: Path, *, sentinel: bool = False) -> dict[str, Any]:
     import broad
 
     before = source_inputs()
-    previous_mode = os.environ.get("FIREEMU_REQUEST_BYTES_SHADOW_MODE")
-    if sentinel:
-        os.environ["FIREEMU_REQUEST_BYTES_SHADOW_MODE"] = "sentinel"
-    else:
-        os.environ.pop("FIREEMU_REQUEST_BYTES_SHADOW_MODE", None)
+    selector = write_sentinel_selector(output) if sentinel else None
     try:
         report = broad.run(
             output,
@@ -1036,10 +1078,8 @@ def run(output: Path, *, sentinel: bool = False) -> dict[str, Any]:
             retain_executed_artifact=True,
         )
     finally:
-        if previous_mode is None:
-            os.environ.pop("FIREEMU_REQUEST_BYTES_SHADOW_MODE", None)
-        else:
-            os.environ["FIREEMU_REQUEST_BYTES_SHADOW_MODE"] = previous_mode
+        if selector is not None:
+            remove_sentinel_selector(output, selector)
     after = source_inputs()
     child_inputs = report.get("manifest", {}).get("sourceInputs")
     bound = before == after

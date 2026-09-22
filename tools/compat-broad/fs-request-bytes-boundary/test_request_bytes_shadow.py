@@ -172,7 +172,7 @@ def test_sentinel_shadow_cannot_publish_a_legacy_comparison(monkeypatch, tmp_pat
     assert error.value.code == 2
 
 
-def test_sentinel_runner_restores_mode_and_requests_only_the_existing_owned_driver(
+def test_sentinel_runner_holds_selector_for_owned_driver_and_cleans_it_up(
     monkeypatch, tmp_path
 ) -> None:
     import types
@@ -182,28 +182,26 @@ def test_sentinel_runner_restores_mode_and_requests_only_the_existing_owned_driv
     calls = []
 
     def broad_run(path, **kwargs):
-        mode = __import__("os").environ.get("FIREEMU_REQUEST_BYTES_SHADOW_MODE")
-        calls.append((path, kwargs, mode))
+        calls.append((path, kwargs, shadow_module.sentinel_selector_enabled(path)))
         return {"status": "incomplete", "manifest": {"sourceInputs": {}}}
 
     monkeypatch.setitem(
         __import__("sys").modules, "broad", types.SimpleNamespace(run=broad_run)
     )
     monkeypatch.setattr(shadow_module, "source_inputs", lambda: {"source": "digest"})
-    monkeypatch.setenv("FIREEMU_REQUEST_BYTES_SHADOW_MODE", "prior")
     shadow_module.run(output, sentinel=True)
     assert calls[0][0] == output
     assert (
         calls[0][1]["child_script"]
         == shadow_module.Path(shadow_module.__file__).resolve()
     )
-    assert calls[0][2] == "sentinel"
-    assert __import__("os").environ["FIREEMU_REQUEST_BYTES_SHADOW_MODE"] == "prior"
+    assert calls[0][2] is True
+    assert shadow_module.sentinel_selector_enabled(output) is False
     binding = __import__("json").loads((output / "shadow-binding.json").read_bytes())
     assert binding["bound"] is True
 
 
-def test_legacy_runner_cannot_inherit_a_stale_sentinel_mode(monkeypatch, tmp_path) -> None:
+def test_legacy_runner_does_not_select_sentinel_from_environment(monkeypatch, tmp_path) -> None:
     import types
 
     output = tmp_path / "legacy-run"
@@ -211,7 +209,7 @@ def test_legacy_runner_cannot_inherit_a_stale_sentinel_mode(monkeypatch, tmp_pat
     modes = []
 
     def broad_run(_path, **_kwargs):
-        modes.append(__import__("os").environ.get("FIREEMU_REQUEST_BYTES_SHADOW_MODE"))
+        modes.append(shadow_module.sentinel_selector_enabled(output))
         return {"status": "incomplete", "manifest": {"sourceInputs": {}}}
 
     monkeypatch.setitem(
@@ -220,8 +218,42 @@ def test_legacy_runner_cannot_inherit_a_stale_sentinel_mode(monkeypatch, tmp_pat
     monkeypatch.setattr(shadow_module, "source_inputs", lambda: {"source": "digest"})
     monkeypatch.setenv("FIREEMU_REQUEST_BYTES_SHADOW_MODE", "sentinel")
     shadow_module.run(output)
-    assert modes == [None]
+    assert modes == [False]
     assert __import__("os").environ["FIREEMU_REQUEST_BYTES_SHADOW_MODE"] == "sentinel"
+
+
+def test_sentinel_selection_reaches_a_child_with_the_real_sanitized_environment(
+    tmp_path,
+) -> None:
+    import os
+    import subprocess
+
+    import broad
+
+    output = tmp_path / "local-shadow"
+    marker = shadow_module.write_sentinel_selector(output)
+    child_code = (
+        "from pathlib import Path; import sys; sys.path.insert(0, sys.argv[2]); "
+        "import request_bytes_shadow as s; "
+        "print('sentinel' if s.sentinel_selector_enabled(Path(sys.argv[1])) else 'legacy')"
+    )
+    env = broad.sanitized_environment(dict(os.environ))
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            child_code,
+            str(output),
+            str(shadow_module.HERE),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert child.stdout.strip() == "sentinel"
+    shadow_module.remove_sentinel_selector(output, marker)
+    assert not marker.exists()
 
 
 def test_gates_pass_on_a_recognised_outcome_with_full_absence() -> None:

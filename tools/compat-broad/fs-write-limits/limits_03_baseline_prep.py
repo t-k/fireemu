@@ -89,6 +89,17 @@ def _verify_binding(binding, binding_digest, source_inputs):
         raise ValueError("PREP frozen worker source differs")
 
 
+def _metadata_transport_failure(request_digest, process_receipt):
+    return {
+        "requestDigest": request_digest,
+        "status": None,
+        "complete": False,
+        "workerReaped": process_receipt.get("workerReaped") is True,
+        "bodyKind": None,
+        "body": None,
+    }
+
+
 def _prep_transport(value, *, binding, binding_digest, capability):
     o8_admission.authorize_transport(
         capability, binding=binding, binding_digest=binding_digest
@@ -172,14 +183,7 @@ def _prep_transport(value, *, binding, binding_digest, capability):
             process_receipt=True,
         )
     except WorkerProcessError as error:
-        return {
-            "requestDigest": request_digest,
-            "status": None,
-            "complete": False,
-            "workerReaped": error.process_receipt.get("workerReaped") is True,
-            "bodyKind": None,
-            "body": None,
-        }
+        return _metadata_transport_failure(request_digest, error.process_receipt)
     return {
         "requestDigest": request_digest,
         "status": response.get("status"),

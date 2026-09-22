@@ -552,6 +552,7 @@ def test_preparation_reserves_real_temporary_ledger_and_gate(tmp_path):
         "key-handoff",
         "timeout",
         "unauthorized",
+        "disconnect",
     ],
 )
 def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path, fault):
@@ -603,6 +604,8 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
                     else database
                 )
             elif path.startswith("/v2/keys:lookupKey"):
+                if fault == "disconnect":
+                    return
                 if fault == "timeout":
                     time.sleep(13)
                     return
@@ -695,6 +698,7 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
                 "key-handoff": 0,
                 "timeout": 6,
                 "unauthorized": 5,
+                "disconnect": 6,
             }[fault]
         )
         state = Ledger(fixture["ledger_root"]).snapshot()
@@ -742,6 +746,18 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
     )
     assert len(Handler.seen) == 6
     _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet)
+
+
+@pytest.mark.parametrize("reaped", [True, False, None])
+def test_failed_metadata_projection_never_invents_worker_reaping(reaped):
+    import limits_03_baseline_prep as prep
+
+    process = {} if reaped is None else {"workerReaped": reaped}
+    result = prep._metadata_transport_failure("a" * 64, process)
+    assert result["workerReaped"] is (reaped is True)
+    assert result["complete"] is False
+    assert result["status"] is None
+    assert result["body"] is None
 
 
 def _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet):
@@ -830,7 +846,7 @@ def _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet):
         ledger_root=fixture["ledger_root"],
     )
     ledger = Ledger(fixture["ledger_root"])
-    ledger.reserve(
+    final_ticket = ledger.reserve(
         _envelope(permission, claim),
         claim,
         gate_plan,
@@ -840,6 +856,20 @@ def _prove_final_freeze_and_downgrade_refusal(tmp_path, fixture, packet):
         task_spent_microusd(ledger.snapshot(), campaign.CAMPAIGN)
         == 600 + claim["budget"]["costMicrousd"]
     )
+    for damage in ("held-reservation", "receipt-digest"):
+        changed = copy.deepcopy(permission)
+        reference = changed["baselinePreparation"]
+        damaged_packet = reference["packet"]
+        if damage == "held-reservation":
+            reference["ticket"] = final_ticket
+            damaged_packet["ticketDigest"] = digest(final_ticket)
+        else:
+            damaged_packet["terminalReceiptDigest"] = "0" * 64
+        damaged_packet["packetDigest"] = digest(
+            {key: value for key, value in damaged_packet.items() if key != "packetDigest"}
+        )
+        with pytest.raises(ValueError, match="terminal PREP baseline"):
+            admission._validate_preparation_permission(changed)
     o8_admission.revoke_production_capability(capability)
     for damage in (
         "missing-packet",

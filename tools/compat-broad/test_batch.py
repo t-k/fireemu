@@ -331,6 +331,32 @@ def test_json_prevalidation_rejects_cycle_depth_nonfinite_unicode_and_bad_url(
     assert not marker.exists()
 
 
+def test_json_prevalidation_uses_one_aggregate_budget_before_serialization(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    marker = tmp_path / "started"
+    (worker_dir / "batch_wire.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    body = {"items": ["escape-🦀" * 700 for _ in range(20)]}
+    with pytest.raises(ValueError, match="body bound"):
+        adapter.wire(
+            "http://127.0.0.1:18081/ok",
+            "POST",
+            body,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    assert not marker.exists()
+
+
 def test_process_receipt_start_failure_does_not_claim_a_worker_was_reaped(
     tmp_path, monkeypatch
 ):

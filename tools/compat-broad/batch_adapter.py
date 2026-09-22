@@ -222,23 +222,34 @@ def _utf8_size(value, limit, label):
     return total
 
 
-def _validate_json_value(value, *, depth=0, nodes=None, active=None):
+def _validate_json_value(value, *, depth=0, nodes=None, active=None, budget=None):
     """Validate bounded JSON inputs before json.dumps can materialize them."""
     if nodes is None:
         nodes = [0]
     if active is None:
         active = set()
+    if budget is None:
+        budget = [0]
+
+    def charge(amount):
+        budget[0] += amount
+        if budget[0] > 16384:
+            raise ValueError("request body bound exceeded")
+
     nodes[0] += 1
     if nodes[0] > 4096 or depth > 64:
         raise ValueError("request JSON structure bound exceeded")
     if value is None or isinstance(value, (bool, int)):
+        charge(len(json.dumps(value, allow_nan=False)))
         return
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError("request JSON contains non-finite number")
+        charge(len(json.dumps(value, allow_nan=False)))
         return
     if isinstance(value, str):
         _utf8_size(value, 16384, "request body")
+        charge(len(json.dumps(value, allow_nan=False)))
         return
     if not isinstance(value, (list, dict)):
         raise ValueError("request JSON type is invalid")
@@ -248,14 +259,31 @@ def _validate_json_value(value, *, depth=0, nodes=None, active=None):
     active.add(identity)
     try:
         if isinstance(value, list):
+            charge(1)
+            first = True
             for item in value:
-                _validate_json_value(item, depth=depth + 1, nodes=nodes, active=active)
+                if not first:
+                    charge(2)
+                first = False
+                _validate_json_value(
+                    item, depth=depth + 1, nodes=nodes, active=active, budget=budget
+                )
+            charge(1)
         else:
+            charge(1)
+            first = True
             for key, item in value.items():
                 if not isinstance(key, str):
                     raise ValueError("request JSON object key is invalid")
                 _utf8_size(key, 16384, "request body")
-                _validate_json_value(item, depth=depth + 1, nodes=nodes, active=active)
+                if not first:
+                    charge(2)
+                first = False
+                charge(len(json.dumps(key, allow_nan=False)) + 2)
+                _validate_json_value(
+                    item, depth=depth + 1, nodes=nodes, active=active, budget=budget
+                )
+            charge(1)
     finally:
         active.remove(identity)
 
@@ -403,7 +431,7 @@ def wire(
     if body is None:
         data = None
     elif isinstance(body, str):
-        _utf8_size(body, 16384, "request body")
+        _validate_json_value(body)
         data = body
     else:
         _validate_json_value(body)

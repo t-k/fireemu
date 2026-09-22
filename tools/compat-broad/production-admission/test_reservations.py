@@ -3,9 +3,12 @@
 
 import multiprocessing
 import copy
+import hashlib
 import json
 import os
+import platform
 import re
+import sys
 from types import SimpleNamespace
 import threading
 import time
@@ -117,6 +120,513 @@ def test_legacy_auth_parent_projection_refuses_tampered_tuple(monkeypatch, mutat
         gate["jobs"]["auth-credential"]["authAccounts"] = {"custom": {"resource": operation["resource"]}}
     with pytest.raises(ValueError):
         reservations._auth_parent_projection(gate, child)
+
+
+def _request_bytes_recovery_shape(tmp_path, *, sentinel):
+    lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+    if str(lane) not in sys.path:
+        sys.path.insert(0, str(lane))
+    import request_bytes_compiler as compiler
+    import request_bytes_recovery_campaign as recovery
+
+    nonce = ("a" if sentinel else "b") * 32
+    parent = (
+        compiler.compile_request_bytes_sentinel_plan(
+            "fireemu-35fe6", "(default)", nonce
+        )
+        if sentinel
+        else compiler.compile_request_bytes_plan("fireemu-35fe6", "(default)", nonce)
+    )
+    selected_probe = "raw-16mib-over" if sentinel else "under"
+    recovery_nonce = ("c" if sentinel else "d") * 32
+    recovery_plan = recovery.compile_recovery_plan(
+        parent, selected_probe=selected_probe, recovery_nonce=recovery_nonce
+    )
+    gate_plan = recovery.compile_gate_plan(
+        parent,
+        selected_probe=selected_probe,
+        recovery_nonce=recovery_nonce,
+        recovery_plan=recovery_plan,
+    )
+    operations = gate_plan["jobs"][recovery.RECOVERY_JOB]["recovery"]
+    resources = sorted({operation["resource"] for operation in operations})
+    reads = sum(operation["kind"] == "recovery-inspection-read" for operation in operations)
+    deletes = sum(operation["kind"] == "recovery-conditional-delete" for operation in operations)
+    absences = sum(operation["kind"] == "recovery-absence-read" for operation in operations)
+    child = {
+        "kind": reservations.RECOVERY_CHILD_KIND,
+        "version": 2,
+        "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
+        "manifestDigest": digest(recovery_plan),
+        "nonceDigest": digest(recovery_nonce),
+        "gatePath": str((tmp_path / "recovery-gate").resolve()),
+        "gatePlanDigest": digest(gate_plan),
+        "locks": [{"key": "project/fireemu-35fe6/firestore/(default)/documents/oracle", "mode": "WRITE"}],
+        "budget": {"requests": len(operations), "accounts": 0, "resources": len(resources), "costMicrousd": len(operations)},
+        "durationSeconds": 1200,
+        "generation": {
+            "sourceCommit": "1" * 40,
+            "collectorSourceDigest": digest("sources"),
+            "sourceDigests": {"source.py": digest("source")},
+        },
+        "parentClaimDigest": "2" * 64,
+        "parentPlanDigest": digest(parent),
+        "recoveryNonce": recovery_nonce,
+        "selectedProbe": selected_probe,
+        "resourceDigest": digest(resources),
+        "ownedResources": resources,
+        "ownerIdentity": "offline-owner",
+        "recoveryOwner": "offline-recovery-owner",
+        "operationClass": reservations.RECOVERY_OPERATION_CLASS,
+        "readCount": reads + absences,
+        "inspectionCount": reads,
+        "absenceCount": absences,
+        "deleteCount": deletes,
+        "tariffEstimateMicrousd": recovery_plan["bounds"]["tariffEstimateMicrousd"],
+        "expiresAt": time.time() + 2000,
+        "executionHost": {"platform": platform.system().lower(), "machine": platform.machine()},
+        "permissionDigest": "3" * 64,
+    }
+    if sentinel:
+        child["caseId"] = compiler.RAW_16MIB_OVER_CASE_ID
+    return parent, recovery_plan, gate_plan, child
+
+
+def _uncertain_request_bytes_parent(gate_path, gate_plan, parent_plan):
+    create(gate_path, gate_plan)
+    gates = {name: Gate(gate_path, name) for name in gate_plan["jobs"]}
+    coordinator = next(iter(gates.values()))
+    for entry in gate_plan["management"]["observation"]:
+        body = None
+        if entry["id"] == "oauth-tokeninfo":
+            body = {
+                "kind": "request-byte-token-attestation-v1",
+                "principalDigest": "0" * 64,
+                "requiredScopeVerified": True,
+                "identityMode": "subject",
+                "identityVerified": True,
+                "oauthClientVerified": True,
+                "expiresInSeconds": 3600,
+                "remainingSecondsAtVerification": 3600,
+                "requiredSeconds": 1700,
+                "complete": True,
+                "workerReaped": True,
+            }
+        coordinator.management_dispatch(
+            "observation",
+            entry["id"],
+            lambda _deadline, body=body: {
+                "status": 200,
+                "complete": True,
+                "workerReaped": True,
+                "bodyKind": "json" if body is not None else "empty",
+                "body": body,
+            },
+        )
+    for gate in gates.values():
+        gate.claim()
+    job_name = next(
+        name
+        for name, job in gate_plan["jobs"].items()
+        if any(operation.get("kind") == "conditional-create-commit" for operation in job["observation"])
+    )
+    gate = gates[job_name]
+    operations = gate.snapshot()["plan"]["jobs"][job_name]["observation"]
+    source = {
+        (operation["kind"], operation.get("probe"), operation.get("resource")): operation
+        for operation in parent_plan["observation"]
+    }
+    for operation in operations:
+        if operation.get("kind") == "conditional-create-commit":
+            materialized = copy.deepcopy(operation)
+            materialized.pop("bodyRef", None)
+            original = source[(operation["kind"], operation.get("probe"), operation.get("resource"))]
+            materialized["body"] = copy.deepcopy(original["body"])
+            try:
+                gate.dispatch(
+                    materialized,
+                    False,
+                    lambda: (_ for _ in ()).throw(TimeoutError("uncertain commit")),
+                )
+            except TimeoutError:
+                gate.abandon_observation("transport-deadline")
+            return
+        gate.dispatch(
+            operation,
+            False,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
+
+
+def _real_request_bytes_recovery_child(tmp_path, *, sentinel):
+    lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+    if str(lane) not in sys.path:
+        sys.path.insert(0, str(lane))
+    import request_bytes_admission as parent_admission
+    import request_bytes_compiler as compiler
+    import request_bytes_descriptor as parent_descriptor
+    import request_bytes_production as parent_production
+    import request_bytes_recovery_campaign as recovery
+    from test_request_bytes_admission import Admission, owner_permission
+
+    fixture = Admission(tmp_path / "owner")
+    case_id = compiler.RAW_16MIB_OVER_CASE_ID if sentinel else None
+    nonce = ("e" if sentinel else "f") * 32
+    fixture.plan = parent_descriptor.plan_compiler(nonce, case_id=case_id)
+    fixture.execution_plan = parent_descriptor.execution_plan(fixture.plan)
+    fixture.permission = owner_permission(
+        fixture.plan,
+        fixture.commit,
+        hashlib.sha256(fixture.artifact_path.read_bytes()).hexdigest(),
+        parent_descriptor.source_map(),
+        fixture.baseline,
+    )
+    if case_id is not None:
+        fixture.permission["caseId"] = case_id
+        fixture.permission["gateReservationSeconds"]["upload"] = (
+            parent_descriptor.transport_deadline_seconds(case_id)
+        )
+    fixture.permission_path.write_text(json.dumps(fixture.permission))
+    fixture.inputs = parent_admission.freeze_inputs(
+        fixture.permission_path,
+        fixture.plan,
+        source_root=fixture.source,
+        artifact_path=fixture.artifact_path,
+        baseline=fixture.baseline,
+    )
+    parent_plan = (
+        compiler.compile_request_bytes_sentinel_plan(
+            parent_descriptor.PROJECT, parent_descriptor.DATABASE, nonce
+        )
+        if sentinel
+        else compiler.compile_request_bytes_plan(
+            parent_descriptor.PROJECT, parent_descriptor.DATABASE, nonce
+        )
+    )
+    parent_gate_plan = parent_admission.gate_plan_for(fixture.inputs, fixture.permission)
+    parent_path = (tmp_path / "parent-gate").resolve()
+    parent_claim = parent_admission.reservation_claim(
+        fixture.inputs, gate_path=parent_path, gate_plan=parent_gate_plan
+    )
+    ledger = Ledger.create(tmp_path / "ledger")
+    parent_ticket = ledger.reserve(
+        parent_production._envelope(fixture.permission, parent_claim),
+        parent_claim,
+        parent_gate_plan,
+        generation=parent_admission.abort_generation(fixture.inputs),
+        now=time.time(),
+    )
+    process = multiprocessing.Process(
+        target=_uncertain_request_bytes_parent,
+        args=(str(parent_path), parent_gate_plan, parent_plan),
+    )
+    process.start()
+    process.join(30)
+    assert process.exitcode == 0
+
+    recovery_nonce = ("a" if sentinel else "b") * 32
+    selected_probe = "raw-16mib-over" if sentinel else "under"
+    recovery_plan = recovery.compile_recovery_plan(
+        parent_plan, selected_probe=selected_probe, recovery_nonce=recovery_nonce
+    )
+    gate_plan = recovery.compile_gate_plan(
+        parent_plan,
+        selected_probe=selected_probe,
+        recovery_nonce=recovery_nonce,
+        recovery_plan=recovery_plan,
+    )
+    resources = sorted(
+        {
+            operation["resource"]
+            for operation in gate_plan["jobs"][recovery.RECOVERY_JOB]["recovery"]
+        }
+    )
+    child_permission = {"kind": "offline-recovery-permission-v1", "nonce": recovery_nonce}
+    child_generation = copy.deepcopy(parent_admission.abort_generation(fixture.inputs))
+    child_generation["collectorSourceDigest"] = digest("distinct recovery source closure")
+    child_generation["sourceDigests"]["recovery.py"] = digest("recovery source")
+    request_count = len(gate_plan["jobs"][recovery.RECOVERY_JOB]["recovery"])
+    inspection_count = sum(
+        operation["kind"] == "recovery-inspection-read"
+        for operation in gate_plan["jobs"][recovery.RECOVERY_JOB]["recovery"]
+    )
+    delete_count = sum(
+        operation["kind"] == "recovery-conditional-delete"
+        for operation in gate_plan["jobs"][recovery.RECOVERY_JOB]["recovery"]
+    )
+    absence_count = sum(
+        operation["kind"] == "recovery-absence-read"
+        for operation in gate_plan["jobs"][recovery.RECOVERY_JOB]["recovery"]
+    )
+    child_budget = {"requests": request_count, "accounts": 0, "resources": len(resources), "costMicrousd": request_count}
+    child_claim = {
+        "kind": reservations.RECOVERY_CHILD_KIND,
+        "version": 2,
+        "campaignId": parent_descriptor.CAMPAIGN,
+        "manifestDigest": digest(recovery_plan),
+        "nonceDigest": digest(recovery_nonce),
+        "gatePath": str((tmp_path / "child-gate").resolve()),
+        "gatePlanDigest": digest(gate_plan),
+        "locks": parent_claim["locks"],
+        "budget": child_budget,
+        "durationSeconds": 1200,
+        "generation": child_generation,
+        "parentClaimDigest": parent_ticket["claimDigest"],
+        "parentPlanDigest": digest(parent_plan),
+        "recoveryNonce": recovery_nonce,
+        "selectedProbe": selected_probe,
+        "resourceDigest": digest(resources),
+        "ownedResources": resources,
+        "ownerIdentity": "offline-child-owner",
+        "recoveryOwner": "offline-recovery-owner",
+        "operationClass": reservations.RECOVERY_OPERATION_CLASS,
+        "readCount": inspection_count + absence_count,
+        "inspectionCount": inspection_count,
+        "absenceCount": absence_count,
+        "deleteCount": delete_count,
+        "tariffEstimateMicrousd": recovery_plan["bounds"]["tariffEstimateMicrousd"],
+        "expiresAt": time.time() + 1800,
+        "executionHost": {"platform": platform.system().lower(), "machine": platform.machine()},
+        "permissionDigest": digest(child_permission),
+    }
+    if case_id is not None:
+        child_claim["caseId"] = case_id
+    child_envelope = {
+        "permissionDigest": digest(child_permission),
+        "issuedAt": time.time() - 1,
+        "expiresAt": time.time() + 1800,
+        "limits": child_budget,
+        "concurrency": 1,
+        "scopes": parent_claim["locks"],
+    }
+    child_ticket = ledger.begin_recovery_extension(
+        parent_ticket,
+        child_claim,
+        child_envelope,
+        parent_plan,
+        gate_plan,
+        now=time.time(),
+        canonical_parent_inputs=fixture.inputs,
+        parent_permission=fixture.permission,
+    )
+    return (
+        ledger,
+        parent_ticket,
+        child_ticket,
+        parent_plan,
+        gate_plan,
+        fixture.inputs,
+        fixture.permission,
+        child_claim,
+        child_envelope,
+    )
+
+
+def _settle_absent_recovery_child(ledger, child_ticket, parent_plan, gate_plan):
+    class ResponseBoundGate(Gate):
+        def _recovery_capture(self, operation, status, body):
+            capture = super()._recovery_capture(operation, status, body)
+            capture["responseDigest"] = digest(body)
+            return capture
+
+    bound = ledger.bound_recovery_claim(child_ticket)
+    gate_path = bound["childClaim"]["gatePath"]
+    create(gate_path, gate_plan)
+    gate = ResponseBoundGate(gate_path, reservations.RECOVERY_GATE_JOB)
+    gate.claim()
+    plan_job = gate.snapshot()["plan"]["jobs"][reservations.RECOVERY_GATE_JOB]
+    for operation in plan_job["recovery"]:
+        request = copy.deepcopy(operation)
+        request.pop("versionFrom", None)
+        gate.dispatch(
+            request,
+            True,
+            lambda: (404, {"error": {"code": 404, "status": "NOT_FOUND"}}),
+        )
+    gate.finish()
+    return ledger.settle_recovery_child(
+        child_ticket,
+        receipt_digest=digest("offline typed-absence receipt"),
+        canonical_parent_plan=parent_plan,
+    )
+
+
+def test_sentinel_recovery_claim_reserves_canonical_sixty_operations(tmp_path):
+    parent, _recovery_plan, gate_plan, child = _request_bytes_recovery_shape(
+        tmp_path, sentinel=True
+    )
+
+    reservations._recovery_child_claim(child)
+    reservations._validate_recovery_gate_plan(parent, gate_plan, child)
+    assert len(gate_plan["jobs"][reservations.RECOVERY_GATE_JOB]["recovery"]) == 60
+    assert (child["inspectionCount"], child["deleteCount"], child["absenceCount"]) == (20, 20, 20)
+    assert len(child["ownedResources"]) == 20
+    assert len(gate_plan["jobs"][reservations.RECOVERY_GATE_JOB]["schedule"]) == 60
+
+
+@pytest.mark.parametrize("sentinel,expected", [(False, (85, 17, 17, 51)), (True, (60, 20, 20, 20))])
+def test_real_ledger_admits_canonical_recovery_child_shape(tmp_path, sentinel, expected):
+    (
+        ledger,
+        _parent_ticket,
+        child_ticket,
+        _parent_plan,
+        gate_plan,
+        _parent_inputs,
+        _parent_permission,
+        _child_claim,
+        _child_envelope,
+    ) = _real_request_bytes_recovery_child(tmp_path, sentinel=sentinel)
+
+    claim = ledger.bound_recovery_claim(child_ticket)["childClaim"]
+    assert (
+        claim["budget"]["requests"],
+        claim["inspectionCount"],
+        claim["deleteCount"],
+        claim["absenceCount"],
+    ) == expected
+    assert ("caseId" in claim) is sentinel
+    assert len(gate_plan["jobs"][reservations.RECOVERY_GATE_JOB]["recovery"]) == expected[0]
+
+
+@pytest.mark.parametrize("sentinel", [False, True])
+def test_real_ledger_settles_recovery_only_after_typed_absence(tmp_path, sentinel):
+    (
+        ledger,
+        parent_ticket,
+        child_ticket,
+        parent_plan,
+        gate_plan,
+        _parent_inputs,
+        _parent_permission,
+        child_claim,
+        _child_envelope,
+    ) = _real_request_bytes_recovery_child(tmp_path, sentinel=sentinel)
+    child_operations = gate_plan["jobs"][reservations.RECOVERY_GATE_JOB]["recovery"]
+    assert len(child_operations) == (60 if sentinel else 85)
+    settled = _settle_absent_recovery_child(ledger, child_ticket, parent_plan, gate_plan)
+
+    assert settled == child_ticket
+    assert ledger.bound_recovery_claim(child_ticket)["state"] == "settled"
+    assert ledger.snapshot()["reservations"][parent_ticket["reservation"]]["state"] == "held"
+    gate = Gate(child_claim["gatePath"], reservations.RECOVERY_GATE_JOB).snapshot()
+    assert sorted(gate["jobs"][reservations.RECOVERY_GATE_JOB]["absent"]) == child_claim["ownedResources"]
+
+
+def test_real_ledger_refuses_wrong_sentinel_case_plan_count_and_cost_without_mutation(tmp_path):
+    (
+        ledger,
+        parent_ticket,
+        _child_ticket,
+        parent_plan,
+        gate_plan,
+        parent_inputs,
+        parent_permission,
+        child_claim,
+        child_envelope,
+    ) = _real_request_bytes_recovery_child(tmp_path, sentinel=True)
+    before = ledger.snapshot()
+    wrong_parent = copy.deepcopy(parent_plan)
+    wrong_parent["caseId"] = "FS-LIMIT-API-REQUEST-BYTES-RAW-16MIB-UNDER"
+    candidates = []
+    wrong_case = copy.deepcopy(child_claim)
+    wrong_case["caseId"] = "FS-LIMIT-API-REQUEST-BYTES-RAW-16MIB-UNDER"
+    wrong_count = copy.deepcopy(child_claim)
+    wrong_count["absenceCount"] = 51
+    candidates.append((wrong_count, parent_plan, gate_plan))
+    wrong_cost = copy.deepcopy(child_claim)
+    wrong_cost["budget"]["costMicrousd"] = 85
+    candidates.append((wrong_cost, parent_plan, gate_plan))
+    wrong_requests = copy.deepcopy(child_claim)
+    wrong_requests["budget"]["requests"] = 85
+    candidates.append((wrong_requests, parent_plan, gate_plan))
+    candidates.extend(
+        [
+            (wrong_case, parent_plan, gate_plan),
+            (child_claim, wrong_parent, gate_plan),
+        ]
+    )
+
+    for candidate, candidate_parent, candidate_gate in candidates:
+        with pytest.raises(ValueError):
+            ledger.begin_recovery_extension(
+                parent_ticket,
+                candidate,
+                child_envelope,
+                candidate_parent,
+                candidate_gate,
+                now=time.time(),
+                canonical_parent_inputs=parent_inputs,
+                parent_permission=parent_permission,
+            )
+        assert ledger.snapshot() == before
+
+
+def test_real_ledger_does_not_settle_child_without_typed_absence_reads(tmp_path):
+    (
+        ledger,
+        _parent_ticket,
+        child_ticket,
+        parent_plan,
+        gate_plan,
+        _parent_inputs,
+        _parent_permission,
+        child_claim,
+        _child_envelope,
+    ) = _real_request_bytes_recovery_child(tmp_path, sentinel=True)
+    create(child_claim["gatePath"], gate_plan)
+    Gate(child_claim["gatePath"], reservations.RECOVERY_GATE_JOB).claim()
+    before = ledger.snapshot()
+
+    with pytest.raises(ValueError, match="terminal evidence|typed absence"):
+        ledger.settle_recovery_child(
+            child_ticket,
+            receipt_digest=digest("unproven recovery receipt"),
+            canonical_parent_plan=parent_plan,
+        )
+
+    assert ledger.snapshot() == before
+
+
+def test_sentinel_allocation_adds_to_existing_task_spend_without_resetting_cap():
+    state = {
+        "reservations": {
+            "historical": {
+                "claim": {
+                    "campaignId": "FS-LIMIT-API-REQUEST-BYTES",
+                    "budget": {"costMicrousd": 606},
+                },
+                "recoveryChildren": [],
+            }
+        }
+    }
+
+    assert reservations.task_budget_check(
+        state, "FS-LIMIT-API-REQUEST-BYTES", reservations.RECOVERY_SENTINEL_COST_MICROUSD
+    ) == 666
+
+
+@pytest.mark.parametrize("mutation", ["case", "requests", "cost", "counts"])
+def test_sentinel_recovery_claim_rejects_wrong_case_or_allocation_without_mutation(
+    tmp_path, mutation
+):
+    _parent, _recovery_plan, _gate_plan, child = _request_bytes_recovery_shape(
+        tmp_path, sentinel=True
+    )
+    if mutation == "case":
+        child["caseId"] = "FS-LIMIT-API-REQUEST-BYTES-RAW-16MIB-UNDER"
+    elif mutation == "requests":
+        child["budget"]["requests"] = 85
+    elif mutation == "cost":
+        child["budget"]["costMicrousd"] = 85
+    else:
+        child["absenceCount"] = 51
+    before = copy.deepcopy(child)
+
+    with pytest.raises(ValueError):
+        reservations._recovery_child_claim(child)
+
+    assert child == before
 
 
 def preparation_response(slot):

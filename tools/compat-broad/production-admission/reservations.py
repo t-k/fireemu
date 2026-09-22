@@ -135,6 +135,13 @@ RECOVERY_ABSENCE_REQUESTS = 51
 RECOVERY_DELETE_REQUESTS = 17
 RECOVERY_OPERATION_CLASS = "read-inspect-conditional-delete-v1"
 RECOVERY_GATE_JOB = "request-bytes-recovery-extension"
+RECOVERY_SENTINEL_CASE_ID = "FS-LIMIT-API-REQUEST-BYTES-RAW-16MIB-OVER"
+RECOVERY_SENTINEL_REQUESTS = 60
+RECOVERY_SENTINEL_COST_MICROUSD = 60
+RECOVERY_SENTINEL_INSPECTION_REQUESTS = 20
+RECOVERY_SENTINEL_ABSENCE_REQUESTS = 20
+RECOVERY_SENTINEL_DELETE_REQUESTS = 20
+RECOVERY_SENTINEL_TARIFF_ESTIMATE_MICROUSD = 28
 RECOVERY_CHILD_FIELDS = {
     "kind", "version", "campaignId", "manifestDigest", "nonceDigest",
     "gatePath", "gatePlanDigest", "locks", "budget", "durationSeconds",
@@ -816,8 +823,20 @@ def _claim(value):
 
 
 def _recovery_child_claim(value):
-    if not isinstance(value, dict) or set(value) != RECOVERY_CHILD_FIELDS:
+    if not isinstance(value, dict) or set(value) not in (
+        RECOVERY_CHILD_FIELDS,
+        RECOVERY_CHILD_FIELDS | {"caseId"},
+    ):
         raise ValueError("exact recovery child claim required")
+    sentinel = "caseId" in value
+    if sentinel and value["caseId"] != RECOVERY_SENTINEL_CASE_ID:
+        raise ValueError("unsupported recovery case identity")
+    request_count = RECOVERY_SENTINEL_REQUESTS if sentinel else RECOVERY_CHILD_REQUESTS
+    cost = RECOVERY_SENTINEL_COST_MICROUSD if sentinel else RECOVERY_CHILD_COST_MICROUSD
+    inspection_count = RECOVERY_SENTINEL_INSPECTION_REQUESTS if sentinel else RECOVERY_INSPECTION_REQUESTS
+    absence_count = RECOVERY_SENTINEL_ABSENCE_REQUESTS if sentinel else RECOVERY_ABSENCE_REQUESTS
+    delete_count = RECOVERY_SENTINEL_DELETE_REQUESTS if sentinel else RECOVERY_DELETE_REQUESTS
+    tariff_estimate = RECOVERY_SENTINEL_TARIFF_ESTIMATE_MICROUSD if sentinel else RECOVERY_TARIFF_ESTIMATE_MICROUSD
     if value["kind"] != RECOVERY_CHILD_KIND or type(value["version"]) is not int or value["version"] != 2:
         raise ValueError("versioned recovery child claim required")
     for key in ("manifestDigest", "nonceDigest", "gatePlanDigest", "parentClaimDigest", "parentPlanDigest", "resourceDigest", "permissionDigest"):
@@ -831,13 +850,13 @@ def _recovery_child_claim(value):
         raise ValueError("recovery operation class changed")
     if (
         any(type(value[key]) is not int for key in ("readCount", "inspectionCount", "absenceCount", "deleteCount"))
-        or value["readCount"] != RECOVERY_INSPECTION_REQUESTS + RECOVERY_ABSENCE_REQUESTS
-        or value["inspectionCount"] != RECOVERY_INSPECTION_REQUESTS
-        or value["absenceCount"] != RECOVERY_ABSENCE_REQUESTS
-        or value["deleteCount"] != RECOVERY_DELETE_REQUESTS
-        or value["tariffEstimateMicrousd"] != RECOVERY_TARIFF_ESTIMATE_MICROUSD
+        or value["readCount"] != inspection_count + absence_count
+        or value["inspectionCount"] != inspection_count
+        or value["absenceCount"] != absence_count
+        or value["deleteCount"] != delete_count
+        or value["tariffEstimateMicrousd"] != tariff_estimate
         or value["budget"]["resources"] != len(value["ownedResources"])
-        or value["budget"] != {"requests": RECOVERY_CHILD_REQUESTS, "accounts": 0, "resources": value["budget"]["resources"], "costMicrousd": RECOVERY_CHILD_COST_MICROUSD}
+        or value["budget"] != {"requests": request_count, "accounts": 0, "resources": value["budget"]["resources"], "costMicrousd": cost}
     ):
         raise ValueError("recovery allocation counts changed")
     if not isinstance(value["ownedResources"], list) or not value["ownedResources"] or len(set(value["ownedResources"])) != len(value["ownedResources"]):
@@ -1863,7 +1882,15 @@ def _validate_recovery_gate_plan(parent_plan, child_plan, child):
     lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
     sys.path.insert(0, str(lane))
     try:
+        import request_bytes_compiler as parent_compiler
         import request_bytes_recovery_campaign as recovery_campaign
+        sentinel = child.get("caseId") == RECOVERY_SENTINEL_CASE_ID
+        if sentinel:
+            if parent_plan.get("caseMode") != "single-exploratory-sentinel":
+                raise ValueError("sentinel parent case identity required")
+            parent_compiler.validate_request_bytes_sentinel_plan(parent_plan)
+        elif parent_plan.get("caseMode") == "single-exploratory-sentinel":
+            raise ValueError("sentinel recovery case identity required")
         recovery = recovery_campaign.compile_recovery_plan(
             parent_plan,
             selected_probe=child["selectedProbe"],
@@ -1883,10 +1910,14 @@ def _validate_recovery_gate_plan(parent_plan, child_plan, child):
     if not isinstance(jobs, dict) or len(jobs) != 1:
         raise ValueError("one recovery Gate job required")
     operations = next(iter(jobs.values())).get("recovery")
-    if not isinstance(operations, list) or len(operations) != RECOVERY_CHILD_REQUESTS:
+    request_count = RECOVERY_SENTINEL_REQUESTS if child.get("caseId") else RECOVERY_CHILD_REQUESTS
+    inspection_count = RECOVERY_SENTINEL_INSPECTION_REQUESTS if child.get("caseId") else RECOVERY_INSPECTION_REQUESTS
+    delete_count = RECOVERY_SENTINEL_DELETE_REQUESTS if child.get("caseId") else RECOVERY_DELETE_REQUESTS
+    absence_count = RECOVERY_SENTINEL_ABSENCE_REQUESTS if child.get("caseId") else RECOVERY_ABSENCE_REQUESTS
+    if not isinstance(operations, list) or len(operations) != request_count:
         raise ValueError("recovery operation count changed")
     kinds = [operation.get("kind") for operation in operations]
-    if kinds.count("recovery-inspection-read") != RECOVERY_INSPECTION_REQUESTS or kinds.count("recovery-conditional-delete") != RECOVERY_DELETE_REQUESTS or kinds.count("recovery-absence-read") != RECOVERY_ABSENCE_REQUESTS:
+    if kinds.count("recovery-inspection-read") != inspection_count or kinds.count("recovery-conditional-delete") != delete_count or kinds.count("recovery-absence-read") != absence_count:
         raise ValueError("recovery operation classes changed")
     if any(operation.get("versionFrom") != "recovery-inspection-read" for operation in operations if operation.get("kind") == "recovery-conditional-delete"):
         raise ValueError("version-bound delete inspection required")
@@ -1895,7 +1926,29 @@ def _validate_recovery_gate_plan(parent_plan, child_plan, child):
         raise ValueError("recovery resources differ from canonical plan")
 
 
-def _validate_recovery_terminal_slots(gate, job_name, expected_fields):
+def _compile_request_bytes_parent(parent_inputs):
+    """Compile exactly the legacy parent or the explicitly selected sentinel."""
+    lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
+    sys.path.insert(0, str(lane))
+    try:
+        import request_bytes_compiler as request_compiler
+
+        plan_inputs = parent_inputs["plan"]
+        case_id = plan_inputs.get("caseId")
+        if case_id == RECOVERY_SENTINEL_CASE_ID:
+            return request_compiler.compile_request_bytes_sentinel_plan(
+                plan_inputs["project"], plan_inputs["database"], plan_inputs["nonce"]
+            )
+        if case_id is not None or plan_inputs.get("caseMode") is not None:
+            raise ValueError("unsupported request-byte parent case identity")
+        return request_compiler.compile_request_bytes_plan(
+            plan_inputs["project"], plan_inputs["database"], plan_inputs["nonce"]
+        )
+    except (ImportError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("canonical parent compiler refused inputs") from error
+
+
+def _validate_recovery_terminal_slots(gate, job_name, expected_fields, child_claim):
     """Bind every compiler recovery slot to its journal event or skip."""
     job = gate["jobs"][job_name]
     plan_job = gate["plan"]["jobs"][job_name]
@@ -1903,7 +1956,8 @@ def _validate_recovery_terminal_slots(gate, job_name, expected_fields):
         raise ValueError("recovery child creation proofs must remain empty")
     operations = plan_job["recovery"]
     schedule = plan_job.get("schedule", [])
-    if len(operations) != RECOVERY_CHILD_REQUESTS or len(schedule) != len(operations):
+    request_count = RECOVERY_SENTINEL_REQUESTS if child_claim.get("caseId") else RECOVERY_CHILD_REQUESTS
+    if len(operations) != request_count or len(schedule) != len(operations):
         raise ValueError("recovery schedule is not canonical")
     events, skips = {}, {}
     journal_events = gate.get("events", [])
@@ -2637,20 +2691,13 @@ class Ledger:
         if not isinstance(canonical_parent_inputs, dict) or not isinstance(parent_permission, dict):
             # The public admission API reports all malformed producer bindings as ValueError.
             raise ValueError("canonical parent producer inputs and permission required")  # noqa: TRY004
-        try:
-            lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
-            sys.path.insert(0, str(lane))
-            import request_bytes_compiler as request_compiler
-            actual_parent_plan = request_compiler.compile_request_bytes_plan(
-                canonical_parent_inputs["plan"]["project"],
-                canonical_parent_inputs["plan"]["database"],
-                canonical_parent_inputs["plan"]["nonce"],
-            )
-        except (ImportError, KeyError, TypeError, ValueError) as error:
-            raise ValueError("canonical parent compiler refused inputs") from error
+        actual_parent_plan = _compile_request_bytes_parent(canonical_parent_inputs)
         if digest(actual_parent_plan) != digest(canonical_parent_plan):
             raise ValueError("canonical parent compiler plan differs")
         _recovery_child_claim(child_claim)
+        expected_case_id = actual_parent_plan.get("caseId")
+        if child_claim.get("caseId") != expected_case_id:
+            raise ValueError("recovery child case identity differs from parent")
         _envelope(new_envelope)
         if now is not None:
             _number(now)
@@ -2765,22 +2812,24 @@ class Ledger:
                 or child_claim["parentClaimDigest"] != parent["claimDigest"]
                 or child_claim["campaignId"] != claim["campaignId"]
                 or claim["campaignId"] != "FS-LIMIT-API-REQUEST-BYTES"
-                or claim["budget"]["requests"] != 265
-                or claim["budget"]["costMicrousd"] != 303
+                or claim["budget"]["requests"] != (108 if expected_case_id else 265)
+                or claim["budget"]["costMicrousd"] != (123 if expected_case_id else 303)
                 or child_claim["nonceDigest"] == claim["nonceDigest"]
                 or child_claim["gatePlanDigest"] == claim["gatePlanDigest"]
                 or child_claim["permissionDigest"] == state["envelopes"][parent["envelopeDigest"]]["envelope"]["permissionDigest"]
                 or child_claim["generation"] == parent.get("generation")
             ):
                 raise ValueError("recovery child is not bound to held parent")
-            if child_claim["budget"]["requests"] != RECOVERY_CHILD_REQUESTS or child_claim["budget"]["costMicrousd"] != RECOVERY_CHILD_COST_MICROUSD:
-                raise ValueError("recovery child must reserve all 85 requests")
+            child_requests = RECOVERY_SENTINEL_REQUESTS if expected_case_id else RECOVERY_CHILD_REQUESTS
+            child_cost = RECOVERY_SENTINEL_COST_MICROUSD if expected_case_id else RECOVERY_CHILD_COST_MICROUSD
+            if child_claim["budget"]["requests"] != child_requests or child_claim["budget"]["costMicrousd"] != child_cost:
+                raise ValueError("recovery child must reserve its canonical request allocation")
             if child_claim["durationSeconds"] < canonical_child_gate_plan["wallSeconds"]:
                 raise ValueError("recovery duration below actual Gate wall")
             decision_now = time.time() if now is None else now
             if child_claim["expiresAt"] < decision_now + child_claim["durationSeconds"]:
                 raise ValueError("recovery permission window is too short")
-            if new_envelope["permissionDigest"] != child_claim["permissionDigest"] or new_envelope["limits"]["requests"] < RECOVERY_CHILD_REQUESTS or new_envelope["limits"]["costMicrousd"] < RECOVERY_CHILD_COST_MICROUSD:
+            if new_envelope["permissionDigest"] != child_claim["permissionDigest"] or new_envelope["limits"]["requests"] < child_requests or new_envelope["limits"]["costMicrousd"] < child_cost:
                 raise ValueError("recovery envelope does not fund canonical child")
             if any(
                 not any(
@@ -2829,7 +2878,7 @@ class Ledger:
                 raise ValueError("recovery nonce already reserved")
             if any(entry["envelope"].get("permissionDigest") == new_envelope["permissionDigest"] for entry in state["envelopes"].values()) or any(entry["envelope"].get("permissionDigest") == new_envelope["permissionDigest"] for entry in state.get("recoveryEnvelopes", {}).values()):
                 raise ValueError("recovery permission already spent")
-            task_budget_check(state, claim["campaignId"], RECOVERY_CHILD_COST_MICROUSD)
+            task_budget_check(state, claim["campaignId"], child_cost)
             child_reservation = secrets.token_hex(32)
             child_ticket = {
                 "ledgerPath": str(self.path),
@@ -2992,17 +3041,7 @@ class Ledger:
             parent_claim_digest = parent["claimDigest"]
             parent_snapshot = copy.deepcopy(parent["claim"])
             parent_plan_digest = claim["parentPlanDigest"]
-        try:
-            lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
-            sys.path.insert(0, str(lane))
-            import request_bytes_compiler as request_compiler
-            actual_parent_plan = request_compiler.compile_request_bytes_plan(
-                canonical_parent_plan["project"],
-                canonical_parent_plan["database"],
-                canonical_parent_plan["nonce"],
-            )
-        except (ImportError, KeyError, TypeError, ValueError) as error:
-            raise ValueError("canonical parent compiler refused inputs") from error
+        actual_parent_plan = _compile_request_bytes_parent({"plan": canonical_parent_plan})
         if digest(actual_parent_plan) != digest(canonical_parent_plan) or digest(actual_parent_plan) != parent_plan_digest:
             raise ValueError("canonical parent compiler plan differs")
         expected_fields = {
@@ -3022,6 +3061,8 @@ class Ledger:
         job_name = RECOVERY_GATE_JOB
         job = jobs.get(job_name) if isinstance(jobs, dict) else None
         plan_job = gate["plan"].get("jobs", {}).get(job_name)
+        child_requests = RECOVERY_SENTINEL_REQUESTS if claim.get("caseId") else RECOVERY_CHILD_REQUESTS
+        child_absence_reads = RECOVERY_SENTINEL_ABSENCE_REQUESTS if claim.get("caseId") else RECOVERY_ABSENCE_REQUESTS
         if (
             not isinstance(job, dict)
             or not isinstance(plan_job, dict)
@@ -3029,18 +3070,18 @@ class Ledger:
             or gate.get("observation") != 0
             or gate.get("recovery") != gate.get("total")
             or type(gate.get("total")) is not int
-            or not 51 <= gate.get("total") <= RECOVERY_CHILD_REQUESTS
+            or not child_absence_reads <= gate.get("total") <= child_requests
             or gate.get("managementUsed") != []
             or job.get("complete") is not True
             or job.get("inflight")
             or job.get("recovery") != len(plan_job.get("recovery", []))
-            or job.get("recovery") != RECOVERY_CHILD_REQUESTS
+            or job.get("recovery") != child_requests
             or set(job.get("absent", [])) != set(job.get("resources", []))
-            or len(job.get("absent", [])) != RECOVERY_ABSENCE_REQUESTS
+            or len(job.get("absent", [])) != child_absence_reads
             or unconfirmed_creates(gate, job_name)
         ):
             raise ValueError("recovery Gate terminal evidence incomplete")
-        _validate_recovery_terminal_slots(gate, job_name, expected_fields)
+        _validate_recovery_terminal_slots(gate, job_name, expected_fields, claim)
         try:
             validate_absence_proofs(gate, job_name)
         except Exception as error:
@@ -3113,15 +3154,7 @@ class Ledger:
         )
         lane = Path(__file__).resolve().parent.parent / "fs-request-bytes-boundary"
         sys.path.insert(0, str(lane))
-        try:
-            import request_bytes_compiler as request_compiler
-            actual_parent = request_compiler.compile_request_bytes_plan(
-                canonical_parent_plan["project"],
-                canonical_parent_plan["database"],
-                canonical_parent_plan["nonce"],
-            )
-        except (ImportError, KeyError, TypeError, ValueError) as error:
-            raise ValueError("canonical parent compiler refused inputs") from error
+        actual_parent = _compile_request_bytes_parent({"plan": canonical_parent_plan})
         if digest(actual_parent) != digest(canonical_parent_plan) or digest(actual_parent) != child_claim["parentPlanDigest"]:
             raise ValueError("canonical parent compiler plan differs")
         parent_gate = Gate(parent_claim["gatePath"], _gate_job(parent_claim)).snapshot()

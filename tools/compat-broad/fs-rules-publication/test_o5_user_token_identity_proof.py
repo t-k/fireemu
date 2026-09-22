@@ -209,7 +209,7 @@ def test_setup_ack_mints_sealed_proof_without_network(tmp_path):
     setup_result = remote.adapt_setup_result(item, {"status": 200, "body": response_body}, endpoint="fixture", sequence=1, request_digest=request_digest)
     handoff, receipt = setup_result.private, setup_result.receipt
     plan = {"kind": "setup-test-plan"}
-    event = {"id": "setup/account/owner-a/signup", "completed": True, "workerReaped": True, "responseDigest": digest(response_body)}
+    event = {"id": "setup/account/owner-a/signup", "completed": True, "workerReaped": True, "responseDigest": digest(response_body), "principalRef": "owner-a", "nonce": "d" * 32, "uid": "fresh-uid", "requestDigest": request_digest}
     gate_path = tmp_path / "gate"
     gate_path.mkdir(mode=0o700, exist_ok=True)
     (gate_path / "lock").write_text("")
@@ -255,7 +255,7 @@ def test_setup_ack_rejects_token_or_gate_binding_changes(tmp_path):
     setup_result = remote.adapt_setup_result(item, {"status": 200, "body": response_body}, endpoint="fixture", sequence=1, request_digest=request_digest)
     handoff, receipt = setup_result.private, setup_result.receipt
     plan = {"kind": "setup-test-plan"}
-    event = {"id": "setup/account/owner-a/signup", "completed": True, "workerReaped": True, "responseDigest": digest(response_body)}
+    event = {"id": "setup/account/owner-a/signup", "completed": True, "workerReaped": True, "responseDigest": digest(response_body), "principalRef": "owner-a", "nonce": "d" * 32, "uid": "fresh-uid", "requestDigest": request_digest}
     gate_path = tmp_path / "gate"
     gate_path.mkdir(mode=0o700, exist_ok=True)
     (gate_path / "lock").write_text("")

@@ -376,7 +376,12 @@ def mint_acknowledged_setup_proof(
     event = next((candidate for candidate in state.get("managementEvents", []) if isinstance(candidate, dict) and candidate.get("id") == gate_acknowledgment["slotId"]), None)
     if not isinstance(event, dict) or event.get("completed") is not True or event.get("workerReaped") is not True:
         raise ValueError("setup Gate event is not durably completed")
-    if event.get("responseDigest") != gate_acknowledgment["responseDigest"] or digest(event) != gate_acknowledgment["eventDigest"]:
+    event_response_digest = event.get("responseDigest")
+    if event_response_digest is None and isinstance(event.get("rulesReceipt"), dict):
+        receipt_body = event["rulesReceipt"].get("body")
+        if isinstance(receipt_body, dict):
+            event_response_digest = receipt_body.get("responseDigest")
+    if event_response_digest != gate_acknowledgment["responseDigest"] or digest(event) != gate_acknowledgment["eventDigest"]:
         raise ValueError("setup Gate event binding differs")
     if not isinstance(private_handoff, SetupPrivateHandoff) or not isinstance(setup_receipt, SetupPublicReceipt):
         raise ValueError("typed setup handoff and receipt required")
@@ -384,6 +389,8 @@ def mint_acknowledged_setup_proof(
     uid = setup_receipt.local_id
     if not isinstance(token, str) or not token or not isinstance(uid, str) or uid != gate_acknowledgment["uid"]:
         raise ValueError("acknowledged setup handoff required")
+    if event.get("principalRef") != principal_ref or event.get("nonce") != gate_acknowledgment["nonce"] or event.get("uid") != uid or event.get("requestDigest") != request_digest:
+        raise ValueError("setup Gate subject binding differs")
     if response_digest != gate_acknowledgment["responseDigest"] or handoff_request_digest != request_digest:
         raise ValueError("setup handoff provenance differs")
     if hashlib.sha256(token.encode()).hexdigest() != gate_acknowledgment["tokenHash"]:

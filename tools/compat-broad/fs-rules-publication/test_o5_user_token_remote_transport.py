@@ -1123,6 +1123,36 @@ def test_commit_and_observation_error_receipts_use_null_fields(plan):
     assert error["fields"] is None
 
 
+def test_atomic_commit_permission_denial_projects_canonical_refusal():
+    commit_plan, operation, _ = minimal_wire_plan("commit", "create")
+    prepared = remote.prepare_request(commit_plan, operation, credentials={"unauthenticated": ""})
+    result = remote._adapt_firestore_result(
+        prepared,
+        {"status": 403, "body": {"error": {"code": 403, "status": "PERMISSION_DENIED"}}},
+        sequence=1,
+        endpoint="127.0.0.1:1234",
+    )
+    assert result["code"] == 7
+    assert result["restErrorCode"] == 403
+    assert result["responseDigest"] == digest({"error": {"code": 403, "status": "PERMISSION_DENIED"}})
+    assert result["refusal"]["canonicalRowDigest"] == prepared["canonicalRowDigest"]
+    assert result["effects"] == []
+    with pytest.raises(ValueError, match="REST error response shape refused"):
+        remote._adapt_firestore_result(
+            prepared,
+            {"status": 403, "body": {"error": {"code": 403, "status": "PERMISSION_DENIED"}, "writeResults": []}},
+            sequence=1,
+            endpoint="127.0.0.1:1234",
+        )
+    with pytest.raises(ValueError, match="REST error response shape refused"):
+        remote._adapt_firestore_result(
+            prepared,
+            {"status": 403, "body": {"error": {"code": 403, "status": "OTHER"}}},
+            sequence=1,
+            endpoint="127.0.0.1:1234",
+        )
+
+
 def test_plan_shape_keeps_o5_accounts_rows_and_rulesets(plan):
     assert len(plan["observation"]) == 33
     assert len(plan["ownedAccounts"]) == 7

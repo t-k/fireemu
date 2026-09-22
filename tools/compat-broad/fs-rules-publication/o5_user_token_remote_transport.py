@@ -510,6 +510,8 @@ def _observation(
             "method": "GET",
             "headers": headers,
             "body": None,
+            "canonicalRowDigest": digest(operation),
+            "principalRef": principal,
         }
     return {
         "service": "firestore",
@@ -519,6 +521,8 @@ def _observation(
         "method": "POST",
         "headers": headers,
         "body": {"writes": _commit_writes(plan, operation["writes"], account_bindings)},
+        "canonicalRowDigest": digest(operation),
+        "principalRef": principal,
     }
 
 
@@ -1135,6 +1139,44 @@ def _adapt_firestore_result(
     wire = {"endpoint": endpoint, "wireSequence": sequence}
     error = body.get("error")
     if status < 200 or status >= 300:
+        if (
+            prepared.get("service") == "firestore"
+            and prepared.get("route") == "observation-commit"
+            and prepared.get("method") == "POST"
+            and prepared.get("path") == f"/v1/projects/{PROJECT}/databases/(default)/documents:commit"
+            and status == 403
+            and set(body) == {"error"}
+            and isinstance(error, dict)
+            and error.get("code") == 403
+            and error.get("status") == "PERMISSION_DENIED"
+            and isinstance(prepared.get("canonicalRowDigest"), str)
+            and "principalRef" in prepared
+        ):
+            response_digest = digest(body)
+            return {
+                "status": "PERMISSION_DENIED",
+                "code": 7,
+                "restErrorCode": 403,
+                "httpStatus": 403,
+                "complete": True,
+                "workerReaped": True,
+                "documentPresent": False,
+                "fields": None,
+                "effects": [],
+                "responseDigest": response_digest,
+                "refusal": {
+                    "kind": "atomic-commit-permission-denied-v1",
+                    "canonicalRowDigest": prepared["canonicalRowDigest"],
+                    "principalRef": prepared["principalRef"],
+                    "operation": "Commit",
+                    "code": 7,
+                    "restErrorCode": 403,
+                    "status": "PERMISSION_DENIED",
+                },
+                **wire,
+            }
+        if prepared.get("route") == "observation-commit" and status == 403:
+            raise ValueError("REST error response shape refused")
         if (
             not isinstance(error, dict)
             or type(error.get("code")) is not int

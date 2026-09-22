@@ -67,54 +67,37 @@
         "runtimeInputCount": 430,
         "runtimeInputsDigest": "bdeeb69292c6fab6c0a587588f920192ce3ee249c77605af680780d1b74d616b",
         "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-        "sha256": "83a49f7018984e868849c0f56874af925c64f52ef7f659cb56133950667f8180"
+        "sha256": "aaeef70f7d7a1af830e04fc727f384492fca0444967e2130c4f583989c17e293"
       },
       "campaignId": "FS-WRITE-LIMITS-03",
       "digests": {
-        "parentManifestSha256": "3419d31f420185dde6e48a2c3749f5a5f8872d3c15e8d882af99a73ba0bf9a04",
+        "parentManifestSha256": "d39bfa25b8795cb36bf88e6929d9e002eedaaa0f35061c09926b3cae7153ba1a",
         "sourceInputsBound": true,
-        "supervisorManifestSha256": "3419d31f420185dde6e48a2c3749f5a5f8872d3c15e8d882af99a73ba0bf9a04"
+        "supervisorManifestSha256": "d39bfa25b8795cb36bf88e6929d9e002eedaaa0f35061c09926b3cae7153ba1a"
       },
       "execution": {
         "allOwnedResourcesAbsentAfterRecovery": true,
         "cleanupComplete": true,
         "cleanupValidated": true,
         "completed": true,
-        "configurationDigest": "111f2670a2e070f03aa8b1a1e428472806b7256523f3101d60eb3d6c00177df2",
+        "configurationDigest": "bcef87578a5b1e30cdf9d66c30fedb1dcc5e5e7c1a986e4a644bc607130e1dd6",
         "database": "(default)",
         "gateCloseRefused": false,
         "indexConfiguration": {
-          "sha256": "8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c",
-          "sourceCommit": "2526c61eda5fc53ac91250307786127ae3c601be"
+          "profile": "nx-local",
+          "sha256": "1e645c04419ac8418e9d05ebceb7a11d641f7127260de5cd1f307570cc93f332",
+          "sourceCommit": null
         },
         "infrastructureFailures": [],
         "observationRequests": 89,
         "ownedDocuments": 29,
         "ownedProcess": {
           "listenersClosed": true,
-          "pid": 66560,
+          "pid": 19801,
           "stopped": true
         },
-        "pendingDifferences": [
-          {
-            "basis": "exact typed document/version not returned",
-            "index": 47,
-            "pending": true,
-            "reason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove"
-          },
-          {
-            "basis": "exact typed document/version not returned",
-            "index": 50,
-            "pending": true,
-            "reason": "the local shadow supervisor pins the historical index configuration and cannot apply the declared exemption, so the local run shows the index-entry refusal the exemption exists to remove"
-          }
-        ],
-        "pendingRows": [
-          47,
-          48,
-          49,
-          50
-        ],
+        "pendingDifferences": [],
+        "pendingRows": [],
         "project": "demo-firestore-probe",
         "receiptValidated": true,
         "recordingComplete": true,
@@ -124,13 +107,13 @@
         "supervisorStatus": "completed",
         "target": "owned-local-artifact-on-loopback"
       },
-      "executionCommit": "ef7ca9bce90d86509cd0fa98a069429c5e21728c"
+      "executionCommit": "a379ead6823d30fbe722dafa8f014ce5fcbb94b6"
     }
   },
   "formalCompatibilityClaim": false,
   "kind": "fs-write-limits-03-local-shadow-v2",
-  "note": "Local artifact evidence only. The executed nonces, the owned resource names and the retained binaries live in private output directories and are not published here. This is not a production observation and promotes nothing. The local shadow supervisor records the closed historical index profile and verifies its digest. The historical profile cannot apply the declared exemption; the nx-local profile applies the exact local after-state and does not carry those pending rows.",
+  "note": "Local artifact evidence only. The executed nonces, the owned resource names and the retained binaries live in private output directories and are not published here. This is not a production observation and promotes nothing. The local shadow supervisor records the closed nx-local index profile and verifies its digest. The historical profile cannot apply the declared exemption; the nx-local profile applies the exact local after-state and does not carry those pending rows.",
   "productionExecuted": false,
-  "sourceCommit": "ef7ca9bce90d86509cd0fa98a069429c5e21728c",
+  "sourceCommit": "a379ead6823d30fbe722dafa8f014ce5fcbb94b6",
   "status": "completed-local-only"
 }

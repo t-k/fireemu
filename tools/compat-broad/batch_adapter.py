@@ -1072,9 +1072,16 @@ class Adapter:
                         proof is None
                         or body.get("name") != name
                         or body.get("updateTime") != proof["updateTime"]
-                        or not isinstance(proof.get("fieldsDigest"), str)
                         or not isinstance(body.get("fields"), dict)
-                        or digest(body["fields"]) != proof["fieldsDigest"]
+                    ):
+                        raise ValueError("document readback mismatch")
+                    fields_digest = proof.get("fieldsDigest")
+                    if fields_digest is None:
+                        fields_digest = digest(body["fields"])
+                        proof["fieldsDigest"] = fields_digest
+                    if (
+                        not isinstance(fields_digest, str)
+                        or digest(body["fields"]) != fields_digest
                     ):
                         raise ValueError("document readback mismatch")
                     query = "?" + urllib.parse.urlencode(

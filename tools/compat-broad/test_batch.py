@@ -637,6 +637,64 @@ def test_cleanup_never_deletes_same_version_document_with_changed_fields(
     assert run.unrecovered == [{"kind": "document", "name": name}]
 
 
+def test_cleanup_readback_completes_transform_proof_before_conditional_delete(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as a
+
+    c = contract()
+    name = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf/transform"
+    fields = {"count": {"doubleValue": "NaN"}}
+    created = {"name": name, "fields": fields, "updateTime": "2026-09-16T00:00:01Z"}
+    seeded = {
+        "name": name,
+        "fields": {"marker": {"stringValue": "seed"}},
+        "updateTime": "2026-09-16T00:00:00Z",
+    }
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        if method == "GET" and len(calls) == 1:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "PATCH":
+            return 200, seeded, "application/json"
+        if method == "GET":
+            if len(calls) == 3:
+                return 200, created, "application/json"
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "DELETE":
+            return 200, {}, "application/json"
+        pytest.fail(f"unexpected request: {method} {url}")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "parent": name.rsplit("/tf/transform", 1)[0],
+        "targets": [name],
+        "seed": [{"path": "/v1/" + name, "fields": {"marker": {"stringValue": "seed"}}}],
+        "steps": [],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+    run.creation_proofs[name]["updateTime"] = created["updateTime"]
+    run.creation_proofs[name]["fieldsDigest"] = None
+    run.cleanup()
+
+    assert [method for method, _url, _body in calls] == [
+        "GET", "PATCH", "GET", "DELETE", "GET"
+    ]
+    assert run.unrecovered == []
+
+
 def test_firestore_proves_and_cleans_up_every_successful_commit_document(
     tmp_path, monkeypatch
 ):

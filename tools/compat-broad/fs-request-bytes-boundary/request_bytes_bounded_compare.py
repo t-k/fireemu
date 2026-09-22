@@ -161,7 +161,7 @@ def _probe_result(run: Path, probe: str) -> dict[str, Any]:
     expected_names = set(expected)
     if any(_row_resource(row) not in expected_names for row in ownership_reads + deletes + absence):
         raise ComparisonError(f"{probe}: cleanup resource set")
-    if any(_status(row) not in (200, 404) for row in ownership_reads):
+    if any(_status(row) != 200 for row in ownership_reads):
         raise ComparisonError(f"{probe}: ownership read status")
     update_times = {}
     for row in readbacks:
@@ -170,6 +170,14 @@ def _probe_result(run: Path, probe: str) -> dict[str, Any]:
         if not isinstance(update_time, str) or not update_time:
             raise ComparisonError(f"{probe}: readback version")
         update_times[row["resource"]] = update_time
+    for row in ownership_reads:
+        body = _response(collection, row)
+        if (
+            body.get("name") != row["resource"]
+            or not _same_json(body.get("fields"), expected[row["resource"]])
+            or body.get("updateTime") != update_times[row["resource"]]
+        ):
+            raise ComparisonError(f"{probe}: ownership version linkage")
     if any(_status(row) != 200 for row in deletes):
         raise ComparisonError(f"{probe}: version-bound delete status")
     for row in deletes:
@@ -272,6 +280,8 @@ def compare_runs(production_run: Path, local_run: Path, output: Path) -> dict[st
         raise ComparisonError("immutable body binding")
     if expected.get("savedRun", "").endswith(PRODUCTION_RUN) is False:
         raise ComparisonError("saved production run binding")
+    if production_run.name != PRODUCTION_RUN:
+        raise ComparisonError("saved production path binding")
     _validate_runtime_anchor(production_run)
     production = {probe: _probe_result(production_run, probe) for probe in PROBES}
     local = {probe: _probe_result(local_run, probe) for probe in PROBES}

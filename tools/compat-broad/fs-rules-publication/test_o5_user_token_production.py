@@ -608,6 +608,10 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
             }
             assert "setup-token" not in json.dumps(receipts)
             assert "setup-token" not in repr(private_handoffs)
+            for handoff in private_handoffs.values():
+                _, response_digest, request_digest = handoff.proof_material()
+                assert len(response_digest) == 64
+                assert isinstance(request_digest, str) and len(request_digest) == 64
             assert all(state["phase"] == "acknowledged" for state in ownership.values())
             for account in plan["ownedAccounts"]:
                 assert ownership[account["ref"]]["tenantId"] == account.get("tenant")

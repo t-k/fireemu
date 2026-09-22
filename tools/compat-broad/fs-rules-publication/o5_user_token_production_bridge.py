@@ -272,6 +272,9 @@ def run_bound_setup(
                     endpoint=fixture_origin or prepared["origin"],
                     sequence=len(receipts) + 1,
                     account_bindings=account_bindings,
+                    request_digest=digest(
+                        {key: prepared[key] for key in ("method", "path", "body")}
+                    ),
                 )
             except ValueError:
                 pending["failure"] = "setup response acknowledgement refused"

@@ -33,6 +33,41 @@ def test_candidate_keeps_all_new_checks_and_bounds_owned_scans():
     assert all("/broad_runs/" in name for p in mapped for name in p["targets"])
 
 
+def test_adopted_artifact_requires_bound_receipt_and_complete_runtime_map(tmp_path):
+    import hashlib
+    import json
+
+    import batch_local
+
+    binary = tmp_path / "fireemu"
+    binary.write_bytes(b"adopted-native-artifact")
+    artifact_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+    inputs = {f"input-{index}": f"sha-{index}" for index in range(429)}
+    build = {
+        "command": ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"],
+        "exitCode": 0,
+        "artifactSha256": artifact_sha,
+        "inputs": inputs,
+    }
+    receipt = {
+        "build": build,
+        "runtimeSource": {"commit": "5" * 40, "files": inputs},
+    }
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt))
+
+    adopted = batch_local.adopted_artifact(binary, receipt_path, "5" * 40)
+    assert adopted["artifactSha256"] == artifact_sha
+    assert adopted["sourceCommit"] == "5" * 40
+    assert adopted["runtimeInputCount"] == 429
+
+    changed = json.loads(receipt_path.read_text())
+    changed["build"]["inputs"]["input-0"] = "substituted"
+    receipt_path.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="runtime input map"):
+        batch_local.adopted_artifact(binary, receipt_path, "5" * 40)
+
+
 def test_changed_source_or_namespace_cannot_be_compiled():
     c = contract()
     m = c.candidate()

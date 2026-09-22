@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -23,7 +24,38 @@ from owned_runner import (
     local_addresses,
     sanitized_environment,
     socket_closed,
+    validate_build,
 )
+
+
+def adopted_artifact(binary: Path, receipt_path: Path, source_commit: str) -> dict:
+    """Validate an immutable previously built binary without rebuilding or relabeling it."""
+    if not binary.is_absolute() or binary.is_symlink() or not binary.is_file():
+        raise ValueError("adopted artifact must be an absolute regular file")
+    if (
+        not receipt_path.is_absolute()
+        or receipt_path.is_symlink()
+        or not receipt_path.is_file()
+    ):
+        raise ValueError("build receipt must be an absolute regular file")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise ValueError("invalid artifact source commit")
+    receipt = json.loads(receipt_path.read_bytes())
+    build = receipt.get("build")
+    runtime = receipt.get("runtimeSource")
+    inputs = runtime.get("files") if isinstance(runtime, dict) else None
+    if runtime.get("commit") != source_commit if isinstance(runtime, dict) else True:
+        raise ValueError("artifact source commit mismatch")
+    if not isinstance(inputs, dict) or len(inputs) != 429 or build.get("inputs") != inputs:
+        raise ValueError("runtime input map mismatch")
+    artifact_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+    validate_build(build, artifact_sha, inputs)
+    return {
+        "artifactSha256": artifact_sha,
+        "sourceCommit": source_commit,
+        "runtimeInputCount": len(inputs),
+        "build": build,
+    }
 
 
 def child(output, nonce, *, shared=False):
@@ -88,11 +120,23 @@ def child(output, nonce, *, shared=False):
         raise ValueError("local batch incomplete; see private report")
 
 
-def run(output, *, shared=False):
+def run(
+    output,
+    *,
+    shared=False,
+    binary=None,
+    build=None,
+    artifact_source_commit=None,
+    build_receipt=None,
+):
     if subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT).strip():
         raise ValueError("freeze checkout before local batch")
     before = source_inputs()
-    binary, build = build_artifact()
+    if binary is None:
+        binary, build = build_artifact()
+    else:
+        adopted = adopted_artifact(binary, build_receipt, artifact_source_commit)
+        build = adopted["build"]
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     artifact = output / "fireemu"
     shutil.copyfile(binary, artifact)
@@ -149,6 +193,11 @@ def run(output, *, shared=False):
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip(),
         "artifactSha256": build["artifactSha256"],
+        "artifactSourceCommit": artifact_source_commit,
+        "artifactProvenance": "retained-build-receipt" if artifact_source_commit else "fresh-build",
+        "harnessDigest": hashlib.sha256(
+            (Path(__file__).with_name("batch_adapter.py")).read_bytes()
+        ).hexdigest(),
         "executionInputs": before,
         "build": build,
     }
@@ -203,13 +252,30 @@ if __name__ == "__main__":
     signal.signal(signal.SIGHUP, interrupted)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--binary", type=Path)
+    source.add_argument("--build", action="store_true")
+    parser.add_argument("--build-receipt", type=Path)
+    parser.add_argument("--artifact-source-commit")
     parser.add_argument("--child", type=Path)
     parser.add_argument("--nonce")
     parser.add_argument("--shared", action="store_true")
     args = parser.parse_args()
     if args.child:
         child(args.child, args.nonce, shared=args.shared)
-    elif args.output:
+    elif args.output and args.build:
         sys.exit(run(args.output.resolve(), shared=args.shared))
+    elif args.output and args.binary:
+        if not args.build_receipt or not args.artifact_source_commit:
+            parser.error("--binary requires --build-receipt and --artifact-source-commit")
+        sys.exit(
+            run(
+                args.output.resolve(),
+                shared=args.shared,
+                binary=args.binary,
+                artifact_source_commit=args.artifact_source_commit,
+                build_receipt=args.build_receipt,
+            )
+        )
     else:
         parser.error("--output required")

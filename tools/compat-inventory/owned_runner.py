@@ -178,6 +178,22 @@ def validate_build(receipt: dict, artifact: str, inputs: dict) -> None:
     )
 
 
+def artifact_binding(source: Path, launch_copy: Path, build: dict, inputs: dict) -> dict:
+    """Bind the built executable and the exact private copy supplied to a launcher."""
+    source = source.resolve(strict=True)
+    launch_copy = launch_copy.resolve(strict=True)
+    source_sha256 = sha(source.read_bytes())
+    launch_copy_sha256 = sha(launch_copy.read_bytes())
+    validate_build(build, source_sha256, inputs)
+    require(launch_copy_sha256 == source_sha256, "artifact launch copy mismatch")
+    return {
+        "sourcePath": str(source),
+        "sourceSha256": source_sha256,
+        "launchCopyPath": str(launch_copy),
+        "launchCopySha256": launch_copy_sha256,
+    }
+
+
 MUTATION_OUTPUT_MARKER = ".fireemu-mutation-output"
 
 

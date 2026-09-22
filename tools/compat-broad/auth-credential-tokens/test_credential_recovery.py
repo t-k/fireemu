@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import importlib.util
 import json
 import subprocess
@@ -15,9 +14,10 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from broad_contract import digest
-
+import credential_gate
 import credential_recovery as recovery
+import shared_gate
+from broad_contract import digest
 
 
 def _provenance() -> dict:
@@ -85,7 +85,7 @@ def _worker_receipt(gate: dict) -> dict:
 
 
 def test_compile_binds_exact_custom_uid_and_one_read_only_lookup() -> None:
-    parent, plan, _permission, _o7, _o8 = _plan()
+    _parent_value, plan, _permission, _o7, _o8 = _plan()
     operation = plan["operation"]
     assert operation["body"] == {"localId": ["$binding:customUid"]}
     assert operation["kind"] == "uid-absence"
@@ -102,6 +102,56 @@ def test_parent_nonce_resource_and_gate_mutation_is_refused_against_immutable_bi
     parent["claim"]["gatePlanDigest"] = digest(parent["gate"]["plan"])
     with pytest.raises(recovery.RecoveryRefusal, match="immutable|resource|Gate"):
         recovery.compile_recovery_plan(parent, recovery_nonce="e" * 32, provenance=_provenance())
+
+
+def test_parent_snapshot_selects_one_unresolved_event_from_real_signing_compiler() -> None:
+    parent = _parent()
+    nonce = parent["gate"]["plan"]["nonce"]
+    gate_plan = credential_gate.gate_plan(
+        recovery.PROJECT,
+        nonce,
+        signing=True,
+        wall_seconds=600,
+        recovery_seconds=60,
+        cost_microusd=100,
+        observation_window_seconds=540,
+    )
+    custom_index = next(
+        index
+        for index, operation in enumerate(gate_plan["jobs"][credential_gate.JOB]["observation"])
+        if operation.get("kind") == "custom-sign-in" and operation.get("binds", {}).get("customUid") == "localId"
+    )
+    operation = gate_plan["jobs"][credential_gate.JOB]["observation"][custom_index]
+    parent["gate"]["plan"] = gate_plan
+    parent["gate"]["planDigest"] = digest(gate_plan)
+    parent["gate"]["events"] = [{
+        "job": credential_gate.JOB,
+        "phase": "observation",
+        "index": custom_index,
+        "requestDigest": digest(operation),
+        "service": operation["service"],
+        "method": operation["method"],
+        "completed": False,
+        "creationOutcome": "unknown",
+        "ended": 999.0,
+    }]
+    parent["claim"]["gatePlanDigest"] = digest(gate_plan)
+    parent["immutableParent"].update(
+        gateDigest=digest(parent["gate"]),
+        gatePlanDigest=digest(gate_plan),
+        resource=operation["resource"],
+        eventIndex=custom_index,
+        requestDigest=digest(operation),
+    )
+
+    snapshot = recovery._parent_snapshot(parent)
+
+    assert snapshot["eventIndex"] == custom_index
+    assert snapshot["operation"]["binds"] == {
+        "customUid": "localId",
+        "customIdToken": "idToken",
+        "customRefresh": "refreshToken",
+    }
 
 
 @pytest.mark.parametrize("field", ["path", "form", "body", "binds"])
@@ -195,6 +245,22 @@ def test_child_source_closure_accepts_only_the_approved_recovery_extension() -> 
     }
 
 
+@pytest.mark.parametrize("deadline_seconds", [20, 60])
+def test_child_gate_plan_is_accepted_by_real_shared_gate(
+    tmp_path: Path, deadline_seconds: int
+) -> None:
+    parent = _parent()
+    plan = recovery.compile_recovery_plan(
+        parent,
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        provenance=_provenance(),
+        now=1000.0,
+        deadline_seconds=deadline_seconds,
+    )
+
+    shared_gate.create(tmp_path / f"child-{deadline_seconds}", plan["gatePlan"])
+
+
 class _Ledger:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple, dict]] = []
@@ -262,6 +328,38 @@ def test_settlement_derives_absence_from_bound_gate_and_receipt() -> None:
     outcome = recovery.settle_and_close(ledger, parent_ticket=parent["ticket"], child_ticket={"child": "ticket"}, parent=parent, plan=plan, child_gate=gate, worker_receipt=receipt)
     assert outcome["state"] == "closed-after-recovery-child"
     assert [name for name, _args, _kwargs in ledger.calls] == ["settle", "close"]
+
+
+def test_real_gate_one_typed_empty_lookup_then_settlement_boundary(tmp_path: Path) -> None:
+    parent, plan, _permission, o7, o8 = _plan()
+    gate_path = tmp_path / "real-child-gate"
+    shared_gate.create(gate_path, plan["gatePlan"])
+    calls: list[dict] = []
+    result = recovery.execute_lookup(
+        plan,
+        parent,
+        send=lambda operation, _timeout: (
+            calls.append(operation)
+            or (200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []})
+        ),
+        now=lambda: 1001.0,
+    )
+    gate = _terminal_gate(plan, o7, o8)
+    receipt = _worker_receipt(gate)
+    outcome = recovery.settle_and_close(
+        _Ledger(),
+        parent_ticket=parent["ticket"],
+        child_ticket={"child": "ticket"},
+        parent=parent,
+        plan=plan,
+        child_gate=gate,
+        worker_receipt=receipt,
+    )
+
+    assert result["disposition"] == "typed-empty"
+    assert len(calls) == 1
+    assert outcome["state"] == "closed-after-recovery-child"
+    assert gate_path.joinpath("lock").is_file()
 
 
 def test_forged_empty_result_or_gate_event_never_reaches_ledger() -> None:

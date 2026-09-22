@@ -21,6 +21,7 @@ This lane prepares a bounded production observation of the `AUTH-CREDENTIAL` con
 | `credential_production.py` | One admitted execution: reserve, Gate, preflight, cases, cleanup, receipt, release. |
 | `credential_o8.py` | The launcher. Exit 0 released, 1 held with a receipt, 2 refused before any wire call. |
 | `credential_recovery_prepare.py` | The offline packet05 recovery preparer. It reads the held parent and Ledger, creates a fresh child nonce and review request, validates separately reviewed permission/O7/O8 documents, and never sends a request or mutates the Ledger. |
+| `credential_recovery_runner.py` | The bounded commander-facing handoff runner. It revalidates a prepared packet, detached review evidence and fixed source closure, then emits a redacted no-network handoff without allocating or mutating the Ledger. |
 
 ## Offline packet05 recovery preparation
 
@@ -38,17 +39,24 @@ uv run --python 3.12 python tools/compat-broad/auth-credential-tokens/credential
   --permission /private/auth-packet05/reviewed/permission.json \
   --o7 /private/auth-packet05/reviewed/o7.json \
   --o8 /private/auth-packet05/reviewed/o8.json \
+  --permission-review /private/auth-packet05/reviewed/permission-review.json \
+  --o7-review /private/auth-packet05/reviewed/o7-review.json \
+  --o8-review /private/auth-packet05/reviewed/o8-review.json \
   --output /private/auth-packet05/recovery-preparation
 ```
 
 The command prints only a status line. It produces `plan.json`,
 `permission.json`, `o7.json`, `o8.json`, `parent-evidence.json`,
+`permission-review.json`, `o7-review.json`, `o8-review.json`,
 `review-request.json`, and the same redacted bundle as `packet.json`. The
-permission/O7/O8 files must be supplied separately by the review process; the
-preparer never manufactures an approval or capability. It does not call
+permission/O7/O8 files and detached review evidence must be supplied
+separately by the review process; the preparer never manufactures an approval
+or capability. Each review evidence document is content-bound to the exact
+authority digest and names an independent reviewer. It does not call
 `begin_child`, consume O8, send production traffic, read credentials, or close
 the held parent. The preparer checks the requested nonce against the Ledger
-history, verifies the clean source checkout and every declared source digest,
+history, derives the child source closure from the canonical parent generation,
+verifies the clean source checkout and every declared source digest,
 and preserves the immutable parent `sourceCommit` and exact packet05 parent
 evidence.
 
@@ -56,6 +64,23 @@ To create the review input before approvals exist, use the same command with
 `--draft-only` and omit `--permission`, `--o7`, and `--o8`. This writes only
 `draft.json`, `review-request.json`, `plan.json`, and `parent-evidence.json`;
 the draft contains no permission or approval claims.
+
+After independent review, run the bounded handoff runner:
+
+```sh
+uv run --python 3.12 python tools/compat-broad/auth-credential-tokens/credential_recovery_runner.py \
+  --packet /private/auth-packet05/recovery-preparation/packet.json \
+  --parent /private/auth-packet05/parent.json \
+  --ledger /private/auth-packet05/ledger \
+  --source /private/auth-packet05/source-checkout \
+  --now 1780000000 \
+  --output /private/auth-packet05/recovery-handoff
+```
+
+The handoff contains only digests and immutable source binding, with explicit
+`networkAllowed=false` and `ledgerMutationAllowed=false` controls. The runner
+does not allocate a child, send traffic, acquire credentials or close the
+parent; a separately authorized production executor must consume this handoff.
 
 ## Signing dependence
 

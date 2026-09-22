@@ -173,19 +173,21 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
     operations = plan_job.get("observation")
     if not isinstance(operations, list):
         _refuse("parent observation plan required")
-    candidates = [
-        (index, operation)
-        for index, operation in enumerate(operations)
-        if isinstance(operation, Mapping) and operation.get("kind") == "custom-sign-in" and operation.get("account") == "custom"
-    ]
-    if len(candidates) != 1:
-        _refuse("one uncertain Auth custom create is required")
-    event_index, operation = candidates[0]
-    expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{nonce}"
+    if type(immutable.get("eventIndex")) is not int or immutable["eventIndex"] < 0:
+        _refuse("immutable parent event index required")
+    event_index = immutable["eventIndex"]
+    operation = operations[event_index] if event_index < len(operations) else None
+    if not isinstance(operation, Mapping) or operation.get("kind") != "custom-sign-in" or operation.get("account") != "custom":
+        _refuse("immutable parent custom event required")
+    expected_resource = operation.get("resource")
+    if not isinstance(expected_resource, str):
+        expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{nonce}"
     expected_parent_path = f"{IDENTITY}/accounts:signInWithCustomToken"
     expected_parent_body = {"token": "$binding:customToken", "returnSecureToken": True}
-    expected_parent_binds = {"customUid": "localId"}
-    if operation.get("service") != "auth" or operation.get("method") != "POST" or operation.get("path") != expected_parent_path or operation.get("form") is not False or operation.get("body") != expected_parent_body or operation.get("binds") != expected_parent_binds or operation.get("owner") is not False or operation.get("resource") != expected_resource or immutable["resource"] != expected_resource or immutable["eventIndex"] != event_index or immutable["requestDigest"] != digest(operation):
+    binds = operation.get("binds")
+    if not isinstance(binds, Mapping) or binds.get("customUid") != "localId":
+        _refuse("parent custom identity binding differs")
+    if operation.get("service") != "auth" or operation.get("method") != "POST" or operation.get("path") != expected_parent_path or operation.get("form") is not False or operation.get("body") != expected_parent_body or operation.get("owner") is not False or operation.get("resource") != expected_resource or immutable["resource"] != expected_resource or immutable["requestDigest"] != digest(operation):
         _refuse("parent custom resource binding differs")
     event = next(
         (item for item in gate.get("events", []) if isinstance(item, Mapping) and item.get("job") == parent_job and item.get("phase") == "observation" and item.get("index") == event_index),
@@ -289,7 +291,8 @@ def _validate_shape(plan: Mapping[str, Any]) -> None:
     if not isinstance(gate, Mapping) or gate.get("campaignId") != CAMPAIGN or gate.get("project") != PROJECT or gate.get("nonce") != plan["recoveryNonce"]:
         _refuse("recovery Gate plan differs")
     job = gate.get("jobs", {}).get(GATE_JOB)
-    if gate.get("observationRequests") != 0 or gate.get("dataRequests") != 1 or gate.get("managementRequests") != 0 or gate.get("recoveryRequests") != 1 or gate.get("costMicrousd") != gate.get("requestCostMicrousd") or gate.get("wallSeconds") != plan["deadlineSeconds"] or not isinstance(job, Mapping):
+    expected_recovery_seconds = min(6, max(1, plan["deadlineSeconds"] // 2))
+    if gate.get("contract") != "shared-local-v1" or gate.get("intervalSeconds") != 0.25 or gate.get("recoverySeconds") != expected_recovery_seconds or gate.get("observationRequests") != 0 or gate.get("dataRequests") != 1 or gate.get("managementRequests") != 0 or gate.get("recoveryRequests") != 1 or gate.get("costMicrousd") != gate.get("requestCostMicrousd") or gate.get("wallSeconds") != plan["deadlineSeconds"] or not isinstance(job, Mapping):
         _refuse("recovery Gate bounds differ")
     if job.get("observation") != [] or job.get("recovery") != [expected] or job.get("resources") != [resource] or job.get("accountBindings") != {"custom": {"resource": resource, "uidBinding": "customUid"}}:
         _refuse("recovery Gate is not lookup-only")
@@ -319,7 +322,51 @@ def compile_recovery_plan(parent: Mapping[str, Any], *, recovery_nonce: str, pro
     _validate_generation_transition(parent_generation, child_generation)
     resource = snapshot["resource"]
     operation = _operation(resource)
-    gate_plan = {"campaignId": CAMPAIGN, "project": PROJECT, "nonce": recovery_nonce, "observationRequests": 0, "dataRequests": 1, "managementRequests": 0, "recoveryRequests": 1, "requestCostMicrousd": 1, "costMicrousd": 1, "wallSeconds": deadline_seconds, "jobs": {GATE_JOB: {"observation": [], "recovery": [operation], "resources": [resource], "accountBindings": {"custom": {"resource": resource, "uidBinding": "customUid"}}, "schedule": [{"phase": "recovery", "index": 0, "seconds": 5.0}]}}}
+    recovery_seconds = min(6, max(1, deadline_seconds // 2))
+    gate_plan = {
+        "contract": "shared-local-v1",
+        "campaignId": CAMPAIGN,
+        "nonce": recovery_nonce,
+        "project": PROJECT,
+        "signing": True,
+        "jobSlots": 1,
+        "requestSeconds": 5.0,
+        "wallSeconds": deadline_seconds,
+        "recoverySeconds": recovery_seconds,
+        "intervalSeconds": 0.25,
+        "observationRequests": 0,
+        "dataRequests": 1,
+        "managementRequests": 0,
+        "recoveryRequests": 1,
+        "requestCostMicrousd": 1,
+        "costMicrousd": 1,
+        "receiptKind": "auth-credential-recovery-receipt-v1",
+        "plannedAccounts": ["custom"],
+        "accountResources": [resource],
+        "mintedBindings": [],
+        "management": {
+            "dispatchKind": "closed-v1",
+            "observation": [],
+            "recovery": [],
+            "credentialIds": [],
+            "credentialSlots": [],
+            "slotSeconds": 0,
+            "intervalSeconds": 0.25,
+            "totalRequests": 0,
+            "observationWindowSeconds": 0,
+            "recoveryWindowSeconds": 0,
+            "permissionExpiryBound": True,
+        },
+        "jobs": {
+            GATE_JOB: {
+                "observation": [],
+                "recovery": [operation],
+                "resources": [resource],
+                "accountBindings": {"custom": {"resource": resource, "uidBinding": "customUid"}},
+                "schedule": [{"phase": "recovery", "index": 0, "seconds": 5.0}],
+            }
+        },
+    }
     plan: dict[str, Any] = {"kind": KIND, "campaignId": CAMPAIGN, "operationClass": OPERATION_CLASS, "project": PROJECT, "recoveryNonce": recovery_nonce, "recoveryNonceDigest": digest(recovery_nonce), "issuedAt": issued_at, "deadlineSeconds": deadline_seconds, "deadlineAt": issued_at + deadline_seconds, "budget": copy.deepcopy(CHILD_BUDGET), "parent": {"ticketDigest": digest(parent.get("ticket")), "claimDigest": snapshot["claim"].get("claimDigest", digest(snapshot["claim"])), "planDigest": digest(snapshot["plan"]), "gateDigest": digest(snapshot["gate"]), "eventIndex": snapshot["eventIndex"], "requestDigest": digest(snapshot["operation"]), "resource": resource, "state": "held"}, "customUid": resource.rsplit("/", 1)[1], "customUidDigest": digest(resource.rsplit("/", 1)[1]), "resource": resource, "operationDigest": digest(operation), "operation": operation, "gatePlan": gate_plan, "provenance": provenance_value}
     plan["planDigest"] = digest(_stable_plan(plan))
     _validate_shape(plan)
@@ -565,4 +612,4 @@ def settle_and_close(ledger: Any, *, parent_ticket: Mapping[str, Any], child_tic
         raise RecoveryRefusal(f"Auth recovery close refused: {type(error).__name__}") from None
 
 
-__all__ = ["ABSENCE_KIND", "CAMPAIGN", "CHILD_BUDGET", "GATE_JOB", "HOST", "KIND", "LAUNCHER_ENTRY", "O7_KIND", "O8_KIND", "PARENT_EVIDENCE_KIND", "PERMISSION_KIND", "RecoveryRefusal", "TRANSPORT_ENTRY", "WORKER_ENTRY", "begin_child", "build_child_claim", "compile_recovery_plan", "custom_sign_in_diagnostic", "execute_lookup", "settle_and_close", "validate_authority_bundle", "validate_plan"]
+__all__ = ["ABSENCE_KIND", "CAMPAIGN", "CHILD_BUDGET", "GATE_JOB", "HOST", "KIND", "LAUNCHER_ENTRY", "O7_KIND", "O8_KIND", "PARENT_EVIDENCE_KIND", "PERMISSION_KIND", "TRANSPORT_ENTRY", "WORKER_ENTRY", "RecoveryRefusal", "begin_child", "build_child_claim", "compile_recovery_plan", "custom_sign_in_diagnostic", "execute_lookup", "settle_and_close", "validate_authority_bundle", "validate_plan"]

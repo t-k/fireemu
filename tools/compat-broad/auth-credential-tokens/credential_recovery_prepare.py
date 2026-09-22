@@ -35,6 +35,7 @@ from shared_gate import Gate
 
 PACKET_KIND = "auth-packet05-recovery-preparation-v1"
 REVIEW_REQUEST_KIND = "auth-packet05-recovery-review-request-v1"
+REVIEW_EVIDENCE_KIND = "auth-packet05-independent-review-evidence-v1"
 ARTIFACT_NAMES = (
     "packet.json",
     "review-request.json",
@@ -42,6 +43,9 @@ ARTIFACT_NAMES = (
     "permission.json",
     "o7.json",
     "o8.json",
+    "permission-review.json",
+    "o7-review.json",
+    "o8-review.json",
     "parent-evidence.json",
 )
 SECRET_KEYS = frozenset(
@@ -124,13 +128,44 @@ def _reconstruct_parent(parent: Mapping[str, Any], ledger: Any) -> tuple[dict[st
         raise recovery.RecoveryRefusal(f"parent Gate snapshot refused: {type(error).__name__}") from None
     if not isinstance(canonical_gate, Mapping):
         _refuse("canonical parent Gate evidence required")
-    canonical = copy.deepcopy(dict(parent))
-    canonical.update(
-        state="held",
-        claim=copy.deepcopy(dict(bound_claim)),
-        gate=copy.deepcopy(dict(canonical_gate)),
-        generation=copy.deepcopy(dict(generation)),
-    )
+    gate_plan = canonical_gate.get("plan")
+    if not isinstance(gate_plan, Mapping):
+        _refuse("canonical parent Gate plan required")
+    parent_job = bound_claim.get("gateJob", "auth-credential")
+    job = gate_plan.get("jobs", {}).get(parent_job) if isinstance(gate_plan.get("jobs"), Mapping) else None
+    operations = job.get("observation") if isinstance(job, Mapping) else None
+    candidates = [
+        (index, operation)
+        for index, operation in enumerate(operations or [])
+        if isinstance(operation, Mapping)
+        and operation.get("kind") == "custom-sign-in"
+        and operation.get("account") == "custom"
+    ]
+    if len(candidates) != 1:
+        _refuse("canonical parent custom event required")
+    event_index, operation = candidates[0]
+    immutable = {
+        "kind": "auth-packet05-parent-binding-v1",
+        "gateDigest": digest(canonical_gate),
+        "gatePlanDigest": digest(gate_plan),
+        "nonce": gate_plan.get("nonce"),
+        "resource": operation.get("resource"),
+        "eventIndex": event_index,
+        "requestDigest": digest(operation),
+        "sourceCommit": generation["sourceCommit"],
+    }
+    # Receipt, responsibility and immutable binding are derived from the
+    # canonical claim/Gate, never accepted from the caller's parent JSON.
+    canonical = {
+        "state": "held",
+        "ticket": copy.deepcopy(dict(ticket)),
+        "claim": copy.deepcopy(dict(bound_claim)),
+        "gate": copy.deepcopy(dict(canonical_gate)),
+        "generation": copy.deepcopy(dict(generation)),
+        "receipt": {"failure": "canonical-unresolved-parent", "postflightComplete": False},
+        "responsibility": {"custom": {"state": "unknown", "uid": None}},
+        "immutableParent": immutable,
+    }
     recovery._parent_snapshot(canonical)
     return canonical, state
 
@@ -154,7 +189,12 @@ def _assert_fresh_nonce(ledger: Any, nonce: str, state: Mapping[str, Any]) -> No
                 _refuse("recovery nonce already reserved")
 
 
-def _verify_fixed_source(provenance: Mapping[str, Any], source_root: Path, expected_commit: str) -> None:
+def _verify_fixed_source(
+    provenance: Mapping[str, Any],
+    source_root: Path,
+    expected_commit: str,
+    parent_generation: Mapping[str, Any],
+) -> None:
     if source_root.is_symlink() or not source_root.is_dir():
         _refuse("clean source checkout required")
     try:
@@ -187,19 +227,18 @@ def _verify_fixed_source(provenance: Mapping[str, Any], source_root: Path, expec
     generation = provenance.get("generation")
     if not isinstance(generation, Mapping):
         _refuse("source generation provenance required")
-    generation_paths = {
-        "worker.py": recovery.WORKER_ENTRY,
-        "transport.py": recovery.TRANSPORT_ENTRY,
-        "recovery.py": "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
-    }
     declared_generation = generation.get("sourceDigests")
-    if not isinstance(declared_generation, Mapping) or set(declared_generation) != set(generation_paths):
+    canonical_sources = parent_generation.get("sourceDigests") if isinstance(parent_generation, Mapping) else None
+    if not isinstance(canonical_sources, Mapping) or not isinstance(declared_generation, Mapping):
         _refuse("source generation closure differs")
-    for name, relative in generation_paths.items():
-        actual_digest = hashlib.sha256((source_root / relative).read_bytes()).hexdigest()
-        if declared_generation[name] != actual_digest:
-            _refuse("source generation digest differs")
-    if generation.get("collectorSourceDigest") != declared_generation["recovery.py"]:
+    if set(declared_generation) - set(canonical_sources) != {recovery.APPROVED_CHILD_SOURCE_EXTENSION}:
+        _refuse("source generation closure differs")
+    if any(declared_generation.get(name) != value for name, value in canonical_sources.items()):
+        _refuse("source generation closure differs")
+    verified_digests = set(source_inputs.values())
+    if any(value not in verified_digests for value in declared_generation.values()):
+        _refuse("source generation digest differs")
+    if generation.get("collectorSourceDigest") != declared_generation.get(recovery.APPROVED_CHILD_SOURCE_EXTENSION):
         _refuse("collector source digest differs")
 
 
@@ -222,16 +261,47 @@ def _validate_reviewed_authorities(
     permission: Mapping[str, Any] | None,
     o7: Mapping[str, Any] | None,
     o8: Mapping[str, Any] | None,
+    permission_review: Mapping[str, Any] | None,
+    o7_review: Mapping[str, Any] | None,
+    o8_review: Mapping[str, Any] | None,
     *,
     now: float,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     if not all(isinstance(value, Mapping) for value in (permission, o7, o8)):
         _refuse("separately reviewed permission/O7/O8 artifacts required")
+    reviews = (permission_review, o7_review, o8_review)
+    if not all(isinstance(value, Mapping) for value in reviews):
+        _refuse("detached independent review evidence required")
     permission = copy.deepcopy(dict(permission))
     o7 = copy.deepcopy(dict(o7))
     o8 = copy.deepcopy(dict(o8))
     recovery.validate_authority_bundle(plan, permission=permission, o7=o7, o8=o8, now=now)
-    return permission, o7, o8
+    authorities = (permission, o7, o8)
+    reviewers: set[str] = set()
+    for authority, review in zip(authorities, reviews, strict=True):
+        evidence = copy.deepcopy(dict(review))
+        if set(evidence) != {
+            "kind", "authorityKind", "authorityDigest", "reviewerIdentity",
+            "decision", "reviewedAt", "evidenceDigest",
+        }:
+            _refuse("independent review evidence shape differs")
+        if evidence["kind"] != REVIEW_EVIDENCE_KIND:
+            _refuse("independent review evidence kind differs")
+        if evidence["authorityKind"] != authority["kind"] or evidence["authorityDigest"] != digest(authority):
+            _refuse("independent review evidence binding differs")
+        reviewer = evidence["reviewerIdentity"]
+        if not isinstance(reviewer, str) or not reviewer.strip() or len(reviewer) > 256 or reviewer in reviewers:
+            _refuse("independent review identity differs")
+        reviewers.add(reviewer)
+        if evidence["decision"] != "approved":
+            _refuse("independent review decision differs")
+        recovery._finite(evidence["reviewedAt"], "review evidence time")
+        if evidence["reviewedAt"] > now:
+            _refuse("independent review evidence is not current")
+        unsigned = {key: value for key, value in evidence.items() if key != "evidenceDigest"}
+        if evidence["evidenceDigest"] != digest(unsigned):
+            _refuse("independent review evidence digest differs")
+    return permission, o7, o8, tuple(copy.deepcopy(dict(value)) for value in reviews)
 
 
 def _reject_secret_keys(value: Any) -> None:
@@ -257,7 +327,12 @@ def _compile_context(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     canonical_parent, ledger_state = _reconstruct_parent(parent, ledger)
     parent_snapshot = recovery._parent_snapshot(canonical_parent)
-    _verify_fixed_source(provenance, source_root, parent_snapshot["sourceCommit"])
+    _verify_fixed_source(
+        provenance,
+        source_root,
+        parent_snapshot["sourceCommit"],
+        parent_snapshot["generation"],
+    )
     nonce = secrets.token_hex(16) if recovery_nonce is None else recovery_nonce
     recovery._nonce(nonce, "recovery")
     _assert_fresh_nonce(ledger, nonce, ledger_state)
@@ -320,6 +395,9 @@ def prepare_packet(
     permission: Mapping[str, Any] | None,
     o7: Mapping[str, Any] | None,
     o8: Mapping[str, Any] | None,
+    permission_review: Mapping[str, Any] | None = None,
+    o7_review: Mapping[str, Any] | None = None,
+    o8_review: Mapping[str, Any] | None = None,
     recovery_nonce: str | None = None,
     now: float | None = None,
     authority_now: float | None = None,
@@ -336,11 +414,14 @@ def prepare_packet(
             now=now,
             deadline_seconds=deadline_seconds,
         )
-        permission, o7, o8 = _validate_reviewed_authorities(
+        permission, o7, o8, reviews = _validate_reviewed_authorities(
             plan,
             permission,
             o7,
             o8,
+            permission_review,
+            o7_review,
+            o8_review,
             now=time.time() if authority_now is None else authority_now,
         )
         review_request = _review_request(plan, parent_snapshot)
@@ -363,6 +444,9 @@ def prepare_packet(
         "permission": permission,
         "o7": o7,
         "o8": o8,
+        "permissionReview": reviews[0],
+        "o7Review": reviews[1],
+        "o8Review": reviews[2],
     }
     _reject_secret_keys(bundle)
     return bundle
@@ -406,6 +490,9 @@ def write_packet(bundle: Mapping[str, Any], output: Path) -> Path:
         "permission.json": bundle["permission"],
         "o7.json": bundle["o7"],
         "o8.json": bundle["o8"],
+        "permission-review.json": bundle["permissionReview"],
+        "o7-review.json": bundle["o7Review"],
+        "o8-review.json": bundle["o8Review"],
         "parent-evidence.json": {
             "immutableParent": bundle["immutableParent"],
             "parentEvidence": bundle["parentEvidence"],
@@ -488,6 +575,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--permission", type=Path, help="separately reviewed permission JSON")
     parser.add_argument("--o7", type=Path, help="separately reviewed O7 approval JSON")
     parser.add_argument("--o8", type=Path, help="separately reviewed O8 capability JSON")
+    parser.add_argument("--permission-review", type=Path, help="detached permission review evidence JSON")
+    parser.add_argument("--o7-review", type=Path, help="detached O7 review evidence JSON")
+    parser.add_argument("--o8-review", type=Path, help="detached O8 review evidence JSON")
     parser.add_argument("--draft-only", action="store_true", help="write a review draft without authority artifacts")
     parser.add_argument(
         "--output", type=Path, required=True, help="new private preparation directory"
@@ -511,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
         ledger = reservations.Ledger(args.ledger)
         _assert_output_detached(args.output, ledger)
         if args.draft_only:
-            if any((args.permission, args.o7, args.o8)):
+            if any((args.permission, args.o7, args.o8, args.permission_review, args.o7_review, args.o8_review)):
                 _refuse("draft-only cannot consume reviewed authority artifacts")
             draft = prepare_review_draft(
                 _read_json(args.parent),
@@ -533,6 +623,9 @@ def main(argv: list[str] | None = None) -> int:
             permission=_read_json(args.permission) if args.permission else None,
             o7=_read_json(args.o7) if args.o7 else None,
             o8=_read_json(args.o8) if args.o8 else None,
+            permission_review=_read_json(args.permission_review) if args.permission_review else None,
+            o7_review=_read_json(args.o7_review) if args.o7_review else None,
+            o8_review=_read_json(args.o8_review) if args.o8_review else None,
             recovery_nonce=args.recovery_nonce,
             now=args.now,
             authority_now=time.time(),

@@ -17,6 +17,7 @@ sys.path.insert(0, str(HERE.parent))
 
 import credential_recovery as recovery
 import credential_recovery_prepare as prepare
+import credential_recovery_runner as runner
 from broad_contract import digest
 from test_credential_recovery import _authorities, _parent, _provenance
 
@@ -87,7 +88,12 @@ def _source_inputs(tmp_path: Path, parent: dict) -> tuple[Path, dict]:
     subprocess.run(["git", "-C", str(source_root), "commit", "-qm", "source"], check=True)
     commit = subprocess.check_output(["git", "-C", str(source_root), "rev-parse", "HEAD"], text=True).strip()
     source_inputs = {}
-    for relative in (recovery.WORKER_ENTRY, recovery.TRANSPORT_ENTRY, recovery.LAUNCHER_ENTRY):
+    for relative in (
+        recovery.WORKER_ENTRY,
+        recovery.TRANSPORT_ENTRY,
+        recovery.LAUNCHER_ENTRY,
+        "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
+    ):
         source_inputs[relative] = hashlib.sha256((source_root / relative).read_bytes()).hexdigest()
     parent["generation"]["sourceDigests"] = {
         "worker.py": source_inputs[recovery.WORKER_ENTRY],
@@ -121,10 +127,32 @@ def _reviewed(parent: dict, provenance: dict) -> tuple[dict, dict, dict]:
     return _authorities(plan)
 
 
+def _review_evidence(authority: dict, reviewer: str) -> dict:
+    evidence = {
+        "kind": "auth-packet05-independent-review-evidence-v1",
+        "authorityKind": authority["kind"],
+        "authorityDigest": digest(authority),
+        "reviewerIdentity": reviewer,
+        "decision": "approved",
+        "reviewedAt": 1000.5,
+    }
+    evidence["evidenceDigest"] = digest(evidence)
+    return evidence
+
+
+def _reviews(permission: dict, o7: dict, o8: dict) -> tuple[dict, dict, dict]:
+    return (
+        _review_evidence(permission, "permission-reviewer@example.invalid"),
+        _review_evidence(o7, "o7-reviewer@example.invalid"),
+        _review_evidence(o8, "o8-reviewer@example.invalid"),
+    )
+
+
 def test_preparation_compiles_fresh_authority_bundle_without_mutating_ledger(tmp_path: Path) -> None:
     parent = _ledger_parent()
     source_root, provenance = _source_inputs(tmp_path, parent)
     permission, o7, o8 = _reviewed(parent, provenance)
+    permission_review, o7_review, o8_review = _reviews(permission, o7, o8)
     ledger = _ReadOnlyLedger(parent)
     before = copy.deepcopy(ledger.snapshot())
 
@@ -139,6 +167,9 @@ def test_preparation_compiles_fresh_authority_bundle_without_mutating_ledger(tmp
         recovery_nonce="fedcba9876543210fedcba9876543210",
         now=1000.0,
         authority_now=1001.0,
+        permission_review=permission_review,
+        o7_review=o7_review,
+        o8_review=o8_review,
     )
 
     assert bundle["kind"] == prepare.PACKET_KIND
@@ -181,6 +212,57 @@ def test_preparation_requires_separately_reviewed_authority_documents(tmp_path: 
             o7=None,
             o8=None,
         )
+
+
+def test_preparation_refuses_authority_without_detached_review_evidence(tmp_path: Path) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    permission, o7, o8 = _reviewed(parent, provenance)
+
+    with pytest.raises(recovery.RecoveryRefusal, match="review evidence"):
+        prepare.prepare_packet(
+            parent,
+            ledger=_ReadOnlyLedger(parent),
+            provenance=provenance,
+            source_root=source_root,
+            permission=permission,
+            o7=o7,
+            o8=o8,
+            recovery_nonce="fedcba9876543210fedcba9876543210",
+            now=1000.0,
+            authority_now=1001.0,
+        )
+
+
+def test_preparation_derives_source_closure_from_canonical_parent(tmp_path: Path) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    source_digests = parent["generation"]["sourceDigests"]
+    renamed = {"auth-worker": source_digests["worker.py"], "auth-transport": source_digests["transport.py"]}
+    parent["generation"]["sourceDigests"] = renamed
+    provenance["generation"]["sourceDigests"] = {
+        **renamed,
+        "recovery.py": provenance["generation"]["sourceDigests"]["recovery.py"],
+    }
+    permission, o7, o8 = _reviewed(parent, provenance)
+    permission_review, o7_review, o8_review = _reviews(permission, o7, o8)
+
+    bundle = prepare.prepare_packet(
+        parent,
+        ledger=_ReadOnlyLedger(parent),
+        provenance=provenance,
+        source_root=source_root,
+        permission=permission,
+        o7=o7,
+        o8=o8,
+        permission_review=permission_review,
+        o7_review=o7_review,
+        o8_review=o8_review,
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        now=1000.0,
+        authority_now=1001.0,
+    )
+    assert bundle["plan"]["provenance"]["generation"]["sourceDigests"] == provenance["generation"]["sourceDigests"]
 
 
 def test_review_draft_is_available_before_separate_authority_review(tmp_path: Path) -> None:
@@ -230,6 +312,7 @@ def test_preparation_rejects_future_reviewed_o7_and_o8(tmp_path: Path) -> None:
     permission, o7, o8 = _reviewed(parent, provenance)
     o7["issuedAt"] = 1100.0
     o8["issuedAt"] = 1100.0
+    permission_review, o7_review, o8_review = _reviews(permission, o7, o8)
 
     with pytest.raises(recovery.RecoveryRefusal, match="active|issued"):
         prepare.prepare_packet(
@@ -243,6 +326,9 @@ def test_preparation_rejects_future_reviewed_o7_and_o8(tmp_path: Path) -> None:
             recovery_nonce="fedcba9876543210fedcba9876543210",
             now=1000.0,
             authority_now=1001.0,
+            permission_review=permission_review,
+            o7_review=o7_review,
+            o8_review=o8_review,
         )
 
 
@@ -273,7 +359,11 @@ def test_preparation_reconstructs_parent_gate_from_canonical_ledger_binding(tmp_
     source_root, provenance = _source_inputs(tmp_path, parent)
     tampered = copy.deepcopy(parent)
     tampered["gate"]["plan"]["nonce"] = "f" * 32
+    tampered["receipt"] = {"failure": "caller-forged", "postflightComplete": False}
+    tampered["responsibility"] = {"custom": {"state": "unknown", "uid": "caller-forged"}}
+    tampered["immutableParent"]["sourceCommit"] = "f" * 40
     permission, o7, o8 = _reviewed(parent, provenance)
+    permission_review, o7_review, o8_review = _reviews(permission, o7, o8)
 
     bundle = prepare.prepare_packet(
         tampered,
@@ -283,6 +373,9 @@ def test_preparation_reconstructs_parent_gate_from_canonical_ledger_binding(tmp_
         permission=permission,
         o7=o7,
         o8=o8,
+        permission_review=permission_review,
+        o7_review=o7_review,
+        o8_review=o8_review,
         recovery_nonce="fedcba9876543210fedcba9876543210",
         now=1000.0,
         authority_now=1001.0,
@@ -342,6 +435,7 @@ def test_write_packet_creates_private_redacted_artifacts_without_printing_bundle
     parent = _ledger_parent()
     source_root, provenance = _source_inputs(tmp_path, parent)
     permission, o7, o8 = _reviewed(parent, provenance)
+    permission_review, o7_review, o8_review = _reviews(permission, o7, o8)
     bundle = prepare.prepare_packet(
         parent,
         ledger=_ReadOnlyLedger(parent),
@@ -350,6 +444,9 @@ def test_write_packet_creates_private_redacted_artifacts_without_printing_bundle
         permission=permission,
         o7=o7,
         o8=o8,
+        permission_review=permission_review,
+        o7_review=o7_review,
+        o8_review=o8_review,
         recovery_nonce="fedcba9876543210fedcba9876543210",
         now=1000.0,
         authority_now=1001.0,
@@ -367,6 +464,9 @@ def test_write_packet_creates_private_redacted_artifacts_without_printing_bundle
         "permission.json",
         "o7.json",
         "o8.json",
+        "permission-review.json",
+        "o7-review.json",
+        "o8-review.json",
         "parent-evidence.json",
     }
     packet = json.loads((output / "packet.json").read_text())
@@ -383,3 +483,72 @@ def test_preparation_output_cannot_be_created_inside_canonical_ledger(
 
     with pytest.raises(recovery.RecoveryRefusal, match="outside canonical Ledger"):
         prepare._assert_output_detached(ledger.path / "prepared", ledger)
+
+
+def test_bounded_runner_emits_no_network_execution_handoff(tmp_path: Path) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    permission, o7, o8 = _reviewed(parent, provenance)
+    reviews = _reviews(permission, o7, o8)
+    packet = prepare.prepare_packet(
+        parent,
+        ledger=_ReadOnlyLedger(parent),
+        provenance=provenance,
+        source_root=source_root,
+        permission=permission,
+        o7=o7,
+        o8=o8,
+        permission_review=reviews[0],
+        o7_review=reviews[1],
+        o8_review=reviews[2],
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        now=1000.0,
+        authority_now=1001.0,
+    )
+
+    request = runner.prepare_execution_request(
+        packet,
+        parent=parent,
+        ledger=_ReadOnlyLedger(parent),
+        source_root=source_root,
+        now=1001.0,
+    )
+
+    assert request["networkAllowed"] is False
+    assert request["ledgerMutationAllowed"] is False
+    assert request["productionExecuted"] is False
+    assert request["requiresSeparateExecutor"] is True
+    assert "custom-" not in json.dumps(request)
+
+
+def test_bounded_runner_refuses_tampered_detached_review_evidence(tmp_path: Path) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    permission, o7, o8 = _reviewed(parent, provenance)
+    reviews = _reviews(permission, o7, o8)
+    packet = prepare.prepare_packet(
+        parent,
+        ledger=_ReadOnlyLedger(parent),
+        provenance=provenance,
+        source_root=source_root,
+        permission=permission,
+        o7=o7,
+        o8=o8,
+        permission_review=reviews[0],
+        o7_review=reviews[1],
+        o8_review=reviews[2],
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        now=1000.0,
+        authority_now=1001.0,
+    )
+    packet["o8Review"]["decision"] = "approved"
+    packet["o8Review"]["evidenceDigest"] = "0" * 64
+
+    with pytest.raises(recovery.RecoveryRefusal, match="review evidence"):
+        runner.prepare_execution_request(
+            packet,
+            parent=parent,
+            ledger=_ReadOnlyLedger(parent),
+            source_root=source_root,
+            now=1001.0,
+        )

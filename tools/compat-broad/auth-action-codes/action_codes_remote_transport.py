@@ -356,8 +356,10 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
         scopes = set(str(body.get("scope", "")).split()) if isinstance(body, dict) else set()
         expires_value = body.get("expires_in") if isinstance(body, dict) else None
         try:
-            expires = float(expires_value)
-        except (TypeError, ValueError):
+            expires = int(expires_value)
+            if isinstance(expires_value, float) and expires != expires_value:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
             expires = None
         valid = (
             status == 200

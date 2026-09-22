@@ -164,7 +164,7 @@ def test_the_descriptor_constructs_with_every_required_member() -> None:
     descriptor = lane.descriptor()
     assert descriptor.campaign_id == CAMPAIGN
     assert descriptor.binds_campaign_id
-    assert descriptor.window_seconds == 900
+    assert descriptor.window_seconds == 600
     assert descriptor.artifact_profile.startswith("o5-user-token-")
     for name in REQUIRED_MEMBERS:
         assert getattr(descriptor, name) is not None
@@ -273,7 +273,7 @@ def test_the_permission_bindings_name_the_collector_and_the_comparator(
     assert permission["campaignManifestDigest"] == admitted_manifest_digest(
         lane.PROJECT, lane.DATABASE, NONCE
     )
-    assert permission["wallSeconds"] == 600
+    assert permission["wallSeconds"] == 300
     assert permission["recoverySeconds"] == 300
     assert permission["budget"]["accounts"] == 7
     assert permission["budget"]["costMicrousd"] == 1_000_000
@@ -379,8 +379,8 @@ def test_the_collector_member_runs_the_lane_collector_bound() -> None:
     # mistaken for production lifecycle evidence.
     assert bundle["recordingComplete"] is False
     assert bundle["abort"] == "collector:ValueError"
-    assert bundle["budget"]["deadlineSeconds"] == 600.0
-    assert bundle["budget"]["recoveryDeadlineSeconds"] == 900.0
+    assert bundle["budget"]["deadlineSeconds"] == 300.0
+    assert bundle["budget"]["recoveryDeadlineSeconds"] == 600.0
     assert bundle["productionReady"] is False
     unbound = Transport(plan)
     refused = descriptor.collector(

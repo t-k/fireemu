@@ -13,9 +13,8 @@ reach a production wire. The collector and acquisition comparator are the
 lane's real modules, reached only through an injected transport that the
 core's ``reject_production_transport`` has inspected.
 
-The window is the collector's: 600 seconds of observation and 300 seconds of
-recovery on top of it, which is the collector's 900 second recovery deadline
-measured from the start of the run. The transport adapter is closed over one
+The window contains 300 seconds of observation and 300 seconds of recovery,
+with a 600 second absolute wall allocation. The transport adapter is closed over one
 request bundle and delegates wire execution to the reviewed remote transport.
 """
 
@@ -65,7 +64,7 @@ MANIFEST_KIND = "o5-user-token-o8-manifest-v1"
 SHADOW_RECORD = "spec/compatibility/fs-rules-user-token-local-shadow.json"
 LANE_DIRECTORY = "tools/compat-broad/fs-rules-publication"
 
-CAMPAIGN_SECONDS = 600
+CAMPAIGN_SECONDS = 300
 RECOVERY_SECONDS = 300
 # The campaign manifest's ceiling, in micro-USD: US$1.00.
 COST_CEILING_MICROUSD = 1_000_000
@@ -185,8 +184,8 @@ def lock_scopes(plan: dict[str, Any]) -> list[dict[str, str]]:
 
     Publishing a Ruleset changes the Rules state of the whole database, so the
     database's ruleset key is held exclusively; the nonce subtree and the
-    throwaway accounts are written; the tenant list is written because the
-    campaign creates and deletes one tenant; everything else is read.
+    throwaway accounts are written; the preexisting tenant binding and all
+    remaining configuration are read.
     """
     validate_case(plan)
     scope = f"project/{PROJECT}"
@@ -204,7 +203,7 @@ def lock_scopes(plan: dict[str, Any]) -> list[dict[str, str]]:
         ],
         {"key": f"{scope}/auth/config", "mode": "READ"},
         {"key": f"{scope}/auth/accounts/o5-user-token/{nonce}/*", "mode": "WRITE"},
-        {"key": f"{scope}/auth/tenants/*", "mode": "WRITE"},
+        {"key": f"{scope}/auth/tenants/*", "mode": "READ"},
         {"key": f"{scope}/api-key-binding", "mode": "READ"},
     ]
 

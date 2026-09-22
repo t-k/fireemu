@@ -122,6 +122,11 @@ def test_parent_snapshot_selects_one_unresolved_event_from_real_signing_compiler
         if operation.get("kind") == "custom-sign-in" and operation.get("binds", {}).get("customUid") == "localId"
     )
     operation = gate_plan["jobs"][credential_gate.JOB]["observation"][custom_index]
+    operation["binds"] = {
+        "customUid": "idToken.sub",
+        "customIdToken": "idToken",
+        "customRefresh": "refreshToken",
+    }
     parent["gate"]["plan"] = gate_plan
     parent["gate"]["planDigest"] = digest(gate_plan)
     parent["gate"]["events"] = [{
@@ -148,7 +153,7 @@ def test_parent_snapshot_selects_one_unresolved_event_from_real_signing_compiler
 
     assert snapshot["eventIndex"] == custom_index
     assert snapshot["operation"]["binds"] == {
-        "customUid": "localId",
+        "customUid": "idToken.sub",
         "customIdToken": "idToken",
         "customRefresh": "refreshToken",
     }

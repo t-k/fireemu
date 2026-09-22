@@ -132,18 +132,9 @@ def _reconstruct_parent(parent: Mapping[str, Any], ledger: Any) -> tuple[dict[st
     if not isinstance(gate_plan, Mapping):
         _refuse("canonical parent Gate plan required")
     parent_job = bound_claim.get("gateJob", "auth-credential")
-    job = gate_plan.get("jobs", {}).get(parent_job) if isinstance(gate_plan.get("jobs"), Mapping) else None
-    operations = job.get("observation") if isinstance(job, Mapping) else None
-    candidates = [
-        (index, operation)
-        for index, operation in enumerate(operations or [])
-        if isinstance(operation, Mapping)
-        and operation.get("kind") == "custom-sign-in"
-        and operation.get("account") == "custom"
-    ]
-    if len(candidates) != 1:
-        _refuse("canonical parent custom event required")
-    event_index, operation = candidates[0]
+    event_index, operation, _event = recovery._select_unresolved_custom_event(
+        gate_plan, canonical_gate, parent_job
+    )
     immutable = {
         "kind": "auth-packet05-parent-binding-v1",
         "gateDigest": digest(canonical_gate),

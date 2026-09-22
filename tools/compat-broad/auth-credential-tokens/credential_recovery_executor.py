@@ -472,6 +472,23 @@ def _write_worker_message(fd: int, value: Mapping[str, Any]) -> None:
         view = view[written:]
 
 
+def _reap_worker_within(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            waited, _status = os.waitpid(pid, os.WNOHANG)
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return True
+        if waited == pid:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(0.01, remaining))
+
+
 def _stop_worker(pid: int) -> None:
     try:
         os.killpg(pid, signal.SIGTERM)
@@ -480,10 +497,23 @@ def _stop_worker(pid: int) -> None:
             os.kill(pid, signal.SIGTERM)
         except OSError:
             pass
-    try:
-        os.waitpid(pid, 0)
-    except ChildProcessError:
+    if _reap_worker_within(pid, 0.25):
         return
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    while True:
+        try:
+            os.waitpid(pid, 0)
+            return
+        except InterruptedError:
+            continue
+        except ChildProcessError:
+            return
 
 
 def _run_gate_worker(
@@ -571,9 +601,10 @@ def _run_gate_worker(
                     if len(payload) > MAX_HANDOFF_BYTES:
                         _stop_worker(pid)
                         _refuse("bounded recovery worker receipt required")
-            waited, wait_status = os.waitpid(pid, os.WNOHANG)
-            if waited == pid:
-                status = wait_status
+            if status is None:
+                waited, wait_status = os.waitpid(pid, os.WNOHANG)
+                if waited == pid:
+                    status = wait_status
     finally:
         os.close(read_fd)
     if status is None:

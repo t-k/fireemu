@@ -13,8 +13,10 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -434,6 +436,89 @@ def test_executor_registers_child_before_fd_read_and_runs_one_typed_empty_gate_r
     assert job["recovery"] == 1
     assert state["coordinatorInflight"] is False
     assert not [event for event in state["events"] if event.get("skipped")]
+
+
+def test_executor_accepts_receipt_when_child_is_reaped_before_pipe_eof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pipe EOF may arrive after WNOHANG has already reaped the child."""
+    parent, source_root, execution_root, packet = _packet(tmp_path)
+    ledger = RecordingLedger(parent)
+    credential_fd = _credential_fd(tmp_path)
+    controller_pid = os.getpid()
+    delayed = False
+    original_select = executor.select.select
+
+    def delayed_controller_select(read, write, error, timeout=None):
+        nonlocal delayed
+        if os.getpid() == controller_pid and not delayed:
+            delayed = True
+            time.sleep(0.03)
+        return original_select(read, write, error, timeout)
+
+    monkeypatch.setattr(executor.select, "select", delayed_controller_select)
+    try:
+        result = executor.execute_recovery(
+            packet,
+            parent=parent,
+            ledger=ledger,
+            source_root=source_root,
+            execution_root=execution_root,
+            credential_fd=credential_fd,
+            gate_path=tmp_path / "child-gate",
+            now=1001.0,
+            clock=lambda: 1001.0,
+            transport=lambda *_args, **_kwargs: (
+                200,
+                {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []},
+            ),
+        )
+    finally:
+        os.close(credential_fd)
+    assert result["disposition"] == "typed-empty"
+    assert ledger.lifecycle == ["begin-child", "settle-child", "close-parent"]
+
+
+def test_stop_worker_escalates_and_reaps_term_ignoring_child() -> None:
+    ready_read, ready_write = os.pipe()
+    child_pid = os.fork()
+    if child_pid == 0:
+        os.close(ready_read)
+        os.setsid()
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        os.write(ready_write, b"r")
+        os.close(ready_write)
+        while True:
+            time.sleep(1.0)
+    os.close(ready_write)
+    assert os.read(ready_read, 1) == b"r"
+    os.close(ready_read)
+
+    alarm_triggered = False
+
+    def alarm_handler(_signum, _frame):
+        nonlocal alarm_triggered
+        alarm_triggered = True
+        raise TimeoutError("unbounded worker cleanup")
+
+    previous_handler = signal.signal(signal.SIGALRM, alarm_handler)
+    signal.alarm(1)
+    started = time.monotonic()
+    try:
+        executor._stop_worker(child_pid)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if alarm_triggered:
+            try:
+                os.killpg(child_pid, signal.SIGKILL)
+            except OSError:
+                pass
+            os.waitpid(child_pid, 0)
+    assert not alarm_triggered
+    assert time.monotonic() - started < 1.0
+    with pytest.raises(ChildProcessError):
+        os.waitpid(child_pid, os.WNOHANG)
 
 
 def test_executor_reconstructs_the_real_signing_compiler_id_token_sub_parent(

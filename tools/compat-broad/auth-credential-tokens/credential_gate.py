@@ -43,7 +43,12 @@ sys.path.insert(0, str(HERE.parents[0]))
 
 from broad_contract import digest
 from credential_cases import SIGNING_DEPENDENT_GROUPS, observation_cases
-from credential_collector import RECOVERY_PHASE, charge_elapsed, reserve_request
+from credential_collector import (
+    RECOVERY_PHASE,
+    charge_elapsed,
+    custom_signin_response_uid,
+    reserve_request,
+)
 from shared_gate import Gate as FrozenGate
 from shared_gate import _save as _save_state
 from shared_gate import create as frozen_create
@@ -336,7 +341,7 @@ def _custom_sign_in(token_binding: str, *, binds: bool) -> dict[str, Any]:
         {"token": _binding(token_binding), "returnSecureToken": True},
         account="custom",
         binds={
-            "customUid": "localId",
+            "customUid": "idToken.sub",
             "customIdToken": "idToken",
             "customRefresh": "refreshToken",
         }
@@ -834,8 +839,25 @@ class CredentialGate(FrozenGate):
         accounts = job.setdefault("authAccounts", {})
         kind, account = operation["kind"], operation.get("account")
         position = len(state["events"]) - 1
+        custom_uid = None
+        if kind == "custom-sign-in":
+            custom_uid = custom_signin_response_uid(
+                status,
+                body,
+                project=state["plan"]["project"],
+                requested_uid=account_identifier(state["plan"]["nonce"], "custom"),
+            )
         for name, field in operation.get("binds", {}).items():
-            value = _field(body, field) if status == 200 else None
+            if kind == "custom-sign-in":
+                if name == "customUid" and field != "idToken.sub":
+                    raise ValueError("custom identity binding contract differs")
+                if custom_uid is None:
+                    continue
+            value = (
+                custom_uid
+                if kind == "custom-sign-in" and name == "customUid"
+                else _field(body, field) if status == 200 else None
+            )
             if not _text(value) or len(value) > 8192:
                 continue
             immutable = name.endswith(IMMUTABLE_SUFFIXES)
@@ -849,7 +871,11 @@ class CredentialGate(FrozenGate):
         if not recovery:
             outcome = "refused"
             if kind in ("sign-up", "custom-sign-in"):
-                uid = body.get("localId") if isinstance(body, dict) else None
+                uid = (
+                    custom_uid
+                    if kind == "custom-sign-in"
+                    else body.get("localId") if isinstance(body, dict) else None
+                )
                 identified_success = (
                     type(status) is int
                     and status == 200

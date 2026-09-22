@@ -266,6 +266,53 @@ def _jwt_objects(token: str) -> tuple[dict[str, Any], dict[str, Any]]:
     return header, payload
 
 
+def custom_signin_response_uid(
+    status: Any, body: Any, *, project: str, requested_uid: str
+) -> str | None:
+    """Project a custom sign-in response onto its verified campaign UID shape.
+
+    This helper only parses the response's compact token envelope. It does not verify
+    JWT signatures and must only receive the exact response body from an already
+    admitted transport. An arbitrary caller-supplied token must never reach an
+    ownership decision through this function.
+    """
+    if (
+        type(status) is not int
+        or status != 200
+        or type(body) is not dict
+        or "error" in body
+        or type(body.get("isNewUser")) is not bool
+        or type(project) is not str
+        or not project
+        or type(requested_uid) is not str
+        or not 1 <= len(requested_uid) <= 128
+    ):
+        return None
+    for name in ("idToken", "refreshToken"):
+        value = body.get(name)
+        if type(value) is not str or not 0 < len(value) <= 8192:
+            return None
+    if "localId" in body and body["localId"] != requested_uid:
+        return None
+    try:
+        _, claims = _jwt_objects(body["idToken"])
+    except (ValueError, TypeError):
+        return None
+    if (
+        claims.get("sub") != requested_uid
+        or claims.get("aud") != project
+        or claims.get("iss") != f"https://securetoken.google.com/{project}"
+        or ("user_id" in claims and claims["user_id"] != requested_uid)
+    ):
+        return None
+    firebase = claims.get("firebase")
+    if type(firebase) is not dict or "tenant" in firebase:
+        return None
+    if firebase.get("sign_in_provider") != "custom":
+        return None
+    return claims["sub"]
+
+
 def claim_shape(token: str, reveal: tuple[str, ...] = ()) -> dict[str, Any]:
     """Describe a token by its claim names, types, times and trust root.
 

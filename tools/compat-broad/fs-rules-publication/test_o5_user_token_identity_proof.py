@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import http.server
 import json
 import os
@@ -186,6 +187,78 @@ def test_proof_rejects_wrong_identity_and_claims(fixture_origin):
         )
 
 
+@pytest.mark.parametrize(
+    "custom",
+    [
+        {},
+        {"o5role": "editor"},
+        {"name": "Owner", "picture": "https://example.invalid/owner.png"},
+        {"phone_number": "+15551234567"},
+    ],
+)
+def test_standard_email_claims_are_not_developer_claims(fixture_origin, custom):
+    token = _token(
+        custom={
+            "email": "owner@example.invalid",
+            "email_verified": False,
+            **custom,
+        }
+    )
+    _Handler.body = {"localId": "uid-a", "idToken": token}
+    request = proof.build_request(
+        "signin",
+        api_key="fixture-key",
+        email="owner@example.invalid",
+        password="pw",
+        tenant=None,
+    )
+
+    issued = proof.issue_proof(
+        "owner-a",
+        request,
+        expected_provider="password",
+        expected_tenant=None,
+        expected_claims=custom,
+        fixture_origin=fixture_origin,
+        now=int(time.time()),
+    )
+
+    assert issued.claims_digest == digest(custom)
+
+
+@pytest.mark.parametrize("field", ["name", "picture", "phone_number"])
+def test_proof_rejects_unexpected_profile_claims(fixture_origin, field):
+    token = _token(
+        custom={
+            "email": "owner@example.invalid",
+            "email_verified": False,
+            field: {
+                "name": "Owner",
+                "picture": "https://example.invalid/owner.png",
+                "phone_number": "+15551234567",
+            }[field],
+        }
+    )
+    _Handler.body = {"localId": "uid-a", "idToken": token}
+    request = proof.build_request(
+        "signin",
+        api_key="fixture-key",
+        email="owner@example.invalid",
+        password="pw",
+        tenant=None,
+    )
+
+    with pytest.raises(ValueError, match="claims"):
+        proof.issue_proof(
+            "owner-a",
+            request,
+            expected_provider="password",
+            expected_tenant=None,
+            expected_claims={},
+            fixture_origin=fixture_origin,
+            now=int(time.time()),
+        )
+
 def test_caller_cannot_construct_a_trusted_proof():
     with pytest.raises(TypeError):
         proof.IdentityProof(
@@ -343,6 +416,71 @@ def test_setup_ack_signup_before_claim_update_has_only_issued_claims(
         proof.mint_acknowledged_setup_proof(**args)
     assert args["gate_authority"].snapshot() == before
     assert len(acknowledged_setup[-1].requests) == 2
+
+
+def test_acknowledged_setup_ignores_standard_email_claims(acknowledged_setup):
+    args = _mint_arguments(acknowledged_setup)
+    original = args["private_handoff"]
+    _token_value, response_digest, handoff_request_digest = original.proof_material()
+    token = _token(
+        uid=args["setup_receipt"].local_id,
+        provider=args["expected_provider"],
+        tenant=args["expected_tenant"],
+        custom={
+            "email": "owner@example.invalid",
+            "email_verified": False,
+            **args["expected_claims"],
+        },
+    )
+    args["private_handoff"] = remote.SetupPrivateHandoff._issued(
+        id_token=token,
+        expires_in=original.expires_in_for_followup(),
+        response_digest=response_digest,
+        request_digest=handoff_request_digest,
+    )
+    args["gate_acknowledgment"]["tokenHash"] = hashlib.sha256(
+        token.encode()
+    ).hexdigest()
+
+    issued = proof.mint_acknowledged_setup_proof(**args)
+
+    assert issued.claims_digest == digest(args["expected_claims"])
+
+
+@pytest.mark.parametrize("field", ["name", "picture", "phone_number"])
+def test_acknowledged_setup_rejects_unexpected_profile_claims(
+    acknowledged_setup, field
+):
+    args = _mint_arguments(acknowledged_setup)
+    original = args["private_handoff"]
+    _token_value, response_digest, handoff_request_digest = original.proof_material()
+    token = _token(
+        uid=args["setup_receipt"].local_id,
+        provider=args["expected_provider"],
+        tenant=args["expected_tenant"],
+        custom={
+            "email": "owner@example.invalid",
+            "email_verified": False,
+            field: {
+                "name": "Owner",
+                "picture": "https://example.invalid/owner.png",
+                "phone_number": "+15551234567",
+            }[field],
+            **args["expected_claims"],
+        },
+    )
+    args["private_handoff"] = remote.SetupPrivateHandoff._issued(
+        id_token=token,
+        expires_in=original.expires_in_for_followup(),
+        response_digest=response_digest,
+        request_digest=handoff_request_digest,
+    )
+    args["gate_acknowledgment"]["tokenHash"] = hashlib.sha256(
+        token.encode()
+    ).hexdigest()
+
+    with pytest.raises(ValueError, match="claims"):
+        proof.mint_acknowledged_setup_proof(**args)
 
 
 @pytest.mark.parametrize(

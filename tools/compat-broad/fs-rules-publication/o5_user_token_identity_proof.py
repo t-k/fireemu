@@ -32,6 +32,20 @@ ORIGIN = "https://" + SERVICE
 MAX_BYTES = 64 * 1024
 MAX_SECONDS = 12.0
 _SEAL = object()
+_STANDARD_TOKEN_CLAIMS = frozenset(
+    {
+        "iss",
+        "aud",
+        "sub",
+        "user_id",
+        "iat",
+        "auth_time",
+        "exp",
+        "firebase",
+        "email",
+        "email_verified",
+    }
+)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -305,8 +319,7 @@ def issue_proof(
     custom = {
         key: value
         for key, value in claims.items()
-        if key
-        not in {"iss", "aud", "sub", "user_id", "iat", "auth_time", "exp", "firebase"}
+        if key not in _STANDARD_TOKEN_CLAIMS
     }
     if custom != expected_claims:
         raise ValueError("issued token claims differ")
@@ -530,8 +543,7 @@ def mint_acknowledged_setup_proof(
     custom = {
         key: value
         for key, value in claims.items()
-        if key
-        not in {"iss", "aud", "sub", "user_id", "iat", "auth_time", "exp", "firebase"}
+        if key not in _STANDARD_TOKEN_CLAIMS
     }
     if custom != expected_claims:
         raise ValueError("setup token claims differ")

@@ -185,6 +185,16 @@ def test_the_descriptor_constructs_with_every_member_real() -> None:
             o8_campaign.CampaignDescriptor(**{k: v for k, v in members.items() if k != name})
 
 
+def test_preparation_descriptor_is_separate_but_reuses_campaign_members() -> None:
+    prep = campaign.preparation_descriptor()
+    assert prep.campaign_id == campaign.CAMPAIGN
+    assert prep.permission_kind == "auth-credential-bootstrap-permission-v1"
+    assert prep.frozen_inputs_kind == "auth-credential-bootstrap-frozen-inputs-v1"
+    assert prep.approval_kind == "auth-credential-bootstrap-approval-v1"
+    assert prep.manifest_kind == "auth-credential-bootstrap-manifest-v1"
+    assert campaign.preparation_transport_bound({"nonce": NONCE, "signing": True})
+
+
 def test_the_budget_is_the_lane_budget_with_management_slots_inside_it() -> None:
     ledger = campaign.ledger_budget()
     assert ledger == {"requests": 60, "accounts": 4, "resources": 4, "costMicrousd": 50_000}

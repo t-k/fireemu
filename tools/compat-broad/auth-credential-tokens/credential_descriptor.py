@@ -51,6 +51,10 @@ PERMISSION_KIND = "auth-credential-owner-execution-permission-v1"
 APPROVAL_KIND = "auth-credential-o8-approval-v1"
 MANIFEST_KIND = "auth-credential-o8-manifest-v1"
 RECEIPT_KIND = "auth-credential-acquisition-receipt-v1"
+PREPARATION_FROZEN_INPUTS_KIND = "auth-credential-bootstrap-frozen-inputs-v1"
+PREPARATION_PERMISSION_KIND = "auth-credential-bootstrap-permission-v1"
+PREPARATION_APPROVAL_KIND = "auth-credential-bootstrap-approval-v1"
+PREPARATION_MANIFEST_KIND = "auth-credential-bootstrap-manifest-v1"
 SHADOW_RECORD = "spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260921.json"
 PRINCIPAL_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 SERVICE_ACCOUNT = "fireemu-oracle@fireemu-35fe6.iam.gserviceaccount.com"
@@ -569,6 +573,50 @@ def descriptor() -> CampaignDescriptor:
     )
 
 
+def preparation_descriptor() -> CampaignDescriptor:
+    """The independent four-request preparation descriptor variant."""
+    members = descriptor().members()
+    members.update(
+        frozen_inputs_kind=PREPARATION_FROZEN_INPUTS_KIND,
+        permission_kind=PREPARATION_PERMISSION_KIND,
+        approval_kind=PREPARATION_APPROVAL_KIND,
+        manifest_kind=PREPARATION_MANIFEST_KIND,
+    )
+    return CampaignDescriptor(**members)
+
+
+def preparation_permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
+    """Bindings for prep authority; no Auth baseline is invented pre-wire."""
+    return {
+        "campaignId": CAMPAIGN,
+        "nonce": plan["nonce"],
+        "planDigest": inputs["planDigest"],
+        "sourceCommit": source_commit,
+        "artifactSha256": artifact_digest,
+        "sourceInputsDigest": digest(inputs["sourceInputs"]),
+        "authorizedUserDigest": plan.get("authorizedUserDigest"),
+        "project": PROJECT,
+        "projectNumber": "592603257417",
+        "preparationRequests": 4,
+        "combinedRequestCeiling": 60,
+        "combinedCostMicrousd": ledger_budget()["costMicrousd"],
+        "combinedWallSeconds": campaign_seconds(),
+    }
+
+
+def preparation_transport_bound(plan) -> bool:
+    """Require the compiler's exact four closed bootstrap routes."""
+    try:
+        candidate = gate_module.bootstrap_plan(
+            compile_gate_plan(plan["nonce"], signing=bool(plan.get("signing", False))),
+            permission_digest="0" * 64,
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    rows = candidate["management"]["observation"][:4]
+    return [row.get("id") for row in rows] == list(gate_module.bootstrap_management_ids())
+
+
 __all__ = [
     "CAMPAIGN",
     "SERVICE_ACCOUNT",
@@ -578,6 +626,9 @@ __all__ = [
     "collect",
     "compile_gate_plan",
     "descriptor",
+    "preparation_descriptor",
+    "preparation_permission_bindings",
+    "preparation_transport_bound",
     "execution_plan",
     "ledger_budget",
     "lock_scopes",

@@ -15,6 +15,7 @@ from request_bytes_collector import (
     typed_not_found,
     typed_over_refusal,
     validate_schedule,
+    _journal_digest,
 )
 from request_bytes_compiler import compile_request_bytes_plan
 
@@ -91,6 +92,13 @@ def test_schedule_mutation_is_rejected():
         validate_schedule(value)
 
 
+def test_journal_digest_is_ordered_and_byte_bound():
+    first = [{"name": "row-000.json", "bytes": 12, "sha256": "a" * 64, "sequence": 0}]
+    second = first + [{"name": "response-000.body", "bytes": 3, "sha256": "b" * 64, "sequence": 0}]
+    assert _journal_digest(first) != _journal_digest(second)
+    assert _journal_digest(second) != _journal_digest(list(reversed(second)))
+
+
 def test_failed_preflight_never_sends_commit_or_next_probe(tmp_path):
     from request_bytes_collector import collect_local
 
@@ -118,6 +126,7 @@ def test_failed_preflight_never_sends_commit_or_next_probe(tmp_path):
     assert not any(item["kind"] == "conditional-create-commit" for item in dispatched)
     assert not any(item["probe"] != "under" for item in dispatched)
     assert not any(item["method"] == "DELETE" for item in dispatched)
+    assert result["localJournal"]["captureComplete"] is False
 
 
 def test_lost_commit_response_holds_cleanup_responsibility(tmp_path):

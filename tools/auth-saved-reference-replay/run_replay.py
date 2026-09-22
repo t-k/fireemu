@@ -36,7 +36,9 @@ def load_runner(path: Path):
 
 
 def run(output_root: Path) -> dict:
+    os_module = __import__("os")
     require(not output_root.exists(), "output root must not already exist")
+    output_root = output_root.resolve()
     output_root.mkdir(mode=0o700)
     # Import lazily so contract/evaluator tests do not build the Rust artifact.
     sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
@@ -52,45 +54,63 @@ def run(output_root: Path) -> dict:
     launch_path.parent.mkdir(mode=0o700)
     shutil.copyfile(source_path, launch_path)
     launch_path.chmod(0o500)
-    build = {
-        **build,
-        **artifact_binding(source_path, launch_path, build, build["inputs"]),
-    }
-
-    source_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
-    ).strip()
-    reports = {}
-    for name in CORPORA:
-        runner = load_runner(RUNNERS[name])
-        runner.build_artifact = lambda: (launch_path, build)
-        report = runner.run(output_root / name)
-        require(
-            runner.complete(report),
-            f"{name}: owned replay failed or is incomplete",
-        )
-        status = report.get("status")
-        require(status in {"passed", "failed"}, f"{name}: invalid report status")
-        reports[name] = {
-            "status": status,
-            "localReport": f"{name}/local.json",
-            "localReportSha256": file_digest(output_root / name / "local.json"),
-            "localReportBytes": (output_root / name / "local.json").stat().st_size,
-            "artifactSha256": report["artifact"]["sha256"],
-            "runtimeSourceCommit": report["runtimeSourceCommit"],
-            "cleanup": report["cleanup"],
-            "listenersClosed": report["ownedProcess"]["listenersClosed"],
-            "processExitCode": report["ownedProcess"]["exitCode"],
-            "probeInputsSha256": digest(report["probeInputs"]),
-            "configurationSha256": report["configuration"]["sha256"],
-            "configurationFileSha256": report["configuration"]["fileSha256"],
+    flags = os_module.O_RDONLY | getattr(os_module, "O_CLOEXEC", 0) | getattr(os_module, "O_NOFOLLOW", 0)
+    launch_fd = os_module.open(launch_path, flags)
+    try:
+        build = {
+            **build,
+            **artifact_binding(
+                source_path, launch_path, build, build["inputs"], launch_fd
+            ),
         }
-        require(
-            report["artifact"]["sha256"] == build["artifactSha256"]
-            and report["runtimeSourceCommit"] == source_commit
-            and report["ownedProcess"]["listenersClosed"] is True,
-            f"{name}: fixed artifact or cleanup binding failed",
-        )
+    except BaseException:
+        os_module.close(launch_fd)
+        raise
+
+    try:
+        source_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+        ).strip()
+    except BaseException:
+        os_module.close(launch_fd)
+        raise
+    try:
+        reports = {}
+        for name in CORPORA:
+            runner = load_runner(RUNNERS[name])
+            runner.build_artifact = lambda: (
+                launch_path,
+                {**build, "_launchCopyFd": launch_fd},
+            )
+            report = runner.run(output_root / name)
+            require(
+                runner.complete(report),
+                f"{name}: owned replay failed or is incomplete",
+            )
+            status = report.get("status")
+            require(status in {"passed", "failed"}, f"{name}: invalid report status")
+            reports[name] = {
+                "status": status,
+                "localReport": f"{name}/local.json",
+                "localReportSha256": file_digest(output_root / name / "local.json"),
+                "localReportBytes": (output_root / name / "local.json").stat().st_size,
+                "artifactSha256": report["artifact"]["sha256"],
+                "runtimeSourceCommit": report["runtimeSourceCommit"],
+                "cleanup": report["cleanup"],
+                "listenersClosed": report["ownedProcess"]["listenersClosed"],
+                "processExitCode": report["ownedProcess"]["exitCode"],
+                "probeInputsSha256": digest(report["probeInputs"]),
+                "configurationSha256": report["configuration"]["sha256"],
+                "configurationFileSha256": report["configuration"]["fileSha256"],
+            }
+            require(
+                report["artifact"]["sha256"] == build["artifactSha256"]
+                and report["runtimeSourceCommit"] == source_commit
+                and report["ownedProcess"]["listenersClosed"] is True,
+                f"{name}: fixed artifact or cleanup binding failed",
+            )
+    finally:
+        os_module.close(launch_fd)
     manifest = {
         "schemaVersion": 2,
         "kind": "auth-saved-reference-replay-local-v2",

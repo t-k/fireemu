@@ -12,6 +12,7 @@ import os
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -178,25 +179,43 @@ def validate_build(receipt: dict, artifact: str, inputs: dict) -> None:
     )
 
 
-def artifact_binding(source: Path, launch_copy: Path, build: dict, inputs: dict) -> dict:
+def artifact_binding(
+    source: Path,
+    launch_copy: Path,
+    build: dict,
+    inputs: dict,
+    launch_fd: int | None = None,
+) -> dict:
     """Bind the built executable and the exact private copy supplied to a launcher."""
     os_module = __import__("os")
     stat_module = __import__("stat")
 
-    def read_stable(path: Path, role: str) -> tuple[Path, str, tuple[int, int]]:
+    def read_stable(
+        path: Path, role: str, supplied_fd: int | None = None
+    ) -> tuple[Path, str, tuple[int, int]]:
         require(".." not in path.parts, f"artifact binding {role} path contains '..'")
         try:
             resolved = path.resolve(strict=True)
         except OSError as exc:
             raise ValueError(f"artifact binding {role} path is unavailable") from exc
+        require(
+            resolved == path.absolute(),
+            f"artifact binding {role} path must be canonical and must not use a symlink parent",
+        )
         flags = os_module.O_RDONLY | getattr(os_module, "O_CLOEXEC", 0)
         flags |= getattr(os_module, "O_NOFOLLOW", 0)
-        try:
-            descriptor = os_module.open(path, flags)
-        except OSError as exc:
-            raise ValueError(
-                f"artifact binding {role} path is unavailable or is a symlink"
-            ) from exc
+        if supplied_fd is None:
+            try:
+                descriptor = os_module.open(path, flags)
+            except OSError as exc:
+                raise ValueError(
+                    f"artifact binding {role} path is unavailable or is a symlink"
+                ) from exc
+        else:
+            try:
+                descriptor = os_module.dup(supplied_fd)
+            except OSError as exc:
+                raise ValueError(f"artifact binding {role} descriptor is unavailable") from exc
         try:
             before = os_module.fstat(descriptor)
             require(
@@ -240,10 +259,30 @@ def artifact_binding(source: Path, launch_copy: Path, build: dict, inputs: dict)
             and identity(current) == identity(after),
             f"artifact binding {role} path changed while reading",
         )
+        try:
+            final_resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path disappeared") from exc
+        require(
+            final_resolved == path.absolute(),
+            f"artifact binding {role} path must be canonical and must not use a symlink parent",
+        )
+        try:
+            final = os_module.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path disappeared") from exc
+        require(
+            stat_module.S_ISREG(final.st_mode)
+            and final.st_nlink == 1
+            and identity(final) == identity(after),
+            f"artifact binding {role} path changed after verification",
+        )
         return resolved, sha(b"".join(chunks)), (after.st_dev, after.st_ino)
 
     source, source_sha256, source_identity = read_stable(source, "source")
-    launch_copy, launch_copy_sha256, launch_identity = read_stable(launch_copy, "launch")
+    launch_copy, launch_copy_sha256, launch_identity = read_stable(
+        launch_copy, "launch", launch_fd
+    )
     require(
         source_identity != launch_identity,
         "artifact binding source and launch paths must have independent inodes",
@@ -256,6 +295,40 @@ def artifact_binding(source: Path, launch_copy: Path, build: dict, inputs: dict)
         "launchCopyPath": str(launch_copy),
         "launchCopySha256": launch_copy_sha256,
     }
+
+
+def copy_verified_artifact(
+    source: Path, destination: Path, verified_fd: int | None = None
+) -> None:
+    """Copy from a previously verified descriptor when one is supplied."""
+    if verified_fd is None:
+        shutil.copyfile(source, destination)
+        return
+    before = os.fstat(verified_fd)
+    require(
+        stat.S_ISREG(before.st_mode),
+        "verified artifact descriptor is not a regular file",
+    )
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    descriptor = os.open(destination, flags, 0o600)
+    try:
+        offset = 0
+        while True:
+            chunk = os.pread(verified_fd, 1024 * 1024, offset)
+            if not chunk:
+                break
+            written = 0
+            while written < len(chunk):
+                written += os.write(descriptor, chunk[written:])
+            offset += len(chunk)
+        after = os.fstat(verified_fd)
+    finally:
+        os.close(descriptor)
+    require(
+        (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns),
+        "verified artifact changed while copying",
+    )
 
 
 MUTATION_OUTPUT_MARKER = ".fireemu-mutation-output"

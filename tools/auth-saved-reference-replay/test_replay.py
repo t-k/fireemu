@@ -213,6 +213,19 @@ def test_manifest_rejects_parent_path_alias_for_artifact_copy(tmp_path):
         )
 
 
+def test_manifest_rejects_parent_directory_symlink_alias(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    real_directory = launch_path.parent.with_name("launch-real")
+    launch_path.parent.rename(real_directory)
+    launch_path.parent.symlink_to(real_directory, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink parent"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
 def test_manifest_accepts_independent_shutil_copyfile_artifact(tmp_path):
     bundle, _source = write_complete_failed_bundle(tmp_path)
     manifest = json.loads((bundle / "run-manifest.json").read_text())
@@ -274,6 +287,30 @@ def test_manifest_rejects_independent_launch_replacement_during_read(
 
     monkeypatch.setattr(replay.os, "read", replace_after_launch_read)
     with pytest.raises(ValueError, match="changed"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_launch_replacement_after_path_recheck(tmp_path, monkeypatch):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_stat = replay.os.stat
+    replaced = False
+
+    def replace_after_launch_stat(path, *args, **kwargs):
+        nonlocal replaced
+        result = original_stat(path, *args, **kwargs)
+        if not replaced and Path(path) == launch_path:
+            launch_path.unlink()
+            launch_path.hardlink_to(source_path)
+            replaced = True
+        return result
+
+    monkeypatch.setattr(replay.os, "stat", replace_after_launch_stat)
+    with pytest.raises(ValueError, match="hardlink|after verification"):
         validate_artifact_binding(
             manifest["build"], manifest["artifactSha256"], bundle
         )

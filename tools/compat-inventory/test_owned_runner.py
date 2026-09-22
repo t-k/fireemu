@@ -19,6 +19,7 @@ from owned_runner import (
     artifact_binding,
     build_timeout,
     child_identity_matches,
+    copy_verified_artifact,
     local_addresses,
     observation_complete,
     run_build,
@@ -120,6 +121,49 @@ def test_artifact_binding_rejects_hardlinked_launch_copy(tmp_path):
         artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 
+def test_artifact_binding_rejects_parent_directory_symlink_alias(tmp_path):
+    source = tmp_path / "source-fireemu"
+    real_directory = tmp_path / "launch-real"
+    alias_directory = tmp_path / "launch"
+    source.write_bytes(b"source")
+    real_directory.mkdir()
+    launch = real_directory / "fireemu"
+    launch.write_bytes(b"source")
+    alias_directory.symlink_to(real_directory, target_is_directory=True)
+    aliased_launch = alias_directory / "fireemu"
+    receipt = {
+        "artifactSha256": __import__("hashlib").sha256(b"source").hexdigest(),
+        "inputs": {"crates/x.rs": "x"},
+        "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fireemu",
+            "--message-format=json",
+        ],
+        "exitCode": 0,
+    }
+    with pytest.raises(ValueError, match="symlink parent"):
+        artifact_binding(source, aliased_launch, receipt, {"crates/x.rs": "x"})
+
+
+def test_verified_fd_copy_survives_launch_path_replacement(tmp_path):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    destination = tmp_path / "destination-fireemu"
+    source.write_bytes(b"source")
+    launch.write_bytes(b"independent-launch")
+    descriptor = os.open(launch, os.O_RDONLY)
+    try:
+        launch.unlink()
+        launch.hardlink_to(source)
+        copy_verified_artifact(launch, destination, descriptor)
+    finally:
+        os.close(descriptor)
+    assert destination.read_bytes() == b"independent-launch"
+
+
 def test_artifact_binding_rejects_launch_replacement_during_descriptor_read(
     tmp_path, monkeypatch
 ):
@@ -195,6 +239,43 @@ def test_artifact_binding_rejects_independent_launch_replacement_during_read(
 
     monkeypatch.setattr(owned_runner.os, "read", replace_after_launch_read)
     with pytest.raises(ValueError, match="changed"):
+        artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
+
+
+def test_artifact_binding_rejects_launch_replacement_after_path_recheck(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    source.write_bytes(b"source")
+    launch.write_bytes(b"source")
+    receipt = {
+        "artifactSha256": __import__("hashlib").sha256(b"source").hexdigest(),
+        "inputs": {"crates/x.rs": "x"},
+        "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fireemu",
+            "--message-format=json",
+        ],
+        "exitCode": 0,
+    }
+    original_stat = owned_runner.os.stat
+    replaced = False
+
+    def replace_after_launch_stat(path, *args, **kwargs):
+        nonlocal replaced
+        result = original_stat(path, *args, **kwargs)
+        if not replaced and Path(path) == launch:
+            launch.unlink()
+            launch.hardlink_to(source)
+            replaced = True
+        return result
+
+    monkeypatch.setattr(owned_runner.os, "stat", replace_after_launch_stat)
+    with pytest.raises(ValueError, match="hardlink|after verification"):
         artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 

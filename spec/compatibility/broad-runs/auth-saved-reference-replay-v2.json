@@ -4,7 +4,7 @@
     "cleanupBound": true,
     "configurationComparison": "separate-evidence",
     "tool": "tools/auth-saved-reference-replay/replay.py",
-    "toolSha256": "f7d4c7cee4603f3cae6b29bde6dbbf0809991ad8208dc669f3e0b57a2b50b1ee",
+    "toolSha256": "051a218a9d55ea21fa44c98d0b05cf291ed7b3273affb76b84a8081ac09aec9e",
     "typedScalarComparison": true
   },
   "corpora": [
@@ -64,7 +64,7 @@
     "productionCommunication": false,
     "singleArtifactRequired": true,
     "tool": "tools/auth-saved-reference-replay/run_replay.py",
-    "toolSha256": "fd5117fb4f2990f34b3b939edce30a2162b85fbe8275004f88179e24676dd197"
+    "toolSha256": "d67159247650fbd2050fc7830223258ac7b705fd0356d9e34f291619f481b900"
   },
   "runtimeSourceBinding": "run-manifest.sourceCommit",
   "schemaVersion": 2

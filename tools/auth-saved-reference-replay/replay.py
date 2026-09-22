@@ -241,7 +241,7 @@ def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: 
             raise ValueError(f"artifact binding {role} path is unavailable") from exc
         require(
             canonical == path,
-            f"artifact binding {role} path must be canonical and must not be a symlink",
+            f"artifact binding {role} path must be canonical and must not use a symlink parent",
         )
         flags = os_module.O_RDONLY | getattr(os_module, "O_CLOEXEC", 0)
         flags |= getattr(os_module, "O_NOFOLLOW", 0)
@@ -293,6 +293,24 @@ def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: 
             and current.st_nlink == 1
             and identity(current) == identity(after),
             f"artifact binding {role} path changed while reading",
+        )
+        try:
+            final_canonical = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path disappeared") from exc
+        require(
+            final_canonical == path,
+            f"artifact binding {role} path must be canonical and must not use a symlink parent",
+        )
+        try:
+            final = os_module.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path disappeared") from exc
+        require(
+            stat_module.S_ISREG(final.st_mode)
+            and final.st_nlink == 1
+            and identity(final) == identity(after),
+            f"artifact binding {role} path changed after verification",
         )
         return (
             hashlib.sha256(b"".join(chunks)).hexdigest(),

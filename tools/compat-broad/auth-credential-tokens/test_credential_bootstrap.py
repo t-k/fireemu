@@ -130,6 +130,11 @@ def test_bootstrap_rejects_foreign_principal_before_network(fixture_origin):
     assert requests == []
 
 
+def test_production_bootstrap_requires_gate_before_any_wire_call():
+    with pytest.raises(ValueError, match="Gate"):
+        bootstrap.prepare(_permission(), adc=ADC, api_key="api-key")
+
+
 def test_bootstrap_rejects_budget_or_deadline_mutation():
     with pytest.raises(ValueError, match="budget"):
         bootstrap.BootstrapBudget(max_requests=5, max_seconds=600, cost_microusd=50_000).validate()

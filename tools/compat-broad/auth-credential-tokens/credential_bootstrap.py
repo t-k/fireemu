@@ -82,6 +82,8 @@ def _validate_permission(permission: dict, adc: dict) -> None:
         raise ValueError("bootstrap principal differs")
     if permission.get("project") != PROJECT or permission.get("projectNumber") != PROJECT_NUMBER:
         raise ValueError("bootstrap project differs")
+    if not isinstance(permission.get("nonce"), str) or len(permission["nonce"]) != 32:
+        raise ValueError("bootstrap nonce required")
     if permission.get("authorizedUserDigest") != digest(adc):
         raise ValueError("authorized-user binding differs")
 
@@ -144,6 +146,8 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
     _validate_handoff_input(permission, adc)
     if not isinstance(api_key, str) or not api_key:
         raise ValueError("private Web API key required")
+    if gate is None and fixture_origin is None:
+        raise ValueError("production bootstrap Gate required")
     if gate is not None:
         snapshot = gate.snapshot()
         bootstrap = snapshot.get("plan", {}).get("bootstrap")
@@ -151,6 +155,11 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
             raise ValueError("bootstrap Gate permission binding differs")
         if tuple(bootstrap.get("operationIds", ())) != gate_module.bootstrap_management_ids():
             raise ValueError("bootstrap Gate operation binding differs")
+        if snapshot.get("plan", {}).get("nonce") != permission["nonce"]:
+            raise ValueError("bootstrap Gate nonce binding differs")
+        before_events = len(snapshot.get("managementEvents", []))
+    else:
+        before_events = 0
 
     def dispatch(slot: str, secret):
         request_slot = {
@@ -188,16 +197,21 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
     status, auth = dispatch("bootstrap-auth-config", token)
     if status != 200 or not isinstance(auth, dict):
         raise ValueError("Auth config readback refused")
-    proof = {"kind": "auth-credential-bootstrap-proof-v1", "permissionDigest": digest(permission), "principalDigest": digest(principal), "project": copy.deepcopy(project), "authConfigDigest": digest(auth), "tokeninfoExpiresInSeconds": expires_in, "requestCount": PREP_REQUESTS, "taskMaxRequests": TASK_MAX_REQUESTS, "taskMaxSeconds": TASK_MAX_SECONDS, "recoverySeconds": RECOVERY_SECONDS}
+    prepared = {"token": token, "apiKey": api_key, "signing": {"serviceAccount": SERVICE_ACCOUNT}}
+    proof = {"kind": "auth-credential-bootstrap-proof-v1", "permissionDigest": digest(permission), "nonce": permission["nonce"], "authorizedUserDigest": digest(adc), "principalDigest": digest(principal), "preparedDigest": digest(prepared), "apiKeyDigest": digest(api_key), "project": copy.deepcopy(project), "authConfigDigest": digest(auth), "tokeninfoExpiresInSeconds": expires_in, "requestCount": PREP_REQUESTS, "taskMaxRequests": TASK_MAX_REQUESTS, "taskMaxSeconds": TASK_MAX_SECONDS, "recoverySeconds": RECOVERY_SECONDS}
+    if not isinstance(auth.get("name"), str) or auth.get("name") != "projects/592603257417/config":
+        raise ValueError("Auth config project binding differs")
     if gate is not None:
         snapshot = gate.snapshot()
         used = snapshot.get("managementUsed", [])
         expected = ["observation:" + item for item in gate_module.bootstrap_management_ids()]
-        if used[:PREP_REQUESTS] != expected:
+        events = snapshot.get("managementEvents", [])
+        if used[:PREP_REQUESTS] != expected or len(events) - before_events != PREP_REQUESTS:
             raise ValueError("bootstrap Gate completion differs")
         proof["gatePlanDigest"] = snapshot["planDigest"]
-        proof["managementJournalDigest"] = digest(snapshot.get("managementEvents", [])[:PREP_REQUESTS])
-    return BootstrapResult({"token": token, "apiKey": api_key, "signing": {"serviceAccount": SERVICE_ACCOUNT}}, proof, PREP_REQUESTS)
+        proof["managementJournalDigest"] = digest(events[before_events:])
+    charged_requests = PREP_REQUESTS if gate is None else len(snapshot.get("managementEvents", [])) - before_events
+    return BootstrapResult(prepared, proof, charged_requests)
 
 
 def finalize_handoff(prepared: dict, observation_permission_digest: str, proof: dict) -> dict:
@@ -215,6 +229,8 @@ def finalize_handoff(prepared: dict, observation_permission_digest: str, proof: 
         or proof.get("recoverySeconds") != RECOVERY_SECONDS
     ):
         raise ValueError("independent bootstrap proof required")
+    if proof.get("preparedDigest") != digest(prepared):
+        raise ValueError("prepared credential differs from bootstrap proof")
     return {"kind": HANDOFF_KIND, "permissionDigest": observation_permission_digest, **copy.deepcopy(prepared)}
 
 

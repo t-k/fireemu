@@ -119,7 +119,10 @@ def test_parent_snapshot_selects_one_unresolved_event_from_real_signing_compiler
     custom_index = next(
         index
         for index, operation in enumerate(gate_plan["jobs"][credential_gate.JOB]["observation"])
-        if operation.get("kind") == "custom-sign-in" and operation.get("binds", {}).get("customUid") == "localId"
+        if operation.get("kind") == "custom-sign-in"
+        and operation.get("binds", {}).get("customUid") in {"localId", "idToken.sub"}
+        and operation.get("binds", {}).get("customIdToken") == "idToken"
+        and operation.get("binds", {}).get("customRefresh") == "refreshToken"
     )
     operation = gate_plan["jobs"][credential_gate.JOB]["observation"][custom_index]
     operation["binds"] = {

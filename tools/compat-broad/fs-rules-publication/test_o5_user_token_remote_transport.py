@@ -1068,8 +1068,9 @@ def test_recovery_document_receipt_uses_version_without_observation_fields(plan)
     )
     assert got["documentPresent"] is True
     assert got["version"] == "2026-09-22T00:00:00Z"
-    assert "fields" not in got
-    accepted, failure = _accept(got, RECOVERY_RECEIPT_KEYS)
+    assert got["fields"] == {"count": 1}
+    assert got["responseDigest"] == digest({"name": resource, "fields": {"count": {"integerValue": "1"}}, "updateTime": "2026-09-22T00:00:00Z"})
+    accepted, failure = _accept({key: got[key] for key in RECOVERY_RECEIPT_KEYS if key in got}, RECOVERY_RECEIPT_KEYS)
     assert failure is None
     assert accepted is not None
 
@@ -1112,6 +1113,8 @@ def test_commit_and_observation_error_receipts_use_null_fields(plan):
         endpoint="127.0.0.1:1234",
     )
     assert got["fields"] is None
+    assert len(got["effects"]) == 1
+    assert got["responseDigest"] == digest({"writeResults": [{"updateTime": "2026-09-22T00:00:00Z"}], "commitTime": "2026-09-22T00:00:00Z"})
     get_plan, get_operation, _ = minimal_wire_plan()
     get_prepared = remote.prepare_request(get_plan, get_operation, credentials={"unauthenticated": ""})
     error = remote._adapt_firestore_result(

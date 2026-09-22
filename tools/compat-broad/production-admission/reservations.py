@@ -1043,7 +1043,7 @@ def _auth_parent_projection(gate, child_claim):
             "returnSecureToken": True,
         }
         or not isinstance(binds, dict)
-        or binds.get("customUid") != "localId"
+        or binds.get("customUid") not in {"localId", "idToken.sub"}
     ):
         raise ValueError("Auth parent custom resource changed")
     events = [
@@ -1318,19 +1318,18 @@ def _auth_parent_responsibility_projection(gate, child_claim):
                 raise ValueError("Auth parent responsibility creating operation semantics differ")
             return index
         if is_custom_sign_in:
-            token = operation.get("body", {}).get("token") if isinstance(operation.get("body"), dict) else None
+            body = operation.get("body")
             if (
                 kind != "custom-sign-in"
                 or operation.get("service") != "auth"
                 or operation.get("method") != "POST"
                 or operation.get("account") != "custom"
                 or operation.get("form") is not False
-                or token not in {
-                    "$binding:customToken",
-                    "$binding:customTokenReserved",
-                    "$binding:customTokenExpired",
-                }
-                or operation.get("body", {}).get("returnSecureToken") is not True
+                or body not in (
+                    {"token": "$binding:customToken", "returnSecureToken": True},
+                    {"token": "$binding:customTokenReserved", "returnSecureToken": True},
+                    {"token": "$binding:customTokenExpired", "returnSecureToken": True},
+                )
             ):
                 raise ValueError("Auth parent responsibility creating operation semantics differ")
             return index

@@ -4,6 +4,7 @@ import copy
 import json
 import multiprocessing
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -623,7 +624,7 @@ def _auth_recovery_fixture(tmp_path):
         "kind": "custom-sign-in",
         "account": "custom",
         "resource": resource,
-        "binds": {"customUid": "localId"},
+        "binds": {"customUid": "idToken.sub"},
     }
     parent_plan = {
         "contract": "shared-local-v1", "campaignId": "AUTH-CREDENTIAL-TOKENS-01",
@@ -718,7 +719,7 @@ def _auth_recovery_fixture(tmp_path):
     return ledger, parent_ticket, child_claim, child_envelope, child_plan, bindings, evidence, resource, child_path
 
 
-def _compiler_auth_projection_fixture(tmp_path, *, management_count=0, malformed_management=None, variant_outcome=None, variant_slot=1):
+def _compiler_auth_projection_fixture(tmp_path, *, management_count=0, malformed_management=None, variant_outcome=None, variant_slot=1, foreign_body=False):
     """Build a real compiler plan and Gate journal with a stopped custom create."""
     nonce = "a" * 32
     plan = credential_gate.gate_plan(
@@ -726,6 +727,13 @@ def _compiler_auth_projection_fixture(tmp_path, *, management_count=0, malformed
         cost_microusd=50_000, observation_window_seconds=500,
     )
     plan["permissionExpiresAt"] = time.time() + 3_600
+    if foreign_body:
+        normal_operation = next(
+            operation for operation in plan["jobs"]["auth-credential"]["observation"]
+            if operation.get("kind") == "custom-sign-in"
+            and operation["body"].get("token") == "$binding:customToken"
+        )
+        normal_operation["body"] = {**normal_operation["body"], "tenantId": "attacker-tenant"}
     resources = plan["jobs"]["auth-credential"]["resources"]
     parent_path = (tmp_path / "compiler-auth-parent-gate").resolve()
     locks = [
@@ -835,6 +843,73 @@ def _compiler_auth_projection_fixture(tmp_path, *, management_count=0, malformed
         "parentRequestDigest": digest(normal_operation), "ownedResources": [normal_operation["resource"]],
     }
     return ledger, parent_path, child_claim
+
+
+def _full_compiler_auth_recovery_fixture(tmp_path):
+    """Bind the real compiler plan to the Ledger child-admission fixture."""
+    fixture = _auth_recovery_fixture(tmp_path)
+    ledger, parent, child, envelope, child_plan, bindings, _evidence, resource, child_path = fixture
+    parent_path = Path(parent["ledgerPath"]).parent / "auth-parent-gate"
+    shutil.rmtree(parent_path)
+    plan = credential_gate.gate_plan(
+        "demo", "a" * 32, signing=True, wall_seconds=600, recovery_seconds=60,
+        cost_microusd=50_000, observation_window_seconds=500,
+    )
+    plan["permissionExpiresAt"] = time.time() + 3_600
+    resources = plan["jobs"]["auth-credential"]["resources"]
+    locks = [{"key": item.replace("projects/", "project/"), "mode": "WRITE"} for item in resources]
+    state = ledger.snapshot()
+    row = state["reservations"][parent["reservation"]]
+    claim = copy.deepcopy(row["claim"])
+    claim.update(
+        gatePath=str(parent_path), gatePlanDigest=digest(plan), manifestDigest=digest(plan), locks=locks,
+    )
+    row["claim"] = claim
+    row["claimDigest"] = digest(claim)
+    parent["claimDigest"] = row["claimDigest"]
+    envelope["scopes"] = locks
+    _save(ledger.path, state)
+    credential_gate.create(parent_path, plan)
+    gate = credential_gate.CredentialGate(parent_path, "auth-credential")
+    gate.claim()
+    operations = plan["jobs"]["auth-credential"]["observation"]
+    signups = [(index, item) for index, item in enumerate(operations) if item.get("kind") == "sign-up"]
+    custom = [(index, item) for index, item in enumerate(operations) if item.get("kind") == "custom-sign-in"]
+    normal_index, normal_operation = custom[0]
+    events = [
+        {
+            "job": "auth-credential", "phase": "observation", "index": index,
+            "requestDigest": digest(operation), "service": "auth", "method": "POST",
+            "completed": True, "creationOutcome": "refused", "status": 400, "failure": None,
+            "authEvidence": {"account": operation["account"], "creationOutcome": "refused"},
+        }
+        for index, operation in signups
+    ]
+    events.append({
+        "job": "auth-credential", "phase": "observation", "index": normal_index,
+        "requestDigest": digest(normal_operation), "service": "auth", "method": "POST",
+        "completed": False, "creationOutcome": "unknown", "ended": 2,
+    })
+    gate_state = gate.snapshot()
+    gate_state["events"] = events
+    gate_state["observation"] = len(events)
+    gate_state["total"] = len(events)
+    gate_state["jobs"]["auth-credential"]["observation"] = len(events)
+    gate_state["jobs"]["auth-credential"]["scheduleDone"] = normal_index + 1
+    dead = _dead_pid()
+    gate_state["coordinatorPid"] = dead
+    gate_state["jobs"]["auth-credential"]["pid"] = dead
+    gate_state["stopped"] = True
+    _save(parent_path, gate_state)
+    child["parentClaimDigest"] = parent["claimDigest"]
+    child["parentPlanDigest"] = digest(plan)
+    child["parentEventIndex"] = normal_index
+    child["parentRequestDigest"] = digest(normal_operation)
+    child["locks"] = locks
+    evidence = reservations._auth_parent_projection(gate_state, child)
+    child["parentGateDigest"] = evidence["gateDigest"]
+    child["parentEvidenceDigest"] = evidence["evidenceDigest"]
+    return ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path
 
 
 def _auth_child_gate(path, child_plan, resource, *, body=None, status=200):
@@ -1082,6 +1157,27 @@ def test_auth_recovery_child_is_durable_lookup_only_and_closes_parent_on_typed_a
         receipt_digest=digest(proof), now=1000) == parent
 
 
+def test_full_compiler_custom_token_parent_begins_and_settles(tmp_path):
+    fixture = _full_compiler_auth_recovery_fixture(tmp_path)
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
+    child_ticket = ledger.begin_auth_recovery_extension(
+        parent, child, envelope, child_plan,
+        source_binding=bindings["source"], transport_binding=bindings["transport"],
+        o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+        parent_evidence=evidence, now=1000,
+    )
+    _auth_child_gate(child_path, child_plan, resource)
+    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+    proof = {
+        "kind": "auth-uid-absence-proof-v1", "resource": resource, "status": 200,
+        "bodyShape": body, "bodyDigest": digest(body), "responseDigest": digest(body),
+        "eventIndex": 0, "requestDigest": digest(child_plan["jobs"]["auth-recovery"]["recovery"][0]),
+    }
+    ledger.settle_auth_recovery_child(child_ticket, absence_proof=proof,
+        receipt_digest=digest(proof), now=1000)
+    assert ledger.snapshot()["reservations"][parent["reservation"]]["recoveryChildren"][0]["state"] == "settled"
+
+
 @pytest.mark.parametrize("management_count", [0, 1, 3])
 def test_auth_parent_projection_counts_validated_management_observations(tmp_path, management_count):
     ledger, parent_path, child_claim = _compiler_auth_projection_fixture(
@@ -1145,6 +1241,13 @@ def test_auth_parent_projection_retains_unresolved_custom_token_responsibility(t
     )
     gate = Gate(parent_path, "auth-credential").snapshot()
     with pytest.raises(ValueError, match="creating event unresolved"):
+        reservations._auth_parent_responsibility_projection(gate, child_claim)
+
+
+def test_auth_parent_projection_rejects_foreign_custom_token_body(tmp_path):
+    _ledger, parent_path, child_claim = _compiler_auth_projection_fixture(tmp_path, foreign_body=True)
+    gate = Gate(parent_path, "auth-credential").snapshot()
+    with pytest.raises(ValueError, match="creating operation semantics"):
         reservations._auth_parent_responsibility_projection(gate, child_claim)
 
 

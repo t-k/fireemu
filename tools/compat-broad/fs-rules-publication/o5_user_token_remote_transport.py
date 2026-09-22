@@ -53,7 +53,7 @@ _RULESET_NAME = re.compile(
 _RELEASE_NAME = re.compile(
     r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$"
 )
-_WORKER_SHA256 = "f186be6be77794c9692eb9627001debaea336eff88fd463bac70e8a10db4a403"
+_WORKER_SHA256 = "437c7c9fb1796dca76bd0d81b4d50c690709bc219b05917b238a14461ff9e586"
 _OWNED_CHILDREN: set[int] = set()
 
 
@@ -645,7 +645,10 @@ def prepare_setup_request(
         body = {"returnSecureToken": True}
         if account.get("email") is not None:
             body.update({"email": account["email"], "password": secret})
-        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signUp"), "method": "POST", "headers": headers, "body": body}
+        if tenant is not None:
+            body["tenantId"] = tenant
+        api_key = _credential(credentials, "api-key", "api-key")
+        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _client_account_path("signUp", api_key), "method": "POST", "headers": _headers(None), "body": body}
     if expected["route"] == "accounts:update":
         bound = (account_bindings or {}).get(expected["accountRef"], {})
         if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
@@ -654,7 +657,11 @@ def prepare_setup_request(
     bound = (account_bindings or {}).get(expected["accountRef"], {})
     if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
         raise ValueError("owner UID binding required")
-    return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signInWithPassword"), "method": "POST", "headers": headers, "body": {"email": account["email"], "password": secret, "returnSecureToken": True}}
+    body = {"email": account["email"], "password": secret, "returnSecureToken": True}
+    if tenant is not None:
+        body["tenantId"] = tenant
+    api_key = _credential(credentials, "api-key", "api-key")
+    return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _client_account_path("signInWithPassword", api_key), "method": "POST", "headers": _headers(None), "body": body}
 
 
 def adapt_setup_result(
@@ -688,7 +695,7 @@ def adapt_setup_result(
                 endpoint=wire["endpoint"],
                 wire_sequence=wire["wireSequence"],
                 name=body["name"],
-                fields_digest=item["response"]["fieldsDigest"],
+                fields_digest=digest(fields),
                 update_time=body["updateTime"],
             ),
             private=SetupPrivateHandoff(),
@@ -699,7 +706,12 @@ def adapt_setup_result(
     if isinstance(bound, dict) and isinstance(bound.get("uid"), str) and body["localId"] != bound["uid"]:
         raise ValueError("setup localId binding refused")
     expected = item["response"]
-    if item["route"] != "accounts:update" and (not isinstance(body.get("idToken"), str) or not isinstance(body.get("expiresIn"), str)):
+    if item["route"] != "accounts:update" and (
+        not isinstance(body.get("idToken"), str)
+        or not body["idToken"]
+        or not isinstance(body.get("expiresIn"), str)
+        or not re.fullmatch(r"[1-9][0-9]*", body["expiresIn"])
+    ):
         raise ValueError("setup token response refused")
     return SetupResult(
         receipt=SetupPublicReceipt(
@@ -720,6 +732,10 @@ def _account_path(tenant: str | None, suffix: str) -> str:
     if tenant is not None:
         prefix += f"/tenants/{tenant}"
     return f"{prefix}/accounts:{suffix}"
+
+
+def _client_account_path(suffix: str, api_key: str) -> str:
+    return f"/v1/accounts:{suffix}?key={quote(api_key, safe='')}"
 
 
 def _principal(
@@ -1191,8 +1207,30 @@ def make_transport(
     account_bindings: dict[str, Any] | None = None,
     identity_proofs: dict[str, IdentityProof] | None = None,
     fixture_origin: str | None = None,
+    deadline: float | None = None,
+    timeout_seconds: float | None = None,
 ):
     _plan_identity(plan)
+    if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+        raise ValueError("absolute transport deadline required")
+    if timeout_seconds is not None and (type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= MAX_SECONDS):
+        raise ValueError("bounded transport timeout required")
+    transport_deadline = deadline
+    transport_timeout = timeout_seconds
+
+    def effective_seconds(
+        call_deadline: float | None, call_timeout: float | None
+    ) -> float:
+        deadlines = [value for value in (transport_deadline, call_deadline) if value is not None]
+        timeouts = [value for value in (transport_timeout, call_timeout) if value is not None]
+        if call_deadline is not None and (type(call_deadline) not in (int, float) or not math.isfinite(call_deadline)):
+            raise ValueError("absolute transport deadline required")
+        if call_timeout is not None and (type(call_timeout) not in (int, float) or not math.isfinite(call_timeout) or not 0 < call_timeout <= MAX_SECONDS):
+            raise ValueError("bounded transport timeout required")
+        seconds = min([MAX_SECONDS, *[float(value) for value in timeouts]])
+        if deadlines:
+            seconds = min(seconds, min(float(value) - time.monotonic() for value in deadlines))
+        return seconds
     frozen = copy.deepcopy(frozen_inputs)
     trusted_bindings = copy.deepcopy(account_bindings or {})
     if identity_proofs is not None:
@@ -1240,6 +1278,8 @@ def make_transport(
         binding: bytes,
         binding_digest: str,
         capability: Any = None,
+        deadline: float | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         nonlocal sequence
         if capability is None:
@@ -1261,7 +1301,10 @@ def make_transport(
             key: prepared[key]
             for key in ("service", "route", "method", "path", "headers", "body")
         }
-        envelope["seconds"] = MAX_SECONDS
+        seconds = effective_seconds(deadline, timeout_seconds)
+        if seconds <= 0:
+            raise WorkerExchangeError("transport deadline exhausted", worker_reaped=False)
+        envelope["seconds"] = seconds
         result = _run_worker(
             envelope,
             binding=binding,
@@ -1276,10 +1319,19 @@ def make_transport(
         )
         endpoint = urlsplit(origin).netloc
         if prepared["service"] == "firestore":
-            return _adapt_firestore_result(
+            adapted = _adapt_firestore_result(
                 prepared, result, sequence=sequence, endpoint=endpoint
             )
-        return {**result["body"], "endpoint": endpoint, "wireSequence": sequence}
+            adapted["workerReaped"] = True
+            return adapted
+        return {
+            **result["body"],
+            "httpStatus": result["status"],
+            "complete": True,
+            "workerReaped": True,
+            "endpoint": endpoint,
+            "wireSequence": sequence,
+        }
 
     return transmit
 

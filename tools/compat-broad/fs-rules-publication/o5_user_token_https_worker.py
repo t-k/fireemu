@@ -38,7 +38,10 @@ _SETUP_DOCUMENT = re.compile(
     r"^/v1/projects/fireemu-35fe6/databases/\(default\)/documents/o5-user-token/n[0-9a-f]{32}/cases/[A-Za-z0-9_-]{1,128}\?currentDocument\.exists=false$"
 )
 _SETUP_ACCOUNT = re.compile(
-    r"^/v1/projects/fireemu-35fe6(?:/tenants/[A-Za-z0-9][A-Za-z0-9_-]{3,35})?/accounts:(signUp|update|signInWithPassword)$"
+    r"^/v1/accounts:(signUp|signInWithPassword)\?key=[A-Za-z0-9._~-]{1,256}$"
+)
+_SETUP_ADMIN_ACCOUNT = re.compile(
+    r"^/v1/projects/fireemu-35fe6(?:/tenants/[A-Za-z0-9][A-Za-z0-9_-]{3,35})?/accounts:update$"
 )
 
 
@@ -120,7 +123,7 @@ def _route(service: Any, route: Any, method: Any, path: Any) -> None:
         service == "identity"
         and route in {"accounts:signUp", "accounts:update", "accounts:signInWithPassword"}
         and method == "POST"
-        and _SETUP_ACCOUNT.fullmatch(path)
+        and ((route == "accounts:update" and _SETUP_ADMIN_ACCOUNT.fullmatch(path)) or (route != "accounts:update" and _SETUP_ACCOUNT.fullmatch(path)))
     ):
         return
     if (
@@ -191,14 +194,18 @@ def _setup_body(route: str, body: Any) -> None:
         if not isinstance(body["name"], str) or not body["name"].startswith("projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/") or not isinstance(body["fields"], dict):
             raise ValueError("setup document body binding refused")
     elif route == "accounts:signUp":
-        if not isinstance(body, dict) or set(body) not in ({"returnSecureToken"}, {"email", "password", "returnSecureToken"}) or body.get("returnSecureToken") is not True:
+        if not isinstance(body, dict) or set(body) not in ({"returnSecureToken"}, {"email", "password", "returnSecureToken"}, {"returnSecureToken", "tenantId"}, {"email", "password", "returnSecureToken", "tenantId"}) or body.get("returnSecureToken") is not True:
             raise ValueError("setup signup body shape refused")
+        if "tenantId" in body and (not isinstance(body["tenantId"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{3,35}", body["tenantId"])):
+            raise ValueError("setup signup tenant binding refused")
     elif route == "accounts:update":
         if not isinstance(body, dict) or set(body) != {"localId", "customAttributes"} or not isinstance(body["localId"], str) or not isinstance(body["customAttributes"], str):
             raise ValueError("setup claims body shape refused")
     elif route == "accounts:signInWithPassword":
-        if not isinstance(body, dict) or set(body) != {"email", "password", "returnSecureToken"} or body.get("returnSecureToken") is not True:
+        if not isinstance(body, dict) or set(body) not in ({"email", "password", "returnSecureToken"}, {"email", "password", "returnSecureToken", "tenantId"}) or body.get("returnSecureToken") is not True:
             raise ValueError("setup signin body shape refused")
+        if "tenantId" in body and (not isinstance(body["tenantId"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{3,35}", body["tenantId"])):
+            raise ValueError("setup signin tenant binding refused")
 
 
 def exchange(
@@ -230,7 +237,8 @@ def exchange(
     ):
         raise ValueError("closed worker headers required")
     lowered = {key.lower() for key in headers}
-    if service in {"identity", "rules"} and "authorization" not in lowered:
+    client_setup = service == "identity" and route in {"accounts:signUp", "accounts:signInWithPassword"}
+    if service in {"identity", "rules"} and not client_setup and "authorization" not in lowered:
         raise ValueError("authorization header required")
     seconds = envelope["seconds"]
     if type(seconds) not in (int, float) or not 0 < seconds <= MAX_SECONDS:
@@ -240,6 +248,8 @@ def exchange(
         _rules_body(route, envelope["body"])
     if route in {"document-create", "accounts:signUp", "accounts:update", "accounts:signInWithPassword"}:
         _setup_body(route, envelope["body"])
+    if client_setup and "authorization" in lowered:
+        raise ValueError("client setup must not use authorization header")
     if route == "document-create" and envelope["body"]["name"] != path.split("?", 1)[0].removeprefix("/v1/"):
         raise ValueError("setup document name binding refused")
     if (

@@ -1,5 +1,6 @@
 """Read-only evidence and recovery-allocation contract tests."""
 
+import copy
 import json
 import multiprocessing
 import os
@@ -602,3 +603,312 @@ def test_recovery_extension_requires_canonical_parent_producer_inputs(tmp_path, 
             ledger, parent, child, envelope, parent_plan, child_plan, now=1100, **kwargs
         )
     assert ledger.snapshot() == before
+
+
+def _auth_recovery_fixture(tmp_path):
+    """Build a held Auth parent with one uncertain custom-sign-in event."""
+    nonce = "a" * 32
+    custom_uid = f"custom-{nonce}"
+    resource = f"projects/demo/auth/accounts/{custom_uid}"
+    parent_path = (tmp_path / "auth-parent-gate").resolve()
+    child_path = (tmp_path / "auth-child-gate").resolve()
+    operation = {
+        "service": "auth",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
+        "form": False,
+        "body": {"token": "$binding:customToken", "returnSecureToken": True},
+        "kind": "custom-sign-in",
+        "account": "custom",
+        "resource": resource,
+        "binds": {"customUid": "localId"},
+    }
+    parent_plan = {
+        "contract": "shared-local-v1", "campaignId": "AUTH-CREDENTIAL-TOKENS-01",
+        "nonce": nonce, "project": "demo", "jobSlots": 1, "requestSeconds": 5,
+        "wallSeconds": 600, "recoverySeconds": 60, "intervalSeconds": 0.25,
+        "observationRequests": 1, "dataRequests": 1, "managementRequests": 0,
+        "requestCostMicrousd": 1, "costMicrousd": 50_000,
+        "jobs": {"auth-credential": {"resources": [resource], "observation": [operation],
+            "recovery": [], "schedule": [{"phase": "observation", "index": 0, "seconds": 5}]}},
+    }
+    parent_claim = {
+        "campaignId": parent_plan["campaignId"], "manifestDigest": digest(parent_plan),
+        "nonceDigest": digest(nonce), "gatePath": str(parent_path),
+        "gatePlanDigest": digest(parent_plan), "gateJob": "auth-credential",
+        "locks": [{"key": f"project/demo/auth/accounts/{custom_uid}", "mode": "WRITE"}],
+        "budget": {"requests": 60, "accounts": 3, "resources": 3, "costMicrousd": 50_000},
+        "durationSeconds": 600,
+    }
+    envelope = {"permissionDigest": "1" * 64, "issuedAt": 900, "expiresAt": 2_000,
+        "limits": parent_claim["budget"], "concurrency": 1, "scopes": parent_claim["locks"]}
+    ledger = reservations.Ledger.create(tmp_path / "ledger")
+    parent_ticket = ledger.reserve(envelope, parent_claim, parent_plan, now=1000)
+    parent_path.mkdir(mode=0o700)
+    (parent_path / "lock").touch(mode=0o600)
+    dead = _dead_pid()
+    parent_state = {
+        "plan": parent_plan, "planDigest": digest(parent_plan), "started": 1, "total": 1,
+        "observation": 1, "recovery": 0, "reservedRecovery": 0, "costMicrousd": 1,
+        "lastSent": 1, "stopped": True, "coordinatorPid": dead, "coordinatorDone": 0,
+        "managementUsed": [], "managementEvents": [], "managementSkipped": [],
+        "managementAbort": None, "coordinatorInflight": False,
+        "events": [{"job": "auth-credential", "phase": "observation", "index": 0,
+            "requestDigest": digest(operation), "service": "auth", "method": "POST",
+            "completed": False, "creationOutcome": "unknown", "ended": 2}],
+        "jobs": {"auth-credential": {"resources": [resource], "pid": dead, "stopped": True,
+            "inflight": False, "observation": 1, "recovery": 0, "owned": [],
+            "creationProofs": {}, "absent": [], "captures": {}, "complete": False, "scheduleDone": 1}},
+    }
+    _save(parent_path, parent_state)
+    child_plan = {
+        "contract": "shared-local-v1", "campaignId": parent_plan["campaignId"], "nonce": "b" * 32,
+        "project": "demo", "jobSlots": 1, "requestSeconds": 5, "wallSeconds": 60,
+        "recoverySeconds": 30, "intervalSeconds": 0.25, "observationRequests": 0,
+        "dataRequests": 1, "managementRequests": 0, "recoveryRequests": 1,
+        "requestCostMicrousd": 1, "costMicrousd": 1,
+        "sourceBindingDigest": "2" * 64, "transportBindingDigest": "3" * 64,
+        "o7BindingDigest": "4" * 64, "o8BindingDigest": "5" * 64,
+        "jobs": {"auth-recovery": {"resources": [resource], "observation": [], "recovery": [{
+            "service": "auth", "method": "POST",
+            "path": "identitytoolkit.googleapis.com/v1/projects/demo/accounts:lookup",
+            "body": {"localId": ["$binding:customUid"]}, "kind": "uid-absence",
+            "account": "custom", "uidBinding": "customUid", "resource": resource,
+            "form": False, "owner": True,
+        }], "accountBindings": {"custom": {"resource": resource, "uidBinding": "customUid"}},
+            "schedule": [{"phase": "recovery", "index": 0, "seconds": 5}]}},
+    }
+    bindings = {
+        "source": {"kind": "auth-source-binding-v1", "digest": "2" * 64},
+        "transport": {"kind": "auth-transport-binding-v1", "digest": "3" * 64},
+        "o7": {"kind": "auth-o7-binding-v1", "digest": "4" * 64},
+        "o8": {"kind": "auth-o8-binding-v1", "digest": "5" * 64},
+    }
+    evidence = {"kind": "auth-parent-uncertain-create-v1", "gateDigest": digest(parent_state),
+        "gatePlanDigest": digest(parent_plan), "job": "auth-credential", "eventIndex": 0,
+        "requestDigest": digest(operation), "resource": resource, "completed": False,
+        "creationOutcome": "unknown"}
+    evidence["evidenceDigest"] = digest(evidence)
+    child_claim = {
+        "kind": reservations.AUTH_RECOVERY_CHILD_KIND, "version": 1,
+        "campaignId": parent_plan["campaignId"], "manifestDigest": digest(child_plan),
+        "nonceDigest": digest("b" * 32), "gatePath": str(child_path), "gateJob": "auth-recovery",
+        "parentGateJob": "auth-credential",
+        "gatePlanDigest": digest(child_plan), "parentClaimDigest": parent_ticket["claimDigest"],
+        "parentPlanDigest": digest(parent_plan), "parentGateDigest": evidence["gateDigest"],
+        "parentEvidenceDigest": evidence["evidenceDigest"], "parentEventIndex": 0,
+        "parentRequestDigest": digest(operation), "recoveryNonce": "b" * 32,
+        "resourceDigest": digest([resource]), "ownedResources": [resource],
+        "locks": parent_claim["locks"], "budget": {"requests": 1, "accounts": 1, "resources": 1, "costMicrousd": 1},
+        "durationSeconds": 60, "generation": {"sourceCommit": "a" * 40,
+            "collectorSourceDigest": "6" * 64, "sourceDigests": {"auth-recovery.py": "7" * 64}},
+        "ownerIdentity": "owner", "recoveryOwner": "recovery-owner",
+        "operationClass": reservations.AUTH_RECOVERY_OPERATION_CLASS, "readCount": 1,
+        "inspectionCount": 1, "absenceCount": 1, "deleteCount": 0, "expiresAt": 1_500,
+        "executionHost": {"platform": reservations.platform.system().lower(), "machine": reservations.platform.machine()},
+        "permissionDigest": "8" * 64, "sourceBindingDigest": bindings["source"]["digest"],
+        "transportBindingDigest": bindings["transport"]["digest"], "o7BindingDigest": bindings["o7"]["digest"],
+        "o8BindingDigest": bindings["o8"]["digest"],
+    }
+    child_envelope = {"permissionDigest": child_claim["permissionDigest"], "issuedAt": 900,
+        "expiresAt": 2_000, "limits": {"requests": 1, "accounts": 1, "resources": 1, "costMicrousd": 1},
+        "concurrency": 1, "scopes": child_claim["locks"]}
+    return ledger, parent_ticket, child_claim, child_envelope, child_plan, bindings, evidence, resource, child_path
+
+
+def _auth_child_gate(path, child_plan, resource, *, body=None, status=200):
+    create_gate(path, child_plan)
+    gate = Gate(path, "auth-recovery")
+    gate.claim()
+    operation = child_plan["jobs"]["auth-recovery"]["recovery"][0]
+    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []} if body is None else body
+    try:
+        gate.dispatch(operation, True, lambda: (status, body))
+    except ValueError:
+        if status == 504 or body.get("users") == []:
+            raise
+    if status == 200 and body.get("users") == []:
+        gate.finish()
+        state = gate.snapshot()
+        dead = _dead_pid()
+        state["coordinatorPid"] = dead
+        state["jobs"]["auth-recovery"]["pid"] = dead
+        _save(path, state)
+
+
+def test_auth_recovery_child_is_durable_lookup_only_and_closes_parent_on_typed_absence(tmp_path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = _auth_recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
+        source_binding=bindings["source"], transport_binding=bindings["transport"],
+        o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
+    assert ledger.snapshot()["reservations"][parent["reservation"]]["recoveryChildren"][0]["state"] == "allocated"
+    _auth_child_gate(child_path, child_plan, resource)
+    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+    proof = {"kind": "auth-uid-absence-proof-v1", "resource": resource, "status": 200,
+        "bodyShape": body, "bodyDigest": digest(body), "responseDigest": digest(body), "eventIndex": 0,
+        "requestDigest": digest(child_plan["jobs"]["auth-recovery"]["recovery"][0])}
+    assert ledger.settle_auth_recovery_child(child_ticket, absence_proof=proof,
+        receipt_digest=digest(proof), now=1000) == child_ticket
+    assert ledger.close_after_auth_recovery_child(parent, child_ticket,
+        receipt_digest=digest(proof), now=1000) == parent
+    assert ledger.snapshot()["reservations"][parent["reservation"]]["state"] == "closed-after-auth-recovery-child"
+    assert ledger.close_after_auth_recovery_child(parent, child_ticket,
+        receipt_digest=digest(proof), now=1000) == parent
+
+
+def _settled_auth_recovery(tmp_path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = _auth_recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_auth_recovery_extension(
+        parent, child, envelope, child_plan,
+        source_binding=bindings["source"], transport_binding=bindings["transport"],
+        o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+        parent_evidence=evidence, now=1000,
+    )
+    _auth_child_gate(child_path, child_plan, resource)
+    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+    proof = {
+        "kind": "auth-uid-absence-proof-v1", "resource": resource, "status": 200,
+        "bodyShape": body, "bodyDigest": digest(body), "responseDigest": digest(body),
+        "eventIndex": 0,
+        "requestDigest": digest(child_plan["jobs"]["auth-recovery"]["recovery"][0]),
+    }
+    ledger.settle_auth_recovery_child(
+        child_ticket, absence_proof=proof, receipt_digest=digest(proof), now=1000,
+    )
+    return ledger, parent, child_ticket, proof, child_path
+
+
+def test_auth_recovery_settlement_rejects_parent_race_after_gate_validation(tmp_path, monkeypatch):
+    ledger, parent, child_ticket, proof, child_path = _settled_auth_recovery(tmp_path)
+    # A second child ticket is not needed: mutate the held parent after the
+    # external Gate snapshot and before the settlement critical section.
+    state = ledger.snapshot()
+    state["reservations"][parent["reservation"]]["state"] = "held"
+    reservations._save(ledger.path, state)
+    original_snapshot = reservations.Gate.snapshot
+
+    def race_snapshot(gate):
+        snapshot = original_snapshot(gate)
+        if gate.path == child_path:
+            raced = ledger.snapshot()
+            raced["reservations"][parent["reservation"]]["state"] = "closed-after-auth-recovery-child"
+            reservations._save(ledger.path, raced)
+        return snapshot
+
+    monkeypatch.setattr(reservations.Gate, "snapshot", race_snapshot)
+    with pytest.raises(ValueError, match="changed during settlement"):
+        ledger.settle_auth_recovery_child(
+            child_ticket, absence_proof=proof, receipt_digest=digest(proof), now=1000,
+        )
+
+
+def test_auth_recovery_close_rejects_parent_race_after_child_gate_validation(tmp_path, monkeypatch):
+    ledger, parent, child_ticket, proof, child_path = _settled_auth_recovery(tmp_path)
+    original_snapshot = reservations.Gate.snapshot
+
+    def race_snapshot(gate):
+        snapshot = original_snapshot(gate)
+        if gate.path == child_path:
+            raced = ledger.snapshot()
+            raced["reservations"][parent["reservation"]]["state"] = "closed-after-auth-recovery-child"
+            reservations._save(ledger.path, raced)
+        return snapshot
+
+    monkeypatch.setattr(reservations.Gate, "snapshot", race_snapshot)
+    with pytest.raises(ValueError, match="Auth parent changed during close"):
+        ledger.close_after_auth_recovery_child(
+            parent, child_ticket, receipt_digest=digest(proof), now=1000,
+        )
+
+
+@pytest.mark.parametrize("mutation", [
+    (200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": [{"localId": "foreign"}]}),
+    (200, {"users": "malformed"}), (504, {}),
+])
+def test_auth_recovery_child_keeps_parent_held_for_non_absent_result(tmp_path, mutation):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = _auth_recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
+        source_binding=bindings["source"], transport_binding=bindings["transport"],
+        o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
+    status, body = mutation
+    _auth_child_gate(child_path, child_plan, resource, body=body, status=status)
+    proof = {"kind": "auth-uid-absence-proof-v1", "resource": resource, "status": status,
+        "bodyShape": body, "bodyDigest": digest(body), "responseDigest": digest(body), "eventIndex": 0,
+        "requestDigest": digest(child_plan["jobs"]["auth-recovery"]["recovery"][0])}
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="typed Auth absence"):
+        ledger.settle_auth_recovery_child(child_ticket, absence_proof=proof,
+            receipt_digest=digest(proof), now=1000)
+    assert ledger.snapshot() == before
+
+
+@pytest.mark.parametrize("path", [
+    "https://attacker.example/accounts:lookup",
+    "identitytoolkit.googleapis.com/v1/projects/foreign/accounts:lookup",
+    "identitytoolkit.googleapis.com/v1/projects/demo/accounts:lookup?key=leak",
+])
+def test_auth_recovery_rejects_lookup_route_escape(tmp_path, path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, _resource, _ = _auth_recovery_fixture(tmp_path)
+    escaped_plan = copy.deepcopy(child_plan)
+    escaped_plan["jobs"]["auth-recovery"]["recovery"][0]["path"] = path
+    escaped_child = copy.deepcopy(child)
+    escaped_child["manifestDigest"] = digest(escaped_plan)
+    escaped_child["gatePlanDigest"] = digest(escaped_plan)
+    with pytest.raises(ValueError, match="Auth recovery operation"):
+        ledger.begin_auth_recovery_extension(
+            parent, escaped_child, envelope, escaped_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+            parent_evidence=evidence, now=1000,
+        )
+
+
+def test_auth_recovery_rejects_parent_change_between_gate_check_and_append(tmp_path, monkeypatch):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, _resource, _ = _auth_recovery_fixture(tmp_path)
+    original_snapshot = reservations.Gate.snapshot
+
+    def race_snapshot(gate):
+        snapshot = original_snapshot(gate)
+        state = ledger.snapshot()
+        state["reservations"][parent["reservation"]]["state"] = "closing"
+        reservations._save(ledger.path, state)
+        return snapshot
+
+    monkeypatch.setattr(reservations.Gate, "snapshot", race_snapshot)
+    with pytest.raises(ValueError, match="parent changed during Auth recovery admission"):
+        ledger.begin_auth_recovery_extension(
+            parent, child, envelope, child_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+            parent_evidence=evidence, now=1000,
+        )
+    assert ledger.snapshot()["reservations"][parent["reservation"]]["state"] == "closing"
+
+
+def test_auth_recovery_rejects_forged_other_parent_event_digest(tmp_path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, _resource, _ = _auth_recovery_fixture(tmp_path)
+    parent_gate_path = (tmp_path / "auth-parent-gate").resolve()
+    parent_gate = Gate(parent_gate_path, "auth-credential").snapshot()
+    operation = parent_gate["plan"]["jobs"]["auth-credential"]["observation"][0]
+    other_operation = copy.deepcopy(operation)
+    other_operation["path"] = "identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+    forged_digest = digest(other_operation)
+    parent_gate["events"][0]["requestDigest"] = forged_digest
+    _save(parent_gate_path, parent_gate)
+
+    forged_evidence = copy.deepcopy(evidence)
+    forged_evidence["gateDigest"] = digest(parent_gate)
+    forged_evidence["requestDigest"] = forged_digest
+    forged_evidence.pop("evidenceDigest")
+    forged_evidence["evidenceDigest"] = digest(forged_evidence)
+    forged_child = copy.deepcopy(child)
+    forged_child["parentGateDigest"] = forged_evidence["gateDigest"]
+    forged_child["parentEvidenceDigest"] = forged_evidence["evidenceDigest"]
+    forged_child["parentRequestDigest"] = forged_digest
+    with pytest.raises(ValueError, match="Auth parent custom create is not uncertain"):
+        ledger.begin_auth_recovery_extension(
+            parent, forged_child, envelope, child_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+            parent_evidence=forged_evidence, now=1000,
+        )

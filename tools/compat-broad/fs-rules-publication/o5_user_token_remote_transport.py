@@ -53,7 +53,7 @@ _RULESET_NAME = re.compile(
 _RELEASE_NAME = re.compile(
     r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$"
 )
-_WORKER_SHA256 = "f186be6be77794c9692eb9627001debaea336eff88fd463bac70e8a10db4a403"
+_WORKER_SHA256 = "437c7c9fb1796dca76bd0d81b4d50c690709bc219b05917b238a14461ff9e586"
 _OWNED_CHILDREN: set[int] = set()
 
 
@@ -645,7 +645,10 @@ def prepare_setup_request(
         body = {"returnSecureToken": True}
         if account.get("email") is not None:
             body.update({"email": account["email"], "password": secret})
-        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signUp"), "method": "POST", "headers": headers, "body": body}
+        if tenant is not None:
+            body["tenantId"] = tenant
+        api_key = _credential(credentials, "api-key", "api-key")
+        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _client_account_path("signUp", api_key), "method": "POST", "headers": _headers(None), "body": body}
     if expected["route"] == "accounts:update":
         bound = (account_bindings or {}).get(expected["accountRef"], {})
         if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
@@ -654,7 +657,11 @@ def prepare_setup_request(
     bound = (account_bindings or {}).get(expected["accountRef"], {})
     if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
         raise ValueError("owner UID binding required")
-    return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signInWithPassword"), "method": "POST", "headers": headers, "body": {"email": account["email"], "password": secret, "returnSecureToken": True}}
+    body = {"email": account["email"], "password": secret, "returnSecureToken": True}
+    if tenant is not None:
+        body["tenantId"] = tenant
+    api_key = _credential(credentials, "api-key", "api-key")
+    return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _client_account_path("signInWithPassword", api_key), "method": "POST", "headers": _headers(None), "body": body}
 
 
 def adapt_setup_result(
@@ -720,6 +727,10 @@ def _account_path(tenant: str | None, suffix: str) -> str:
     if tenant is not None:
         prefix += f"/tenants/{tenant}"
     return f"{prefix}/accounts:{suffix}"
+
+
+def _client_account_path(suffix: str, api_key: str) -> str:
+    return f"/v1/accounts:{suffix}?key={quote(api_key, safe='')}"
 
 
 def _principal(
@@ -1092,17 +1103,44 @@ def _adapt_firestore_result(
             or not isinstance(error.get("status"), str)
         ):
             raise ValueError("REST error response shape refused")
+        if prepared["route"] == "document-recovery-get" and status == 404 and error["status"] == "NOT_FOUND":
+            return {
+                "status": "NOT_FOUND",
+                "code": 5,
+                "httpStatus": 404,
+                "documentPresent": False,
+                "version": None,
+                "complete": True,
+                **wire,
+            }
         return {
             "status": error["status"],
             "code": error["code"],
             "httpStatus": status,
             "documentPresent": False,
-            "fields": {},
+            "fields": None,
             "complete": True,
             **wire,
         }
     route = prepared["route"]
-    if route in {"observation-get", "document-recovery-get"}:
+    if route == "document-recovery-get":
+        name = body.get("name")
+        fields = body.get("fields")
+        expected = prepared["path"][len("/v1/") :]
+        if not isinstance(name, str) or name != expected or not isinstance(fields, dict) or not isinstance(body.get("updateTime"), str):
+            raise ValueError("REST recovery Document response shape refused")
+        for value in fields.values():
+            _decode_firestore_value(value)
+        return {
+            "status": "OK",
+            "code": 0,
+            "httpStatus": status,
+            "documentPresent": True,
+            "version": body["updateTime"],
+            "complete": True,
+            **wire,
+        }
+    if route == "observation-get":
         name = body.get("name")
         fields = body.get("fields")
         expected = prepared["path"][len("/v1/") :]
@@ -1140,7 +1178,7 @@ def _adapt_firestore_result(
             "code": 0,
             "httpStatus": status,
             "documentPresent": True,
-            "fields": {},
+            "fields": None,
             "complete": True,
             **wire,
         }
@@ -1164,8 +1202,14 @@ def make_transport(
     account_bindings: dict[str, Any] | None = None,
     identity_proofs: dict[str, IdentityProof] | None = None,
     fixture_origin: str | None = None,
+    deadline: float | None = None,
+    timeout_seconds: float | None = None,
 ):
     _plan_identity(plan)
+    if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+        raise ValueError("absolute transport deadline required")
+    if timeout_seconds is not None and (type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= MAX_SECONDS):
+        raise ValueError("bounded transport timeout required")
     frozen = copy.deepcopy(frozen_inputs)
     trusted_bindings = copy.deepcopy(account_bindings or {})
     if identity_proofs is not None:
@@ -1234,7 +1278,12 @@ def make_transport(
             key: prepared[key]
             for key in ("service", "route", "method", "path", "headers", "body")
         }
-        envelope["seconds"] = MAX_SECONDS
+        seconds = MAX_SECONDS if timeout_seconds is None else float(timeout_seconds)
+        if deadline is not None:
+            seconds = min(seconds, deadline - time.monotonic())
+        if seconds <= 0:
+            raise WorkerExchangeError("transport deadline exhausted", worker_reaped=False)
+        envelope["seconds"] = seconds
         result = _run_worker(
             envelope,
             binding=binding,

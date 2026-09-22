@@ -11,13 +11,16 @@ import owned_transform_runner as runner
 import pytest
 from owned_transform_runner import (
     BUILD_COMMAND,
-    CURRENT_PROFILE,
     CURRENT_8245_PROFILE,
+    CURRENT_PROFILE,
+    G0_CURRENT_648_PROFILE,
     G0_CURRENT_PROFILE,
     PROFILES,
     REPAIRED_PROFILE,
+    resolve_profile,
     validate_copied_manifest,
     validate_current_g0_artifact,
+    validate_manifest_payload,
     validate_retained_artifact,
 )
 
@@ -49,6 +52,135 @@ def test_g0_profile_is_closed_to_the_retained_build_identity():
         "manifestCommitField": "executionCommit",
         "requireTopLevelArtifactSha": False,
     }
+
+
+def test_current_648_g0_profile_is_bound_to_the_retained_build_identity():
+    assert G0_CURRENT_648_PROFILE == {
+        "name": "current-648-7737",
+        "artifactSha256": "7737f6c389aff0a0f280757591af3b81f11edfbc8438cb69268da0f4c2237026",
+        "runtimeCommit": "648aabe56cf6147128ffadf565d93ca7a92013c1",
+        "manifestCommitPath": ["runtimeSource", "commit"],
+        "requireTopLevelArtifactSha": False,
+    }
+    assert PROFILES[G0_CURRENT_648_PROFILE["name"]] is G0_CURRENT_648_PROFILE
+
+
+def _current_648_manifest(mutation: str | None = None) -> tuple[dict, bytes]:
+    from evidence_common import runtime_inputs_at_commit
+
+    inputs = runtime_inputs_at_commit(
+        G0_CURRENT_648_PROFILE["runtimeCommit"], runner.ROOT
+    )
+    manifest = {
+        "runtimeSource": {"commit": G0_CURRENT_648_PROFILE["runtimeCommit"]},
+        "build": {
+            "artifactSha256": G0_CURRENT_648_PROFILE["artifactSha256"],
+            "exitCode": 0,
+            "command": BUILD_COMMAND,
+            "inputs": inputs,
+        },
+    }
+    if mutation == "source":
+        manifest["runtimeSource"]["commit"] = "f" * 40
+    elif mutation == "receipt-artifact":
+        manifest["build"]["artifactSha256"] = "0" * 64
+    elif mutation == "extra-input":
+        manifest["build"]["inputs"]["forged-input"] = "0" * 64
+    elif mutation == "missing-input":
+        del manifest["build"]["inputs"]["Cargo.toml"]
+    elif mutation == "changed-input":
+        manifest["build"]["inputs"]["Cargo.toml"] = "0" * 64
+    return manifest, json.dumps(manifest).encode()
+
+
+def test_current_648_g0_profile_accepts_exact_build_receipt_and_runtime_map():
+    manifest, manifest_bytes = _current_648_manifest()
+
+    result = validate_manifest_payload(
+        manifest, manifest_bytes, profile="current-648-7737"
+    )
+
+    assert result["artifactSha256"] == G0_CURRENT_648_PROFILE["artifactSha256"]
+    assert result["runtimeSourceCommit"] == G0_CURRENT_648_PROFILE["runtimeCommit"]
+    assert result["artifactProfile"] == "current-648-7737"
+    assert result["runtimeInputCount"] == 430
+
+
+def test_current_648_g0_profile_accepts_ancestor_source_with_current_runtime_inputs(
+    tmp_path, monkeypatch
+):
+    artifact = tmp_path / "fireemu"
+    artifact.write_bytes(b"test artifact identity")
+    artifact.chmod(0o500)
+    _, manifest_bytes = _current_648_manifest()
+    manifest_path = tmp_path / "build-local.json"
+    manifest_path.write_bytes(manifest_bytes)
+    original_sha_file = runner.sha_file
+    monkeypatch.setattr(
+        runner,
+        "sha_file",
+        lambda path: (
+            G0_CURRENT_648_PROFILE["artifactSha256"]
+            if path == artifact
+            else original_sha_file(path)
+        ),
+    )
+
+    result = validate_current_g0_artifact(
+        artifact,
+        manifest_path,
+        profile="current-648-7737",
+        repo=runner.ROOT,
+    )
+
+    assert result["runtimeSourceCommit"] == G0_CURRENT_648_PROFILE["runtimeCommit"]
+    assert (
+        result["currentSourceCommit"]
+        == subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=runner.ROOT, text=True
+        ).strip()
+    )
+    assert result["sourceInputsEqualCurrent"] is True
+
+
+def test_current_648_g0_profile_rejects_an_artifact_with_a_different_hash(tmp_path):
+    artifact = tmp_path / "fireemu"
+    artifact.write_bytes(b"different artifact")
+    _, manifest_bytes = _current_648_manifest()
+    manifest_path = tmp_path / "build-local.json"
+    manifest_path.write_bytes(manifest_bytes)
+
+    with pytest.raises(ValueError, match="retained artifact/build/source binding"):
+        validate_current_g0_artifact(
+            artifact,
+            manifest_path,
+            profile="current-648-7737",
+            repo=runner.ROOT,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["source", "receipt-artifact", "extra-input", "missing-input", "changed-input"],
+)
+def test_current_648_g0_profile_rejects_build_provenance_mutations(mutation):
+    manifest, manifest_bytes = _current_648_manifest(mutation)
+
+    with pytest.raises(ValueError):
+        validate_manifest_payload(
+            manifest, manifest_bytes, profile="current-648-7737"
+        )
+
+
+def test_current_648_g0_profile_rejects_profile_relabeling():
+    relabeled = {
+        **G0_CURRENT_648_PROFILE,
+        "name": "current-648-other-artifact",
+        "artifactSha256": "0" * 64,
+    }
+
+    with pytest.raises(ValueError, match="unregistered artifact profile"):
+        resolve_profile(relabeled)
 
 
 PRIVATE_8245_ENABLED = os.environ.get("G0_8245_RUN_PRIVATE_TESTS") == "1"

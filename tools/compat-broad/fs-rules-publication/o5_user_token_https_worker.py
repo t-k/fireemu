@@ -34,6 +34,12 @@ _EXECUTABLE = re.compile(r"^/v1/projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1
 _ACCOUNT = re.compile(
     r"^/v1/projects/fireemu-35fe6(?:/tenants/[A-Za-z0-9][A-Za-z0-9_-]{3,35})?/accounts:(lookup|update|delete)$"
 )
+_SETUP_DOCUMENT = re.compile(
+    r"^/v1/projects/fireemu-35fe6/databases/\(default\)/documents/o5-user-token/n[0-9a-f]{32}/cases/[A-Za-z0-9_-]{1,128}\?currentDocument\.exists=false$"
+)
+_SETUP_ACCOUNT = re.compile(
+    r"^/v1/projects/fireemu-35fe6(?:/tenants/[A-Za-z0-9][A-Za-z0-9_-]{3,35})?/accounts:(signUp|update|signInWithPassword)$"
+)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -97,10 +103,24 @@ def _route(service: Any, route: Any, method: Any, path: Any) -> None:
     ):
         return
     if (
+        service == "firestore"
+        and route == "document-create"
+        and method == "PATCH"
+        and _SETUP_DOCUMENT.fullmatch(path)
+    ):
+        return
+    if (
         service == "identity"
         and route in {"account-recovery", "principal-action"}
         and method == "POST"
         and _ACCOUNT.fullmatch(path)
+    ):
+        return
+    if (
+        service == "identity"
+        and route in {"accounts:signUp", "accounts:update", "accounts:signInWithPassword"}
+        and method == "POST"
+        and _SETUP_ACCOUNT.fullmatch(path)
     ):
         return
     if (
@@ -164,6 +184,23 @@ def _rules_body(route: str, body: Any) -> None:
             raise ValueError("release patch resource shape refused")
 
 
+def _setup_body(route: str, body: Any) -> None:
+    if route == "document-create":
+        if not isinstance(body, dict) or set(body) != {"name", "fields"}:
+            raise ValueError("setup document body shape refused")
+        if not isinstance(body["name"], str) or not body["name"].startswith("projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/") or not isinstance(body["fields"], dict):
+            raise ValueError("setup document body binding refused")
+    elif route == "accounts:signUp":
+        if not isinstance(body, dict) or set(body) not in ({"returnSecureToken"}, {"email", "password", "returnSecureToken"}) or body.get("returnSecureToken") is not True:
+            raise ValueError("setup signup body shape refused")
+    elif route == "accounts:update":
+        if not isinstance(body, dict) or set(body) != {"localId", "customAttributes"} or not isinstance(body["localId"], str) or not isinstance(body["customAttributes"], str):
+            raise ValueError("setup claims body shape refused")
+    elif route == "accounts:signInWithPassword":
+        if not isinstance(body, dict) or set(body) != {"email", "password", "returnSecureToken"} or body.get("returnSecureToken") is not True:
+            raise ValueError("setup signin body shape refused")
+
+
 def exchange(
     envelope: dict[str, Any], *, fixture_origin: str | None = None
 ) -> dict[str, Any]:
@@ -201,11 +238,15 @@ def exchange(
     body = _bounded_body(envelope["body"])
     if route in {"ruleset-create", "release-patch"}:
         _rules_body(route, envelope["body"])
+    if route in {"document-create", "accounts:signUp", "accounts:update", "accounts:signInWithPassword"}:
+        _setup_body(route, envelope["body"])
+    if route == "document-create" and envelope["body"]["name"] != path.split("?", 1)[0].removeprefix("/v1/"):
+        raise ValueError("setup document name binding refused")
     if (
         method == "GET"
         and body is not None
         or method != "GET"
-        and route in {"observation-commit", "ruleset-create", "release-patch"}
+        and route in {"observation-commit", "ruleset-create", "release-patch", "document-create", "accounts:signUp", "accounts:update", "accounts:signInWithPassword"}
         and body is None
     ):
         raise ValueError("request body shape refused")

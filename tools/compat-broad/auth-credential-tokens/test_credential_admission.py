@@ -349,7 +349,7 @@ def test_bootstrap_permission_has_a_separate_typed_claim_contract(built, tmp_pat
         "authorizedUserDigest": digest({"type": "authorized_user", "client_id": "offline-client"}),
         "preparationPlanDigest": gate_module.bootstrap_plan_digest(template),
         "issuedAt": issued,
-        "expiresAt": issued + 660,
+        "expiresAt": issued + 600,
     }
     plan = gate_module.bootstrap_plan(base, permission_digest=digest(prep))
     validated = admission.validate_bootstrap_permission(prep, plan=plan)
@@ -369,7 +369,7 @@ def test_bootstrap_permission_has_a_separate_typed_claim_contract(built, tmp_pat
     }
     ticket = reservations.Ledger(built.ledger).reserve(envelope, claim, plan)
     assert ticket["reservation"] in reservations.Ledger(built.ledger).snapshot()["reservations"]
-    short = {**prep, "expiresAt": issued + 659}
+    short = {**prep, "expiresAt": issued + 599}
     short_plan = gate_module.bootstrap_plan(base, permission_digest=digest(short))
     with pytest.raises(ValueError, match="window"):
         admission.validate_bootstrap_permission(

@@ -289,7 +289,6 @@ def validate_bootstrap_permission(permission, *, plan) -> dict:
         or type(permission.get("issuedAt")) not in (int, float)
         or type(permission.get("expiresAt")) not in (int, float)
         or permission["expiresAt"] - permission["issuedAt"] < plan["wallSeconds"]
-        + plan["recoverySeconds"]
         or permission["expiresAt"] < time.time()
     ):
         raise ValueError("bootstrap permission window or ADC binding differs")

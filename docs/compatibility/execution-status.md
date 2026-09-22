@@ -1,5 +1,7 @@
 # Execution status: compatibility program
 
+The bounded condition `fs.aggregations.saved-20260907.v1` is independently approved at source `0b4fa6ae`: 23 MATCH, 0 MISMATCH and 0 INDETERMINATE under the historical index configuration. This supersedes neither the original 17 MATCH / 6 MISMATCH initial-index-config run nor its historical record, and does not classify that result as a runtime defect. The artifact SHA-256 is `8245b80ea941344e114fe8f61cd7721d2519739509779e7504c295c1bbb66849`; the exact 430-entry runtime map digest is `bdeeb69292c6fab6c0a587588f920192ce3ee249c77605af680780d1b74d616b`. The durable replay confirmed cleanup and process closure, but no launch receipt was emitted by the legacy adapter. This is bounded saved-production, REST, strict-profile normalized evidence only, with no fresh production, Rules/user-token, SDK/gRPC, broad query/index or parent-promotion claim; `COMPAT_VERIFIED` remains `0 / 14`.
+
 Plan: [execution-plan.md](execution-plan.md). Scope: [emulator-scope.md](emulator-scope.md). This page records the latest verified checkpoint, what was executed, what was pushed and what remains. Counts are not compatibility percentages.
 
 ## Validated continuation checkpoint (2026-09-22)

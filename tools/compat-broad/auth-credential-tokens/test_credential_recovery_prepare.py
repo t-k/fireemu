@@ -344,6 +344,168 @@ def test_review_draft_is_available_before_separate_authority_review(tmp_path: Pa
     assert (output / "review-request.json").is_file()
 
 
+@pytest.mark.parametrize("draft_nonce", [None, "fedcba9876543210fedcba9876543210"])
+def test_packet_assembles_from_persisted_draft_without_reissuing_plan_at_later_clock(
+    tmp_path: Path, draft_nonce: str | None,
+) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    ledger = _ReadOnlyLedger(parent)
+    draft = prepare.prepare_review_draft(
+        parent,
+        ledger=ledger,
+        provenance=provenance,
+        source_root=source_root,
+        recovery_nonce=draft_nonce,
+        now=1000.0,
+    )
+    permission, o7, o8 = _authorities(draft["plan"])
+    reviews = _reviews(permission, o7, o8)
+
+    packet = prepare.prepare_packet(
+        parent,
+        ledger=ledger,
+        provenance=provenance,
+        source_root=source_root,
+        permission=permission,
+        o7=o7,
+        o8=o8,
+        permission_review=reviews[0],
+        o7_review=reviews[1],
+        o8_review=reviews[2],
+        draft=draft,
+        now=1001.0,
+        authority_now=1001.0,
+    )
+
+    assert packet["plan"] == draft["plan"]
+    assert packet["plan"]["planDigest"] == draft["plan"]["planDigest"]
+
+
+def test_persisted_draft_refuses_foreign_nonce_and_source_provenance(tmp_path: Path) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    draft = prepare.prepare_review_draft(
+        parent,
+        ledger=_ReadOnlyLedger(parent),
+        provenance=provenance,
+        source_root=source_root,
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        now=1000.0,
+    )
+    permission, o7, o8 = _authorities(draft["plan"])
+    reviews = _reviews(permission, o7, o8)
+
+    with pytest.raises(recovery.RecoveryRefusal, match="draft|nonce"):
+        prepare.prepare_packet(
+            parent,
+            ledger=_ReadOnlyLedger(parent),
+            provenance=provenance,
+            source_root=source_root,
+            permission=permission,
+            o7=o7,
+            o8=o8,
+            permission_review=reviews[0],
+            o7_review=reviews[1],
+            o8_review=reviews[2],
+            draft=draft,
+            recovery_nonce="0123456789abcdef0123456789abcdef",
+            now=1001.0,
+            authority_now=1001.0,
+        )
+
+    foreign = copy.deepcopy(provenance)
+    foreign["sourceCommit"] = "f" * 40
+    with pytest.raises(recovery.RecoveryRefusal, match="draft|source"):
+        prepare.prepare_packet(
+            parent,
+            ledger=_ReadOnlyLedger(parent),
+            provenance=foreign,
+            source_root=source_root,
+            permission=permission,
+            o7=o7,
+            o8=o8,
+            permission_review=reviews[0],
+            o7_review=reviews[1],
+            o8_review=reviews[2],
+            draft=draft,
+            now=1001.0,
+            authority_now=1001.0,
+        )
+
+
+def test_persisted_draft_refuses_when_assembly_clock_passes_deadline(tmp_path: Path) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    ledger = _ReadOnlyLedger(parent)
+    draft = prepare.prepare_review_draft(
+        parent,
+        ledger=ledger,
+        provenance=provenance,
+        source_root=source_root,
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        now=1000.0,
+    )
+    permission, o7, o8 = _authorities(draft["plan"])
+    permission_review, o7_review, o8_review = _reviews(permission, o7, o8)
+
+    with pytest.raises(recovery.RecoveryRefusal, match="expired|deadline"):
+        prepare.prepare_packet(
+            parent,
+            ledger=ledger,
+            provenance=provenance,
+            source_root=source_root,
+            permission=permission,
+            o7=o7,
+            o8=o8,
+            permission_review=permission_review,
+            o7_review=o7_review,
+            o8_review=o8_review,
+            draft=draft,
+            authority_now=1100.0,
+        )
+
+
+def test_persisted_draft_refuses_a_different_canonical_parent_ticket_and_claim(
+    tmp_path: Path,
+) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    draft = prepare.prepare_review_draft(
+        parent,
+        ledger=_ReadOnlyLedger(parent),
+        provenance=provenance,
+        source_root=source_root,
+        recovery_nonce="fedcba9876543210fedcba9876543210",
+        now=1000.0,
+    )
+    permission, o7, o8 = _authorities(draft["plan"])
+    permission_review, o7_review, o8_review = _reviews(permission, o7, o8)
+    foreign = copy.deepcopy(parent)
+    foreign["ticket"]["reservation"] = "different-reservation"
+    foreign["claim"]["durationSeconds"] = 300
+    foreign["claim"]["claimDigest"] = digest(
+        {key: value for key, value in foreign["claim"].items() if key != "claimDigest"}
+    )
+
+    with pytest.raises(recovery.RecoveryRefusal, match="parent|ticket|claim"):
+        prepare.prepare_packet(
+            foreign,
+            ledger=_ReadOnlyLedger(foreign),
+            provenance=provenance,
+            source_root=source_root,
+            permission=permission,
+            o7=o7,
+            o8=o8,
+            permission_review=permission_review,
+            o7_review=o7_review,
+            o8_review=o8_review,
+            draft=draft,
+            now=1001.0,
+            authority_now=1001.0,
+        )
+
+
 def test_preparation_refuses_a_nonce_already_present_in_ledger(tmp_path: Path) -> None:
     parent = _ledger_parent()
     source_root, provenance = _source_inputs(tmp_path, parent)

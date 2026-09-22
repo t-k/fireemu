@@ -134,6 +134,13 @@ test("raw page-token is encoded once; query delimiters cannot alter the route", 
   assert.deepEqual([...parsed.searchParams.keys()], ["pageSize", "pageToken"]);
   assert.equal(parsed.hash, "");
 });
+test("raw apostrophe token differs from canonical URL text without changing its value", () => {
+  const token = "cursor'next";
+  const raw = resolveRecordedPath(program.steps[5].path, new Map([[entry.stepIds[4], { nextPageToken: token }]]));
+  const parsed = new URL("http://127.0.0.1:1234" + raw);
+  assert.notEqual(raw, parsed.pathname + parsed.search);
+  assert.equal(parsed.searchParams.get("pageToken"), token);
+});
 test("path references preserve pre-escaped bytes instead of decoding twice", () => {
   assert.equal(resolveRecordedPath("/x?token={{step.nextPageToken}}", new Map([["step", { nextPageToken: "%2F%26" }]])), "/x?token=%252F%2526");
 });
@@ -200,7 +207,11 @@ async function wire(options = {}) {
       const spec = program.steps[count++ - program.seed.length]; assert.ok(spec);
       let expectedPath = sub(spec.path);
       // Independent finite handoff check, not the implementation's resolver.
-      if (spec.id === "list-documents-next-page") expectedPath = `/v1/projects/${entry.project}/databases/(default)/documents/prj?pageSize=1&pageToken=${encodeURIComponent(options.token ?? PAGE_TOKEN)}`;
+      if (spec.id === "list-documents-next-page") {
+        const rawPath = `/v1/projects/${entry.project}/databases/(default)/documents/prj?pageSize=1&pageToken=${encodeURIComponent(options.token ?? PAGE_TOKEN)}`;
+        const canonical = new URL(`http://127.0.0.1${rawPath}`);
+        expectedPath = canonical.pathname + canonical.search;
+      }
       assert.equal(req.method, spec.method); assert.equal(req.url, expectedPath);
       assert.deepEqual(body, sub(spec.body));
       const r = reply(spec.id, options); return send(r.status, r.body);
@@ -263,6 +274,14 @@ test("path-like token stays in its one query parameter, never changes origin or 
   const sent = r.session.requests.find(row => row.phase === "list-documents-next-page");
   const url = new URL("http://127.0.0.1" + sent.path); assert.equal(url.pathname, `/v1/projects/${entry.project}/databases/(default)/documents/prj`);
   assert.equal(url.searchParams.get("pageToken"), token); assert.equal(url.hash, "");
+});
+for (const token of ["cursor'next", "quote'&x=1"]) test(`apostrophe token is accepted by the wire recorder: ${token}`, { timeout: 15000 }, async () => {
+  const r = await wire({ token }); assert.equal(r.exit, 0, r.stderr); assert.deepEqual(r.errors, []);
+  const sent = r.session.requests.find(row => row.phase === "list-documents-next-page");
+  assert.ok(sent);
+  const url = new URL("http://127.0.0.1" + sent.path);
+  assert.equal(url.searchParams.get("pageToken"), token);
+  assert.equal(r.session.completed, true); assert.equal(r.session.cleanup.state, "confirmed");
 });
 test("complete synthetic mismatch stays MISMATCH rather than being swallowed by the runner", { timeout: 15000 }, async () => {
   const r = await wire({ corruptBody: true }); assert.equal(r.exit, 0, r.stderr); assert.deepEqual(r.errors, []);

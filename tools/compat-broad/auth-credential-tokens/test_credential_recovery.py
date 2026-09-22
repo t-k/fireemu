@@ -249,6 +249,98 @@ def test_deadline_cannot_exceed_packet05_admitted_recovery_window() -> None:
         recovery.compile_recovery_plan(parent, recovery_nonce="e" * 32, provenance=_provenance(), now=1000.0, deadline_seconds=61)
 
 
+@pytest.mark.parametrize("deadline_seconds", [5, 10, 11])
+def test_infeasible_recovery_deadlines_refuse_before_gate_allocation(deadline_seconds: int) -> None:
+    parent = _parent()
+    with pytest.raises(recovery.RecoveryRefusal, match="deadline|Gate reserve"):
+        recovery.compile_recovery_plan(
+            parent,
+            recovery_nonce="e" * 32,
+            provenance=_provenance(),
+            now=1000.0,
+            deadline_seconds=deadline_seconds,
+        )
+
+
+@pytest.mark.parametrize("deadline_seconds", [12, 20, 60])
+def test_feasible_recovery_deadlines_pass_real_shared_gate(
+    tmp_path: Path, deadline_seconds: int,
+) -> None:
+    parent = _parent()
+    plan = recovery.compile_recovery_plan(
+        parent,
+        recovery_nonce="e" * 32,
+        provenance=_provenance(),
+        now=1000.0,
+        deadline_seconds=deadline_seconds,
+    )
+    shared_gate.create(tmp_path / f"gate-{deadline_seconds}", plan["gatePlan"])
+    assert 0 < plan["gatePlan"]["recoverySeconds"] < plan["gatePlan"]["wallSeconds"]
+    assert plan["gatePlan"]["recoverySeconds"] >= shared_gate._recovery_time(
+        plan["gatePlan"], plan["gatePlan"]["requestSeconds"]
+    )
+
+
+@pytest.mark.parametrize("deadline_seconds", [12, 20, 60])
+def test_child_claim_controls_retain_real_gate_feasibility(
+    tmp_path: Path, deadline_seconds: int,
+) -> None:
+    parent = _parent()
+    plan = recovery.compile_recovery_plan(
+        parent,
+        recovery_nonce="e" * 32,
+        provenance=_provenance(),
+        now=1000.0,
+        deadline_seconds=deadline_seconds,
+    )
+    permission, o7, o8 = _authorities(plan)
+    source_binding = {"kind": "auth-source-binding-v1", "digest": plan["provenance"]["sourceInputsDigest"]}
+    transport_binding = {"kind": "auth-transport-binding-v1", "digest": digest(plan["provenance"]["transport"])}
+    o7_binding = {"kind": "auth-o7-binding-v1", "digest": digest(o7), "authority": o7}
+    o8_binding = {"kind": "auth-o8-binding-v1", "digest": digest(o8), "authority": o8}
+    _claim, _envelope, bound_plan = recovery.build_child_claim(
+        parent,
+        plan,
+        permission=permission,
+        source_binding=source_binding,
+        transport_binding=transport_binding,
+        o7_binding=o7_binding,
+        o8_binding=o8_binding,
+        parent_evidence=recovery._parent_snapshot(parent)["evidence"],
+        gate_path=str(tmp_path / f"child-{deadline_seconds}"),
+        owner_identity="owner@example.invalid",
+        recovery_owner="recovery@example.invalid",
+        now=1001.0,
+    )
+    shared_gate.create(tmp_path / f"bound-{deadline_seconds}", bound_plan["gatePlan"])
+
+
+@pytest.mark.parametrize("claimed_at", [1054.0, 1055.0])
+def test_late_child_claim_refuses_when_remaining_gate_window_is_infeasible(
+    claimed_at: float,
+) -> None:
+    parent, plan, permission, o7, o8 = _plan()
+    source_binding = {"kind": "auth-source-binding-v1", "digest": plan["provenance"]["sourceInputsDigest"]}
+    transport_binding = {"kind": "auth-transport-binding-v1", "digest": digest(plan["provenance"]["transport"])}
+    o7_binding = {"kind": "auth-o7-binding-v1", "digest": digest(o7), "authority": o7}
+    o8_binding = {"kind": "auth-o8-binding-v1", "digest": digest(o8), "authority": o8}
+    with pytest.raises(recovery.RecoveryRefusal, match="deadline|Gate reserve"):
+        recovery.build_child_claim(
+            parent,
+            plan,
+            permission=permission,
+            source_binding=source_binding,
+            transport_binding=transport_binding,
+            o7_binding=o7_binding,
+            o8_binding=o8_binding,
+            parent_evidence=recovery._parent_snapshot(parent)["evidence"],
+            gate_path="/tmp/auth-recovery-gate",
+            owner_identity="owner@example.invalid",
+            recovery_owner="recovery@example.invalid",
+            now=claimed_at,
+        )
+
+
 def test_source_commit_cannot_be_overridden_by_detached_parent_field() -> None:
     parent = _parent()
     parent["sourceCommit"] = "2" * 40

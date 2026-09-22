@@ -353,7 +353,63 @@ export const PROJECTION_CASE = Object.freeze({
   ]),
 });
 
-export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE, PROJECTION_CASE]);
+// FS-EVID-AGGREGATIONS-029: add the WHOLE existing 23-step query program.
+// The test replies are synthetic; execution uses only the pinned production matrix.
+// Reuse the reviewed 027 multi-seed/query-area support without changing the runner.
+export const AGGREGATIONS_CASE = Object.freeze({
+  ...CASE,
+  id: "fs.aggregations.saved-20260907.v1",
+  parent: "FS-QUERY-INDEX",
+  programId: "queries/aggregations",
+  programArea: "queries",
+  seedCount: 6,
+  programDigest: "6123c1524b70e0ea1e32d18d5b177a73430ec10a76bfd1e82c92e4714832fdc2",
+  title: "Saved production count/sum/avg, missing fields, numeric boundaries and refusals",
+  sessionSetupPhases: Object.freeze(["reset", "seed", "seed", "seed", "seed", "seed", "seed"]),
+  stepIds: Object.freeze([
+    "count-all",
+    "count-up-to",
+    "count-with-filter",
+    "count-with-limit",
+    "count-with-offset",
+    "count-empty",
+    "sum-integers",
+    "sum-mixed-numbers",
+    "sum-doubles-only",
+    "sum-empty",
+    "sum-missing-field",
+    "sum-overflow-saturates-or-promotes",
+    "avg-integers",
+    "avg-with-nan",
+    "avg-empty",
+    "several-aggregations",
+    "count-collection-group",
+    "count-with-cursor",
+    "count-beside-a-sum-over-a-missing-field",
+    "count-beside-an-avg-over-a-missing-field",
+    "duplicate-alias",
+    "no-aggregations",
+    "sum-on-name"
+]),
+  ownedDocuments: Object.freeze(["agg/a", "agg/b", "agg/c", "agg/d", "agg/e", "agg/f"]),
+  compared: Object.freeze([
+    "All 23 original HTTP-status/canonical-code/normalized-response-body decisions",
+    "Recorded count queries with upTo, filter, limit, offset, cursor and empty result",
+    "Recorded sum/avg values and types, including NaN, missing fields and integer overflow inputs",
+    "Combined aggregations, aliases and their recorded missing-field interactions",
+    "Duplicate-alias, empty-aggregation-list and sum-on-name responses exactly as observed",
+  ]),
+  notEstablished: Object.freeze([
+    "Floating-point accuracy for arbitrary data, large populations or all evaluation orders",
+    "Nested collection-group breadth: the six historical seed documents are all root-level",
+    "Successful rows inferred from case names; the pinned production outcome alone is the oracle",
+    "Error message/details, raw readTime, runtime statistics or values erased by the historical normalizer",
+    "Rules/user-token authorization, SDK/gRPC, index-requirement parity or concurrent snapshot behavior",
+    "New production observations, current-artifact execution or independent acceptance from registering this case",
+  ]),
+});
+
+export const CASES = Object.freeze([CASE, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE, PROJECTION_CASE, AGGREGATIONS_CASE]);
 
 export function selectCase(id = CASE.id) {
   const entry = CASES.find((c) => c.id === id);

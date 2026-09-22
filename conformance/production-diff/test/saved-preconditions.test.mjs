@@ -9,7 +9,7 @@ import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE as entry, PROJECTION_CASE, selectCase } from '../registry.mjs';
+import { CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE as entry, PROJECTION_CASE, AGGREGATIONS_CASE, selectCase } from '../registry.mjs';
 import { blobSha, digestJson, sha256, equal, validateProgram, resolveRecordedValue, expectedCleanupDocuments } from '../core.mjs';
 import { cleanEnvironment } from '../io.mjs';
 import { verifySession, parseArgs, main } from '../pilot.mjs';
@@ -189,7 +189,7 @@ test('public CLI selects the new case without changing the default',async()=>{
  assert.equal(parseArgs(['plan']).case,CASE.id);
  const prior=console.log;let output;
  try{console.log=s=>{output=s;};assert.equal(await main(['list']),0);}finally{console.log=prior;}
- assert.deepEqual(JSON.parse(output).cases.map(c=>c.id),[CASE.id,'fs.commit-transform-limits.saved-031c74bfe.v1','fs.g0.saved-68012694.v1',TRANSFORMS_CASE.id,entry.id,PROJECTION_CASE.id]);
+ assert.deepEqual(JSON.parse(output).cases.map(c=>c.id),[CASE.id,'fs.commit-transform-limits.saved-031c74bfe.v1','fs.g0.saved-68012694.v1',TRANSFORMS_CASE.id,entry.id,PROJECTION_CASE.id,AGGREGATIONS_CASE.id]);
 });
 
 test('actual parent verifier refuses missing or substituted generated cleanup',{timeout:15000},async()=>{

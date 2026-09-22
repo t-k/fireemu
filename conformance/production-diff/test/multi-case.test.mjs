@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
-import { CASE, CASES, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE, PROJECTION_CASE, selectCase } from "../registry.mjs";
+import { CASE, CASES, COMMIT_TRANSFORM_CASE, G0_CASE, TRANSFORMS_CASE, PRECONDITIONS_CASE, PROJECTION_CASE, AGGREGATIONS_CASE, selectCase } from "../registry.mjs";
 import { buildExecArgs, main } from "../pilot.mjs";
 import { resultEnvelope } from "../core.mjs";
 
@@ -24,7 +24,7 @@ async function captureStdout(run) {
 test("registry exposes registered cases and rejects an unknown id", () => {
   assert.deepEqual(
     CASES.map((c) => c.id),
-    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id, TRANSFORMS_CASE.id, PRECONDITIONS_CASE.id, PROJECTION_CASE.id],
+    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id, TRANSFORMS_CASE.id, PRECONDITIONS_CASE.id, PROJECTION_CASE.id, AGGREGATIONS_CASE.id],
   );
   assert.equal(selectCase(COMMIT_TRANSFORM_CASE.id).adapter, "commit-transform");
   assert.equal(selectCase(G0_CASE.id).adapter, "g0");
@@ -37,7 +37,7 @@ test("pilot.mjs list reports registered cases", async () => {
   const parsed = JSON.parse(lines[0]);
   assert.deepEqual(
     parsed.cases.map((c) => c.id),
-    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id, TRANSFORMS_CASE.id, PRECONDITIONS_CASE.id, PROJECTION_CASE.id],
+    [CASE.id, COMMIT_TRANSFORM_CASE.id, G0_CASE.id, TRANSFORMS_CASE.id, PRECONDITIONS_CASE.id, PROJECTION_CASE.id, AGGREGATIONS_CASE.id],
   );
 });
 

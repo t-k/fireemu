@@ -329,6 +329,8 @@ def _compile_context(
     recovery_nonce: str | None,
     now: float | None,
     deadline_seconds: int,
+    draft: Mapping[str, Any] | None = None,
+    assembly_now: float | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     canonical_parent, ledger_state = _reconstruct_parent(parent, ledger)
     parent_snapshot = recovery._parent_snapshot(canonical_parent)
@@ -338,6 +340,46 @@ def _compile_context(
         parent_snapshot["sourceCommit"],
         parent_snapshot["generation"],
     )
+    if draft is not None:
+        if draft.get("kind") != "auth-packet05-recovery-review-draft-v1" or draft.get("campaignId") != recovery.CAMPAIGN:
+            _refuse("persisted recovery draft required")
+        if draft.get("productionExecuted") is not False or draft.get("productionAllowed") is not False or draft.get("ledgerMutated") is not False:
+            _refuse("persisted recovery draft execution flags differ")
+        if draft.get("immutableParent") != canonical_parent["immutableParent"] or draft.get("parentEvidence") != parent_snapshot["evidence"]:
+            _refuse("persisted recovery draft parent binding differs")
+        review_request = draft.get("reviewRequest")
+        plan = draft.get("plan")
+        if not isinstance(review_request, Mapping) or not isinstance(plan, Mapping):
+            _refuse("persisted recovery draft plan required")
+        if review_request.get("planDigest") != plan.get("planDigest") or review_request.get("parentEvidenceDigest") != parent_snapshot["evidence"]["evidenceDigest"]:
+            _refuse("persisted recovery draft digest differs")
+        parent_binding = plan.get("parent")
+        canonical_claim = canonical_parent["claim"]
+        canonical_claim_digest = canonical_claim.get("claimDigest", digest(canonical_claim))
+        if (
+            not isinstance(parent_binding, Mapping)
+            or parent_binding.get("ticketDigest") != digest(canonical_parent["ticket"])
+            or parent_binding.get("claimDigest") != canonical_claim_digest
+        ):
+            _refuse("persisted recovery draft parent ticket or claim differs")
+        if recovery_nonce is not None and recovery_nonce != plan.get("recoveryNonce"):
+            _refuse("persisted recovery draft nonce differs")
+        draft_now = assembly_now if assembly_now is not None else now
+        if draft_now is None:
+            draft_now = time.time()
+        recovery._finite(draft_now, "draft assembly time")
+        if draft_now < plan.get("issuedAt", draft_now):
+            _refuse("persisted recovery draft is from the future")
+        if draft_now >= plan.get("deadlineAt", draft_now):
+            _refuse("persisted recovery draft expired")
+        normalized_provenance = recovery._provenance(provenance)
+        if normalized_provenance != plan.get("provenance"):
+            _refuse("persisted recovery draft source binding differs")
+        nonce = plan.get("recoveryNonce")
+        recovery._nonce(nonce, "recovery")
+        _assert_fresh_nonce(ledger, nonce, ledger_state)
+        recovery.validate_plan(plan, canonical_parent)
+        return canonical_parent, parent_snapshot, copy.deepcopy(dict(plan))
     nonce = secrets.token_hex(16) if recovery_nonce is None else recovery_nonce
     recovery._nonce(nonce, "recovery")
     _assert_fresh_nonce(ledger, nonce, ledger_state)
@@ -403,6 +445,7 @@ def prepare_packet(
     permission_review: Mapping[str, Any] | None = None,
     o7_review: Mapping[str, Any] | None = None,
     o8_review: Mapping[str, Any] | None = None,
+    draft: Mapping[str, Any] | None = None,
     recovery_nonce: str | None = None,
     now: float | None = None,
     authority_now: float | None = None,
@@ -418,6 +461,8 @@ def prepare_packet(
             recovery_nonce=recovery_nonce,
             now=now,
             deadline_seconds=deadline_seconds,
+            draft=draft,
+            assembly_now=authority_now,
         )
         permission, o7, o8, reviews = _validate_reviewed_authorities(
             plan,
@@ -583,6 +628,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--permission-review", type=Path, help="detached permission review evidence JSON")
     parser.add_argument("--o7-review", type=Path, help="detached O7 review evidence JSON")
     parser.add_argument("--o8-review", type=Path, help="detached O8 review evidence JSON")
+    parser.add_argument("--draft", type=Path, help="persisted packet05 review draft JSON")
     parser.add_argument("--draft-only", action="store_true", help="write a review draft without authority artifacts")
     parser.add_argument(
         "--output", type=Path, required=True, help="new private preparation directory"
@@ -606,7 +652,7 @@ def main(argv: list[str] | None = None) -> int:
         ledger = reservations.Ledger(args.ledger)
         _assert_output_detached(args.output, ledger)
         if args.draft_only:
-            if any((args.permission, args.o7, args.o8, args.permission_review, args.o7_review, args.o8_review)):
+            if any((args.permission, args.o7, args.o8, args.permission_review, args.o7_review, args.o8_review, args.draft)):
                 _refuse("draft-only cannot consume reviewed authority artifacts")
             draft = prepare_review_draft(
                 _read_json(args.parent),
@@ -631,6 +677,7 @@ def main(argv: list[str] | None = None) -> int:
             permission_review=_read_json(args.permission_review) if args.permission_review else None,
             o7_review=_read_json(args.o7_review) if args.o7_review else None,
             o8_review=_read_json(args.o8_review) if args.o8_review else None,
+            draft=_read_json(args.draft) if args.draft else None,
             recovery_nonce=args.recovery_nonce,
             now=args.now,
             authority_now=time.time(),

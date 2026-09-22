@@ -18,6 +18,7 @@ started as a fixture worker.
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import math
@@ -53,6 +54,14 @@ class WorkerExchange:
     status: int
     body: dict[str, Any]
     worker_reaped: bool
+
+
+class WorkerFailure(ValueError):
+    """A secret-free worker failure with an observed child lifecycle result."""
+
+    def __init__(self, message: str, *, worker_reaped: bool):
+        super().__init__(message)
+        self.worker_reaped = worker_reaped
 
 
 def worker_binding() -> tuple[bytes, str]:
@@ -139,15 +148,17 @@ def request_with_lifecycle(
                 process.kill()
                 process.communicate(timeout=1)
             except (OSError, subprocess.TimeoutExpired):
-                raise ValueError("credential worker was not reaped") from None
-        raise ValueError("credential request deadline exceeded") from None
+                raise WorkerFailure("credential worker was not reaped", worker_reaped=False) from None
+            if process.poll() is None:
+                raise WorkerFailure("credential worker was not reaped", worker_reaped=False) from None
+        raise WorkerFailure("credential request deadline exceeded", worker_reaped=True) from None
     except OSError:
-        raise ValueError("credential worker could not start") from None
+        raise WorkerFailure("credential worker could not start", worker_reaped=process is None) from None
     if process is None or process.poll() is None:
-        raise ValueError("credential worker was not reaped")
+        raise WorkerFailure("credential worker was not reaped", worker_reaped=False) from None
     try:
         if process.returncode != 0 or not 0 < len(stdout) <= MAX_OUTPUT_BYTES:
-            raise ValueError("invalid worker result")
+            raise WorkerFailure("invalid worker result", worker_reaped=True)
         value = json.loads(stdout)
         if (
             not isinstance(value, list)
@@ -156,14 +167,15 @@ def request_with_lifecycle(
             or not 200 <= value[0] <= 599
             or not isinstance(value[1], str)
         ):
-            raise ValueError("invalid worker result")
-        return WorkerExchange(
-            status=value[0],
-            body=response_body(base64.b64decode(value[1], validate=True)),
-            worker_reaped=True,
-        )
-    except (ValueError, TypeError, UnicodeError, RecursionError):
-        raise ValueError("credential HTTP response was not usable") from None
+            raise WorkerFailure("invalid worker result", worker_reaped=True)
+        body_value = response_body(base64.b64decode(value[1], validate=True))
+        if not isinstance(body_value, dict):
+            raise WorkerFailure("credential HTTP response was not usable", worker_reaped=True)
+        return WorkerExchange(status=value[0], body=body_value, worker_reaped=True)
+    except WorkerFailure:
+        raise
+    except (ValueError, TypeError, UnicodeError, RecursionError, binascii.Error):
+        raise WorkerFailure("credential HTTP response was not usable", worker_reaped=True) from None
 
 
 def request(

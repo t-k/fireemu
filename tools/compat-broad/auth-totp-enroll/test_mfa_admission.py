@@ -55,8 +55,8 @@ def test_frozen_inputs_bind_the_plan_permission_and_source_snapshot(tmp_path):
 
 
 def test_selected_plan_permission_passes_the_o8_frozen_input_path(tmp_path):
-    descriptor = campaign.descriptor(WallClockSleeper())
-    plan = descriptor.plan_compiler(NONCE, selector="pending-age-300-v1")
+    plan = campaign.plan_compiler(NONCE, selector="pending-age-300-v1")
+    descriptor = campaign.descriptor_for_plan(plan, WallClockSleeper())
     source = frozen_checkout(tmp_path)
     commit = subprocess.check_output(
         ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
@@ -91,9 +91,23 @@ def test_selected_plan_permission_passes_the_o8_frozen_input_path(tmp_path):
     assert inputs["permission"]["campaignSeconds"] == 1200
 
     mismatch = copy.deepcopy(inputs)
-    mismatch["plan"]["selector"]["caseIds"] = ["age-450s-start"]
-    with pytest.raises(ValueError):
-        admission.validate_frozen_inputs(mismatch, descriptor)
+    mismatch["plan"] = campaign.plan_compiler(NONCE)
+    mismatch["planDigest"] = digest(mismatch["plan"])
+    mismatch["bounds"] = campaign.descriptor(WallClockSleeper()).frozen_bounds
+    mismatch["inputsDigest"] = digest(
+        {key: value for key, value in mismatch.items() if key != "inputsDigest"}
+    )
+    with pytest.raises(ValueError, match="typed owner permission binding differs"):
+        admission.validate_frozen_inputs(mismatch)
+
+    unknown = copy.deepcopy(inputs)
+    unknown["plan"]["selector"]["name"] = "unknown"
+    unknown["planDigest"] = digest(unknown["plan"])
+    unknown["inputsDigest"] = digest(
+        {key: value for key, value in unknown.items() if key != "inputsDigest"}
+    )
+    with pytest.raises(ValueError, match="unsupported MFA selector"):
+        admission.validate_frozen_inputs(unknown)
 
 
 def test_a_complete_o7_binding_is_admitted(tmp_path):

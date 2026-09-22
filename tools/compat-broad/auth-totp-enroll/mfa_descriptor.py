@@ -298,12 +298,18 @@ def configuration_change() -> dict:
     }
 
 
-def frozen_bounds() -> dict:
+def frozen_bounds(
+    *, case_count: int | None = None, account_count: int | None = None
+) -> dict:
     return {
         **request_budget(),
         **wall_budget(),
-        "caseCount": len(observation_cases()),
-        "ownedAccounts": len(owned_accounts()),
+        "caseCount": (
+            len(observation_cases()) if case_count is None else case_count
+        ),
+        "ownedAccounts": (
+            len(owned_accounts()) if account_count is None else account_count
+        ),
         "concurrency": 1,
         "configurationChange": configuration_change(),
     }
@@ -641,6 +647,27 @@ def descriptor(sleeper=None) -> CampaignDescriptor:
         seconds=campaign_seconds(),
         recovery=recovery_seconds(),
         bounds=frozen_bounds(),
+        timing=WALL_CLOCK,
+    )
+
+
+def descriptor_for_plan(plan: dict, sleeper=None) -> CampaignDescriptor:
+    """Build the production descriptor for one canonical frozen plan reference."""
+    from mfa_timing import WallClockSleeper
+
+    manifest = execution_plan(plan)
+    if plan["timingMode"] != WALL_CLOCK:
+        raise ValueError("wall-clock plan reference required")
+    active_sleeper = WallClockSleeper() if sleeper is None else sleeper
+    require_wall_clock(active_sleeper)
+    bounds = frozen_bounds(
+        case_count=plan["caseCount"], account_count=plan["ownedAccounts"]
+    )
+    return _descriptor(
+        active_sleeper,
+        seconds=manifest["limits"]["maxWallSeconds"],
+        recovery=manifest["limits"]["recoveryReserveSeconds"],
+        bounds=bounds,
         timing=WALL_CLOCK,
     )
 

@@ -80,6 +80,10 @@ def descriptor(sleeper=None):
     return campaign.descriptor(sleeper)
 
 
+def descriptor_for_plan(plan, sleeper=None):
+    return campaign.descriptor_for_plan(plan, sleeper)
+
+
 def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
     return campaign.permission_bindings(
         plan, source_commit, artifact_digest, inputs, baseline
@@ -87,7 +91,23 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
 
 
 def validate_frozen_inputs(inputs, descriptor_=None) -> None:
-    o8_admission.validate_frozen_inputs(descriptor_ or descriptor(), inputs)
+    if descriptor_ is None:
+        plan = inputs.get("plan") if isinstance(inputs, dict) else None
+        descriptor_ = descriptor_for_plan(plan)
+    o8_admission.validate_frozen_inputs(descriptor_, inputs)
+    campaign.execution_plan(inputs["plan"])
+    if inputs.get("bounds") != descriptor_.frozen_bounds:
+        raise ValueError("frozen campaign bounds differ")
+    permission = inputs["permission"]
+    required = descriptor_.permission_bindings(
+        inputs["plan"],
+        inputs["sourceCommit"],
+        inputs["artifactSha256"],
+        inputs["sourceInputs"],
+        permission.get("authConfigBaselineDigest"),
+    )
+    if digest({key: permission.get(key) for key in required}) != digest(required):
+        raise ValueError("typed owner permission binding differs")
 
 
 def abort_generation(inputs, descriptor_=None):
@@ -95,13 +115,21 @@ def abort_generation(inputs, descriptor_=None):
 
 
 def validate_o7_admission(descriptor_=None, **bindings):
-    return o8_admission.validate_o7_admission(descriptor_ or descriptor(), **bindings)
+    inputs = bindings.get("inputs")
+    if descriptor_ is None:
+        plan = inputs.get("plan") if isinstance(inputs, dict) else None
+        descriptor_ = descriptor_for_plan(plan)
+    validate_frozen_inputs(inputs, descriptor_)
+    return o8_admission.validate_o7_admission(descriptor_, **bindings)
 
 
 def issue_production_capability(descriptor_=None, **bindings):
-    return o8_admission.issue_production_capability(
-        descriptor_ or descriptor(), **bindings
-    )
+    inputs = bindings.get("inputs")
+    if descriptor_ is None:
+        plan = inputs.get("plan") if isinstance(inputs, dict) else None
+        descriptor_ = descriptor_for_plan(plan)
+    validate_frozen_inputs(inputs, descriptor_)
+    return o8_admission.issue_production_capability(descriptor_, **bindings)
 
 
 def _read(path):

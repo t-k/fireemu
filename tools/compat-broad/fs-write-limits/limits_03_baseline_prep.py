@@ -37,8 +37,10 @@ from shared_gate import Gate, create, validate_limits_preparation_response
 NONCE = re.compile(r"^[0-9a-f]{32}$")
 PREPARATION_KIND = "limits-03-baseline-preparation-v1"
 MAX_INPUT_BYTES = 64 * 1024
+MAX_CUSTODY_BYTES = 16 * 1024
 CAMPAIGN = "FS-WRITE-LIMITS-03"
 METADATA_IDS = ("project", "database", "auth", "key")
+CUSTODY_KIND = "limits-03-preparation-custody-v1"
 
 
 def descriptor():
@@ -482,7 +484,99 @@ def _public_metadata(slot, response):
     }
 
 
-def _run_preparation(bindings, output, handoff_fd):
+def _write_custody_pipe(fd, value):
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    if len(raw) > MAX_CUSTODY_BYTES:
+        raise ValueError("bounded custody handoff required")
+    view = memoryview(raw)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise ValueError("custody handoff write failed")
+        view = view[written:]
+
+
+def _validate_custody_destination(fd):
+    if type(fd) is not int or fd < 0:
+        raise ValueError("private custody output descriptor required")
+    info = os.fstat(fd)
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_mode & 0o077
+        or info.st_size != 0
+    ):
+        raise ValueError("empty owned private custody output required")
+    os.lseek(fd, 0, os.SEEK_SET)
+
+
+def _validate_custody(value, permission):
+    from credential_prep import private_string
+
+    if (
+        not isinstance(value, dict)
+        or set(value) != {
+            "kind", "token", "project", "principalDigest", "expiresAt",
+            "preparationPermissionDigest",
+        }
+        or value["kind"] != CUSTODY_KIND
+        or not private_string(value["token"], 8192)
+        or value["project"] != campaign.PROJECT
+        or value["principalDigest"] != digest(permission["credentialPrincipal"])
+        or value["preparationPermissionDigest"] != digest(permission)
+        or type(value["expiresAt"]) not in (int, float)
+        or isinstance(value["expiresAt"], bool)
+        or not math.isfinite(value["expiresAt"])
+        or value["expiresAt"] <= time.time()
+    ):
+        raise ValueError("verified private custody handoff required")
+    return value
+
+
+def _read_custody_pipe(fd):
+    raw = bytearray()
+    while len(raw) <= MAX_CUSTODY_BYTES:
+        chunk = os.read(fd, MAX_CUSTODY_BYTES + 1 - len(raw))
+        if not chunk:
+            break
+        raw.extend(chunk)
+    if len(raw) > MAX_CUSTODY_BYTES:
+        raise ValueError("bounded custody handoff required")
+    if not raw:
+        return None
+    try:
+        value = json.loads(bytes(raw))
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError("verified private custody handoff required") from error
+    if not isinstance(value, dict):
+        raise ValueError("verified private custody handoff required")
+    return value
+
+
+def _publish_custody(fd, value):
+    _validate_custody_destination(fd)
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    if len(raw) > MAX_CUSTODY_BYTES:
+        raise ValueError("bounded custody handoff required")
+    view = memoryview(raw)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise ValueError("custody handoff write failed")
+        view = view[written:]
+    os.fsync(fd)
+
+
+def _clear_custody(fd):
+    try:
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.fsync(fd)
+    except (OSError, ValueError):
+        pass
+
+
+def _run_preparation(bindings, output, handoff_fd, custody_pipe_fd=None):
     """The coordinator child owns the Gate; its parent observes its exit."""
     from credential_prep import private_string
 
@@ -490,6 +584,7 @@ def _run_preparation(bindings, output, handoff_fd):
     permission, inputs = bindings["permission"], bindings["inputs"]
     rows, values, request_digests = [], {}, []
     failure = None
+    custody = None
     try:
         ledger, ticket, _allocation, gate_plan = reserve_preparation(
             permission,
@@ -521,7 +616,7 @@ def _run_preparation(bindings, output, handoff_fd):
                 ledger.validate(ticket, duration=12)
 
                 def send(deadline, slot=slot, secret=secret):
-                    nonlocal token
+                    nonlocal token, custody
                     # Gate calls this after its rate wait. Recheck authority and
                     # the original reservation deadline before spawning a worker.
                     ledger.validate(
@@ -570,6 +665,14 @@ def _run_preparation(bindings, output, handoff_fd):
                                 now=time.monotonic(),
                                 required_seconds=300,
                             )
+                            custody = {
+                                "kind": CUSTODY_KIND,
+                                "token": token,
+                                "project": campaign.PROJECT,
+                                "principalDigest": digest(permission["credentialPrincipal"]),
+                                "expiresAt": time.time() + response["body"]["remainingSecondsAtVerification"],
+                                "preparationPermissionDigest": digest(permission),
+                            }
                         else:
                             response["body"] = _public_metadata(slot, raw)
                             values[slot] = response["body"]
@@ -631,6 +734,11 @@ def _run_preparation(bindings, output, handoff_fd):
                 authConfigDigest=values["auth"]["responseDigest"],
                 apiKey=values["key"],
             )
+            if custody_pipe_fd is not None:
+                if custody is None:
+                    raise ValueError("verified custody required")
+                _validate_custody(custody, permission)
+                _write_custody_pipe(custody_pipe_fd, custody)
         packet["packetDigest"] = digest(packet)
         receipt = {
             "kind": gate_plan["receiptKind"],
@@ -667,9 +775,11 @@ def _run_preparation(bindings, output, handoff_fd):
         o8_admission.revoke_production_capability(capability)
 
 
-def capture_baseline(*, bindings, output, handoff_fd):
+def capture_baseline(*, bindings, output, handoff_fd, custody_output_fd=None):
     """Execute an independently approved preparation and observe child exit."""
     output = Path(output).resolve()
+    if custody_output_fd is not None:
+        _validate_custody_destination(custody_output_fd)
     # Admission fails without reading the private descriptor or reserving.
     capability = approve_preparation(**bindings)
     o8_admission.revoke_production_capability(capability)
@@ -681,15 +791,23 @@ def capture_baseline(*, bindings, output, handoff_fd):
         if key != "manifest_bytes"
     }
     serial["manifest_bytes"] = bindings["manifest_bytes"].decode("utf-8")
+    custody_read_fd = custody_write_fd = None
+    if custody_output_fd is not None:
+        custody_read_fd, custody_write_fd = os.pipe()
     payload = json.dumps(
-        {"bindings": serial, "output": str(output), "handoffFd": handoff_fd}
+        {
+            "bindings": serial,
+            "output": str(output),
+            "handoffFd": handoff_fd,
+            "custodyPipeFd": custody_write_fd,
+        }
     ).encode()
     child = subprocess.Popen(
         [sys.executable, "-I", "-S", "-B", str(Path(__file__).resolve()), "--worker"],
         stdin=subprocess.PIPE,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        pass_fds=(handoff_fd,),
+        pass_fds=tuple(fd for fd in (handoff_fd, custody_write_fd) if fd is not None),
         env={"PATH": os.defpath, "LANG": "C"},
     )
     try:
@@ -700,9 +818,31 @@ def capture_baseline(*, bindings, output, handoff_fd):
         raise ValueError(
             "PREP coordinator deadline; retained recovery context"
         ) from None
+    if custody_write_fd is not None:
+        os.close(custody_write_fd)
+        custody_write_fd = None
+    custody = None
+    if custody_read_fd is not None:
+        try:
+            custody = _read_custody_pipe(custody_read_fd)
+        finally:
+            os.close(custody_read_fd)
+        if custody is not None:
+            _validate_custody(custody, bindings["permission"])
     if child.returncode != 0:
         raise ValueError("PREP coordinator failed; retained recovery context")
-    return retire_preparation(ledger_root=bindings["ledger_root"], output=output)
+    if custody is None:
+        result = Ledger._read_bounded_json(output / "coordinator-result.json")
+        if result["packet"].get("completed") is not False:
+            raise ValueError("verified custody handoff required")
+    packet = retire_preparation(ledger_root=bindings["ledger_root"], output=output)
+    if custody_output_fd is not None and custody is not None:
+        try:
+            _publish_custody(custody_output_fd, custody)
+        except Exception:
+            _clear_custody(custody_output_fd)
+            raise
+    return packet
 
 
 def _publish_or_verify(path, value):
@@ -878,9 +1018,7 @@ def main(argv: list[str] | None = None) -> int:
 
         message = decode_json(sys.stdin.buffer.read(8 * 1024 * 1024 + 1))
         if not isinstance(message, dict) or set(message) != {
-            "bindings",
-            "output",
-            "handoffFd",
+            "bindings", "output", "handoffFd", "custodyPipeFd"
         }:
             raise ValueError("closed PREP coordinator input required")
         bindings = message["bindings"]
@@ -893,11 +1031,17 @@ def main(argv: list[str] | None = None) -> int:
         ):
             bindings[key] = Path(bindings[key])
         bindings["manifest_bytes"] = bindings["manifest_bytes"].encode("utf-8")
-        _run_preparation(bindings, Path(message["output"]), message["handoffFd"])
+        _run_preparation(
+            bindings,
+            Path(message["output"]),
+            message["handoffFd"],
+            message["custodyPipeFd"],
+        )
         return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--handoff-fd", type=int, required=True)
+    parser.add_argument("--custody-output-fd", type=int)
     for name in (
         "inputs",
         "approval",
@@ -924,7 +1068,10 @@ def main(argv: list[str] | None = None) -> int:
         launcher_path=Path(__file__),
     )
     packet = capture_baseline(
-        bindings=bindings, output=args.output, handoff_fd=args.handoff_fd
+        bindings=bindings,
+        output=args.output,
+        handoff_fd=args.handoff_fd,
+        custody_output_fd=args.custody_output_fd,
     )
     print("PREP completed" if packet["completed"] else "PREP failed and retired")
     return 0 if packet["completed"] else 2

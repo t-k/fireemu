@@ -79,6 +79,99 @@ def test_private_handoff_rejects_pipe_and_duplicate_json_keys():
             prep._read_private_json(private.fileno())
 
 
+def _custody_permission():
+    import limits_03_baseline_prep as prep
+    from broad_contract import digest
+
+    permission = {
+        "credentialPrincipal": {
+            "clientId": "fixture-client",
+            "subject": "fixture-subject",
+            "requiredScopes": [prep.campaign.PRINCIPAL_SCOPE],
+        },
+    }
+    return permission, digest(permission)
+
+
+def _custody_value():
+    import limits_03_baseline_prep as prep
+    from broad_contract import digest
+
+    permission, permission_digest = _custody_permission()
+    return permission, {
+        "kind": prep.CUSTODY_KIND,
+        "token": "fixture-token",
+        "project": prep.campaign.PROJECT,
+        "principalDigest": digest(permission["credentialPrincipal"]),
+        "expiresAt": time.time() + 600,
+        "preparationPermissionDigest": permission_digest,
+    }
+
+
+def test_custody_pipe_is_bounded_and_validated_before_private_publication():
+    import limits_03_baseline_prep as prep
+
+    permission, custody = _custody_value()
+    read_fd, write_fd = os.pipe()
+    try:
+        prep._write_custody_pipe(write_fd, custody)
+        os.close(write_fd)
+        write_fd = None
+        received = prep._read_custody_pipe(read_fd)
+        assert prep._validate_custody(received, permission) == custody
+    finally:
+        os.close(read_fd)
+        if write_fd is not None:
+            os.close(write_fd)
+
+
+def test_custody_destination_requires_empty_owned_regular_0600_file(tmp_path):
+    import limits_03_baseline_prep as prep
+
+    permission, custody = _custody_value()
+    path = tmp_path / "custody"
+    path.touch(mode=0o600)
+    with path.open("r+b") as stream:
+        prep._validate_custody_destination(stream.fileno())
+        prep._publish_custody(stream.fileno(), custody)
+        stream.seek(0)
+        assert prep._validate_custody(json.loads(stream.read()), permission) == custody
+    nonempty = tmp_path / "nonempty"
+    nonempty.write_bytes(b"x")
+    nonempty.chmod(0o600)
+    with nonempty.open("r+b") as stream, pytest.raises(ValueError, match="empty owned"):
+        prep._validate_custody_destination(stream.fileno())
+
+
+def test_custody_refuses_empty_pipe_expiry_or_wrong_permission():
+    import limits_03_baseline_prep as prep
+
+    permission, custody = _custody_value()
+    read_fd, write_fd = os.pipe()
+    os.close(write_fd)
+    try:
+        assert prep._read_custody_pipe(read_fd) is None
+    finally:
+        os.close(read_fd)
+    with pytest.raises(ValueError, match="verified private custody"):
+        prep._validate_custody({**custody, "expiresAt": time.time() - 1}, permission)
+    with pytest.raises(ValueError, match="verified private custody"):
+        prep._validate_custody(custody, {"credentialPrincipal": permission["credentialPrincipal"], "x": 1})
+
+
+def test_partial_private_custody_is_cleared(tmp_path):
+    import limits_03_baseline_prep as prep
+
+    path = tmp_path / "custody"
+    path.touch(mode=0o600)
+    with path.open("r+b") as stream:
+        stream.write(b'{"kind":"partial')
+        stream.flush()
+        prep._clear_custody(stream.fileno())
+        stream.seek(0)
+        assert stream.read() == b""
+
+
 def _approved(tmp_path, *, fixture_origin=None):
     import limits_03_baseline_prep as prep
     import o8_admission
@@ -659,7 +752,7 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         from broad_contract import digest
 
         fixture = _approved(tmp_path, fixture_origin=origin)
-        with tempfile.TemporaryFile() as handoff:
+        with tempfile.TemporaryFile() as handoff, tempfile.TemporaryFile() as custody:
             handoff.write(
                 json.dumps(
                     {
@@ -674,8 +767,13 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
             )
             handoff.seek(0)
             packet = prep.capture_baseline(
-                bindings=fixture, output=tmp_path / "run", handoff_fd=handoff.fileno()
+                bindings=fixture,
+                output=tmp_path / "run",
+                handoff_fd=handoff.fileno(),
+                custody_output_fd=custody.fileno(),
             )
+            custody.seek(0)
+            custody_bytes = custody.read()
     finally:
         server.shutdown()
         server.server_close()
@@ -701,6 +799,7 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         assert packet["completed"] is False
         assert packet["failed"] is True
         assert packet["reservationReleased"] is True
+        assert custody_bytes == b""
         assert (
             len(Handler.seen)
             == {
@@ -723,6 +822,10 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         return
 
     assert packet["completed"] is True
+    custody_value = json.loads(custody_bytes)
+    assert custody_value["kind"] == prep.CUSTODY_KIND
+    assert custody_value["project"] == prep.campaign.PROJECT
+    assert custody_value["preparationPermissionDigest"] == digest(fixture["permission"])
     from batch_contract import database_evidence
 
     assert (

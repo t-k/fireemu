@@ -260,7 +260,7 @@ def _write_resource(document: Any, plan: dict[str, Any]) -> str:
         raise ValueError("write document required")  # noqa: TRY004
     for resource in plan.get("ownedResources", []):
         if isinstance(resource, str) and resource.endswith("/cases/" + document):
-            return "/v1/" + resource
+            return resource
     raise ValueError("write document outside owned namespace")
 
 
@@ -783,6 +783,114 @@ def run_worker(
     )
 
 
+def _decode_firestore_value(value: Any) -> Any:
+    if not isinstance(value, dict) or len(value) != 1:
+        raise ValueError("Firestore value shape refused")
+    kind, payload = next(iter(value.items()))
+    if kind in {"nullValue", "booleanValue", "stringValue", "doubleValue"}:
+        return payload
+    if kind == "integerValue":
+        if not isinstance(payload, str) or not re.fullmatch(r"-?(0|[1-9][0-9]*)", payload):
+            raise ValueError("Firestore integer value refused")
+        return int(payload)
+    if kind == "mapValue":
+        if not isinstance(payload, dict) or set(payload) != {"fields"} or not isinstance(payload["fields"], dict):
+            raise ValueError("Firestore map value refused")
+        return {key: _decode_firestore_value(nested) for key, nested in payload["fields"].items()}
+    if kind == "arrayValue":
+        if not isinstance(payload, dict) or set(payload) != {"values"} or not isinstance(payload["values"], list):
+            raise ValueError("Firestore array value refused")
+        return [_decode_firestore_value(nested) for nested in payload["values"]]
+    if kind in {"timestampValue", "bytesValue", "referenceValue", "geoPointValue"}:
+        if not isinstance(payload, (str, dict)):
+            raise ValueError("Firestore scalar value refused")
+        return payload
+    raise ValueError("Firestore value kind refused")
+
+
+def _adapt_firestore_result(
+    prepared: dict[str, Any], result: dict[str, Any], *, sequence: int, endpoint: str
+) -> dict[str, Any]:
+    status = result.get("status")
+    body = result.get("body")
+    if type(status) is not int or not isinstance(body, dict):
+        raise ValueError("REST response envelope refused")
+    wire = {"endpoint": endpoint, "wireSequence": sequence}
+    if "complete" in body and "status" in body:
+        return {**body, "httpStatus": status, **wire}
+    error = body.get("error")
+    if status < 200 or status >= 300:
+        if (
+            not isinstance(error, dict)
+            or type(error.get("code")) is not int
+            or error["code"] != status
+            or not isinstance(error.get("status"), str)
+        ):
+            raise ValueError("REST error response shape refused")
+        return {
+            "status": error["status"],
+            "code": error["code"],
+            "httpStatus": status,
+            "documentPresent": False,
+            "fields": {},
+            "complete": True,
+            **wire,
+        }
+    route = prepared["route"]
+    if route in {"observation-get", "document-recovery-get"}:
+        name = body.get("name")
+        fields = body.get("fields")
+        expected = prepared["path"][len("/v1/") :]
+        if not isinstance(name, str) or name != expected or not isinstance(fields, dict):
+            raise ValueError("REST Document response shape refused")
+        return {
+            "status": "OK",
+            "code": 0,
+            "httpStatus": status,
+            "documentPresent": True,
+            "fields": {key: _decode_firestore_value(value) for key, value in fields.items()},
+            "complete": True,
+            **wire,
+        }
+    if route == "observation-commit":
+        write_results = body.get("writeResults")
+        writes = prepared.get("body", {}).get("writes")
+        if (
+            not isinstance(write_results, list)
+            or not isinstance(writes, list)
+            or len(write_results) != len(writes)
+            or not isinstance(body.get("commitTime"), str)
+            or any(
+                not isinstance(result, dict)
+                or (
+                    not isinstance(result.get("updateTime"), str)
+                    and not isinstance(result.get("transformResults"), list)
+                )
+                for result in write_results
+            )
+        ):
+            raise ValueError("REST Commit response shape refused")
+        return {
+            "status": "OK",
+            "code": 0,
+            "httpStatus": status,
+            "documentPresent": True,
+            "fields": {},
+            "complete": True,
+            **wire,
+        }
+    if route == "document-recovery-delete" and body == {}:
+        return {
+            "status": "OK",
+            "code": 0,
+            "httpStatus": status,
+            "documentPresent": False,
+            "complete": True,
+            **wire,
+        }
+    raise ValueError("REST response route shape refused")
+
+
 def make_transport(
     plan: dict[str, Any],
     *,
@@ -874,11 +982,12 @@ def make_transport(
             if fixture_origin is not None
             else prepared["origin"]
         )
-        return {
-            **result["body"],
-            "endpoint": urlsplit(origin).netloc,
-            "wireSequence": sequence,
-        }
+        endpoint = urlsplit(origin).netloc
+        if prepared["service"] == "firestore":
+            return _adapt_firestore_result(
+                prepared, result, sequence=sequence, endpoint=endpoint
+            )
+        return {**result["body"], "endpoint": endpoint, "wireSequence": sequence}
 
     return transmit
 

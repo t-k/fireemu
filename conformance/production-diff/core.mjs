@@ -32,6 +32,55 @@ export const digestJson = (value) => sha256(canonical(value));
 export const safeCode = (error) =>
   /^[a-z0-9][a-z0-9-]{0,90}$/.test(error?.message ?? "") ? error.message : "operation-failed";
 
+/** Resolve the pinned recorder's existing $from notation from earlier raw replies.
+ * Never use normalized timestamps or caller supplied substitutions. */
+export function resolveRecordedValue(value, replies) {
+  if (Array.isArray(value)) return value.map((item) => resolveRecordedValue(item, replies));
+  if (!object(value)) return value;
+  if (typeof value.$from === "string") {
+    requireThat(typeof value.path === "string" && replies.has(value.$from), "recorder-reference-unavailable");
+    let found = replies.get(value.$from);
+    for (const key of value.path.split(".")) {
+      requireThat(found !== null && typeof found === "object" && Object.hasOwn(found, key), "recorder-reference-unavailable");
+      found = found[key];
+    }
+    requireThat(found !== undefined, "recorder-reference-unavailable");
+    return structuredClone(found);
+  }
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveRecordedValue(item, replies)]));
+}
+
+/** Dynamic cleanup names come only from a declared create reply on the owned daemon.
+ * This is not production deletion authority. The full local DB is reset first. */
+export function expectedCleanupDocuments(entry, requests) {
+  const paths = [...entry.ownedDocuments];
+  for (const [phase, collection] of Object.entries(entry.generatedDocumentSteps ?? {})) {
+    const rows = requests.filter((row) => row.phase === phase);
+    requireThat(rows.length <= 1, "generated-document-receipt-invalid");
+    if (!rows.length) continue; // A stopped run may never have sent this operation.
+    const row = rows[0];
+    const prefix = `projects/${entry.project}/databases/(default)/documents/${collection}/`;
+    requireThat(row.method === "POST" && row.path === `/v1/${prefix.slice(0, -1)}`, "generated-document-receipt-invalid");
+    requireThat(row.status === null || (Number.isInteger(row.status) && row.status >= 200 && row.status <= 599), "generated-document-receipt-invalid");
+    if (row.status === null || row.status < 200 || row.status >= 300) {
+      requireThat(row.generatedDocument === undefined && row.generatedResponseText === undefined, "generated-document-receipt-invalid");
+      continue;
+    }
+    requireThat(Number.isInteger(row.status) && typeof row.generatedDocument === "string" &&
+      row.generatedDocument.startsWith(prefix) && /^[A-Za-z0-9]{20}$/.test(row.generatedDocument.slice(prefix.length)),
+      "generated-document-receipt-invalid");
+    requireThat(typeof row.generatedResponseText === "string" && Buffer.byteLength(row.generatedResponseText) <= 65536 &&
+      sha256(row.generatedResponseText) === row.responseSha256, "generated-document-response-binding");
+    let responseBody;
+    try { responseBody = JSON.parse(row.generatedResponseText); } catch { throw new Error("generated-document-response-binding"); }
+    requireThat(object(responseBody) && responseBody.name === row.generatedDocument, "generated-document-response-binding");
+    const path = `${collection}/${row.generatedDocument.slice(prefix.length)}`;
+    requireThat(!paths.includes(path), "generated-document-receipt-invalid");
+    paths.push(path);
+  }
+  return paths;
+}
+
 export function validateProgram(program, entry) {
   requireThat(
     object(program) && program.id === entry.programId && program.area === "writes",
@@ -51,7 +100,7 @@ export function validateProgram(program, entry) {
   requireThat(!program.databases?.length, "unexpected-database");
   for (const step of program.steps) {
     requireThat(
-      ["GET", "POST"].includes(step.method) &&
+      (entry.allowedMethods ?? ["GET", "POST"]).includes(step.method) &&
         typeof step.path === "string" &&
         step.path.startsWith("/v1/projects/PROJECT/databases/(default)/documents"),
       "program-route",

@@ -15,6 +15,18 @@ HERE = Path(__file__).resolve().parent
 AUTHORITY = HERE / "current_authority.py"
 ROOT = Path(os.environ.get("FIREEMU_WRITE_CURRENT_ROOT", "/Users/tk/work/firebase-emulator"))
 RUNTIME = Path(os.environ.get("FIREEMU_WRITE_CURRENT_RUNTIME_SOURCE", ""))
+ARTIFACT = Path(
+    os.environ.get(
+        "FIREEMU_WRITE_CURRENT_ARTIFACT",
+        "/Users/tk/work/firebase-emulator/docs.local/runs/saved-runtime-20260922-approved/projection-e896/fireemu",
+    )
+)
+MANIFEST = Path(
+    os.environ.get(
+        "FIREEMU_WRITE_CURRENT_MANIFEST",
+        "/Users/tk/work/firebase-emulator/docs.local/runs/saved-runtime-20260922-approved/build/build-local.json",
+    )
+)
 RECEIPT = Path(
     os.environ.get(
         "FIREEMU_WRITE_CURRENT_RECEIPT",
@@ -63,6 +75,10 @@ def run_private(tmp_path: Path, *extra: str) -> subprocess.CompletedProcess[str]
             str(ROOT),
             "--runtime-source",
             str(RUNTIME),
+            "--artifact",
+            str(ARTIFACT),
+            "--build-manifest",
+            str(MANIFEST),
             "--receipt",
             str(RECEIPT),
             "--production",
@@ -140,7 +156,8 @@ def test_private_preexisting_output_refuses_without_replacement(tmp_path: Path) 
     output = tmp_path / "out.json"
     output.write_text("sentinel\n")
     result = run_private(tmp_path)
-    assert_refused(result, output)
+    assert result.returncode == 2
+    assert result.stderr.startswith("Current write authority refused (")
     assert output.read_text() == "sentinel\n"
 
 

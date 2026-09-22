@@ -160,6 +160,8 @@ AUTH_PARENT_OBSERVATION_KINDS = frozenset({
     "send-oob-code", "reset-password",
 })
 AUTH_PARENT_RECOVERY_KINDS = frozenset({"delete", "uid-absence", "address-absence"})
+AUTH_PARENT_SIGNUP_PATH = "identitytoolkit.googleapis.com/v1/accounts:signUp"
+AUTH_PARENT_CUSTOM_SIGN_IN_PATH = "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken"
 AUTH_RECOVERY_CHILD_FIELDS = {
     "kind", "version", "campaignId", "manifestDigest", "nonceDigest", "gatePath",
     "gateJob", "parentGateJob", "gatePlanDigest", "parentClaimDigest", "parentPlanDigest",
@@ -1190,6 +1192,52 @@ def _auth_parent_responsibility_projection(gate, child_claim):
             raise ValueError(f"Auth parent responsibility {kind} typed evidence required")
         return {"event": position, "requestDigest": event["requestDigest"]}
 
+    def _creating_operation(index, operation):
+        kind = operation.get("kind")
+        path = operation.get("path")
+        is_signup = path == AUTH_PARENT_SIGNUP_PATH
+        is_custom_sign_in = path == AUTH_PARENT_CUSTOM_SIGN_IN_PATH
+        if kind in {"sign-up", "custom-sign-in"}:
+            expected_path = AUTH_PARENT_SIGNUP_PATH if kind == "sign-up" else AUTH_PARENT_CUSTOM_SIGN_IN_PATH
+            if path != expected_path:
+                raise ValueError("Auth parent responsibility creating operation route differs")
+        if is_signup:
+            account = operation.get("account")
+            expected_email = {
+                "acct0": f"fireemu-cred-{plan['nonce'][:8]}-0@fireemu-credential.invalid",
+                "acct1": f"fireemu-cred-{plan['nonce'][:8]}-1@fireemu-credential.invalid",
+            }.get(account)
+            if (
+                kind != "sign-up"
+                or operation.get("service") != "auth"
+                or operation.get("method") != "POST"
+                or operation.get("form") is not False
+                or operation.get("body") != {
+                    "email": expected_email,
+                    "password": "$binding:password",
+                    "returnSecureToken": True,
+                }
+            ):
+                raise ValueError("Auth parent responsibility creating operation semantics differ")
+            return index
+        if is_custom_sign_in:
+            if (
+                kind != "custom-sign-in"
+                or operation.get("service") != "auth"
+                or operation.get("method") != "POST"
+                or operation.get("account") != "custom"
+                or operation.get("form") is not False
+                or operation.get("body") != {
+                    "token": "$binding:customToken",
+                    "returnSecureToken": True,
+                }
+            ):
+                raise ValueError("Auth parent responsibility creating operation semantics differ")
+            return index
+        if kind in {"sign-up", "custom-sign-in"}:
+            raise ValueError("Auth parent responsibility creating operation semantics differ")
+        return None
+
     responsibilities = []
     for job_name, plan_job in plan_jobs.items():
         job = jobs[job_name]
@@ -1213,6 +1261,11 @@ def _auth_parent_responsibility_projection(gate, child_claim):
             raise ValueError("Auth parent responsibility observation operation is unsupported")
         if any(operation.get("kind") not in AUTH_PARENT_RECOVERY_KINDS for operation in recovery):
             raise ValueError("Auth parent responsibility recovery operation is unsupported")
+        creating_indices = {
+            creating_index
+            for index, operation in enumerate(observations)
+            if (creating_index := _creating_operation(index, operation)) is not None
+        }
         observation_events = [
             event for event in events
             if event.get("job") == job_name and event.get("phase") == "observation"
@@ -1298,10 +1351,7 @@ def _auth_parent_responsibility_projection(gate, child_claim):
         # operation kinds. Its schedule also contains non-creating token and
         # refresh slots, so the schedule's default ``creates`` value is not an
         # ownership declaration for this facade.
-        creating = {
-            index for index, operation in enumerate(observations)
-            if operation.get("kind") in {"sign-up", "custom-sign-in"}
-        }
+        creating = creating_indices
         created_accounts = set()
         for index in sorted(creating):
             operation = observations[index]

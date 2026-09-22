@@ -163,6 +163,26 @@ def test_tokeninfo_uses_only_the_documented_oauth_route() -> None:
             worker.validate_target(url, fixture=False)
 
 
+def test_bootstrap_routes_are_closed_to_the_four_documented_operations() -> None:
+    accepted = (
+        "https://oauth2.googleapis.com/token",
+        "https://oauth2.googleapis.com/tokeninfo?access_token=opaque",
+        "https://cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6",
+        "https://identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config",
+    )
+    for url in accepted:
+        worker.validate_target(url, fixture=False)
+    for url in (
+        "https://oauth2.googleapis.com/oauth2/v1/tokeninfo?access_token=opaque",
+        "https://oauth2.googleapis.com/token?extra=x",
+        "https://cloudresourcemanager.googleapis.com/v1/projects/other",
+        "https://identitytoolkit.googleapis.com/v1/projects/fireemu-35fe6/config",
+        "https://identitytoolkit.googleapis.com/admin/v2/projects/other/config",
+    ):
+        with pytest.raises(ValueError):
+            worker.validate_target(url, fixture=False)
+
+
 def test_lifecycle_result_proves_worker_reaped(fixture_origin) -> None:
     origin, _server = fixture_origin
     result = remote.request_with_lifecycle(

@@ -296,6 +296,9 @@ def test_partial_create_readback_keeps_unverified_ownership_held(tmp_path) -> No
         for line in journal_path.read_text().splitlines()
         if json.loads(line)["kind"] == "rules-management-ownership"
     ]
+    kinds = [json.loads(line)["kind"] for line in journal_path.read_text().splitlines()]
+    assert "rules-management-intent" in kinds
+    assert "rules-management-baseline" in kinds
     assert ownership[-1]["phase"] == "created-unverified"
 
 

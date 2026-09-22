@@ -375,7 +375,19 @@ class RulesManagementSession:
                 },
             )
 
+    def _record_management(self, kind: str, payload: dict[str, Any]) -> None:
+        if self.journal is not None:
+            self.journal.record(kind, payload)
+
     def _dispatch(self, phase: str, slot: str, operation: dict[str, Any], *, allow_status: frozenset[int] = frozenset()) -> dict[str, Any]:
+        self._record_management(
+            "rules-management-intent",
+            {
+                "phase": phase,
+                "slot": slot,
+                "operationDigest": digest(operation),
+            },
+        )
         def send(deadline: float) -> dict[str, Any]:
             if self.ledger is not None:
                 self.ledger.validate(self.ticket, duration=8)
@@ -404,6 +416,16 @@ class RulesManagementSession:
                     "endpoint": endpoint,
                     "wireSequence": wire_sequence,
                 }
+            )
+            self._record_management(
+                "rules-management-receipt",
+                {
+                    "phase": phase,
+                    "slot": slot,
+                    "wireSequence": wire_sequence,
+                    "endpoint": endpoint,
+                    "responseDigest": digest(raw),
+                },
             )
             credential_failure = _scan_management_receipt(raw)
             if credential_failure is not None:
@@ -489,6 +511,7 @@ class RulesManagementSession:
         if executable.get("rulesetName") != baseline_ruleset:
             raise ValueError("baseline executable differs")
         self.baseline = {"releaseName": release_name, "rulesetName": baseline_ruleset, "sourceDigest": baseline_digest}
+        self._record_management("rules-management-baseline", dict(self.baseline))
         for label, patch_base in (("A", "a"), ("B", "b")):
             source_digest = digest(self.plan["rulesets"][label]["source"])
             created = self._dispatch("observation", f"create-{patch_base}", {"action": "create", "label": label, "sourceDigest": source_digest})

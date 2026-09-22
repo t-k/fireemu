@@ -76,6 +76,26 @@ def test_the_frozen_plan_is_created_by_the_shared_gate_at_its_wall_cap(tmp_path)
     assert declared
 
 
+def test_the_selected_gate_plan_has_one_account_and_the_three_case_closure():
+    value = mfa_gate.gate_plan(
+        NONCE,
+        wall_seconds=1200,
+        recovery_seconds=300,
+        cost_microusd=100_006,
+        selector="pending-age-300-v1",
+    )
+    job = value["jobs"][mfa_gate.JOB]
+    assert value["selector"] == "pending-age-300-v1"
+    assert value["plannedAccounts"] == ["pending-age-300"]
+    assert len(job["observation"]) == 11
+    assert len(job["recovery"]) == 4
+    assert len(job["accountBindings"]) == 1
+    assert all(
+        operation.get("account") == "pending-age-300"
+        for operation in (*job["observation"], *job["recovery"])
+    )
+
+
 def test_the_plan_above_the_wall_cap_is_refused_by_the_shared_gate(tmp_path):
     with pytest.raises(ValueError, match="invalid shared allocation"):
         mfa_gate.create(tmp_path / "gate", plan(wall=2700, recovery=300))

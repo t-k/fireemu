@@ -57,6 +57,34 @@ def test_the_blocking_conditions_each_have_cases() -> None:
         assert any(case["endpoint"] == endpoint for case in cases), endpoint
 
 
+def test_the_only_finite_selector_preserves_the_full_catalog_and_exact_closure() -> None:
+    full = compile_campaign(NONCE)
+    selected = compile_campaign(NONCE, selector="pending-age-300-v1")
+    assert [case["id"] for case in selected["cases"]] == list(CASE_IDS)
+    assert selected["caseCount"] == 33
+    assert selected["selector"] == {
+        "name": "pending-age-300-v1",
+        "caseIds": [
+            "age-300s-start",
+            "age-300s-finalize",
+            "age-300s-same-account-fresh-control",
+        ],
+        "accountRoles": ["pending-age-300"],
+        "observedAgeSeconds": 301,
+        "dataRequests": 11,
+        "recoveryRequests": 4,
+        "managementRequests": 6,
+        "declaredRequests": 22,
+        "maxWallSeconds": 1200,
+        "criticalPathSeconds": 301,
+        "slackSeconds": 119,
+    }
+    assert "selector" not in full
+    assert validate_campaign(selected) is True
+    with pytest.raises(ValueError, match="unsupported MFA selector"):
+        compile_campaign(NONCE, selector="age-450s")
+
+
 def test_the_fresh_same_account_control_shares_its_aged_case_account() -> None:
     by_id = {case["id"]: case for case in observation_cases()}
     for age in SAMPLED_AGES_SECONDS:

@@ -30,6 +30,21 @@ def fresh() -> dict:
     return initial_state(compile_campaign(NONCE), ORIGIN)
 
 
+def test_selected_collector_denominator_is_frozen_to_the_three_case_closure() -> None:
+    state = initial_state(
+        compile_campaign(NONCE, selector="pending-age-300-v1"), ORIGIN
+    )
+    assert [step["id"] for step in state["steps"]] == [
+        "age-300s-start",
+        "age-300s-finalize",
+        "age-300s-same-account-fresh-control",
+    ]
+    assert state["selectedCaseIds"] == [step["id"] for step in state["steps"]]
+    with pytest.raises(CheckpointError, match="checkpoint state is invalid"):
+        altered = dict(state, selectedCaseIds=["age-450s-start"])
+        checkpoint_bytes(altered)
+
+
 def drain(state: dict, now: float) -> None:
     for step in state["steps"]:
         if step["status"] == "pending":

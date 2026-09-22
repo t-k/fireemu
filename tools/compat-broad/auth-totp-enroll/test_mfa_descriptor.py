@@ -54,6 +54,23 @@ def test_the_production_descriptor_is_complete_and_wall_clock_bound():
     assert set(descriptor.members()) == set(REQUIRED_MEMBERS)
 
 
+def test_the_selected_plan_reference_binds_the_allowlisted_selector():
+    reference = campaign.plan_compiler(
+        NONCE, selector="pending-age-300-v1", timing=campaign.WALL_CLOCK
+    )
+    assert reference["selector"]["caseIds"] == [
+        "age-300s-start",
+        "age-300s-finalize",
+        "age-300s-same-account-fresh-control",
+    ]
+    assert reference["selectedCaseCount"] == 3
+    assert reference["selectedAccountCount"] == 1
+    plan = campaign.execution_plan(reference)
+    assert plan["selector"]["name"] == "pending-age-300-v1"
+    assert plan["limits"]["maxWallSeconds"] == 1200
+    assert campaign.lock_scopes(reference)[0]["key"].endswith(
+        "auth/accounts/o2-mfa-pending-age-300-" + NONCE
+    )
 @pytest.mark.parametrize("member", sorted(REQUIRED_MEMBERS))
 def test_a_descriptor_missing_any_member_is_refused(member):
     members = campaign.descriptor(WallClockSleeper()).members()

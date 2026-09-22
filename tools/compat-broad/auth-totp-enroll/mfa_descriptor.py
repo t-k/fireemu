@@ -310,7 +310,9 @@ def frozen_bounds() -> dict:
 
 
 # --- plan ---------------------------------------------------------------------------
-def plan_compiler(nonce: str, *, timing: str = WALL_CLOCK) -> dict:
+def plan_compiler(
+    nonce: str, *, timing: str = WALL_CLOCK, selector: str | None = None
+) -> dict:
     """The plan as the admission sees it: a reference to the frozen manifest.
 
     Every field is derived from the nonce by the reviewed manifest compiler, so the
@@ -322,8 +324,8 @@ def plan_compiler(nonce: str, *, timing: str = WALL_CLOCK) -> dict:
         raise ValueError("fresh 128-bit lowercase hexadecimal nonce required")
     if timing not in (WALL_CLOCK, VIRTUAL_CLOCK):
         raise ValueError("declared timing mode required")
-    manifest = compile_campaign(nonce)
-    return {
+    manifest = compile_campaign(nonce, selector=selector)
+    reference = {
         "schema": "mfa-plan-reference-v1",
         "campaignId": manifest["campaignId"],
         "project": manifest["project"],
@@ -337,6 +339,11 @@ def plan_compiler(nonce: str, *, timing: str = WALL_CLOCK) -> dict:
         "agingSchedule": manifest["agingSchedule"]["mode"],
         "timingMode": timing,
     }
+    if selector is not None:
+        reference["selector"] = copy.deepcopy(manifest["selector"])
+        reference["selectedCaseCount"] = len(manifest["selector"]["caseIds"])
+        reference["selectedAccountCount"] = len(manifest["selector"]["accountRoles"])
+    return reference
 
 
 def execution_plan(reference: dict) -> dict:
@@ -347,10 +354,11 @@ def execution_plan(reference: dict) -> dict:
     timing = reference.get("timingMode")
     if timing not in (WALL_CLOCK, VIRTUAL_CLOCK):
         raise ValueError("frozen MFA plan reference differs")
-    canonical = plan_compiler(nonce, timing=timing)
+    selector = reference.get("selector", {}).get("name") if "selector" in reference else None
+    canonical = plan_compiler(nonce, timing=timing, selector=selector)
     if digest(reference) != digest(canonical):
         raise ValueError("frozen MFA plan reference differs")
-    manifest = compile_campaign(nonce)
+    manifest = compile_campaign(nonce, selector=selector)
     if digest(manifest) != reference["manifestDigest"] or not validate_campaign(
         manifest
     ):
@@ -367,8 +375,14 @@ def lock_scopes(plan: dict) -> list[dict]:
     """
     nonce = plan["nonce"]
     scope = f"project/{PROJECT}"
+    selector = plan.get("selector")
+    account_key = (
+        f"{scope}/auth/accounts/o2-mfa-pending-age-300-{nonce}"
+        if isinstance(selector, dict) and selector.get("name") == "pending-age-300-v1"
+        else f"{scope}/auth/accounts/o2/{CAMPAIGN}/{nonce}/*"
+    )
     return [
-        {"key": f"{scope}/auth/accounts/o2/{CAMPAIGN}/{nonce}/*", "mode": "WRITE"},
+        {"key": account_key, "mode": "WRITE"},
         {"key": f"{scope}/auth/config", "mode": "EXCLUSIVE"},
         {"key": f"{scope}/identity", "mode": "READ"},
     ]

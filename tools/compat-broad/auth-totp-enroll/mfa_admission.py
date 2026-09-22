@@ -300,11 +300,18 @@ def gate_plan_for(inputs, permission, descriptor_=None) -> dict:
     expiry = permission.get("expiresAt")
     if type(expiry) not in (int, float) or isinstance(expiry, bool):
         raise ValueError("permission expiry required for management dispatch")
+    selector = inputs["plan"].get("selector", {}).get("name")
+    selected_wall_seconds = (
+        inputs["plan"]["selector"]["maxWallSeconds"]
+        if selector is not None
+        else descriptor_.campaign_seconds
+    )
     plan = mfa_gate.gate_plan(
         inputs["plan"]["nonce"],
-        wall_seconds=descriptor_.campaign_seconds,
+        wall_seconds=selected_wall_seconds,
         recovery_seconds=descriptor_.recovery_seconds,
         cost_microusd=campaign.ledger_budget()["costMicrousd"],
+        selector=selector,
     )
     plan["permissionExpiresAt"] = expiry
     return plan
@@ -319,6 +326,10 @@ def reservation_claim(inputs, *, gate_path, gate_plan, descriptor_=None):
         or gate_plan.get("campaignId") != descriptor_.campaign_id
     ):
         raise ValueError("Gate plan belongs to another campaign or nonce")
+    selector = plan.get("selector")
+    duration_seconds = (
+        selector["maxWallSeconds"] if selector is not None else descriptor_.campaign_seconds
+    )
     return {
         "campaignId": descriptor_.campaign_id,
         "manifestDigest": inputs["planDigest"],
@@ -328,7 +339,7 @@ def reservation_claim(inputs, *, gate_path, gate_plan, descriptor_=None):
         "gateJob": GATE_JOB,
         "locks": descriptor_.lock_scopes(plan),
         "budget": campaign.ledger_budget(),
-        "durationSeconds": descriptor_.campaign_seconds,
+        "durationSeconds": duration_seconds,
     }
 
 
@@ -387,9 +398,13 @@ def hosting_check(claim, gate_plan) -> list[dict]:
         + [gate_plan.get("configResource")]
     )
     refused = []
+    selected = gate_plan.get("selector") is not None
     for name in resources:
         try:
-            reservations._firestore_resource_scope(name)
+            if selected:
+                reservations._resource_scope(name)
+            else:
+                reservations._firestore_resource_scope(name)
         except (ValueError, TypeError):
             refused.append(name)
     if refused:
@@ -398,10 +413,10 @@ def hosting_check(claim, gate_plan) -> list[dict]:
                 "refusal": "ledger-resource-refused",
                 "module": "tools/compat-broad/production-admission/reservations.py",
                 "detail": (
-                    "Ledger.reserve admits only canonical Firestore document resources "
-                    "and Ledger.finish only a Firestore typed-404 absence proof; this "
-                    "campaign's resources are Auth accounts, the two account cleanup "
-                    "routes and the project Auth configuration"
+                    "the selected Auth account resources are supported by the shared "
+                    "resource scope, but the project Auth configuration resource still "
+                    "has no canonical scope; the full campaign retains its historical "
+                    "Firestore-only refusal"
                 ),
                 "value": {"refusedResources": len(refused), "sample": refused[:3]},
             }

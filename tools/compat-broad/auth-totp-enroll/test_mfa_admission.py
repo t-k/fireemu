@@ -272,6 +272,28 @@ def test_the_hosting_check_names_every_shared_module_refusal(tmp_path):
         )
 
 
+def test_selected_age_300_plan_uses_supported_auth_account_scope_and_bounded_claim(
+    tmp_path,
+):
+    built = RehearsalAdmission(tmp_path)
+    production = campaign.descriptor(WallClockSleeper())
+    inputs = copy.deepcopy(built.inputs)
+    inputs["plan"] = production.plan_compiler(
+        NONCE, selector="pending-age-300-v1"
+    )
+    gate_plan = admission.gate_plan_for(inputs, built.permission, production)
+    claim = admission.reservation_claim(
+        inputs, gate_path=tmp_path / "gate", gate_plan=gate_plan, descriptor_=production
+    )
+
+    assert gate_plan["wallSeconds"] == 1200
+    assert claim["durationSeconds"] == 1200
+    assert claim["locks"][0]["key"].endswith("pending-age-300-" + NONCE)
+    refusals = admission.hosting_check(claim, gate_plan)
+    assert [item["refusal"] for item in refusals] == ["ledger-resource-refused"]
+    assert refusals[0]["value"]["refusedResources"] == 1
+
+
 @pytest.mark.parametrize(
     "value",
     [

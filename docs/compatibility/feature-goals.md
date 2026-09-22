@@ -4,6 +4,17 @@ The [merge acceptance table](merge-readiness.md) fixes which completed Goals and
 
 This queue starts from 8f2e4850 and preserves all previous observations and their limitations. Only the coordinator integrates and pushes to `feat/compatibility-inventory`. G0 later ran once under a separately supplied bounded owner permission; that consumed permission does not authorize any other Cloud operation. The fixed observation remains independent of the newer development runtime.
 
+## Current condition-focused status
+
+The acceptance sequence is condition-focused and does not wait for whole-G1 local completion. `COMPAT_VERIFIED` remains `0 / 14`; no parent is promoted by a finite child result alone.
+
+- The finite First46 current-artifact saved replay is accepted at 46/46 matching rows, with reviewed artifact binding and complete cleanup. This closes only that finite saved-replay condition.
+- The bounded saved-transform replay is accepted at 18/18 matching rows with reviewed current-artifact provenance and cleanup evidence.
+- The saved-preconditions replay implementation is integrated at `e565251be`, but native replay and evidence review remain pending; it is not accepted.
+- For `AUTH-CREDENTIAL-TOKENS-01`, attempt 02 is closed as `source-proven-unsent`. Packets 03 and 04 terminated `aborted-no-data` after preparation calls/timeouts. Packet 05 has 6 observed rows and 13 `NOT_RUN` rows; custom-sign-in ownership validation is incomplete, so it is held without a compatibility verdict.
+
+Production observations, saved-production comparisons, local shadows, skips and `NOT_RUN` rows remain distinct evidence classes. The Auth packet outcomes do not promote an Auth parent, and the finite Firestore replays do not promote `FS-DATA-WRITE`.
+
 | Goal | Finite conditions and evidence | Owner model | State and fixed evidence | Remaining parent scope |
 | --- | --- | --- | --- | --- |
 | G0 | The two existing BatchWrite recipes; production response and post-state comparison | Coordinator | done-candidate; fixed a35f85b4 ran each recipe once, recorded 10 matches/2 mismatches with complete state and cleanup, and repaired runtime 68012694 compares 12/12 to the saved responses | Result acceptance and broader BatchWrite coverage remain separate; the consumed permission and nonce authorize no reobservation |

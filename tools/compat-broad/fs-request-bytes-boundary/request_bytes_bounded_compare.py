@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from urllib.parse import parse_qs, urlsplit
 from pathlib import Path
 from typing import Any
@@ -27,10 +28,10 @@ PRODUCTION_INPUTS_SHA256 = "b7b423ea1c28b1bc610eae9281f0c89f04e467d7504d32f13318
 PRODUCTION_RECEIPT_SHA256 = "10ff0f711c6b10e740d3620021f028d9ffd6891e4e5aa55dc620dbad960895cd"
 PRODUCTION_RESULT_SHA256 = "cb8ef1af7a630362b8d6b161d69dbe0b7bf2688b3fcc5ebdb0d9138cd6290450"
 PRODUCTION_GATE_STATE_SHA256 = "dda8f96ac2f8db4417dc3c56f5032467244952ef8656f627398d56e2d226afea"
+PRODUCTION_ROW_DIGEST = "0f44b5daf53e7474d1dd14865fee7404603f83dc23a1bcd2ff8740f19a105fb7"
 LOCAL_MANIFEST_SHA256 = "7afacb213758873229d3005d86791a503a468601fcc2dc1cc9f8a305fe5ee87e"
 LOCAL_PROJECTION_SHA256 = "1ab02dd1560c381b6f9987782d92b6d9850344ff1d7f805cf6d3ba282e945b19"
-RUNTIME_ARTIFACT = Path("/Users/tk/work/firebase-emulator/docs.local/runs/requestbytes-native-ba4-20260922/fireemu")
-RUNTIME_SOURCE_MAP = Path("/Users/tk/work/firebase-emulator/docs.local/runs/requestbytes-native-ba4-20260922/source-runtime-input-map.txt")
+FREEZE_MANIFEST_SHA256 = "9ea3479f2449244cd05ab9b62be33daf0259b357a0d837edf8357993edd3ed5b"
 PRODUCTION_RUN = "requestbytes-production-2a1-fresh02"
 RESULT_KIND = "requestbytes-bounded-response-sideeffect-comparison-v1"
 
@@ -101,6 +102,13 @@ def _rows(run: Path) -> tuple[Path, dict[str, Any]]:
     return collection, rows
 
 
+def _row_digest(collection: Path) -> str:
+    hashes = []
+    for path in sorted(collection.glob("row-*.json")):
+        hashes.append(f"{path.name}:{_sha256(path)}")
+    return hashlib.sha256("\n".join(hashes).encode()).hexdigest()
+
+
 def _status(row: dict[str, Any]) -> int:
     receipt = row.get("receipt")
     if not isinstance(receipt, dict) or type(receipt.get("status")) is not int:
@@ -127,6 +135,16 @@ def _probe_result(run: Path, probe: str) -> dict[str, Any]:
         if name in expected:
             raise ComparisonError(f"{probe}: duplicate resource")
         expected[name] = update["fields"]
+    def phase(kind: str) -> list[dict[str, Any]]:
+        return [r for r in rows.values() if r.get("probe") == probe and r.get("kind") == kind]
+
+    preflight = phase("preflight-typed-absence")
+    if len(preflight) != 17 or len({_row_resource(row) for row in preflight}) != 17 or {_row_resource(row) for row in preflight} != set(expected):
+        raise ComparisonError(f"{probe}: preflight resource set")
+    for row in preflight:
+        if row.get("method") != "GET" or row.get("path") != "/v1/" + row["resource"] or _status(row) != 404 or not _typed_not_found(collection, row):
+            raise ComparisonError(f"{probe}: preflight typed absence")
+
     commit_rows = [r for r in rows.values() if r.get("probe") == probe and r.get("kind") == "conditional-create-commit"]
     if len(commit_rows) != 1:
         raise ComparisonError(f"{probe}: commit row count")
@@ -137,21 +155,29 @@ def _probe_result(run: Path, probe: str) -> dict[str, Any]:
     results = response.get("writeResults")
     if _status(commit) != 200 or not isinstance(results, list) or len(results) != 17:
         raise ComparisonError(f"{probe}: commit response")
-    if any(not isinstance(item, dict) or not item.get("updateTime") for item in results):
+    if any(type(item.get("updateTime")) is not str or not item["updateTime"] for item in results):
         raise ComparisonError(f"{probe}: versioned write results")
 
     readbacks = [r for r in rows.values() if r.get("probe") == probe and r.get("kind") == "probe-readback"]
-    if len(readbacks) != 17 or {_row_resource(r) for r in readbacks} != set(expected):
+    if len(readbacks) != 17 or len({_row_resource(r) for r in readbacks}) != 17 or {_row_resource(r) for r in readbacks} != set(expected):
         raise ComparisonError(f"{probe}: readback resource set")
+    if any(row.get("method") != "GET" or row.get("path") != "/v1/" + row["resource"] for row in readbacks):
+        raise ComparisonError(f"{probe}: readback canonical path")
     fields_equal = True
     readback_digests = []
+    readback_versions = {}
     for row in readbacks:
         body = _response(collection, row)
         if _status(row) != 200 or body.get("name") != row.get("resource"):
             fields_equal = False
             continue
         fields_equal = fields_equal and _same_json(body.get("fields"), expected[row["resource"]])
+        if type(body.get("updateTime")) is not str or not body["updateTime"]:
+            raise ComparisonError(f"{probe}: readback version")
+        readback_versions[row["resource"]] = body["updateTime"]
         readback_digests.append(_digest({"name": body.get("name"), "fields": body.get("fields")}))
+    if list(readback_versions.get(name) for name in expected) != [item["updateTime"] for item in results]:
+        raise ComparisonError(f"{probe}: commit/readback version linkage")
 
     ownership_reads = [r for r in rows.values() if r.get("probe") == probe and r.get("kind") == "cleanup-ownership-read"]
     deletes = [r for r in rows.values() if r.get("probe") == probe and r.get("kind") == "cleanup-version-bound-delete"]
@@ -159,17 +185,15 @@ def _probe_result(run: Path, probe: str) -> dict[str, Any]:
     if len(ownership_reads) != 17 or len(deletes) != 17 or len(absence) != 17:
         raise ComparisonError(f"{probe}: versioned cleanup counts")
     expected_names = set(expected)
+    for phase_rows in (ownership_reads, deletes, absence):
+        names = [_row_resource(row) for row in phase_rows]
+        if len(set(names)) != 17 or set(names) != expected_names:
+            raise ComparisonError(f"{probe}: cleanup resource set")
     if any(_row_resource(row) not in expected_names for row in ownership_reads + deletes + absence):
         raise ComparisonError(f"{probe}: cleanup resource set")
-    if any(_status(row) != 200 for row in ownership_reads):
+    if any(row.get("method") != "GET" or row.get("path") != "/v1/" + row["resource"] or _status(row) != 200 for row in ownership_reads):
         raise ComparisonError(f"{probe}: ownership read status")
-    update_times = {}
-    for row in readbacks:
-        body = _response(collection, row)
-        update_time = body.get("updateTime")
-        if not isinstance(update_time, str) or not update_time:
-            raise ComparisonError(f"{probe}: readback version")
-        update_times[row["resource"]] = update_time
+    update_times = readback_versions
     for row in ownership_reads:
         body = _response(collection, row)
         if (
@@ -180,10 +204,14 @@ def _probe_result(run: Path, probe: str) -> dict[str, Any]:
             raise ComparisonError(f"{probe}: ownership version linkage")
     if any(_status(row) != 200 for row in deletes):
         raise ComparisonError(f"{probe}: version-bound delete status")
+    if any(row.get("method") != "DELETE" for row in deletes):
+        raise ComparisonError(f"{probe}: delete method")
     for row in deletes:
         query = parse_qs(urlsplit(row.get("path", "")).query)
-        if query.get("currentDocument.updateTime") != [update_times[row["resource"]]]:
+        if urlsplit(row.get("path", "")).path != "/v1/" + row["resource"] or query.get("currentDocument.updateTime") != [update_times[row["resource"]]]:
             raise ComparisonError(f"{probe}: delete version linkage")
+    if any(row.get("method") != "GET" or row.get("path") != "/v1/" + row["resource"] for row in absence):
+        raise ComparisonError(f"{probe}: absence canonical path")
     final_absence = all(_status(row) == 404 and _typed_not_found(collection, row) for row in absence)
     if not fields_equal or not all(_status(row) == 200 for row in readbacks):
         raise ComparisonError(f"{probe}: readback fields or status")
@@ -245,7 +273,7 @@ def _validate_local_bindings(run: Path, immutable: Path) -> dict[str, Any]:
     return projection
 
 
-def _validate_runtime_anchor(production_run: Path) -> None:
+def _validate_runtime_anchor(production_run: Path, runtime_artifact: Path, runtime_source_map: Path, freeze_manifest: Path) -> None:
     anchors = {
         "inputs.json": PRODUCTION_INPUTS_SHA256,
         "receipt.json": PRODUCTION_RECEIPT_SHA256,
@@ -255,20 +283,33 @@ def _validate_runtime_anchor(production_run: Path) -> None:
     for relative, expected in anchors.items():
         if _sha256(production_run / relative) != expected:
             raise ComparisonError(f"production anchor changed: {relative}")
-    if RUNTIME_ARTIFACT.is_symlink() or not RUNTIME_ARTIFACT.is_file() or _sha256(RUNTIME_ARTIFACT) != ARTIFACT_SHA256:
+    if runtime_artifact.is_symlink() or not runtime_artifact.is_file() or _sha256(runtime_artifact) != ARTIFACT_SHA256:
         raise ComparisonError("runtime artifact binding")
-    if RUNTIME_SOURCE_MAP.is_symlink() or not RUNTIME_SOURCE_MAP.is_file() or _sha256(RUNTIME_SOURCE_MAP) != RUNTIME_SOURCE_MAP_SHA256:
+    if runtime_source_map.is_symlink() or not runtime_source_map.is_file() or _sha256(runtime_source_map) != RUNTIME_SOURCE_MAP_SHA256:
         raise ComparisonError("runtime source map binding")
     fields = {}
-    for line in RUNTIME_SOURCE_MAP.read_text(encoding="utf-8").splitlines():
+    for line in runtime_source_map.read_text(encoding="utf-8").splitlines():
         if "=" in line:
             key, value = line.split("=", 1)
             fields[key] = value
     if fields.get("sourceCommit") != RUNTIME_SOURCE_COMMIT or fields.get("artifactSha256") != ARTIFACT_SHA256:
         raise ComparisonError("runtime source/artifact map binding")
+    if freeze_manifest.is_symlink() or not freeze_manifest.is_file() or _sha256(freeze_manifest) != FREEZE_MANIFEST_SHA256:
+        raise ComparisonError("private freeze manifest binding")
+    frozen = _json(freeze_manifest)
+    if frozen.get("bindings", {}).get("runtimeArtifactSha256") != ARTIFACT_SHA256 or frozen.get("bindings", {}).get("harnessSourceCommit") != HARNESS_COMMIT:
+        raise ComparisonError("private freeze bindings")
 
 
-def compare_runs(production_run: Path, local_run: Path, output: Path) -> dict[str, Any]:
+def compare_runs(
+    production_run: Path,
+    local_run: Path,
+    output: Path,
+    *,
+    runtime_artifact: Path | None = None,
+    runtime_source_map: Path | None = None,
+    freeze_manifest: Path | None = None,
+) -> dict[str, Any]:
     immutable = local_run / "immutable-expected.json"
     expected = _json(immutable)
     if _sha256(immutable) != IMMUTABLE_EXPECTED_SHA256 or expected.get("statusByProbe") != EXPECTED_STATUS:
@@ -282,7 +323,15 @@ def compare_runs(production_run: Path, local_run: Path, output: Path) -> dict[st
         raise ComparisonError("saved production run binding")
     if production_run.name != PRODUCTION_RUN:
         raise ComparisonError("saved production path binding")
-    _validate_runtime_anchor(production_run)
+    if runtime_artifact is None or runtime_source_map is None or freeze_manifest is None:
+        evidence_root = Path(expected["savedRun"]).resolve().parents[2]
+        runtime_artifact = evidence_root / "docs.local/runs/requestbytes-native-ba4-20260922/fireemu"
+        runtime_source_map = evidence_root / "docs.local/runs/requestbytes-native-ba4-20260922/source-runtime-input-map.txt"
+        freeze_manifest = evidence_root / "docs.local/runs/requestbytes-exact-replay-20260922-v2/freeze-manifest.json"
+    _validate_runtime_anchor(production_run, runtime_artifact, runtime_source_map, freeze_manifest)
+    production_collection, production_rows = _rows(production_run)
+    if _row_digest(production_collection) != expected.get("rowDigest") or _row_digest(production_collection) != PRODUCTION_ROW_DIGEST:
+        raise ComparisonError("anchored production row journal changed")
     production = {probe: _probe_result(production_run, probe) for probe in PROBES}
     local = {probe: _probe_result(local_run, probe) for probe in PROBES}
     _validate_local_bindings(local_run, immutable)
@@ -332,10 +381,21 @@ def compare_runs(production_run: Path, local_run: Path, output: Path) -> dict[st
             "projectionSha256": _sha256(local_run / "v2-projection.json"),
         },
     }
-    if output.exists() or output.is_symlink():
-        raise ComparisonError("refusing to overwrite existing output")
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    payload = (json.dumps(result, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except FileExistsError as error:
+        raise ComparisonError("refusing to overwrite existing output") from error
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+    except Exception:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
     return result
 
 
@@ -344,9 +404,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--production-run", type=Path, required=True)
     parser.add_argument("--local-run", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--runtime-artifact", type=Path, required=True)
+    parser.add_argument("--runtime-source-map", type=Path, required=True)
+    parser.add_argument("--freeze-manifest", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        result = compare_runs(args.production_run, args.local_run, args.output)
+        result = compare_runs(args.production_run, args.local_run, args.output, runtime_artifact=args.runtime_artifact, runtime_source_map=args.runtime_source_map, freeze_manifest=args.freeze_manifest)
     except (ComparisonError, OSError, json.JSONDecodeError) as error:
         print(f"bounded comparison refused: {error}")
         return 2

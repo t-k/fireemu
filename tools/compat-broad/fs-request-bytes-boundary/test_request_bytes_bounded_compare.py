@@ -10,6 +10,9 @@ from request_bytes_bounded_compare import ComparisonError, compare_runs
 ROOT = Path(__file__).resolve().parents[5]
 PRODUCTION = ROOT / "docs.local/runs/requestbytes-production-2a1-fresh02"
 LOCAL = ROOT / "docs.local/runs/requestbytes-exact-replay-20260922-v2/ba4-483-rerun"
+RUNTIME_ARTIFACT = ROOT / "docs.local/runs/requestbytes-native-ba4-20260922/fireemu"
+RUNTIME_SOURCE_MAP = ROOT / "docs.local/runs/requestbytes-native-ba4-20260922/source-runtime-input-map.txt"
+FREEZE_MANIFEST = ROOT / "docs.local/runs/requestbytes-exact-replay-20260922-v2/freeze-manifest.json"
 
 
 @pytest.fixture(scope="module")
@@ -20,7 +23,14 @@ def local_copy(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def _run(local: Path, output: Path) -> dict:
-    return compare_runs(PRODUCTION, local, output)
+    return compare_runs(
+        PRODUCTION,
+        local,
+        output,
+        runtime_artifact=RUNTIME_ARTIFACT,
+        runtime_source_map=RUNTIME_SOURCE_MAP,
+        freeze_manifest=FREEZE_MANIFEST,
+    )
 
 
 def test_actual_saved_rows_produce_bounded_result(local_copy: Path, tmp_path: Path) -> None:

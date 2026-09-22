@@ -39,7 +39,7 @@ from credential_wire import response_body
 from o8_admission import authorize_transport
 
 WORKER_ENTRY = "credential_https_worker.py"
-WORKER_SHA256 = "72102049911957c6f376ef552c33d2e47a473b966f62ae3170ed0ead5150d635"
+WORKER_SHA256 = "337bb2a07c3d0d6bbc69a49f5c99faadc7534178b89e1ecf57b24d6614b1f3eb"
 MAX_SECONDS = 12.0
 MAX_ENVELOPE_BYTES = 65536
 MAX_OUTPUT_BYTES = 90000

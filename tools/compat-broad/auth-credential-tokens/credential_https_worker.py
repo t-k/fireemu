@@ -25,6 +25,7 @@ HOSTS = frozenset(
         "securetoken.googleapis.com",
         "iamcredentials.googleapis.com",
         "oauth2.googleapis.com",
+        "cloudresourcemanager.googleapis.com",
     }
 )
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1"})
@@ -57,10 +58,19 @@ def validate_target(url, *, fixture):
         return parsed
     if parsed.scheme != "https" or parsed.hostname not in HOSTS or parsed.port is not None:
         raise ValueError("production host outside the allowlist")
-    if parsed.hostname == "oauth2.googleapis.com":
+    if parsed.hostname == "oauth2.googleapis.com" and parsed.path == "/tokeninfo":
         query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-        if parsed.path != "/tokeninfo" or len(query) != 1 or query[0][0] != "access_token" or not query[0][1]:
+        if len(query) != 1 or query[0][0] != "access_token" or not query[0][1]:
             raise ValueError("token-info route must be exact")
+    elif parsed.hostname == "oauth2.googleapis.com":
+        if parsed.path != "/token" or parsed.query:
+            raise ValueError("OAuth refresh route must be exact")
+    elif parsed.hostname == "cloudresourcemanager.googleapis.com":
+        if parsed.path != "/v1/projects/fireemu-35fe6" or parsed.query:
+            raise ValueError("project route must be exact")
+    elif parsed.hostname == "identitytoolkit.googleapis.com" and parsed.path.startswith("/admin/v2/"):
+        if parsed.path != "/admin/v2/projects/fireemu-35fe6/config" or parsed.query:
+            raise ValueError("Auth config route must be exact")
     return parsed
 
 
@@ -91,8 +101,22 @@ def exchange(value, *, fixture):
     if body is not None and (not isinstance(body, str) or len(body.encode()) > MAX_INPUT_BYTES):
         raise ValueError("bounded body required")
     parsed = validate_target(value["url"], fixture=fixture)
-    if not fixture and parsed.hostname == "oauth2.googleapis.com" and value["body"] is not None:
-        raise ValueError("token-info route must be GET")
+    if not fixture:
+        if parsed.hostname == "oauth2.googleapis.com" and parsed.path == "/tokeninfo":
+            if value["body"] is not None:
+                raise ValueError("token-info route must be GET")
+        elif parsed.hostname == "oauth2.googleapis.com":
+            fields = urllib.parse.parse_qsl(value["body"] or "", keep_blank_values=True)
+            if value["body"] is None or value["headers"].get("Content-Type") != "application/x-www-form-urlencoded":
+                raise ValueError("OAuth refresh form required")
+            if {key for key, _value in fields} != {"grant_type", "client_id", "client_secret", "refresh_token"}:
+                raise ValueError("OAuth refresh fields required")
+            values = dict(fields)
+            if values.get("grant_type") != "refresh_token" or any(not values[key] for key in ("client_id", "client_secret", "refresh_token")):
+                raise ValueError("OAuth refresh fields required")
+        elif parsed.hostname in {"cloudresourcemanager.googleapis.com", "identitytoolkit.googleapis.com"}:
+            if value["body"] is not None or value["headers"].get("x-goog-user-project") != "fireemu-35fe6" or not value["headers"].get("Authorization", "").startswith("Bearer "):
+                raise ValueError("project authority headers required")
     request = urllib.request.Request(
         value["url"],
         data=None if body is None else body.encode("utf-8"),

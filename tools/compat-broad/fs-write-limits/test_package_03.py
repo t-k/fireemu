@@ -525,6 +525,28 @@ def test_the_shadow_index_configuration_is_cross_checked() -> None:
             assert declared["sha256"] != configuration["conformanceIndexesSha256Before"]
 
 
+def test_manifest_recomputes_historical_shadow_difference_after_nx_local() -> None:
+    """A historical profile must not inherit nx-local's cleared difference flag."""
+    import copy
+    import package_03
+
+    previous = load(MANIFEST)
+    shadow = load(SHADOW)
+    shadow["execution"]["ALL"]["execution"]["indexConfiguration"]["profile"] = (
+        "historical"
+    )
+    previous["indexConfiguration"]["shadowDifference"] = False
+    published = package_03.manifest(previous, shadow, package_03.head_commit())
+    assert published["indexConfiguration"]["shadowDifference"] is True
+
+    nx_local = copy.deepcopy(shadow)
+    nx_local["execution"]["ALL"]["execution"]["indexConfiguration"]["profile"] = (
+        "nx-local"
+    )
+    published = package_03.manifest(previous, nx_local, package_03.head_commit())
+    assert published["indexConfiguration"]["shadowDifference"] is False
+
+
 def test_the_declared_data_cost_is_accounted_for_in_the_envelope() -> None:
     """S2: a ceiling that omits a cost the same object declares is not a ceiling."""
     manifest = load(MANIFEST)
@@ -632,12 +654,12 @@ def test_the_o8_section_names_the_descriptor_and_its_bindings() -> None:
         "oauth-tokeninfo",
         "project",
         "database",
-        "index-exemption",
-        "auth",
         "index-lifecycle-before",
         "index-lifecycle-apply",
         "index-lifecycle-poll",
         "index-lifecycle-after",
+        "index-exemption",
+        "auth",
     ]
     assert budgets["managementSlots"]["recovery"] == [
         "project",

@@ -31,8 +31,11 @@ from shared_gate import (
     LIMITS_PREPARATION_TRANSPORT,
     Gate,
     _management_receipt_valid,
+    _auth_creation_ownership,
+    _auth_recovery_operation_valid,
     _save,
     abandoned_cleanup_complete,
+    auth_typed_absence,
     canonical_body_bytes,
     non_creating_dispatches,
     typed_absence,
@@ -1055,6 +1058,306 @@ def _auth_parent_projection(gate, child_claim):
     return projection
 
 
+def _auth_parent_responsibility_projection(gate, child_claim):
+    """Project every Auth parent responsibility onto immutable Gate evidence.
+
+    The recovery child is allowed to settle exactly the one uncertain custom
+    create bound by ``_auth_parent_projection``. Every other planned creating
+    slot must either have a canonical refusal, never have been dispatched, or
+    have an owned account with a complete typed cleanup chain. Counts and
+    caller summaries are deliberately not consulted here.
+    """
+    if not isinstance(gate, dict) or not isinstance(gate.get("plan"), dict):
+        raise ValueError("Auth parent responsibility Gate required")
+    plan = gate["plan"]
+    if plan.get("campaignId") != AUTH_RECOVERY_CAMPAIGN or not isinstance(plan.get("project"), str) or not isinstance(plan.get("nonce"), str) or re.fullmatch(r"[0-9a-f]{32}", plan["nonce"]) is None:
+        raise ValueError("Auth parent responsibility campaign binding differs")
+    plan_jobs = plan.get("jobs")
+    jobs = gate.get("jobs")
+    events = gate.get("events")
+    if not isinstance(plan_jobs, dict) or not isinstance(jobs, dict) or not isinstance(events, list):
+        raise ValueError("Auth parent responsibility journal malformed")
+    if set(plan_jobs) != set(jobs):
+        raise ValueError("Auth parent responsibility jobs differ")
+
+    event_by_slot = {}
+    for event in events:
+        if not isinstance(event, dict):
+            raise ValueError("Auth parent responsibility event malformed")
+        job_name = event.get("job")
+        phase = event.get("phase")
+        index = event.get("index")
+        if (
+            not isinstance(job_name, str)
+            or not isinstance(phase, str)
+            or job_name not in plan_jobs
+            or phase not in {"observation", "recovery"}
+            or type(index) is not int
+            or index < 0
+        ):
+            raise ValueError("Auth parent responsibility event binding differs")
+        plan_job = plan_jobs[job_name]
+        operations = plan_job.get(phase)
+        if not isinstance(operations, list) or index >= len(operations) or not isinstance(operations[index], dict):
+            raise ValueError("Auth parent responsibility event slot differs")
+        key = (job_name, phase, index)
+        if key in event_by_slot:
+            raise ValueError("duplicate Auth parent responsibility event")
+        operation = operations[index]
+        if (
+            event.get("requestDigest") != digest(operation)
+            or event.get("service") != operation.get("service")
+            or event.get("method") != operation.get("method")
+        ):
+            raise ValueError("Auth parent responsibility event request differs")
+        event_by_slot[key] = event
+
+    child_job = plan_jobs.get(child_claim.get("parentGateJob"))
+    child_index = child_claim.get("parentEventIndex")
+    if (
+        not isinstance(child_job, dict)
+        or not isinstance(child_job.get("observation"), list)
+        or type(child_index) is not int
+        or child_index < 0
+        or child_index >= len(child_job["observation"])
+        or not isinstance(child_job["observation"][child_index], dict)
+    ):
+        raise ValueError("Auth parent responsibility child slot differs")
+    child_key = (child_claim["parentGateJob"], "observation", child_index)
+    if child_claim.get("parentRequestDigest") != digest(child_job["observation"][child_index]):
+        raise ValueError("Auth parent responsibility child request differs")
+
+    def _resource(value):
+        return isinstance(value, str) and re.fullmatch(r"projects/[^/]+/auth/accounts/[^/]+", value) is not None
+
+    def _event_index(value, label):
+        if type(value) is not int or isinstance(value, bool) or not 0 <= value < len(events):
+            raise ValueError(f"Auth parent responsibility {label} event differs")
+        return value
+
+    def _typed_cleanup_event(job_name, job, account, operation, position, kind):
+        event = events[_event_index(position, kind)]
+        operation_index = next(
+            (index for index, candidate in enumerate(plan_jobs[job_name].get("recovery", [])) if candidate is operation),
+            None,
+        )
+        if operation_index is None:
+            operation_index = next(
+                (index for index, candidate in enumerate(plan_jobs[job_name].get("recovery", [])) if candidate == operation),
+                None,
+            )
+        if (
+            event.get("job") != job_name
+            or event.get("phase") != "recovery"
+            or event.get("index") != operation_index
+            or event.get("requestDigest") != digest(operation)
+            or event.get("completed") is not True
+            or event.get("failure") is not None
+            or event.get("service") != operation.get("service")
+            or event.get("method") != operation.get("method")
+        ):
+            raise ValueError(f"Auth parent responsibility {kind} event differs")
+        evidence = event.get("authEvidence")
+        body = evidence.get("body") if isinstance(evidence, dict) else None
+        if not isinstance(evidence, dict) or evidence.get("account") != account:
+            raise ValueError(f"Auth parent responsibility {kind} evidence differs")
+        if event.get("responseDigest") != digest(body) or evidence.get("responseDigest") != event.get("responseDigest"):
+            raise ValueError(f"Auth parent responsibility {kind} response differs")
+        if kind == "delete":
+            valid = type(event.get("status")) is int and event["status"] == 200 and body in (
+                {}, {"kind": "identitytoolkit#DeleteAccountResponse"}
+            )
+        else:
+            valid = auth_typed_absence(event.get("status"), body)
+        if not valid:
+            raise ValueError(f"Auth parent responsibility {kind} typed evidence required")
+        return {"event": position, "requestDigest": event["requestDigest"]}
+
+    responsibilities = []
+    for job_name, plan_job in plan_jobs.items():
+        job = jobs[job_name]
+        if not isinstance(job, dict) or job.get("inflight") is True:
+            raise ValueError("Auth parent responsibility job is in flight")
+        resources = plan_job.get("resources")
+        if (
+            not isinstance(resources, list)
+            or any(not isinstance(value, str) for value in resources)
+            or len(resources) != len(set(resources))
+            or any(not _resource(value) for value in resources)
+        ):
+            raise ValueError("Auth parent responsibility resources malformed")
+        if job.get("resources") != resources:
+            raise ValueError("Auth parent responsibility resources differ")
+        observations = plan_job.get("observation")
+        recovery = plan_job.get("recovery")
+        if not isinstance(observations, list) or not all(isinstance(operation, dict) for operation in observations) or not isinstance(recovery, list) or not all(isinstance(operation, dict) for operation in recovery):
+            raise ValueError("Auth parent responsibility plan malformed")
+        account_resources = {}
+        for operation in observations + recovery:
+            account = operation.get("account")
+            if account is None:
+                continue
+            resource = operation.get("resource")
+            if not isinstance(account, str) or not _resource(resource) or resource not in resources:
+                raise ValueError("Auth parent responsibility account binding differs")
+            if account == "custom":
+                identifier = f"custom-{plan['nonce']}"
+            elif account == "acct0":
+                identifier = f"fireemu-cred-{plan['nonce'][:8]}-0"
+            elif account == "acct1":
+                identifier = f"fireemu-cred-{plan['nonce'][:8]}-1"
+            else:
+                raise ValueError("Auth parent responsibility account identity differs")
+            if resource != f"projects/{plan['project']}/auth/accounts/{identifier}":
+                raise ValueError("Auth parent responsibility canonical resource differs")
+            previous = account_resources.setdefault(account, resource)
+            if previous != resource:
+                raise ValueError("Auth parent responsibility account resource differs")
+        if set(account_resources.values()) != set(resources):
+            raise ValueError("Auth parent responsibility resource coverage incomplete")
+        account_bindings = plan_job.get("accountBindings")
+        if account_bindings is not None:
+            if not isinstance(account_bindings, dict) or set(account_bindings) != set(account_resources):
+                raise ValueError("Auth parent responsibility account bindings differ")
+            for account, binding in account_bindings.items():
+                if not isinstance(binding, dict) or binding.get("resource") != account_resources[account]:
+                    raise ValueError("Auth parent responsibility account bindings differ")
+
+        accounts = job.get("authAccounts", {})
+        owned = job.get("owned", [])
+        creation_proofs = job.get("creationProofs", {})
+        absence_proofs = job.get("absenceProofs", {})
+        if (
+            not isinstance(accounts, dict)
+            or not isinstance(owned, list)
+            or not all(isinstance(resource, str) for resource in owned)
+            or not isinstance(creation_proofs, dict)
+            or not isinstance(absence_proofs, dict)
+        ):
+            raise ValueError("Auth parent responsibility ownership evidence malformed")
+        if owned or creation_proofs:
+            raise ValueError("Auth parent responsibility has unsupported creation proof")
+        if len(owned) != len(set(owned)):
+            raise ValueError("Auth parent responsibility ownership duplicated")
+        if any(resource not in resources for resource in absence_proofs):
+            raise ValueError("Auth parent responsibility absence resource differs")
+        if any(account not in account_resources for account in accounts):
+            raise ValueError("Auth parent responsibility account is unplanned")
+        # CredentialGate's closed Auth contract has exactly two account-creating
+        # operation kinds. Its schedule also contains non-creating token and
+        # refresh slots, so the schedule's default ``creates`` value is not an
+        # ownership declaration for this facade.
+        creating = {
+            index for index, operation in enumerate(observations)
+            if operation.get("kind") in {"sign-up", "custom-sign-in"}
+        }
+        created_accounts = set()
+        for index in sorted(creating):
+            operation = observations[index]
+            key = (job_name, "observation", index)
+            event = event_by_slot.get(key)
+            account = operation.get("account")
+            resource = operation.get("resource")
+            if key == child_key:
+                if account != "custom" or resource != child_claim["ownedResources"][0]:
+                    raise ValueError("Auth parent responsibility child exception differs")
+                responsibilities.append({"job": job_name, "phase": "observation", "index": index, "account": account, "resource": resource, "disposition": "child-absence"})
+                continue
+            if event is None:
+                # A missing event is terminal only when the frozen cursor proves
+                # that the slot was never dispatched.
+                schedule = plan_job.get("schedule")
+                consumed = job.get("scheduleDone")
+                if type(consumed) is not int or consumed < 0:
+                    raise ValueError("Auth parent responsibility cursor malformed")
+                if isinstance(schedule, list):
+                    if consumed > len(schedule):
+                        raise ValueError("Auth parent responsibility cursor malformed")
+                    slots = [entry for entry in schedule[:consumed] if isinstance(entry, dict)]
+                    if any(entry.get("phase") == "observation" and entry.get("index") == index for entry in slots):
+                        raise ValueError("Auth parent responsibility creating event missing")
+                elif type(job.get("observation")) is not int or job["observation"] <= index:
+                    responsibilities.append({"job": job_name, "phase": "observation", "index": index, "account": account, "resource": resource, "disposition": "not-dispatched"})
+                    continue
+                else:
+                    raise ValueError("Auth parent responsibility creating event missing")
+                responsibilities.append({"job": job_name, "phase": "observation", "index": index, "account": account, "resource": resource, "disposition": "not-dispatched"})
+                continue
+            if event.get("completed") is not True or event.get("failure") is not None:
+                raise ValueError("Auth parent responsibility creating event unresolved")
+            outcome = event.get("creationOutcome")
+            if outcome == "refused":
+                evidence = event.get("authEvidence")
+                status = event.get("status")
+                if not isinstance(evidence, dict) or evidence.get("account") != account or evidence.get("creationOutcome") != "refused" or not (type(status) is int and 400 <= status < 500):
+                    raise ValueError("Auth parent responsibility typed refusal required")
+                responsibilities.append({"job": job_name, "phase": "observation", "index": index, "account": account, "resource": resource, "disposition": "refused"})
+                continue
+            if outcome != "created":
+                raise ValueError("Auth parent responsibility creating event unresolved")
+            record = accounts.get(account)
+            if not isinstance(record, dict) or record.get("resource") != resource:
+                raise ValueError("Auth parent responsibility account ownership missing")
+            created_accounts.add(account)
+            if record.get("createEvent") != next((position for position, candidate in enumerate(events) if candidate is event), None):
+                raise ValueError("Auth parent responsibility creation event differs")
+            try:
+                owns = _auth_creation_ownership(gate, job, operation)
+            except (KeyError, TypeError, ValueError):
+                owns = False
+            if not owns:
+                raise ValueError("Auth parent responsibility creation proof differs")
+            responsibilities.append({"job": job_name, "phase": "observation", "index": index, "account": account, "resource": resource, "disposition": "owned"})
+
+        if set(accounts) != created_accounts:
+            raise ValueError("Auth parent responsibility account coverage differs")
+        for account, record in accounts.items():
+            uid = record.get("uid")
+            if not isinstance(uid, str) or not uid or sum(other.get("uid") == uid for other in accounts.values() if isinstance(other, dict)) != 1:
+                raise ValueError("Auth parent responsibility account identity differs")
+            cleanup_operations = [operation for operation in recovery if operation.get("account") == account]
+            cleanup = {operation.get("kind"): operation for operation in cleanup_operations}
+            if len(cleanup) != len(cleanup_operations):
+                raise ValueError("Auth parent responsibility cleanup plan duplicated")
+            if set(cleanup) != {"delete", "uid-absence"} and set(cleanup) != {"delete", "uid-absence", "address-absence"}:
+                raise ValueError("Auth parent responsibility cleanup plan differs")
+            for kind, operation in cleanup.items():
+                if (
+                    operation.get("resource") != record.get("resource")
+                    or operation.get("service") != "auth"
+                    or operation.get("method") != "POST"
+                    or operation.get("kind") != kind
+                    or not _auth_recovery_operation_valid(operation, plan.get("project"), account_bindings)
+                ):
+                    raise ValueError("Auth parent responsibility cleanup operation differs")
+            order = [record.get("createEvent"), record.get("deleteEvent"), record.get("absenceEvent")]
+            if "address-absence" in cleanup:
+                order.append(record.get("addressAbsenceEvent"))
+            positions = [_event_index(value, "cleanup") for value in order]
+            if positions != sorted(positions) or len(set(positions)) != len(positions):
+                raise ValueError("Auth parent responsibility cleanup order differs")
+            for kind, position in zip(("create", "delete", "uid-absence", "address-absence"), positions, strict=True):
+                if kind == "create":
+                    continue
+                _typed_cleanup_event(job_name, job, account, cleanup[kind], position, kind)
+            proof = absence_proofs.get(record.get("resource"))
+            if not isinstance(proof, dict) or proof.get("eventIndex") != record.get("absenceEvent") or proof.get("body") != events[record["absenceEvent"]].get("authEvidence", {}).get("body"):
+                raise ValueError("Auth parent responsibility typed absence proof differs")
+
+        if set(absence_proofs) != {record.get("resource") for record in accounts.values()}:
+            raise ValueError("Auth parent responsibility absence coverage differs")
+
+    projection = {
+        "kind": "auth-parent-responsibility-close-v1",
+        "parentPlanDigest": digest(plan),
+        "parentGateDigest": digest(gate),
+        "childClaimDigest": digest(child_claim),
+        "responsibilities": sorted(responsibilities, key=lambda value: (value["job"], value["phase"], value["index"])),
+    }
+    projection["projectionDigest"] = digest(projection)
+    return projection
+
+
 def _auth_absence_proof(value, resource, operation):
     if not isinstance(value, dict) or set(value) != {
         "kind", "resource", "status", "bodyShape", "bodyDigest", "responseDigest",
@@ -1491,6 +1794,7 @@ class Ledger:
                     "aborted-no-data",
                     "closed-after-escalation",
                     "closed-after-abandon",
+                    "closed-after-auth-recovery-child",
                 }
             ]
             if any(
@@ -1783,8 +2087,15 @@ class Ledger:
             if child is None or child_ticket.get("parentReservation") != parent_ticket.get("reservation"):
                 raise ValueError("Auth recovery child is not nested under parent")
             if parent["state"] == "closed-after-auth-recovery-child":
-                if parent.get("authRecoveryCloseReceiptDigest") != receipt_digest or parent.get("authRecoveryCloseChildTicketDigest") != digest(child_ticket):
+                if (
+                    parent.get("authRecoveryCloseReceiptDigest") != receipt_digest
+                    or parent.get("authRecoveryCloseChildTicketDigest") != digest(child_ticket)
+                ):
                     raise ValueError("different Auth recovery close")
+                try:
+                    _hash(parent.get("authRecoveryCloseResponsibilitiesDigest"))
+                except ValueError:
+                    raise ValueError("different Auth recovery close") from None
                 return copy.deepcopy(parent_ticket)
             if parent["state"] != "held" or child.get("state") != "settled" or child.get("receiptDigest") != receipt_digest:
                 raise ValueError("settled absent Auth child and held parent required")
@@ -1809,6 +2120,7 @@ class Ledger:
         evidence = _auth_parent_projection(parent_gate, child_claim)
         if evidence["evidenceDigest"] != child_claim["parentEvidenceDigest"] or evidence["gateDigest"] != child_claim["parentGateDigest"]:
             raise ValueError("Auth parent evidence changed during close")
+        close_projection = _auth_parent_responsibility_projection(parent_gate, child_claim)
         for pid in [parent_gate.get("coordinatorPid")] + [job.get("pid") for job in parent_gate.get("jobs", {}).values()]:
             if pid is None:
                 continue
@@ -1834,6 +2146,7 @@ class Ledger:
                     parent.get("authRecoveryCloseReceiptDigest") != receipt_digest
                     or parent.get("authRecoveryCloseChildTicketDigest") != digest(child_ticket)
                     or parent.get("authRecoveryCloseChildClaimDigest") != close_snapshot["childClaimDigest"]
+                    or parent.get("authRecoveryCloseResponsibilitiesDigest") != close_projection["projectionDigest"]
                     or parent.get("finalGateDigest") != close_snapshot["childFinalGateDigest"]
                 ):
                     if close_snapshot["parentState"] == "held":
@@ -1859,6 +2172,7 @@ class Ledger:
             parent["authRecoveryCloseReceiptDigest"] = receipt_digest
             parent["authRecoveryCloseChildTicketDigest"] = digest(child_ticket)
             parent["authRecoveryCloseChildClaimDigest"] = child["claimDigest"]
+            parent["authRecoveryCloseResponsibilitiesDigest"] = close_projection["projectionDigest"]
             parent["finalGateDigest"] = final_gate_digest
             self._save(state)
             return copy.deepcopy(parent_ticket)

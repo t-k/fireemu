@@ -736,6 +736,24 @@ def _auth_child_gate(path, child_plan, resource, *, body=None, status=200):
         _save(path, state)
 
 
+def _auth_recovery_fixture_with_unplanned_account(tmp_path):
+    fixture = _auth_recovery_fixture(tmp_path)
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
+    parent_path = Path(parent["ledgerPath"]).parent / "auth-parent-gate"
+    parent_gate = Gate(parent_path, "auth-credential").snapshot()
+    parent_gate["jobs"]["auth-credential"]["authAccounts"] = {
+        "acct0": {
+            "uid": "unexpected-uid",
+            "resource": "projects/demo/auth/accounts/unexpected-uid",
+        }
+    }
+    _save(parent_path, parent_gate)
+    updated_evidence = reservations._auth_parent_projection(parent_gate, child)
+    child["parentGateDigest"] = updated_evidence["gateDigest"]
+    child["parentEvidenceDigest"] = updated_evidence["evidenceDigest"]
+    return ledger, parent, child, envelope, child_plan, bindings, updated_evidence, resource, child_path
+
+
 def test_auth_recovery_child_is_durable_lookup_only_and_closes_parent_on_typed_absence(tmp_path):
     ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = _auth_recovery_fixture(tmp_path)
     child_ticket = ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
@@ -752,8 +770,58 @@ def test_auth_recovery_child_is_durable_lookup_only_and_closes_parent_on_typed_a
     assert ledger.close_after_auth_recovery_child(parent, child_ticket,
         receipt_digest=digest(proof), now=1000) == parent
     assert ledger.snapshot()["reservations"][parent["reservation"]]["state"] == "closed-after-auth-recovery-child"
+    assert len(ledger.snapshot()["reservations"][parent["reservation"]]["authRecoveryCloseResponsibilitiesDigest"]) == 64
     assert ledger.close_after_auth_recovery_child(parent, child_ticket,
         receipt_digest=digest(proof), now=1000) == parent
+
+
+def test_valid_auth_recovery_close_releases_parent_lock_for_new_reservation(tmp_path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = _auth_recovery_fixture(tmp_path)
+    child_ticket = ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
+        source_binding=bindings["source"], transport_binding=bindings["transport"],
+        o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
+    _auth_child_gate(child_path, child_plan, resource)
+    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+    proof = {"kind": "auth-uid-absence-proof-v1", "resource": resource, "status": 200,
+        "bodyShape": body, "bodyDigest": digest(body), "responseDigest": digest(body), "eventIndex": 0,
+        "requestDigest": digest(child_plan["jobs"]["auth-recovery"]["recovery"][0])}
+    ledger.settle_auth_recovery_child(child_ticket, absence_proof=proof,
+        receipt_digest=digest(proof), now=1000)
+    ledger.close_after_auth_recovery_child(parent, child_ticket,
+        receipt_digest=digest(proof), now=1000)
+
+    fresh_plan = copy.deepcopy(ledger.snapshot()["reservations"][parent["reservation"]]["claim"])
+    fresh_gate_plan = copy.deepcopy(json.loads((Path(parent["ledgerPath"]) / ".." / "auth-parent-gate" / "state.json").read_text())["plan"])
+    fresh_gate_plan["nonce"] = "c" * 32
+    fresh_claim = copy.deepcopy(fresh_plan)
+    fresh_claim["gatePath"] = str((tmp_path / "fresh-auth-parent-gate").resolve())
+    fresh_claim["manifestDigest"] = digest(fresh_gate_plan)
+    fresh_claim["gatePlanDigest"] = digest(fresh_gate_plan)
+    fresh_claim["nonceDigest"] = digest(fresh_gate_plan["nonce"])
+    fresh_envelope = copy.deepcopy(envelope)
+    fresh_envelope["permissionDigest"] = "2" * 64
+    fresh_envelope["scopes"] = fresh_claim["locks"]
+    fresh_envelope["limits"] = copy.deepcopy(fresh_claim["budget"])
+    assert ledger.reserve(fresh_envelope, fresh_claim, fresh_gate_plan, now=1000)
+
+
+def test_auth_recovery_close_refuses_unplanned_parent_account_without_mutating_ledger(tmp_path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = _auth_recovery_fixture_with_unplanned_account(tmp_path)
+    child_ticket = ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
+        source_binding=bindings["source"], transport_binding=bindings["transport"],
+        o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
+    _auth_child_gate(child_path, child_plan, resource)
+    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+    proof = {"kind": "auth-uid-absence-proof-v1", "resource": resource, "status": 200,
+        "bodyShape": body, "bodyDigest": digest(body), "responseDigest": digest(body), "eventIndex": 0,
+        "requestDigest": digest(child_plan["jobs"]["auth-recovery"]["recovery"][0])}
+    ledger.settle_auth_recovery_child(child_ticket, absence_proof=proof,
+        receipt_digest=digest(proof), now=1000)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="Auth parent responsibility"):
+        ledger.close_after_auth_recovery_child(parent, child_ticket,
+            receipt_digest=digest(proof), now=1000)
+    assert ledger.snapshot() == before
 
 
 def _settled_auth_recovery(tmp_path):

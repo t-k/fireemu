@@ -874,6 +874,15 @@ def recover_setup_failure(
         cleanup["outstandingAccounts"] = sorted(
             set(cleanup.get("outstandingAccounts", [])) | unsafe_accounts
         )
+        attempted = set(context.attempted)
+        attempted_unsafe = {
+            ref
+            for ref in unsafe_accounts
+            if ref in attempted or "account/" + ref in attempted
+        }
+        cleanup["unrecoveredAttempted"] = sorted(
+            set(cleanup.get("unrecoveredAttempted", [])) | attempted_unsafe
+        )
         cleanup["cleanupComplete"] = False
     if proof_failures:
         cleanup["proofFailures"] = dict(sorted(proof_failures.items()))

@@ -392,7 +392,7 @@ def test_recovery_keeps_confirmed_documents_when_one_identity_proof_fails(monkey
         "account-bad": {"phase": "acknowledged"},
     }
     gate = Namespace(snapshot=lambda: {"coordinatorInflight": False})
-    context = Namespace(attempted=[])
+    context = Namespace(attempted=["account-bad"])
     proof = Namespace(
         uid="uid-good",
         provider="password",
@@ -443,4 +443,5 @@ def test_recovery_keeps_confirmed_documents_when_one_identity_proof_fails(monkey
     ]
     assert result["cleanupComplete"] is False
     assert result["held"] == ["account-bad"]
+    assert result["unrecoveredAttempted"] == ["account-bad"]
     assert result["proofFailures"] == {"account-bad": "ValueError"}

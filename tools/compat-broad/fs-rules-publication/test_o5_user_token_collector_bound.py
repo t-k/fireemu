@@ -474,6 +474,7 @@ def test_management_cursor_keeps_gate_skips_separate_from_receipts() -> None:
     assert cursor == {
         "used": ["observation:setup/one", "recovery:cleanup/document/x/read"],
         "skipped": ["recovery:cleanup/document/x/delete"],
+        "ordered": [],
     }
 
 

@@ -248,10 +248,44 @@ _RELEASE_RESOURCE = re.compile(r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]
 class RulesManagementReceipt(dict):
     """Typed Gate receipt carrying transport facts outside the REST body."""
 
-    def __init__(self, value: Mapping[str, Any], *, endpoint: str | None = None, wire_sequence: int | None = None):
+    def __init__(self, value: Mapping[str, Any], *, endpoint: str | None = None, wire_sequence: int | None = None, response_body: Mapping[str, Any] | None = None):
         super().__init__(value)
         self.endpoint = endpoint
         self.wire_sequence = wire_sequence
+        self.response_body = dict(response_body) if isinstance(response_body, Mapping) else None
+
+
+def _rules_management_proof(
+    slot: str, operation: Mapping[str, Any], body: Mapping[str, Any], status: int
+) -> dict[str, Any]:
+    """Build the sanitized Gate proof; REST response data never crosses it."""
+    action = operation.get("action")
+    subject_name = operation.get("rulesetName") or body.get("name")
+    effect: dict[str, Any] | None = None
+    if status == 404:
+        effect = {
+            "subject": str(subject_name or "ruleset/unknown"),
+            "proof": {"kind": "absence", "resource": str(subject_name or "ruleset/unknown")},
+        }
+    elif action == "get" and isinstance(body.get("source"), dict):
+        files = body["source"].get("files", [])
+        content = files[0].get("content") if files and isinstance(files[0], dict) else None
+        effect = {
+            "subject": "release/baseline" if slot == "baseline-ruleset-get" else str(subject_name),
+            "proof": {"kind": "ruleset", "name": body.get("name"), "sourceDigest": digest(content)},
+        }
+    elif action == "create":
+        effect = {
+            "subject": str(body.get("name")),
+            "proof": {"kind": "ruleset", "name": body.get("name"), "sourceDigest": operation.get("sourceDigest")},
+        }
+    elif action in {"release-get", "release-patch", "release-get-executable"}:
+        effect = {
+            "subject": "release/baseline" if slot.startswith("baseline-") else "release/cloud.firestore",
+            "proof": {"kind": "release", "name": body.get("name") or operation.get("releaseName"), "rulesetName": body.get("rulesetName")},
+        }
+    effects = [effect] if effect is not None and all(effect["proof"].get(key) is not None for key in ("kind",)) else []
+    return {"kind": "rules-management-proof-v1", "responseDigest": digest(body), "effects": effects}
 
 
 class RulesManagementError(ValueError):
@@ -284,13 +318,23 @@ def _management_cursor(gate) -> dict[str, list[str]]:
         skipped_ids.append(identity)
     if len(used_ids) != len(used):
         raise ValueError("typed management receipt identity required")
-    return {"used": used_ids, "skipped": skipped_ids}
+    declared = [
+        f"{phase}:{entry['id']}"
+        for phase in ("observation", "recovery")
+        for entry in snapshot.get("plan", {}).get("management", {}).get(phase, [])
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+    ]
+    consumed = set(used_ids) | set(skipped_ids)
+    ordered = [identity for identity in declared if identity in consumed]
+    return {"used": used_ids, "skipped": skipped_ids, "ordered": ordered}
 
 
 def _phase_cursor(cursor: Mapping[str, list[str]], phase: str) -> list[str]:
-    """Select a phase's consumed identities in compiler order."""
+    """Select a phase's consumed identities; Gate supplies compiler order."""
     prefix = phase + ":"
-    return [identity for identity in cursor["used"] + cursor["skipped"] if identity.startswith(prefix)]
+    ordered = cursor.get("ordered")
+    identities = ordered if isinstance(ordered, list) else cursor["used"] + cursor["skipped"]
+    return [identity for identity in identities if identity.startswith(prefix)]
 
 
 class RulesManagementSession:
@@ -444,7 +488,10 @@ class RulesManagementSession:
                 "operationDigest": digest(operation),
             },
         )
+        raw_response_body: dict[str, Any] | None = None
+
         def send(deadline: float) -> dict[str, Any]:
+            nonlocal raw_response_body
             if self.ledger is not None:
                 self.ledger.validate(self.ticket, duration=8)
             request = {
@@ -486,19 +533,28 @@ class RulesManagementSession:
             credential_failure = _scan_management_receipt(raw)
             if credential_failure is not None:
                 raise RulesManagementError(credential_failure)
-            if {"status", "complete", "workerReaped", "bodyKind", "body"} <= set(raw):
+            if isinstance(raw, RulesManagementReceipt) and raw.response_body is not None:
+                raw_response_body = dict(raw.response_body)
                 return raw
             status = raw.get("status")
             if not isinstance(status, int):
                 raise ValueError("typed Rules HTTP status required")
             body = raw.get("body")
-            return {
+            if not isinstance(body, dict):
+                raise ValueError("Rules management JSON body required")
+            raw_response_body = dict(body)
+            proof = _rules_management_proof(slot, operation, body, status)
+            return RulesManagementReceipt(
+                {
                 "status": status,
                 "complete": raw.get("complete") is not False,
                 "workerReaped": raw.get("workerReaped", True) is True,
                 "bodyKind": "json",
-                "body": body,
-            }
+                    "body": proof,
+                },
+                endpoint=endpoint,
+                wire_sequence=wire_sequence,
+            )
 
         receipt = self.gate.management_dispatch(phase, slot, send)
         if phase == "observation" and receipt.get("complete") is False:
@@ -508,7 +564,13 @@ class RulesManagementSession:
         status = receipt.get("status")
         if not isinstance(status, int) or not (200 <= status < 300 or status in allow_status):
             raise ValueError("Rules management HTTP failure")
-        body = receipt.get("body")
+        persisted_proof = receipt.get("body")
+        if isinstance(persisted_proof, dict) and persisted_proof.get("kind") == "rules-management-proof-v1":
+            if raw_response_body is None or persisted_proof.get("responseDigest") != digest(raw_response_body):
+                raise ValueError("Rules management proof digest mismatch")
+        body = raw_response_body
+        if body is None and isinstance(receipt, RulesManagementReceipt):
+            body = receipt.response_body
         if not isinstance(body, dict):
             raise ValueError("Rules management JSON body required")
         if status in allow_status:
@@ -1381,12 +1443,18 @@ def collect(
             if worker_state["unreaped"]:
                 cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
             else:
-                cleanup = recover_owned(
-                    plan, execute, budget, wire, attempted, journal,
-                    ownership=ownership,
-                    recovery_dispatch=recovery_dispatch,
-                    worker_state=worker_state,
-                )
+                if ownership is None and (bindings is None or role != ROLE_PRODUCTION):
+                    cleanup = _recover(
+                        plan, execute, budget, wire, attempted, journal,
+                        worker_state=worker_state,
+                    )
+                else:
+                    cleanup = recover_owned(
+                        plan, execute, budget, wire, attempted, journal,
+                        ownership=ownership,
+                        recovery_dispatch=recovery_dispatch,
+                        worker_state=worker_state,
+                    )
                 if worker_state["unreaped"]:
                     cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
             if management_session is not None and not management_session.recovery_allowed:
@@ -1823,6 +1891,21 @@ def recover_owned(
     or absence receipt.  ``recovery_dispatch`` is an orchestrator-owned
     adapter for the same bounded Gate session, not a second cleanup pass.
     """
+    if ownership is None:
+        subjects = list(plan["ownedResources"]) + [entry["ref"] for entry in plan["ownedAccounts"]]
+        return {
+            "documentSteps": [],
+            "accountSteps": [],
+            "outstandingResources": list(plan["ownedResources"]),
+            "outstandingAccounts": [entry["ref"] for entry in plan["ownedAccounts"]],
+            "unrecoveredAttempted": [subject for subject in attempted if subject in subjects],
+            "recovered": [],
+            "held": sorted(subjects),
+            "unconfirmed": [],
+            "notAttempted": [],
+            "cleanupComplete": False,
+            "blockedReason": "ownership-proof-required",
+        }
     dispatch = recovery_dispatch or execute
     selected_plan = plan
     held: list[str] = []

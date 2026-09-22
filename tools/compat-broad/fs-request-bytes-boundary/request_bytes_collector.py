@@ -21,7 +21,9 @@ from request_bytes_compiler import (
     compact_utf8,
     logical_fields_digest,
     validate_request_bytes_plan,
+    validate_request_bytes_sentinel_plan,
 )
+from request_bytes_remote_transport import MAX_SENTINEL_REQUEST_BYTES
 
 MAX_ROW_BYTES = 131_072
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -151,6 +153,42 @@ def typed_over_refusal(receipt: Any) -> bool:
         and type(error.get("code")) is int
         and error.get("code") == receipt["status"]
         and error.get("status") == "INVALID_ARGUMENT"
+    )
+
+
+_FIRESTORE_ERROR_STATUSES = frozenset(
+    {
+        "CANCELLED",
+        "UNKNOWN",
+        "INVALID_ARGUMENT",
+        "DEADLINE_EXCEEDED",
+        "NOT_FOUND",
+        "ALREADY_EXISTS",
+        "PERMISSION_DENIED",
+        "RESOURCE_EXHAUSTED",
+        "FAILED_PRECONDITION",
+        "ABORTED",
+        "OUT_OF_RANGE",
+        "UNAUTHENTICATED",
+        "INTERNAL",
+        "UNAVAILABLE",
+        "DATA_LOSS",
+    }
+)
+
+
+def typed_firestore_refusal(receipt: Any) -> bool:
+    """Recognize a complete, status-bound Firestore API error envelope."""
+    body = receipt.get("body") if isinstance(receipt, dict) else None
+    error = body.get("error") if isinstance(body, dict) else None
+    return (
+        complete(receipt)
+        and 400 <= receipt["status"] < 600
+        and isinstance(error, dict)
+        and type(error.get("code")) is int
+        and error["code"] == receipt["status"]
+        and isinstance(error.get("status"), str)
+        and error["status"] in _FIRESTORE_ERROR_STATUSES
     )
 
 
@@ -318,6 +356,9 @@ def readback_matches(
 
 def validate_schedule(plan: dict[str, Any]) -> None:
     """Reject flat-array dispatch and require the compiler's exact schedule."""
+    if plan.get("caseMode") == "single-exploratory-sentinel":
+        validate_request_bytes_sentinel_plan(plan)
+        return
     validate_request_bytes_plan(plan)
     expected = [
         item
@@ -506,6 +547,53 @@ def _validated_response(receipt):
     return receipt
 
 
+def sentinel_response_capture(
+    receipt: dict[str, Any],
+    operation: dict[str, Any],
+    row: dict[str, Any],
+    classification: str,
+) -> dict[str, Any]:
+    """Retain bounded response metadata while the complete bytes live in a sidecar."""
+    raw_encoded = receipt.get("rawBodyBase64")
+    raw = None
+    if isinstance(raw_encoded, str):
+        try:
+            raw = base64.b64decode(raw_encoded, validate=True)
+        except (ValueError, base64.binascii.Error):
+            raw = None
+    headers = receipt.get("headers")
+    content_type = (
+        headers.get("content-type", "")[:128]
+        if isinstance(headers, dict) and isinstance(headers.get("content-type"), str)
+        else ""
+    )
+    body = receipt.get("body")
+    error = body.get("error") if isinstance(body, dict) else None
+    typed_error = None
+    if isinstance(error, dict) and type(error.get("code")) is int and isinstance(
+        error.get("status"), str
+    ):
+        typed_error = {
+            "code": error["code"],
+            "status": error["status"],
+            **refusal_message_fields(error.get("message"), row.get("responseBodyFile")),
+        }
+    request_body = compact_utf8(operation["body"])
+    return {
+        "classification": classification,
+        "complete": complete(receipt),
+        "failure": receipt.get("failure"),
+        "httpStatus": receipt.get("status"),
+        "contentType": content_type,
+        "responseBytes": len(raw) if raw is not None else None,
+        "responseSha256": hashlib.sha256(raw).hexdigest() if raw is not None else None,
+        "responseBodyFile": row.get("responseBodyFile"),
+        "typedError": typed_error,
+        "requestBytes": len(request_body),
+        "requestSha256": hashlib.sha256(request_body).hexdigest(),
+    }
+
+
 def collect_local(
     plan: dict[str, Any],
     execute: Callable[..., dict[str, Any]],
@@ -545,7 +633,12 @@ def collect_local(
         journal_sidecars: list[dict[str, Any]] = []
         for probe in plan["probes"]:
             body = compact_utf8(probe["body"])
-            if len(body) != probe["bodyBytes"] or len(body) > MAX_RESPONSE_BYTES * 8:
+            body_cap = (
+                MAX_SENTINEL_REQUEST_BYTES
+                if plan.get("caseMode") == "single-exploratory-sentinel"
+                else MAX_RESPONSE_BYTES * 8
+            )
+            if len(body) != probe["bodyBytes"] or len(body) > body_cap:
                 # The request bodies are intentionally retained outside bounded rows.
                 raise ValueError("unexpected compiled Commit body")
             _publish(
@@ -581,6 +674,9 @@ def collect_local(
         commit_refused: set[str] = set()
         over_refusal_observation: dict[str, Any] | None = None
         untyped_over_refusal: dict[str, Any] | None = None
+        sentinel_response: dict[str, Any] | None = None
+        sentinel_outcome = "sentinel-inconclusive"
+        is_sentinel = plan.get("caseMode") == "single-exploratory-sentinel"
         abandoned_observation: set[str] = set()
         stopped = False
         observation_stopped = False
@@ -743,8 +839,30 @@ def collect_local(
                     found = commit_versions(receipt, probe_resources)
                     if found is not None:
                         versions[probe] = dict(zip(probe_resources, found))
-                        if probe == "over":
+                        if is_sentinel:
+                            sentinel_outcome = "sentinel-accepted"
+                            sentinel_response = sentinel_response_capture(
+                                receipt, operation, row, "sentinel-accepted"
+                            )
+                        elif probe == "over":
                             failures.append("over:unexpected-success")
+                    elif is_sentinel and typed_firestore_refusal(receipt):
+                        commit_refused.add(probe)
+                        sentinel_outcome = "sentinel-typed-refusal"
+                        sentinel_response = sentinel_response_capture(
+                            receipt, operation, row, "sentinel-typed-refusal"
+                        )
+                    elif is_sentinel:
+                        refusal = untyped_refusal_observation(receipt)
+                        classification = (
+                            "sentinel-untyped-refusal"
+                            if refusal is not None
+                            else "sentinel-inconclusive"
+                        )
+                        sentinel_response = sentinel_response_capture(
+                            receipt, operation, row, classification
+                        )
+                        failures.append(f"{probe}:commit-proof-missing")
                     elif probe == "over" and typed_over_refusal(receipt):
                         commit_refused.add(probe)
                         body = receipt["body"]
@@ -777,7 +895,7 @@ def collect_local(
                     expected_digest = plan["documents"][resource]["fieldsSha256"]
                     matched = (
                         typed_not_found(receipt)
-                        if probe == "over" and probe not in versions
+                        if (is_sentinel or probe == "over") and probe not in versions
                         else readback_matches(
                             receipt,
                             resource,
@@ -868,6 +986,8 @@ def collect_local(
         absence = all_resources == set().union(*absence_proofs.values())
         if "over:unexpected-success" in failures:
             semantic_outcome = "unexpected-over-success"
+        elif is_sentinel:
+            semantic_outcome = sentinel_outcome
         elif over_refusal_observation is not None:
             semantic_outcome = "typed-over-refusal"
         else:
@@ -925,6 +1045,8 @@ def collect_local(
             # Deliberately a separate key. It is never a typed refusal and must
             # not be readable as one by anything consuming `overRefusal`.
             result["untypedOverRefusal"] = untyped_over_refusal
+        if sentinel_response is not None:
+            result["sentinelResponse"] = sentinel_response
         _guard_publishable(result)
         _publish(output_fd, "result.json", result)
         return result

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import sys
+import base64
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -23,6 +26,7 @@ from request_bytes_campaign import (
     compile_request_bytes_sentinel_campaign,
     validate_request_bytes_sentinel_campaign,
 )
+from request_bytes_collector import collect_local, validate_schedule
 
 NONCE = "a" * 32
 
@@ -128,3 +132,145 @@ def test_sentinel_campaign_validator_rejects_outcome_and_budget_drift() -> None:
     campaign["budget"]["maxDeletes"] = 19
     with pytest.raises(ValueError, match="budget"):
         validate_request_bytes_sentinel_campaign(campaign)
+
+
+def _run_sentinel_collector(tmp_path: Path, outcome: str) -> dict:
+    plan = compile_request_bytes_sentinel_plan("demo", "(default)", NONCE)
+    fields = {
+        write["update"]["name"]: write["update"]["fields"]
+        for write in plan["probes"][0]["body"]["writes"]
+    }
+    live: dict[str, str] = {}
+    version = "2026-09-23T01:02:03Z"
+    dispatched = []
+
+    def receipt(status: int, body: object, *, content_type: str = "application/json"):
+        raw = (
+            body.encode("utf-8")
+            if isinstance(body, str)
+            else json.dumps(body, separators=(",", ":")).encode()
+        )
+        return {
+            "complete": True,
+            "failure": None,
+            "status": status,
+            "headers": {"content-type": content_type},
+            "body": body if isinstance(body, str) else body,
+            "rawBodyBase64": base64.b64encode(raw).decode("ascii"),
+            "rawBodyBytes": len(raw),
+            "rawBodySha256": hashlib.sha256(raw).hexdigest(),
+            "bodyBytes": len(raw),
+        }
+
+    def absent():
+        return receipt(404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+
+    def execute(operation: dict) -> dict:
+        dispatched.append(operation)
+        kind, resource = operation["kind"], operation.get("resource")
+        if kind == "conditional-create-commit":
+            resources = plan["probes"][0]["resources"]
+            if outcome == "accepted":
+                live.update({name: version for name in resources})
+                return receipt(
+                    200,
+                    {
+                        "writeResults": [
+                            {"name": name, "updateTime": version} for name in resources
+                        ]
+                    },
+                )
+            if outcome == "typed-refused":
+                return receipt(
+                    429,
+                    {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED"}},
+                )
+            if outcome == "untyped-refused":
+                return receipt(413, "<html>proxy response</html>", content_type="text/html")
+            return {
+                "complete": False,
+                "failure": "response-timeout",
+                "status": None,
+            }
+        if kind == "cleanup-version-bound-delete":
+            assert resource in live
+            assert operation["path"].endswith("currentDocument.updateTime=2026-09-23T01%3A02%3A03Z")
+            del live[resource]
+            return receipt(200, {})
+        if resource in live:
+            return receipt(
+                200,
+                {
+                    "name": resource,
+                    "fields": fields[resource],
+                    "updateTime": live[resource],
+                },
+            )
+        return absent()
+
+    result = collect_local(plan, execute, tmp_path / outcome)
+    result["testDispatched"] = dispatched
+    return result
+
+
+def test_sentinel_collector_acceptance_is_complete_and_cleans_all_owned_documents(
+    tmp_path: Path,
+) -> None:
+    plan = compile_request_bytes_sentinel_plan("demo", "(default)", NONCE)
+    validate_schedule(plan)
+
+    result = _run_sentinel_collector(tmp_path, "accepted")
+
+    assert result["completed"] is True
+    assert result["resourceAbsence"] is True
+    assert result["requestCount"] == 101
+    assert result["semanticOutcome"] == "sentinel-accepted"
+    assert len([op for op in result["testDispatched"] if op["method"] == "DELETE"]) == 20
+    assert result["sentinelResponse"]["httpStatus"] == 200
+    assert result["sentinelResponse"]["requestBytes"] == RAW_16MIB_OVER_BYTES
+
+
+def test_sentinel_collector_typed_refusal_is_outcome_neutral_and_proves_absence(
+    tmp_path: Path,
+) -> None:
+    result = _run_sentinel_collector(tmp_path, "typed-refused")
+
+    assert result["completed"] is True
+    assert result["resourceAbsence"] is True
+    assert result["semanticOutcome"] == "sentinel-typed-refusal"
+    assert {
+        key: result["sentinelResponse"]["typedError"][key]
+        for key in ("code", "status")
+    } == {"code": 429, "status": "RESOURCE_EXHAUSTED"}
+    assert not any(op["method"] == "DELETE" for op in result["testDispatched"])
+
+
+def test_sentinel_collector_records_an_intermediary_response_without_calling_it_firestore(
+    tmp_path: Path,
+) -> None:
+    result = _run_sentinel_collector(tmp_path, "untyped-refused")
+
+    assert result["completed"] is False
+    assert result["resourceAbsence"] is True
+    assert result["semanticOutcome"] == "sentinel-inconclusive"
+    capture = result["sentinelResponse"]
+    assert capture["classification"] == "sentinel-untyped-refusal"
+    assert capture["httpStatus"] == 413
+    assert capture["contentType"] == "text/html"
+    assert capture["responseBytes"] == len(b"<html>proxy response</html>")
+    assert capture["responseSha256"] == hashlib.sha256(
+        b"<html>proxy response</html>"
+    ).hexdigest()
+    assert capture["typedError"] is None
+    assert capture["requestBytes"] == RAW_16MIB_OVER_BYTES
+    assert not any(op["method"] == "DELETE" for op in result["testDispatched"])
+
+
+def test_sentinel_collector_incomplete_commit_is_inconclusive_and_cannot_delete(
+    tmp_path: Path,
+) -> None:
+    result = _run_sentinel_collector(tmp_path, "incomplete")
+
+    assert result["completed"] is False
+    assert result["semanticOutcome"] == "sentinel-inconclusive"
+    assert not any(op["method"] == "DELETE" for op in result["testDispatched"])

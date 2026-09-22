@@ -36,6 +36,7 @@ from credential_collector import (
     check_deadline,
     claim_set,
     claim_shape,
+    custom_signin_response_uid,
     enter_recovery,
     mark_deleted,
     new_budget,
@@ -259,6 +260,31 @@ def _rest(budget: dict[str, Any], seconds: float) -> None:
 
 def _sleep_to_next_second(budget: dict[str, Any]) -> None:
     _rest(budget, 1.05 - (time.time() % 1))
+
+
+def _track_custom_signin(
+    tracker: dict[str, Any],
+    intent: str,
+    status: int,
+    body: dict[str, Any],
+    *,
+    project: str,
+    requested_uid: str,
+) -> str:
+    """Track the admitted response, deriving identity from its ID-token subject."""
+    if status != 200:
+        raise ShadowError(f"custom-token sign-in failed: {error_code(body)}")
+    uid = custom_signin_response_uid(
+        status, body, project=project, requested_uid=requested_uid
+    )
+    if uid is None:
+        raise ShadowError("custom sign-in creation status unconfirmed")
+    if body["isNewUser"] is False:
+        responsibility.resolve(tracker, intent, uid, created=False)
+        raise ShadowError("custom sign-in reused an account not owned by this run")
+    track_account(tracker, uid, None)
+    responsibility.resolve(tracker, intent, uid, created=True)
+    return uid
 
 
 def run_cases(
@@ -559,18 +585,14 @@ def run_cases(
         f"/accounts:signInWithCustomToken?key={key}",
         {"token": custom, "returnSecureToken": True},
     )
-    if status != 200:
-        raise ShadowError(f"custom-token sign-in failed: {error_code(body)}")
-    # Signing in may REUSE an existing account. That ACK grants no deletion
-    # ownership, and must not progress to later developer-claim mutations.
-    if ("error" in body or body.get("localId") != custom_uid
-            or type(body.get("isNewUser")) is not bool):
-        raise ShadowError("custom sign-in creation status unconfirmed")
-    if body["isNewUser"] is False:
-        responsibility.resolve(tracker, intent, custom_uid, created=False)
-        raise ShadowError("custom sign-in reused an account not owned by this run")
-    track_account(tracker, custom_uid, None)
-    responsibility.resolve(tracker, intent, custom_uid, created=True)
+    custom_uid = _track_custom_signin(
+        tracker,
+        intent,
+        status,
+        body,
+        project=env["project"],
+        requested_uid=custom_uid,
+    )
     custom_session = body
     custom_shape = claim_shape(body["idToken"], reveal=("role",))
     rows["custom-token-developer-claims-present"] = row(
@@ -683,7 +705,7 @@ def run_cases(
         admin,
         "/accounts:update",
         {
-            "localId": custom_session["localId"],
+            "localId": custom_uid,
             "customAttributes": json.dumps({"role": "admin", "tier": "gold"}),
         },
         owner=True,

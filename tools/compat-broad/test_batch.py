@@ -266,6 +266,97 @@ def test_process_receipt_bounds_simultaneous_stdout_and_stderr_flood(
     assert receipt["returncode"] is not None
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        lambda origin: (origin + "/" + "u" * 70000, {}, None),
+        lambda origin: (origin + "/ok", {"X-Large": "h" * 70000}, None),
+        lambda origin: (origin + "/ok", {}, {"nested": {"value": "n" * 200000}}),
+    ],
+)
+def test_oversized_input_is_rejected_before_worker_start(tmp_path, monkeypatch, case):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    marker = tmp_path / "started"
+    (worker_dir / "batch_wire.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    url, headers, body = case("http://127.0.0.1:18081")
+    with pytest.raises(ValueError, match="bound exceeded"):
+        adapter.wire(
+            url,
+            "GET",
+            body,
+            headers,
+            local=True,
+            process_receipt=True,
+        )
+    assert not marker.exists()
+
+
+def test_json_prevalidation_rejects_cycle_depth_nonfinite_unicode_and_bad_url(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    marker = tmp_path / "started"
+    (worker_dir / "batch_wire.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    cyclic = []
+    cyclic.append(cyclic)
+    deep = value = []
+    for _ in range(70):
+        value.append([])
+        value = value[0]
+    cases = [
+        ("http://127.0.0.1:18081/ok", {"value": float("nan")}),
+        ("http://127.0.0.1:18081/ok", cyclic),
+        ("http://127.0.0.1:18081/ok", deep),
+        ("http://127.0.0.1:18081/ok", "🦀" * 5000),
+    ]
+    for url, body in cases:
+        with pytest.raises(ValueError):
+            adapter.wire(url, "POST", body, {}, local=True, process_receipt=True)
+    with pytest.raises(ValueError, match="URL"):
+        adapter.wire(123, "GET", None, {}, local=True, process_receipt=True)
+    assert not marker.exists()
+
+
+def test_json_prevalidation_uses_one_aggregate_budget_before_serialization(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    marker = tmp_path / "started"
+    (worker_dir / "batch_wire.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    body = {"items": ["escape-🦀" * 700 for _ in range(20)]}
+    with pytest.raises(ValueError, match="body bound"):
+        adapter.wire(
+            "http://127.0.0.1:18081/ok",
+            "POST",
+            body,
+            {},
+            local=True,
+            process_receipt=True,
+        )
+    assert not marker.exists()
+
+
 def test_process_receipt_start_failure_does_not_claim_a_worker_was_reaped(
     tmp_path, monkeypatch
 ):

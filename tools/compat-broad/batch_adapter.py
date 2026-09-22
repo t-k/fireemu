@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import selectors
@@ -41,6 +42,9 @@ HOSTS = {
 }
 MAX_WORKER_STDOUT = 131072
 MAX_WORKER_STDERR = 8192
+MAX_WORKER_URL = 65536
+MAX_WORKER_HEADERS = 65536
+MAX_WORKER_INPUT = 262144
 
 
 class WorkerProcessError(ValueError):
@@ -209,6 +213,81 @@ def _bounded_worker_exchange(worker, payload, deadline):
         raise WorkerProcessError("bounded worker returned malformed output", receipt) from None
 
 
+def _utf8_size(value, limit, label):
+    total = 0
+    for offset in range(0, len(value), 4096):
+        total += len(value[offset : offset + 4096].encode())
+        if total > limit:
+            raise ValueError(f"{label} bound exceeded")
+    return total
+
+
+def _validate_json_value(value, *, depth=0, nodes=None, active=None, budget=None):
+    """Validate bounded JSON inputs before json.dumps can materialize them."""
+    if nodes is None:
+        nodes = [0]
+    if active is None:
+        active = set()
+    if budget is None:
+        budget = [0]
+
+    def charge(amount):
+        budget[0] += amount
+        if budget[0] > 16384:
+            raise ValueError("request body bound exceeded")
+
+    nodes[0] += 1
+    if nodes[0] > 4096 or depth > 64:
+        raise ValueError("request JSON structure bound exceeded")
+    if value is None or isinstance(value, (bool, int)):
+        charge(len(json.dumps(value, allow_nan=False)))
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("request JSON contains non-finite number")
+        charge(len(json.dumps(value, allow_nan=False)))
+        return
+    if isinstance(value, str):
+        _utf8_size(value, 16384, "request body")
+        charge(len(json.dumps(value, allow_nan=False)))
+        return
+    if not isinstance(value, (list, dict)):
+        raise ValueError("request JSON type is invalid")
+    identity = id(value)
+    if identity in active:
+        raise ValueError("request JSON cycle is invalid")
+    active.add(identity)
+    try:
+        if isinstance(value, list):
+            charge(1)
+            first = True
+            for item in value:
+                if not first:
+                    charge(2)
+                first = False
+                _validate_json_value(
+                    item, depth=depth + 1, nodes=nodes, active=active, budget=budget
+                )
+            charge(1)
+        else:
+            charge(1)
+            first = True
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise ValueError("request JSON object key is invalid")
+                _utf8_size(key, 16384, "request body")
+                if not first:
+                    charge(2)
+                first = False
+                charge(len(json.dumps(key, allow_nan=False)) + 2)
+                _validate_json_value(
+                    item, depth=depth + 1, nodes=nodes, active=active, budget=budget
+                )
+            charge(1)
+    finally:
+        active.remove(identity)
+
+
 def _run_worker(payload, timeout, *, include_process_receipt):
     if not include_process_receipt:
         try:
@@ -314,6 +393,8 @@ def wire(
     receipt=False,
     process_receipt=False,
 ):
+    if not isinstance(url, str):
+        raise ValueError("request URL is invalid")
     parsed = urllib.parse.urlsplit(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     if local:
@@ -328,15 +409,34 @@ def wire(
         raise ValueError("remote origin refused")
     if parsed.fragment or timeout <= 0 or timeout > 12:
         raise ValueError("invalid request boundary")
-    data = (
-        None
-        if body is None
-        else body
-        if isinstance(body, str)
-        else json.dumps(body, allow_nan=False)
-    )
-    if data is not None and len(data.encode()) > 16384:
-        raise ValueError("request body bound exceeded")
+    if not isinstance(method, str) or not method or len(method.encode()) > 128:
+        raise ValueError("request method bound exceeded")
+    try:
+        _utf8_size(url, MAX_WORKER_URL, "request URL")
+    except UnicodeEncodeError:
+        raise ValueError("request URL is invalid") from None
+    if not isinstance(headers, dict):
+        raise ValueError("request headers are invalid")
+    header_size = 0
+    for key, value in headers.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("request headers are invalid")
+        try:
+            header_size += _utf8_size(key, MAX_WORKER_HEADERS, "request headers")
+            header_size += _utf8_size(value, MAX_WORKER_HEADERS, "request headers")
+        except UnicodeEncodeError:
+            raise ValueError("request headers are invalid") from None
+    if header_size > MAX_WORKER_HEADERS:
+        raise ValueError("request headers bound exceeded")
+    if body is None:
+        data = None
+    elif isinstance(body, str):
+        _validate_json_value(body)
+        data = body
+    else:
+        _validate_json_value(body)
+        data = json.dumps(body, allow_nan=False)
+        _utf8_size(data, 16384, "request body")
     payload = json.dumps(
         {
             "url": url,
@@ -346,6 +446,12 @@ def wire(
             "receipt": receipt or process_receipt,
         }
     )
+    try:
+        payload_size = len(payload.encode())
+    except UnicodeEncodeError:
+        raise ValueError("request payload is invalid") from None
+    if payload_size > MAX_WORKER_INPUT:
+        raise ValueError("request payload bound exceeded")
     output, process = _run_worker(
         payload, timeout, include_process_receipt=process_receipt
     )

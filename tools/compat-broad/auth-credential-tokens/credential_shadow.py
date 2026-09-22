@@ -287,6 +287,41 @@ def _track_custom_signin(
     return uid
 
 
+def _boundary_readback_second(status: Any, body: Any, uid: str) -> int | str:
+    """Read this default-namespace account's second, not another result's number.
+
+    Keep the received int64 representation in diagnostics. A valid but different
+    second is still an unpinned observation; an invalid readback is not evidence
+    of timing nondeterminism. This grants no account ownership or cleanup right.
+    """
+    failure = "same-second readback did not confirm the requested account"
+    if (
+        type(status) is not int or status != 200
+        or type(body) is not dict or "error" in body
+        or type(uid) is not str or not uid
+    ):
+        raise ShadowError(failure)
+    users = body.get("users")
+    if (
+        type(users) is not list or len(users) != 1
+        or type(users[0]) is not dict or "error" in users[0]
+        or type(users[0].get("localId")) is not str
+        or users[0]["localId"] != uid
+        or users[0].get("tenantId") not in (None, "")
+    ):
+        raise ShadowError(failure)
+    stored = users[0].get("validSince")
+    if not (
+        type(stored) is int
+        or (type(stored) is str and len(stored) <= 32
+            and re.fullmatch(r"-?[0-9]+", stored) is not None)
+    ):
+        raise ShadowError("same-second readback has no valid int64 second")
+    if not -(1 << 63) <= int(stored) < (1 << 63):
+        raise ShadowError("same-second readback has no valid int64 second")
+    return stored
+
+
 def run_cases(
     base: str,
     budget: dict[str, Any],
@@ -538,11 +573,11 @@ def run_cases(
         {"localId": revoked["localId"], "validSince": str(boundary_second)},
         owner=True,
     )
-    _, read_back = send(
+    read_status, read_back = send(
         budget, admin, "/accounts:lookup", {"localId": [revoked["localId"]]}, owner=True
     )
-    stored = read_back.get("users", [{}])[0].get("validSince")
-    pinned = str(stored) == str(boundary_second)
+    stored = _boundary_readback_second(read_status, read_back, revoked["localId"])
+    pinned = int(stored) == boundary_second
     status, body = lookup(boundary["idToken"])
     rows["revocation-same-second-session"] = row(
         "revocation-same-second-session",

@@ -38,10 +38,17 @@ class _ActionFixture(BaseHTTPRequestHandler):
     fail_first_response = False
 
     def do_POST(self):  # noqa: N802 - stdlib handler API
+        self._serve_action_request()
+
+    def do_GET(self):  # noqa: N802 - stdlib handler API
+        self._serve_action_request()
+
+    def _serve_action_request(self):
         size = int(self.headers.get("Content-Length", "0"))
-        body = json.loads(self.rfile.read(size))
+        raw = self.rfile.read(size)
+        body = json.loads(raw) if raw else {}
         self.__class__.calls.append({"path": self.path, "body": body})
-        if self.__class__.fail_first_response and len(self.__class__.calls) == 1:
+        if self.__class__.fail_first_response and len(self.__class__.calls) == 3:
             encoded = b"not-json"
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -176,7 +183,7 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
     assert result["observation"] == 28
     assert result["recovery"] == 6
     assert result["reservation"] == "released"
-    assert len(_ActionFixture.calls) == 32
+    assert len(_ActionFixture.calls) == 34
     gate_state = json.loads((tmp_path / "output" / "gate" / "state.json").read_bytes())
     assert gate_state["managementUsed"] == [
         "observation:oauth-tokeninfo",
@@ -188,9 +195,11 @@ def test_full_action_bridge_runs_26_plus_6_through_o8_ledger_gate_and_worker(tmp
         row["path"].format(project=descriptor.AUTHORIZED_PROJECT).lstrip("/")
         for row in (*frozen_plan["stages"], *frozen_plan["recovery"])
     ]
-    actual_paths = [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls]
+    management_paths = [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[:2]]
+    assert management_paths == ["oauth2/v1/tokeninfo", "v1/projects/fireemu-35fe6/config"]
+    actual_paths = [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[2:]]
     assert actual_paths == expected_paths
-    assert _ActionFixture.calls[0]["body"] == {
+    assert _ActionFixture.calls[2]["body"] == {
         "email": f"o1-oob-{NONCE}-a@example.invalid",
         "password": "secret-accountA-password",
         "returnSecureToken": True,
@@ -255,7 +264,7 @@ def test_observation_failure_attempts_all_known_cleanup_and_holds_unknown_signup
     state = reservations.Ledger(ledger_root).snapshot()
     rows = list(state["reservations"].values())
     assert len(rows) == 1 and rows[0]["state"] == "held"
-    assert len(_ActionFixture.calls) == 7
+    assert len(_ActionFixture.calls) == 9
     expected_recovery_paths = [
         row["path"].format(project=descriptor.AUTHORIZED_PROJECT).lstrip("/")
         for row in plan_module.campaign_manifest(NONCE, project=descriptor.AUTHORIZED_PROJECT)["recovery"]

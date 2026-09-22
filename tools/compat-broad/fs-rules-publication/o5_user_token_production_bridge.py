@@ -41,8 +41,24 @@ TOTAL_REQUESTS = 144
 RULES_REQUESTS = 23
 OBSERVATION_REQUESTS = 33
 RECOVERY_REQUESTS = 63
-WORKER_TIMEOUT_SECONDS = 8.0
+WORKER_TIMEOUT_SECONDS = 12.0
 SETUP_TIMEOUT_SECONDS = 2.0
+
+
+def worker_timeout(operation: dict[str, Any], deadline: float | None) -> float:
+    """Keep every worker within its existing compiled management slot."""
+    seconds = (
+        WORKER_TIMEOUT_SECONDS
+        if operation.get("kind") == "rules-lifecycle"
+        else SETUP_TIMEOUT_SECONDS
+    )
+    if deadline is not None:
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise ValueError("finite worker deadline required")
+        seconds = min(seconds, deadline - time.monotonic())
+        if seconds <= 0:
+            raise TimeoutError("Rules worker deadline exhausted")
+    return seconds
 
 
 def rules_gate_receipt(
@@ -395,16 +411,15 @@ def bound_execute(
     def execute(
         operation: dict[str, Any], *, deadline: float | None = None
     ) -> dict[str, Any]:
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining < WORKER_TIMEOUT_SECONDS:
-                raise TimeoutError("Rules worker cannot fit within Gate deadline")
+        seconds = worker_timeout(operation, deadline)
         authorize_transport(capability, binding=binding, binding_digest=binding_digest)
         return transport(
             operation,
             binding=binding,
             binding_digest=binding_digest,
             capability=capability,
+            deadline=deadline,
+            timeout_seconds=seconds,
         )
 
     return execute

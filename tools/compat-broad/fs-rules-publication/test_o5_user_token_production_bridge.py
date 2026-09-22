@@ -23,6 +23,17 @@ def _plan():
     return case.compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant-test")
 
 
+def test_worker_timeout_uses_the_compiled_slot_bound():
+    assert bridge.worker_timeout({"kind": "rules-lifecycle"}, None) == 12.0
+    assert bridge.worker_timeout({"kind": "observation"}, None) == 2.0
+    assert bridge.worker_timeout({"phase": "recovery"}, None) == 2.0
+
+
+def test_worker_timeout_refuses_expired_deadline():
+    with pytest.raises(TimeoutError, match="deadline"):
+        bridge.worker_timeout({"kind": "observation"}, 0.0)
+
+
 def test_rules_receipt_preserves_real_status_and_keeps_rest_body_outside_gate():
     raw = {
         "httpStatus": 404,

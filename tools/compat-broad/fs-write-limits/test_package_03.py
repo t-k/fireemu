@@ -540,9 +540,15 @@ def test_manifest_recomputes_historical_shadow_difference_after_nx_local() -> No
     assert published["indexConfiguration"]["shadowDifference"] is True
 
     nx_local = copy.deepcopy(shadow)
-    nx_local["execution"]["ALL"]["execution"]["indexConfiguration"]["profile"] = (
-        "nx-local"
-    )
+    execution = nx_local["execution"]["ALL"]["execution"]
+    execution["indexConfiguration"] = {
+        "profile": "nx-local",
+        "sha256": package_03.campaign.INDEXES_SHA256_AFTER,
+        "sourceCommit": None,
+    }
+    execution["pendingDifferences"] = []
+    execution["pendingRows"] = []
+    nx_local["execution"]["ALL"]["executionCommit"] = package_03.head_commit()
     published = package_03.manifest(previous, nx_local, package_03.head_commit())
     assert published["indexConfiguration"]["shadowDifference"] is False
 

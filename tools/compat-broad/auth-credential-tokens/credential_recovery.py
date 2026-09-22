@@ -1,35 +1,35 @@
-"""Parent-linked, read-only recovery for an unresolved Auth custom sign-in.
+"""Source-bound, read-only Auth recovery for an unresolved custom sign-in.
 
-The packet05 parent contains one unresolved ``custom-sign-in`` creation.  This
-module deliberately does not resume that request, discover an account by email,
-or acquire ownership from a successful lookup.  A fresh child may perform one
-privileged lookup for the UID derived from the immutable parent plan.  Only the
-typed empty result is closable; every other result leaves the parent held.
-
-The Ledger methods used here are intentionally Auth-specific.  The generic
-Firestore recovery extension must not be used for an Auth account resource.
+The recovery child is deliberately narrower than the observation campaign. It
+can perform one exact Admin ``accounts:lookup`` request for the UID derived
+from the immutable parent Gate. It cannot adopt an account, delete an account,
+or release the parent from a caller-supplied response. The shared Ledger and
+the child Gate remain authoritative for allocation and terminal evidence.
 """
 
 from __future__ import annotations
 
 import copy
-import hashlib
 import math
+import platform
 import re
 import time
 from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from broad_contract import digest
 
 CAMPAIGN = "AUTH-CREDENTIAL-TOKENS-01"
-KIND = "auth-credential-custom-uid-recovery-v1"
+KIND = "auth-custom-uid-recovery-child-v1"
+CHILD_KIND = KIND
 PERMISSION_KIND = "auth-credential-recovery-permission-v1"
 O7_KIND = "auth-credential-recovery-o7-approval-v1"
 O8_KIND = "auth-credential-recovery-o8-capability-v1"
-CHILD_KIND = "auth-credential-recovery-child-claim-v1"
-ENVELOPE_KIND = "auth-credential-recovery-envelope-v1"
-OPERATION_CLASS = "read-only-custom-uid-v1"
+ABSENCE_KIND = "auth-uid-absence-proof-v1"
+PARENT_EVIDENCE_KIND = "auth-parent-uncertain-create-v1"
+OPERATION_CLASS = "auth-custom-uid-lookup-only-v1"
+GATE_JOB = "auth-credential-recovery"
 PROJECT = "fireemu-35fe6"
 IDENTITY = "identitytoolkit.googleapis.com/v1"
 WORKER_ENTRY = "tools/compat-broad/auth-credential-tokens/credential_https_worker.py"
@@ -38,14 +38,9 @@ LAUNCHER_ENTRY = "tools/compat-broad/auth-credential-tokens/credential_bootstrap
 NONCE = re.compile(r"^[0-9a-f]{32}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
-MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-MAX_DEADLINE_SECONDS = 300
-CHILD_BUDGET = {
-    "requests": 1,
-    "accounts": 0,
-    "resources": 1,
-    "costMicrousd": 50_000,
-}
+MAX_DEADLINE_SECONDS = 60
+CHILD_BUDGET = {"requests": 1, "accounts": 1, "resources": 1, "costMicrousd": 50_000}
+HOST = {"platform": platform.system().lower(), "machine": platform.machine()}
 
 
 class RecoveryRefusal(ValueError):
@@ -80,63 +75,96 @@ def _finite(value: Any, field: str) -> None:
 
 
 def _text(value: Any) -> bool:
-    return isinstance(value, str) and bool(value) and len(value) <= 1024
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= 1024
 
 
-def _project(parent_plan: Mapping[str, Any]) -> str:
-    project = parent_plan.get("project")
-    if project != PROJECT:
+def _project(plan: Mapping[str, Any]) -> None:
+    if plan.get("project") not in (None, PROJECT):
         _refuse("oracle project binding differs")
-    return project
 
 
-def _parent_plan(parent: Mapping[str, Any]) -> Mapping[str, Any]:
+def _parent_evidence(gate: Mapping[str, Any], job: str, index: int, operation: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
+    evidence = {
+        "kind": PARENT_EVIDENCE_KIND,
+        "gateDigest": digest(gate),
+        "gatePlanDigest": digest(gate["plan"]),
+        "job": job,
+        "eventIndex": index,
+        "requestDigest": digest(operation),
+        "resource": operation["resource"],
+        "completed": False,
+        "creationOutcome": event["creationOutcome"],
+    }
+    evidence["evidenceDigest"] = digest(evidence)
+    return evidence
+
+
+def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate the held packet and return only its canonical Gate projection."""
     if not isinstance(parent, Mapping) or parent.get("state") != "held":
         _refuse("parent is not held")
-    plan = parent.get("plan")
-    claim = parent.get("claim")
-    gate = parent.get("gate")
-    receipt = parent.get("receipt")
-    responsibility = parent.get("responsibility")
-    if not all(isinstance(value, Mapping) for value in (plan, claim, gate, receipt, responsibility)):
+    claim, gate, receipt, responsibility = (
+        parent.get("claim"), parent.get("gate"), parent.get("receipt"), parent.get("responsibility")
+    )
+    if not all(isinstance(value, Mapping) for value in (claim, gate, receipt, responsibility)):
         _refuse("immutable parent evidence required")
-    if plan.get("campaignId") != CAMPAIGN or claim.get("campaignId") != CAMPAIGN:
-        _refuse("parent campaign differs")
-    nonce = plan.get("nonce")
-    _nonce(nonce, "parent")
-    _project(plan)
-    if claim.get("nonceDigest") != digest(nonce):
-        _refuse("parent nonce binding differs")
-    if gate.get("coordinatorInflight") or any(
-        isinstance(job, Mapping) and job.get("inflight") for job in (gate.get("jobs") or {}).values()
-    ):
-        _refuse("parent worker is still active")
     gate_plan = gate.get("plan")
-    if not isinstance(gate_plan, Mapping) or digest(gate_plan) != claim.get("gatePlanDigest"):
-        _refuse("parent Gate plan differs")
+    if not isinstance(gate_plan, Mapping):
+        _refuse("canonical parent Gate plan required")
+    if gate_plan.get("campaignId") != CAMPAIGN or claim.get("campaignId") != CAMPAIGN:
+        _refuse("parent campaign differs")
+    _project(gate_plan)
+    nonce = gate_plan.get("nonce")
+    _nonce(nonce, "parent")
+    if claim.get("nonceDigest") != digest(nonce) or claim.get("gatePlanDigest") != digest(gate_plan):
+        _refuse("parent Gate binding differs")
+    parent_job = claim.get("gateJob", "auth-credential")
+    plan_job = gate_plan.get("jobs", {}).get(parent_job)
+    runtime_job = gate.get("jobs", {}).get(parent_job)
+    if not isinstance(plan_job, Mapping) or not isinstance(runtime_job, Mapping):
+        _refuse("parent Gate job missing")
+    if gate.get("coordinatorInflight") or runtime_job.get("inflight"):
+        _refuse("parent worker is still active")
     if receipt.get("failure") is None or receipt.get("postflightComplete") is True:
         _refuse("unresolved parent failure required")
-    custom = [
-        operation
-        for operation in plan.get("jobs", {}).get("auth-credential", {}).get("observation", [])
-        if isinstance(operation, Mapping)
-        and operation.get("kind") == "custom-sign-in"
-        and operation.get("account") == "custom"
+    immutable = parent.get("immutableParent")
+    required_immutable = {"kind", "gateDigest", "gatePlanDigest", "nonce", "resource", "eventIndex", "requestDigest"}
+    if not isinstance(immutable, Mapping) or set(immutable) != required_immutable or immutable.get("kind") != "auth-packet05-parent-binding-v1":
+        _refuse("immutable packet05 parent binding required")
+    _sha(immutable.get("gateDigest"), "parent Gate")
+    _sha(immutable.get("gatePlanDigest"), "parent plan")
+    _sha(immutable.get("requestDigest"), "parent request")
+    if immutable["gateDigest"] != digest(gate) or immutable["gatePlanDigest"] != digest(gate_plan) or immutable["nonce"] != nonce or claim.get("gatePlanDigest") != immutable["gatePlanDigest"]:
+        _refuse("immutable parent Gate changed")
+    operations = plan_job.get("observation")
+    if not isinstance(operations, list):
+        _refuse("parent observation plan required")
+    candidates = [
+        (index, operation)
+        for index, operation in enumerate(operations)
+        if isinstance(operation, Mapping) and operation.get("kind") == "custom-sign-in" and operation.get("account") == "custom"
     ]
-    if len(custom) != 1:
-        _refuse("one immutable custom sign-in required")
-    operation = custom[0]
-    expected_digest = digest(operation)
-    events = gate.get("events")
-    if not isinstance(events, list):
-        _refuse("parent custom event required")
-    matching = [event for event in events if isinstance(event, Mapping) and event.get("requestDigest") == expected_digest]
-    if len(matching) != 1 or matching[0].get("completed") is not False or matching[0].get("creationOutcome") not in {"unknown", "pending"}:
+    if len(candidates) != 1:
+        _refuse("one uncertain Auth custom create is required")
+    event_index, operation = candidates[0]
+    expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{nonce}"
+    if operation.get("service") != "auth" or operation.get("method") != "POST" or operation.get("resource") != expected_resource or immutable["resource"] != expected_resource or immutable["eventIndex"] != event_index or immutable["requestDigest"] != digest(operation):
+        _refuse("parent custom resource binding differs")
+    event = next(
+        (item for item in gate.get("events", []) if isinstance(item, Mapping) and item.get("job") == parent_job and item.get("phase") == "observation" and item.get("index") == event_index),
+        None,
+    )
+    if not isinstance(event, Mapping) or event.get("requestDigest") != digest(operation) or event.get("completed") is not False or event.get("creationOutcome") not in {"pending", "unknown"}:
         _refuse("parent custom event is not unresolved")
-    custom_intent = responsibility.get("custom") or responsibility.get("custom-signin")
-    if not isinstance(custom_intent, Mapping) or custom_intent.get("state") != "unknown" or custom_intent.get("uid") is not None:
+    _finite(event.get("ended"), "parent event end")
+    custom = responsibility.get("custom") or responsibility.get("custom-signin")
+    if not isinstance(custom, Mapping) or custom.get("state") != "unknown" or custom.get("uid") is not None:
         _refuse("custom creation responsibility is not unresolved")
-    return plan
+    return {
+        "plan": copy.deepcopy(dict(gate_plan)), "claim": copy.deepcopy(dict(claim)), "gate": copy.deepcopy(dict(gate)),
+        "job": parent_job, "eventIndex": event_index, "operation": copy.deepcopy(dict(operation)), "resource": expected_resource,
+        "evidence": _parent_evidence(gate, parent_job, event_index, operation, event),
+    }
 
 
 def _provenance(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -154,16 +182,8 @@ def _provenance(value: Mapping[str, Any]) -> dict[str, Any]:
             _refuse("source path provenance differs")
         _sha(value_hash, "source")
         normalized_inputs[path] = value_hash
-    normalized: dict[str, Any] = {
-        "sourceCommit": source_commit,
-        "sourceInputs": normalized_inputs,
-        "sourceInputsDigest": digest(normalized_inputs),
-    }
-    for name, expected_path in (
-        ("worker", WORKER_ENTRY),
-        ("transport", TRANSPORT_ENTRY),
-        ("launcher", LAUNCHER_ENTRY),
-    ):
+    normalized: dict[str, Any] = {"sourceCommit": source_commit, "sourceInputs": normalized_inputs, "sourceInputsDigest": digest(normalized_inputs)}
+    for name, expected_path in (("worker", WORKER_ENTRY), ("transport", TRANSPORT_ENTRY), ("launcher", LAUNCHER_ENTRY)):
         binding = value.get(name)
         if not isinstance(binding, Mapping) or set(binding) != {"path", "sha256"} or binding["path"] != expected_path:
             _refuse(f"{name} provenance differs")
@@ -171,35 +191,39 @@ def _provenance(value: Mapping[str, Any]) -> dict[str, Any]:
         if normalized_inputs.get(expected_path) != binding["sha256"]:
             _refuse(f"{name} source digest differs")
         normalized[name] = {"path": expected_path, "sha256": binding["sha256"]}
+    generation = value.get("generation")
+    if not isinstance(generation, Mapping) or set(generation) != {"sourceCommit", "collectorSourceDigest", "sourceDigests"} or generation.get("sourceCommit") != source_commit:
+        _refuse("source generation provenance required")
+    _sha(generation.get("collectorSourceDigest"), "collector source")
+    if not isinstance(generation.get("sourceDigests"), Mapping) or not generation["sourceDigests"]:
+        _refuse("source generation closure required")
+    for name, value_hash in generation["sourceDigests"].items():
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name):
+            _refuse("source generation path differs")
+        _sha(value_hash, "source generation")
+    normalized["generation"] = copy.deepcopy(dict(generation))
     return normalized
 
 
-def _operation(parent_plan: Mapping[str, Any]) -> dict[str, Any]:
-    nonce = parent_plan["nonce"]
-    uid = f"custom-{nonce}"
-    project = _project(parent_plan)
-    return {
-        "service": "auth",
-        "method": "POST",
-        "path": f"{IDENTITY}/projects/{project}/accounts:lookup",
-        "body": {"localId": [uid]},
-        "form": False,
-        "owner": True,
-        "kind": "recovery-custom-uid-lookup",
-        "account": "custom",
-        "resource": f"projects/{project}/auth/accounts/{uid}",
-    }
+def _operation(resource: str) -> dict[str, Any]:
+    project = resource.split("/")[1]
+    uid = resource.rsplit("/", 1)[1]
+    return {"kind": "auth-custom-uid-lookup", "service": "auth", "method": "POST", "path": f"{IDENTITY}/projects/{project}/accounts:lookup", "body": {"localId": [uid]}, "resource": resource, "precondition": None}
 
 
 def _stable_plan(plan: Mapping[str, Any]) -> dict[str, Any]:
     value = copy.deepcopy(dict(plan))
-    for key in ("planDigest", "permissionDigest", "o7Digest", "o8Digest"):
+    for key in ("planDigest", "permissionDigest", "o7Digest", "o8Digest", "sourceBindingDigest", "transportBindingDigest"):
         value.pop(key, None)
+    gate = value.get("gatePlan")
+    if isinstance(gate, dict):
+        for key in ("sourceBindingDigest", "transportBindingDigest", "o7BindingDigest", "o8BindingDigest"):
+            gate.pop(key, None)
     return value
 
 
 def _validate_shape(plan: Mapping[str, Any]) -> None:
-    if plan.get("kind") != KIND or plan.get("campaignId") != CAMPAIGN or plan.get("operationClass") != OPERATION_CLASS:
+    if not isinstance(plan, Mapping) or plan.get("kind") != KIND or plan.get("campaignId") != CAMPAIGN or plan.get("operationClass") != OPERATION_CLASS:
         _refuse("Auth recovery plan kind differs")
     _project(plan)
     _nonce(plan.get("recoveryNonce"), "recovery")
@@ -211,258 +235,157 @@ def _validate_shape(plan: Mapping[str, Any]) -> None:
         _refuse("recovery plan digest differs")
     _finite(plan.get("issuedAt"), "recovery issue time")
     _finite(plan.get("deadlineAt"), "recovery deadline")
-    if (
-        type(plan.get("deadlineSeconds")) is not int
-        or not 1 <= plan["deadlineSeconds"] <= MAX_DEADLINE_SECONDS
-        or plan["deadlineAt"] <= plan["issuedAt"]
-    ):
+    if type(plan.get("deadlineSeconds")) is not int or not 1 <= plan["deadlineSeconds"] <= MAX_DEADLINE_SECONDS or plan["deadlineAt"] != plan["issuedAt"] + plan["deadlineSeconds"]:
         _refuse("recovery deadline bound differs")
     if plan.get("budget") != CHILD_BUDGET:
         _refuse("recovery budget differs")
-    operations = plan.get("operations")
-    if not isinstance(operations, list) or len(operations) != 1:
-        _refuse("one recovery lookup required")
-    operation = operations[0]
-    if not isinstance(operation, Mapping) or operation.get("kind") != "recovery-custom-uid-lookup" or operation.get("method") != "POST" or operation.get("owner") is not True:
-        _refuse("read-only custom lookup required")
-    if "email" in repr(operation).lower() or operation.get("method") == "DELETE":
-        _refuse("email adoption or deletion is forbidden")
-    if plan.get("gatePlan") != {"campaignId": CAMPAIGN, "job": "auth-credential-recovery", "observation": [], "recovery": [operation]}:
+    resource = plan.get("resource")
+    if not isinstance(resource, str) or not re.fullmatch(rf"projects/{re.escape(PROJECT)}/auth/accounts/custom-[0-9a-f]{{32}}", resource):
+        _refuse("exact custom UID resource required")
+    expected = _operation(resource)
+    if not isinstance(plan.get("operation"), Mapping) or dict(plan["operation"]) != expected:
+        _refuse("exact Auth UID lookup required")
+    if plan.get("operationDigest") != digest(expected) or plan.get("customUid") != resource.rsplit("/", 1)[1] or plan.get("customUidDigest") != digest(plan["customUid"]):
+        _refuse("custom UID operation binding differs")
+    gate = plan.get("gatePlan")
+    if not isinstance(gate, Mapping) or gate.get("campaignId") != CAMPAIGN or gate.get("nonce") != plan["recoveryNonce"]:
         _refuse("recovery Gate plan differs")
+    job = gate.get("jobs", {}).get(GATE_JOB)
+    if gate.get("observationRequests") != 0 or gate.get("dataRequests") != 1 or gate.get("managementRequests") != 0 or gate.get("recoveryRequests") != 1 or gate.get("costMicrousd") != gate.get("requestCostMicrousd") or gate.get("wallSeconds") != plan["deadlineSeconds"] or not isinstance(job, Mapping):
+        _refuse("recovery Gate bounds differ")
+    if job.get("observation") != [] or job.get("recovery") != [expected] or job.get("resources") != [resource]:
+        _refuse("recovery Gate is not lookup-only")
+    schedule = job.get("schedule")
+    if not isinstance(schedule, list) or len(schedule) != 1 or schedule[0].get("phase") != "recovery" or schedule[0].get("index") != 0:
+        _refuse("recovery Gate schedule differs")
     _provenance(plan.get("provenance", {}))
 
 
-def compile_recovery_plan(
-    parent: Mapping[str, Any],
-    *,
-    recovery_nonce: str,
-    provenance: Mapping[str, Any],
-    now: float | None = None,
-    deadline_seconds: int = 180,
-) -> dict[str, Any]:
-    """Compile one fresh child without reading credentials or touching a Ledger."""
-    parent_plan = _parent_plan(parent)
+def compile_recovery_plan(parent: Mapping[str, Any], *, recovery_nonce: str, provenance: Mapping[str, Any], now: float | None = None, deadline_seconds: int = 60) -> dict[str, Any]:
+    """Compile a fresh child from the immutable held packet and no credentials."""
+    snapshot = _parent_snapshot(parent)
     _nonce(recovery_nonce, "recovery")
-    if recovery_nonce == parent_plan["nonce"]:
+    if recovery_nonce == snapshot["plan"]["nonce"]:
         _refuse("recovery nonce must be fresh")
     if type(deadline_seconds) is not int or not 1 <= deadline_seconds <= MAX_DEADLINE_SECONDS:
         _refuse("finite recovery deadline required")
     issued_at = time.time() if now is None else now
     _finite(issued_at, "recovery issue time")
     provenance_value = _provenance(provenance)
-    if provenance_value["sourceCommit"] != parent_plan.get("sourceCommit"):
+    parent_generation = parent.get("generation")
+    if not isinstance(parent_generation, Mapping) or provenance_value["generation"] != parent_generation:
+        _refuse("parent source generation binding differs")
+    if provenance_value["sourceCommit"] != snapshot["plan"].get("sourceCommit") and parent.get("sourceCommit") not in (None, provenance_value["sourceCommit"]):
         _refuse("source commit must remain parent-linked")
-    parent_claim = parent["claim"]
-    parent_gate = parent["gate"]
-    parent_receipt = parent["receipt"]
-    parent_responsibility = parent["responsibility"]
-    operation = _operation(parent_plan)
-    resource = operation["resource"]
-    gate_plan = {
-        "campaignId": CAMPAIGN,
-        "job": "auth-credential-recovery",
-        "observation": [],
-        "recovery": [operation],
-    }
-    plan: dict[str, Any] = {
-        "kind": KIND,
-        "campaignId": CAMPAIGN,
-        "operationClass": OPERATION_CLASS,
-        "project": PROJECT,
-        "recoveryNonce": recovery_nonce,
-        "recoveryNonceDigest": digest(recovery_nonce),
-        "issuedAt": issued_at,
-        "deadlineSeconds": deadline_seconds,
-        "deadlineAt": issued_at + deadline_seconds,
-        "budget": copy.deepcopy(CHILD_BUDGET),
-        "parent": {
-            "ticketDigest": digest(parent.get("ticket")),
-            "claimDigest": parent_claim.get("claimDigest", digest(parent_claim)),
-            "planDigest": digest(parent_plan),
-            "gateDigest": digest(parent_gate),
-            "receiptDigest": digest(parent_receipt),
-            "responsibilityDigest": digest(parent_responsibility),
-            "state": "held",
-        },
-        "customUid": operation["body"]["localId"][0],
-        "customUidDigest": digest(operation["body"]["localId"][0]),
-        "resource": resource,
-        "operationDigest": digest(operation),
-        "operations": [operation],
-        "gatePlan": gate_plan,
-        "provenance": provenance_value,
-    }
+    resource = snapshot["resource"]
+    operation = _operation(resource)
+    gate_plan = {"campaignId": CAMPAIGN, "nonce": recovery_nonce, "observationRequests": 0, "dataRequests": 1, "managementRequests": 0, "recoveryRequests": 1, "requestCostMicrousd": 1, "costMicrousd": 1, "wallSeconds": deadline_seconds, "jobs": {GATE_JOB: {"observation": [], "recovery": [operation], "resources": [resource], "schedule": [{"phase": "recovery", "index": 0, "seconds": 5.0}]}}}
+    plan: dict[str, Any] = {"kind": KIND, "campaignId": CAMPAIGN, "operationClass": OPERATION_CLASS, "project": PROJECT, "recoveryNonce": recovery_nonce, "recoveryNonceDigest": digest(recovery_nonce), "issuedAt": issued_at, "deadlineSeconds": deadline_seconds, "deadlineAt": issued_at + deadline_seconds, "budget": copy.deepcopy(CHILD_BUDGET), "parent": {"ticketDigest": digest(parent.get("ticket")), "claimDigest": snapshot["claim"].get("claimDigest", digest(snapshot["claim"])), "planDigest": digest(snapshot["plan"]), "gateDigest": digest(snapshot["gate"]), "eventIndex": snapshot["eventIndex"], "requestDigest": digest(snapshot["operation"]), "resource": resource, "state": "held"}, "customUid": resource.rsplit("/", 1)[1], "customUidDigest": digest(resource.rsplit("/", 1)[1]), "resource": resource, "operationDigest": digest(operation), "operation": operation, "gatePlan": gate_plan, "provenance": provenance_value}
     plan["planDigest"] = digest(_stable_plan(plan))
     _validate_shape(plan)
     return plan
 
 
+def _binding_digest(value: Mapping[str, Any], kind: str) -> str:
+    if not isinstance(value, Mapping) or value.get("kind") != kind:
+        _refuse("typed Auth recovery binding required")
+    supplied = value.get("digest", value.get("bindingDigest")) or digest(value)
+    _sha(supplied, kind)
+    return supplied
+
+
+def _bound_plan(plan: Mapping[str, Any], *, source_binding: Mapping[str, Any], transport_binding: Mapping[str, Any], o7_binding: Mapping[str, Any], o8_binding: Mapping[str, Any]) -> dict[str, Any]:
+    value = copy.deepcopy(dict(plan))
+    value["gatePlan"].update(sourceBindingDigest=_binding_digest(source_binding, "auth-source-binding-v1"), transportBindingDigest=_binding_digest(transport_binding, "auth-transport-binding-v1"), o7BindingDigest=_binding_digest(o7_binding, "auth-o7-binding-v1"), o8BindingDigest=_binding_digest(o8_binding, "auth-o8-binding-v1"))
+    value["sourceBindingDigest"] = value["gatePlan"]["sourceBindingDigest"]
+    value["transportBindingDigest"] = value["gatePlan"]["transportBindingDigest"]
+    value["o7Digest"] = value["gatePlan"]["o7BindingDigest"]
+    value["o8Digest"] = value["gatePlan"]["o8BindingDigest"]
+    _validate_shape(value)
+    return value
+
+
 def validate_plan(plan: Mapping[str, Any], parent: Mapping[str, Any]) -> dict[str, Any]:
-    """Revalidate a detached plan against the unchanged held parent."""
-    parent_plan = _parent_plan(parent)
+    snapshot = _parent_snapshot(parent)
     _validate_shape(plan)
-    expected_operation = _operation(parent_plan)
-    if plan.get("parent", {}).get("planDigest") != digest(parent_plan) or plan.get("operations") != [expected_operation] or plan.get("customUid") != expected_operation["body"]["localId"][0]:
-        _refuse("parent-linked custom UID plan differs")
-    if plan.get("operationDigest") != digest(expected_operation) or plan.get("resource") != expected_operation["resource"]:
-        _refuse("custom UID operation binding differs")
+    if plan.get("parent", {}).get("planDigest") != digest(snapshot["plan"]) or plan.get("parent", {}).get("gateDigest") != digest(snapshot["gate"]):
+        _refuse("parent Gate evidence differs")
+    if plan.get("parent", {}).get("requestDigest") != digest(snapshot["operation"]) or plan.get("parent", {}).get("eventIndex") != snapshot["eventIndex"] or plan.get("resource") != snapshot["resource"]:
+        _refuse("parent event binding differs")
     return copy.deepcopy(dict(plan))
 
 
-def _authority_fields(value: Mapping[str, Any], kind: str) -> None:
-    if not isinstance(value, Mapping) or value.get("kind") != kind:
-        _refuse(f"{kind} authority required")
-    for field in ("campaignId", "planDigest", "permissionDigest", "nonceDigest", "sourceInputsDigest"):
-        if value.get(field) is None:
-            _refuse(f"{kind} binding required")
-    if value.get("campaignId") != CAMPAIGN:
-        _refuse(f"{kind} campaign differs")
-    _sha(value["planDigest"], f"{kind} plan")
-    _sha(value["permissionDigest"], f"{kind} permission")
-    _sha(value["nonceDigest"], f"{kind} nonce")
-    _sha(value["sourceInputsDigest"], f"{kind} source")
-    _finite(value.get("issuedAt"), f"{kind} issue time")
-    _finite(value.get("expiresAt"), f"{kind} expiry")
-    if value["expiresAt"] <= value["issuedAt"]:
-        _refuse(f"{kind} window differs")
-
-
-def validate_authority_bundle(
-    plan: Mapping[str, Any], *, permission: Mapping[str, Any], o7: Mapping[str, Any], o8: Mapping[str, Any], now: float | None = None
-) -> None:
-    """Require fresh, mutually bound O7/O8 metadata without handling secrets."""
+def validate_authority_bundle(plan: Mapping[str, Any], *, permission: Mapping[str, Any], o7: Mapping[str, Any], o8: Mapping[str, Any], now: float | None = None) -> None:
     _validate_shape(plan)
-    if not isinstance(permission, Mapping) or permission.get("kind") != PERMISSION_KIND:
-        _refuse("fresh recovery permission required")
-    if permission.get("campaignId") != CAMPAIGN or permission.get("planDigest") != plan["planDigest"] or permission.get("nonceDigest") != plan["recoveryNonceDigest"] or permission.get("sourceInputsDigest") != plan["provenance"]["sourceInputsDigest"] or permission.get("budget") != CHILD_BUDGET:
+    if not isinstance(permission, Mapping) or permission.get("kind") != PERMISSION_KIND or permission.get("campaignId") != CAMPAIGN or permission.get("planDigest") != plan["planDigest"] or permission.get("parentClaimDigest") != plan["parent"]["claimDigest"] or permission.get("nonceDigest") != plan["recoveryNonceDigest"] or permission.get("sourceInputsDigest") != plan["provenance"]["sourceInputsDigest"] or permission.get("budget") != CHILD_BUDGET:
         _refuse("recovery permission binding differs")
-    if permission.get("parentClaimDigest") != plan["parent"]["claimDigest"]:
-        _refuse("recovery parent claim binding differs")
     _finite(permission.get("issuedAt"), "permission issue time")
     _finite(permission.get("expiresAt"), "permission expiry")
-    if permission["expiresAt"] <= permission["issuedAt"]:
-        _refuse("permission window differs")
+    if permission["expiresAt"] < plan["deadlineAt"] or permission["expiresAt"] <= permission["issuedAt"]:
+        _refuse("permission window does not cover child")
     permission_digest = digest(permission)
-    _authority_fields(o7, O7_KIND)
-    _authority_fields(o8, O8_KIND)
-    for value in (o7, o8):
-        if value["planDigest"] != plan["planDigest"] or value["permissionDigest"] != permission_digest or value["nonceDigest"] != plan["recoveryNonceDigest"] or value["sourceInputsDigest"] != plan["provenance"]["sourceInputsDigest"]:
+    for value, kind in ((o7, O7_KIND), (o8, O8_KIND)):
+        if not isinstance(value, Mapping) or value.get("kind") != kind or value.get("campaignId") != CAMPAIGN or value.get("planDigest") != plan["planDigest"] or value.get("permissionDigest") != permission_digest or value.get("nonceDigest") != plan["recoveryNonceDigest"] or value.get("sourceInputsDigest") != plan["provenance"]["sourceInputsDigest"]:
             _refuse("fresh O7/O8 binding differs")
-    if o7.get("status") != "approved" or o8.get("status") != "issued" or o8.get("oneShot") is not True or o8.get("consumed") is not False or not isinstance(o8.get("capabilityDigest"), str) or SHA256.fullmatch(o8["capabilityDigest"]) is None:
+        _finite(value.get("issuedAt"), f"{kind} issue time")
+        _finite(value.get("expiresAt"), f"{kind} expiry")
+        if value["expiresAt"] < plan["deadlineAt"] or value["expiresAt"] <= value["issuedAt"] or value["issuedAt"] < plan["issuedAt"]:
+            _refuse("fresh O7/O8 window does not cover child")
+    if o7.get("status") != "approved" or o8.get("status") != "issued" or o8.get("oneShot") is not True or o8.get("consumed") is not False:
         _refuse("fresh O7/O8 status differs")
     current = time.time() if now is None else now
     _finite(current, "authority check time")
-    if not all(value["issuedAt"] >= plan["issuedAt"] for value in (permission, o7, o8)):
-        _refuse("fresh O7/O8 issue time differs")
-    if not all(current < value["expiresAt"] for value in (permission, o7, o8)):
+    if current >= min(permission["expiresAt"], o7["expiresAt"], o8["expiresAt"]):
         _refuse("fresh O7/O8 authority expired")
 
 
-def build_child_claim(
-    parent: Mapping[str, Any],
-    plan: Mapping[str, Any],
-    *,
-    permission: Mapping[str, Any],
-    gate_path: str,
-    owner_identity: str,
-    recovery_owner: str,
-    execution_host: Mapping[str, str],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Build the Auth-specific claim and envelope passed to the shared Ledger."""
+def build_child_claim(parent: Mapping[str, Any], plan: Mapping[str, Any], *, permission: Mapping[str, Any], source_binding: Mapping[str, Any], transport_binding: Mapping[str, Any], o7_binding: Mapping[str, Any], o8_binding: Mapping[str, Any], parent_evidence: Mapping[str, Any], gate_path: str, owner_identity: str, recovery_owner: str, execution_host: Mapping[str, str] | None = None, now: float | None = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    snapshot = _parent_snapshot(parent)
     validate_plan(plan, parent)
-    if not _text(gate_path) or not gate_path.startswith("/") or not _text(owner_identity) or not _text(recovery_owner):
-        _refuse("recovery child authority fields required")
-    if owner_identity == recovery_owner or not isinstance(execution_host, Mapping) or set(execution_host) != {"platform", "machine"} or not all(_text(value) for value in execution_host.values()):
-        _refuse("recovery execution authority differs")
-    _sha(permission.get("permissionDigest", digest(permission)), "permission")
-    resource = plan["resource"]
-    claim = {
-        "kind": CHILD_KIND,
-        "version": 1,
-        "campaignId": CAMPAIGN,
-        "operationClass": OPERATION_CLASS,
-        "manifestDigest": plan["planDigest"],
-        "nonceDigest": plan["recoveryNonceDigest"],
-        "gatePlanDigest": digest(plan["gatePlan"]),
-        "parentClaimDigest": parent["claim"].get("claimDigest", digest(parent["claim"])),
-        "parentPlanDigest": plan["parent"]["planDigest"],
-        "permissionDigest": digest(permission),
-        "resourceDigest": digest([resource]),
-        "ownedResources": [resource],
-        "recoveryNonce": plan["recoveryNonce"],
-        "ownerIdentity": owner_identity,
-        "recoveryOwner": recovery_owner,
-        "executionHost": dict(execution_host),
-        "expiresAt": plan["deadlineAt"],
-        "durationSeconds": plan["deadlineSeconds"],
-        "gatePath": gate_path,
-        "gateJob": plan["gatePlan"]["job"],
-        "budget": copy.deepcopy(CHILD_BUDGET),
-        "readCount": 1,
-        "inspectionCount": 1,
-        "absenceCount": 1,
-        "deleteCount": 0,
-        "provenance": copy.deepcopy(plan["provenance"]),
-        "customUidDigest": plan["customUidDigest"],
-    }
-    envelope = {
-        "kind": ENVELOPE_KIND,
-        "permissionDigest": digest(permission),
-        "issuedAt": plan["issuedAt"],
-        "expiresAt": plan["deadlineAt"],
-        "limits": copy.deepcopy(CHILD_BUDGET),
-        "concurrency": 1,
-        "scopes": [{"key": f"project/{PROJECT}/auth/accounts/{plan['customUid']}", "mode": "READ"}],
-    }
-    return claim, envelope
+    authority_plan = _bound_plan(plan, source_binding=source_binding, transport_binding=transport_binding, o7_binding=o7_binding, o8_binding=o8_binding)
+    if not isinstance(o7_binding.get("authority"), Mapping) or not isinstance(o8_binding.get("authority"), Mapping):
+        _refuse("fresh O7/O8 authority payload required")
+    validate_authority_bundle(authority_plan, permission=permission, o7=o7_binding["authority"], o8=o8_binding["authority"], now=authority_plan["issuedAt"])
+    if dict(parent_evidence) != snapshot["evidence"]:
+        _refuse("parent evidence differs from canonical Gate")
+    gate_path = str(Path(gate_path).resolve())
+    host = dict(HOST if execution_host is None else execution_host)
+    if not _text(owner_identity) or not _text(recovery_owner) or owner_identity == recovery_owner or host != HOST:
+        _refuse("exact Auth recovery execution authority required")
+    decision_now = time.time() if now is None else now
+    _finite(decision_now, "child allocation time")
+    remaining = authority_plan["deadlineAt"] - decision_now
+    if remaining < 1:
+        _refuse("recovery deadline expired")
+    duration = min(authority_plan["deadlineSeconds"], int(remaining))
+    child_gate_plan = copy.deepcopy(authority_plan["gatePlan"])
+    child_gate_plan["wallSeconds"] = duration
+    child_gate_plan["jobs"][GATE_JOB]["schedule"][0]["seconds"] = min(5.0, float(duration))
+    resource = authority_plan["resource"]
+    locks = [{"key": f"project/{PROJECT}/auth/accounts/{authority_plan['customUid']}", "mode": "WRITE"}]
+    claim = {"kind": CHILD_KIND, "version": 1, "campaignId": CAMPAIGN, "manifestDigest": digest(child_gate_plan), "nonceDigest": authority_plan["recoveryNonceDigest"], "gatePath": gate_path, "gateJob": GATE_JOB, "parentGateJob": snapshot["job"], "gatePlanDigest": digest(child_gate_plan), "parentClaimDigest": snapshot["claim"].get("claimDigest", digest(snapshot["claim"])), "parentPlanDigest": digest(snapshot["plan"]), "parentGateDigest": snapshot["evidence"]["gateDigest"], "parentEvidenceDigest": snapshot["evidence"]["evidenceDigest"], "parentEventIndex": snapshot["eventIndex"], "parentRequestDigest": digest(snapshot["operation"]), "recoveryNonce": authority_plan["recoveryNonce"], "resourceDigest": digest([resource]), "ownedResources": [resource], "locks": locks, "budget": copy.deepcopy(CHILD_BUDGET), "durationSeconds": duration, "generation": copy.deepcopy(parent["generation"]), "ownerIdentity": owner_identity, "recoveryOwner": recovery_owner, "operationClass": OPERATION_CLASS, "readCount": 1, "inspectionCount": 1, "absenceCount": 1, "deleteCount": 0, "expiresAt": authority_plan["deadlineAt"], "executionHost": host, "permissionDigest": digest(permission), "sourceBindingDigest": authority_plan["gatePlan"]["sourceBindingDigest"], "transportBindingDigest": authority_plan["gatePlan"]["transportBindingDigest"], "o7BindingDigest": authority_plan["gatePlan"]["o7BindingDigest"], "o8BindingDigest": authority_plan["gatePlan"]["o8BindingDigest"]}
+    envelope = {"permissionDigest": digest(permission), "issuedAt": authority_plan["issuedAt"], "expiresAt": authority_plan["deadlineAt"], "limits": copy.deepcopy(CHILD_BUDGET), "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}/auth/accounts/{authority_plan['customUid']}", "mode": "WRITE"}]}
+    authority_plan["gatePlan"] = child_gate_plan
+    return claim, envelope, authority_plan
 
 
-def begin_child(
-    ledger: Any,
-    *,
-    parent_ticket: Mapping[str, Any],
-    parent: Mapping[str, Any],
-    plan: Mapping[str, Any],
-    permission: Mapping[str, Any],
-    o7: Mapping[str, Any],
-    o8: Mapping[str, Any],
-    gate_path: str = "/tmp/auth-recovery-gate",
-    owner_identity: str = "owner@example.invalid",
-    recovery_owner: str = "recovery@example.invalid",
-    execution_host: Mapping[str, str] | None = None,
-    now: float | None = None,
-) -> Any:
-    """Persist the child before capability use; never call the generic FS API."""
+def begin_child(ledger: Any, *, parent_ticket: Mapping[str, Any], parent: Mapping[str, Any], plan: Mapping[str, Any], permission: Mapping[str, Any], o7: Mapping[str, Any], o8: Mapping[str, Any], gate_path: str = "/tmp/auth-recovery-gate", owner_identity: str = "owner@example.invalid", recovery_owner: str = "recovery@example.invalid", execution_host: Mapping[str, str] | None = None, now: float | None = None) -> Any:
     validate_plan(plan, parent)
     validate_authority_bundle(plan, permission=permission, o7=o7, o8=o8, now=now)
-    claim, envelope = build_child_claim(
-        parent,
-        plan,
-        permission=permission,
-        gate_path=gate_path,
-        owner_identity=owner_identity,
-        recovery_owner=recovery_owner,
-        execution_host=execution_host or {"platform": "unknown", "machine": "unknown"},
-    )
+    source_binding = {"kind": "auth-source-binding-v1", "digest": plan["provenance"]["sourceInputsDigest"]}
+    transport_binding = {"kind": "auth-transport-binding-v1", "digest": digest(plan["provenance"]["transport"])}
+    o7_binding = {"kind": "auth-o7-binding-v1", "digest": digest(o7), "authority": copy.deepcopy(dict(o7))}
+    o8_binding = {"kind": "auth-o8-binding-v1", "digest": digest(o8), "authority": copy.deepcopy(dict(o8))}
+    evidence = _parent_snapshot(parent)["evidence"]
+    claim, envelope, bound_plan = build_child_claim(parent, plan, permission=permission, source_binding=source_binding, transport_binding=transport_binding, o7_binding=o7_binding, o8_binding=o8_binding, parent_evidence=evidence, gate_path=gate_path, owner_identity=owner_identity, recovery_owner=recovery_owner, execution_host=execution_host, now=now)
     method = getattr(ledger, "begin_auth_recovery_extension", None)
     if not callable(method):
         _refuse("Auth recovery Ledger API required")
     try:
-        ticket = method(
-            parent_ticket,
-            claim,
-            envelope,
-            parent["plan"],
-            plan["gatePlan"],
-            parent_inputs=parent.get("inputs"),
-            parent_permission=parent.get("permission"),
-            child_permission=copy.deepcopy(permission),
-            o7=copy.deepcopy(o7),
-            o8=copy.deepcopy(o8),
-        )
+        ticket = method(parent_ticket, claim, envelope, bound_plan["gatePlan"], source_binding=source_binding, transport_binding=transport_binding, o7_binding=o7_binding, o8_binding=o8_binding, parent_evidence=evidence, now=now)
     except RecoveryRefusal:
         raise
-    except Exception as error:  # noqa: BLE001 -- shared boundary returns no secret text
+    except Exception as error:  # noqa: BLE001
         raise RecoveryRefusal(f"Auth recovery child refused: {type(error).__name__}") from None
     if not isinstance(ticket, Mapping) or ticket.get("parentReservation") != parent_ticket.get("reservation"):
         _refuse("Auth recovery child parent binding differs")
@@ -486,135 +409,101 @@ def _shape(value: Any) -> str:
 
 
 def custom_sign_in_diagnostic(status: Any, body: Any) -> dict[str, Any]:
-    """Project creation-status facts without retaining UID or token values."""
+    """Project creation facts without retaining UID or token values."""
     result: dict[str, Any] = {"status": status, "bodyType": _shape(body)}
     if not isinstance(body, Mapping):
         result.update(localId="missing", isNewUser="missing", tokens={"idToken": "missing", "refreshToken": "missing"})
         return result
     local_id = body.get("localId")
     result["localId"] = "present" if _text(local_id) else ("malformed" if "localId" in body else "missing")
-    if body.get("isNewUser") is True:
-        result["isNewUser"] = "boolean-true"
-    elif body.get("isNewUser") is False:
-        result["isNewUser"] = "boolean-false"
-    elif "isNewUser" not in body:
-        result["isNewUser"] = "missing"
-    else:
-        result["isNewUser"] = "malformed"
+    result["isNewUser"] = "boolean-true" if body.get("isNewUser") is True else "boolean-false" if body.get("isNewUser") is False else "missing" if "isNewUser" not in body else "malformed"
     result["tokens"] = {name: "present" if _text(body.get(name)) else ("malformed" if name in body else "missing") for name in ("idToken", "refreshToken")}
     return result
 
 
 def _typed_empty(status: Any, body: Any) -> bool:
-    return type(status) is int and status == 200 and isinstance(body, Mapping) and body.get("kind") == "identitytoolkit#GetAccountInfoResponse" and body.get("users") == [] and set(body) == {"kind", "users"}
+    return type(status) is int and status == 200 and isinstance(body, Mapping) and set(body) == {"kind", "users"} and body.get("kind") == "identitytoolkit#GetAccountInfoResponse" and body.get("users") == []
 
 
-def execute_lookup(
-    plan: Mapping[str, Any],
-    *,
-    send: Callable[[Mapping[str, Any], float], tuple[Any, Any]],
-    now: Callable[[], float] | float | None = None,
-) -> dict[str, Any]:
-    """Send exactly one UID lookup and return only a secret-free typed result."""
-    _validate_shape(plan)
+def execute_lookup(plan: Mapping[str, Any], parent: Mapping[str, Any], *, send: Callable[[Mapping[str, Any], float], tuple[Any, Any]], now: Callable[[], float] | float | None = None) -> dict[str, Any]:
+    """Send one exact UID lookup and reject responses that arrive after deadline."""
+    validated = validate_plan(plan, parent)
     clock = now if callable(now) else (lambda: time.time() if now is None else float(now))
     started = clock()
     _finite(started, "lookup clock")
-    remaining = plan["deadlineAt"] - started
+    remaining = validated["deadlineAt"] - started
     if remaining <= 0:
         _refuse("recovery deadline expired")
     try:
-        status, body = send(copy.deepcopy(plan["operations"][0]), remaining)
+        status, body = send(copy.deepcopy(validated["operation"]), remaining)
     except TimeoutError:
         _refuse("lookup timeout")
-    except Exception as error:  # noqa: BLE001 -- no transport text crosses the boundary
+    except Exception as error:  # noqa: BLE001
         raise RecoveryRefusal(f"lookup transport refused: {type(error).__name__}") from None
-    if _typed_empty(status, body):
-        return {
-            "kind": "auth-credential-recovery-result-v1",
-            "disposition": "typed-empty",
-            "lookupCount": 1,
-            "status": 200,
-            "responseDigest": digest(body),
-            "response": {"kind": body["kind"], "users": 0},
-            "receiptDigest": hashlib.sha256(repr((plan["planDigest"], digest(body))).encode()).hexdigest(),
-        }
-    if type(status) is int and status == 200 and isinstance(body, Mapping) and isinstance(body.get("users"), list):
-        if not body["users"]:
-            _refuse("malformed custom account lookup response")
-        if len(body["users"]) == 1 and isinstance(body["users"][0], Mapping):
-            _refuse("present custom account")
-        _refuse("ambiguous custom account result")
-    _refuse("malformed custom account lookup response")
+    if clock() > validated["deadlineAt"]:
+        _refuse("lookup completed after deadline")
+    if not _typed_empty(status, body):
+        if type(status) is int and status == 200 and isinstance(body, Mapping) and isinstance(body.get("users"), list):
+            _refuse("present custom account" if body["users"] else "malformed custom account lookup response")
+        _refuse("malformed custom account lookup response")
+    response_digest = digest(body)
+    return {"kind": "auth-credential-recovery-result-v1", "disposition": "typed-empty", "lookupCount": 1, "status": 200, "responseDigest": response_digest, "response": {"kind": body["kind"], "users": 0}}
 
 
-def settle_and_close(
-    ledger: Any,
-    *,
-    parent_ticket: Mapping[str, Any],
-    child_ticket: Mapping[str, Any],
-    parent: Mapping[str, Any],
-    plan: Mapping[str, Any],
-    result: Mapping[str, Any],
-) -> Any:
-    """Settle and close only after the typed empty lookup result."""
-    if not isinstance(result, Mapping) or result.get("disposition") != "typed-empty" or result.get("lookupCount") != 1:
-        _refuse("typed-empty child result required")
-    if result.get("status") != 200 or result.get("response") != {
-        "kind": "identitytoolkit#GetAccountInfoResponse",
-        "users": 0,
-    }:
-        _refuse("typed-empty child response required")
-    _sha(result.get("responseDigest"), "recovery response")
-    _sha(result.get("receiptDigest"), "recovery receipt")
-    expected_receipt = hashlib.sha256(
-        repr((plan["planDigest"], result["responseDigest"])).encode()
-    ).hexdigest()
-    if result["receiptDigest"] != expected_receipt:
-        _refuse("recovery receipt binding differs")
+def _derive_absence_proof(child_gate: Mapping[str, Any], plan: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
+    if not isinstance(child_gate, Mapping) or not isinstance(child_gate.get("plan"), Mapping) or child_gate.get("planDigest") != digest(child_gate["plan"]):
+        _refuse("bound child Gate plan required")
+    expected_gate = copy.deepcopy(plan["gatePlan"])
+    for key in ("sourceBindingDigest", "transportBindingDigest", "o7BindingDigest", "o8BindingDigest"):
+        expected_gate[key] = child_gate["plan"].get(key)
+    expected_gate["wallSeconds"] = child_gate["plan"].get("wallSeconds")
+    expected_gate["jobs"][GATE_JOB]["schedule"][0]["seconds"] = child_gate["plan"]["jobs"][GATE_JOB]["schedule"][0].get("seconds")
+    if child_gate["plan"] != expected_gate:
+        _refuse("bound child Gate plan differs")
+    job = child_gate.get("jobs", {}).get(GATE_JOB)
+    operation = plan["operation"]
+    if not isinstance(job, Mapping) or job.get("inflight") or job.get("complete") is not True or job.get("recovery") != 1 or job.get("observation") != 0 or job.get("absent") != [plan["resource"]] or child_gate.get("coordinatorInflight") or child_gate.get("skips"):
+        _refuse("child Gate terminal evidence incomplete")
+    events = child_gate.get("events")
+    if not isinstance(events, list) or len(events) != 1:
+        _refuse("child Gate terminal event required")
+    event = events[0]
+    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+    response_digest = digest(body)
+    if not isinstance(event, Mapping) or event.get("job") != GATE_JOB or event.get("phase") != "recovery" or event.get("index") != 0 or event.get("requestDigest") != digest(operation) or event.get("service") != "auth" or event.get("method") != "POST" or event.get("completed") is not True or event.get("status") != 200 or event.get("responseDigest") != response_digest or job.get("creationProofs") not in (None, {}):
+        _refuse("child Gate typed absence evidence changed")
+    proof = {"kind": ABSENCE_KIND, "resource": plan["resource"], "status": 200, "bodyShape": body, "bodyDigest": response_digest, "responseDigest": response_digest, "eventIndex": 0, "requestDigest": digest(operation)}
+    return proof, response_digest
+
+
+def _worker_receipt(receipt: Mapping[str, Any], child_gate: Mapping[str, Any], response_digest: str) -> str:
+    required = {"kind", "gateDigest", "gatePlanDigest", "responseDigest", "completed", "receiptDigest"}
+    if not isinstance(receipt, Mapping) or set(receipt) != required or receipt.get("kind") != "auth-credential-recovery-worker-receipt-v1" or receipt.get("gateDigest") != digest(child_gate) or receipt.get("gatePlanDigest") != digest(child_gate["plan"]) or receipt.get("responseDigest") != response_digest or receipt.get("completed") is not True:
+        _refuse("bound worker receipt required")
+    supplied = receipt["receiptDigest"]
+    _sha(supplied, "worker receipt")
+    expected = digest({key: value for key, value in receipt.items() if key != "receiptDigest"})
+    if supplied != expected:
+        _refuse("worker receipt binding differs")
+    return supplied
+
+
+def settle_and_close(ledger: Any, *, parent_ticket: Mapping[str, Any], child_ticket: Mapping[str, Any], parent: Mapping[str, Any], plan: Mapping[str, Any], child_gate: Mapping[str, Any], worker_receipt: Mapping[str, Any], now: float | None = None) -> Any:
+    """Derive absence from the bound Gate, then use the exact API924 contract."""
     validate_plan(plan, parent)
+    proof, response_digest = _derive_absence_proof(child_gate, plan)
+    receipt_digest = _worker_receipt(worker_receipt, child_gate, response_digest)
     settle = getattr(ledger, "settle_auth_recovery_child", None)
     close = getattr(ledger, "close_after_auth_recovery_child", None)
     if not callable(settle) or not callable(close):
         _refuse("Auth recovery close API required")
     try:
-        settled = settle(
-            child_ticket,
-            receipt_digest=result["receiptDigest"],
-            canonical_parent_plan=parent["plan"],
-            canonical_child_plan=plan["gatePlan"],
-            result=copy.deepcopy(dict(result)),
-        )
-        return close(
-            parent_ticket,
-            settled,
-            receipt_digest=result["receiptDigest"],
-            canonical_parent_plan=parent["plan"],
-            canonical_child_plan=plan["gatePlan"],
-            result=copy.deepcopy(dict(result)),
-        )
+        settled = settle(child_ticket, absence_proof=proof, receipt_digest=receipt_digest, now=now)
+        return close(parent_ticket, settled, receipt_digest=receipt_digest, now=now)
     except RecoveryRefusal:
         raise
-    except Exception as error:  # noqa: BLE001 -- parent remains held on shared refusal
+    except Exception as error:  # noqa: BLE001
         raise RecoveryRefusal(f"Auth recovery close refused: {type(error).__name__}") from None
 
 
-__all__ = [
-    "CAMPAIGN",
-    "CHILD_BUDGET",
-    "LAUNCHER_ENTRY",
-    "O7_KIND",
-    "O8_KIND",
-    "PERMISSION_KIND",
-    "RecoveryRefusal",
-    "TRANSPORT_ENTRY",
-    "WORKER_ENTRY",
-    "begin_child",
-    "build_child_claim",
-    "compile_recovery_plan",
-    "custom_sign_in_diagnostic",
-    "execute_lookup",
-    "settle_and_close",
-    "validate_authority_bundle",
-    "validate_plan",
-]
+__all__ = ["ABSENCE_KIND", "CAMPAIGN", "CHILD_BUDGET", "GATE_JOB", "HOST", "KIND", "LAUNCHER_ENTRY", "O7_KIND", "O8_KIND", "PARENT_EVIDENCE_KIND", "PERMISSION_KIND", "RecoveryRefusal", "TRANSPORT_ENTRY", "WORKER_ENTRY", "begin_child", "build_child_claim", "compile_recovery_plan", "custom_sign_in_diagnostic", "execute_lookup", "settle_and_close", "validate_authority_bundle", "validate_plan"]

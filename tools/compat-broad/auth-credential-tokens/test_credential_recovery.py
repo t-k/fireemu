@@ -1,4 +1,4 @@
-"""Offline tests for the parent-linked Auth custom-UID recovery contract."""
+"""Offline adversarial tests for the Auth packet05 recovery contract."""
 
 from __future__ import annotations
 
@@ -18,300 +18,196 @@ import credential_recovery as recovery
 
 
 def _provenance() -> dict:
-    values = {
-        recovery.WORKER_ENTRY: "a" * 64,
-        recovery.TRANSPORT_ENTRY: "b" * 64,
-        recovery.LAUNCHER_ENTRY: "c" * 64,
-    }
+    values = {recovery.WORKER_ENTRY: "a" * 64, recovery.TRANSPORT_ENTRY: "b" * 64, recovery.LAUNCHER_ENTRY: "c" * 64}
     return {
         "sourceCommit": "1" * 40,
         "sourceInputs": values,
         "worker": {"path": recovery.WORKER_ENTRY, "sha256": values[recovery.WORKER_ENTRY]},
         "transport": {"path": recovery.TRANSPORT_ENTRY, "sha256": values[recovery.TRANSPORT_ENTRY]},
         "launcher": {"path": recovery.LAUNCHER_ENTRY, "sha256": values[recovery.LAUNCHER_ENTRY]},
+        "generation": {"sourceCommit": "1" * 40, "collectorSourceDigest": "e" * 64, "sourceDigests": {"worker.py": "a" * 64, "transport.py": "b" * 64}},
     }
 
 
 def _parent() -> dict:
     nonce = "0123456789abcdef0123456789abcdef"
-    uid = f"custom-{nonce}"
-    operation = {
-        "service": "auth",
-        "method": "POST",
-        "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
-        "body": {"token": "$binding:customToken", "returnSecureToken": True},
-        "form": False,
-        "owner": False,
-        "kind": "custom-sign-in",
-        "account": "custom",
-        "binds": {"customUid": "localId"},
-        "resource": f"projects/fireemu-35fe6/auth/accounts/{uid}",
-    }
-    plan = {
-        "campaignId": recovery.CAMPAIGN,
-        "project": "fireemu-35fe6",
-        "nonce": nonce,
-        "sourceCommit": "1" * 40,
-        "sourceInputs": _provenance()["sourceInputs"],
-        "jobs": {"auth-credential": {"observation": [operation], "recovery": []}},
-    }
-    event = {
-        "job": "auth-credential",
-        "phase": "observation",
-        "index": 0,
-        "requestDigest": digest(operation),
-        "completed": False,
-        "creationOutcome": "unknown",
-    }
-    return {
-        "state": "held",
-        "ticket": {"reservation": "parent-ticket", "claimDigest": "parent-claim"},
-        "claim": {
-            "campaignId": recovery.CAMPAIGN,
-            "claimDigest": "parent-claim",
-            "gatePlanDigest": digest(plan),
-            "nonceDigest": digest(nonce),
-            "gatePath": "/tmp/auth-parent-gate",
-        },
-        "plan": plan,
-        "gate": {
-            "plan": plan,
-            "jobs": {"auth-credential": {"inflight": False}},
-            "events": [event],
-            "coordinatorInflight": False,
-        },
-        "receipt": {"kind": "auth-credential-acquisition-receipt-v1", "failure": "collection-incomplete"},
-        "responsibility": {"custom": {"state": "unknown", "uid": None}},
-    }
+    resource = f"projects/fireemu-35fe6/auth/accounts/custom-{nonce}"
+    operation = {"service": "auth", "method": "POST", "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken", "body": {"token": "$binding:customToken", "returnSecureToken": True}, "form": False, "owner": False, "kind": "custom-sign-in", "account": "custom", "binds": {"customUid": "localId"}, "resource": resource}
+    plan = {"campaignId": recovery.CAMPAIGN, "project": recovery.PROJECT, "nonce": nonce, "sourceCommit": "1" * 40, "jobs": {"auth-credential": {"observation": [operation], "recovery": []}}}
+    event = {"job": "auth-credential", "phase": "observation", "index": 0, "requestDigest": digest(operation), "completed": False, "creationOutcome": "unknown", "ended": 999.0}
+    gate = {"plan": plan, "planDigest": digest(plan), "jobs": {"auth-credential": {"inflight": False}}, "events": [event], "coordinatorInflight": False}
+    claim = {"campaignId": recovery.CAMPAIGN, "claimDigest": "d" * 64, "gatePlanDigest": digest(plan), "nonceDigest": digest(nonce), "gateJob": "auth-credential"}
+    immutable = {"kind": "auth-packet05-parent-binding-v1", "gateDigest": digest(gate), "gatePlanDigest": digest(plan), "nonce": nonce, "resource": resource, "eventIndex": 0, "requestDigest": digest(operation)}
+    return {"state": "held", "ticket": {"reservation": "parent-ticket"}, "claim": claim, "plan": plan, "gate": gate, "receipt": {"failure": "collection-incomplete", "postflightComplete": False}, "responsibility": {"custom": {"state": "unknown", "uid": None}}, "immutableParent": immutable, "generation": _provenance()["generation"]}
 
 
 def _authorities(plan: dict) -> tuple[dict, dict, dict]:
-    permission = {
-        "kind": recovery.PERMISSION_KIND,
-        "campaignId": recovery.CAMPAIGN,
-        "parentClaimDigest": plan["parent"]["claimDigest"],
-        "planDigest": plan["planDigest"],
-        "nonceDigest": plan["recoveryNonceDigest"],
-        "sourceInputsDigest": plan["provenance"]["sourceInputsDigest"],
-        "budget": copy.deepcopy(recovery.CHILD_BUDGET),
-        "ownerIdentity": "owner@example.invalid",
-        "recoveryOwner": "recovery@example.invalid",
-        "issuedAt": 1000.0,
-        "expiresAt": 1300.0,
-    }
-    o7 = {
-        "kind": recovery.O7_KIND,
-        "status": "approved",
-        "campaignId": recovery.CAMPAIGN,
-        "planDigest": plan["planDigest"],
-        "permissionDigest": digest(permission),
-        "nonceDigest": plan["recoveryNonceDigest"],
-        "sourceInputsDigest": plan["provenance"]["sourceInputsDigest"],
-        "issuedAt": 1000.0,
-        "expiresAt": 1300.0,
-    }
-    o8 = {
-        "kind": recovery.O8_KIND,
-        "status": "issued",
-        "campaignId": recovery.CAMPAIGN,
-        "planDigest": plan["planDigest"],
-        "permissionDigest": digest(permission),
-        "nonceDigest": plan["recoveryNonceDigest"],
-        "sourceInputsDigest": plan["provenance"]["sourceInputsDigest"],
-        "capabilityDigest": "d" * 64,
-        "oneShot": True,
-        "consumed": False,
-        "issuedAt": 1001.0,
-        "expiresAt": 1300.0,
-    }
+    permission = {"kind": recovery.PERMISSION_KIND, "campaignId": recovery.CAMPAIGN, "parentClaimDigest": plan["parent"]["claimDigest"], "planDigest": plan["planDigest"], "nonceDigest": plan["recoveryNonceDigest"], "sourceInputsDigest": plan["provenance"]["sourceInputsDigest"], "budget": copy.deepcopy(recovery.CHILD_BUDGET), "issuedAt": 1000.0, "expiresAt": 1300.0}
+    o7 = {"kind": recovery.O7_KIND, "status": "approved", "campaignId": recovery.CAMPAIGN, "planDigest": plan["planDigest"], "permissionDigest": digest(permission), "nonceDigest": plan["recoveryNonceDigest"], "sourceInputsDigest": plan["provenance"]["sourceInputsDigest"], "issuedAt": 1000.0, "expiresAt": 1300.0}
+    o8 = {"kind": recovery.O8_KIND, "status": "issued", "campaignId": recovery.CAMPAIGN, "planDigest": plan["planDigest"], "permissionDigest": digest(permission), "nonceDigest": plan["recoveryNonceDigest"], "sourceInputsDigest": plan["provenance"]["sourceInputsDigest"], "oneShot": True, "consumed": False, "issuedAt": 1001.0, "expiresAt": 1300.0}
     return permission, o7, o8
 
 
-def _plan() -> tuple[dict, dict]:
+def _plan() -> tuple[dict, dict, dict, dict, dict]:
     parent = _parent()
-    plan = recovery.compile_recovery_plan(
-        parent,
-        recovery_nonce="fedcba9876543210fedcba9876543210",
-        provenance=_provenance(),
-        now=1000.0,
-        deadline_seconds=180,
-    )
+    plan = recovery.compile_recovery_plan(parent, recovery_nonce="fedcba9876543210fedcba9876543210", provenance=_provenance(), now=1000.0, deadline_seconds=60)
     permission, o7, o8 = _authorities(plan)
-    plan["permissionDigest"] = digest(permission)
-    plan["o7Digest"] = digest(o7)
-    plan["o8Digest"] = digest(o8)
     recovery.validate_authority_bundle(plan, permission=permission, o7=o7, o8=o8, now=1001.0)
-    return parent, plan
+    return parent, plan, permission, o7, o8
+
+
+def _bound_gate(plan: dict, o7: dict, o8: dict) -> dict:
+    source = {"kind": "auth-source-binding-v1", "digest": plan["provenance"]["sourceInputsDigest"]}
+    transport = {"kind": "auth-transport-binding-v1", "digest": digest(plan["provenance"]["transport"])}
+    o7_binding = {"kind": "auth-o7-binding-v1", "digest": digest(o7), "authority": o7}
+    o8_binding = {"kind": "auth-o8-binding-v1", "digest": digest(o8), "authority": o8}
+    return recovery._bound_plan(plan, source_binding=source, transport_binding=transport, o7_binding=o7_binding, o8_binding=o8_binding)["gatePlan"]
+
+
+def _terminal_gate(plan: dict, o7: dict, o8: dict) -> dict:
+    gate_plan = _bound_gate(plan, o7, o8)
+    operation = plan["operation"]
+    response_digest = digest({"kind": "identitytoolkit#GetAccountInfoResponse", "users": []})
+    return {"plan": gate_plan, "planDigest": digest(gate_plan), "coordinatorInflight": False, "skips": [], "jobs": {recovery.GATE_JOB: {"inflight": False, "complete": True, "recovery": 1, "observation": 0, "absent": [plan["resource"]], "creationProofs": {}}}, "events": [{"job": recovery.GATE_JOB, "phase": "recovery", "index": 0, "requestDigest": digest(operation), "service": "auth", "method": "POST", "completed": True, "status": 200, "responseDigest": response_digest}]}
+
+
+def _worker_receipt(gate: dict) -> dict:
+    value = {"kind": "auth-credential-recovery-worker-receipt-v1", "gateDigest": digest(gate), "gatePlanDigest": digest(gate["plan"]), "responseDigest": digest({"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}), "completed": True}
+    value["receiptDigest"] = digest(value)
+    return value
 
 
 def test_compile_binds_exact_custom_uid_and_one_read_only_lookup() -> None:
-    parent, plan = _plan()
-    operation = plan["operations"][0]
+    parent, plan, _permission, _o7, _o8 = _plan()
+    operation = plan["operation"]
     assert operation["body"] == {"localId": [f"custom-{parent['plan']['nonce']}"]}
-    assert operation["kind"] == "recovery-custom-uid-lookup"
+    assert operation["kind"] == "auth-custom-uid-lookup"
     assert operation["method"] == "POST"
-    assert len(plan["operations"]) == 1
-    assert plan["budget"] == recovery.CHILD_BUDGET
-    assert plan["deadlineSeconds"] == 180
-    assert "email" not in repr(plan)
-    assert all(op["method"] != "DELETE" for op in plan["operations"])
+    assert plan["budget"] == {"requests": 1, "accounts": 1, "resources": 1, "costMicrousd": 50_000}
+    assert "delete" not in repr(plan).lower()
+    assert "email" not in repr(plan).lower()
 
 
-def test_compile_refuses_parent_that_is_not_held_or_custom_event_changed() -> None:
+def test_parent_nonce_resource_and_gate_mutation_is_refused_against_immutable_binding() -> None:
     parent = _parent()
-    parent["state"] = "released"
-    with pytest.raises(recovery.RecoveryRefusal, match="parent.*held"):
-        recovery.compile_recovery_plan(parent, recovery_nonce="f" * 32, provenance=_provenance())
-
-    parent = _parent()
-    parent["gate"]["events"][0]["requestDigest"] = "0" * 64
-    with pytest.raises(recovery.RecoveryRefusal, match="custom.*event"):
-        recovery.compile_recovery_plan(parent, recovery_nonce="f" * 32, provenance=_provenance())
+    parent["gate"]["plan"]["nonce"] = "f" * 32
+    parent["gate"]["plan"]["jobs"]["auth-credential"]["observation"][0]["resource"] = f"projects/{recovery.PROJECT}/auth/accounts/custom-{'f' * 32}"
+    parent["claim"]["gatePlanDigest"] = digest(parent["gate"]["plan"])
+    with pytest.raises(recovery.RecoveryRefusal, match="immutable|resource|Gate"):
+        recovery.compile_recovery_plan(parent, recovery_nonce="e" * 32, provenance=_provenance())
 
 
-def test_fresh_authority_must_bind_child_and_parent_provenance() -> None:
-    _parent_value, plan = _plan()
-    permission, o7, o8 = _authorities(plan)
-    o8["consumed"] = True
-    with pytest.raises(recovery.RecoveryRefusal, match="O8"):
+def test_detached_plan_cannot_turn_lookup_into_arbitrary_post_or_delete() -> None:
+    parent, plan, _permission, _o7, _o8 = _plan()
+    tampered = copy.deepcopy(plan)
+    tampered["operation"]["method"] = "DELETE"
+    tampered["planDigest"] = digest(recovery._stable_plan(tampered))
+    with pytest.raises(recovery.RecoveryRefusal, match="lookup"):
+        recovery.execute_lookup(tampered, parent, send=lambda *_: (200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}), now=lambda: 1001.0)
+
+
+def test_authority_window_must_cover_entire_child_deadline() -> None:
+    _parent_value, plan, permission, o7, o8 = _plan()
+    o8["expiresAt"] = 1050.0
+    with pytest.raises(recovery.RecoveryRefusal, match="window"):
         recovery.validate_authority_bundle(plan, permission=permission, o7=o7, o8=o8, now=1001.0)
+
+
+def test_deadline_cannot_exceed_packet05_admitted_recovery_window() -> None:
+    parent = _parent()
+    with pytest.raises(recovery.RecoveryRefusal, match="deadline"):
+        recovery.compile_recovery_plan(parent, recovery_nonce="e" * 32, provenance=_provenance(), now=1000.0, deadline_seconds=61)
 
 
 class _Ledger:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple, dict]] = []
 
-    def begin_auth_recovery_extension(self, *args, **kwargs):
-        self.calls.append(("begin", args, kwargs))
-        return {"child": "ticket", "parentReservation": "parent-ticket"}
+    def begin_auth_recovery_extension(self, parent_ticket, child_claim, envelope, canonical_child_gate_plan, *, source_binding, transport_binding, o7_binding, o8_binding, parent_evidence, now=None):
+        self.calls.append(("begin", (parent_ticket, child_claim, envelope, canonical_child_gate_plan), {"source_binding": source_binding, "transport_binding": transport_binding, "o7_binding": o7_binding, "o8_binding": o8_binding, "parent_evidence": parent_evidence, "now": now}))
+        assert set(child_claim) == {"kind", "version", "campaignId", "manifestDigest", "nonceDigest", "gatePath", "gateJob", "parentGateJob", "gatePlanDigest", "parentClaimDigest", "parentPlanDigest", "parentGateDigest", "parentEvidenceDigest", "parentEventIndex", "parentRequestDigest", "recoveryNonce", "resourceDigest", "ownedResources", "locks", "budget", "durationSeconds", "generation", "ownerIdentity", "recoveryOwner", "operationClass", "readCount", "inspectionCount", "absenceCount", "deleteCount", "expiresAt", "executionHost", "permissionDigest", "sourceBindingDigest", "transportBindingDigest", "o7BindingDigest", "o8BindingDigest"}
+        assert set(envelope) == {"permissionDigest", "issuedAt", "expiresAt", "limits", "concurrency", "scopes"}
+        assert child_claim["kind"] == "auth-custom-uid-recovery-child-v1"
+        assert child_claim["budget"]["accounts"] == 1
+        assert canonical_child_gate_plan["jobs"][recovery.GATE_JOB]["recovery"][0]["method"] == "POST"
+        return {"child": "ticket", "parentReservation": parent_ticket["reservation"]}
 
-    def settle_auth_recovery_child(self, *args, **kwargs):
-        self.calls.append(("settle", args, kwargs))
+    def settle_auth_recovery_child(self, child_ticket, *, absence_proof, receipt_digest, now=None):
+        self.calls.append(("settle", (child_ticket,), {"absence_proof": absence_proof, "receipt_digest": receipt_digest, "now": now}))
+        assert absence_proof["kind"] == recovery.ABSENCE_KIND
         return {"child": "ticket", "state": "settled"}
 
-    def close_after_auth_recovery_child(self, *args, **kwargs):
-        self.calls.append(("close", args, kwargs))
+    def close_after_auth_recovery_child(self, parent_ticket, child_ticket, *, receipt_digest, now=None):
+        self.calls.append(("close", (parent_ticket, child_ticket), {"receipt_digest": receipt_digest, "now": now}))
         return {"state": "closed-after-recovery-child"}
 
 
-def test_begin_uses_auth_child_api_and_does_not_touch_parent() -> None:
-    parent, plan = _plan()
-    permission, o7, o8 = _authorities(plan)
+def test_begin_matches_api924_and_does_not_touch_parent() -> None:
+    parent, plan, permission, o7, o8 = _plan()
     ledger = _Ledger()
-    ticket = recovery.begin_child(
-        ledger,
-        parent_ticket=parent["ticket"],
-        parent=parent,
-        plan=plan,
-        permission=permission,
-        o7=o7,
-        o8=o8,
-        now=1001.0,
-    )
+    ticket = recovery.begin_child(ledger, parent_ticket=parent["ticket"], parent=parent, plan=plan, permission=permission, o7=o7, o8=o8, now=1001.0)
     assert ticket["child"] == "ticket"
     assert [name for name, _args, _kwargs in ledger.calls] == ["begin"]
     assert parent["state"] == "held"
 
 
-@pytest.mark.parametrize(
-    "answer",
-    [
-        (200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}),
-    ],
-)
-def test_empty_uid_lookup_is_typed_and_is_the_only_send(answer) -> None:
-    _parent_value, plan = _plan()
+@pytest.mark.parametrize("answer,reason", [((200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": [{"localId": "x"}]}), "present"), ((200, {"users": []}), "malformed"), ((200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": ["bad"]}), "present"), ((200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}), "late")])
+def test_lookup_refuses_nonempty_malformed_or_late_and_sends_once(answer, reason) -> None:
+    parent, plan, _permission, _o7, _o8 = _plan()
     calls = []
-
     def send(operation, timeout):
-        calls.append((operation, timeout))
+        calls.append(operation)
+        if reason == "late":
+            return answer
         return answer
+    clock = iter((1001.0, 1181.0)) if reason == "late" else iter((1001.0, 1001.0))
+    with pytest.raises(recovery.RecoveryRefusal, match="late|present|malformed|deadline"):
+        recovery.execute_lookup(plan, parent, send=send, now=lambda: next(clock))
+    assert len(calls) == 1
 
-    result = recovery.execute_lookup(plan, send=send, now=lambda: 1001.0)
+
+def test_typed_empty_result_is_secret_free_and_only_one_send() -> None:
+    parent, plan, _permission, _o7, _o8 = _plan()
+    calls = []
+    result = recovery.execute_lookup(plan, parent, send=lambda operation, timeout: (calls.append(operation) or (200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []})), now=lambda: 1001.0)
     assert result["disposition"] == "typed-empty"
     assert result["lookupCount"] == 1
     assert len(calls) == 1
-    assert result["response"]["users"] == 0
     assert "custom-" not in repr(result)
 
 
-@pytest.mark.parametrize(
-    "answer,reason",
-    [
-        ((200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": [{"localId": "x"}]}), "present"),
-        ((200, {"users": []}), "malformed"),
-        ((200, {"kind": "identitytoolkit#GetAccountInfoResponse", "users": ["bad"]}), "ambiguous"),
-    ],
-)
-def test_non_empty_malformed_and_ambiguous_answers_refuse_without_second_send(answer, reason) -> None:
-    _parent_value, plan = _plan()
-    calls = []
-
-    def send(operation, timeout):
-        calls.append(operation)
-        return answer
-
-    with pytest.raises(recovery.RecoveryRefusal, match=reason):
-        recovery.execute_lookup(plan, send=send, now=lambda: 1001.0)
-    assert len(calls) == 1
-
-
-def test_timeout_refuses_without_settlement() -> None:
-    _parent_value, plan = _plan()
-    with pytest.raises(recovery.RecoveryRefusal, match="timeout"):
-        recovery.execute_lookup(
-            plan,
-            send=lambda _operation, _timeout: (_ for _ in ()).throw(TimeoutError()),
-            now=lambda: 1001.0,
-        )
-
-
-def test_settle_and_close_is_only_available_for_typed_empty() -> None:
-    parent, plan = _plan()
+def test_settlement_derives_absence_from_bound_gate_and_receipt() -> None:
+    parent, plan, _permission, o7, o8 = _plan()
+    gate = _terminal_gate(plan, o7, o8)
+    receipt = _worker_receipt(gate)
     ledger = _Ledger()
-    response_digest = digest({"kind": "identitytoolkit#GetAccountInfoResponse", "users": []})
-    result = {
-        "disposition": "typed-empty",
-        "lookupCount": 1,
-        "status": 200,
-        "responseDigest": response_digest,
-        "response": {"kind": "identitytoolkit#GetAccountInfoResponse", "users": 0},
-        "receiptDigest": hashlib.sha256(repr((plan["planDigest"], response_digest)).encode()).hexdigest(),
-    }
-    outcome = recovery.settle_and_close(
-        ledger,
-        parent_ticket=parent["ticket"],
-        child_ticket={"child": "ticket"},
-        parent=parent,
-        plan=plan,
-        result=result,
-    )
+    outcome = recovery.settle_and_close(ledger, parent_ticket=parent["ticket"], child_ticket={"child": "ticket"}, parent=parent, plan=plan, child_gate=gate, worker_receipt=receipt)
     assert outcome["state"] == "closed-after-recovery-child"
     assert [name for name, _args, _kwargs in ledger.calls] == ["settle", "close"]
 
+
+def test_forged_empty_result_or_gate_event_never_reaches_ledger() -> None:
+    parent, plan, _permission, o7, o8 = _plan()
+    gate = _terminal_gate(plan, o7, o8)
+    gate["events"][0]["responseDigest"] = "a" * 64
     ledger = _Ledger()
-    with pytest.raises(recovery.RecoveryRefusal, match="typed-empty"):
-        recovery.settle_and_close(
-            ledger,
-            parent_ticket=parent["ticket"],
-            child_ticket={"child": "ticket"},
-            parent=parent,
-            plan=plan,
-            result={"disposition": "present"},
-        )
+    with pytest.raises(recovery.RecoveryRefusal, match="absence"):
+        recovery.settle_and_close(ledger, parent_ticket=parent["ticket"], child_ticket={"child": "ticket"}, parent=parent, plan=plan, child_gate=gate, worker_receipt=_worker_receipt(gate))
+    assert ledger.calls == []
+
+
+def test_forged_worker_receipt_never_reaches_ledger() -> None:
+    parent, plan, _permission, o7, o8 = _plan()
+    gate = _terminal_gate(plan, o7, o8)
+    receipt = _worker_receipt(gate)
+    receipt["responseDigest"] = "a" * 64
+    ledger = _Ledger()
+    with pytest.raises(recovery.RecoveryRefusal, match="receipt"):
+        recovery.settle_and_close(ledger, parent_ticket=parent["ticket"], child_ticket={"child": "ticket"}, parent=parent, plan=plan, child_gate=gate, worker_receipt=receipt)
     assert ledger.calls == []
 
 
 def test_diagnostic_projection_is_secret_free_and_typed() -> None:
-    projection = recovery.custom_sign_in_diagnostic(
-        200,
-        {"localId": "uid", "isNewUser": False, "idToken": "secret", "refreshToken": "secret"},
-    )
-    assert projection == {
-        "status": 200,
-        "bodyType": "object",
-        "localId": "present",
-        "isNewUser": "boolean-false",
-        "tokens": {"idToken": "present", "refreshToken": "present"},
-    }
+    projection = recovery.custom_sign_in_diagnostic(200, {"localId": "uid", "isNewUser": False, "idToken": "secret", "refreshToken": "secret"})
+    assert projection == {"status": 200, "bodyType": "object", "localId": "present", "isNewUser": "boolean-false", "tokens": {"idToken": "present", "refreshToken": "present"}}
     assert "secret" not in repr(projection)

@@ -189,9 +189,8 @@ def execute(
     )
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     ticket = ledger.reserve(envelope, claim, gate_plan)
-    gate_module.create(output / "gate", gate_plan)
-    handle = gate_module.ActionGate(output / "gate", gate_module.JOB)
-    handle.claim()
+    handle = None
+    transport_started = False
 
     snapshot = {}
     primary_error = None
@@ -214,13 +213,14 @@ def execute(
 
     def record_terminal():
         nonlocal snapshot, reservation_state, primary_error, primary_traceback
-        try:
-            snapshot = handle.snapshot()
-        except Exception as error:  # noqa: BLE001 -- terminal evidence must survive Gate failures.
-            remember_cleanup_error(error, "gate-snapshot")
-            if primary_error is None:
-                remember_primary(error, "terminal-record", "action-terminal-record-failure")
-            snapshot = {}
+        if handle is not None:
+            try:
+                snapshot = handle.snapshot()
+            except Exception as error:  # noqa: BLE001 -- terminal evidence must survive Gate failures.
+                remember_cleanup_error(error, "gate-snapshot")
+                if primary_error is None:
+                    remember_primary(error, "terminal-record", "action-terminal-record-failure")
+                snapshot = {}
         try:
             ledger_state = ledger.snapshot()
             row = ledger_state.get("reservations", {}).get(ticket["reservation"])
@@ -252,18 +252,30 @@ def execute(
                 primary_traceback = error.__traceback__
 
     def finish_terminal():
-        try:
-            remote.forget_transport(inputs["inputsDigest"])
-        except Exception as error:  # noqa: BLE001 -- transport cleanup cannot replace primary failure.
-            remember_primary(error, "transport-forget", "action-transport-cleanup-failure")
+        if transport_started:
+            try:
+                remote.forget_transport(inputs["inputsDigest"])
+            except Exception as error:  # noqa: BLE001 -- transport cleanup cannot replace primary failure.
+                remember_primary(error, "transport-forget", "action-transport-cleanup-failure")
         record_terminal()
 
+    try:
+        gate_module.create(output / "gate", gate_plan)
+        handle = gate_module.ActionGate(output / "gate", gate_module.JOB)
+        handle.claim()
+    except Exception as error:  # noqa: BLE001 -- preserve Gate setup failure after reservation.
+        remember_primary(error, "gate-setup", "action-gate-setup-failure")
+        finish_terminal()
+        raise primary_error.with_traceback(primary_traceback)
+
     def prepare():
+        nonlocal transport_started
         transport_bindings = copy.deepcopy(bindings)
         for stage_bindings in transport_bindings.values():
             for name in tuple(stage_bindings):
                 if name in remote.GENERATED_BINDINGS and not name.endswith(".localId"):
                     stage_bindings[name] = "$generated:" + name
+        transport_started = True
         remote.make_transport(
             frozen_inputs=inputs,
             declared_bindings=transport_bindings,

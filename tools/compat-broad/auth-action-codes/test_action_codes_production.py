@@ -399,10 +399,14 @@ class _F4TerminalHarness:
 
         class Gate:
             def __init__(self, _path, _job):
+                if harness.failure == "gate-construct":
+                    raise ValueError("gate-constructor-refused")
                 self.observation = 0
                 self.recovery = 0
 
             def claim(self):
+                if harness.failure == "gate-claim":
+                    raise ValueError("gate-claim-refused")
                 return None
 
             def management_dispatch(self, _phase, _slot, send):
@@ -471,10 +475,15 @@ class _F4TerminalHarness:
                 harness.transport_open = False
                 harness.remote_forgotten = True
 
+        def create_gate(*_args):
+            if harness.failure == "gate-create":
+                raise ValueError("gate-create-refused")
+
         self.Capability = Capability
         self.Ledger = Ledger
         self.Gate = Gate
         self.Remote = Remote
+        self.create_gate = create_gate
 
 
 def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
@@ -489,6 +498,9 @@ def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
         "transport-setup": ("preflight", "ValueError"),
         "management-preflight": ("preflight", "ValueError"),
         "binding-setup": ("preflight", "FileNotFoundError"),
+        "gate-create": ("gate-setup", "ValueError"),
+        "gate-construct": ("gate-setup", "ValueError"),
+        "gate-claim": ("gate-setup", "ValueError"),
     }
     for failure, (expected_phase, expected_error) in expected.items():
         case = _F4TerminalHarness(tmp_path / failure, failure)
@@ -548,7 +560,7 @@ def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
             SimpleNamespace(
                 JOB="auth-action",
                 gate_plan=lambda _project, _nonce, frozen_plan=gate_plan: frozen_plan,
-                create=lambda *_args: None,
+                create=case.create_gate,
                 ActionGate=case.Gate,
             ),
         )
@@ -594,5 +606,5 @@ def test_f4_terminal_receipt_retains_primary_failure_and_held_reservation(
         assert receipt["terminal"]["releaseEvidence"] is False
         assert receipt["terminal"]["phase"] == expected_phase
         assert receipt["terminal"]["primaryError"] == expected_error
-        assert case.remote_forgotten
+        assert case.remote_forgotten is (expected_phase != "gate-setup")
         assert case.transport_open is False

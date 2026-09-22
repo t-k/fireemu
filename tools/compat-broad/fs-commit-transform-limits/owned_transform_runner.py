@@ -76,6 +76,13 @@ CURRENT_8245_PROFILE = {
     "manifestCommitPath": ["runtimeSource", "commit"],
     "requireTopLevelArtifactSha": False,
 }
+G0_CURRENT_648_PROFILE = {
+    "name": "current-648-7737",
+    "artifactSha256": "7737f6c389aff0a0f280757591af3b81f11edfbc8438cb69268da0f4c2237026",
+    "runtimeCommit": "648aabe56cf6147128ffadf565d93ca7a92013c1",
+    "manifestCommitPath": ["runtimeSource", "commit"],
+    "requireTopLevelArtifactSha": False,
+}
 PROFILES = {
     item["name"]: item
     for item in (
@@ -84,6 +91,7 @@ PROFILES = {
         CURRENT_PROFILE,
         G0_CURRENT_PROFILE,
         CURRENT_8245_PROFILE,
+        G0_CURRENT_648_PROFILE,
     )
 }
 PROJECT = "demo-firestore-probe"

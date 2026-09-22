@@ -1092,6 +1092,39 @@ class _Wire:
         return bool(hosts) and hosts <= allowed and self.sequenced == self.receipts
 
 
+def start_context(
+    plan: Mapping[str, Any],
+    *,
+    environment: str | None,
+    journal: Any,
+    deadline_seconds: float = 600.0,
+    recovery_deadline_seconds: float = 900.0,
+    clock: Callable[[], float] = _now,
+    attempted: list[str] | None = None,
+    worker_state: dict[str, bool] | None = None,
+) -> RulesRecoveryContext:
+    """Create one bounded run context before setup; callers reuse it in collect."""
+    if environment not in {None, ENVIRONMENT_PRODUCTION, ENVIRONMENT_LOCAL}:
+        raise ValueError("unknown recovery environment")
+    accounts = plan["ownedAccounts"]
+    budget = _Budget(
+        requests=len(plan["observation"]),
+        recovery=3 * (len(plan["ownedResources"]) + len(accounts)),
+        rulesets=ruleset_transitions(plan["observation"]),
+        actions=len(principal_actions(plan)),
+        deadline_seconds=float(deadline_seconds),
+        recovery_deadline_seconds=float(recovery_deadline_seconds),
+        clock=clock,
+    )
+    return RulesRecoveryContext(
+        budget=budget,
+        wire=_Wire(environment),
+        journal=journal,
+        attempted=attempted if attempted is not None else [],
+        worker_state=worker_state,
+    )
+
+
 def _validate_acquisition(
     acquisition: Any, role: str, plan: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -1215,6 +1248,7 @@ def collect(
     journal: _Journal | None = None,
     ownership: dict[str, dict[str, Any]] | None = None,
     recovery_dispatch: Callable[[dict[str, Any]], Any] | None = None,
+    context: RulesRecoveryContext | None = None,
 ) -> dict[str, Any]:
     """Run the compiled matrix through ``execute`` under enforced bounds.
 
@@ -1248,16 +1282,23 @@ def collect(
     accounts = plan["ownedAccounts"]
     transitions = ruleset_transitions(operations) if bindings is not None else 0
     action_count = len(principal_actions(plan)) if bindings is not None else 0
-    budget = _Budget(
-        requests=len(operations),
-        recovery=3 * (len(plan["ownedResources"]) + len(accounts)),
-        rulesets=transitions,
-        actions=action_count,
-        deadline_seconds=float(deadline_seconds),
-        recovery_deadline_seconds=float(recovery_deadline_seconds),
-        clock=clock,
-    )
-    wire = _Wire(environment)
+    if context is not None:
+        budget = context.budget
+        wire = context.wire
+        journal = context.journal
+        attempted = context.attempted
+        worker_state = context.worker_state
+    else:
+        budget = _Budget(
+            requests=len(operations),
+            recovery=3 * (len(plan["ownedResources"]) + len(accounts)),
+            rulesets=transitions,
+            actions=action_count,
+            deadline_seconds=float(deadline_seconds),
+            recovery_deadline_seconds=float(recovery_deadline_seconds),
+            clock=clock,
+        )
+        wire = _Wire(environment)
     wall_started = _read_wall_clock(wall_clock)
     sources = source_digests()
     observer = {
@@ -1265,7 +1306,7 @@ def collect(
         "sourceDigests": sources,
         "observerDigest": digest(sources),
     }
-    journal_owned = journal is None
+    journal_owned = context is None and journal is None
     journal = journal or open_ownership_journal(
         journal_path, run_id=run_id, plan_digest=plan["planDigest"]
     )
@@ -1286,14 +1327,16 @@ def collect(
     rows: list[dict[str, Any]] = []
     releases: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
-    attempted: list[str] = []
+    if context is None:
+        attempted = []
     # Every account exists before the first row, so all of them are owned.
     attempted_accounts = [entry["ref"] for entry in accounts]
     journal.record("accounts", {"refs": attempted_accounts})
     failures: list[str] = []
     abort: str | None = None
     worker_reaped: bool | None = None
-    worker_state = {"unreaped": False}
+    if context is None:
+        worker_state = {"unreaped": False}
     active_ruleset: str | None = None
     rules_management: dict[str, Any] | None = None
 

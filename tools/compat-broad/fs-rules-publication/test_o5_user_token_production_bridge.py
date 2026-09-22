@@ -46,6 +46,19 @@ def test_initial_packet_uses_admin_and_api_key_without_preexisting_users(tmp_pat
     assert result["requestUpperBound"] == 144
 
 
+def test_shared_inventory_preserves_authoritative_gate_status(tmp_path):
+    plan = _plan()
+    path = tmp_path / "gate"
+    shared_gate.create(path, descriptor.gate_plan(plan))
+    gate = shared_gate.Gate(path, "rules-management")
+    ownership = {}
+    before = gate.snapshot()
+    bridge.refresh_ownership(gate, ownership)
+    assert len(ownership) == 21
+    assert all(state["status"] == "not-attempted" for state in ownership.values())
+    assert gate.snapshot() == before
+
+
 def test_worker_timeout_uses_the_compiled_slot_bound():
     assert bridge.worker_timeout({"kind": "rules-lifecycle"}, None) == 12.0
     assert bridge.worker_timeout({"kind": "observation"}, None) == 2.0

@@ -522,6 +522,7 @@ def refresh_ownership(gate, ownership):
         state = states[subject["id"]]
         status, proof = state["status"], state["proof"]
         value = {
+            "status": status,
             "phase": "acknowledged" if status == "owned" else status,
             "gateDisposition": "never-attempted"
             if status == "not-attempted"

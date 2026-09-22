@@ -249,8 +249,9 @@ def test_setup_fixture_uses_bound_patch_and_official_loopback_response(fixture_o
         },
     }
     got = remote.adapt_setup_result(item, result, endpoint="loopback", sequence=1)
-    assert got["name"] == plan["fixtures"][0]["resource"]
-    assert got["fieldsDigest"] == digest({})
+    assert got.receipt.name == plan["fixtures"][0]["resource"]
+    assert got.receipt.fields_digest == digest({})
+    assert "fixture-admin" not in json.dumps(got.receipt.as_dict())
 
 
 def test_setup_claim_update_requires_route_specific_owner_binding():
@@ -272,6 +273,34 @@ def test_setup_claim_update_requires_route_specific_owner_binding():
             credentials={"administrator": "fixture-admin"},
             setup_secrets={"owner-a": "secret"},
         )
+
+
+def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
+    item = {
+        "id": "account/owner-a/signin",
+        "service": "identity",
+        "route": "accounts:signInWithPassword",
+        "method": "POST",
+        "accountRef": "owner-a",
+        "tenant": None,
+        "response": {
+            "localId": "response-bound",
+            "idToken": "response-bound",
+            "expiresIn": "response-bound",
+        },
+    }
+    result = remote.adapt_setup_result(
+        item,
+        {"status": 200, "body": {"localId": "uid-owner-a", "idToken": "secret-token", "expiresIn": "3600"}},
+        endpoint="loopback",
+        sequence=1,
+        account_bindings={"owner-a": {"uid": "uid-owner-a"}},
+    )
+    assert result.receipt.local_id == "uid-owner-a"
+    assert result.private.id_token == "secret-token"
+    serialized = json.dumps(result.receipt.as_dict())
+    assert "secret-token" not in serialized
+    assert "password" not in serialized
 
 
 def _fixture_token(uid, provider, tenant, claims):

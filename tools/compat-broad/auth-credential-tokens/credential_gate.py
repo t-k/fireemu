@@ -850,15 +850,18 @@ class CredentialGate(FrozenGate):
             outcome = "refused"
             if kind in ("sign-up", "custom-sign-in"):
                 uid = body.get("localId") if isinstance(body, dict) else None
-                created = (
-                    status == 200
+                identified_success = (
+                    type(status) is int
+                    and status == 200
                     and isinstance(body, dict)
                     and "error" not in body
                     and _text(uid)
                     and len(uid) <= 128
                     and _text(body.get("idToken"))
                     and _text(body.get("refreshToken"))
-                    and (kind == "sign-up" or body.get("isNewUser") is True)
+                )
+                created = identified_success and (
+                    kind == "sign-up" or body.get("isNewUser") is True
                 )
                 if created:
                     if kind == "custom-sign-in" and uid != account_identifier(state["plan"]["nonce"], "custom"):
@@ -884,8 +887,14 @@ class CredentialGate(FrozenGate):
                     evidence["uid"] = uid
                     evidence["resource"] = resource
                     outcome = "created"
-                elif status == 200 and kind == "custom-sign-in":
-                    # A 200 that did not create is a reused account, never owned here.
+                elif (
+                    kind == "custom-sign-in"
+                    and identified_success
+                    and body.get("isNewUser") is False
+                    and uid == account_identifier(state["plan"]["nonce"], "custom")
+                ):
+                    # Only an explicit, identified reuse ACK proves no creation.
+                    # Missing identity/new-user evidence is unknown, not refusal.
                     outcome = "refused"
                 elif not typed_refusal(status, body):
                     # No account was proven created and no typed refusal came back:

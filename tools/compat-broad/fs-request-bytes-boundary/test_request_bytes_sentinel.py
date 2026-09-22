@@ -97,6 +97,23 @@ def test_sentinel_validator_rejects_create_precondition_and_schedule_drift() -> 
         validate_request_bytes_sentinel_plan(plan)
 
 
+def test_transport_rejects_exact_cap_commit_row_with_mutated_owner_nonce() -> None:
+    import copy
+
+    import request_bytes_remote_transport as transport
+
+    plan = compile_request_bytes_sentinel_plan("demo", "(default)", NONCE)
+    operation = copy.deepcopy(plan["observation"][20])
+    operation["body"]["writes"][0]["update"]["fields"]["_owner"][
+        "stringValue"
+    ] = "b" * 32
+    assert len(compact_utf8(operation["body"])) == RAW_16MIB_OVER_BYTES
+    plan["observation"][20] = copy.deepcopy(operation)
+
+    with pytest.raises(ValueError, match="request plan validation failed"):
+        transport.prepare(plan, "observation", 20, operation, "offline-test-token")
+
+
 def test_sentinel_campaign_is_finite_costed_and_does_not_predict_outcome() -> None:
     campaign = compile_request_bytes_sentinel_campaign("demo", "(default)", NONCE)
 

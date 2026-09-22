@@ -607,27 +607,77 @@ def validate_request_bytes_sentinel_plan(plan: dict[str, Any]) -> None:
         raise ValueError("sentinel observation schedule drift")
     if not isinstance(recovery, list) or len(recovery) != 60:
         raise ValueError("sentinel recovery schedule drift")
-    if (
-        [row.get("kind") for row in observation[:20]] != ["preflight-typed-absence"] * 20
-        or observation[20].get("kind") != "conditional-create-commit"
-        or [row.get("resource") for row in observation[21:]] != resources
-    ):
-        raise ValueError("sentinel observation order drift")
-    recovery_kinds = [
-        kind
-        for _ in resources
-        for kind in (
-            "cleanup-ownership-read",
-            "cleanup-version-bound-delete",
-            "cleanup-verify-absence",
+    expected_observation = [
+        _op(
+            "preflight-typed-absence",
+            "GET",
+            "/v1/" + resource,
+            RAW_16MIB_OVER_LABEL,
+            {"status": 404, "typed": "NOT_FOUND", "owned": False},
+            resource,
         )
+        for resource in resources
     ]
-    if (
-        [row.get("kind") for row in recovery] != recovery_kinds
-        or [row.get("resource") for row in recovery[::3]] != resources
-        or any(row.get("versionFrom") != "cleanup-ownership-read" for row in recovery[1::3])
-    ):
-        raise ValueError("sentinel recovery scope or order drift")
+    expected_observation.append(
+        _op(
+            "conditional-create-commit",
+            "POST",
+            endpoint,
+            RAW_16MIB_OVER_LABEL,
+            expected,
+            body=body,
+        )
+    )
+    expected_observation.extend(
+        _op(
+            "probe-readback",
+            "GET",
+            "/v1/" + resource,
+            RAW_16MIB_OVER_LABEL,
+            {
+                "accepted": expected["accepted"],
+                "refused": expected["refused"],
+                "sameProbe": True,
+            },
+            resource,
+        )
+        for resource in resources
+    )
+    expected_recovery = []
+    for resource in resources:
+        expected_recovery.extend(
+            [
+                _op(
+                    "cleanup-ownership-read",
+                    "GET",
+                    "/v1/" + resource,
+                    RAW_16MIB_OVER_LABEL,
+                    {"statuses": [200, 404], "owned": True, "versionRequired": True},
+                    resource,
+                ),
+                {
+                    **_op(
+                        "cleanup-version-bound-delete",
+                        "DELETE",
+                        "/v1/" + resource,
+                        RAW_16MIB_OVER_LABEL,
+                        {"status": 200, "owned": True, "versionBound": True},
+                        resource,
+                    ),
+                    "versionFrom": "cleanup-ownership-read",
+                },
+                _op(
+                    "cleanup-verify-absence",
+                    "GET",
+                    "/v1/" + resource,
+                    RAW_16MIB_OVER_LABEL,
+                    {"status": 404, "typed": "NOT_FOUND"},
+                    resource,
+                ),
+            ]
+        )
+    if observation != expected_observation or recovery != expected_recovery:
+        raise ValueError("sentinel observation or recovery operation drift")
     schedule = [
         *({"phase": "observation", "index": index} for index in range(41)),
         *({"phase": "recovery", "index": index} for index in range(60)),

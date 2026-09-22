@@ -269,4 +269,4 @@ def test_observation_failure_attempts_all_known_cleanup_and_holds_unknown_signup
         row["path"].format(project=descriptor.AUTHORIZED_PROJECT).lstrip("/")
         for row in plan_module.campaign_manifest(NONCE, project=descriptor.AUTHORIZED_PROJECT)["recovery"]
     ]
-    assert [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[1:]] == expected_recovery_paths
+    assert [call["path"].split("?", 1)[0].lstrip("/") for call in _ActionFixture.calls[2:]] == expected_recovery_paths

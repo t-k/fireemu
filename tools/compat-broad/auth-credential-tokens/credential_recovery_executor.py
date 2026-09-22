@@ -51,6 +51,8 @@ RUNTIME_CLOSURE = (
     "tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py",
     "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
     "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
+    "tools/compat-broad/auth-credential-tokens/credential_wire.py",
+    "tools/compat-broad/batch_wire.py",
     recovery.WORKER_ENTRY,
     "tools/compat-broad/shared_gate.py",
     "tools/compat-broad/production-admission/reservations.py",
@@ -585,11 +587,22 @@ def _run_gate_worker(
     payload = bytearray()
     status: int | None = None
     eof = False
+    stop_attempted = False
+    worker_reaped = False
+
+    def stop_worker_once() -> None:
+        nonlocal stop_attempted, worker_reaped
+        if stop_attempted or worker_reaped:
+            return
+        stop_attempted = True
+        _stop_worker(pid)
+        worker_reaped = True
+
     try:
         while status is None or not eof:
             remaining = hard_deadline - time.monotonic()
             if remaining <= 0:
-                _stop_worker(pid)
+                stop_worker_once()
                 _refuse("recovery worker deadline expired")
             readable, _, _ = select.select([read_fd], [], [], min(remaining, 0.25))
             if readable:
@@ -599,14 +612,24 @@ def _run_gate_worker(
                 else:
                     payload.extend(chunk)
                     if len(payload) > MAX_HANDOFF_BYTES:
-                        _stop_worker(pid)
+                        stop_worker_once()
                         _refuse("bounded recovery worker receipt required")
             if status is None:
                 waited, wait_status = os.waitpid(pid, os.WNOHANG)
                 if waited == pid:
                     status = wait_status
+                    worker_reaped = True
+    except BaseException:
+        try:
+            stop_worker_once()
+        except BaseException as cleanup_error:  # noqa: BLE001 -- preserve original.
+            del cleanup_error
+        raise
     finally:
-        os.close(read_fd)
+        try:
+            os.close(read_fd)
+        except OSError:
+            pass
     if status is None:
         _, status = os.waitpid(pid, 0)
     try:

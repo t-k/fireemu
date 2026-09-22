@@ -186,6 +186,36 @@ def test_authority_window_must_cover_entire_child_deadline() -> None:
         recovery.validate_authority_bundle(plan, permission=permission, o7=o7, o8=o8, now=1001.0)
 
 
+def test_child_envelope_starts_at_latest_reviewed_authority_issue() -> None:
+    parent, plan, permission, o7, o8 = _plan()
+    permission["issuedAt"] = 1005.0
+    o7["permissionDigest"] = digest(permission)
+    o7["issuedAt"] = 1006.0
+    o8["permissionDigest"] = digest(permission)
+    o8["issuedAt"] = 1007.0
+    source_binding = {"kind": "auth-source-binding-v1", "digest": plan["provenance"]["sourceInputsDigest"]}
+    transport_binding = {"kind": "auth-transport-binding-v1", "digest": digest(plan["provenance"]["transport"])}
+    o7_binding = {"kind": "auth-o7-binding-v1", "digest": digest(o7), "authority": o7}
+    o8_binding = {"kind": "auth-o8-binding-v1", "digest": digest(o8), "authority": o8}
+
+    _claim, envelope, _bound_plan = recovery.build_child_claim(
+        parent,
+        plan,
+        permission=permission,
+        source_binding=source_binding,
+        transport_binding=transport_binding,
+        o7_binding=o7_binding,
+        o8_binding=o8_binding,
+        parent_evidence=recovery._parent_snapshot(parent)["evidence"],
+        gate_path="/tmp/auth-recovery-gate",
+        owner_identity="owner@example.invalid",
+        recovery_owner="recovery@example.invalid",
+        now=1008.0,
+    )
+
+    assert envelope["issuedAt"] == 1007.0
+
+
 def test_deadline_cannot_exceed_packet05_admitted_recovery_window() -> None:
     parent = _parent()
     with pytest.raises(recovery.RecoveryRefusal, match="deadline"):

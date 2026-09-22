@@ -465,7 +465,12 @@ def build_child_claim(parent: Mapping[str, Any], plan: Mapping[str, Any], *, per
     resource = authority_plan["resource"]
     locks = [{"key": f"project/{PROJECT}/auth/accounts/{authority_plan['customUid']}", "mode": "WRITE"}]
     claim = {"kind": CHILD_KIND, "version": 1, "campaignId": CAMPAIGN, "manifestDigest": digest(child_gate_plan), "nonceDigest": authority_plan["recoveryNonceDigest"], "gatePath": gate_path, "gateJob": GATE_JOB, "parentGateJob": snapshot["job"], "gatePlanDigest": digest(child_gate_plan), "parentClaimDigest": snapshot["claim"].get("claimDigest", digest(snapshot["claim"])), "parentPlanDigest": digest(snapshot["plan"]), "parentGateDigest": snapshot["evidence"]["gateDigest"], "parentEvidenceDigest": snapshot["evidence"]["evidenceDigest"], "parentEventIndex": snapshot["eventIndex"], "parentRequestDigest": digest(snapshot["operation"]), "recoveryNonce": authority_plan["recoveryNonce"], "resourceDigest": digest([resource]), "ownedResources": [resource], "locks": locks, "budget": copy.deepcopy(CHILD_BUDGET), "durationSeconds": duration, "generation": copy.deepcopy(authority_plan["provenance"]["generation"]), "ownerIdentity": owner_identity, "recoveryOwner": recovery_owner, "operationClass": OPERATION_CLASS, "readCount": 1, "inspectionCount": 1, "absenceCount": 1, "deleteCount": 0, "expiresAt": authority_plan["deadlineAt"], "executionHost": host, "permissionDigest": digest(permission), "sourceBindingDigest": authority_plan["gatePlan"]["sourceBindingDigest"], "transportBindingDigest": authority_plan["gatePlan"]["transportBindingDigest"], "o7BindingDigest": authority_plan["gatePlan"]["o7BindingDigest"], "o8BindingDigest": authority_plan["gatePlan"]["o8BindingDigest"]}
-    envelope = {"permissionDigest": digest(permission), "issuedAt": authority_plan["issuedAt"], "expiresAt": authority_plan["deadlineAt"], "limits": copy.deepcopy(CHILD_BUDGET), "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}/auth/accounts/{authority_plan['customUid']}", "mode": "WRITE"}]}
+    effective_authority_start = max(
+        permission["issuedAt"],
+        o7_binding["authority"]["issuedAt"],
+        o8_binding["authority"]["issuedAt"],
+    )
+    envelope = {"permissionDigest": digest(permission), "issuedAt": effective_authority_start, "expiresAt": authority_plan["deadlineAt"], "limits": copy.deepcopy(CHILD_BUDGET), "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}/auth/accounts/{authority_plan['customUid']}", "mode": "WRITE"}]}
     authority_plan["gatePlan"] = child_gate_plan
     return claim, envelope, authority_plan
 

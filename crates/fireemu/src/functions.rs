@@ -544,7 +544,8 @@ impl FunctionsSourceTraversal<'_> {
             ensure_source_work_active(self.cancelled)?;
             let path = entry.path();
             let relative = path.strip_prefix(self.root).unwrap_or(&path);
-            if ignored_reload_path(relative, self.ignores) {
+            // Watcher/deploy ignores must not remove files required by the runtime.
+            if ignored_reload_path(relative, &[]) {
                 continue;
             }
             let kind = entry
@@ -787,6 +788,10 @@ fn snapshot_functions_source_with_charge(
     cancelled: &AtomicBool,
 ) -> Result<FunctionsSourceSnapshot, String> {
     static NEXT_SNAPSHOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    // Deployment/watch ignores do not define the runtime generation. Validate every
+    // copied input, including local dotenv and secret files, under the same I/O budget.
+    let before =
+        functions_source_stamp_with_charge(root, &[], charge, cancelled)?.content_signature;
     let sequence = NEXT_SNAPSHOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let destination = std::env::temp_dir().join(format!(
         "fireemu-functions-{}-{sequence}",
@@ -815,6 +820,14 @@ fn snapshot_functions_source_with_charge(
         }
         Ok(())
     })?;
+    let copied =
+        functions_source_stamp_with_charge(&destination, &[], charge, cancelled)?.content_signature;
+    let after = functions_source_stamp_with_charge(root, &[], charge, cancelled)?.content_signature;
+    if before != copied || before != after {
+        return Err(
+            "Functions runtime inputs changed while capturing a reload snapshot".to_owned(),
+        );
+    }
     Ok(snapshot)
 }
 
@@ -1209,6 +1222,10 @@ pub struct EmulatorHosts {
     /// The Logging emulator WebSocket (`FIREBASE_LOGGING_EMULATOR_HOST`), a bare host:port. The
     /// runner's functions inherit it so any Firebase tooling they load can find the log stream.
     pub logging: Option<String>,
+    /// Pub/Sub listener, exported as a bare host and port.
+    pub pubsub: Option<String>,
+    /// Emulator Hub listener, exported as a bare host and port.
+    pub hub: Option<String>,
 }
 
 /// Where a located runner script came from.
@@ -2193,6 +2210,12 @@ async fn start_codebase(
     }
     if let Some(host) = &hosts.functions {
         env.push(("FIREEMU_FUNCTIONS_HOST".to_owned(), host.clone()));
+    }
+    if let Some(host) = &hosts.pubsub {
+        env.push(("PUBSUB_EMULATOR_HOST".to_owned(), host.clone()));
+    }
+    if let Some(host) = &hosts.hub {
+        env.push(("FIREBASE_EMULATOR_HUB".to_owned(), host.clone()));
     }
     if let Some(host) = &hosts.logging {
         env.push(("FIREBASE_LOGGING_EMULATOR_HOST".to_owned(), host.clone()));
@@ -3264,6 +3287,7 @@ mod tests {
         MAX_FUNCTIONS_SOURCE_ENTRIES, MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND,
         MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND, SOURCE_IO_BUFFER_BYTES,
     };
+    #[cfg(not(windows))]
     use super::{push_node_candidate, run_node_probe};
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
@@ -3350,25 +3374,37 @@ mod tests {
         let budget = Arc::new(FunctionsSourceScanBudget::new());
         let task_root = root.clone();
         let task = tokio::spawn(async move { budget.snapshot(&task_root, &[]).await });
-        let created = tokio::time::Instant::now() + Duration::from_secs(3);
-        while snapshots().is_empty() {
-            assert!(
-                tokio::time::Instant::now() < created,
-                "the snapshot task did not create its destination"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        // Readiness is not a latency assertion: hashing and scheduling can exceed
+        // the minimum pacing delay under workspace-wide test load.
+        let ready = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                if !snapshots().is_empty() {
+                    return true;
+                }
+                if task.is_finished() {
+                    return false;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
 
         task.abort();
         let _ = task.await;
-        let cleaned = tokio::time::Instant::now() + Duration::from_secs(1);
-        while !snapshots().is_empty() {
-            assert!(
-                tokio::time::Instant::now() < cleaned,
-                "cancelling a paced 512 MiB snapshot did not stop and clean up within one second"
-            );
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        let cleaned = tokio::time::timeout(Duration::from_secs(1), async {
+            while !snapshots().is_empty() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(
+            cleaned.is_ok(),
+            "cancelling a paced 512 MiB snapshot did not stop and clean up within one second"
+        );
+        assert!(
+            matches!(ready, Ok(true)),
+            "the snapshot task did not expose a partial copy before cancellation"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -4292,6 +4328,95 @@ mod tests {
             bytes_per_second >= MIN_BYTES_PER_SECOND,
             "source scanning fell below the 16 MiB/s release gate: {bytes_per_second} bytes/s"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reload_snapshot_refuses_ignored_runtime_inputs_changed_during_capture() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-snapshot-ignored-race-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".env.local"), "LOCAL=old").unwrap();
+        std::fs::write(root.join(".secret.local"), "SECRET=old").unwrap();
+        let mut changed = false;
+        let result = super::snapshot_functions_source_with_charge(
+            &root,
+            &["*.local".to_owned()],
+            &mut |_, bytes| {
+                if bytes > 0 && !changed {
+                    // A buffer from one file has already been read. Replace both live
+                    // inputs before the remaining capture work can observe them.
+                    changed = true;
+                    std::fs::write(root.join(".env.local"), "LOCAL=new").unwrap();
+                    std::fs::write(root.join(".secret.local"), "SECRET=new").unwrap();
+                }
+                Ok(())
+            },
+            &std::sync::atomic::AtomicBool::new(false),
+        );
+        assert!(changed, "the mutation must occur within actual source I/O");
+        assert!(
+            result.is_err(),
+            "a mixed runtime generation must not be published"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reload_snapshot_retains_runtime_files_excluded_from_change_detection() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-snapshot-ignored-runtime-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        for (name, value) in [
+            ("index.js", "exports.value = 1;"),
+            (".env.local", "FX_LOCAL=local"),
+            (".secret.local", "FX_SECRET=secret"),
+            ("data.json", "{}"),
+            (".git/config", "not runtime data"),
+        ] {
+            std::fs::write(root.join(name), value).unwrap();
+        }
+        let ignores = vec![
+            "node_modules".to_owned(),
+            ".git".to_owned(),
+            "*.local".to_owned(),
+            "data.json".to_owned(),
+        ];
+        let before = functions_source_stamp(&root, &ignores)
+            .unwrap()
+            .content_signature;
+        let snapshot = snapshot_functions_source(&root, &ignores).unwrap();
+        for name in ["index.js", ".env.local", ".secret.local", "data.json"] {
+            assert!(
+                snapshot.join(name).is_file(),
+                "runtime input {name} must survive reload"
+            );
+            assert_eq!(
+                std::fs::read(snapshot.join(name)).unwrap(),
+                std::fs::read(root.join(name)).unwrap()
+            );
+        }
+        assert!(!snapshot.join(".git").exists());
+        std::fs::write(root.join(".env.local"), "FX_LOCAL=changed").unwrap();
+        assert_eq!(
+            functions_source_stamp(&root, &ignores)
+                .unwrap()
+                .content_signature,
+            before,
+            "configured ignores still control change detection"
+        );
+        assert_eq!(
+            std::fs::read_to_string(snapshot.join(".env.local")).unwrap(),
+            "FX_LOCAL=local",
+            "the snapshot remains one generation"
+        );
+        drop(snapshot);
         std::fs::remove_dir_all(root).unwrap();
     }
 

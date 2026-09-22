@@ -70,6 +70,7 @@
       "features": [],
       "dependencies": [
         "registry+https://github.com/rust-lang/crates.io-index#bytes@1.12.1",
+        "registry+https://github.com/rust-lang/crates.io-index#getrandom@0.3.4",
         "registry+https://github.com/rust-lang/crates.io-index#http-body-util@0.1.5",
         "registry+https://github.com/rust-lang/crates.io-index#http-body@1.1.0",
         "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.151",

@@ -153,12 +153,13 @@ jobs:
           key: ${{ matrix.os }}
       # The process-census integration suites shell out to `ps` and `kill` to prove that a
       # daemon leaves nothing running; they are POSIX-only by construction, so Windows runs the
-      # in-crate unit tests. Making them portable is tracked in the distribution issue.
+      # portable library tests plus the explicit Windows CLI targets.
       - name: tests
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cargo nextest run --workspace --lib --profile pr
+            cargo nextest run --workspace --lib --profile pr --exclude fireemu-verification-quint --exclude traceability-check
+            cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr
           else
             cargo nextest run --workspace --profile pr
           fi

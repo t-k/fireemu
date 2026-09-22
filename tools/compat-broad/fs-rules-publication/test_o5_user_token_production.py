@@ -613,7 +613,8 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
             return
         assert snapshot["stopped"] is True
         assert len(snapshot["managementUsed"]) == failure_after + 1
-        assert snapshot["managementEvents"][-1].get("failure")
+        assert snapshot["managementEvents"][-1]["status"] == 500
+        assert snapshot["managementEvents"][-1]["workerReaped"] is True
         assert ledger.snapshot()["reservations"]
         operations = setup_plan(plan)["operations"]
         creates = [
@@ -629,6 +630,28 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
         serialized = json.dumps(snapshot)
         assert "fixture-password" not in serialized
         assert "idToken" not in serialized
+        gate.cancel_management_observation()
+        assert gate.snapshot()["managementAbort"] is not None
+        if failure_after == 0:
+            before = gate.snapshot()
+            bridge.skip_unused_recovery(gate)
+            after = gate.snapshot()
+            assert after["total"] == before["total"]
+            assert after["costMicrousd"] == before["costMicrousd"]
+            assert (
+                len(
+                    [
+                        entry
+                        for entry in after["managementSkipped"]
+                        if entry["phase"] == "recovery"
+                    ]
+                )
+                == 73
+            )
+            assert after["reservedRecovery"] == 0
+            with pytest.raises(ValueError, match="ownership"):
+                gate.finish()
+            assert gate.snapshot() == after
     finally:
         journal.close()
         _ProducerHandler.fail_setup_after = None

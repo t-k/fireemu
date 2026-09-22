@@ -101,6 +101,9 @@ def test_whole_schedule_ledger_reserve_rejects_shortfall_without_state_change(
 def test_closed_schedule_accounts_for_every_wire_exchange_and_one_cleanup(tmp_path):
     plan = lane.plan_compiler(NONCE)
     compiled = lane.gate_plan(plan)
+    assert compiled["jobs"] == {
+        "rules-management": {"resources": [], "observation": [], "recovery": []}
+    }
     management = compiled["management"]
     observation = management["observation"]
     recovery = management["recovery"]

@@ -36,6 +36,37 @@ WORKER_TIMEOUT_SECONDS = 8.0
 SETUP_TIMEOUT_SECONDS = 2.0
 
 
+def skip_unused_recovery(
+    gate: Any, *, stop_before: str | None = None
+) -> dict[str, Any]:
+    """Advance only through dependency-authorized, durably recorded Gate skips."""
+    snapshot = gate.snapshot()
+    slots = [entry["id"] for entry in snapshot["plan"]["management"]["recovery"]]
+    consumed = set(snapshot["managementUsed"]) | {
+        entry["id"] for entry in snapshot["managementSkipped"]
+    }
+    if stop_before is not None and (
+        stop_before not in slots or "recovery:" + stop_before in consumed
+    ):
+        raise ValueError("fresh compiled recovery destination required")
+    for slot in slots:
+        if "recovery:" + slot in consumed:
+            continue
+        if slot == stop_before:
+            break
+        snapshot = gate.skip_management_recovery(
+            slot,
+            expected_plan_digest=snapshot["planDigest"],
+            expected_prefix_digest=digest(
+                {
+                    "used": snapshot["managementUsed"],
+                    "skipped": snapshot["managementSkipped"],
+                }
+            ),
+        )
+    return snapshot
+
+
 def run_bound_setup(
     *,
     plan: dict[str, Any],
@@ -96,13 +127,27 @@ def run_bound_setup(
                 binding_digest=binding_digest,
                 fixture_origin=fixture_origin,
             )
-            typed = adapt_setup_result(
-                item,
-                result,
-                endpoint=fixture_origin or prepared["origin"],
-                sequence=len(receipts) + 1,
-                account_bindings=account_bindings,
-            )
+            try:
+                typed = adapt_setup_result(
+                    item,
+                    result,
+                    endpoint=fixture_origin or prepared["origin"],
+                    sequence=len(receipts) + 1,
+                    account_bindings=account_bindings,
+                )
+            except ValueError:
+                pending["failure"] = "setup response acknowledgement refused"
+                return {
+                    "status": result["status"],
+                    "complete": True,
+                    "workerReaped": True,
+                    "bodyKind": "json",
+                    "body": {
+                        "kind": "rules-management-proof-v1",
+                        "responseDigest": digest(result["body"]),
+                        "effects": [],
+                    },
+                }
             # Keep issued tokens private to this in-memory handoff. Gate
             # persists only a provenance digest and the typed resource result;
             # neither its event body nor the returned setup receipt may carry
@@ -143,6 +188,9 @@ def run_bound_setup(
             }
 
         result = gate.management_dispatch("observation", slot_id, send)
+        if "failure" in pending:
+            gate.cancel_management_observation()
+            raise ValueError(pending["failure"])
         receipt = pending["receipt"]
         events = gate.snapshot()["managementEvents"]
         event = events[-1]

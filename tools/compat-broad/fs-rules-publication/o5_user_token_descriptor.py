@@ -253,7 +253,7 @@ def gate_plan(
         "transport": "bounded-rules-worker",
         "jobs": {
             "rules-management": {
-                "resources": list(plan["ownedResources"][:1]),
+                "resources": [],
                 "observation": [],
                 "recovery": [],
             }

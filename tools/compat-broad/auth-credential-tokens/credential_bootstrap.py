@@ -39,14 +39,6 @@ TASK_MAX_COST_MICROUSD = 50_000
 RECOVERY_SECONDS = 60
 MIN_TASK_REQUESTS = 53
 
-ADC = {
-    "type": "authorized_user",
-    "client_id": "client-1",
-    "client_secret": "fixture-secret",
-    "refresh_token": "fixture-refresh",
-}
-
-
 @dataclass(frozen=True)
 class BootstrapBudget:
     max_requests: int = TASK_MAX_REQUESTS
@@ -158,4 +150,4 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
     return BootstrapResult({"kind": HANDOFF_KIND, "permissionDigest": permission["permissionDigest"], "token": token, "apiKey": api_key, "signing": {"serviceAccount": SERVICE_ACCOUNT}}, proof, PREP_REQUESTS)
 
 
-__all__ = ["ADC", "BootstrapBudget", "BootstrapResult", "HANDOFF_KIND", "PERMISSION_KIND", "PREP_REQUESTS", "SCOPE", "SERVICE_ACCOUNT", "prepare", "validate_deadline"]
+__all__ = ["BootstrapBudget", "BootstrapResult", "HANDOFF_KIND", "PERMISSION_KIND", "PREP_REQUESTS", "SCOPE", "SERVICE_ACCOUNT", "prepare", "validate_deadline"]

@@ -16,6 +16,13 @@ sys.path.insert(0, str(HERE.parent))
 
 import credential_bootstrap as bootstrap
 
+ADC = {
+    "type": "authorized_user",
+    "client_id": "client-1",
+    "client_secret": "fixture-secret",
+    "refresh_token": "fixture-refresh",
+}
+
 
 class _Fixture(BaseHTTPRequestHandler):
     requests = []
@@ -75,7 +82,7 @@ def _permission():
     return {
         "kind": bootstrap.PERMISSION_KIND,
         "permissionDigest": "permission-digest",
-        "authorizedUserDigest": bootstrap.digest(bootstrap.ADC),
+        "authorizedUserDigest": bootstrap.digest(ADC),
         "credentialPrincipal": {"clientId": "client-1", "subject": "subject-1", "requiredScopes": [bootstrap.SCOPE]},
         "project": bootstrap.PROJECT,
         "projectNumber": bootstrap.PROJECT_NUMBER,
@@ -85,7 +92,7 @@ def _permission():
 
 def test_fixture_bootstrap_charges_exact_four_requests_and_returns_private_handoff(fixture_origin):
     origin, requests = fixture_origin
-    result = bootstrap.prepare(_permission(), adc=bootstrap.ADC, api_key="api-key", fixture_origin=origin)
+    result = bootstrap.prepare(_permission(), adc=ADC, api_key="api-key", fixture_origin=origin)
     assert requests == ["/token", "/oauth2/v1/tokeninfo?access_token=fixture-access", "/v1/projects/fireemu-35fe6", "/admin/v2/projects/fireemu-35fe6/config"]
     assert result.handoff == {
         "kind": bootstrap.HANDOFF_KIND,
@@ -104,7 +111,7 @@ def test_bootstrap_rejects_foreign_principal_before_network(fixture_origin):
     permission = _permission()
     permission["credentialPrincipal"]["clientId"] = "foreign-client"
     with pytest.raises(ValueError, match="principal"):
-        bootstrap.prepare(permission, adc=bootstrap.ADC, api_key="api-key", fixture_origin=origin)
+        bootstrap.prepare(permission, adc=ADC, api_key="api-key", fixture_origin=origin)
     assert requests == []
 
 

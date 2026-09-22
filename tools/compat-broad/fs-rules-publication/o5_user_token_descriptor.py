@@ -241,7 +241,7 @@ def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = Non
         "costMicrousd": management["totalRequests"],
         "requestSeconds": 12.0,
         "wallSeconds": 600.0,
-        "recoverySeconds": 300.0,
+        "recoverySeconds": 900.0,
         "intervalSeconds": 0.25,
         "receiptKind": "fs-rules-management-receipt-v1",
         "transport": "bounded-rules-worker",

@@ -24,7 +24,7 @@ import o5_user_token_production as production
 import o5_user_token_production_bridge as bridge
 import o5_user_token_remote_transport as remote
 import shared_gate
-from o5_user_token_campaign import digest, setup_plan
+from o5_user_token_campaign import digest, setup_plan, setup_recovery_plan
 from o5_user_token_collector import ROLE_PRODUCTION
 from reservations import Ledger
 from test_o5_user_token_collector_bound import acquisition_for
@@ -224,6 +224,19 @@ def test_setup_plan_is_source_backed_and_excludes_precreated_tenant_and_row_acti
     assert not any(item["route"] in {"tenants:create", "tenants:delete"} for item in setup["auth"])
     assert not any("post-signin" in item["id"] for item in setup["auth"])
     assert next(item for item in setup["auth"] if item["route"] == "accounts:update")["response"] == {"localId": "response-bound"}
+
+
+def test_setup_recovery_plan_covers_only_created_resources() -> None:
+    plan = lane.plan_compiler("a" * 32)
+    recovery = setup_recovery_plan(plan)
+    assert len(recovery) == 51
+    assert [entry["kind"] for entry in recovery].count("document-read") == 10
+    assert [entry["kind"] for entry in recovery].count("account-read") == 7
+    assert all(entry["id"].startswith("setup-recovery/") for entry in recovery)
+    assert all(entry["kind"].split("-", 1)[1] in {"read", "delete", "absence"} for entry in recovery)
+    assert not any("claim-update" in entry["id"] or "signin" in entry["id"] for entry in recovery)
+    management = lane.gate_plan(plan)["management"]
+    assert [entry["id"] for entry in management["recovery"]][:51] == [entry["id"] for entry in recovery]
 
 
 @pytest.mark.parametrize("field", ["approval", "manifest", "permission", "capabilityInputs"])

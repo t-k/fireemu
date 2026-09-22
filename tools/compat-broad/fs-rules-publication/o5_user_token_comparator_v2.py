@@ -641,6 +641,7 @@ def _admit_cleanup(side: _Side, *, production_cleanup_gate: Any = None) -> list[
         if side.side == SIDE_PRODUCTION
         else frozenset()
     )
+    action_absences = _admit_action_absences(side)
     _admit_subjects(
         side, steps, plan["ownedResources"], "resource", "documentPresent", "version", exempt=exempt
     )
@@ -655,6 +656,7 @@ def _admit_cleanup(side: _Side, *, production_cleanup_gate: Any = None) -> list[
             entry["ref"]: entry.get("postSignIn") != POST_SIGN_IN_DELETE
             for entry in plan["ownedAccounts"]
         },
+        action_absences=action_absences,
     )
     attempted = side.bundle.get("attemptedResources")
     if not isinstance(attempted, list) or any(
@@ -662,6 +664,29 @@ def _admit_cleanup(side: _Side, *, production_cleanup_gate: Any = None) -> list[
     ):
         side.fail("cleanup-unknown:attempted-outside-owned-scope")
     return steps
+
+
+def _admit_action_absences(side: _Side) -> frozenset[str]:
+    """Return only account deletions proven absent by their real action readback."""
+    transport = side.bundle.get("transport")
+    actions = transport.get("principalActions") if isinstance(transport, Mapping) else None
+    if not isinstance(actions, list):
+        return frozenset()
+    absent: set[str] = set()
+    for action in actions:
+        if not isinstance(action, Mapping) or action.get("action") != "delete":
+            continue
+        ref = action.get("ref")
+        readback = action.get("readback")
+        if (
+            isinstance(ref, str)
+            and isinstance(readback, Mapping)
+            and readback.get("present") is False
+            and isinstance(readback.get("uidFingerprint"), str)
+            and readback.get("uidFingerprint")
+        ):
+            absent.add(ref)
+    return frozenset(absent)
 
 
 def _admit_subjects(
@@ -673,6 +698,7 @@ def _admit_subjects(
     identity_key: str,
     expected_presence: Mapping[str, bool] | None = None,
     exempt: frozenset[str] = frozenset(),
+    action_absences: frozenset[str] = frozenset(),
 ) -> None:
     """Every subject: readback, then delete under its identity and typed
     absence when it was present. When ``expected_presence`` is given, the
@@ -687,6 +713,8 @@ def _admit_subjects(
         readback = next((s for s in own if s.get("kind") == f"{prefix}readback"), None)
         if readback is None:
             if subject in exempt:
+                continue
+            if subject_key == "accountRef" and expected_presence is not None and expected_presence.get(subject) is False and subject in action_absences:
                 continue
             side.fail(f"cleanup-unknown:no-readback:{subject}")
             continue

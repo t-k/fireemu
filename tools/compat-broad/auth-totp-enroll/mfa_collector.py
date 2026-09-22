@@ -130,8 +130,18 @@ def _nonempty(value: Any) -> bool:
 def _validate_state(state: Any) -> None:
     """Validate this schema's full case denominator; a self-hash is not enough."""
     required = {
-        "schema", "campaignId", "nonce", "planDigest", "startedAt", "deadline",
-        "maxRequests", "requests", "steps", "ownedResources", "aborted", "abortReason",
+        "schema",
+        "campaignId",
+        "nonce",
+        "planDigest",
+        "startedAt",
+        "deadline",
+        "maxRequests",
+        "requests",
+        "steps",
+        "ownedResources",
+        "aborted",
+        "abortReason",
     }
     if not isinstance(state, dict) or set(state) not in (
         required,
@@ -141,13 +151,19 @@ def _validate_state(state: Any) -> None:
     if state["schema"] != SCHEMA or state["campaignId"] != CAMPAIGN_ID:
         raise ValueError("invalid collector identity")
     for name in ("nonce", "planDigest"):
-        if not isinstance(state[name], str) or not re.fullmatch(r"[0-9a-f]{64}", state[name]):
+        if not isinstance(state[name], str) or not re.fullmatch(
+            r"[0-9a-f]{64}", state[name]
+        ):
             raise ValueError("invalid collector binding")
     start, deadline = _number(state["startedAt"]), _number(state["deadline"])
     if deadline <= start:
         raise ValueError("invalid collector deadline")
-    if (type(state["maxRequests"]) is not int or state["maxRequests"] < 1
-            or type(state["requests"]) is not int or state["requests"] < 0):
+    if (
+        type(state["maxRequests"]) is not int
+        or state["maxRequests"] < 1
+        or type(state["requests"]) is not int
+        or state["requests"] < 0
+    ):
         raise ValueError("invalid collector request count")
     if type(state["aborted"]) is not bool:
         raise ValueError("invalid collector abort flag")
@@ -157,7 +173,11 @@ def _validate_state(state: Any) -> None:
         raise ValueError("invalid collector abort reason")
     steps = state["steps"]
     selected = state.get("selectedCaseIds")
-    expected = selected if selected is not None else [case["id"] for case in observation_cases()]
+    expected = (
+        selected
+        if selected is not None
+        else [case["id"] for case in observation_cases()]
+    )
     if selected is not None and selected != [
         "age-300s-start",
         "age-300s-finalize",
@@ -183,9 +203,15 @@ def _validate_state(state: Any) -> None:
             if step["observation"] is not None:
                 raise ValueError("pending step contains an observation")
         else:
-            if _number(step["recordedAt"]) < start or not isinstance(step["observation"], dict):
+            if _number(step["recordedAt"]) < start or not isinstance(
+                step["observation"], dict
+            ):
                 raise ValueError("invalid recorded observation")
-            if status == "done" and step["dueAt"] is not None and step["recordedAt"] < step["dueAt"]:
+            if (
+                status == "done"
+                and step["dueAt"] is not None
+                and step["recordedAt"] < step["dueAt"]
+            ):
                 raise ValueError("observation predates its scheduled due time")
             assert_no_sensitive_material(step["observation"])
             if status == "skipped" and (
@@ -195,19 +221,30 @@ def _validate_state(state: Any) -> None:
                 raise ValueError("invalid skipped observation")
     resources = state["ownedResources"]
     if not isinstance(resources, list):
-        raise ValueError("invalid owned resources")
+        raise TypeError("invalid owned resources")
     ids = set()
     for resource in resources:
         if not isinstance(resource, dict) or set(resource) != {
-            "kind", "id", "createdAt", "deleted", "absenceVerified",
+            "kind",
+            "id",
+            "createdAt",
+            "deleted",
+            "absenceVerified",
         }:
             raise ValueError("invalid owned resource shape")
-        if not _nonempty(resource["kind"]) or not _nonempty(resource["id"]) or resource["id"] in ids:
+        if (
+            not _nonempty(resource["kind"])
+            or not _nonempty(resource["id"])
+            or resource["id"] in ids
+        ):
             raise ValueError("invalid or duplicate owned resource")
         ids.add(resource["id"])
         if _number(resource["createdAt"]) < start:
             raise ValueError("invalid resource creation time")
-        if type(resource["deleted"]) is not bool or type(resource["absenceVerified"]) is not bool:
+        if (
+            type(resource["deleted"]) is not bool
+            or type(resource["absenceVerified"]) is not bool
+        ):
             raise ValueError("invalid cleanup flag")
         if resource["absenceVerified"] and not resource["deleted"]:
             raise ValueError("absence without deletion acknowledgement")
@@ -343,7 +380,11 @@ def register_owned(
 ) -> None:
     """Record a resource this run created, before it can be lost."""
     created_at = _number(now)
-    if created_at < state["startedAt"] or not _nonempty(kind) or not _nonempty(identifier):
+    if (
+        created_at < state["startedAt"]
+        or not _nonempty(kind)
+        or not _nonempty(identifier)
+    ):
         raise ValueError("invalid owned resource")
     for resource in state["ownedResources"]:
         if resource["id"] == identifier:
@@ -351,8 +392,13 @@ def register_owned(
                 raise ValueError("resource kind changed")
             return
     state["ownedResources"].append(
-        {"kind": kind, "id": identifier, "createdAt": created_at,
-         "deleted": False, "absenceVerified": False}
+        {
+            "kind": kind,
+            "id": identifier,
+            "createdAt": created_at,
+            "deleted": False,
+            "absenceVerified": False,
+        }
     )
 
 
@@ -473,7 +519,9 @@ def _reject_constant(_value: str) -> None:
     raise ValueError("non-finite checkpoint number")
 
 
-def load_checkpoint(data: bytes, *, plan: dict[str, Any] | None = None) -> dict[str, Any]:
+def load_checkpoint(
+    data: bytes, *, plan: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Read a complete schema, optionally bound to the caller's independently held plan.
 
     Even a valid, plan-bound checkpoint is private state, not current resource/ownership
@@ -483,8 +531,10 @@ def load_checkpoint(data: bytes, *, plan: dict[str, Any] | None = None) -> dict[
         if not isinstance(data, bytes) or len(data) > MAX_CHECKPOINT_BYTES:
             raise ValueError("invalid checkpoint bytes")
         loaded = json.loads(
-            data.decode("utf-8"), object_pairs_hook=_unique_members,
-            parse_constant=_reject_constant, parse_float=_finite_float,
+            data.decode("utf-8"),
+            object_pairs_hook=_unique_members,
+            parse_constant=_reject_constant,
+            parse_float=_finite_float,
         )
     except (TypeError, ValueError, RecursionError):
         raise CheckpointError("checkpoint is not unambiguous UTF-8 JSON") from None
@@ -498,8 +548,12 @@ def load_checkpoint(data: bytes, *, plan: dict[str, Any] | None = None) -> dict[
         if plan is not None:
             expected = initial_state(plan, state["startedAt"])
             for field in (
-                "campaignId", "nonce", "planDigest", "maxRequests", "deadline",
-                "steps", "selectedCaseIds",
+                "campaignId",
+                "nonce",
+                "planDigest",
+                "maxRequests",
+                "deadline",
+                "selectedCaseIds",
             ):
                 if state.get(field) != expected.get(field):
                     raise CheckpointError("checkpoint does not match the expected plan")

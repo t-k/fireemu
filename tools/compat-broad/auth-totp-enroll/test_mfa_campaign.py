@@ -78,6 +78,11 @@ def test_the_only_finite_selector_preserves_the_full_catalog_and_exact_closure()
         "maxWallSeconds": 1200,
         "criticalPathSeconds": 301,
         "slackSeconds": 119,
+        "requestContingency": {
+            "resumeTokeninfoRequests": 3,
+            "abandonTokeninfoRequests": 1,
+            "restoreFallbackRequests": 4,
+        },
     }
     assert "selector" not in full
     assert validate_campaign(selected) is True

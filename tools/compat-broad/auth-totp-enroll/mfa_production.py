@@ -26,13 +26,12 @@ import tempfile
 import time
 from pathlib import Path
 
-import reservations
-from broad_contract import digest
-
 import mfa_admission as admission
 import mfa_descriptor as campaign
 import mfa_gate
 import mfa_production_transport as transport
+import reservations
+from broad_contract import digest
 from mfa_cases import TOTP_STEP_ROLLOVER_SECONDS
 from mfa_config_lock import VERIFIED_RESTORE_STATUSES, ConfigLock, ConfigLockError
 from mfa_provenance import compute_provenance, describe_worktree
@@ -40,8 +39,15 @@ from mfa_timing import timing_mode
 from mfa_walk import PROJECT, BudgetError, Refused, StopRequested
 
 RUN_STATE_FILE = "run-state.json"
+CALL_BUDGET_CONTRACT = "call-budget.json"
+CALL_BUDGET_EVENTS = "call-budget-events"
 INJECTED_EXECUTION = "injected-transport"
 PRODUCTION_EXECUTION = "fixed-production-wire"
+ABANDON_ALLOWANCE = campaign.SELECTED_REQUEST_CONTINGENCY["abandonTokeninfoRequests"]
+RESTORE_FALLBACK_REQUESTS = campaign.SELECTED_REQUEST_CONTINGENCY[
+    "restoreFallbackRequests"
+]
+UNGATED_RESTORE_ATTEMPTS = RESTORE_FALLBACK_REQUESTS // 2
 
 
 def _envelope(permission: dict, claim: dict) -> dict:
@@ -124,6 +130,174 @@ def _read_private(path: Path) -> dict:
     return value
 
 
+class RequestBudgetRefused(ValueError):
+    """The run exhausted or could not adopt its manifest-bound call budget."""
+
+
+class MfaRequestBudget:
+    """Durable pre-dispatch charges for calls outside the Gate's own journal."""
+
+    def __init__(self, output: Path, spec: dict, *, create: bool = False) -> None:
+        self.output = Path(output)
+        self.spec = copy.deepcopy(spec)
+        self.spec_digest = digest(self.spec)
+        self.events = self.output / CALL_BUDGET_EVENTS
+        contract = self.output / CALL_BUDGET_CONTRACT
+        if create:
+            self.events.mkdir(mode=0o700)
+            _write_immutable(
+                contract,
+                {
+                    "schema": "mfa-request-budget-contract-v1",
+                    "spec": self.spec,
+                    "specDigest": self.spec_digest,
+                },
+            )
+            directory = os.open(self.output, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        else:
+            try:
+                saved = _read_private(contract)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                raise RequestBudgetRefused(
+                    "manifest-bound request budget is missing or unreadable"
+                ) from error
+            if saved != {
+                "schema": "mfa-request-budget-contract-v1",
+                "spec": self.spec,
+                "specDigest": self.spec_digest,
+            }:
+                raise RequestBudgetRefused("manifest-bound request budget differs")
+            if self.events.is_symlink() or not self.events.is_dir():
+                raise RequestBudgetRefused("request budget journal is missing")
+        self._charges = self._read_charges()
+
+    def _read_charges(self) -> list[dict]:
+        names = sorted(path.name for path in self.events.iterdir())
+        charges = []
+        previous = "0" * 64
+        allowances = self.spec.get("allowances")
+        if not isinstance(allowances, dict) or any(
+            not isinstance(category, str) or type(limit) is not int or limit < 0
+            for category, limit in allowances.items()
+        ):
+            raise RequestBudgetRefused("manifest-bound request budget is malformed")
+        counts = {category: 0 for category in allowances}
+        for index, name in enumerate(names):
+            if name != f"{index:06d}.json":
+                raise RequestBudgetRefused("request budget journal sequence differs")
+            try:
+                event = _read_private(self.events / name)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                raise RequestBudgetRefused(
+                    "request budget journal is unreadable"
+                ) from error
+            body = {key: value for key, value in event.items() if key != "eventDigest"}
+            category = event.get("category")
+            if (
+                event.get("schema") != "mfa-request-charge-v1"
+                or event.get("index") != index
+                or event.get("specDigest") != self.spec_digest
+                or event.get("previousDigest") != previous
+                or category not in allowances
+                or event.get("eventDigest") != digest(body)
+            ):
+                raise RequestBudgetRefused("request budget journal binding differs")
+            counts[category] += 1
+            if counts[category] > allowances[category]:
+                raise RequestBudgetRefused("request budget journal exceeds allowance")
+            previous = event["eventDigest"]
+            charges.append(event)
+        return charges
+
+    @property
+    def used(self) -> int:
+        return len(self._charges)
+
+    @property
+    def allowance(self) -> int:
+        return sum(self.spec["allowances"].values())
+
+    def call(self, category: str, send):
+        self._charges = self._read_charges()
+        allowances = self.spec["allowances"]
+        if category not in allowances:
+            raise RequestBudgetRefused("request category is not manifest-bound")
+        if (
+            sum(event["category"] == category for event in self._charges)
+            >= allowances[category]
+        ):
+            raise RequestBudgetRefused(f"request budget exhausted: {category}")
+        previous = self._charges[-1]["eventDigest"] if self._charges else "0" * 64
+        body = {
+            "schema": "mfa-request-charge-v1",
+            "index": len(self._charges),
+            "specDigest": self.spec_digest,
+            "category": category,
+            "previousDigest": previous,
+        }
+        _write_immutable(
+            self.events / f"{len(self._charges):06d}.json",
+            {**body, "eventDigest": digest(body)},
+        )
+        self._charges.append({**body, "eventDigest": digest(body)})
+        return send()
+
+
+def request_budget_spec(
+    inputs: dict, permission: dict, manifest: dict, gate_plan: dict
+) -> dict:
+    """Derive finite call authority only from the frozen plan and owner permission."""
+    job = gate_plan["jobs"][mfa_gate.JOB]
+    gate_slots = (
+        len(job["observation"])
+        + len(job["recovery"])
+        + len(gate_plan["management"]["observation"])
+        + len(gate_plan["management"]["recovery"])
+    )
+    selector = manifest.get("selector")
+    base = (
+        selector["declaredRequests"]
+        if selector is not None
+        else manifest["limits"]["maxRequests"]
+    )
+    contingency = (
+        selector["requestContingency"]
+        if selector is not None
+        else campaign.SELECTED_REQUEST_CONTINGENCY
+    )
+    expected_contingency = {
+        "resumeTokeninfoRequests": campaign.RESUME_ALLOWANCE,
+        "abandonTokeninfoRequests": ABANDON_ALLOWANCE,
+        "restoreFallbackRequests": RESTORE_FALLBACK_REQUESTS,
+    }
+    if contingency != expected_contingency or RESTORE_FALLBACK_REQUESTS % 2:
+        raise RequestBudgetRefused("manifest-bound request contingency differs")
+    if selector is not None and gate_slots + 1 != base:
+        raise RequestBudgetRefused(
+            "selected request budget does not match Gate closure"
+        )
+    return {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": inputs["inputsDigest"],
+        "planDigest": inputs["planDigest"],
+        "permissionDigest": digest(permission),
+        "gatePlanDigest": digest(gate_plan),
+        "selector": selector["name"] if selector is not None else None,
+        "baseRequests": base,
+        "allowances": {
+            "gate": gate_slots,
+            "project-preflight": 1,
+            "resume-tokeninfo": contingency["resumeTokeninfoRequests"],
+            "abandon-tokeninfo": contingency["abandonTokeninfoRequests"],
+            "restore-fallback": contingency["restoreFallbackRequests"],
+        },
+    }
+
+
 class GateAdoptionRefused(ValueError):
     """The shared Gate could not be adopted by this process; nothing was sent."""
 
@@ -136,9 +310,10 @@ class GateSession:
     finalize the walk cannot send is consumed as a journaled zero-wire skip.
     """
 
-    def __init__(self, inner, gate: mfa_gate.MfaGate) -> None:
+    def __init__(self, inner, gate: mfa_gate.MfaGate, budget: MfaRequestBudget) -> None:
         self.inner = inner
         self.gate = gate
+        self.budget = budget
         self.phase = "observation"
         self._management_slots = [
             ("observation", name) for name in mfa_gate.MANAGEMENT_OBSERVATION_IDS
@@ -155,8 +330,10 @@ class GateSession:
         def send():
             deadline = time.monotonic() + mfa_gate.DATA_SLOT_SECONDS
             if owner:
-                return self.inner.admin(path, body, deadline=deadline)
-            return self.inner.public(path, body, deadline=deadline)
+                request = lambda: self.inner.admin(path, body, deadline=deadline)
+            else:
+                request = lambda: self.inner.public(path, body, deadline=deadline)
+            return self.budget.call("gate", request)
 
         return self.gate.dispatch_runtime(
             path, body, owner=owner, recovery=recovery, send=send
@@ -190,7 +367,8 @@ class GateSession:
 
         def send(deadline):
             try:
-                status, body = call(deadline)
+                request = lambda: call(deadline)
+                status, body = self.budget.call("gate", request)
             except Exception as error:  # noqa: BLE001 -- the slot is charged either way; the class is the evidence
                 outcome["failure"] = type(error).__name__
                 return {
@@ -214,6 +392,8 @@ class GateSession:
         self.management_receipts.append(
             {
                 "id": f"{phase}:{slot_id}",
+                "chargedByBudget": True,
+                "budgetCategory": "gate",
                 **{k: v for k, v in outcome.items() if k != "body"},
             }
         )
@@ -232,7 +412,8 @@ class GateSession:
         result: dict = {}
 
         def send(deadline):
-            status, body = self.inner.tokeninfo(deadline=deadline)
+            request = lambda: self.inner.tokeninfo(deadline=deadline)
+            status, body = self.budget.call("gate", request)
             result["status"] = status
             if status != 200:
                 return {
@@ -254,7 +435,12 @@ class GateSession:
         self._consumed = getattr(self, "_consumed", 0) + 1
         self.gate.management_dispatch(phase, slot_id, send)
         self.management_receipts.append(
-            {"id": f"{phase}:{slot_id}", "status": result.get("status")}
+            {
+                "id": f"{phase}:{slot_id}",
+                "status": result.get("status"),
+                "chargedByBudget": True,
+                "budgetCategory": "gate",
+            }
         )
         if result.get("status") != 200:
             raise ValueError(f"tokeninfo answered {result.get('status')}")
@@ -347,7 +533,7 @@ def discover_unsettled(walk, gate, session, journal: list) -> dict:
         if email is None:
             untracked.append(role)
             continue
-        status, body = session.admin(
+        _status, _body = session.admin(
             f"/v1/projects/{PROJECT}/accounts:lookup",
             {"email": [email]},
         )
@@ -383,7 +569,15 @@ def reconcile_gate_accounts(walk, gate) -> list[str]:
     return adopted
 
 
-def ungated_restore(output, inner, lock_arguments, journal: list, *, attempts: int = 2):
+def ungated_restore(
+    output,
+    inner,
+    lock_arguments,
+    journal: list,
+    *,
+    budget: MfaRequestBudget,
+    attempts: int = UNGATED_RESTORE_ATTEMPTS,
+):
     """Restore the configuration outside the Gate, after the gated restore failed.
 
     The Gate's restore slot is one-shot and phase-ordered, so a transient failure
@@ -392,12 +586,23 @@ def ungated_restore(output, inner, lock_arguments, journal: list, *, attempts: i
     the inner session, journaled as not charged by the Gate, and returns the lock
     whose record now says what happened.
     """
+
+    def read():
+        return budget.call(
+            "restore-fallback",
+            lambda: inner.read_config(deadline=time.monotonic() + 12.0),
+        )
+
+    def patch(body, mask):
+        return budget.call(
+            "restore-fallback",
+            lambda: inner.patch_config(body, mask, deadline=time.monotonic() + 12.0),
+        )
+
     lock = ConfigLock.resume(
         output,
-        read=lambda: inner.read_config(deadline=time.monotonic() + 12.0),
-        patch=lambda body, mask: inner.patch_config(
-            body, mask, deadline=time.monotonic() + 12.0
-        ),
+        read=read,
+        patch=patch,
         frozen_baseline_digest=lock_arguments["frozen_baseline_digest"],
     )
     for attempt in range(1, attempts + 1):
@@ -409,6 +614,8 @@ def ungated_restore(output, inner, lock_arguments, journal: list, *, attempts: i
                     "attempt": attempt,
                     "status": lock.record["restoreStatus"],
                     "chargedByGate": False,
+                    "chargedByBudget": True,
+                    "budgetCategory": "restore-fallback",
                 }
             )
             return lock
@@ -419,6 +626,8 @@ def ungated_restore(output, inner, lock_arguments, journal: list, *, attempts: i
                     "attempt": attempt,
                     "status": lock.record["restoreStatus"],
                     "chargedByGate": False,
+                    "chargedByBudget": True,
+                    "budgetCategory": "restore-fallback",
                 }
             )
     return lock
@@ -532,6 +741,8 @@ def execute(
             # its allocation either way. The approval window is the owner's and is
             # checked by the launcher; the owner re-mints it for a late recovery.
             run_state["abandonCount"] = run_state.get("abandonCount", 0) + 1
+            if run_state["abandonCount"] > ABANDON_ALLOWANCE:
+                raise ValueError("abandon allowance exhausted")
     else:
         output.mkdir(mode=0o700, parents=True, exist_ok=False)
         _write_immutable(output / "inputs.json", inputs)
@@ -557,7 +768,11 @@ def execute(
             "receipts": [],
         }
         mfa_gate.create(output / "gate", gate_plan)
+    budget_spec = request_budget_spec(inputs, permission, manifest, gate_plan)
     output = output.resolve()
+    request_budget = MfaRequestBudget(
+        output, budget_spec, create=not (resume or abandon)
+    )
     _write_private(output / RUN_STATE_FILE, run_state)
     gate = mfa_gate.MfaGate(output / "gate")
     if resume or abandon:
@@ -603,7 +818,7 @@ def execute(
         else:
             inner = session_factory(capability, credentials, deadline_for)
         credentials = None
-        session = GateSession(inner, gate)
+        session = GateSession(inner, gate, request_budget)
         lock_arguments = {
             "read": session.read_config,
             "patch": session.patch_config,
@@ -626,7 +841,11 @@ def execute(
             # no slot for a second one, so this call is counted by the session and
             # recorded as not charged by the Gate.
             stop_point = "preflight-tokeninfo"
-            status, body = inner.tokeninfo(deadline=time.monotonic() + 12.0)
+            request_category = "abandon-tokeninfo" if abandon else "resume-tokeninfo"
+            status, body = request_budget.call(
+                request_category,
+                lambda: inner.tokeninfo(deadline=time.monotonic() + 12.0),
+            )
             if status != 200:
                 raise ValueError(f"tokeninfo answered {status}")
             credential_evidence = transport.verify_tokeninfo(
@@ -643,9 +862,11 @@ def execute(
             )
             session.management_receipts.append(
                 {
-                    "id": "resume:oauth-tokeninfo",
+                    "id": f"{'abandon' if abandon else 'resume'}:oauth-tokeninfo",
                     "status": status,
                     "chargedByGate": False,
+                    "chargedByBudget": True,
+                    "budgetCategory": request_category,
                 }
             )
             # The Gate's observation preflight was spent by the first process; the
@@ -695,7 +916,10 @@ def execute(
             # digest is bound into the private run record so a resume re-checks
             # the same physical key.
             stop_point = "preflight-key-project"
-            status, body = inner.project_config(deadline=time.monotonic() + 12.0)
+            status, body = request_budget.call(
+                "project-preflight",
+                lambda: inner.project_config(deadline=time.monotonic() + 12.0),
+            )
             if status != 200:
                 raise ValueError(f"project-config preflight answered {status}")
             transport.verify_key_project(body, PROJECT)
@@ -706,6 +930,8 @@ def execute(
                     "id": "preflight:auth-key-project",
                     "status": status,
                     "chargedByGate": False,
+                    "chargedByBudget": True,
+                    "budgetCategory": "project-preflight",
                 }
             )
             stop_point = "preflight-config-readback"
@@ -826,13 +1052,26 @@ def execute(
             except ConfigLockError:
                 # The gated restore is one-shot and phase-ordered; what it could
                 # not do, the un-gated retry does, journaled as such.
-                lock = ungated_restore(
-                    output, inner, lock_arguments, session.management_receipts
-                )
+                try:
+                    lock = ungated_restore(
+                        output,
+                        inner,
+                        lock_arguments,
+                        session.management_receipts,
+                        budget=request_budget,
+                    )
+                except RequestBudgetRefused as error:
+                    failure = failure or type(error).__name__
+                    if stop_point != "cleanup":
+                        stop_point = "restore"
                 if lock.record["restoreStatus"] not in VERIFIED_RESTORE_STATUSES:
                     failure = failure or "ConfigLockError"
                     if stop_point != "cleanup":
                         stop_point = "restore"
+            except RequestBudgetRefused as error:
+                failure = failure or type(error).__name__
+                if stop_point != "cleanup":
+                    stop_point = "restore"
         if session is not None and not resumable and cleanup["complete"]:
             try:
                 gate.finish()
@@ -901,6 +1140,15 @@ def execute(
         releaseEligible=complete and ticket is not None,
         releaseRecord="release.json" if complete else None,
         requestsCharged=session.requests if session is not None else 0,
+        requestBudget={
+            "schema": budget_spec["schema"],
+            "used": request_budget.used,
+            "allowance": request_budget.allowance,
+            "baseRequests": budget_spec["baseRequests"],
+            "contingencyAllowance": request_budget.allowance
+            - budget_spec["allowances"]["gate"]
+            - budget_spec["allowances"]["project-preflight"],
+        },
     )
     admission.screen_receipt(receipt)
     sequence = len(run_state["receipts"])

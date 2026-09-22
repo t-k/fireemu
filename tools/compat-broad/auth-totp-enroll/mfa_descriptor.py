@@ -31,12 +31,9 @@ for entry in (ROOT / "tools/compat-broad", ROOT / "tools/compat-broad/o8-core", 
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from broad_contract import digest
-from o8_admission import authorize_transport
-from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
-
 import mfa_gate
 import mfa_production_transport as transport
+from broad_contract import digest
 from mfa_cases import (
     CAMPAIGN_ID,
     critical_path_seconds,
@@ -49,11 +46,14 @@ from mfa_manifest import (
     LIMITS,
     PROJECT,
     PROVISIONING_SECONDS,
+    SELECTED_REQUEST_CONTINGENCY,
     compile_campaign,
     validate_campaign,
 )
 from mfa_provenance import BOUND_PATHS
 from mfa_timing import VIRTUAL_CLOCK, WALL_CLOCK, require_wall_clock, timing_mode
+from o8_admission import authorize_transport
+from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
 
 CAMPAIGN = CAMPAIGN_ID
 PROJECT_NUMBER = "592603257417"
@@ -102,7 +102,7 @@ MANAGEMENT_PREFLIGHT = mfa_gate.MANAGEMENT_OBSERVATION_IDS[:2]
 CONFIG_APPLY = mfa_gate.MANAGEMENT_OBSERVATION_IDS[2:]
 CONFIG_RESTORE = mfa_gate.MANAGEMENT_RECOVERY_IDS
 # How many times a paused run may be resumed under its reservation.
-RESUME_ALLOWANCE = 3
+RESUME_ALLOWANCE = SELECTED_REQUEST_CONTINGENCY["resumeTokeninfoRequests"]
 # Each owned account is deleted, then proven absent by UID and, where it has one, by
 # address; the anonymous account has no address.
 RECOVERY_REQUESTS_PER_ACCOUNT = 4
@@ -225,12 +225,7 @@ def wall_budget(
     critical = critical_path_seconds() if critical_path is None else critical_path
     total = campaign_seconds() if max_wall_seconds is None else max_wall_seconds
     recovery = recovery_seconds() if recovery_reserve is None else recovery_reserve
-    used = (
-        PROVISIONING_SECONDS
-        + CONFIG_ENFORCEMENT_LAG_SECONDS
-        + critical
-        + recovery
-    )
+    used = PROVISIONING_SECONDS + CONFIG_ENFORCEMENT_LAG_SECONDS + critical + recovery
     if used > total:
         raise ValueError("wall budget does not hold the critical path and recovery")
     return {
@@ -313,16 +308,12 @@ def frozen_bounds(
     wall = wall_budget(
         max_wall_seconds=None if limits is None else limits["maxWallSeconds"],
         critical_path=None if limits is None else limits["criticalPathSeconds"],
-        recovery_reserve=(
-            None if limits is None else limits["recoveryReserveSeconds"]
-        ),
+        recovery_reserve=(None if limits is None else limits["recoveryReserveSeconds"]),
     )
     return {
         **request_budget(),
         **wall,
-        "caseCount": (
-            len(observation_cases()) if case_count is None else case_count
-        ),
+        "caseCount": (len(observation_cases()) if case_count is None else case_count),
         "ownedAccounts": (
             len(owned_accounts()) if account_count is None else account_count
         ),
@@ -378,7 +369,9 @@ def execution_plan(reference: dict) -> dict:
     timing = reference.get("timingMode")
     if timing not in (WALL_CLOCK, VIRTUAL_CLOCK):
         raise ValueError("frozen MFA plan reference differs")
-    selector = reference.get("selector", {}).get("name") if "selector" in reference else None
+    selector = (
+        reference.get("selector", {}).get("name") if "selector" in reference else None
+    )
     canonical = plan_compiler(nonce, timing=timing, selector=selector)
     if digest(reference) != digest(canonical):
         raise ValueError("frozen MFA plan reference differs")
@@ -544,9 +537,7 @@ def permission_bindings(
         selector_name = selector.get("name")
     else:
         raise ValueError("fixed production project and timing mode required")
-    canonical = plan_compiler(
-        plan["nonce"], timing=timing, selector=selector_name
-    )
+    canonical = plan_compiler(plan["nonce"], timing=timing, selector=selector_name)
     if digest(plan) != digest(canonical):
         raise ValueError("frozen MFA plan reference differs")
     manifest = execution_plan(plan)

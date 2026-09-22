@@ -28,7 +28,12 @@ for entry in (
 
 import mfa_admission as admission
 import mfa_descriptor as campaign
-from conftest_rehearsal import ENROLLMENT_TTL_SECONDS, RehearsalAdmission
+from conftest_rehearsal import (
+    ENROLLMENT_TTL_SECONDS,
+    NONCE,
+    RehearsalAdmission,
+    owner_permission,
+)
 from mfa_cases import CASE_IDS, owned_accounts
 from mfa_config_lock import LOCK_FILE, applied
 from mfa_walk import CHECKPOINT_FILE, MATERIAL_FILE
@@ -38,6 +43,200 @@ EXPECTED_SKIPS = {"age-1800s-finalize"}
 
 def _rows(result):
     return {row["id"]: row for row in result["rows"]}
+
+
+def _selected_rehearsal(built):
+    manifest = campaign.compile_campaign(NONCE, selector="pending-age-300-v1")
+    bounds = campaign.frozen_bounds(
+        case_count=3, account_count=1, limits=manifest["limits"]
+    )
+    bounds.update(timingMode="virtual-clock", rehearsal=True)
+    built.descriptor = campaign._descriptor(
+        built.sleeper,
+        seconds=1200,
+        recovery=300,
+        bounds=bounds,
+        timing=campaign.VIRTUAL_CLOCK,
+    )
+    built.plan = built.descriptor.plan_compiler(NONCE, selector="pending-age-300-v1")
+    built.permission = owner_permission(
+        built.descriptor,
+        built.plan,
+        built.commit,
+        hashlib.sha256(built.artifact_path.read_bytes()).hexdigest(),
+        campaign.source_map(),
+        built.baseline_digest,
+    )
+    built.permission_path.write_text(json.dumps(built.permission))
+    built.inputs = admission.freeze_inputs(
+        built.permission_path,
+        built.plan,
+        source_root=built.source,
+        artifact_path=built.artifact_path,
+        descriptor_=built.descriptor,
+    )
+    built.manifest = {
+        "kind": campaign.MANIFEST_KIND,
+        "inputsDigest": built.inputs["inputsDigest"],
+    }
+    built.manifest_bytes = json.dumps(built.manifest).encode()
+    built.manifest_path.write_bytes(built.manifest_bytes)
+    built.manifest_path.chmod(0o600)
+    built.approval = built._approval()
+    built.approval_path.write_text(json.dumps(built.approval))
+    built.approval_path.chmod(0o600)
+    return built
+
+
+def test_the_durable_request_budget_rejects_exhaustion_before_transport(tmp_path):
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"resume-tokeninfo": 1},
+    }
+    budget = mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    sent = []
+    assert budget.call("resume-tokeninfo", lambda: sent.append("first")) is None
+    assert sent == ["first"]
+
+    resumed = mfa_production.MfaRequestBudget(tmp_path, spec)
+    with pytest.raises(mfa_production.RequestBudgetRefused, match="exhausted"):
+        resumed.call("resume-tokeninfo", lambda: sent.append("second"))
+    assert sent == ["first"]
+
+
+def test_a_failed_dispatch_stays_spent_after_budget_reload(tmp_path):
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"restore-fallback": 1},
+    }
+    budget = mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    sent = []
+
+    def interrupted():
+        sent.append("dispatch-started")
+        raise TimeoutError("fixture response was lost")
+
+    with pytest.raises(TimeoutError, match="response was lost"):
+        budget.call("restore-fallback", interrupted)
+
+    resumed = mfa_production.MfaRequestBudget(tmp_path, spec)
+    with pytest.raises(mfa_production.RequestBudgetRefused, match="exhausted"):
+        resumed.call("restore-fallback", lambda: sent.append("retried"))
+    assert sent == ["dispatch-started"]
+
+
+def test_a_rehashed_request_budget_cannot_expand_the_manifest_allowance(tmp_path):
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"resume-tokeninfo": 1},
+    }
+    mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    contract_path = tmp_path / mfa_production.CALL_BUDGET_CONTRACT
+    contract = json.loads(contract_path.read_bytes())
+    contract["spec"]["allowances"]["resume-tokeninfo"] = 100
+    contract["specDigest"] = mfa_production.digest(contract["spec"])
+    mfa_production._write_private(contract_path, contract)
+
+    with pytest.raises(ValueError, match="manifest-bound request budget"):
+        mfa_production.MfaRequestBudget(tmp_path, spec)
+
+
+def test_selected_run_resume_cumulatively_charges_calls_under_its_22_position_base(
+    tmp_path,
+):
+    built = _selected_rehearsal(RehearsalAdmission(tmp_path))
+    first = built.run(stop_requested=_stop_after(built, 1))
+    assert first["failure"] == "StopRequested"
+    assert first["resumable"] is True
+    first_used = first["requestBudget"]["used"]
+    assert first["requestBudget"]["baseRequests"] == 22
+
+    second = built.run(resume=True)
+
+    assert second["failure"] is None
+    assert len(second["rows"]) == 3
+    assert 22 <= second["requestBudget"]["used"] <= 23
+    assert second["requestBudget"]["used"] > first_used
+    assert second["requestBudget"]["allowance"] == 30
+    assert second["chargedCalls"] <= 21
+    assert any(
+        item["id"] == "resume:oauth-tokeninfo"
+        and item["budgetCategory"] == "resume-tokeninfo"
+        for item in second["managementEvidence"]
+    )
+
+
+def test_the_selected_manifest_binds_a_22_position_base_and_finite_contingency(
+    tmp_path,
+):
+    import mfa_gate
+    import mfa_production
+
+    manifest = campaign.compile_campaign("d" * 32, selector="pending-age-300-v1")
+    built = RehearsalAdmission(tmp_path)
+    plan = campaign.plan_compiler(
+        "d" * 32, selector="pending-age-300-v1", timing=campaign.VIRTUAL_CLOCK
+    )
+    gate_plan = mfa_gate.gate_plan(
+        "d" * 32,
+        wall_seconds=1200,
+        recovery_seconds=300,
+        cost_microusd=campaign.ledger_budget()["costMicrousd"],
+        selector="pending-age-300-v1",
+    )
+    inputs = {
+        "inputsDigest": "a" * 64,
+        "planDigest": campaign.digest(plan),
+    }
+    permission = {"selector": "pending-age-300-v1"}
+    spec = mfa_production.request_budget_spec(inputs, permission, manifest, gate_plan)
+
+    assert spec["baseRequests"] == manifest["selector"]["declaredRequests"] == 22
+    assert manifest["selector"]["requestContingency"] == {
+        "resumeTokeninfoRequests": 3,
+        "abandonTokeninfoRequests": 1,
+        "restoreFallbackRequests": 4,
+    }
+    assert spec["allowances"] == {
+        "gate": 21,
+        "project-preflight": 1,
+        "resume-tokeninfo": campaign.RESUME_ALLOWANCE,
+        "abandon-tokeninfo": mfa_production.ABANDON_ALLOWANCE,
+        "restore-fallback": mfa_production.UNGATED_RESTORE_ATTEMPTS * 2,
+    }
+    assert built.descriptor.frozen_bounds["caseCount"] == len(CASE_IDS) == 33
+
+
+def test_a_second_abandon_is_refused_before_credentials_or_transport(tmp_path):
+    built = RehearsalAdmission(tmp_path)
+    first = built.run(stop_requested=_stop_after(built, 1))
+    assert first["resumable"] is True
+
+    abandoned = built.run(abandon=True)
+    assert abandoned["abandonCount"] == 1
+    before = list(built.fake.log)
+    with pytest.raises(ValueError, match="abandon allowance exhausted"):
+        built.run(
+            abandon=True, credential_reader=lambda: pytest.fail("credential read")
+        )
+    assert built.fake.log == before
+    assert built.fake.accounts == {}
+    assert not applied(built.fake.config)
 
 
 @pytest.fixture(scope="module")
@@ -88,6 +287,8 @@ def test_the_full_walk_completes_cleans_up_and_restores(completed):
     assert configuration["baselineReference"]["valuesRetained"] is False
     assert not applied(built.fake.config)
     assert result["collection"]["requests"] <= campaign.request_budget()["maxRequests"]
+    assert result["requestBudget"]["used"] == result["requestsCharged"]
+    assert result["requestBudget"]["baseRequests"] == 400
     assert result["executionKind"] == "injected-transport"
     assert result["productionExecuted"] is False
     assert result["timingMode"] == "virtual-clock"
@@ -175,6 +376,13 @@ def test_a_stop_mid_run_restores_the_configuration_and_a_resume_completes(tmp_pa
     assert second["resumeCount"] == 1
     assert [row["id"] for row in second["rows"]] == list(CASE_IDS)
     assert second["configuration"]["restoreAttempts"] == 1
+    assert second["requestBudget"]["used"] > first["requestBudget"]["used"]
+    assert any(
+        item["id"] == "resume:oauth-tokeninfo"
+        and item["chargedByBudget"] is True
+        and item["budgetCategory"] == "resume-tokeninfo"
+        for item in second["managementEvidence"]
+    )
     assert second["gateComplete"] is True
     assert second["cleanup"]["complete"] is True
     assert built.fake.accounts == {}
@@ -201,6 +409,12 @@ def test_an_abandon_after_a_stop_deletes_every_account_and_restores(tmp_path):
     assert first["resumable"] is True and built.fake.accounts
     abandoned = built.run(abandon=True)
     assert abandoned["failure"] == "StopRequested"
+    assert any(
+        item["id"] == "abandon:oauth-tokeninfo"
+        and item["chargedByBudget"] is True
+        and item["budgetCategory"] == "abandon-tokeninfo"
+        for item in abandoned["managementEvidence"]
+    )
     assert abandoned["resumable"] is False
     assert abandoned["stopPoint"] == "cleanup"
     assert abandoned["cleanup"]["complete"] is True
@@ -230,7 +444,9 @@ def test_recover_unsettled_is_a_classifiable_cleanup_stop():
         "gateComplete": True,
         "untrackedIntents": [],
     }
-    assert admission.classify_stop(receipt)["disposition"] == "abandoned-cleanup-complete"
+    assert (
+        admission.classify_stop(receipt)["disposition"] == "abandoned-cleanup-complete"
+    )
 
 
 def test_a_key_of_another_project_refuses_before_any_patch_or_signup(tmp_path):
@@ -525,6 +741,10 @@ def _dead_during_apply(tmp_path, *, after_readback):
     )
     output = built.output
     output.mkdir(mode=0o700)
+    budget_spec = mfa_production.request_budget_spec(
+        inputs, permission, campaign.execution_plan(inputs["plan"]), gate_plan
+    )
+    budget = mfa_production.MfaRequestBudget(output, budget_spec, create=True)
     mfa_production._write_immutable(output / "inputs.json", inputs)
     mfa_production._write_private(
         output / "run-state.json",
@@ -546,7 +766,7 @@ def _dead_during_apply(tmp_path, *, after_readback):
     mfa_gate.create(output / "gate", gate_plan)
     gate = mfa_gate.MfaGate(output / "gate")
     gate.claim()
-    session = mfa_production.GateSession(FakeSession(built.fake), gate)
+    session = mfa_production.GateSession(FakeSession(built.fake), gate, budget)
     session.tokeninfo(
         lambda body: {
             "kind": "request-byte-token-attestation-v1",
@@ -826,9 +1046,7 @@ def test_a_lost_signup_in_a_dead_process_stays_held_on_abandon(tmp_path, monkeyp
         "restored-verified-normalized",
     )
     assert not applied(built.fake.config)
-    assert (
-        admission.classify_stop(recovered)["disposition"] == "owner-escalation"
-    )
+    assert admission.classify_stop(recovered)["disposition"] == "owner-escalation"
 
 
 def test_an_anonymous_signup_whose_answer_was_lost_is_reported_untracked(tmp_path):

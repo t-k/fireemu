@@ -93,6 +93,16 @@ def test_a_checkpoint_round_trip_reproduces_the_same_decision() -> None:
     assert next_action(resumed, ORIGIN + 400)["action"] == "RUN"
 
 
+def test_a_progressed_checkpoint_remains_bound_to_its_frozen_plan() -> None:
+    plan = compile_campaign(NONCE)
+    state = initial_state(plan, ORIGIN)
+    record_step(state, CASE_IDS[0], {"status": 200}, ORIGIN + 1)
+
+    resumed = load_checkpoint(checkpoint_bytes(state), plan=plan)
+
+    assert resumed == state
+
+
 @pytest.mark.parametrize(
     ("checkpoint_selector", "plan_selector"),
     [(None, "pending-age-300-v1"), ("pending-age-300-v1", None)],

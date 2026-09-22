@@ -27,11 +27,10 @@ for entry in (
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-import reservations
-from broad_contract import digest
-
 import mfa_admission as admission
 import mfa_descriptor as campaign
+import reservations
+from broad_contract import digest
 from conftest_rehearsal import (
     NONCE,
     RehearsalAdmission,
@@ -316,7 +315,10 @@ def test_the_hosting_check_names_every_shared_module_refusal(tmp_path):
         item["refusal"]
         for item in admission.hosting_check(rehearsal_claim, rehearsal_plan)
     ] == ["ledger-resource-refused"]
-    with pytest.raises(ValueError, match="canonical Firestore resource required|Gate resource lock is not covered"):
+    with pytest.raises(
+        ValueError,
+        match="canonical Firestore resource required|Gate resource lock is not covered",
+    ):
         ledger.reserve(
             {
                 **envelope,
@@ -331,12 +333,12 @@ def test_the_hosting_check_names_every_shared_module_refusal(tmp_path):
 def test_selected_age_300_plan_uses_supported_auth_account_scope_and_bounded_claim(
     tmp_path,
 ):
+    import mfa_gate
+
     built = RehearsalAdmission(tmp_path)
     production = campaign.descriptor(WallClockSleeper())
     inputs = copy.deepcopy(built.inputs)
-    inputs["plan"] = production.plan_compiler(
-        NONCE, selector="pending-age-300-v1"
-    )
+    inputs["plan"] = production.plan_compiler(NONCE, selector="pending-age-300-v1")
     gate_plan = admission.gate_plan_for(inputs, built.permission, production)
     claim = admission.reservation_claim(
         inputs, gate_path=tmp_path / "gate", gate_plan=gate_plan, descriptor_=production
@@ -344,10 +346,31 @@ def test_selected_age_300_plan_uses_supported_auth_account_scope_and_bounded_cla
 
     assert gate_plan["wallSeconds"] == 1200
     assert claim["durationSeconds"] == 1200
-    assert claim["locks"][0]["key"].endswith("pending-age-300-" + NONCE)
+    account_resource = gate_plan["accountResources"][0]
+    assert claim["locks"][0] == {
+        "key": "project/fireemu-35fe6/auth/accounts/o2-mfa-pending-age-300-" + NONCE,
+        "mode": "WRITE",
+    }
+    assert reservations._resource_scope(account_resource) == tuple(
+        claim["locks"][0]["key"].split("/")
+    )
     refusals = admission.hosting_check(claim, gate_plan)
-    assert [item["refusal"] for item in refusals] == ["ledger-resource-refused"]
-    assert refusals[0]["value"]["refusedResources"] == 1
+    assert refusals == []
+
+    envelope = {
+        "permissionDigest": digest(built.permission),
+        "issuedAt": built.permission["issuedAt"],
+        "expiresAt": built.permission["expiresAt"],
+        "limits": claim["budget"],
+        "concurrency": 1,
+        "scopes": claim["locks"],
+    }
+    ledger = reservations.Ledger(built.ledger)
+    ticket = ledger.reserve(envelope, claim, gate_plan)
+    mfa_gate.create(Path(claim["gatePath"]), gate_plan)
+    row = ledger.snapshot()["reservations"][ticket["reservation"]]
+    assert row["state"] == "held"
+    assert row["claim"]["locks"] == claim["locks"]
 
 
 @pytest.mark.parametrize(

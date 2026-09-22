@@ -21,7 +21,12 @@ import request_bytes_preflight as preflight
 import reservations
 import shared_gate
 from broad_contract import digest
-from request_bytes_collector import _validated_response, collect_local, complete
+from request_bytes_collector import (
+    _validated_response,
+    cleanup_safety_complete,
+    collect_local,
+    complete,
+)
 
 
 def _envelope(permission: dict, claim: dict) -> dict:
@@ -212,7 +217,10 @@ def execute(
             return receipt
 
         result = collect_local(plan, execute_wire, output / "collection", gate=gates)
-        if result.get("completed") and result.get("cleanupComplete"):
+        if (
+            result.get("cleanupSafetyComplete") is True
+            and cleanup_safety_complete(result)
+        ):
             management.run("recovery")
             for gate in gates.values():
                 gate.finish()
@@ -398,8 +406,8 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
     routes = _read_saved(output / "routes.json")["rows"]
     if (
         collection != receipt.get("collection")
-        or collection.get("completed") is not True
-        or collection.get("cleanupComplete") is not True
+        or collection.get("cleanupSafetyComplete") is not True
+        or not cleanup_safety_complete(collection)
         # The Gate total counts the seven charged management slots as well as
         # the data routes; the route journal carries only the data routes.
         or len(routes) + len(snapshot.get("managementEvents", []))

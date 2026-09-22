@@ -387,6 +387,7 @@ def test_unexpected_over_success_keeps_creation_proof_for_cleanup(tmp_path):
     assert not live
     assert result["resourceAbsence"] is True
     assert result["cleanupComplete"] is False
+    assert result["cleanupSafetyComplete"] is True
     assert "over:unexpected-success" in result["failures"]
 
 
@@ -488,6 +489,7 @@ def test_recording_failure_stops_observation_but_runs_recovery(
     result = collect_local(value, execute, tmp_path / "run")
     assert result["completed"] is False
     assert result["resourceAbsence"] is False
+    assert result["cleanupSafetyComplete"] is False
     assert len(deletes) == (17 if failure_sequence == 17 else 0)
     assert not any(item["probe"] != "under" for item in calls)
     if failure_sequence == 0:
@@ -666,6 +668,7 @@ def test_invalid_over_receipt_keeps_collection_incomplete_and_never_deletes(
     result = collect_local(value, execute, tmp_path / "run")
     assert result["completed"] is False
     assert result["cleanupComplete"] is False
+    assert result["cleanupSafetyComplete"] is False
     assert over_dispatch_index is not None
     assert not any(
         operation["kind"] == "cleanup-version-bound-delete"

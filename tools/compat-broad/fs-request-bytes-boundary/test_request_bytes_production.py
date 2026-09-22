@@ -92,7 +92,7 @@ def built(tmp_path):
     return fixture
 
 
-def wire_fixture(monkeypatch, *, fault=None, over_status=400):
+def wire_fixture(monkeypatch, *, fault=None, over_status=400, over_success=False):
     calls, live = [], {}
     version = "2026-01-01T00:00:00.123456789Z"
 
@@ -103,10 +103,32 @@ def wire_fixture(monkeypatch, *, fault=None, over_status=400):
         kind, resource = operation["kind"], operation.get("resource")
         if fault == "preflight" and len(calls) == 1:
             return {"complete": False, "failure": "offline-preflight-failure"}
-        if kind == "conditional-create-commit":
+        if fault == "unsafe-ownership" and kind == "cleanup-ownership-read":
+            body = {
+                "name": resource,
+                "fields": {"_owner": {"stringValue": "foreign-owner"}},
+                "updateTime": version,
+            }
+            status = 200
+        elif fault == "extra-error" and kind == "cleanup-verify-absence":
+            status, body = 500, {"error": {"code": 500, "status": "INTERNAL"}}
+        elif kind == "conditional-create-commit":
             if fault == "commit":
                 return {"complete": False, "failure": "offline-lost-response"}
-            if operation["probe"] == "over":
+            if operation["probe"] == "over" and over_success:
+                writes = operation["body"]["writes"]
+                for write in writes:
+                    live[write["update"]["name"]] = write["update"]["fields"]
+                status, body = (
+                    200,
+                    {
+                        "writeResults": [
+                            {"updateTime": version, "name": write["update"]["name"]}
+                            for write in writes
+                        ]
+                    },
+                )
+            elif operation["probe"] == "over":
                 status = over_status
                 body = {"error": {"code": status, "status": "INVALID_ARGUMENT"}}
             else:
@@ -144,6 +166,76 @@ def wire_fixture(monkeypatch, *, fault=None, over_status=400):
 
     monkeypatch.setattr(remote, "request", request)
     return calls, live
+
+
+def test_safe_semantic_mismatch_runs_postflight_and_releases(
+    built, tmp_path, monkeypatch
+):
+    calls, live = wire_fixture(monkeypatch, over_success=True)
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["reservationReleased"] is True
+    assert not live
+    collection = result["collection"]
+    assert collection["completed"] is False
+    assert collection["cleanupComplete"] is False
+    assert collection["cleanupSafetyComplete"] is True
+    assert collection["failures"] == ["over:unexpected-success"]
+    assert len(calls) == 258
+    output = tmp_path / "output"
+    gate = shared_gate.Gate(
+        output / "gate", campaign.gate_job_name("probe-u01")
+    ).snapshot()
+    expected_management = [
+        "observation:oauth-tokeninfo",
+        "observation:project",
+        "observation:database",
+        "observation:auth",
+        "recovery:project",
+        "recovery:database",
+        "recovery:auth",
+    ]
+    assert [event["id"] for event in gate["managementEvents"]] == expected_management
+    assert all(event["completed"] is True for event in gate["managementEvents"])
+    assert all(job["complete"] for job in gate["jobs"].values())
+    final = reservations.Ledger(built.ledger).snapshot()[
+        "reservations"
+    ][result["ticket"]["reservation"]]
+    assert final["state"] == "released"
+
+
+@pytest.mark.parametrize(
+    ("fault", "over_status"),
+    [
+        ("commit", 400),
+        ("unsafe-ownership", 400),
+        ("extra-error", 400),
+        (None, 413),
+    ],
+    ids=["unknown-create", "unsafe-ownership", "extra-cleanup-error", "proof-missing"],
+)
+def test_safety_negative_outcomes_remain_held(
+    built, tmp_path, monkeypatch, fault, over_status
+):
+    wire_fixture(monkeypatch, fault=fault, over_status=over_status)
+    result = launcher.execute(launcher.build_parser().parse_args(built.argv(tmp_path)))
+
+    assert result["reservationReleased"] is False
+    assert result["releaseEligible"] is False
+    if result["collection"] is not None:
+        assert result["collection"]["cleanupSafetyComplete"] is False
+        assert result["collection"]["completed"] is False
+    row = reservations.Ledger(built.ledger).snapshot()["reservations"][
+        result["ticket"]["reservation"]
+    ]
+    assert row["state"] == "held"
+    gate = shared_gate.Gate(
+        tmp_path / "output/gate", row["claim"]["gateJob"]
+    ).snapshot()
+    assert not any(
+        event["id"].startswith("recovery:")
+        for event in gate["managementEvents"]
+    )
 
 
 def test_all_three_probe_jobs_finish_before_real_ledger_release(
@@ -247,6 +339,7 @@ def test_stopped_runs_persist_evidence_and_retain_reservation(
     receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
     assert receipt["failure"]
     assert receipt["releaseEligible"] is False
+    assert receipt["collection"]["cleanupSafetyComplete"] is False
     assert receipt["productionExecuted"] is True
     assert receipt["metadata"]
     assert receipt["stopPoint"] == (
@@ -461,6 +554,42 @@ def test_saved_verifier_rejects_tampered_evidence(built, tmp_path, monkeypatch, 
         )
 
 
+def test_saved_verifier_recomputes_cleanup_safety_boolean(
+    built, tmp_path, monkeypatch
+):
+    wire_fixture(monkeypatch, over_success=True)
+    assert launcher.main(built.argv(tmp_path)) == 0
+    output = tmp_path / "output"
+    production.verify_saved(
+        output,
+        expected_inputs_digest=built.inputs["inputsDigest"],
+        ledger_root=built.ledger,
+    )
+
+    collection_path = output / "collection/result.json"
+    collection = json.loads(collection_path.read_bytes())
+    collection["cleanupSafetyComplete"] = False
+    collection_path.write_text(json.dumps(collection))
+    receipt_path = output / "receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["collection"] = collection
+    receipt["evidenceFiles"]["collection/result.json"] = hashlib.sha256(
+        collection_path.read_bytes()
+    ).hexdigest()
+    receipt_path.write_text(json.dumps(receipt))
+    release_path = output / "release.json"
+    release = json.loads(release_path.read_bytes())
+    release["receiptDigest"] = digest(receipt)
+    release_path.write_text(json.dumps(release))
+
+    with pytest.raises(ValueError, match="saved route journal differs"):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+
+
 def test_saved_verifier_requires_independent_inputs_digest(tmp_path):
     with pytest.raises(ValueError):
         production.verify_saved(
@@ -538,6 +667,7 @@ def test_recording_failure_after_commit_still_cleans_owned_documents(
     assert all(operation["probe"] == "under" for _, _, operation in calls)
     receipt = json.loads((tmp_path / "output/receipt.json").read_bytes())
     assert receipt["releaseEligible"] is False
+    assert receipt["collection"]["cleanupSafetyComplete"] is False
     row = reservations.Ledger(built.ledger).snapshot()["reservations"][
         receipt["ticket"]["reservation"]
     ]

@@ -4,10 +4,12 @@ verifies, through an injected transport, with no socket and no credential."""
 from __future__ import annotations
 
 import copy
+import atexit
 import json
 import tempfile
 import time
 import sys
+from typing import Any
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,8 @@ from o5_user_token_collector import (
     collect as _collect,
     RulesManagementReceipt,
     RulesManagementSession,
+    RULES_MANAGEMENT_OBSERVATION,
+    RULES_MANAGEMENT_RECOVERY,
     open_ownership_journal,
     start_context,
     _rules_management_proof,
@@ -44,6 +48,13 @@ NONCE = "a" * 32
 LOCAL_TENANT = "fireemu-00000000000000000001"
 PRODUCTION_ENDPOINT = "firestore.googleapis.com:443"
 LOCAL_ENDPOINT = "127.0.0.1:52879"
+_LIVE_FIXTURES: list[tempfile.TemporaryDirectory] = []
+
+
+@atexit.register
+def _close_live_fixtures() -> None:
+    while _LIVE_FIXTURES:
+        _LIVE_FIXTURES.pop().cleanup()
 
 
 def plan_for(role: str) -> dict:
@@ -120,11 +131,28 @@ def bound(
     if role != ROLE_PRODUCTION:
         bundle = collect(plan, transport, role=role, run_id=f"{role}-run", acquisition=acquisition, **kwargs)
         return bundle, transport
-    with tempfile.TemporaryDirectory(prefix="o5-bound-rules-") as directory:
-        root = __import__("pathlib").Path(directory)
+    # Canonical production fixture: run the real 19-slot setup bridge against
+    # the loopback producer, then enter the Rules collector with its durable
+    # setup proof and shared context.
+    from test_o5_user_token_production import _ProducerHandler, _producer_server
+    import o5_user_token_production_bridge as bridge
+    import o5_user_token_descriptor as descriptor
+    from test_o5_user_token_descriptor import synthetic
+    from test_o5_user_token_remote_transport import account_bindings
+    from test_o5_user_token_remote_transport import _fixture_capability as fixture_capability
+
+    fixture = tempfile.TemporaryDirectory(prefix="o5-bound-rules-")
+    _LIVE_FIXTURES.append(fixture)
+    try:
+        root = __import__("pathlib").Path(fixture.name)
+        server = _producer_server()
+        server_thread = __import__("threading").Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        origin = f"http://127.0.0.1:{server.server_address[1]}"
         gate_path = root / "gate"
         ledger = Ledger.create(root / "ledger")
         plan_gate = gate_plan(plan, permission_expires_at=time.time() + 3600)
+        plan_gate["jobs"]["rules-management"]["resources"] = []
         required_requests = plan_gate["observationRequests"] + sum(
             len(job["recovery"]) for job in plan_gate["jobs"].values()
         ) + len(plan_gate["management"]["recovery"]) + plan_gate.get("coordinatorRequests", 0)
@@ -139,13 +167,144 @@ def bound(
         ticket = ledger.reserve(envelope, claim, plan_gate)
         shared_gate.create(gate_path, plan_gate)
         gate = shared_gate.Gate(gate_path, plan["campaignId"])
-        management = _management_executor(plan, transport)
-        def execute(request, **_kwargs):
-            if request.get("kind") == "rules-lifecycle":
-                return management(request)
-            return transport(request)
-        session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=plan)
-        bundle = collect(plan, execute, role=role, run_id=f"{role}-run", acquisition=acquisition, management_session=session, **kwargs)
+        bindings = synthetic(root, descriptor.descriptor())
+        binding, binding_digest = __import__("o5_user_token_remote_transport").worker_binding()
+        capability = fixture_capability(
+            plan,
+            binding,
+            binding_digest,
+            bindings["inputs"],
+            window_seconds=float(claim["durationSeconds"]),
+        )
+        _ProducerHandler._plan = plan
+        _ProducerHandler.requests = []
+        _ProducerHandler.setup_uids = {}
+        _ProducerHandler.active = "projects/fireemu-35fe6/rulesets/pre-existing"
+        _ProducerHandler.deleted = set()
+        _ProducerHandler.recovered_documents = set()
+        _ProducerHandler.deleted_accounts = set()
+        _ProducerHandler.setup_account_order = []
+        _ProducerHandler.documents = {}
+        _ProducerHandler.account_state = {}
+        _ProducerHandler.observation_index = 0
+        _ProducerHandler.fail_setup_after = None
+        _ProducerHandler.malformed_setup_failure = False
+        journal = open_ownership_journal(root / "ownership.jsonl", run_id=f"{role}-run", plan_digest=plan["planDigest"])
+        ownership: dict[str, dict[str, Any]] = {}
+        handoffs: dict[str, Any] = {}
+        try:
+            bridge.run_bound_setup(
+                plan=plan,
+                gate=gate,
+                credentials={"administrator": "fixture-admin", "api-key": "fixture-key"},
+                setup_secrets={entry["ref"]: "fixture-password" for entry in plan["ownedAccounts"]},
+                account_bindings=account_bindings(plan),
+                capability=capability,
+                fixture_origin=origin,
+                binding=binding,
+                binding_digest=binding_digest,
+                journal=journal,
+                ownership=ownership,
+                identity_handoffs=handoffs,
+            )
+            identity_proofs = bridge.setup_identity_proofs(
+                plan, gate, handoffs, fixture_origin=origin
+            )
+            acquisition["principals"] = {
+                ref: {
+                    "uidFingerprint": digest(["uid", plan["nonce"], proof.uid])[:16],
+                    "provider": "anonymous" if proof.provider == "anonymous" else "email",
+                    "tenant": proof.tenant,
+                    "claimsDigest": proof.claims_digest,
+                }
+                for ref, proof in identity_proofs.items()
+            }
+            credentials = {
+                "administrator": "fixture-admin",
+                "api-key": "fixture-key",
+                "expired-token": "expired-fixture-token",
+                "revoked-expired-token": "expired-fixture-token",
+                "malformed-bearer": "malformed-fixture-token",
+                "empty-bearer": "",
+                **{ref: proof.token for ref, proof in identity_proofs.items()},
+            }
+            account_map = account_bindings(plan)
+            for ref, proof in identity_proofs.items():
+                account_map[ref] = {
+                    "uid": proof.uid,
+                    "provider": proof.provider,
+                    "tenant": proof.tenant,
+                    "claimsDigest": proof.claims_digest,
+                    "authTime": proof.auth_time,
+                }
+            real_execute = bridge.bound_execute(
+                plan,
+                credentials=credentials,
+                frozen_inputs=bindings["inputs"],
+                account_bindings=account_map,
+                identity_proofs=identity_proofs,
+                capability=capability,
+                fixture_origin=origin,
+            )
+
+            def production_wire(receipt):
+                """Keep loopback I/O while reporting the fixture's production lane.
+
+                The producer is deliberately loopback-only, but this helper is
+                the production acquisition fixture. Endpoint identity is a
+                transport fact consumed by the comparator; the response body,
+                status, sequence, and Gate proof remain those returned by the
+                real bounded worker.
+                """
+                if not isinstance(receipt, dict):
+                    return receipt
+                normalized = dict(receipt)
+                normalized["endpoint"] = PRODUCTION_ENDPOINT
+                return normalized
+
+            def execute_management(request, *, deadline=None):
+                operation = {
+                    key: value
+                    for key, value in request.items()
+                    if key not in {"managementSlot", "managementPhase"}
+                }
+                return bridge.rules_gate_receipt(
+                    plan, request, production_wire(real_execute(operation, deadline=deadline))
+                )
+
+            def execute_production(request, *, deadline=None):
+                return production_wire(real_execute(request, deadline=deadline))
+            raw_dispatch = bridge.collection_dispatch(
+                plan, gate, execute_production,
+                credentials=credentials,
+                account_bindings=account_map,
+                identity_proofs=identity_proofs,
+                ownership=ownership,
+            )
+            dispatch = raw_dispatch
+            bridge.refresh_ownership(gate, ownership)
+            session = bridge.management_session(
+                plan=plan, gate=gate, ledger=ledger, ticket=ticket,
+                execute=execute_management, journal=journal, ownership=ownership,
+            )
+            context = start_context(
+                plan, environment=ENVIRONMENT_PRODUCTION, journal=journal,
+                deadline_seconds=300.0, recovery_deadline_seconds=600.0,
+            )
+            bundle = collect(
+                plan, dispatch, role=role, run_id=f"{role}-run",
+                acquisition=acquisition, management_session=session,
+                context=context, ownership=ownership, recovery_dispatch=dispatch, **kwargs,
+            )
+        finally:
+            journal.close()
+            server.shutdown()
+            server.server_close()
+        transport.production_cleanup_gate = gate
+    except BaseException:
+        fixture.cleanup()
+        _LIVE_FIXTURES.remove(fixture)
+        raise
     return bundle, transport
 
 
@@ -171,10 +330,20 @@ def _management_executor(plan: dict, transport):
             else release
         )
         def typed(body, *, complete=True, status=200):
+            proof = _rules_management_proof(
+                request.get("managementSlot", ""), request, body, status
+            )
             return RulesManagementReceipt(
-                {"status": status, "complete": complete, "workerReaped": True, "bodyKind": "json", "body": body},
+                {
+                    "status": status,
+                    "complete": complete,
+                    "workerReaped": True,
+                    "bodyKind": "json",
+                    "body": proof,
+                },
                 endpoint=endpoint,
                 wire_sequence=wire_sequence,
+                response_body=body,
             )
         if scripted.get("complete") is False:
             return typed({}, complete=False)
@@ -219,6 +388,7 @@ def collect(plan, execute, *, role, run_id, acquisition=None, management_session
         gate_path = root / "gate"
         ledger = Ledger.create(root / "ledger")
         plan_gate = gate_plan(plan, permission_expires_at=time.time() + 3600)
+        plan_gate["jobs"]["rules-management"]["resources"] = []
         required_requests = plan_gate["observationRequests"] + sum(
             len(job["recovery"]) for job in plan_gate["jobs"].values()
         ) + len(plan_gate["management"]["recovery"]) + plan_gate.get("coordinatorRequests", 0)
@@ -233,12 +403,37 @@ def collect(plan, execute, *, role, run_id, acquisition=None, management_session
         ticket = ledger.reserve(envelope, claim, plan_gate)
         shared_gate.create(gate_path, plan_gate)
         gate = shared_gate.Gate(gate_path, plan["campaignId"])
+        management_plan = gate.snapshot()["plan"]["management"]
+        setup_prefix = {
+            "observationIds": [
+                entry["id"] for entry in management_plan["observation"]
+                if entry["id"] not in RULES_MANAGEMENT_OBSERVATION
+            ],
+            "recoveryIds": [
+                entry["id"] for entry in management_plan["recovery"]
+                if entry["id"] not in RULES_MANAGEMENT_RECOVERY
+            ],
+            "planDigest": plan["planDigest"],
+            "journalDigest": digest({"fixture": "scripted-prefix"}),
+            "proofDigest": digest({"fixture": "scripted-prefix-proof"}),
+        }
         management = _management_executor(plan, execute)
         def routed(request, **_kwargs):
             if request.get("kind") == "rules-lifecycle":
                 return management(request)
             return execute(request)
-        session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=routed, plan=plan)
+        session = RulesManagementSession(
+            gate=gate,
+            ledger=ledger,
+            ticket=ticket,
+            execute=routed,
+            plan=plan,
+            lifecycle_slice={
+                "observationIds": list(RULES_MANAGEMENT_OBSERVATION),
+                "recoveryIds": list(RULES_MANAGEMENT_RECOVERY),
+            },
+            setup_prefix=setup_prefix,
+        )
         return _collect(plan, routed, role=role, run_id=run_id, acquisition=acquisition, management_session=session, **kwargs)
 
 
@@ -457,6 +652,10 @@ def test_session_accepts_only_a_compiler_bound_setup_observation_and_recovery_pr
         execute=lambda *_args, **_kwargs: {},
         plan=plan,
         setup_prefix=proof,
+        lifecycle_slice={
+            "observationIds": list(RULES_MANAGEMENT_OBSERVATION),
+            "recoveryIds": list(RULES_MANAGEMENT_RECOVERY),
+        },
     )
     assert session.setup_observation_prefix == observation_prefix
     assert session.setup_recovery_prefix == recovery_prefix

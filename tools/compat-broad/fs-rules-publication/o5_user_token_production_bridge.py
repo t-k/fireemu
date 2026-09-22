@@ -540,6 +540,43 @@ def refresh_ownership(gate, ownership):
     return states
 
 
+def validated_cleanup_gate(plan: dict[str, Any], gate: Any) -> Any:
+    """Return the live Gate only after validating the comparator handoff."""
+    if gate is None or not callable(getattr(gate, "snapshot", None)):
+        raise ValueError("live Rules Gate required")
+    snapshot = gate.snapshot()
+    gate_plan = snapshot.get("plan") if isinstance(snapshot, dict) else None
+    if not isinstance(gate_plan, dict) or any(
+        gate_plan.get(key) != plan.get(key)
+        for key in ("campaignId", "project", "database")
+    ):
+        raise ValueError("Rules Gate case binding differs")
+    if not callable(getattr(gate, "rules_management_ownership", None)):
+        raise ValueError("Rules Gate ownership replay required")
+    gate.rules_management_ownership()
+    return gate
+
+
+def compare_with_cleanup_gate(
+    production: dict[str, Any],
+    plan: dict[str, Any],
+    gate: Any,
+    *,
+    local: dict[str, Any] | None = None,
+    manifest_digest: str | None = None,
+) -> dict[str, Any]:
+    """Run the descriptor comparator while the source-bound Gate is live."""
+    from o5_user_token_descriptor import comparator
+
+    return comparator(
+        production,
+        plan,
+        local,
+        manifest_digest=manifest_digest,
+        production_cleanup_gate=validated_cleanup_gate(plan, gate),
+    )
+
+
 def collection_dispatch(
     plan, gate, execute, *, credentials, account_bindings, identity_proofs, ownership
 ):
@@ -1103,6 +1140,7 @@ def run_bound_collection(
     binding: bytes | None = None,
     binding_digest: str | None = None,
     journal_path: Any = None,
+    compare_after_collect: bool = False,
 ) -> dict[str, Any]:
     """Run the existing collector through real Gate/Ledger ownership."""
     if plan.get("campaignId") != CAMPAIGN:
@@ -1344,6 +1382,8 @@ def run_bound_collection(
         "requestCount": len(setup_receipts),
         "receipts": setup_receipts,
     }
+    if compare_after_collect:
+        bundle["comparison"] = compare_with_cleanup_gate(bundle, plan, gate)
     if (
         bundle.get("recordingComplete") is True
         and bundle.get("cleanup", {}).get("cleanupComplete") is True
@@ -1355,4 +1395,10 @@ def run_bound_collection(
     return bundle
 
 
-__all__ = ["bound_execute", "run_bound_collection", "validate_compiled_accounting"]
+__all__ = [
+    "bound_execute",
+    "run_bound_collection",
+    "validate_compiled_accounting",
+    "validated_cleanup_gate",
+    "compare_with_cleanup_gate",
+]

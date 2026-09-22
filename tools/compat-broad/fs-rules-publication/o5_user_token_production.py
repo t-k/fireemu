@@ -144,6 +144,7 @@ def run_approved(packet: dict[str, Any]) -> dict[str, Any]:
             fixture_origin=values["fixtureOrigin"],
             binding=values["binding"],
             binding_digest=values["bindingDigest"],
+            compare_after_collect=True,
         )
     finally:
         revoke_production_capability(capability)

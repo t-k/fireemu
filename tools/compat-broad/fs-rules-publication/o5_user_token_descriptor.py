@@ -344,6 +344,7 @@ def comparator(
     local: dict[str, Any] | None = None,
     *,
     manifest_digest: str | None = None,
+    production_cleanup_gate: Any = None,
 ) -> dict[str, Any]:
     """Classify a production bundle against the published local shadow.
 
@@ -360,6 +361,12 @@ def comparator(
         "artifactSha256": record["artifact"]["artifactSha256"],
         "sourceCommit": record["artifact"]["sourceCommit"],
     }
+    if production_cleanup_gate is not None:
+        from o5_user_token_production_bridge import validated_cleanup_gate
+
+        production_cleanup_gate = validated_cleanup_gate(
+            plan, production_cleanup_gate
+        )
     acquisition = reference.get("acquisition") if isinstance(reference, dict) else None
     bound = acquisition.get("artifact") if isinstance(acquisition, dict) else None
     if bound != expected_artifact:
@@ -373,7 +380,13 @@ def comparator(
             "productionObserved": False,
             "promotionReady": False,
         }
-    return compare(production, reference, plan, manifest_digest=manifest_digest)
+    return compare(
+        production,
+        reference,
+        plan,
+        manifest_digest=manifest_digest,
+        production_cleanup_gate=production_cleanup_gate,
+    )
 
 
 def unwired(member: str):

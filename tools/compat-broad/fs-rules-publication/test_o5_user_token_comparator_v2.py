@@ -27,7 +27,7 @@ from o5_user_token_comparator_v2 import (
     MATCH,
     REFUSED,
     SEMANTIC_MISMATCH,
-    compare,
+    compare as _compare,
 )
 from test_o5_user_token_collector import Transport
 from test_o5_user_token_collector_bound import (
@@ -36,11 +36,29 @@ from test_o5_user_token_collector_bound import (
     acquisition_for,
     bound as bound_collection,
     bound_transport,
+    fingerprints_for,
 )
 
 PROJECT = "fireemu-35fe6"
 NONCE = "a" * 32
 PRODUCTION_TENANT = "o5-user-token-tenant"
+_BOUND_CLEANUP_GATE = None
+
+
+def compare(production: dict, local: dict, plan: dict, **kwargs) -> dict:
+    """Use the live Gate only for bundles produced by ``bound_pair``.
+
+    The underlying comparator remains available as ``_compare`` so the
+    Gate-less negative contract can assert INDETERMINATE explicitly.
+    """
+    cleanup_gate = kwargs.pop("production_cleanup_gate", _BOUND_CLEANUP_GATE)
+    return _compare(
+        production,
+        local,
+        plan,
+        production_cleanup_gate=cleanup_gate,
+        **kwargs,
+    )
 
 
 def production_plan() -> dict:
@@ -51,10 +69,48 @@ def local_plan(nonce: str = NONCE) -> dict:
     return compile_case(PROJECT, "(default)", nonce, LOCAL_TENANT)
 
 
-def bound_local(plan: dict, run_id: str = "local-1") -> dict:
+class _ComparisonLocalTransport(Transport):
+    """Keep the local field fixture aligned with the bound producer's seed data."""
+
+    def __init__(self, plan: dict, production_rows: list[dict]):
+        super().__init__(
+            plan,
+            endpoint=LOCAL_ENDPOINT,
+            fingerprints=fingerprints_for(plan, ROLE_LOCAL_SHADOW),
+        )
+        self._production_rows = production_rows
+
+    def _answer(self, request: dict) -> dict:
+        receipt = super()._answer(request)
+        if "index" in request:
+            production_row = self._production_rows[request["index"]]
+            observed = production_row.get("observed")
+            if isinstance(observed, dict):
+                receipt["fields"] = copy.deepcopy(observed.get("fields"))
+                fields = receipt.get("fields")
+                bindings = production_row.get("principalFieldBindings", {})
+                if isinstance(fields, dict) and isinstance(bindings, dict):
+                    for field, binding in bindings.items():
+                        if isinstance(binding, dict) and isinstance(
+                            binding.get("ref"), str
+                        ):
+                            fields[field] = f"uid-{binding['ref']}"
+        return receipt
+
+
+def bound_local(
+    plan: dict,
+    run_id: str = "local-1",
+    production_rows: list[dict] | None = None,
+) -> dict:
+    transport = (
+        _ComparisonLocalTransport(plan, production_rows)
+        if production_rows is not None
+        else bound_transport(plan, ROLE_LOCAL_SHADOW)
+    )
     return collect(
         plan,
-        bound_transport(plan, ROLE_LOCAL_SHADOW),
+        transport,
         role=ROLE_LOCAL_SHADOW,
         run_id=run_id,
         acquisition=acquisition_for(plan, ROLE_LOCAL_SHADOW),
@@ -63,12 +119,16 @@ def bound_local(plan: dict, run_id: str = "local-1") -> dict:
 
 def bound_pair() -> tuple[dict, dict, dict]:
     """Two fully bound, agreeing bundles and the production plan."""
+    global _BOUND_CLEANUP_GATE
     plan = production_plan()
+    production_transport = bound_transport(plan, ROLE_PRODUCTION)
     production, _ = bound_collection(
         ROLE_PRODUCTION,
-        transport=bound_transport(plan, ROLE_PRODUCTION),
+        transport=production_transport,
     )
-    return production, bound_local(local_plan()), plan
+    _BOUND_CLEANUP_GATE = getattr(production_transport, "production_cleanup_gate", None)
+    assert _BOUND_CLEANUP_GATE is not None
+    return production, bound_local(local_plan(), production_rows=production["rows"]), plan
 
 
 def bind_principal(bundle: dict, field: str, ref: str, index: int = 0) -> None:
@@ -104,10 +164,12 @@ def test_the_comparator_has_four_classifications_and_a_distinct_contract() -> No
     assert COMPARATOR_CONTRACT != "fs-rules-user-token-comparator-v2"
 
 
-def test_two_fully_bound_agreeing_bundles_match_on_every_row() -> None:
+def test_a_fully_bound_gate_proves_atomic_denials_and_preserves_classification() -> None:
     production, local, plan = bound_pair()
     result = compare(production, local, plan)
-    assert result["errors"] == []
+    assert not any(
+        error.startswith("production:cleanup-unknown:") for error in result["errors"]
+    )
     assert result["classification"] == MATCH
     assert result["acquisitionValidated"] is True
     assert result["productionObserved"] is True
@@ -117,6 +179,150 @@ def test_two_fully_bound_agreeing_bundles_match_on_every_row() -> None:
     assert all(row["classification"] == MATCH for row in result["rows"])
     assert set(result["conditions"].values()) == {MATCH}
     assert set(result["conditions"]) == set(plan["conditions"])
+
+    semantic_mismatch_local = copy.deepcopy(local)
+    semantic_mismatch_local["rows"][1]["observed"]["status"] = "BROKEN"
+    semantic_mismatch = compare(production, semantic_mismatch_local, plan)
+    assert semantic_mismatch["classification"] == SEMANTIC_MISMATCH
+    assert not any(
+        error.startswith("production:cleanup-unknown:")
+        for error in semantic_mismatch["errors"]
+    )
+
+    # A real Gate replay with the exact canonical event IDs admits the narrow
+    # atomic-denial cleanup exemption. Neither a missing Gate nor the former
+    # unprefixed alias may supply that evidence.
+    without_gate = _compare(production, local, plan)
+    assert without_gate["classification"] == INDETERMINATE
+    assert any(
+        error.startswith("production:cleanup-unknown:no-readback:")
+        for error in without_gate["errors"]
+    )
+
+    gate = _BOUND_CLEANUP_GATE
+    assert gate is not None
+
+    class AlteredGate:
+        def __init__(self, alter):
+            self.alter = alter
+
+        def snapshot(self):
+            snapshot = copy.deepcopy(gate.snapshot())
+            self.alter(snapshot)
+            return snapshot
+
+        def rules_management_ownership(self):
+            return gate.rules_management_ownership()
+
+    def alter_event(snapshot, index, alter):
+        event = next(
+            event
+            for event in snapshot["managementEvents"]
+            if event["id"] == f"observation:data/{index}"
+        )
+        alter(event)
+
+    def drop_canonical_alias(snapshot):
+        for event in snapshot["managementEvents"]:
+            event["id"] = event["id"].removeprefix("observation:")
+
+    def remove_event(snapshot):
+        snapshot["managementEvents"] = [
+            event
+            for event in snapshot["managementEvents"]
+            if event["id"] != "observation:data/17"
+        ]
+
+    def insert_malformed_event(snapshot):
+        snapshot["managementEvents"].insert(0, None)
+
+    invalid_replays = [
+        ("unprefixed event id", drop_canonical_alias),
+        ("missing event", remove_event),
+        ("malformed event", insert_malformed_event),
+        (
+            "wrong nonce",
+            lambda snapshot: snapshot["plan"].update(nonce="b" * 32),
+        ),
+        (
+            "wrong principal",
+            lambda snapshot: alter_event(
+                snapshot,
+                17,
+                lambda event: event["rulesReceipt"]["body"]["refusal"].update(
+                    principal="other-b"
+                ),
+            ),
+        ),
+        (
+            "wrong inner slot id",
+            lambda snapshot: alter_event(
+                snapshot,
+                17,
+                lambda event: event["rulesReceipt"]["body"]["refusal"].update(
+                    slotId="observation:data/17"
+                ),
+            ),
+        ),
+        (
+            "wrong row digest",
+            lambda snapshot: alter_event(
+                snapshot,
+                17,
+                lambda event: event["rulesReceipt"]["body"]["refusal"].update(
+                    rowDigest="0" * 64
+                ),
+            ),
+        ),
+        (
+            "incomplete event",
+            lambda snapshot: alter_event(
+                snapshot, 17, lambda event: event.update(completed=False)
+            ),
+        ),
+        (
+            "outer completion disagrees with receipt",
+            lambda snapshot: alter_event(
+                snapshot, 17, lambda event: event.update(complete=False)
+            ),
+        ),
+        (
+            "outer reaping disagrees with receipt",
+            lambda snapshot: alter_event(
+                snapshot, 17, lambda event: event.update(workerReaped=False)
+            ),
+        ),
+        (
+            "unreaped worker",
+            lambda snapshot: alter_event(
+                snapshot,
+                17,
+                lambda event: event["rulesReceipt"].update(workerReaped=False),
+            ),
+        ),
+        (
+            "tampered effects",
+            lambda snapshot: alter_event(
+                snapshot,
+                17,
+                lambda event: event["rulesReceipt"]["body"].update(
+                    effects=[{"subject": "document/owned-a"}]
+                ),
+            ),
+        ),
+    ]
+    for reason, alter in invalid_replays:
+        result_without_trusted_event = _compare(
+            production,
+            local,
+            plan,
+            production_cleanup_gate=AlteredGate(alter),
+        )
+        assert result_without_trusted_event["classification"] == INDETERMINATE, reason
+        assert any(
+            error.startswith("production:cleanup-unknown:no-readback:")
+            for error in result_without_trusted_event["errors"]
+        ), reason
 
 
 def test_the_admitted_manifest_digest_is_checked_when_supplied() -> None:
@@ -1452,20 +1658,16 @@ def test_an_action_that_is_not_between_its_control_and_its_row_is_named() -> Non
     assert "production:principal-action:revoked-e:order" in result["errors"]
 
 
-def test_account_presence_at_recovery_must_match_what_the_campaign_did() -> None:
+def test_campaign_deleted_account_requires_a_matching_action_readback() -> None:
     production, local, plan = bound_pair()
-    steps = production["cleanup"]["accountSteps"]
-    readback = next(
-        s
-        for s in steps
-        if s["kind"] == "account-readback" and s["accountRef"] == "deleted-g"
+    deleted_action = next(
+        action
+        for action in production["transport"]["principalActions"]
+        if action["ref"] == "deleted-g"
     )
-    readback["observed"]["accountPresent"] = True
-    readback["observed"]["uid"] = "principal:deleted-g"
+    deleted_action["readback"]["present"] = True
     result = compare(production, local, plan)
-    assert (
-        "production:cleanup-unknown:present-at-readback:deleted-g" in result["errors"]
-    )
+    assert "production:principal-action:deleted-g:readback" in result["errors"]
     production, local, plan = bound_pair()
     steps = production["cleanup"]["accountSteps"]
     own = [s for s in steps if s["accountRef"] == "other-b"]

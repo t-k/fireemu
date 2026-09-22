@@ -187,7 +187,7 @@ class _Side:
         return any(error.split(":", 2)[1] in REFUSAL_ERRORS for error in self.errors)
 
 
-def _admit_side(side: _Side, production_plan: dict[str, Any]) -> None:
+def _admit_side(side: _Side, production_plan: dict[str, Any], *, production_cleanup_gate: Any = None) -> None:
     bundle = side.bundle
     if not isinstance(bundle, Mapping):
         side.fail("not-a-bundle")
@@ -244,7 +244,10 @@ def _admit_side(side: _Side, production_plan: dict[str, Any]) -> None:
         for label in redacted
     ):
         side.fail("unredacted-identifier:labels")
-    cleanup_steps = _admit_cleanup(side)
+    cleanup_steps = _admit_cleanup(
+        side,
+        production_cleanup_gate=production_cleanup_gate,
+    )
     releases = _admit_releases(side, rows)
     actions = _admit_actions(side, rows)
     _admit_transport(side, rows, releases, actions, cleanup_steps)
@@ -511,7 +514,98 @@ def _admit_endpoint(side: _Side, endpoint: Any, where: str) -> None:
         side.fail("local-reached-nonloopback")
 
 
-def _admit_cleanup(side: _Side) -> list[dict[str, Any]]:
+def _gate_no_effect_subjects(gate: Any, plan: dict[str, Any]) -> frozenset[str]:
+    """Derive the two atomic-denial exemptions from a live Gate replay."""
+    if gate is None or not callable(getattr(gate, "snapshot", None)) or not callable(
+        getattr(gate, "rules_management_ownership", None)
+    ):
+        return frozenset()
+    try:
+        snapshot = gate.snapshot()
+        ownership = gate.rules_management_ownership()
+    except Exception:
+        return frozenset()
+    gate_plan = snapshot.get("plan") if isinstance(snapshot, Mapping) else None
+    if not isinstance(gate_plan, Mapping):
+        return frozenset()
+    if any(
+        gate_plan.get(key) != plan.get(key)
+        for key in ("campaignId", "project", "database", "nonce", "planDigest")
+    ):
+        return frozenset()
+    if not isinstance(ownership, Mapping):
+        return frozenset()
+    rows = {
+        row["index"]: row
+        for row in plan["observation"]
+        if row.get("method") == "commit"
+        and row.get("expect", {}).get("status") == "PERMISSION_DENIED"
+    }
+    events = snapshot.get("managementEvents")
+    if not isinstance(events, list) or any(
+        not isinstance(event, Mapping) for event in events
+    ):
+        return frozenset()
+    accepted: set[str] = set()
+    for index, row in rows.items():
+        resources = row.get("resources", [])
+        if not isinstance(resources, list):
+            continue
+        event = next(
+            (
+                item
+                for item in events
+                if item.get("id") == f"observation:data/{index}"
+            ),
+            None,
+        )
+        if not isinstance(event, Mapping):
+            continue
+        receipt = event.get("rulesReceipt")
+        body = receipt.get("body") if isinstance(receipt, Mapping) else None
+        refusal = body.get("refusal") if isinstance(body, Mapping) else None
+        if not (
+            isinstance(receipt, Mapping)
+            and event.get("complete") is receipt.get("complete") is True
+            and event.get("workerReaped") is receipt.get("workerReaped") is True
+            and event.get("completed") is True
+            and event.get("status") == 403
+            and receipt.get("complete") is True
+            and receipt.get("workerReaped") is True
+            and isinstance(body, Mapping)
+            and body.get("effects") == []
+            and isinstance(refusal, Mapping)
+            and refusal.get("kind") == "rules-atomic-commit-refusal-v1"
+            and refusal.get("slotId") == f"data/{index}"
+            and refusal.get("rowDigest") == digest(row)
+            and refusal.get("principal") == row.get("principal")
+            and refusal.get("operation") == "Commit"
+            and refusal.get("restCode") == 403
+            and refusal.get("status") == "PERMISSION_DENIED"
+        ):
+            continue
+        for resource in resources:
+            subject = next(
+                (
+                    key
+                    for key in ownership
+                    if isinstance(key, str)
+                    and key.startswith("document/")
+                    and key.rsplit("/", 1)[-1] == resource.rsplit("/", 1)[-1]
+                ),
+                None,
+            )
+            state = ownership.get(subject) if subject is not None else None
+            if (
+                subject in {"document/getafter-control-target", "document/multiwrite-y"}
+                and isinstance(state, Mapping)
+                and state.get("status") == "attempted-no-effect"
+            ):
+                accepted.add(resource)
+    return frozenset(accepted)
+
+
+def _admit_cleanup(side: _Side, *, production_cleanup_gate: Any = None) -> list[dict[str, Any]]:
     """Every owned document and account must be read back, deleted under its
     observed version or uid, and then read back absent. Anything else is an
     unknown cleanup state, never a silent success."""
@@ -523,8 +617,14 @@ def _admit_cleanup(side: _Side) -> list[dict[str, Any]]:
         return []
     if cleanup.get("cleanupComplete") is not True:
         side.fail("cleanup-unknown:incomplete")
-    for key in ("outstandingResources", "outstandingAccounts", "unrecoveredAttempted"):
-        if cleanup.get(key) != []:
+    for key in (
+        "outstandingResources",
+        "outstandingAccounts",
+        "unrecoveredAttempted",
+        "held",
+        "unconfirmed",
+    ):
+        if key in cleanup and cleanup.get(key) != []:
             side.fail(f"cleanup-unknown:{key}")
     steps: list[dict[str, Any]] = []
     for key in ("documentSteps", "accountSteps"):
@@ -550,8 +650,14 @@ def _admit_cleanup(side: _Side) -> list[dict[str, Any]]:
             side.fail("time-contradiction:cleanup-not-monotonic")
         else:
             previous_at = at
+    exempt = (
+        _gate_no_effect_subjects(production_cleanup_gate, plan)
+        if side.side == SIDE_PRODUCTION
+        else frozenset()
+    )
+    action_absences = _admit_action_absences(side)
     _admit_subjects(
-        side, steps, plan["ownedResources"], "resource", "documentPresent", "version"
+        side, steps, plan["ownedResources"], "resource", "documentPresent", "version", exempt=exempt
     )
     _admit_subjects(
         side,
@@ -564,6 +670,7 @@ def _admit_cleanup(side: _Side) -> list[dict[str, Any]]:
             entry["ref"]: entry.get("postSignIn") != POST_SIGN_IN_DELETE
             for entry in plan["ownedAccounts"]
         },
+        action_absences=action_absences,
     )
     attempted = side.bundle.get("attemptedResources")
     if not isinstance(attempted, list) or any(
@@ -571,6 +678,29 @@ def _admit_cleanup(side: _Side) -> list[dict[str, Any]]:
     ):
         side.fail("cleanup-unknown:attempted-outside-owned-scope")
     return steps
+
+
+def _admit_action_absences(side: _Side) -> frozenset[str]:
+    """Return only account deletions proven absent by their real action readback."""
+    transport = side.bundle.get("transport")
+    actions = transport.get("principalActions") if isinstance(transport, Mapping) else None
+    if not isinstance(actions, list):
+        return frozenset()
+    absent: set[str] = set()
+    for action in actions:
+        if not isinstance(action, Mapping) or action.get("action") != "delete":
+            continue
+        ref = action.get("ref")
+        readback = action.get("readback")
+        if (
+            isinstance(ref, str)
+            and isinstance(readback, Mapping)
+            and readback.get("present") is False
+            and isinstance(readback.get("uidFingerprint"), str)
+            and readback.get("uidFingerprint")
+        ):
+            absent.add(ref)
+    return frozenset(absent)
 
 
 def _admit_subjects(
@@ -581,6 +711,8 @@ def _admit_subjects(
     presence_key: str,
     identity_key: str,
     expected_presence: Mapping[str, bool] | None = None,
+    exempt: frozenset[str] = frozenset(),
+    action_absences: frozenset[str] = frozenset(),
 ) -> None:
     """Every subject: readback, then delete under its identity and typed
     absence when it was present. When ``expected_presence`` is given, the
@@ -594,6 +726,10 @@ def _admit_subjects(
         kinds = [step.get("kind") for step in own]
         readback = next((s for s in own if s.get("kind") == f"{prefix}readback"), None)
         if readback is None:
+            if subject in exempt:
+                continue
+            if subject_key == "accountRef" and expected_presence is not None and expected_presence.get(subject) is False and subject in action_absences:
+                continue
             side.fail(f"cleanup-unknown:no-readback:{subject}")
             continue
         observed = readback.get("observed") or {}
@@ -1254,6 +1390,7 @@ def compare(
     plan: Any,
     *,
     manifest_digest: str | None = None,
+    production_cleanup_gate: Any = None,
 ) -> dict[str, Any]:
     """Classify a production bundle against a local shadow bundle.
 
@@ -1282,7 +1419,11 @@ def compare(
     production_side = _Side(production, SIDE_PRODUCTION)
     local_side = _Side(local, SIDE_LOCAL)
     try:
-        _admit_side(production_side, plan)
+        _admit_side(
+            production_side,
+            plan,
+            production_cleanup_gate=production_cleanup_gate,
+        )
         _admit_side(local_side, plan)
         cross = _cross_errors(production_side, local_side, plan, manifest_digest)
     except Exception as error:  # noqa: BLE001 -- an unforeseen shape is named, never raised

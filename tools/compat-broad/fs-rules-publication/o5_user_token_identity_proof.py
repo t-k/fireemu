@@ -384,6 +384,8 @@ def mint_acknowledged_setup_proof(
     uid = setup_receipt.local_id
     if not isinstance(token, str) or not token or not isinstance(uid, str) or uid != gate_acknowledgment["uid"]:
         raise ValueError("acknowledged setup handoff required")
+    if event.get("principalRef") != principal_ref or event.get("nonce") != gate_acknowledgment["nonce"] or event.get("uid") != uid or event.get("requestDigest") != request_digest:
+        raise ValueError("setup Gate subject binding differs")
     if response_digest != gate_acknowledgment["responseDigest"] or handoff_request_digest != request_digest:
         raise ValueError("setup handoff provenance differs")
     if hashlib.sha256(token.encode()).hexdigest() != gate_acknowledgment["tokenHash"]:

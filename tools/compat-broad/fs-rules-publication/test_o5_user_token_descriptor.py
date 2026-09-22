@@ -386,10 +386,12 @@ def test_the_comparator_member_compares_against_the_published_shadow() -> None:
         acquisition=acquisition_for(shadow_plan, ROLE_PRODUCTION),
     )
     result = descriptor.comparator(production, shadow_plan)
-    # The checked-in shadow predates the production management closure. It is
-    # intentionally stale and must remain refused until refreshed separately.
-    assert result["classification"] == REFUSED
+    # The published local shadow is a valid reference, while this side is only
+    # a preparation bundle with no production management session. The
+    # comparator must preserve that uncertainty rather than call it refusal.
+    assert result["classification"] == "INDETERMINATE"
     assert "production:recording-incomplete" in result["errors"]
+    assert "production:recording-aborted" in result["errors"]
 
 
 def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_ledger(tmp_path) -> None:
@@ -516,9 +518,12 @@ def test_descriptor_collector_runs_complete_rules_lifecycle_with_real_gate_and_l
 
 
 def test_preserved_local_runner_acquisition_remains_accepted_without_management_session() -> None:
-    raw_path = Path("/Users/tk/work/firebase-emulator/docs.local/runs/o5-rules-shadow-fd4.84Jpkk/local-shadow.json")
-    if not raw_path.is_file():
-        pytest.skip("preserved local runner receipt is unavailable")
+    configured = os.environ.get("O5_PRESERVED_LOCAL_RUNNER")
+    if not configured:
+        pytest.skip("O5_PRESERVED_LOCAL_RUNNER is not configured")
+    raw_path = Path(configured)
+    assert not raw_path.is_symlink(), "configured preserved runner must not be a symlink"
+    assert raw_path.is_file(), "configured preserved local runner receipt is unavailable"
     raw = json.loads(raw_path.read_bytes())
     recorded = raw["bundle"]["acquisition"]
     acquisition = {key: recorded[key] for key in ("environment", "campaignManifestDigest", "nonceReservation", "ownerPermission", "artifact", "principals", "window")}

@@ -634,12 +634,19 @@ def test_the_o8_section_names_the_descriptor_and_its_bindings() -> None:
         "database",
         "index-exemption",
         "auth",
+        "index-lifecycle-before",
+        "index-lifecycle-apply",
+        "index-lifecycle-poll",
+        "index-lifecycle-after",
     ]
     assert budgets["managementSlots"]["recovery"] == [
         "project",
         "database",
         "index-exemption",
         "auth",
+        "index-lifecycle-restore",
+        "index-lifecycle-poll-restore",
+        "index-lifecycle-restored",
     ]
     assert budgets["maxWallSeconds"] == campaign.campaign_seconds() <= 1200
     assert manifest["allocation"]["managementCharged"]

@@ -38,13 +38,15 @@ from request_bytes_campaign import (
     compile_request_bytes_campaign,
     validate_request_bytes_campaign,
 )
-from request_bytes_collector import collect_local
 from request_bytes_compiler import (
     CAMPAIGN,
     DOCUMENT_COUNT,
     compile_request_bytes_plan,
+    compile_request_bytes_sentinel_plan,
     validate_request_bytes_plan,
+    validate_request_bytes_sentinel_plan,
 )
+from request_bytes_collector import collect_local
 
 PROJECT = "demo-firestore-probe"
 DATABASE = "(default)"
@@ -894,6 +896,45 @@ def _child(output: Path, nonce: str) -> None:
         },
     )
 
+    if os.environ.get("FIREEMU_REQUEST_BYTES_SHADOW_MODE") == "sentinel":
+        plan = compile_request_bytes_sentinel_plan(project, DATABASE, nonce)
+        validate_request_bytes_sentinel_plan(plan)
+        result = collect_local(plan, _executor(firestore, plan), output / "collection")
+        after = source_inputs()
+        bound = before == after
+        artifact = output / "fireemu"
+        save(
+            output / "sentinel-shadow.json",
+            {
+                "kind": "fs-request-bytes-sentinel-local-shadow-v1",
+                "caseId": plan["caseId"],
+                "caseMode": plan["caseMode"],
+                "target": "owned-local-artifact",
+                "project": project,
+                "database": DATABASE,
+                "productionExecuted": False,
+                "formalCompatibilityClaim": False,
+                "semanticOutcome": result.get("semanticOutcome", "sentinel-inconclusive"),
+                "outcomeIsPrediction": False,
+                "metricStatus": plan["metricStatus"],
+                "requestBytes": plan["bounds"]["requestBytes"],
+                "distinctDocumentCount": plan["bounds"]["distinctDocumentCount"],
+                "observationRequestBound": plan["bounds"]["observationRequests"],
+                "recoveryRequestBound": plan["bounds"]["recoveryRequests"],
+                "collector": result,
+                "planSha256": hashlib.sha256(
+                    json.dumps(plan, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+                "sourceInputs": before,
+                "sourceInputsAfter": after,
+                "sourceBinding": bound,
+                "artifact": runtime_binding(artifact),
+                "cleanupComplete": result.get("cleanupComplete") is True,
+                "resourceAbsence": result.get("resourceAbsence") is True,
+            },
+        )
+        return
+
     plan = compile_request_bytes_plan(project, DATABASE, nonce)
     validate_request_bytes_plan(plan)
     campaign = compile_request_bytes_campaign(project, DATABASE, nonce)
@@ -975,19 +1016,30 @@ def _child(output: Path, nonce: str) -> None:
         save(output / "local-shadow.json", document)
 
 
-def run(output: Path) -> dict[str, Any]:
+def run(output: Path, *, sentinel: bool = False) -> dict[str, Any]:
     import broad
 
     before = source_inputs()
-    report = broad.run(
-        output,
-        child_script=Path(__file__).resolve(),
-        project=PROJECT,
-        configuration={"daemon": {"authProjectNumbers": {}}},
-        execution_timeout=900,
-        recovery_grace=1,
-        retain_executed_artifact=True,
-    )
+    previous_mode = os.environ.get("FIREEMU_REQUEST_BYTES_SHADOW_MODE")
+    if sentinel:
+        os.environ["FIREEMU_REQUEST_BYTES_SHADOW_MODE"] = "sentinel"
+    else:
+        os.environ.pop("FIREEMU_REQUEST_BYTES_SHADOW_MODE", None)
+    try:
+        report = broad.run(
+            output,
+            child_script=Path(__file__).resolve(),
+            project=PROJECT,
+            configuration={"daemon": {"authProjectNumbers": {}}},
+            execution_timeout=900,
+            recovery_grace=1,
+            retain_executed_artifact=True,
+        )
+    finally:
+        if previous_mode is None:
+            os.environ.pop("FIREEMU_REQUEST_BYTES_SHADOW_MODE", None)
+        else:
+            os.environ["FIREEMU_REQUEST_BYTES_SHADOW_MODE"] = previous_mode
     after = source_inputs()
     child_inputs = report.get("manifest", {}).get("sourceInputs")
     bound = before == after
@@ -1010,6 +1062,12 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--output", type=Path)
     mode.add_argument("--child", type=Path)
+    mode.add_argument(
+        "--sentinel-raw-16mib-over",
+        dest="sentinel_output",
+        type=Path,
+        help="run only the finite 16,777,217-byte local sentinel case",
+    )
     parser.add_argument("--nonce")
     parser.add_argument(
         "--publish",
@@ -1023,7 +1081,11 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--nonce is required with --child")
         _child(args.child.resolve(), args.nonce)
         return 0
-    report = run(args.output.resolve())
+    sentinel = args.sentinel_output is not None
+    if sentinel and args.publish:
+        parser.error("--publish is not available for the outcome-neutral sentinel")
+    output = args.sentinel_output if sentinel else args.output
+    report = run(output.resolve(), sentinel=sentinel)
     status = report.get("status")
     published = False
     if args.publish and status == "completed":

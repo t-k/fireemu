@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from typing import ClassVar
 
@@ -216,11 +217,15 @@ def test_capture_closes_custody_fds_after_worker_timeout(tmp_path, monkeypatch):
     class TimedOut:
         returncode = None
 
+        def poll(self):
+            return self.returncode
+
         def communicate(self, payload, timeout):
             raise subprocess.TimeoutExpired("prep", timeout)
 
         def kill(self):
             self.killed = True
+            self.returncode = -9
 
         def wait(self, timeout):
             self.waited = True
@@ -236,6 +241,97 @@ def test_capture_closes_custody_fds_after_worker_timeout(tmp_path, monkeypatch):
     for fd in recorded:
         with pytest.raises(OSError):
             os.fstat(fd)
+
+
+def test_capture_reaps_real_child_after_unexpected_communicate_failure(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    monkeypatch.setattr(prep, "approve_preparation", lambda **bindings: object())
+    monkeypatch.setattr(prep.o8_admission, "revoke_production_capability", lambda _: None)
+    real_child = subprocess.Popen([os.sys.executable, "-c", "import time; time.sleep(60)"])
+
+    class BrokenCommunicate:
+        def poll(self):
+            return real_child.poll()
+
+        def communicate(self, payload, timeout):
+            raise OSError("stdin transport failed")
+
+        def kill(self):
+            real_child.kill()
+
+        def wait(self, timeout=None):
+            return real_child.wait(timeout=timeout)
+
+    monkeypatch.setattr(prep.subprocess, "Popen", lambda *args, **kwargs: BrokenCommunicate())
+    try:
+        with tempfile.TemporaryFile() as handoff, tempfile.TemporaryFile() as custody, pytest.raises(OSError, match="stdin transport"):
+            prep.capture_baseline(
+                bindings=_capture_failure_bindings(tmp_path),
+                output=tmp_path / "run",
+                handoff_fd=handoff.fileno(),
+                custody_output_fd=custody.fileno(),
+            )
+    finally:
+        assert real_child.poll() is not None
+
+
+def test_default_capture_path_does_not_require_custody(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    monkeypatch.setattr(prep, "approve_preparation", lambda **bindings: object())
+    monkeypatch.setattr(prep.o8_admission, "revoke_production_capability", lambda _: None)
+
+    class Completed:
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self, payload, timeout):
+            return b"", b""
+
+    monkeypatch.setattr(prep.subprocess, "Popen", lambda *args, **kwargs: Completed())
+    packet = {"completed": True}
+    called = []
+    monkeypatch.setattr(
+        prep,
+        "retire_preparation",
+        lambda **kwargs: called.append(kwargs) or packet,
+    )
+    with tempfile.TemporaryFile() as handoff:
+        assert prep.capture_baseline(
+            bindings=_capture_failure_bindings(tmp_path),
+            output=tmp_path / "run",
+            handoff_fd=handoff.fileno(),
+        ) == packet
+    assert called
+
+
+def test_partial_publication_clears_output_without_touching_released_proof(tmp_path, monkeypatch):
+    import limits_03_baseline_prep as prep
+
+    permission, custody = _custody_value()
+    path = tmp_path / "custody"
+    path.touch(mode=0o600)
+    proof = tmp_path / "baseline-packet.json"
+    proof.write_bytes(b'{"reservationReleased":true}')
+    with path.open("r+b") as stream:
+        real_write = prep.os.write
+
+        def partial_write(fd, data):
+            if fd == stream.fileno():
+                real_write(fd, b"partial")
+                raise OSError("simulated publication failure")
+            return real_write(fd, data)
+
+        monkeypatch.setattr(prep.os, "write", partial_write)
+        with pytest.raises(OSError, match="simulated publication"):
+            prep._publish_custody_or_clear(stream.fileno(), custody)
+        stream.seek(0)
+        assert stream.read() == b""
+    assert proof.read_bytes() == b'{"reservationReleased":true}'
+    assert prep._validate_custody(custody, permission)
 
 
 def test_custody_refuses_empty_pipe_expiry_or_wrong_permission():
@@ -743,8 +839,14 @@ def test_preparation_reserves_real_temporary_ledger_and_gate(tmp_path):
         "disconnect",
     ],
 )
-def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path, fault):
+@pytest.mark.parametrize("custody_enabled", (True, False))
+def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(
+    tmp_path, fault, custody_enabled
+):
     import limits_03_baseline_prep as prep
+
+    if not custody_enabled and fault is not None:
+        pytest.skip("default compatibility is exercised only on the successful path")
 
     database = {
         "name": "projects/fireemu-35fe6/databases/(default)",
@@ -847,7 +949,13 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         from broad_contract import digest
 
         fixture = _approved(tmp_path, fixture_origin=origin)
-        with tempfile.TemporaryFile() as handoff, tempfile.TemporaryFile() as custody:
+        with ExitStack() as stack:
+            handoff = stack.enter_context(tempfile.TemporaryFile())
+            custody = (
+                stack.enter_context(tempfile.TemporaryFile())
+                if custody_enabled
+                else None
+            )
             handoff.write(
                 json.dumps(
                     {
@@ -865,10 +973,12 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
                 bindings=fixture,
                 output=tmp_path / "run",
                 handoff_fd=handoff.fileno(),
-                custody_output_fd=custody.fileno(),
+                custody_output_fd=custody.fileno() if custody is not None else None,
             )
-            custody.seek(0)
-            custody_bytes = custody.read()
+            custody_bytes = b""
+            if custody is not None:
+                custody.seek(0)
+                custody_bytes = custody.read()
     finally:
         server.shutdown()
         server.server_close()
@@ -917,10 +1027,13 @@ def test_capture_uses_real_loopback_worker_for_all_four_metadata_reads(tmp_path,
         return
 
     assert packet["completed"] is True
-    custody_value = json.loads(custody_bytes)
-    assert custody_value["kind"] == prep.CUSTODY_KIND
-    assert custody_value["project"] == prep.campaign.PROJECT
-    assert custody_value["preparationPermissionDigest"] == digest(fixture["permission"])
+    if custody_enabled:
+        custody_value = json.loads(custody_bytes)
+        assert custody_value["kind"] == prep.CUSTODY_KIND
+        assert custody_value["project"] == prep.campaign.PROJECT
+        assert custody_value["preparationPermissionDigest"] == digest(fixture["permission"])
+    else:
+        assert custody_bytes == b""
     from batch_contract import database_evidence
 
     assert (

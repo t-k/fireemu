@@ -576,6 +576,38 @@ def _clear_custody(fd):
         pass
 
 
+def _publish_custody_or_clear(fd, value):
+    try:
+        _publish_custody(fd, value)
+    except Exception:
+        _clear_custody(fd)
+        raise
+
+
+def _reap_child(child):
+    if child.poll() is not None:
+        return
+    try:
+        child.kill()
+    except BaseException:  # noqa: BLE001, S110
+        pass
+    for _ in range(2):
+        try:
+            child.wait(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            try:
+                child.kill()
+            except BaseException:  # noqa: BLE001, S110
+                pass
+        except BaseException:  # noqa: BLE001, S112
+            continue
+    try:
+        child.wait()
+    except BaseException:  # noqa: BLE001, S110
+        pass
+
+
 def _require_released_preparation(ledger_root, output):
     result = Ledger._read_bounded_json(Path(output) / "coordinator-result.json")
     reservation = result["receipt"]["ticket"]["reservation"]
@@ -823,8 +855,6 @@ def capture_baseline(*, bindings, output, handoff_fd, custody_output_fd=None):
         try:
             child.communicate(payload, timeout=420)
         except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait(timeout=5)
             raise ValueError(
                 "PREP coordinator deadline; retained recovery context"
             ) from None
@@ -842,21 +872,19 @@ def capture_baseline(*, bindings, output, handoff_fd, custody_output_fd=None):
                 _validate_custody(custody, bindings["permission"])
         if child.returncode != 0:
             raise ValueError("PREP coordinator failed; retained recovery context")
-        if custody is None:
+        if custody_output_fd is not None and custody is None:
             result = Ledger._read_bounded_json(output / "coordinator-result.json")
             if result["packet"].get("completed") is not False:
                 raise ValueError("verified custody handoff required")
         packet = retire_preparation(ledger_root=bindings["ledger_root"], output=output)
         if custody_output_fd is not None and custody is not None:
             _require_released_preparation(bindings["ledger_root"], output)
-            try:
-                _validate_custody(custody, bindings["permission"])
-                _publish_custody(custody_output_fd, custody)
-            except Exception:
-                _clear_custody(custody_output_fd)
-                raise
+            _validate_custody(custody, bindings["permission"])
+            _publish_custody_or_clear(custody_output_fd, custody)
         return packet
     finally:
+        if child is not None:
+            _reap_child(child)
         for fd_name in ("custody_read_fd", "custody_write_fd"):
             fd = locals()[fd_name]
             if fd is not None:

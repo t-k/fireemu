@@ -586,6 +586,7 @@ def test_transport_adapts_official_document_response_through_real_worker(fixture
         "documentPresent": True,
         "fields": {"count": 1},
         "complete": True,
+        "workerReaped": True,
         "endpoint": fixture_origin.removeprefix("http://"),
         "wireSequence": 1,
     }
@@ -721,6 +722,7 @@ def test_transport_adapts_official_permission_error_through_real_worker(fixture_
         "documentPresent": False,
         "fields": None,
         "complete": True,
+        "workerReaped": True,
         "endpoint": fixture_origin.removeprefix("http://"),
         "wireSequence": 1,
     }

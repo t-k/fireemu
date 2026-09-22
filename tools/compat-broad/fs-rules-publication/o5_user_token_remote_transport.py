@@ -695,7 +695,7 @@ def adapt_setup_result(
                 endpoint=wire["endpoint"],
                 wire_sequence=wire["wireSequence"],
                 name=body["name"],
-                fields_digest=item["response"]["fieldsDigest"],
+                fields_digest=digest(fields),
                 update_time=body["updateTime"],
             ),
             private=SetupPrivateHandoff(),
@@ -1298,10 +1298,19 @@ def make_transport(
         )
         endpoint = urlsplit(origin).netloc
         if prepared["service"] == "firestore":
-            return _adapt_firestore_result(
+            adapted = _adapt_firestore_result(
                 prepared, result, sequence=sequence, endpoint=endpoint
             )
-        return {**result["body"], "endpoint": endpoint, "wireSequence": sequence}
+            adapted["workerReaped"] = True
+            return adapted
+        return {
+            **result["body"],
+            "httpStatus": result["status"],
+            "complete": True,
+            "workerReaped": True,
+            "endpoint": endpoint,
+            "wireSequence": sequence,
+        }
 
     return transmit
 

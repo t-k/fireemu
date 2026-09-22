@@ -912,7 +912,10 @@ class MfaGate(FrozenGate):
         uid = user.get("localId")
         if user.get("email") != email or not _text(uid) or len(uid) > 128:
             raise ValueError("address reconciliation identity differs")
-        return uid
+        # An address readback selects an account but does not prove that this run
+        # created it. Ownership is established only by the Gate's acknowledged UID
+        # checkpoint, so email-only presence must remain held.
+        return {"uid": uid, "ownership": "email-only-unproven"}
 
     def settle_reconciled_creation(self, role: str) -> dict[str, Any]:
         """Settle one pending signup from its frozen reconciliation event only."""
@@ -960,6 +963,14 @@ class MfaGate(FrozenGate):
                     "kind": "address-readback-absent",
                     "responseDigest": reconcile.get("responseDigest"),
                 }
+            elif evidence.get("ownership") != "acknowledged":
+                event["settlementOutcome"] = "present-unproven"
+                event["settledBy"] = {
+                    "kind": "address-readback-present-unproven",
+                    "responseDigest": reconcile.get("responseDigest"),
+                }
+                _save(self.path, state)
+                return {"role": role, "uid": uid, "adopted": False, "held": True}
             else:
                 if not _text(uid) or len(uid) > 128:
                     raise ValueError("typed account identity required")
@@ -1180,8 +1191,11 @@ class MfaGate(FrozenGate):
         self._save_bindings()
         evidence: dict[str, Any] = {"kind": kind, "account": account, "status": status}
         if recovery and kind == "address-reconcile":
-            uid = self._reconcile_uid(operation, status, body)
+            reconciliation = self._reconcile_uid(operation, status, body)
+            uid = reconciliation["uid"] if reconciliation is not None else None
             evidence.update(uid=uid, email=owned_email(self.nonce, account))
+            if reconciliation is not None:
+                evidence["ownership"] = reconciliation["ownership"]
             evidence["responseDigest"] = event["responseDigest"]
             event["authEvidence"] = evidence
             return

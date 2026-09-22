@@ -341,6 +341,7 @@ def remaining_seconds(prior: dict, now: float, *, manifest: dict, recovery: int)
 def discover_unsettled(walk, gate, session, journal: list) -> dict:
     """Settle lost signups through their frozen, typed reconciliation slots."""
     untracked = []
+    unproven = []
     for role in gate.unsettled_accounts():
         email = walk._email(role)
         if email is None:
@@ -354,9 +355,11 @@ def discover_unsettled(walk, gate, session, journal: list) -> dict:
         found = settled["uid"]
         if found is None:
             walk.settle_intent(role)
+        elif settled.get("held") is True:
+            unproven.append(role)
         else:
             walk.adopt_account(role, found)
-    return {"untracked": untracked}
+    return {"untracked": untracked, "unproven": unproven}
 
 
 def reconcile_gate_accounts(walk, gate) -> list[str]:
@@ -584,6 +587,7 @@ def execute(
     session = None
     inner = None
     untracked: list = []
+    unproven: list = []
     try:
         credentials = _validate_credentials(credential_reader())
         # Bound before the raw value is discarded, so a resume can re-check the
@@ -662,9 +666,11 @@ def execute(
                 )
                 stop_point = "recover-unsettled"
                 reconcile_gate_accounts(walk, gate)
-                untracked = discover_unsettled(
+                unsettled = discover_unsettled(
                     walk, gate, session, session.management_receipts
-                )["untracked"]
+                )
+                untracked = unsettled["untracked"]
+                unproven = unsettled["unproven"]
             elif not abandon:
                 raise ValueError("no checkpoint to resume; abandon the run instead")
             if abandon:
@@ -786,9 +792,11 @@ def execute(
                 if walk is not None:
                     reconcile_gate_accounts(walk, gate)
                 if walk is not None and gate.unsettled_accounts():
-                    untracked = discover_unsettled(
+                    unsettled = discover_unsettled(
                         walk, gate, session, session.management_receipts
-                    )["untracked"]
+                    )
+                    untracked = unsettled["untracked"]
+                    unproven = unsettled["unproven"]
                 if walk is not None:
                     walk.cleanup()
             except Exception as error:  # noqa: BLE001 -- the restore behind cleanup must never be skipped
@@ -832,8 +840,8 @@ def execute(
             except ValueError as error:
                 gate_refusal = type(error).__name__
         admission.revoke_production_capability(capability)
-    if untracked and failure is None:
-        failure = "UntrackedAccount"
+    if (untracked or unproven) and failure is None:
+        failure = "UntrackedAccount" if untracked else "UnprovenAccount"
     walk_state = copy.deepcopy(walk.state) if walk is not None else None
     rows = walk.ordered_rows() if walk is not None else []
     complete = bool(
@@ -881,6 +889,7 @@ def execute(
         abandonCount=run_state.get("abandonCount", 0),
         adoptions=run_state.get("adoptions", []),
         untrackedIntents=list(untracked),
+        unprovenIntents=list(unproven),
         configurationStillApplied=bool(
             lock is not None
             and lock.record["changeAttempted"]

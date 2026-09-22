@@ -412,7 +412,7 @@ def test_address_reconciliation_accepts_typed_presence_and_kind_only_absence(tmp
         operation,
         200,
         {"kind": "identitytoolkit#GetAccountInfoResponse", "users": [{"email": email, "localId": "uid-1"}]},
-    ) == "uid-1"
+    ) == {"uid": "uid-1", "ownership": "email-only-unproven"}
     assert gate._reconcile_uid(
         operation, 200, {"kind": "identitytoolkit#GetAccountInfoResponse"}
     ) is None
@@ -420,6 +420,53 @@ def test_address_reconciliation_accepts_typed_presence_and_kind_only_absence(tmp
     for body in ({}, {"kind": "wrong", "users": []}):
         with pytest.raises(ValueError):
             gate._reconcile_uid(operation, 200, body)
+
+
+def test_email_only_presence_is_held_without_adoption_or_cleanup(tmp_path):
+    gate = _claimed_gate(tmp_path)
+    operation = next(
+        item
+        for item in mfa_gate.recovery_operations(NONCE)
+        if item["kind"] == "address-reconcile" and item["account"] == "pending-control"
+    )
+    signup = next(
+        item
+        for item in mfa_gate.observation_operations(NONCE)
+        if item["kind"] == "sign-up" and item["account"] == "pending-control"
+    )
+    with gate.locked() as state:
+        state["events"] = [
+            {
+                "job": mfa_gate.JOB,
+                "phase": "observation",
+                "index": mfa_gate.observation_operations(NONCE).index(signup),
+                "creationOutcome": "unknown",
+                "settlementOutcome": None,
+            },
+            {
+                "job": mfa_gate.JOB,
+                "phase": "recovery",
+                "index": mfa_gate.recovery_operations(NONCE).index(operation),
+                "completed": True,
+                "authEvidence": {
+                    "account": "pending-control",
+                    "uid": "foreign-uid",
+                    "ownership": "email-only-unproven",
+                    "responseDigest": "a" * 64,
+                },
+            },
+        ]
+        mfa_gate._save(gate.path, state)
+    settled = gate.settle_reconciled_creation("pending-control")
+    assert settled == {
+        "role": "pending-control",
+        "uid": "foreign-uid",
+        "adopted": False,
+        "held": True,
+    }
+    snapshot = gate.snapshot()
+    assert snapshot["jobs"][mfa_gate.JOB].get("authAccounts", {}) == {}
+    assert gate.unsettled_accounts() == ["pending-control"]
 
 
 def test_adoption_requires_the_recorded_processes_to_be_gone(tmp_path, monkeypatch):

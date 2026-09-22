@@ -847,6 +847,40 @@ def test_an_anonymous_signup_whose_answer_was_lost_is_reported_untracked(tmp_pat
     assert admission.classify_stop(result)["disposition"] == "owner-escalation"
 
 
+def test_email_only_unknown_signup_is_reported_unproven_and_not_adopted():
+    import mfa_production
+
+    class Walk:
+        def _email(self, role):
+            return f"o2-mfa-{role}-nonce@example.com"
+
+        def adopt_account(self, role, uid):
+            raise AssertionError("email-only presence must not be adopted")
+
+        def settle_intent(self, role):
+            raise AssertionError("email-only presence must not be settled absent")
+
+    class Gate:
+        def unsettled_accounts(self):
+            return ["pending-control"]
+
+        def settle_reconciled_creation(self, role):
+            return {
+                "role": role,
+                "uid": "foreign-uid",
+                "adopted": False,
+                "held": True,
+            }
+
+    class Session:
+        def admin(self, path, body):
+            assert path.endswith("accounts:lookup")
+            return 200, {"users": [{"email": "same", "localId": "foreign-uid"}]}
+
+    result = mfa_production.discover_unsettled(Walk(), Gate(), Session(), [])
+    assert result == {"untracked": [], "unproven": ["pending-control"]}
+
+
 def test_a_death_between_the_gate_journal_and_the_walk_ack_is_reconciled(
     tmp_path, monkeypatch
 ):

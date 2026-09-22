@@ -43,6 +43,8 @@ class _ProducerHandler(_FixtureHandler):
     recovered_documents: ClassVar[set[str]] = set()
     deleted_accounts: ClassVar[set[str]] = set()
     requests: ClassVar[list[dict[str, object]]] = []
+    setup_uids: ClassVar[dict[str, str]] = {}
+    setup_account_order: ClassVar[list[str]] = []
 
     def do_any(self) -> None:
         size = int(self.headers.get("Content-Length", "0"))
@@ -50,7 +52,45 @@ class _ProducerHandler(_FixtureHandler):
         path = self.path
         self.__class__.requests.append({"method": self.command, "path": path, "body": body})
         status = 200
-        if path.startswith("/v1/accounts:"):
+        if "currentDocument.exists=false" in path:
+            # The worker has already checked the compiler-owned conditional
+            # path and request shape. Echo the materialized Firestore fields
+            # so adapt_setup_result can bind the response to the request.
+            payload = {
+                "name": body["name"],
+                "fields": body["fields"],
+                "updateTime": "2026-09-22T00:00:00Z",
+            }
+        elif "/v1/projects/" in path and "/accounts:signUp" in path:
+            email = body.get("email")
+            ref = next(
+                (
+                    row["ref"]
+                    for row in self._plan["ownedAccounts"]
+                    if row.get("email") == email
+                ),
+                None,
+            )
+            if ref is None:
+                remaining = [
+                    row["ref"]
+                    for row in self._plan["ownedAccounts"]
+                    if row["ref"] not in self.__class__.setup_uids
+                ]
+                ref = remaining[0]
+            uid = "uid-" + str(ref)
+            self.__class__.setup_uids[str(ref)] = uid
+            payload = {"localId": uid, "idToken": "setup-token-" + str(ref), "expiresIn": "3600"}
+        elif "/v1/projects/" in path and "/accounts:update" in path:
+            payload = {"localId": body["localId"]}
+        elif "/v1/projects/" in path and "/accounts:signInWithPassword" in path:
+            ref = next(
+                ref
+                for ref, uid in self.__class__.setup_uids.items()
+                if uid == "uid-owner-a"
+            )
+            payload = {"localId": self.__class__.setup_uids[ref], "idToken": "setup-token-owner-a", "expiresIn": "3600"}
+        elif path.startswith("/v1/accounts:"):
             payload = self.__class__.issuance_body or {}
         elif path.endswith(":getExecutable"):
             payload = {"rulesetName": self.__class__.active}
@@ -185,6 +225,8 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
     tmp_path, monkeypatch
 ) -> None:
     _ProducerHandler._plan = None
+    _ProducerHandler.setup_uids = {}
+    _ProducerHandler.requests = []
     server = socketserver.TCPServer(("127.0.0.1", 0), _ProducerHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -260,6 +302,7 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
             "binding": binding,
             "bindingDigest": binding_digest,
             "credentials": credentials,
+            "setupSecrets": {ref: "fixture-password" for ref in accounts},
             "frozenInputs": bindings["inputs"],
             "accountBindings": accounts,
             "identityProofs": proofs,
@@ -308,7 +351,13 @@ def test_approved_packet_runs_real_loopback_producer_and_records_bounded_counts(
         # one typed lookup slot instead of issuing a redundant delete pair.
         assert bundle["budget"]["recoverySpent"] == 61
         assert bundle["budget"]["principalActionSpent"] == 3
-        assert len(gate.snapshot()["managementUsed"]) == 23
+        assert len(gate.snapshot()["managementUsed"]) == 42
+        assert bundle["setup"]["recordingComplete"] is True
+        assert bundle["setup"]["requestCount"] == 19
+        assert all(
+            "idToken" not in receipt and "password" not in repr(receipt)
+            for receipt in bundle["setup"]["receipts"]
+        )
         assert bundle["transport"]["receipts"] == 97
         assert bundle["budget"]["observationSpent"] + bundle["budget"]["recoverySpent"] + bundle["budget"]["principalActionSpent"] == 97
         assert bundle["cleanup"]["cleanupComplete"] is True

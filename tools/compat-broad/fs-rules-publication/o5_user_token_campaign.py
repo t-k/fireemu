@@ -59,6 +59,19 @@ def rules_management_plan() -> dict[str, Any]:
         "recoveryDeadlineSeconds": 900.0,
     }
 
+
+def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Freeze setup slots before the existing Rules management slots."""
+    setup = setup_plan(plan)
+    value = rules_management_plan()
+    entries = [
+        {"id": "setup/" + item["id"], "timeout": 12.0}
+        for item in (*setup["fixtures"], *setup["auth"])
+    ]
+    value["observation"] = entries + value["observation"]
+    value["totalRequests"] += setup["totalRequests"]
+    return value
+
 OWNER_PRECONDITIONS = (
     "project and database identity confirmed by the owner",
     "a fresh nonce reserved for this campaign only",

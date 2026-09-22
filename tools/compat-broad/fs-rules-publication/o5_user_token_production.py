@@ -39,6 +39,7 @@ REQUIRED_PACKET_KEYS = frozenset(
         "binding",
         "bindingDigest",
         "credentials",
+        "setupSecrets",
         "frozenInputs",
         "accountBindings",
         "identityProofs",
@@ -63,6 +64,7 @@ def _require_packet(packet: Any) -> dict[str, Any]:
         or not isinstance(packet["permission"], dict)
         or not isinstance(packet["capabilityInputs"], dict)
         or not isinstance(packet["credentials"], dict)
+        or not isinstance(packet["setupSecrets"], dict)
         or not isinstance(packet["frozenInputs"], dict)
         or not isinstance(packet["accountBindings"], dict)
         or not isinstance(packet["identityProofs"], dict)
@@ -144,6 +146,13 @@ def run_approved(packet: dict[str, Any]) -> dict[str, Any]:
             acquisition=values["acquisition"],
             run_id=values["runId"],
             permission_expires_at=values["approval"].get("windowExpiresAt"),
+            setup_secrets=values["setupSecrets"],
+            capability=capability,
+            account_bindings=values["accountBindings"],
+            credentials=values["credentials"],
+            fixture_origin=values["fixtureOrigin"],
+            binding=values["binding"],
+            binding_digest=values["bindingDigest"],
         )
     finally:
         revoke_production_capability(capability)

@@ -40,6 +40,7 @@ from broad_contract import digest
 from o5_user_token_campaign import (
     PERMISSION_ENVELOPE,
     admitted_manifest_digest,
+    gate_management_plan,
     rules_management_plan,
 )
 from o5_user_token_campaign import (
@@ -223,7 +224,7 @@ def cost_model() -> dict[str, Any]:
 def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = None) -> dict[str, Any]:
     """Freeze the Rules management envelope consumed by ``Gate``."""
     validate_case(plan)
-    management = rules_management_plan()
+    management = gate_management_plan(plan)
     value = {
         "contract": "shared-local-v1",
         "kind": "fs-rules-user-token-gate-plan-v1",

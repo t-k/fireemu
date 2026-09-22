@@ -13,6 +13,7 @@ import copy
 import hashlib
 import math
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,8 +22,8 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parent / "fs-write-txn"))
 
 from broad_contract import digest
-import credential_prep
 import credential_remote_transport as remote
+import credential_gate as gate_module
 
 PROJECT = "fireemu-35fe6"
 PROJECT_NUMBER = "592603257417"
@@ -92,31 +93,44 @@ def _validate_handoff_input(permission: dict, adc: dict) -> None:
         raise ValueError("private bootstrap input required")
 
 
-def _request(slot: str, secret, *, fixture_origin: str | None):
-    if slot in ("refresh", "tokeninfo"):
-        value = credential_prep._http_request(slot, secret, fixture_origin=fixture_origin, timeout=PREP_REQUEST_SECONDS)
-        return value.get("status"), value.get("body")
-    if slot == "project":
-        url = f"https://cloudresourcemanager.googleapis.com/v1/projects/{PROJECT}"
-        if fixture_origin is not None:
-            url = fixture_origin + "/v1/projects/" + PROJECT
+def _origin_url(host: str, path: str, fixture_origin: str | None) -> str:
+    return (fixture_origin + "/" if fixture_origin is not None else "https://") + host + path
+
+
+def _request(slot: str, secret, *, fixture_origin: str | None, deadline: float | None = None):
+    seconds = PREP_REQUEST_SECONDS if deadline is None else min(
+        PREP_REQUEST_SECONDS, max(0.001, deadline - time.monotonic())
+    )
+    if slot == "refresh":
+        status, body = remote.request(
+            _origin_url("oauth2.googleapis.com", "/token", fixture_origin),
+            {"grant_type": "refresh_token", "client_id": secret["client_id"], "client_secret": secret["client_secret"], "refresh_token": secret["refresh_token"]},
+            headers={}, seconds=seconds, form=True, fixture_origin=fixture_origin,
+        )
+        return status, body
+    if slot == "tokeninfo":
         return remote.request(
-            url,
+            _origin_url("www.googleapis.com", "/oauth2/v1/tokeninfo?access_token=" + secret, fixture_origin),
+            None, headers={}, seconds=seconds, fixture_origin=fixture_origin,
+        )
+    if slot == "project":
+        return remote.request(
+            _origin_url("cloudresourcemanager.googleapis.com", "/v1/projects/" + PROJECT, fixture_origin),
             None,
             headers={"Authorization": "Bearer " + secret, "x-goog-user-project": PROJECT},
-            seconds=PREP_REQUEST_SECONDS,
+            seconds=seconds,
             fixture_origin=fixture_origin,
         )
     return remote.request(
-        (fixture_origin + "/admin/v2/projects/" + PROJECT + "/config") if fixture_origin is not None else f"https://identitytoolkit.googleapis.com/admin/v2/projects/{PROJECT}/config",
+        _origin_url("identitytoolkit.googleapis.com", "/admin/v2/projects/" + PROJECT + "/config", fixture_origin),
         None,
         headers={"Authorization": "Bearer " + secret, "x-goog-user-project": PROJECT},
-        seconds=PREP_REQUEST_SECONDS,
+        seconds=seconds,
         fixture_origin=fixture_origin,
     )
 
 
-def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | None = None, budget: BootstrapBudget | None = None) -> BootstrapResult:
+def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | None = None, budget: BootstrapBudget | None = None, gate=None) -> BootstrapResult:
     """Run exactly refresh, tokeninfo, project and Auth-config operations.
 
     `fixture_origin` is test-only; production leaves it unset so the pinned
@@ -130,32 +144,77 @@ def prepare(permission: dict, *, adc: dict, api_key: str, fixture_origin: str | 
     _validate_handoff_input(permission, adc)
     if not isinstance(api_key, str) or not api_key:
         raise ValueError("private Web API key required")
-    status, refresh = _request("refresh", adc, fixture_origin=fixture_origin)
+    if gate is not None:
+        snapshot = gate.snapshot()
+        bootstrap = snapshot.get("plan", {}).get("bootstrap")
+        if not isinstance(bootstrap, dict) or bootstrap.get("permissionDigest") != digest(permission):
+            raise ValueError("bootstrap Gate permission binding differs")
+        if tuple(bootstrap.get("operationIds", ())) != gate_module.bootstrap_management_ids():
+            raise ValueError("bootstrap Gate operation binding differs")
+
+    def dispatch(slot: str, secret):
+        request_slot = {
+            "bootstrap-refresh": "refresh",
+            "bootstrap-tokeninfo": "tokeninfo",
+            "bootstrap-project": "project",
+            "bootstrap-auth-config": "auth",
+        }[slot]
+        if gate is None:
+            return _request(request_slot, secret, fixture_origin=fixture_origin)
+
+        def send(deadline):
+            status_, body_ = _request(request_slot, secret, fixture_origin=fixture_origin, deadline=deadline)
+            return {"status": status_, "complete": status_ == 200, "workerReaped": True, "bodyKind": "json", "body": body_}
+
+        receipt = gate.management_dispatch("observation", slot, send)
+        return receipt.get("status"), receipt.get("body")
+
+    status, refresh = dispatch("bootstrap-refresh", adc)
     if status != 200 or not isinstance(refresh, dict) or not isinstance(refresh.get("access_token"), str):
         raise ValueError("OAuth refresh refused")
     token = refresh["access_token"]
-    status, tokeninfo = _request("tokeninfo", token, fixture_origin=fixture_origin)
+    status, tokeninfo = dispatch("bootstrap-tokeninfo", token)
     if status != 200 or not isinstance(tokeninfo, dict):
         raise ValueError("tokeninfo refused")
     principal = permission["credentialPrincipal"]
-    if tokeninfo.get("issued_to") != principal["clientId"] or tokeninfo.get("audience") != principal["clientId"] or tokeninfo.get("user_id") != principal["subject"] or SCOPE not in str(tokeninfo.get("scope", "")).split() or not isinstance(tokeninfo.get("expires_in"), int) or tokeninfo["expires_in"] <= TASK_MAX_SECONDS:
+    expires_in = tokeninfo.get("expires_in")
+    if isinstance(expires_in, str) and expires_in.isdecimal():
+        expires_in = int(expires_in)
+    if tokeninfo.get("azp") != principal["clientId"] or tokeninfo.get("aud") != principal["clientId"] or tokeninfo.get("sub") != principal["subject"] or SCOPE not in str(tokeninfo.get("scope", "")).split() or type(expires_in) is not int or expires_in <= TASK_MAX_SECONDS:
         raise ValueError("tokeninfo principal or lifetime differs")
-    status, project = _request("project", token, fixture_origin=fixture_origin)
+    status, project = dispatch("bootstrap-project", token)
     if status != 200 or project != {"projectId": PROJECT, "projectNumber": PROJECT_NUMBER}:
         raise ValueError("project identity differs")
-    status, auth = _request("auth", token, fixture_origin=fixture_origin)
+    status, auth = dispatch("bootstrap-auth-config", token)
     if status != 200 or not isinstance(auth, dict):
         raise ValueError("Auth config readback refused")
-    proof = {"kind": "auth-credential-bootstrap-proof-v1", "principalDigest": digest(principal), "project": copy.deepcopy(project), "authConfigDigest": digest(auth), "tokeninfoExpiresInSeconds": tokeninfo["expires_in"], "requestCount": PREP_REQUESTS, "taskMaxRequests": TASK_MAX_REQUESTS, "taskMaxSeconds": TASK_MAX_SECONDS, "recoverySeconds": RECOVERY_SECONDS}
+    proof = {"kind": "auth-credential-bootstrap-proof-v1", "permissionDigest": digest(permission), "principalDigest": digest(principal), "project": copy.deepcopy(project), "authConfigDigest": digest(auth), "tokeninfoExpiresInSeconds": expires_in, "requestCount": PREP_REQUESTS, "taskMaxRequests": TASK_MAX_REQUESTS, "taskMaxSeconds": TASK_MAX_SECONDS, "recoverySeconds": RECOVERY_SECONDS}
+    if gate is not None:
+        snapshot = gate.snapshot()
+        used = snapshot.get("managementUsed", [])
+        expected = ["observation:" + item for item in gate_module.bootstrap_management_ids()]
+        if used[:PREP_REQUESTS] != expected:
+            raise ValueError("bootstrap Gate completion differs")
+        proof["gatePlanDigest"] = snapshot["planDigest"]
+        proof["managementJournalDigest"] = digest(snapshot.get("managementEvents", [])[:PREP_REQUESTS])
     return BootstrapResult({"token": token, "apiKey": api_key, "signing": {"serviceAccount": SERVICE_ACCOUNT}}, proof, PREP_REQUESTS)
 
 
-def finalize_handoff(prepared: dict, observation_permission_digest: str) -> dict:
+def finalize_handoff(prepared: dict, observation_permission_digest: str, proof: dict) -> dict:
     """Bind the private prepared values only after observation permission exists."""
-    if not isinstance(observation_permission_digest, str) or not observation_permission_digest:
+    if not isinstance(observation_permission_digest, str) or len(observation_permission_digest) != 64:
         raise ValueError("observation permission digest required")
     if not isinstance(prepared, dict) or set(prepared) != {"token", "apiKey", "signing"}:
         raise ValueError("prepared credential required")
+    if (
+        not isinstance(proof, dict)
+        or proof.get("kind") != "auth-credential-bootstrap-proof-v1"
+        or proof.get("requestCount") != PREP_REQUESTS
+        or proof.get("taskMaxRequests") != TASK_MAX_REQUESTS
+        or proof.get("taskMaxSeconds") != TASK_MAX_SECONDS
+        or proof.get("recoverySeconds") != RECOVERY_SECONDS
+    ):
+        raise ValueError("independent bootstrap proof required")
     return {"kind": HANDOFF_KIND, "permissionDigest": observation_permission_digest, **copy.deepcopy(prepared)}
 
 

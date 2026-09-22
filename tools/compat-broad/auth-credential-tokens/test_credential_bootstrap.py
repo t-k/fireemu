@@ -29,13 +29,13 @@ class _Fixture(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.__class__.requests.append(self.path)
-        if self.path == "/token":
+        if self.path == "/oauth2.googleapis.com/token":
             body = {"access_token": "fixture-access", "expires_in": 3600, "token_type": "Bearer"}
-        elif self.path.startswith("/oauth2/v1/tokeninfo"):
+        elif self.path.startswith("/www.googleapis.com/oauth2/v1/tokeninfo"):
             body = {
-                "issued_to": "client-1",
-                "audience": "client-1",
-                "user_id": "subject-1",
+                "azp": "client-1",
+                "aud": "client-1",
+                "sub": "subject-1",
                 "scope": "https://www.googleapis.com/auth/cloud-platform",
                 "expires_in": 3600,
             }
@@ -45,7 +45,16 @@ class _Fixture(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.__class__.requests.append(self.path)
-        self._reply(self._metadata())
+        if self.path.startswith("/www.googleapis.com/oauth2/v1/tokeninfo"):
+            self._reply({
+                "azp": "client-1",
+                "aud": "client-1",
+                "sub": "subject-1",
+                "scope": "https://www.googleapis.com/auth/cloud-platform",
+                "expires_in": 3600,
+            })
+        else:
+            self._reply(self._metadata())
 
     def _metadata(self):
         if self.path.endswith("/config"):
@@ -93,15 +102,16 @@ def _permission():
 def test_fixture_bootstrap_charges_exact_four_requests_and_returns_private_handoff(fixture_origin):
     origin, requests = fixture_origin
     result = bootstrap.prepare(_permission(), adc=ADC, api_key="api-key", fixture_origin=origin)
-    assert requests == ["/token", "/oauth2/v1/tokeninfo?access_token=fixture-access", "/v1/projects/fireemu-35fe6", "/admin/v2/projects/fireemu-35fe6/config"]
+    assert requests == ["/oauth2.googleapis.com/token", "/www.googleapis.com/oauth2/v1/tokeninfo?access_token=fixture-access", "/cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6", "/identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config"]
     assert result.prepared == {
         "token": "fixture-access",
         "apiKey": "api-key",
         "signing": {"serviceAccount": bootstrap.SERVICE_ACCOUNT},
     }
-    assert bootstrap.finalize_handoff(result.prepared, "observation-permission-digest") == {
+    observation_digest = "a" * 64
+    assert bootstrap.finalize_handoff(result.prepared, observation_digest, result.proof) == {
         "kind": bootstrap.HANDOFF_KIND,
-        "permissionDigest": "observation-permission-digest",
+        "permissionDigest": observation_digest,
         "token": "fixture-access",
         "apiKey": "api-key",
         "signing": {"serviceAccount": bootstrap.SERVICE_ACCOUNT},

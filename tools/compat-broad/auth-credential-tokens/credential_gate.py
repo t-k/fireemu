@@ -94,6 +94,90 @@ MANAGEMENT_DURATION_SECONDS = 12.0
 SHARED_MANAGEMENT_IDS = ("oauth-tokeninfo", "project", "auth")
 SIGN_MANAGEMENT_IDS = ("sign-developer", "sign-reserved", "sign-expired")
 MANAGEMENT_RECOVERY_IDS = ("auth",)
+BOOTSTRAP_MANAGEMENT_IDS = (
+    "bootstrap-refresh",
+    "bootstrap-tokeninfo",
+    "bootstrap-project",
+    "bootstrap-auth-config",
+)
+
+
+def bootstrap_management_ids() -> tuple[str, ...]:
+    """The four source-bound OAuth/Auth preparation slots.
+
+    These are ordinary closed management slots, deliberately placed before the
+    campaign's existing bearer and project preflight. The route metadata is
+    descriptive plan input; the credential hosting worker remains the only
+    component allowed to put private values on the wire.
+    """
+    return BOOTSTRAP_MANAGEMENT_IDS
+
+
+def _bootstrap_management(ids: tuple[str, ...]) -> list[dict[str, Any]]:
+    routes = {
+        "bootstrap-refresh": {
+            "method": "POST",
+            "host": "oauth2.googleapis.com",
+            "path": "https://oauth2.googleapis.com/token",
+            "form": True,
+        },
+        "bootstrap-tokeninfo": {
+            "method": "GET",
+            "host": "www.googleapis.com",
+            "path": "https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=$binding:accessToken",
+            "form": False,
+        },
+        "bootstrap-project": {
+            "method": "GET",
+            "host": "cloudresourcemanager.googleapis.com",
+            "path": "https://cloudresourcemanager.googleapis.com/v1/projects/$project",
+            "form": False,
+        },
+        "bootstrap-auth-config": {
+            "method": "GET",
+            "host": "identitytoolkit.googleapis.com",
+            "path": "https://identitytoolkit.googleapis.com/admin/v2/projects/$project/config",
+            "form": False,
+        },
+    }
+    return [
+        {
+            "id": item,
+            "seconds": MANAGEMENT_SLOT_SECONDS,
+            "duration": MANAGEMENT_DURATION_SECONDS,
+            "timeout": MANAGEMENT_SLOT_SECONDS,
+            **routes[item],
+        }
+        for item in ids
+    ]
+
+
+def bootstrap_plan(plan: dict[str, Any], *, permission_digest: str) -> dict[str, Any]:
+    """Return a Gate plan with the independent four-request preparation prefix."""
+    if not isinstance(plan, dict) or not isinstance(permission_digest, str) or len(permission_digest) != 64:
+        raise ValueError("bootstrap plan binding required")
+    result = copy.deepcopy(plan)
+    management = result.get("management")
+    if not isinstance(management, dict) or management.get("dispatchKind") != "closed-v1":
+        raise ValueError("closed management plan required")
+    existing = management.get("observation")
+    if not isinstance(existing, list) or [item.get("id") for item in existing[:4]] == list(BOOTSTRAP_MANAGEMENT_IDS):
+        raise ValueError("bootstrap plan already prepared")
+    result["bootstrap"] = {
+        "kind": "auth-credential-bootstrap-v1",
+        "permissionDigest": permission_digest,
+        "operationIds": list(BOOTSTRAP_MANAGEMENT_IDS),
+        "taskRequests": 4,
+        "taskSeconds": 600,
+        "recoverySeconds": 60,
+    }
+    result["permissionDigest"] = permission_digest
+    result["management"]["observation"] = _bootstrap_management(BOOTSTRAP_MANAGEMENT_IDS) + existing
+    result["management"]["credentialIds"] = ["oauth-tokeninfo"]
+    result["management"]["totalRequests"] = len(result["management"]["observation"]) + len(result["management"].get("recovery", []))
+    result["observationRequests"] += len(BOOTSTRAP_MANAGEMENT_IDS)
+    result["managementRequests"] += len(BOOTSTRAP_MANAGEMENT_IDS)
+    return result
 
 
 def management_ids(signing: bool) -> dict[str, tuple[str, ...]]:
@@ -970,6 +1054,8 @@ __all__ = [
     "CredentialGate",
     "account_evidence",
     "account_resource",
+    "bootstrap_management_ids",
+    "bootstrap_plan",
     "create",
     "gate_environment",
     "gate_plan",

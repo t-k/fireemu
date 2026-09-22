@@ -14,6 +14,8 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 
 import credential_gate as gate_module
+import credential_admission as admission
+import reservations
 import credential_shadow as shadow
 from credential_cases import observation_cases
 from credential_collector import cleanup_report, enter_recovery, new_budget, new_tracker
@@ -25,6 +27,7 @@ from credential_gate import (
     gate_poster,
 )
 from test_credential_shadow import _service
+from test_credential_admission import Admission
 
 PROJECT = "demo-app"
 NONCE = "c" * 32
@@ -143,6 +146,70 @@ def test_the_plan_freezes_every_request_the_runner_makes_in_order() -> None:
     assert "$binding:" in serialized
     assert "$apiKey" not in serialized
     assert "Bearer" not in serialized
+
+
+def test_bootstrap_plan_adds_four_modern_oauth_management_slots(tmp_path: Path) -> None:
+    plan = gate_module.bootstrap_plan(_plan(), permission_digest="a" * 64)
+    management = plan["management"]
+    assert [item["id"] for item in management["observation"][:4]] == [
+        "bootstrap-refresh",
+        "bootstrap-tokeninfo",
+        "bootstrap-project",
+        "bootstrap-auth-config",
+    ]
+    assert [item["method"] for item in management["observation"][:4]] == [
+        "POST", "GET", "GET", "GET"
+    ]
+    assert management["observation"][1]["path"].startswith(
+        "https://www.googleapis.com/oauth2/v1/tokeninfo?access_token="
+    )
+    assert plan["observationRequests"] == 44
+    assert plan["managementRequests"] == 11
+    assert plan["observationRequests"] + len(plan["jobs"][gate_module.JOB]["recovery"]) + 1 == 53
+    assert plan["bootstrap"]["permissionDigest"] == "a" * 64
+    gate_module.create(tmp_path / "gate", plan)
+
+
+def test_bootstrap_prefix_is_reserved_and_journaled_after_fixture_o7(tmp_path: Path) -> None:
+    built = Admission(tmp_path)
+    admission.validate_o7_admission(**built.bindings())
+    plan = gate_module.bootstrap_plan(
+        admission.gate_plan_for(built.inputs, built.permission),
+        permission_digest=gate_module.digest(built.permission),
+    )
+    gate_path = tmp_path / "gate"
+    claim = admission.reservation_claim(built.inputs, gate_path=gate_path, gate_plan=plan)
+    envelope = {
+        "permissionDigest": gate_module.digest(built.permission),
+        "issuedAt": built.permission["issuedAt"],
+        "expiresAt": built.permission["expiresAt"],
+        "limits": dict(claim["budget"]),
+        "concurrency": 1,
+        "scopes": list(claim["locks"]),
+    }
+    ticket = reservations.Ledger(built.ledger).reserve(envelope, claim, plan)
+    assert ticket["reservation"] in reservations.Ledger(built.ledger).snapshot()["reservations"]
+    gate_module.create(gate_path, plan)
+    gate = CredentialGate(gate_path)
+    receipts = []
+    for slot in gate_module.bootstrap_management_ids():
+        receipt = gate.management_dispatch(
+            "observation",
+            slot,
+            lambda _deadline, slot=slot: {
+                "status": 200,
+                "complete": True,
+                "workerReaped": True,
+                "bodyKind": "json",
+                "body": {"slot": slot, "fixture": True},
+            },
+        )
+        receipts.append(receipt)
+    assert [row["body"]["slot"] for row in receipts] == list(gate_module.bootstrap_management_ids())
+    snapshot = gate.snapshot()
+    assert snapshot["managementUsed"] == ["observation:" + slot for slot in gate_module.bootstrap_management_ids()]
+    assert snapshot["managementEvents"][0]["bodyDigest"] == gate_module.digest(receipts[0]["body"])
+    assert "fixture" not in (gate_path / "state.json").read_text()
 
 
 def test_every_binding_a_slot_carries_is_either_observed_earlier_or_minted() -> None:

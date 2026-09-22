@@ -8,6 +8,7 @@ checks; this bridge never creates credentials or manufactures identity proof.
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -15,8 +16,16 @@ from typing import Any
 
 from broad_contract import digest
 from o5_user_token_campaign import budget as campaign_budget
-from o5_user_token_campaign import setup_plan
-from o5_user_token_collector import RulesManagementSession, open_ownership_journal
+from o5_user_token_campaign import (
+    RULES_MANAGEMENT_OBSERVATION,
+    RULES_MANAGEMENT_RECOVERY,
+    setup_plan,
+)
+from o5_user_token_collector import (
+    RulesManagementReceipt,
+    RulesManagementSession,
+    open_ownership_journal,
+)
 from o5_user_token_descriptor import CAMPAIGN, collector, gate_plan
 from o5_user_token_remote_transport import (
     adapt_setup_result,
@@ -34,6 +43,118 @@ OBSERVATION_REQUESTS = 33
 RECOVERY_REQUESTS = 63
 WORKER_TIMEOUT_SECONDS = 8.0
 SETUP_TIMEOUT_SECONDS = 2.0
+
+
+def rules_gate_receipt(
+    plan: dict[str, Any], operation: dict[str, Any], raw: dict[str, Any]
+) -> RulesManagementReceipt:
+    """Project actual Rules HTTP facts into the durable, secret-free Gate schema."""
+    if (
+        not isinstance(raw, dict)
+        or type(raw.get("httpStatus")) is not int
+        or type(raw.get("complete")) is not bool
+        or type(raw.get("workerReaped")) is not bool
+    ):
+        raise ValueError("actual Rules wire facts required")
+    slot = operation.get("managementSlot")
+    phase = operation.get("managementPhase")
+    slots = (
+        RULES_MANAGEMENT_OBSERVATION
+        if phase == "observation"
+        else RULES_MANAGEMENT_RECOVERY
+        if phase == "recovery"
+        else ()
+    )
+    if slot not in slots:
+        raise ValueError("compiled Rules management slot required")
+    metadata = {"httpStatus", "complete", "workerReaped", "endpoint", "wireSequence"}
+    body = {key: value for key, value in raw.items() if key not in metadata}
+    effects = []
+    proof = None
+    subject = "release/baseline"
+    if slot.startswith(("create-", "delete-")):
+        subject = "ruleset/" + slot.split("-")[1]
+    if (
+        raw["httpStatus"] == 404
+        and slot in {"delete-a-absence", "delete-b-absence"}
+        and isinstance(body.get("error"), dict)
+        and body["error"].get("code") == 404
+    ):
+        proof = {"kind": "absence", "resource": operation["rulesetName"]}
+    elif 200 <= raw["httpStatus"] < 300 and raw["complete"] and raw["workerReaped"]:
+        try:
+            if slot in {"create-a", "create-b"}:
+                name = body.get("name")
+                if (
+                    not isinstance(name, str)
+                    or re.fullmatch(
+                        r"projects/fireemu-35fe6/rulesets/[A-Za-z0-9_-]{1,128}", name
+                    )
+                    is None
+                ):
+                    raise ValueError("Rules create name differs")
+                proof = {
+                    "kind": "ruleset",
+                    "name": name,
+                    "sourceDigest": digest(
+                        plan["rulesets"][slot[-1].upper()]["source"]
+                    ),
+                }
+            elif slot in {
+                "baseline-ruleset-get",
+                "create-a-get",
+                "create-b-get",
+                "delete-a-get",
+                "delete-b-get",
+            }:
+                expected = (
+                    None
+                    if slot == "baseline-ruleset-get"
+                    else digest(plan["rulesets"][subject[-1].upper()]["source"])
+                )
+                name = RulesManagementSession._ruleset(body, expected)
+                proof = {
+                    "kind": "ruleset",
+                    "name": name,
+                    "sourceDigest": RulesManagementSession._ruleset_digest(body),
+                }
+            elif slot not in {
+                "delete-a",
+                "delete-b",
+                "delete-a-absence",
+                "delete-b-absence",
+            }:
+                name = (
+                    "projects/fireemu-35fe6/releases/cloud.firestore"
+                    if operation.get("action") == "release-get-executable"
+                    else body.get("name")
+                )
+                release = {"name": name, "rulesetName": body.get("rulesetName")}
+                name, ruleset = RulesManagementSession._release(release)
+                proof = {"kind": "release", "name": name, "rulesetName": ruleset}
+        except ValueError:
+            # A malformed response still has real HTTP/reap facts. Keep it
+            # charged without inventing ownership; the collector rejects it.
+            proof = None
+    if proof is not None:
+        effects.append({"subject": subject, "proof": proof})
+    receipt = RulesManagementReceipt(
+        {
+            "status": raw["httpStatus"],
+            "complete": raw["complete"],
+            "workerReaped": raw["workerReaped"],
+            "bodyKind": "json",
+            "body": {
+                "kind": "rules-management-proof-v1",
+                "responseDigest": digest(body),
+                "effects": effects,
+            },
+        },
+        endpoint=raw.get("endpoint"),
+        wire_sequence=raw.get("wireSequence"),
+    )
+    receipt.response_body = body
+    return receipt
 
 
 def skip_unused_recovery(
@@ -324,26 +445,10 @@ def run_bound_collection(
     def execute_management(
         operation: dict[str, Any], *, deadline: float | None = None
     ) -> dict[str, Any]:
-        """Adapt the transport body to the management session's typed receipt.
-
-        The shared transport intentionally returns the decoded body to the
-        collector. Rules lifecycle management additionally needs the HTTP
-        status to distinguish a typed 404 absence during cleanup. Derive that
-        status only from the response body (success is 200; the sole accepted
-        absence is the typed 404 error), without changing ordinary receipts.
-        """
-        raw = execute(operation, deadline=deadline)
-        if not isinstance(raw, dict):
-            raise TypeError("Rules management response body required")
-        error = raw.get("error")
-        status = 404 if isinstance(error, dict) and error.get("code") == 404 else 200
-        return {
-            "status": status,
-            "complete": True,
-            "workerReaped": True,
-            "bodyKind": "json",
-            "body": raw,
-        }
+        """Keep actual wire facts and project only typed ownership to Gate."""
+        return rules_gate_receipt(
+            plan, operation, execute(operation, deadline=deadline)
+        )
 
     if (
         setup_secrets is None

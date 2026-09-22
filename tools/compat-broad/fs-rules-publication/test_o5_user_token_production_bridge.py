@@ -23,6 +23,58 @@ def _plan():
     return case.compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant-test")
 
 
+def test_rules_receipt_preserves_real_status_and_keeps_rest_body_outside_gate():
+    raw = {
+        "httpStatus": 404,
+        "complete": True,
+        "workerReaped": True,
+        "endpoint": "127.0.0.1:17400",
+        "wireSequence": 22,
+        "error": {"code": 404},
+    }
+    operation = {
+        "kind": "rules-lifecycle",
+        "managementPhase": "recovery",
+        "managementSlot": "delete-a-absence",
+        "action": "get",
+        "rulesetName": "projects/fireemu-35fe6/rulesets/issued-a",
+    }
+    receipt = bridge.rules_gate_receipt(_plan(), operation, raw)
+    assert receipt["status"] == 404
+    assert receipt["body"]["effects"] == [
+        {
+            "subject": "ruleset/a",
+            "proof": {"kind": "absence", "resource": operation["rulesetName"]},
+        }
+    ]
+    assert receipt.response_body == {"error": {"code": 404}}
+    assert "error" not in receipt["body"]
+    assert receipt.endpoint == raw["endpoint"]
+    assert receipt.wire_sequence == 22
+
+
+@pytest.mark.parametrize("missing", ["httpStatus", "complete", "workerReaped"])
+def test_rules_receipt_never_defaults_missing_wire_facts(missing):
+    raw = {
+        "httpStatus": 200,
+        "complete": True,
+        "workerReaped": True,
+        "endpoint": "127.0.0.1:17400",
+        "wireSequence": 1,
+        "name": "projects/fireemu-35fe6/releases/cloud.firestore",
+        "rulesetName": "projects/fireemu-35fe6/rulesets/baseline",
+    }
+    raw.pop(missing)
+    operation = {
+        "kind": "rules-lifecycle",
+        "managementPhase": "observation",
+        "managementSlot": "baseline-release-get",
+        "action": "release-get",
+    }
+    with pytest.raises(ValueError, match="wire"):
+        bridge.rules_gate_receipt(_plan(), operation, raw)
+
+
 def test_setup_refuses_failed_durable_journal_before_gate_or_worker(tmp_path):
     plan = _plan()
     gate_path = tmp_path / "gate"

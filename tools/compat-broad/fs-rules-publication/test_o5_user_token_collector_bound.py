@@ -5,9 +5,15 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 import time
+import sys
+from pathlib import Path
 
 import pytest
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "o8-core"))
+sys.path.insert(0, str(ROOT / "production-admission"))
 from o5_user_token_campaign import admitted_manifest_digest, source_digests
 from o5_user_token_case import compile_case, digest
 from o5_user_token_collector import (
@@ -18,8 +24,13 @@ from o5_user_token_collector import (
     READBACK_RELEASE_GET,
     ROLE_LOCAL_SHADOW,
     ROLE_PRODUCTION,
-    collect,
+    collect as _collect,
+    RulesManagementReceipt,
+    RulesManagementSession,
 )
+from o5_user_token_descriptor import gate_plan
+from reservations import Ledger
+import shared_gate
 from test_o5_user_token_collector import Transport
 
 PROJECT = "fireemu-35fe6"
@@ -99,15 +110,114 @@ def bound(
 ) -> tuple[dict, Transport]:
     plan = plan_for(role)
     transport = transport or bound_transport(plan, role)
-    bundle = collect(
-        plan,
-        transport,
-        role=role,
-        run_id=f"{role}-run",
-        acquisition=acquisition_for(plan, role),
-        **kwargs,
-    )
+    acquisition = acquisition_for(plan, role)
+    if role != ROLE_PRODUCTION:
+        bundle = collect(plan, transport, role=role, run_id=f"{role}-run", acquisition=acquisition, **kwargs)
+        return bundle, transport
+    with tempfile.TemporaryDirectory(prefix="o5-bound-rules-") as directory:
+        root = __import__("pathlib").Path(directory)
+        gate_path = root / "gate"
+        ledger = Ledger.create(root / "ledger")
+        plan_gate = gate_plan(plan, permission_expires_at=time.time() + 3600)
+        limits = {"requests": 56, "accounts": 0, "resources": 1, "costMicrousd": 23}
+        envelope = {"permissionDigest": digest({"kind": "bound-test"}), "issuedAt": time.time() - 1, "expiresAt": time.time() + 3600, "limits": limits, "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}]}
+        claim = {"campaignId": plan["campaignId"], "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str(gate_path.resolve()), "gatePlanDigest": digest(plan_gate), "locks": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}], "budget": limits, "durationSeconds": 600}
+        ticket = ledger.reserve(envelope, claim, plan_gate)
+        shared_gate.create(gate_path, plan_gate)
+        gate = shared_gate.Gate(gate_path, plan["campaignId"])
+        management = _management_executor(plan, transport)
+        def execute(request, **_kwargs):
+            if request.get("kind") == "rules-lifecycle":
+                return management(request)
+            return transport(request)
+        session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=execute, plan=plan)
+        bundle = collect(plan, execute, role=role, run_id=f"{role}-run", acquisition=acquisition, management_session=session, **kwargs)
     return bundle, transport
+
+
+def _management_executor(plan: dict, transport):
+    names = {"A": f"projects/{PROJECT}/rulesets/server-a", "B": f"projects/{PROJECT}/rulesets/server-b"}
+    baseline = f"projects/{PROJECT}/rulesets/pre-existing"
+    release = f"projects/{PROJECT}/releases/cloud.firestore"
+    active = baseline
+    deleted: set[str] = set()
+    def execute(request, **_kwargs):
+        nonlocal active
+        action = request["action"]
+        label = request.get("label") or ("A" if request.get("rulesetName") == names["A"] else "B")
+        source_digest = digest(plan["rulesets"][label]["source"])
+        scripted = transport({"phase": "ruleset", "ruleset": label, "sourceDigest": source_digest})
+        endpoint = scripted.get("endpoint")
+        wire_sequence = scripted.get("wireSequence")
+        scripted_name = scripted.get("releaseName")
+        mutated_name = (
+            scripted_name
+            if isinstance(scripted_name, str)
+            and not scripted_name.startswith(f"projects/{PROJECT}/releases/scripted-")
+            else release
+        )
+        def typed(body, *, complete=True, status=200):
+            return RulesManagementReceipt(
+                {"status": status, "complete": complete, "workerReaped": True, "bodyKind": "json", "body": body},
+                endpoint=endpoint,
+                wire_sequence=wire_sequence,
+            )
+        if scripted.get("complete") is False:
+            return typed({}, complete=False)
+        if action == "release-get":
+            body = {"name": mutated_name, "rulesetName": active}
+        elif action == "release-get-executable":
+            body = {"rulesetName": active}
+        elif action == "create":
+            body = {"name": names[request["label"]]}
+        elif action == "get":
+            name = request["rulesetName"]
+            if name in deleted:
+                return typed({"error": {"code": 404}}, status=404)
+            label = "A" if name == names["A"] else "B"
+            body = {"name": name, "source": {"files": [{"name": "firestore.rules", "content": plan["rulesets"][label]["source"]}]}}
+        elif action == "release-patch":
+            active = request["rulesetName"]
+            body = {"name": mutated_name, "rulesetName": active}
+        elif action == "delete":
+            deleted.add(request["rulesetName"])
+            body = {}
+        else:
+            raise AssertionError(action)
+        return typed(body)
+    return execute
+
+
+def collect(plan, execute, *, role, run_id, acquisition=None, management_session=None, **kwargs):
+    """Bind every production fixture call to the same real session helper."""
+    if role != ROLE_PRODUCTION or acquisition is None or management_session is not None:
+        return _collect(
+            plan,
+            execute,
+            role=role,
+            run_id=run_id,
+            acquisition=acquisition,
+            management_session=management_session,
+            **kwargs,
+        )
+    with tempfile.TemporaryDirectory(prefix="o5-bound-rules-") as directory:
+        root = Path(directory)
+        gate_path = root / "gate"
+        ledger = Ledger.create(root / "ledger")
+        plan_gate = gate_plan(plan, permission_expires_at=time.time() + 3600)
+        limits = {"requests": 56, "accounts": 0, "resources": 1, "costMicrousd": 23}
+        envelope = {"permissionDigest": digest({"kind": "bound-test"}), "issuedAt": time.time() - 1, "expiresAt": time.time() + 3600, "limits": limits, "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}]}
+        claim = {"campaignId": plan["campaignId"], "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str(gate_path.resolve()), "gatePlanDigest": digest(plan_gate), "locks": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}], "budget": limits, "durationSeconds": 600}
+        ticket = ledger.reserve(envelope, claim, plan_gate)
+        shared_gate.create(gate_path, plan_gate)
+        gate = shared_gate.Gate(gate_path, plan["campaignId"])
+        management = _management_executor(plan, execute)
+        def routed(request, **_kwargs):
+            if request.get("kind") == "rules-lifecycle":
+                return management(request)
+            return execute(request)
+        session = RulesManagementSession(gate=gate, ledger=ledger, ticket=ticket, execute=routed, plan=plan)
+        return _collect(plan, routed, role=role, run_id=run_id, acquisition=acquisition, management_session=session, **kwargs)
 
 
 def test_a_bound_run_records_releases_wire_facts_and_observer_identity() -> None:

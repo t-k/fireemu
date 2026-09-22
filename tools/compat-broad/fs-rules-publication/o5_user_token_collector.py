@@ -243,6 +243,24 @@ _RULESET_RESOURCE = re.compile(r"^projects/fireemu-35fe6/rulesets/[A-Za-z0-9_-]{
 _RELEASE_RESOURCE = re.compile(r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$")
 
 
+class RulesManagementReceipt(dict):
+    """Typed Gate receipt carrying transport facts outside the REST body."""
+
+    def __init__(self, value: Mapping[str, Any], *, endpoint: str | None = None, wire_sequence: int | None = None):
+        super().__init__(value)
+        self.endpoint = endpoint
+        self.wire_sequence = wire_sequence
+
+
+class RulesManagementError(ValueError):
+    """A bounded management refusal with a collector-safe reason."""
+
+    def __init__(self, reason: str, *, failure: str | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.failure = failure
+
+
 class RulesManagementSession:
     """Gate-owned Rules lifecycle with response-derived resource bindings.
 
@@ -287,6 +305,8 @@ class RulesManagementSession:
         self.baseline: dict[str, Any] | None = None
         self.created: dict[str, str] = {}
         self.active: dict[str, str] = {}
+        self.receipts: list[dict[str, Any]] = []
+        self.release_evidence: list[dict[str, Any]] = []
 
     def _dispatch(self, phase: str, slot: str, operation: dict[str, Any], *, allow_status: frozenset[int] = frozenset()) -> dict[str, Any]:
         def send(deadline: float) -> dict[str, Any]:
@@ -296,6 +316,20 @@ class RulesManagementSession:
             raw = self.execute(request, deadline=deadline)
             if not isinstance(raw, dict):
                 raise ValueError("bounded Rules worker receipt required")
+            endpoint = getattr(raw, "endpoint", None)
+            wire_sequence = getattr(raw, "wire_sequence", None)
+            self.receipts.append(
+                {
+                    "phase": phase,
+                    "slot": slot,
+                    "at": time.monotonic(),
+                    "endpoint": endpoint,
+                    "wireSequence": wire_sequence,
+                }
+            )
+            credential_failure = _scan_management_receipt(raw)
+            if credential_failure is not None:
+                raise RulesManagementError(credential_failure)
             if {"status", "complete", "workerReaped", "bodyKind", "body"} <= set(raw):
                 return raw
             status = raw.get("status")
@@ -383,6 +417,7 @@ class RulesManagementSession:
             name = self._ruleset(self._dispatch("observation", f"create-{patch_base}-get", {"action": "get", "rulesetName": created["name"]}), source_digest, created["name"])
             self.created[label] = name
             self._dispatch("observation", f"patch-{patch_base}", {"action": "release-patch", "releaseName": release_name, "rulesetName": name})
+            patch_receipt = self.receipts[-1]
             active_name, active_ruleset = self._release(self._dispatch("observation", f"patch-{patch_base}-get", {"action": "release-get", "releaseName": release_name}), release_name)
             if active_name != release_name or active_ruleset != name:
                 raise ValueError("active Ruleset binding differs")
@@ -390,7 +425,25 @@ class RulesManagementSession:
             if executable.get("rulesetName") != name:
                 raise ValueError("active executable differs")
             self.active[label] = name
-        return {"baseline": dict(self.baseline), "created": dict(self.created), "active": dict(self.active)}
+            self.release_evidence.append(
+                {
+                    "label": label,
+                    "sourceDigest": source_digest,
+                    "releaseName": release_name,
+                    "readback": {"kind": READBACK_RELEASE_GET, "digest": source_digest},
+                    "endpoint": patch_receipt.get("endpoint"),
+                    "wireSequence": patch_receipt.get("wireSequence"),
+                    "beforeIndex": 0 if label == "A" else 30,
+                    "activeFrom": patch_receipt.get("at"),
+                }
+            )
+        return {
+            "baseline": dict(self.baseline),
+            "created": dict(self.created),
+            "active": dict(self.active),
+            "releases": [dict(entry) for entry in self.release_evidence],
+            "managementReceipts": [dict(entry) for entry in self.receipts],
+        }
 
     def run_recovery(self) -> dict[str, Any]:
         """Restore only the captured baseline and prove created absence."""
@@ -493,6 +546,31 @@ def _scan(value: Any, depth: int, budget: list[int]) -> str | None:
     if isinstance(value, (bool, int, float)) or value is None:
         return None
     return "unsupported-receipt-value"
+
+
+def _scan_management_receipt(value: Any) -> str | None:
+    """Scan management metadata while allowing Rules source text newlines."""
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                return "non-string-receipt-key"
+            lowered = key.lower()
+            for marker in FORBIDDEN_KEY_TOKENS:
+                if marker in lowered:
+                    return f"credential-leak:{key}"
+            if key == "content":
+                continue
+            failure = _scan_management_receipt(nested)
+            if failure is not None:
+                return failure
+        return None
+    if isinstance(value, (list, tuple)):
+        for nested in value:
+            failure = _scan_management_receipt(nested)
+            if failure is not None:
+                return failure
+        return None
+    return _scan(value, 0, [_MAX_NODES])
 
 
 def _accept(
@@ -944,6 +1022,16 @@ def collect(
             if bindings is None or role != ROLE_PRODUCTION:
                 raise ValueError("Rules management requires bound production acquisition")
             rules_management = management_session.run_observation()
+            for receipt in management_session.receipts:
+                facts, receipt_failure = wire.note(receipt)
+                if receipt_failure is not None:
+                    raise RulesManagementError(
+                        receipt_failure,
+                        failure=f"ruleset:A:{receipt_failure}",
+                    )
+            releases.extend(rules_management.get("releases", []))
+            for _ in rules_management.get("releases", []):
+                budget.take_ruleset()
         for operation in operations:
             if journal.failures:
                 abort = "journal-failure"
@@ -1020,8 +1108,8 @@ def collect(
                 break
 
     except Exception as error:  # noqa: BLE001 -- processing must not skip recovery
-        abort = "collector:" + type(error).__name__
-        failures.append(abort)
+        abort = getattr(error, "reason", None) or "collector:" + type(error).__name__
+        failures.append(getattr(error, "failure", None) or abort)
     finally:
         observation_finished = budget.stamp()
         try:
@@ -1036,9 +1124,19 @@ def collect(
                     cleanup = _blocked_cleanup(plan, attempted, worker_reaped=False)
             if management_session is not None and rules_management is not None and not worker_state["unreaped"]:
                 try:
+                    observed_receipts = len(rules_management.get("managementReceipts", []))
                     rules_management["recovery"] = management_session.run_recovery()
+                    for receipt in management_session.receipts[observed_receipts:]:
+                        facts, receipt_failure = wire.note(receipt)
+                        if receipt_failure is not None:
+                            raise RulesManagementError(receipt_failure)
+                    rules_management["managementReceipts"] = [
+                        dict(entry) for entry in management_session.receipts
+                    ]
                 except Exception as error:  # noqa: BLE001 - retain ownership on uncertainty
-                    failures.append("rules-management-recovery:" + type(error).__name__)
+                    failure = getattr(error, "reason", None) or "rules-management-recovery:" + type(error).__name__
+                    if abort is None and failure not in failures:
+                        failures.append(failure)
                     abort = abort or "rules-management-recovery"
         finally:
             journal.close()

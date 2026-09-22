@@ -953,6 +953,25 @@ pub fn write_from_json(v: &Value, path: &FieldPath<'_>) -> Result<pb::Write, Jso
     })
 }
 
+/// JSON writes for `BatchWrite`.
+///
+/// An empty write object is retained as a default protobuf write so the backend can report a
+/// row-local invalid-operation status. Other operation-less objects remain malformed payloads.
+pub fn batch_writes_from_json(items: &[Value]) -> Result<Vec<pb::Write>, JsonError> {
+    let path = FieldPath::root("writes");
+    items
+        .iter()
+        .enumerate()
+        .map(|(at, item)| {
+            if item.as_object().is_some_and(serde_json::Map::is_empty) {
+                Ok(pb::Write::default())
+            } else {
+                write_from_json(item, &path.index(at))
+            }
+        })
+        .collect()
+}
+
 /// Write result → JSON.
 #[must_use]
 pub fn write_result_to_json(w: &pb::WriteResult) -> Value {

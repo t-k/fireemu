@@ -137,6 +137,15 @@ pub fn coverage_html(rules: &LoadedRules, coverage: &Coverage) -> String {
         cursor = close.max(cursor);
     }
     push_escaped(&mut body, &source[cursor..]);
+    // HTML raw-text parsing recognizes closing tags even for application/json scripts.
+    // JSON escapes preserve the original source and evaluated values when decoded.
+    let data = data
+        .to_string()
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029");
     format!(
         "<!DOCTYPE html>\n<meta charset=\"utf-8\">\n<title>Firestore Rule Coverage Report</title>\n\
          <style>\n\

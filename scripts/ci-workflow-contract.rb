@@ -33,6 +33,16 @@ assert(pr_runs.include?("cargo check --workspace --all-targets"), "the minimal p
   assert(!pr_runs.include?(expensive), "the automatic pr job must not run #{expensive}")
 end
 
+platform_runs = jobs.fetch("platforms").fetch("steps").map { |step| step["run"] }.compact.join("\n")
+windows_runs = platform_runs.split('= "Windows" ]; then', 2).last.to_s.split("else", 2).first
+assert(windows_runs.include?("--exclude fireemu-verification-quint"), "Windows must exclude the Unix-only Quint supervisor")
+assert(windows_runs.include?("--exclude traceability-check"), "Windows must exclude the Unix-only traceability supervisor")
+assert(windows_runs.include?("cargo nextest run -p fireemu --bin fireemu --test exec_windows --profile pr"), "Windows must execute fireemu binary unit tests and native lifecycle tests")
+
+sdk_runs = load_workflow("functions-sdk-discovery.yml").dig("jobs", "real-sdk-discovery", "steps").map { |step| step["run"] }.compact.join("\n")
+assert(sdk_runs.include?("npm ci --prefix tools/sdk-smoke --ignore-scripts"), "SDK environment regressions require installed real dependencies")
+assert(sdk_runs.include?("cargo test -p fireemu --test functions_environment -- --include-ignored"), "the manual SDK job must execute every environment regression including opt-in cases")
+
 release = load_workflow("release.yml")
 release_source = File.read(File.join(ROOT, ".github", "workflows", "release.yml"))
 assert(!release_source.match?(/uses:\s+[^\s]+@(v\d+|stable)\b/), "release actions must be pinned to immutable commits")

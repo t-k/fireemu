@@ -1983,6 +1983,65 @@ fn the_rule_coverage_route_reports_every_expression_by_its_source_position() {
     }
 }
 
+#[test]
+fn rule_coverage_html_preserves_json_without_allowing_script_termination() {
+    let payload = "</ScRiPt><script>alert(1)</script><!--&>\u{2028}\u{2029}";
+    let source = format!(
+        "rules_version = '2'; service cloud.firestore {{ match /databases/{{db}}/documents {{ match /notes/{{id}} {{ allow get: if id != 'secret'; allow create: if request.resource.data.value != 'blocked'; }} }} }} // {payload}"
+    );
+    let s = state(Some(&source));
+    call_as(&s, "GET", &format!("{DOCS}/notes/a"), json!({}), None);
+    let (created, response) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}/notes?documentId=payload"),
+        json!({"fields": {"value": {"stringValue": payload}}}),
+        None,
+    );
+    assert_eq!(created, 200, "{response}");
+    let (_, expected) = call_as(
+        &s,
+        "GET",
+        &format!("{EMULATOR}:ruleCoverage"),
+        json!({}),
+        None,
+    );
+
+    let (status, response) = call_as(
+        &s,
+        "GET",
+        &format!("{EMULATOR}:ruleCoverage.html"),
+        json!({}),
+        None,
+    );
+    assert_eq!(status, 200, "{response}");
+    let html = response[fireemu_adapter_grpc::rest::coverage::HTML_KEY]
+        .as_str()
+        .expect("an HTML body");
+    assert_eq!(
+        html.to_ascii_lowercase().matches("</script").count(),
+        1,
+        "only the template may close the JSON element"
+    );
+    let embedded = html
+        .split("type=\"application/json\">")
+        .nth(1)
+        .expect("embedded JSON")
+        .split("</script>")
+        .next()
+        .expect("JSON script content");
+    for forbidden in ['<', '>', '&', '\u{2028}', '\u{2029}'] {
+        assert!(
+            !embedded.contains(forbidden),
+            "raw HTML-sensitive character: {forbidden:?}"
+        );
+    }
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(embedded).expect("valid embedded JSON"),
+        expected
+    );
+}
+
 /// Production Firestore's REST wire, recorded in `conformance/firestore-production-matrix.json`:
 /// no `done` marker on the last query element, offsets reported in a leading result-less
 /// element, no `nextPageToken` on the last page, and batch results with found documents in

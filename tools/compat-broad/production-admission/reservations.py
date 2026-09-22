@@ -1127,10 +1127,33 @@ def _auth_parent_responsibility_projection(gate, child_claim):
         not isinstance(management_used, list)
         or not isinstance(management_events, list)
         or not isinstance(management_skipped, list)
-        or management_used != declared_management[:len(management_used)]
-        or len(management_events) != len(management_used)
-        or management_skipped
         or any(not isinstance(item, str) for item in management_used)
+        or len(set(management_used)) != len(management_used)
+        or len(set(item.get("id") for item in management_skipped if isinstance(item, dict))) != len(management_skipped)
+    ):
+        raise ValueError("Auth parent responsibility management journal differs")
+    skipped_ids = []
+    for item in management_skipped:
+        if (
+            not isinstance(item, dict)
+            or item.get("id") not in declared_management
+            or item.get("phase") not in {"observation", "recovery"}
+            or item["id"].split(":", 1)[0] != item["phase"]
+            or not isinstance(item.get("reason"), str)
+        ):
+            raise ValueError("Auth parent responsibility management journal differs")
+        skipped_ids.append(item["id"])
+    if len(set(skipped_ids) & set(management_used)):
+        raise ValueError("Auth parent responsibility management journal differs")
+    consumed_management = set(management_used) | set(skipped_ids)
+    if consumed_management != set(declared_management[:len(consumed_management)]):
+        raise ValueError("Auth parent responsibility management journal differs")
+    expected_used = [identity for identity in declared_management[:len(consumed_management)] if identity not in skipped_ids]
+    expected_skipped = [identity for identity in declared_management[:len(consumed_management)] if identity in skipped_ids]
+    if (
+        management_used != expected_used
+        or skipped_ids != expected_skipped
+        or len(management_events) != len(management_used)
     ):
         raise ValueError("Auth parent responsibility management journal differs")
     for identity, event in zip(management_used, management_events, strict=True):
@@ -1143,6 +1166,7 @@ def _auth_parent_responsibility_projection(gate, child_claim):
         ):
             raise ValueError("Auth parent responsibility management event differs")
     management_observation_count = sum(identity.startswith("observation:") for identity in management_used)
+    management_recovery_count = sum(identity.startswith("recovery:") for identity in management_used)
     if any(
         not isinstance(job, dict)
         or type(job.get("observation")) is not int
@@ -1154,6 +1178,15 @@ def _auth_parent_responsibility_projection(gate, child_claim):
         job["observation"] for job in jobs.values()
     ):
         raise ValueError("Auth parent responsibility observation total differs")
+    if type(gate.get("recovery")) is not int or gate["recovery"] < 0 or gate["recovery"] != management_recovery_count + sum(
+        job["recovery"] for job in jobs.values()
+    ):
+        raise ValueError("Auth parent responsibility recovery total differs")
+    coordinator_requests = plan.get("coordinatorRequests", 0)
+    if type(coordinator_requests) is not int or coordinator_requests < 0 or type(gate.get("total")) is not int or gate["total"] < 0 or gate["total"] != coordinator_requests + len(management_used) + sum(
+        job["observation"] + job["recovery"] for job in jobs.values()
+    ):
+        raise ValueError("Auth parent responsibility global total differs")
 
     event_by_slot = {}
     for event in events:

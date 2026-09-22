@@ -1052,7 +1052,7 @@ def _auth_recovery_fixture_with_two_account_cleanup(tmp_path):
     envelope["scopes"] = claim["locks"]
     parent_gate["plan"] = plan
     parent_gate["planDigest"] = digest(plan)
-    parent_gate["total"] = 2
+    parent_gate["total"] = 4
     parent_gate["observation"] = 2
     parent_gate["recovery"] = 2
     parent_gate["jobs"]["auth-credential"].update(

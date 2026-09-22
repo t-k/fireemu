@@ -10,6 +10,7 @@ import pytest
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE.parent / "o8-core"))
+sys.path.insert(0, str(HERE.parent / "production-admission"))
 sys.path.insert(0, str(HERE))
 
 import o5_user_token_case as case
@@ -17,10 +18,32 @@ import o5_user_token_production_bridge as bridge
 import o5_user_token_descriptor as descriptor
 import shared_gate
 from o5_user_token_collector import open_ownership_journal
+from o5_user_token_campaign import validate_production_packet
+from broad_contract import digest
+from reservations import Ledger
 
 
 def _plan():
     return case.compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant-test")
+
+
+def test_initial_packet_uses_admin_and_api_key_without_preexisting_users(tmp_path):
+    plan = _plan()
+    path = tmp_path / "gate"
+    shared_gate.create(path, descriptor.gate_plan(plan))
+    result = validate_production_packet(
+        plan,
+        approval={"status": "approved"},
+        permission={"campaignId": plan["campaignId"], "planDigest": plan["planDigest"]},
+        capability_inputs={"plan": plan, "planDigest": digest(plan)},
+        credentials={"administrator": "fixture-admin", "api-key": "fixture-key"},
+        account_bindings={},
+        identity_proofs={},
+        gate=shared_gate.Gate(path, "rules-management"),
+        ledger=Ledger.create(tmp_path / "ledger"),
+        ticket={},
+    )
+    assert result["requestUpperBound"] == 144
 
 
 def test_worker_timeout_uses_the_compiled_slot_bound():

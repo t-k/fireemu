@@ -529,7 +529,8 @@ def validate_production_packet(
         or not isinstance(credentials, dict)
         or not isinstance(account_bindings, dict)
         or not isinstance(identity_proofs, dict)
-        or set(identity_proofs) != {entry["ref"] for entry in plan["ownedAccounts"]}
+        or bool(identity_proofs)
+        or bool(account_bindings)
         or not isinstance(ticket, dict)
         or gate is None
         or ledger is None

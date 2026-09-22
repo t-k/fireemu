@@ -863,6 +863,41 @@ def test_auth_recovery_rejects_lookup_route_escape(tmp_path, path):
         )
 
 
+def test_auth_recovery_rejects_gate_cost_above_child_budget(tmp_path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, _resource, _ = _auth_recovery_fixture(tmp_path)
+    expensive_plan = copy.deepcopy(child_plan)
+    expensive_plan["costMicrousd"] = 100_000
+    expensive_plan["requestCostMicrousd"] = 100_000
+    expensive_child = copy.deepcopy(child)
+    expensive_child["manifestDigest"] = digest(expensive_plan)
+    expensive_child["gatePlanDigest"] = digest(expensive_plan)
+    with pytest.raises(ValueError, match="Auth recovery Gate cost exceeds child budget"):
+        ledger.begin_auth_recovery_extension(
+            parent, expensive_child, envelope, expensive_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+            parent_evidence=evidence, now=1000,
+        )
+
+
+def test_auth_recovery_allows_compiled_gate_cost_within_child_budget(tmp_path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = _auth_recovery_fixture(tmp_path)
+    funded_child = copy.deepcopy(child)
+    funded_child["budget"]["costMicrousd"] = 50_000
+    funded_envelope = copy.deepcopy(envelope)
+    funded_envelope["limits"]["costMicrousd"] = 50_000
+    child_ticket = ledger.begin_auth_recovery_extension(
+        parent, funded_child, funded_envelope, child_plan,
+        source_binding=bindings["source"], transport_binding=bindings["transport"],
+        o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+        parent_evidence=evidence, now=1000,
+    )
+    # Exercise the real shared Gate compiler/validator with the lower-cost
+    # one-request plan instead of a hand-written terminal state.
+    _auth_child_gate(child_path, child_plan, resource)
+    assert ledger.bound_auth_recovery_claim(child_ticket)["state"] == "allocated"
+
+
 def test_auth_recovery_rejects_parent_change_between_gate_check_and_append(tmp_path, monkeypatch):
     ledger, parent, child, envelope, child_plan, bindings, evidence, _resource, _ = _auth_recovery_fixture(tmp_path)
     original_snapshot = reservations.Gate.snapshot

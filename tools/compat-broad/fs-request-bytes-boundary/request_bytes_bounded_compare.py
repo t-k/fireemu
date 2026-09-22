@@ -273,6 +273,46 @@ def _validate_local_bindings(run: Path, immutable: Path) -> dict[str, Any]:
     return projection
 
 
+def _validate_v3_capture(run: Path, freeze: Path, freeze_sha256: str) -> dict[str, Any]:
+    if freeze.is_symlink() or not freeze.is_file() or _sha256(freeze) != freeze_sha256:
+        raise ComparisonError("V3 freeze binding")
+    frozen = _json(freeze)
+    if frozen.get("kind") != "requestbytes-exact-replay-private-freeze-v3":
+        raise ComparisonError("V3 freeze kind")
+    files = frozen.get("files")
+    if not isinstance(files, dict) or not files:
+        raise ComparisonError("V3 freeze files")
+    for relative, expected in files.items():
+        path = _regular_child(run, relative)
+        if _sha256(path) != expected:
+            raise ComparisonError(f"V3 frozen file changed: {relative}")
+    journal_path = _regular_child(run, frozen.get("localJournalFile", ""))
+    journal = _json(journal_path)
+    result_path = _regular_child(run, "collection/result.json")
+    result = _json(result_path)
+    if result.get("localJournal") != journal:
+        raise ComparisonError("V3 journal/result binding")
+    if journal.get("captureComplete") is not True or journal.get("rowCount") != 258 or journal.get("sidecarCount") != 258:
+        raise ComparisonError("V3 incomplete local journal")
+    cases = _json(_regular_child(run, "cases.json"))
+    manifest = _json(_regular_child(run, "manifest.json"))
+    if _sha256(_regular_child(run, "cases.json")) != manifest.get("partialResultSha256"):
+        raise ComparisonError("V3 supervisor/cases binding")
+    if cases.get("collectionResultSha256") != _sha256(result_path) or cases.get("localJournalDigest") != journal.get("entryDigest"):
+        raise ComparisonError("V3 cases/journal binding")
+    if cases.get("captureComplete") is not True or cases.get("conditionIds") != [
+        "FS-LIMIT-API-REQUEST-BYTES-UNDER",
+        "FS-LIMIT-API-REQUEST-BYTES-EXACT",
+        "FS-LIMIT-API-REQUEST-BYTES-OVER",
+    ]:
+        raise ComparisonError("V3 cases contract")
+    if manifest.get("productionExecuted") is not False or manifest.get("ownedProcess", {}).get("stopped") is not True or manifest.get("ownedProcess", {}).get("listenersClosed") is not True:
+        raise ComparisonError("V3 process/production closure")
+    if manifest.get("artifactSha256") != ARTIFACT_SHA256 or manifest.get("sourceCheckoutCommit") == HARNESS_COMMIT:
+        raise ComparisonError("V3 runtime/harness binding")
+    return journal
+
+
 def _validate_runtime_anchor(production_run: Path, runtime_artifact: Path, runtime_source_map: Path, freeze_manifest: Path) -> None:
     anchors = {
         "inputs.json": PRODUCTION_INPUTS_SHA256,
@@ -309,6 +349,8 @@ def compare_runs(
     runtime_artifact: Path | None = None,
     runtime_source_map: Path | None = None,
     freeze_manifest: Path | None = None,
+    v3_freeze: Path | None = None,
+    v3_freeze_sha256: str | None = None,
 ) -> dict[str, Any]:
     immutable = local_run / "immutable-expected.json"
     expected = _json(immutable)
@@ -323,12 +365,15 @@ def compare_runs(
         raise ComparisonError("saved production run binding")
     if production_run.name != PRODUCTION_RUN:
         raise ComparisonError("saved production path binding")
+    if v3_freeze is None or v3_freeze_sha256 is None:
+        raise ComparisonError("missing V3 local journal anchor")
     if runtime_artifact is None or runtime_source_map is None or freeze_manifest is None:
         evidence_root = Path(expected["savedRun"]).resolve().parents[2]
         runtime_artifact = evidence_root / "docs.local/runs/requestbytes-native-ba4-20260922/fireemu"
         runtime_source_map = evidence_root / "docs.local/runs/requestbytes-native-ba4-20260922/source-runtime-input-map.txt"
         freeze_manifest = evidence_root / "docs.local/runs/requestbytes-exact-replay-20260922-v2/freeze-manifest.json"
     _validate_runtime_anchor(production_run, runtime_artifact, runtime_source_map, freeze_manifest)
+    _validate_v3_capture(local_run, v3_freeze, v3_freeze_sha256)
     production_collection, production_rows = _rows(production_run)
     if _row_digest(production_collection) != expected.get("rowDigest") or _row_digest(production_collection) != PRODUCTION_ROW_DIGEST:
         raise ComparisonError("anchored production row journal changed")
@@ -407,9 +452,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-artifact", type=Path, required=True)
     parser.add_argument("--runtime-source-map", type=Path, required=True)
     parser.add_argument("--freeze-manifest", type=Path, required=True)
+    parser.add_argument("--v3-freeze", type=Path, required=True)
+    parser.add_argument("--v3-freeze-sha256", required=True)
     args = parser.parse_args(argv)
     try:
-        result = compare_runs(args.production_run, args.local_run, args.output, runtime_artifact=args.runtime_artifact, runtime_source_map=args.runtime_source_map, freeze_manifest=args.freeze_manifest)
+        result = compare_runs(args.production_run, args.local_run, args.output, runtime_artifact=args.runtime_artifact, runtime_source_map=args.runtime_source_map, freeze_manifest=args.freeze_manifest, v3_freeze=args.v3_freeze, v3_freeze_sha256=args.v3_freeze_sha256)
     except (ComparisonError, OSError, json.JSONDecodeError) as error:
         print(f"bounded comparison refused: {error}")
         return 2

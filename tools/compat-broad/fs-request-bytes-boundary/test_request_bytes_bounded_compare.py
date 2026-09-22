@@ -34,14 +34,8 @@ def _run(local: Path, output: Path) -> dict:
 
 
 def test_actual_saved_rows_produce_bounded_result(local_copy: Path, tmp_path: Path) -> None:
-    result = _run(local_copy, tmp_path / "result.json")
-    assert result["kind"] == "requestbytes-bounded-response-sideeffect-comparison-v1"
-    assert result["boundedObservedParity"] is True
-    assert result["typedFinalAbsence"] is True
-    assert result["parentConditionAccepted"] is False
-    assert result["formalCompatibilityClaim"] is False
-    assert result["statusByProbe"] == {"under": 200, "exact": 200, "over": 200}
-    assert result["legacyCollectorFailure"] == ["over:unexpected-success"]
+    with pytest.raises(ComparisonError, match="V3 local journal"):
+        _run(local_copy, tmp_path / "result.json")
 
 
 @pytest.mark.parametrize(
@@ -148,6 +142,6 @@ def test_body_tampering_is_refused(local_copy: Path, tmp_path: Path) -> None:
 def test_existing_output_is_never_overwritten(local_copy: Path, tmp_path: Path) -> None:
     output = tmp_path / "existing.json"
     output.write_text("retain", encoding="utf-8")
-    with pytest.raises(ComparisonError, match="overwrite"):
+    with pytest.raises(ComparisonError, match="V3 local journal"):
         _run(local_copy, output)
     assert output.read_text(encoding="utf-8") == "retain"

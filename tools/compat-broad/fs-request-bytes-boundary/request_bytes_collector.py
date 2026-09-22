@@ -346,7 +346,7 @@ def _safe_json(value: Any) -> bytes:
     return encoded
 
 
-def _publish(directory: int, name: str, value: Any, *, bounded: bool = True) -> None:
+def _publish(directory: int, name: str, value: Any, *, bounded: bool = True) -> bytes:
     encoded = (_safe_json(value) if bounded else compact_utf8(value)) + b"\n"
     if "/" in name or name.startswith("."):
         raise ValueError("unsafe output filename")
@@ -363,6 +363,12 @@ def _publish(directory: int, name: str, value: Any, *, bounded: bool = True) -> 
         except FileNotFoundError:
             pass
         raise
+    return encoded
+
+
+def _journal_digest(entries: list[dict[str, Any]]) -> str:
+    encoded = json.dumps(entries, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _create_output_directory(output: Path) -> int:
@@ -535,6 +541,8 @@ def collect_local(
         }
     output_fd = _create_output_directory(Path(output))
     try:
+        journal_rows: list[dict[str, Any]] = []
+        journal_sidecars: list[dict[str, Any]] = []
         for probe in plan["probes"]:
             body = compact_utf8(probe["body"])
             if len(body) != probe["bodyBytes"] or len(body) > MAX_RESPONSE_BYTES * 8:
@@ -706,6 +714,14 @@ def collect_local(
                             stream.flush()
                             os.fsync(stream.fileno())
                         row["responseBodyFile"] = sidecar
+                        journal_sidecars.append(
+                            {
+                                "name": sidecar,
+                                "bytes": len(raw),
+                                "sha256": hashlib.sha256(raw).hexdigest(),
+                                "sequence": sequence,
+                            }
+                        )
                     except Exception as error:  # noqa: BLE001 - recording must not bypass recovery.
                         try:
                             os.unlink(sidecar, dir_fd=output_fd)
@@ -795,7 +811,16 @@ def collect_local(
                     failures.append(f"{phase}:{index}:incomplete")
             (rows if phase == "observation" else recovery).append(row)
             try:
-                _publish(output_fd, f"row-{sequence:03d}.json", row)
+                row_name = f"row-{sequence:03d}.json"
+                encoded_row = _publish(output_fd, row_name, row)
+                journal_rows.append(
+                    {
+                        "name": row_name,
+                        "bytes": len(encoded_row),
+                        "sha256": hashlib.sha256(encoded_row).hexdigest(),
+                        "sequence": sequence,
+                    }
+                )
             except Exception as error:  # noqa: BLE001 - recording must not bypass recovery.
                 failures.append(
                     f"recording:row-{sequence:03d}.json:{type(error).__name__}"
@@ -847,13 +872,40 @@ def collect_local(
             semantic_outcome = "typed-over-refusal"
         else:
             semantic_outcome = "unknown-over-outcome"
+        plan_digest = hashlib.sha256(compact_utf8(plan)).hexdigest()
+        request_bindings = {}
+        for operation in plan["observation"]:
+            if operation.get("kind") == "conditional-create-commit":
+                body = compact_utf8(operation["body"])
+                request_bindings[operation["probe"]] = {
+                    "bytes": len(body),
+                    "sha256": hashlib.sha256(body).hexdigest(),
+                }
+        expected_slots = len(plan["executionSchedule"])
+        capture_complete = (
+            len(journal_rows) == expected_slots
+            and len(journal_sidecars) == expected_slots
+            and len(rows) + len(recovery) == expected_slots
+            and all("responseBodyFile" in row for row in rows + recovery)
+        )
+        local_journal = {
+            "schemaVersion": 1,
+            "planDigest": plan_digest,
+            "rowCount": len(journal_rows),
+            "sidecarCount": len(journal_sidecars),
+            "rowEntries": journal_rows,
+            "sidecarEntries": journal_sidecars,
+            "requestBindings": request_bindings,
+            "entryDigest": _journal_digest(journal_rows + journal_sidecars),
+            "captureComplete": capture_complete,
+        }
         result = {
             "productionExecuted": False,
             "localOnly": True,
             "formalCompatibilityClaim": False,
             "rawHttpMetricStatus": "observation hypothesis",
             "canonicalRequestBytesMeasuredLocally": True,
-            "planDigest": hashlib.sha256(compact_utf8(plan)).hexdigest(),
+            "planDigest": plan_digest,
             "rowCount": len(rows),
             "recoveryRowCount": len(recovery),
             "requestCount": dispatches,
@@ -865,6 +917,7 @@ def collect_local(
             "completed": not failures,
             "failures": failures,
             "semanticOutcome": semantic_outcome,
+            "localJournal": local_journal,
         }
         if over_refusal_observation is not None:
             result["overRefusal"] = over_refusal_observation

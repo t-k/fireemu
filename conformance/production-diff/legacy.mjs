@@ -64,6 +64,41 @@ export async function prepare(repo, entry = CASE) {
   const matrixBytes = pin(await readSource(repo, entry.matrixPath), entry.matrixBlob);
   const matrix = JSON.parse(matrixBytes);
   const production = selectProduction(matrix, entry);
+  let indexBytes = null;
+  let indexProvenance = null;
+  if (entry.indexFilePath) {
+    const observations = matrix.evidence?.observations;
+    const productionIndexes = observations?.production?.inputs?.indexFiles;
+    const fireemuIndexes = observations?.fireemu?.inputs?.indexFiles;
+    requireThat(Array.isArray(productionIndexes) && productionIndexes.length === 1, "index-file-production-metadata");
+    requireThat(Array.isArray(fireemuIndexes) && fireemuIndexes.length === 1, "index-file-fireemu-metadata");
+    requireThat(`sha256-${digestJson(productionIndexes)}` === entry.indexFilesDigest, "index-file-production-digest");
+    requireThat(`sha256-${digestJson(fireemuIndexes)}` === entry.indexFilesDigest, "index-file-fireemu-digest");
+    const metadata = productionIndexes[0];
+    requireThat(
+      metadata.file === entry.indexFilePath &&
+        metadata.bytes === entry.indexFileBytes &&
+        metadata.sha256 === entry.indexFileSha256,
+      "index-file-metadata-mismatch",
+    );
+    requireThat(
+      JSON.stringify(fireemuIndexes[0]) === JSON.stringify(metadata),
+      "index-file-side-mismatch",
+    );
+    indexBytes = pin(
+      git(repo, ["show", `${entry.observedSource}:${entry.indexFilePath}`]),
+      entry.indexFileBlob,
+    );
+    requireThat(indexBytes.length === entry.indexFileBytes, "index-file-byte-count");
+    requireThat(`sha256-${sha256(indexBytes)}` === entry.indexFileSha256, "index-file-content-digest");
+    indexProvenance = {
+      path: entry.indexFilePath,
+      blob: entry.indexFileBlob,
+      bytes: entry.indexFileBytes,
+      sha256: entry.indexFileSha256,
+      metadataDigest: entry.indexFilesDigest,
+    };
+  }
   const corpusBytes = pin(
     git(repo, ["show", `${entry.observedSource}:${entry.corpusPath}`]),
     entry.corpusBlob,
@@ -118,15 +153,18 @@ export async function prepare(repo, entry = CASE) {
         comparatorSliceSha256: sha256(pure),
         sessionBlob: entry.sessionBlob,
         credentialsBlob: entry.credentialsBlob,
+        ...(indexProvenance ? { indexFile: indexProvenance } : {}),
       },
     },
+    ...(indexBytes ? { indexBytes } : {}),
   };
 }
 
-export async function stageLegacy(prepared, directory) {
+export async function stageLegacy(prepared, directory, runDirectory = dirname(directory)) {
   await fs.mkdir(directory, { mode: 0o700 });
   await publish(join(directory, "session.mjs"), prepared.sessionBytes);
   await publish(join(directory, "credentials.mjs"), prepared.credentialsBytes);
+  if (prepared.indexBytes) await publish(join(runDirectory, "firestore.indexes.json"), prepared.indexBytes);
 }
 
 export async function sourceUnchanged(repo, entry, before, adapterBefore) {
@@ -142,6 +180,14 @@ export async function sourceUnchanged(repo, entry, before, adapterBefore) {
       [entry.credentialsPath, entry.credentialsBlob],
     ])
       pin(await readSource(repo, path), hash);
+    if (entry.indexFilePath) {
+      const historicalIndex = pin(
+        git(repo, ["show", `${entry.observedSource}:${entry.indexFilePath}`]),
+        entry.indexFileBlob,
+      );
+      requireThat(historicalIndex.length === entry.indexFileBytes, "index-file-source-size");
+      requireThat(`sha256-${sha256(historicalIndex)}` === entry.indexFileSha256, "index-file-source-digest");
+    }
     requireThat(
       sha256(comparatorModuleSource((await readSource(repo, entry.comparatorPath)).toString())) ===
         entry.comparatorSliceSha256,

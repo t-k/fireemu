@@ -809,6 +809,8 @@ class Adapter:
             return
         body = step.get("body")
         writes = body.get("writes") if isinstance(body, dict) else None
+        if writes == [] and result == {}:
+            return
         results = result.get("writeResults") if isinstance(result, dict) else None
         if not isinstance(writes, list) or not isinstance(results, list) or len(writes) != len(results):
             raise ValueError("document commit acknowledgement incomplete")
@@ -1070,9 +1072,16 @@ class Adapter:
                         proof is None
                         or body.get("name") != name
                         or body.get("updateTime") != proof["updateTime"]
-                        or not isinstance(proof.get("fieldsDigest"), str)
                         or not isinstance(body.get("fields"), dict)
-                        or digest(body["fields"]) != proof["fieldsDigest"]
+                    ):
+                        raise ValueError("document readback mismatch")
+                    fields_digest = proof.get("fieldsDigest")
+                    if fields_digest is None:
+                        fields_digest = digest(body["fields"])
+                        proof["fieldsDigest"] = fields_digest
+                    if (
+                        not isinstance(fields_digest, str)
+                        or digest(body["fields"]) != fields_digest
                     ):
                         raise ValueError("document readback mismatch")
                     query = "?" + urllib.parse.urlencode(

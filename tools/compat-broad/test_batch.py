@@ -33,6 +33,41 @@ def test_candidate_keeps_all_new_checks_and_bounds_owned_scans():
     assert all("/broad_runs/" in name for p in mapped for name in p["targets"])
 
 
+def test_adopted_artifact_requires_bound_receipt_and_complete_runtime_map(tmp_path):
+    import hashlib
+    import json
+
+    import batch_local
+
+    binary = tmp_path / "fireemu"
+    binary.write_bytes(b"adopted-native-artifact")
+    artifact_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+    inputs = {f"input-{index}": f"sha-{index}" for index in range(429)}
+    build = {
+        "command": ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"],
+        "exitCode": 0,
+        "artifactSha256": artifact_sha,
+        "inputs": inputs,
+    }
+    receipt = {
+        "build": build,
+        "runtimeSource": {"commit": "5" * 40, "files": inputs},
+    }
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(receipt))
+
+    adopted = batch_local.adopted_artifact(binary, receipt_path, "5" * 40)
+    assert adopted["artifactSha256"] == artifact_sha
+    assert adopted["sourceCommit"] == "5" * 40
+    assert adopted["runtimeInputCount"] == 429
+
+    changed = json.loads(receipt_path.read_text())
+    changed["build"]["inputs"]["input-0"] = "substituted"
+    receipt_path.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="runtime input map"):
+        batch_local.adopted_artifact(binary, receipt_path, "5" * 40)
+
+
 def test_changed_source_or_namespace_cannot_be_compiled():
     c = contract()
     m = c.candidate()
@@ -602,6 +637,64 @@ def test_cleanup_never_deletes_same_version_document_with_changed_fields(
     assert run.unrecovered == [{"kind": "document", "name": name}]
 
 
+def test_cleanup_readback_completes_transform_proof_before_conditional_delete(
+    tmp_path, monkeypatch
+):
+    import batch_adapter as a
+
+    c = contract()
+    name = "projects/demo-firestore-probe/databases/(default)/documents/broad_runs/owned/tf/transform"
+    fields = {"count": {"doubleValue": "NaN"}}
+    created = {"name": name, "fields": fields, "updateTime": "2026-09-16T00:00:01Z"}
+    seeded = {
+        "name": name,
+        "fields": {"marker": {"stringValue": "seed"}},
+        "updateTime": "2026-09-16T00:00:00Z",
+    }
+    calls = []
+
+    def fake_wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+        calls.append((method, url, body))
+        if method == "GET" and len(calls) == 1:
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "PATCH":
+            return 200, seeded, "application/json"
+        if method == "GET":
+            if len(calls) == 3:
+                return 200, created, "application/json"
+            return 404, {"error": {"status": "NOT_FOUND"}}, "application/json"
+        if method == "DELETE":
+            return 200, {}, "application/json"
+        pytest.fail(f"unexpected request: {method} {url}")
+
+    run = a.Adapter(
+        c.candidate(),
+        "a" * 32,
+        tmp_path / "run",
+        local_origins={
+            "auth": "http://127.0.0.1:12345",
+            "firestore": "http://127.0.0.1:12346",
+        },
+    )
+    run.compiled = [{
+        "parent": name.rsplit("/tf/transform", 1)[0],
+        "targets": [name],
+        "seed": [{"path": "/v1/" + name, "fields": {"marker": {"stringValue": "seed"}}}],
+        "steps": [],
+    }]
+    monkeypatch.setattr(a, "wire", fake_wire)
+
+    run.firestore()
+    run.creation_proofs[name]["updateTime"] = created["updateTime"]
+    run.creation_proofs[name]["fieldsDigest"] = None
+    run.cleanup()
+
+    assert [method for method, _url, _body in calls] == [
+        "GET", "PATCH", "GET", "DELETE", "GET"
+    ]
+    assert run.unrecovered == []
+
+
 def test_firestore_proves_and_cleans_up_every_successful_commit_document(
     tmp_path, monkeypatch
 ):
@@ -979,5 +1072,35 @@ def test_request_headers_bind_only_remote_privileged_quota():
                     "Bearer offline-token" if token else None
                 )
                 assert headers["Content-Type"] == (
-                    "application/x-www-form-urlencoded" if form else "application/json"
+                "application/x-www-form-urlencoded" if form else "application/json"
                 )
+
+
+def test_empty_commit_acknowledgement_is_valid_but_nonempty_requires_results():
+    import batch_adapter as a
+
+    run = object.__new__(a.Adapter)
+    run._record_document_writes(
+        {
+            "method": "POST",
+            "path": "/v1/projects/demo/databases/(default)/documents:commit",
+            "body": {"writes": []},
+        },
+        200,
+        {},
+    )
+
+    with pytest.raises(ValueError, match="document commit acknowledgement incomplete"):
+        run._record_document_writes(
+            {
+                "method": "POST",
+                "path": "/v1/projects/demo/databases/(default)/documents:commit",
+                "body": {
+                    "writes": [
+                        {"delete": "projects/demo/databases/(default)/documents/x"}
+                    ]
+                },
+            },
+            200,
+            {},
+        )

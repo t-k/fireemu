@@ -461,17 +461,24 @@ def run_bound_setup(
     return receipts
 
 
-def setup_identity_proofs(plan, gate, handoffs, *, fixture_origin=None):
+def setup_identity_proofs(plan, gate, handoffs, *, fixture_origin=None, partial=False):
     """Mint identities solely from acknowledged setup, without another exchange."""
     accounts = {account["ref"]: account for account in plan["ownedAccounts"]}
-    if set(handoffs) != set(accounts):
+    if (
+        not set(handoffs) <= set(accounts)
+        or not partial
+        and set(handoffs) != set(accounts)
+    ):
         raise ValueError("complete acknowledged setup identities required")
     state = gate.snapshot()
     proofs = {}
-    for ref, account in accounts.items():
+    for ref in handoffs:
+        account = accounts[ref]
         handoff = handoffs[ref]
         event = handoff["event"]
         suffix = "signin" if account["claims"] else "signup"
+        if partial and event["id"].endswith("/signup"):
+            suffix = "signup"
         if event["id"] != f"observation:setup/account/{ref}/{suffix}":
             raise ValueError("final compiled identity handoff required")
         token, _, request_digest = handoff["private"].proof_material()
@@ -498,7 +505,7 @@ def setup_identity_proofs(plan, gate, handoffs, *, fixture_origin=None):
             if account["kind"] == "anonymous"
             else "password",
             expected_tenant=account["tenant"],
-            expected_claims=account["claims"],
+            expected_claims=account["claims"] if suffix == "signin" else {},
             request_digest=request_digest,
             fixture_origin=fixture_origin,
         )

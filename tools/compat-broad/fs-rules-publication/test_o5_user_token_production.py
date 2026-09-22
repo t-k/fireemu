@@ -602,6 +602,11 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
                 identity_handoffs=identity_handoffs,
             )
         snapshot = gate.snapshot()
+        partial_proofs = bridge.setup_identity_proofs(
+            plan, gate, identity_handoffs, fixture_origin=origin, partial=True
+        )
+        assert set(partial_proofs) == set(identity_handoffs)
+        assert all(proof.trusted() for proof in partial_proofs.values())
         if failure_after == 19:
             assert len(receipts) == 19
             assert set(private_handoffs) == {

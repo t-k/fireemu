@@ -66,22 +66,20 @@ def production_plan(nonce: str) -> dict:
 def baseline_preparation_plan(nonce: str) -> dict:
     """Return the same-campaign Gate allocation for pre-O7 metadata capture.
 
-    The preparation has no data or index operation authority.  It deliberately
-    retains the compiler's resource-shaped job so the existing Gate/Ledger
-    validators can bind the reservation, while its management schedule is the
-    six credential/metadata slots only.  The final O7 permission is separate.
+    Preparation owns no document. Its six closed requests are two isolated
+    OAuth exchanges followed by four authenticated metadata GETs.
     """
     import compiler_03
 
     compiled = compiler_03.compile_limits_plan(PROJECT, DATABASE, nonce)
     plan = compiled["localGatePlan"]
-    baseline_resource = (
-        f"projects/{PROJECT}/databases/{DATABASE}/documents/oracle/"
-        f"{nonce}/limits-03-baseline/packet"
-    )
+    slots = [
+        {"id": name, "timeout": 12}
+        for name in ("refresh", "oauth-tokeninfo", "project", "database", "auth", "key")
+    ]
     plan["jobs"] = {
         "limits": {
-            "resources": [baseline_resource],
+            "resources": [],
             "observation": [],
             "recovery": [],
             "schedule": [],
@@ -89,23 +87,29 @@ def baseline_preparation_plan(nonce: str) -> dict:
     }
     plan.update(
         campaignId=compiler_03.CAMPAIGN,
-        transport="limits-baseline-preparation-v1",
+        transport="limits-03-baseline-preparation-v2",
+        receiptKind="limits-03-baseline-preparation-receipt-v1",
         wallSeconds=300,
         recoverySeconds=120,
-        observationRequests=len(management()),
+        observationRequests=6,
         fixedCostMicrousd=0,
-        costMicrousd=len(management()) * 100,
-        management={"observation": management(), "recovery": []},
+        costMicrousd=600,
+        management={
+            "dispatchKind": "closed-v1",
+            "observation": slots,
+            "recovery": [],
+            "credentialIds": ["oauth-tokeninfo"],
+            "credentialSlots": ["oauth-tokeninfo"],
+        },
     )
     return {
         "kind": "fs-write-limits-baseline-preparation-v1",
         "campaignId": compiler_03.CAMPAIGN,
         "gatePlan": plan,
-        "managementIds": ["observation:" + item["id"] for item in management()],
+        "managementIds": ["observation:" + item["id"] for item in slots],
         "dataDispatchAllowed": False,
         "indexMutationAllowed": False,
         "resourceLocks": [
-            {"key": f"project/{PROJECT}/firestore/{DATABASE}/documents/oracle/{nonce}/limits-03-baseline/packet", "mode": "WRITE"},
             {"key": f"project/{PROJECT}/firestore/{DATABASE}/database", "mode": "READ"},
             {"key": f"project/{PROJECT}/auth/config", "mode": "READ"},
             {"key": f"project/{PROJECT}/api-key-binding", "mode": "READ"},

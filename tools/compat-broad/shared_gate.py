@@ -401,10 +401,30 @@ def _auth_creation_ownership(state, job, operation):
     recipe = state["plan"].get("jobs", {}).get(job_name) if job_name is not None else None
     observation = recipe.get("observation", []) if isinstance(recipe, dict) else []
     observed_slot = event.get("index")
+    observed_operation = observation[observed_slot] if (
+        type(observed_slot) is int
+        and 0 <= observed_slot < len(observation)
+    ) else None
+    custom_creation = (
+        isinstance(observed_operation, dict)
+        and observed_operation.get("kind") == "custom-sign-in"
+        and observed_operation.get("account") == "custom"
+        and observed_operation.get("service") == "auth"
+        and observed_operation.get("method") == "POST"
+        and observed_operation.get("path") == "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken"
+        and observed_operation.get("form") is False
+        and observed_operation.get("body") == {
+            "token": "$binding:customToken",
+            "returnSecureToken": True,
+        }
+    )
     if (
         type(observed_slot) is not int
         or not 0 <= observed_slot < len(observation)
-        or observation[observed_slot].get("kind") != "sign-up"
+        or (
+            observation[observed_slot].get("kind") != "sign-up"
+            and not custom_creation
+        )
         or event.get("requestDigest") != digest(observation[observed_slot])
     ):
         return False

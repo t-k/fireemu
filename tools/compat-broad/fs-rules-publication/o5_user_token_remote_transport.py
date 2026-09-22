@@ -490,6 +490,150 @@ def _rules_route(
     raise ValueError("rules lifecycle action refused")
 
 
+def _setup_item(plan: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+        raise ValueError("setup item shape refused")
+    if item["id"].startswith("fixture/"):
+        document = item["id"][len("fixture/") :]
+        entry = next((row for row in plan.get("fixtures", []) if row.get("document") == document), None)
+        if not isinstance(entry, dict):
+            raise ValueError("setup fixture binding refused")
+        expected = {
+            "id": item["id"],
+            "service": "firestore",
+            "route": "document-create",
+            "method": "PATCH",
+            "path": "/v1/" + entry["resource"] + "?currentDocument.exists=false",
+            "document": entry["document"],
+            "resource": entry["resource"],
+            "fields": entry["fields"],
+            "fieldsDigest": digest(entry["fields"]),
+            "precondition": {"exists": False},
+            "response": {
+                "name": entry["resource"],
+                "fieldsDigest": digest(entry["fields"]),
+                "updateTime": "response-bound",
+            },
+        }
+    elif item["id"].startswith("account/"):
+        parts = item["id"].split("/")
+        if len(parts) != 3 or parts[0] != "account":
+            raise ValueError("setup account binding refused")
+        ref, action = parts[1], parts[2]
+        account = next((row for row in plan.get("ownedAccounts", []) if row.get("ref") == ref), None)
+        if not isinstance(account, dict):
+            raise ValueError("setup account binding refused")
+        if action == "signup":
+            response = {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"}
+            route = "accounts:signUp"
+        elif action == "claim-update" and ref == "owner-a":
+            response = {"localId": "response-bound"}
+            route = "accounts:update"
+        elif action == "signin" and ref == "owner-a":
+            response = {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"}
+            route = "accounts:signInWithPassword"
+        else:
+            raise ValueError("setup account route refused")
+        expected = {
+            "id": item["id"],
+            "service": "identity",
+            "route": route,
+            "method": "POST",
+            "accountRef": ref,
+            "tenant": account.get("tenant"),
+            "response": response,
+        }
+        if action == "claim-update":
+            expected["claimsDigest"] = digest(account.get("claims", {}))
+    else:
+        raise ValueError("setup item id refused")
+    if item != expected:
+        raise ValueError("setup item differs from frozen plan")
+    return expected
+
+
+def prepare_setup_request(
+    plan: dict[str, Any],
+    item: dict[str, Any],
+    *,
+    credentials: dict[str, Any],
+    account_bindings: dict[str, Any] | None = None,
+    setup_secrets: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build one compiler-owned setup request; never creates admission authority."""
+    expected = _setup_item(plan, copy.deepcopy(item))
+    admin = _credential(credentials, "administrator", "administrator")
+    if expected["service"] == "firestore":
+        resource = expected["resource"]
+        return {
+            "service": "firestore",
+            "route": "document-create",
+            "origin": FIRESTORE_ORIGIN,
+            "path": expected["path"],
+            "method": "PATCH",
+            "headers": _headers(admin),
+            "body": {"name": resource, "fields": {key: _typed(value, account_bindings) for key, value in expected["fields"].items()}},
+        }
+    account = next(row for row in plan["ownedAccounts"] if row["ref"] == expected["accountRef"])
+    secret = (setup_secrets or {}).get(expected["accountRef"])
+    if not isinstance(secret, str) or not secret or any(char.isspace() for char in secret):
+        raise ValueError("transient setup secret required")
+    tenant = expected["tenant"]
+    headers = _headers(admin)
+    if expected["route"] == "accounts:signUp":
+        body = {"returnSecureToken": True}
+        if account.get("email") is not None:
+            body.update({"email": account["email"], "password": secret})
+        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signUp"), "method": "POST", "headers": headers, "body": body}
+    if expected["route"] == "accounts:update":
+        bound = (account_bindings or {}).get(expected["accountRef"], {})
+        if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
+            raise ValueError("owner UID binding required")
+        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "update"), "method": "POST", "headers": headers, "body": {"localId": bound["uid"], "customAttributes": json.dumps(account["claims"], separators=(",", ":"))}}
+    bound = (account_bindings or {}).get(expected["accountRef"], {})
+    if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
+        raise ValueError("owner UID binding required")
+    return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signInWithPassword"), "method": "POST", "headers": headers, "body": {"email": account["email"], "password": secret, "returnSecureToken": True}}
+
+
+def adapt_setup_result(
+    item: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    endpoint: str,
+    sequence: int,
+    account_bindings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(result, dict) or type(result.get("status")) is not int or not isinstance(result.get("body"), dict):
+        raise ValueError("setup response envelope refused")
+    status, body = result["status"], result["body"]
+    if not 200 <= status < 300:
+        raise ValueError("setup response status refused")
+    wire = {"id": item["id"], "httpStatus": status, "endpoint": endpoint, "wireSequence": sequence}
+    if item["service"] == "firestore":
+        if body.get("name") != item["response"]["name"] or not isinstance(body.get("updateTime"), str) or not isinstance(body.get("fields"), dict):
+            raise ValueError("setup Document response refused")
+        fields = {key: _decode_firestore_value(value) for key, value in body["fields"].items()}
+        expected_fields = {
+            key: _decode_firestore_value(_typed(value, account_bindings))
+            for key, value in item.get("fields", {}).items()
+        }
+        if digest(fields) != digest(expected_fields):
+            raise ValueError("setup fields digest refused")
+        return {**wire, "localId": None, "name": body["name"], "fieldsDigest": item["response"]["fieldsDigest"], "updateTime": body["updateTime"]}
+    if not isinstance(body.get("localId"), str):
+        raise ValueError("setup localId response refused")
+    bound = (account_bindings or {}).get(item.get("accountRef"))
+    if isinstance(bound, dict) and isinstance(bound.get("uid"), str) and body["localId"] != bound["uid"]:
+        raise ValueError("setup localId binding refused")
+    expected = item["response"]
+    if item["route"] == "accounts:update" and set(body) - {"localId"}:
+        raise ValueError("setup claims response refused")
+    if item["route"] != "accounts:update" and (not isinstance(body.get("idToken"), str) or not isinstance(body.get("expiresIn"), str)):
+        raise ValueError("setup token response refused")
+    return {**wire, "localId": body["localId"], "idToken": body.get("idToken"), "expiresIn": body.get("expiresIn")}
+
+
 def _account_path(tenant: str | None, suffix: str) -> str:
     prefix = f"/v1/projects/{PROJECT}"
     if tenant is not None:

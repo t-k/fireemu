@@ -199,6 +199,81 @@ def minimal_wire_plan(method="get", operation="create"):
     }, row, resource
 
 
+def _setup_fixture_plan():
+    resource = (
+        "projects/fireemu-35fe6/databases/(default)/documents/"
+        "o5-user-token/naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cases/setup-doc"
+    )
+    return {
+        "fixtures": [{"document": "setup-doc", "resource": resource, "fields": {}}],
+        "ownedAccounts": [
+            {
+                "ref": "owner-a",
+                "email": "owner@example.test",
+                "tenant": None,
+                "claims": {"owner": "yes"},
+            }
+        ],
+    }
+
+
+def test_setup_fixture_uses_bound_patch_and_official_loopback_response(fixture_origin):
+    plan = _setup_fixture_plan()
+    item = {
+        "id": "fixture/setup-doc",
+        "service": "firestore",
+        "route": "document-create",
+        "method": "PATCH",
+        "path": "/v1/" + plan["fixtures"][0]["resource"] + "?currentDocument.exists=false",
+        "document": "setup-doc",
+        "resource": plan["fixtures"][0]["resource"],
+        "fields": {},
+        "fieldsDigest": digest({}),
+        "precondition": {"exists": False},
+        "response": {
+            "name": plan["fixtures"][0]["resource"],
+            "fieldsDigest": digest({}),
+            "updateTime": "response-bound",
+        },
+    }
+    request = remote.prepare_setup_request(
+        plan, item, credentials={"administrator": "fixture-admin"}
+    )
+    assert request["path"].startswith("/v1/projects/fireemu-35fe6/")
+    result = {
+        "status": 200,
+        "body": {
+            "name": plan["fixtures"][0]["resource"],
+            "fields": {},
+            "updateTime": "2026-09-22T00:00:00Z",
+        },
+    }
+    got = remote.adapt_setup_result(item, result, endpoint="loopback", sequence=1)
+    assert got["name"] == plan["fixtures"][0]["resource"]
+    assert got["fieldsDigest"] == digest({})
+
+
+def test_setup_claim_update_requires_route_specific_owner_binding():
+    plan = _setup_fixture_plan()
+    item = {
+        "id": "account/owner-a/claim-update",
+        "service": "identity",
+        "route": "accounts:update",
+        "method": "POST",
+        "accountRef": "owner-a",
+        "tenant": None,
+        "claimsDigest": digest(plan["ownedAccounts"][0]["claims"]),
+        "response": {"localId": "response-bound"},
+    }
+    with pytest.raises(ValueError, match="owner UID binding required"):
+        remote.prepare_setup_request(
+            plan,
+            item,
+            credentials={"administrator": "fixture-admin"},
+            setup_secrets={"owner-a": "secret"},
+        )
+
+
 def _fixture_token(uid, provider, tenant, claims):
     now = int(time.time())
     firebase = {"sign_in_provider": provider}

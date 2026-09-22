@@ -141,7 +141,7 @@ def _execution_source(source_root: Path) -> dict[str, Any]:
                     "ls-tree",
                     "-z",
                     "--full-tree",
-                    "HEAD",
+                    source_commit,
                     "--",
                     relative,
                 ],
@@ -159,7 +159,7 @@ def _execution_source(source_root: Path) -> dict[str, Any]:
             ):
                 _refuse("execution source closure differs")
             git_bytes = subprocess.check_output(
-                ["git", "-C", str(source_root), "show", f"HEAD:{relative}"],
+                ["git", "-C", str(source_root), "show", f"{source_commit}:{relative}"],
                 stderr=subprocess.DEVNULL,
             )
             file_bytes = path.read_bytes()
@@ -168,6 +168,28 @@ def _execution_source(source_root: Path) -> dict[str, Any]:
         if file_bytes != git_bytes:
             _refuse("execution source closure differs")
         source_inputs[relative] = hashlib.sha256(git_bytes).hexdigest()
+    try:
+        final_commit = subprocess.check_output(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        final_dirty = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(source_root),
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        _refuse("clean execution source checkout required")
+    if final_commit != source_commit or final_dirty:
+        _refuse("execution source checkout changed during capture")
     return {
         "kind": EXECUTION_SOURCE_KIND,
         "sourceCommit": source_commit,

@@ -540,6 +540,47 @@ def test_execution_source_rejects_files_that_differ_from_head_blob(
         )
 
 
+def test_execution_source_refuses_head_advance_during_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    execution_root, _execution = _execution_source(tmp_path)
+    original_check_output = prepare.subprocess.check_output
+    advanced = False
+
+    def advance_after_rev_parse(command, *args, **kwargs):
+        nonlocal advanced
+        result = original_check_output(command, *args, **kwargs)
+        if (
+            not advanced
+            and list(command)
+            == ["git", "-C", str(execution_root), "rev-parse", "HEAD"]
+        ):
+            advanced = True
+            changed = execution_root / EXECUTION_CLOSURE[0]
+            changed.write_text(changed.read_text() + "\n# commit B\n")
+            subprocess.run(["git", "-C", str(execution_root), "add", "tools"], check=True)
+            subprocess.run(
+                ["git", "-C", str(execution_root), "commit", "-qm", "commit B"],
+                check=True,
+            )
+        return result
+
+    monkeypatch.setattr(prepare.subprocess, "check_output", advance_after_rev_parse)
+    with pytest.raises(recovery.RecoveryRefusal, match="capture|execution source"):
+        prepare.prepare_review_draft(
+            parent,
+            ledger=_ReadOnlyLedger(parent),
+            provenance=provenance,
+            source_root=source_root,
+            execution_source_root=execution_root,
+            recovery_nonce="fedcba9876543210fedcba9876543210",
+            now=1000.0,
+        )
+    assert advanced is True
+
+
 @pytest.mark.parametrize("tamper", ["wrong-commit", "extra-key", "map-value"])
 def test_persisted_draft_refuses_execution_source_mismatch_before_authority_assembly(
     tmp_path: Path, tamper: str,

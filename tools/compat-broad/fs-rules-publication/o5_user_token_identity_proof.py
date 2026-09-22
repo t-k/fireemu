@@ -44,9 +44,6 @@ _STANDARD_TOKEN_CLAIMS = frozenset(
         "firebase",
         "email",
         "email_verified",
-        "phone_number",
-        "name",
-        "picture",
     }
 )
 

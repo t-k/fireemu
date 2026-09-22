@@ -276,6 +276,31 @@ def test_setup_claim_update_requires_route_specific_owner_binding():
         )
 
 
+def test_setup_signup_and_signin_use_client_api_key_routes():
+    plan = _setup_fixture_plan()
+    signup = {
+        "id": "account/owner-a/signup",
+        "service": "identity",
+        "route": "accounts:signUp",
+        "method": "POST",
+        "accountRef": "owner-a",
+        "tenant": None,
+        "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"},
+    }
+    signin = {**signup, "id": "account/owner-a/signin", "route": "accounts:signInWithPassword"}
+    for item in (signup, signin):
+        request = remote.prepare_setup_request(
+            plan,
+            item,
+            credentials={"administrator": "fixture-admin", "api-key": "fixture-key"},
+            account_bindings={"owner-a": {"uid": "uid-owner-a"}},
+            setup_secrets={"owner-a": "secret"},
+        )
+        assert request["path"] == f"/v1/{item['route']}?key=fixture-key"
+        assert "Authorization" not in request["headers"]
+        assert request["body"]["returnSecureToken"] is True
+
+
 def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
     item = {
         "id": "account/owner-a/signin",

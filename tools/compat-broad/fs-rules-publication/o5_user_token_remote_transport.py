@@ -53,7 +53,7 @@ _RULESET_NAME = re.compile(
 _RELEASE_NAME = re.compile(
     r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$"
 )
-_WORKER_SHA256 = "f186be6be77794c9692eb9627001debaea336eff88fd463bac70e8a10db4a403"
+_WORKER_SHA256 = "437c7c9fb1796dca76bd0d81b4d50c690709bc219b05917b238a14461ff9e586"
 _OWNED_CHILDREN: set[int] = set()
 
 
@@ -645,7 +645,10 @@ def prepare_setup_request(
         body = {"returnSecureToken": True}
         if account.get("email") is not None:
             body.update({"email": account["email"], "password": secret})
-        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signUp"), "method": "POST", "headers": headers, "body": body}
+        if tenant is not None:
+            body["tenantId"] = tenant
+        api_key = _credential(credentials, "api-key", "api-key")
+        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _client_account_path("signUp", api_key), "method": "POST", "headers": _headers(None), "body": body}
     if expected["route"] == "accounts:update":
         bound = (account_bindings or {}).get(expected["accountRef"], {})
         if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
@@ -654,7 +657,11 @@ def prepare_setup_request(
     bound = (account_bindings or {}).get(expected["accountRef"], {})
     if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
         raise ValueError("owner UID binding required")
-    return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signInWithPassword"), "method": "POST", "headers": headers, "body": {"email": account["email"], "password": secret, "returnSecureToken": True}}
+    body = {"email": account["email"], "password": secret, "returnSecureToken": True}
+    if tenant is not None:
+        body["tenantId"] = tenant
+    api_key = _credential(credentials, "api-key", "api-key")
+    return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _client_account_path("signInWithPassword", api_key), "method": "POST", "headers": _headers(None), "body": body}
 
 
 def adapt_setup_result(
@@ -720,6 +727,10 @@ def _account_path(tenant: str | None, suffix: str) -> str:
     if tenant is not None:
         prefix += f"/tenants/{tenant}"
     return f"{prefix}/accounts:{suffix}"
+
+
+def _client_account_path(suffix: str, api_key: str) -> str:
+    return f"/v1/accounts:{suffix}?key={quote(api_key, safe='')}"
 
 
 def _principal(

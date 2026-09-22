@@ -46,12 +46,15 @@ def setup_origin():
 
 
 def _setup_envelope(route: str, method: str, path: str, body: dict[str, object]) -> dict[str, object]:
+    headers = {"x-goog-user-project": "fireemu-35fe6"}
+    if not path.startswith("/v1/accounts:"):
+        headers["Authorization"] = "Bearer transient"
     return {
         "service": "firestore" if route == "document-create" else "identity",
         "route": route,
         "method": method,
         "path": path,
-        "headers": {"x-goog-user-project": "fireemu-35fe6", "Authorization": "Bearer transient"},
+        "headers": headers,
         "body": body,
         "seconds": 2.0,
     }
@@ -66,9 +69,9 @@ def test_setup_routes_use_actual_loopback_official_responses(setup_origin):
     assert result["status"] == 200
     assert result["body"]["name"].endswith("/cases/setup-doc")
     for route, path, body in (
-        ("accounts:signUp", "/v1/projects/fireemu-35fe6/accounts:signUp", {"email": "owner@example.test", "password": "transient", "returnSecureToken": True}),
+        ("accounts:signUp", "/v1/accounts:signUp?key=fixture-key", {"email": "owner@example.test", "password": "transient", "returnSecureToken": True}),
         ("accounts:update", "/v1/projects/fireemu-35fe6/accounts:update", {"localId": "uid-owner-a", "customAttributes": "{\"owner\":\"yes\"}"}),
-        ("accounts:signInWithPassword", "/v1/projects/fireemu-35fe6/accounts:signInWithPassword", {"email": "owner@example.test", "password": "transient", "returnSecureToken": True}),
+        ("accounts:signInWithPassword", "/v1/accounts:signInWithPassword?key=fixture-key", {"email": "owner@example.test", "password": "transient", "returnSecureToken": True}),
     ):
         result = worker.exchange(_setup_envelope(route, "POST", path, body), fixture_origin=setup_origin)
         assert result["status"] == 200

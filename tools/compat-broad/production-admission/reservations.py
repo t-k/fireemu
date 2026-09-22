@@ -993,21 +993,38 @@ def _auth_parent_projection(gate, child_claim):
     if len(candidates) != 1:
         raise ValueError("one uncertain Auth custom create is required")
     index, operation = candidates[0]
-    if index != child_claim["parentEventIndex"] or operation.get("resource") != child_claim["ownedResources"][0]:
+    binds = operation.get("binds")
+    if (
+        index != child_claim["parentEventIndex"]
+        or operation.get("resource") != child_claim["ownedResources"][0]
+        or operation.get("service") != "auth"
+        or operation.get("method") != "POST"
+        or operation.get("path") != "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken"
+        or operation.get("form") is not False
+        or operation.get("body") != {
+            "token": "$binding:customToken",
+            "returnSecureToken": True,
+        }
+        or not isinstance(binds, dict)
+        or binds.get("customUid") != "localId"
+    ):
         raise ValueError("Auth parent custom resource changed")
-    event = next(
-        (
-            item for item in gate.get("events", [])
-            if item.get("job") == job_name and item.get("phase") == "observation" and item.get("index") == index
-        ),
-        None,
-    )
+    events = [
+        item for item in gate.get("events", [])
+        if item.get("job") == job_name and item.get("phase") == "observation" and item.get("index") == index
+    ]
+    if len(events) != 1:
+        raise ValueError("one uncertain Auth custom create event is required")
+    event = events[0]
     if (
         not isinstance(event, dict)
         or event.get("completed") is not False
         or event.get("creationOutcome") not in {"pending", "unknown"}
         or type(event.get("ended")) not in (int, float)
-        or child_claim["parentRequestDigest"] != event["requestDigest"]
+        or event.get("service") != operation["service"]
+        or event.get("method") != operation["method"]
+        or event.get("requestDigest") != digest(operation)
+        or child_claim["parentRequestDigest"] != digest(operation)
     ):
         raise ValueError("Auth parent custom create is not uncertain")
     projection = {

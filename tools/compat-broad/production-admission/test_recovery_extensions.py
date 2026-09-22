@@ -616,10 +616,12 @@ def _auth_recovery_fixture(tmp_path):
         "service": "auth",
         "method": "POST",
         "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
-        "body": {"token": "$binding:customToken"},
+        "form": False,
+        "body": {"token": "$binding:customToken", "returnSecureToken": True},
         "kind": "custom-sign-in",
         "account": "custom",
         "resource": resource,
+        "binds": {"customUid": "localId"},
     }
     parent_plan = {
         "contract": "shared-local-v1", "campaignId": "AUTH-CREDENTIAL-TOKENS-01",
@@ -652,7 +654,8 @@ def _auth_recovery_fixture(tmp_path):
         "managementUsed": [], "managementEvents": [], "managementSkipped": [],
         "managementAbort": None, "coordinatorInflight": False,
         "events": [{"job": "auth-credential", "phase": "observation", "index": 0,
-            "requestDigest": digest(operation), "completed": False, "creationOutcome": "unknown", "ended": 2}],
+            "requestDigest": digest(operation), "service": "auth", "method": "POST",
+            "completed": False, "creationOutcome": "unknown", "ended": 2}],
         "jobs": {"auth-credential": {"resources": [resource], "pid": dead, "stopped": True,
             "inflight": False, "observation": 1, "recovery": 0, "owned": [],
             "creationProofs": {}, "absent": [], "captures": {}, "complete": False, "scheduleDone": 1}},
@@ -880,3 +883,32 @@ def test_auth_recovery_rejects_parent_change_between_gate_check_and_append(tmp_p
             parent_evidence=evidence, now=1000,
         )
     assert ledger.snapshot()["reservations"][parent["reservation"]]["state"] == "closing"
+
+
+def test_auth_recovery_rejects_forged_other_parent_event_digest(tmp_path):
+    ledger, parent, child, envelope, child_plan, bindings, evidence, _resource, _ = _auth_recovery_fixture(tmp_path)
+    parent_gate_path = (tmp_path / "auth-parent-gate").resolve()
+    parent_gate = Gate(parent_gate_path, "auth-credential").snapshot()
+    operation = parent_gate["plan"]["jobs"]["auth-credential"]["observation"][0]
+    other_operation = copy.deepcopy(operation)
+    other_operation["path"] = "identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+    forged_digest = digest(other_operation)
+    parent_gate["events"][0]["requestDigest"] = forged_digest
+    _save(parent_gate_path, parent_gate)
+
+    forged_evidence = copy.deepcopy(evidence)
+    forged_evidence["gateDigest"] = digest(parent_gate)
+    forged_evidence["requestDigest"] = forged_digest
+    forged_evidence.pop("evidenceDigest")
+    forged_evidence["evidenceDigest"] = digest(forged_evidence)
+    forged_child = copy.deepcopy(child)
+    forged_child["parentGateDigest"] = forged_evidence["gateDigest"]
+    forged_child["parentEvidenceDigest"] = forged_evidence["evidenceDigest"]
+    forged_child["parentRequestDigest"] = forged_digest
+    with pytest.raises(ValueError, match="Auth parent custom create is not uncertain"):
+        ledger.begin_auth_recovery_extension(
+            parent, forged_child, envelope, child_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+            parent_evidence=forged_evidence, now=1000,
+        )

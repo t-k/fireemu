@@ -219,6 +219,7 @@ def run_bound_setup(
     journal: Any = None,
     ownership: dict[str, dict[str, Any]] | None = None,
     private_handoffs: dict[str, Any] | None = None,
+    identity_handoffs: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Charge and execute compiler-owned setup through the Gate journal."""
     if journal is None or journal.path is None or journal.failures:
@@ -295,6 +296,7 @@ def run_bound_setup(
             # passwords or user ID tokens.
             receipt = typed.receipt.as_dict()
             pending["receipt"] = receipt
+            pending["typedReceipt"] = typed.receipt
             pending["private"] = typed.private
             subject_id = (
                 "document/" + item["document"]
@@ -364,6 +366,15 @@ def run_bound_setup(
             "accounts:signInWithPassword",
         }:
             private_handoffs[item["accountRef"]] = pending["private"]
+        if identity_handoffs is not None and item["route"] in {
+            "accounts:signUp",
+            "accounts:signInWithPassword",
+        }:
+            identity_handoffs[item["accountRef"]] = {
+                "receipt": pending["typedReceipt"],
+                "private": pending["private"],
+                "event": event,
+            }
         if item["service"] == "identity" and receipt.get("localId") is not None:
             account_bindings[item["accountRef"]] = {
                 **account_bindings.get(item["accountRef"], {}),

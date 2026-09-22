@@ -532,6 +532,7 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
     )
     ownership = {}
     private_handoffs = {}
+    identity_handoffs = {}
     origin_server = _producer_server()
     thread = threading.Thread(target=origin_server.serve_forever, daemon=True)
     thread.start()
@@ -599,6 +600,7 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
                 journal=journal,
                 ownership=ownership,
                 private_handoffs=private_handoffs,
+                identity_handoffs=identity_handoffs,
             )
         snapshot = gate.snapshot()
         if failure_after == 19:
@@ -612,6 +614,12 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
                 _, response_digest, request_digest = handoff.proof_material()
                 assert len(response_digest) == 64
                 assert isinstance(request_digest, str) and len(request_digest) == 64
+            assert set(identity_handoffs) == set(private_handoffs)
+            for ref, handoff in identity_handoffs.items():
+                assert isinstance(handoff["receipt"], remote.SetupPublicReceipt)
+                assert handoff["private"] is private_handoffs[ref]
+                assert handoff["event"] in snapshot["managementEvents"]
+            assert identity_handoffs["owner-a"]["event"]["id"].endswith("/signin")
             assert all(state["phase"] == "acknowledged" for state in ownership.values())
             for account in plan["ownedAccounts"]:
                 assert ownership[account["ref"]]["tenantId"] == account.get("tenant")

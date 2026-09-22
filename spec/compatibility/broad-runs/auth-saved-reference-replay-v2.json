@@ -4,7 +4,7 @@
     "cleanupBound": true,
     "configurationComparison": "separate-evidence",
     "tool": "tools/auth-saved-reference-replay/replay.py",
-    "toolSha256": "d89c771b83a39f5fb204adf33f8d13898567291acb8ce7de7131ce608bd188d6",
+    "toolSha256": "f7d4c7cee4603f3cae6b29bde6dbbf0809991ad8208dc669f3e0b57a2b50b1ee",
     "typedScalarComparison": true
   },
   "corpora": [

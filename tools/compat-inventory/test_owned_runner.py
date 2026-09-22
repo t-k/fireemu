@@ -1,6 +1,7 @@
 """Owned launch boundaries, with an opt-in real fireemu process integration test."""
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -10,6 +11,7 @@ from itertools import product
 from pathlib import Path
 
 import pytest
+import owned_runner
 from aggregation_corpus import CONFIG
 from owned_runner import (
     BUILD_TIMEOUT_VARIABLE,
@@ -115,6 +117,84 @@ def test_artifact_binding_rejects_hardlinked_launch_copy(tmp_path):
         "exitCode": 0,
     }
     with pytest.raises(ValueError, match="hardlink"):
+        artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
+
+
+def test_artifact_binding_rejects_launch_replacement_during_descriptor_read(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    source.write_bytes(b"source")
+    launch.write_bytes(b"source")
+    receipt = {
+        "artifactSha256": __import__("hashlib").sha256(b"source").hexdigest(),
+        "inputs": {"crates/x.rs": "x"},
+        "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fireemu",
+            "--message-format=json",
+        ],
+        "exitCode": 0,
+    }
+    original_read = owned_runner.os.read
+    replaced = False
+
+    def replace_after_source_read(fd, size):
+        nonlocal replaced
+        chunk = original_read(fd, size)
+        if not replaced and chunk:
+            launch.unlink()
+            launch.hardlink_to(source)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(owned_runner.os, "read", replace_after_source_read)
+    with pytest.raises(ValueError, match="hardlink|changed"):
+        artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
+
+
+def test_artifact_binding_rejects_independent_launch_replacement_during_read(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    source.write_bytes(b"source")
+    launch.write_bytes(b"source")
+    original_inode = launch.stat().st_ino
+    receipt = {
+        "artifactSha256": __import__("hashlib").sha256(b"source").hexdigest(),
+        "inputs": {"crates/x.rs": "x"},
+        "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fireemu",
+            "--message-format=json",
+        ],
+        "exitCode": 0,
+    }
+    original_read = owned_runner.os.read
+    replaced = False
+
+    def replace_after_launch_read(fd, size):
+        nonlocal replaced
+        before = owned_runner.os.fstat(fd)
+        chunk = original_read(fd, size)
+        if not replaced and chunk and before.st_ino == original_inode:
+            replacement = launch.with_name("replacement-fireemu")
+            shutil.copyfile(source, replacement)
+            launch.unlink()
+            replacement.rename(launch)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(owned_runner.os, "read", replace_after_launch_read)
+    with pytest.raises(ValueError, match="changed"):
         artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 

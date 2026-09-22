@@ -8,6 +8,7 @@ import types
 from pathlib import Path
 
 import pytest
+import replay
 import run_replay
 from replay import (
     BUILD_COMMAND,
@@ -220,6 +221,62 @@ def test_manifest_accepts_independent_shutil_copyfile_artifact(tmp_path):
     launch_path.unlink()
     shutil.copyfile(source_path, launch_path)
     validate_artifact_binding(manifest["build"], manifest["artifactSha256"], bundle)
+
+
+def test_manifest_rejects_launch_replacement_during_descriptor_read(
+    tmp_path, monkeypatch
+):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_read = replay.os.read
+    replaced = False
+
+    def replace_after_source_read(fd, size):
+        nonlocal replaced
+        chunk = original_read(fd, size)
+        if not replaced and chunk:
+            launch_path.unlink()
+            launch_path.hardlink_to(source_path)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(replay.os, "read", replace_after_source_read)
+    with pytest.raises(ValueError, match="hardlink|changed"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_independent_launch_replacement_during_read(
+    tmp_path, monkeypatch
+):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    original_inode = launch_path.stat().st_ino
+    original_read = replay.os.read
+    replaced = False
+
+    def replace_after_launch_read(fd, size):
+        nonlocal replaced
+        before = replay.os.fstat(fd)
+        chunk = original_read(fd, size)
+        if not replaced and chunk and before.st_ino == original_inode:
+            replacement = launch_path.with_name("replacement-fireemu")
+            shutil.copyfile(source_path, replacement)
+            launch_path.unlink()
+            replacement.rename(launch_path)
+            replaced = True
+        return chunk
+
+    monkeypatch.setattr(replay.os, "read", replace_after_launch_read)
+    with pytest.raises(ValueError, match="changed"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
 
 
 def test_typed_json_distinguishes_boolean_integer_and_float():

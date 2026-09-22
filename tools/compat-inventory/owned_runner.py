@@ -180,41 +180,74 @@ def validate_build(receipt: dict, artifact: str, inputs: dict) -> None:
 
 def artifact_binding(source: Path, launch_copy: Path, build: dict, inputs: dict) -> dict:
     """Bind the built executable and the exact private copy supplied to a launcher."""
+    os_module = __import__("os")
+    stat_module = __import__("stat")
+
+    def read_stable(path: Path, role: str) -> tuple[Path, str, tuple[int, int]]:
+        require(".." not in path.parts, f"artifact binding {role} path contains '..'")
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path is unavailable") from exc
+        flags = os_module.O_RDONLY | getattr(os_module, "O_CLOEXEC", 0)
+        flags |= getattr(os_module, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os_module.open(path, flags)
+        except OSError as exc:
+            raise ValueError(
+                f"artifact binding {role} path is unavailable or is a symlink"
+            ) from exc
+        try:
+            before = os_module.fstat(descriptor)
+            require(
+                stat_module.S_ISREG(before.st_mode),
+                f"artifact binding {role} path must be a regular file",
+            )
+            require(
+                before.st_nlink == 1,
+                f"artifact binding {role} path must not be a hardlink",
+            )
+            chunks = []
+            while True:
+                chunk = os_module.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            after = os_module.fstat(descriptor)
+        finally:
+            os_module.close(descriptor)
+        def identity(metadata):
+            return (
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_mode,
+                metadata.st_nlink,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+            )
+        require(
+            identity(before) == identity(after),
+            f"artifact binding {role} changed while reading",
+        )
+        try:
+            current = os_module.stat(path, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(f"artifact binding {role} path disappeared") from exc
+        require(
+            stat_module.S_ISREG(current.st_mode)
+            and current.st_nlink == 1
+            and identity(current) == identity(after),
+            f"artifact binding {role} path changed while reading",
+        )
+        return resolved, sha(b"".join(chunks)), (after.st_dev, after.st_ino)
+
+    source, source_sha256, source_identity = read_stable(source, "source")
+    launch_copy, launch_copy_sha256, launch_identity = read_stable(launch_copy, "launch")
     require(
-        ".." not in source.parts,
-        "artifact binding source path contains '..'",
-    )
-    require(
-        source.is_file() and not source.is_symlink(),
-        "artifact binding source path is unavailable or is a symlink",
-    )
-    require(
-        ".." not in launch_copy.parts,
-        "artifact binding launch path contains '..'",
-    )
-    require(
-        launch_copy.is_file() and not launch_copy.is_symlink(),
-        "artifact binding launch path is unavailable or is a symlink",
-    )
-    source_metadata = source.stat()
-    launch_metadata = launch_copy.stat()
-    require(
-        source_metadata.st_nlink == 1,
-        "artifact binding source path must not be a hardlink",
-    )
-    require(
-        launch_metadata.st_nlink == 1,
-        "artifact binding launch path must not be a hardlink",
-    )
-    source = source.resolve(strict=True)
-    launch_copy = launch_copy.resolve(strict=True)
-    require(
-        (source_metadata.st_dev, source_metadata.st_ino)
-        != (launch_metadata.st_dev, launch_metadata.st_ino),
+        source_identity != launch_identity,
         "artifact binding source and launch paths must have independent inodes",
     )
-    source_sha256 = sha(source.read_bytes())
-    launch_copy_sha256 = sha(launch_copy.read_bytes())
     validate_build(build, source_sha256, inputs)
     require(launch_copy_sha256 == source_sha256, "artifact launch copy mismatch")
     return {

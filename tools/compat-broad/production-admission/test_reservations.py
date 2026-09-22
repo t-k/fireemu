@@ -48,16 +48,39 @@ def envelope():
     }
 
 
+def preparation_response(slot):
+    from batch_contract import DATABASE_PROJECTION
+
+    project = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+    projection = {
+        "name": "projects/fireemu-35fe6/databases/(default)", "uid": "fixture-database-uid",
+        "databaseEdition": "STANDARD", "type": "FIRESTORE_NATIVE", "locationId": "us-central1",
+    }
+    parent = "projects/592603257417/locations/global"
+    values = {
+        "project": project,
+        "database": {"projection": projection, "projectionDigest": digest({**projection, "concurrencyMode": "PESSIMISTIC"}), "identityProjectionDigest": digest(projection), "responseDigest": digest({**projection, "concurrencyMode": "PESSIMISTIC"}), "contractDigest": digest(DATABASE_PROJECTION)},
+        "auth": {"name": "projects/592603257417/config"},
+        "key": {"parent": parent, "name": parent + "/keys/fixture-key-id"},
+    }
+    if slot == "refresh":
+        body = {"kind": "limits-03-preparation-refresh-v1", "expiresInSeconds": 1200, "authorizedUserDigest": digest("authorized-user")}
+    elif slot == "oauth-tokeninfo":
+        body = token_attestation()
+    else:
+        body = {"kind": "limits-03-preparation-metadata-v1", "slot": slot, "responseDigest": digest(values[slot]), "value": values[slot]}
+        if slot == "database":
+            body["responseDigest"] = values[slot]["responseDigest"]
+    return {"status": 200, "complete": True, "workerReaped": True, "bodyKind": "json", "body": body}
+
+
 def _preparation_worker(gate_path, gate_plan, queue, fail=False):
     create(gate_path, gate_plan)
     gate = Gate(gate_path, "limits")
     gate.claim()
     rows = []
     for slot in gate_plan["management"]["observation"]:
-        response = {
-            "status": 200, "complete": True, "workerReaped": True,
-            "bodyKind": "json", "body": token_attestation() if slot["id"] == "oauth-tokeninfo" else {"digest": digest(slot)},
-        }
+        response = preparation_response(slot["id"])
         if fail and slot["id"] == "key":
             response = {"status": None, "complete": False, "workerReaped": True, "bodyKind": None, "body": None}
         gate.management_dispatch("observation", slot["id"], lambda _deadline, response=response: response)
@@ -71,6 +94,7 @@ def preparation_reservation(tmp_path):
     from test_shared_gate import limits_preparation_plan
 
     value = limits_preparation_plan()
+    value["permissionDigest"] = "a" * 64
     now = time.time()
     value["permissionExpiresAt"] = now + value["wallSeconds"]
     permission = envelope()
@@ -99,12 +123,28 @@ def preparation_terminal(tmp_path, *, fail=False):
     assert child.exitcode == 0
     queue.close()
     gate = Gate(row["gatePath"], "limits").snapshot()
+    collection = {
+        "kind": "limits-03-baseline-preparation-v1", "campaignId": "FS-WRITE-LIMITS-03",
+        "preparationId": value["nonce"], "nonce": value["nonce"], "permissionDigest": value["permissionDigest"],
+        "sourceCommit": generation["sourceCommit"], "sourceDigest": generation["collectorSourceDigest"],
+        "manifestDigest": digest("approved-manifest"), "ticketDigest": digest(ticket), "claimDigest": ticket["claimDigest"],
+        "ownerIdentityDigest": digest("owner"), "principalDigest": token_attestation()["principalDigest"],
+        "issuedAt": time.time() - 300, "expiresAt": value["permissionExpiresAt"],
+        "slots": gate["managementUsed"], "evidence": gate["managementEvents"],
+        "requestDigests": [digest({"slot": slot}) for slot in value["management"]["observation"]],
+        "chargedCalls": 6, "costMicrousd": 600, "completed": True, "failed": False, "failureClass": None,
+        "project": preparation_response("project")["body"]["value"],
+        "database": preparation_response("database")["body"]["value"],
+        "authConfigDigest": preparation_response("auth")["body"]["responseDigest"],
+        "apiKey": preparation_response("key")["body"],
+    }
+    collection["packetDigest"] = digest(collection)
     receipt = {
         "kind": value["receiptKind"], "ticket": ticket, "claimDigest": ticket["claimDigest"],
         "planDigest": digest(value), "gateDigest": digest(gate), "generation": generation,
         "reservationStateAtPublication": "held", "executionKind": "fixed-production-wire",
         "releaseEligible": True, "failure": None, "chargedCalls": 6, "ownedResources": [],
-        "collection": {"baselineDigest": digest("verified-metadata")}, "managementEvidence": rows,
+        "collection": collection, "managementEvidence": rows,
     }
     path = Path(row["gatePath"]).parent / "receipt.json"
     path.write_text(json.dumps(receipt))
@@ -126,6 +166,69 @@ def test_limits_preparation_terminal_releases_real_exited_worker_and_keeps_cost(
     state = ledger.snapshot()
     assert state["reservations"][ticket["reservation"]]["claim"]["budget"]["costMicrousd"] == 600
     assert state["envelopes"][ticket["envelopeDigest"]]["allocated"]["costMicrousd"] == 600
+
+
+@pytest.mark.parametrize("target", ["refresh", "oauth-tokeninfo", "project", "database", "auth", "key", "project-value", "database-projection", "auth-value", "key-value", "collection", "collection-project", "collection-database", "collection-event", "receipt"])
+def test_limits_preparation_refuses_rebound_secret_fields_without_release(tmp_path, target):
+    ledger, ticket, record = preparation_terminal(tmp_path)
+    gate = Gate(ledger.bound_claim(ticket)["gatePath"], "limits")
+    path = Path(record["receiptPath"])
+    receipt = json.loads(path.read_text())
+    with gate.locked() as state:
+        if target == "receipt":
+            destination = receipt
+        elif target.startswith("collection"):
+            destination = receipt["collection"]
+            if target == "collection-project":
+                destination = destination["project"]
+            elif target == "collection-database":
+                destination = destination["database"]["projection"]
+            elif target == "collection-event":
+                destination = destination["evidence"][0]
+                state["managementEvents"][0]["access_token"] = "SECRET"
+        else:
+            slot = target.split("-", 1)[0] if target.endswith(("-value", "-projection")) else target
+            index = next(index for index, row in enumerate(receipt["managementEvidence"]) if row["id"] == "observation:" + slot)
+            item = receipt["managementEvidence"][index]
+            destination = item["response"]["body"]
+            if target.endswith("-value"):
+                destination = destination["value"]
+            elif target == "database-projection":
+                destination = destination["value"]["projection"]
+        destination["access_token"] = "SECRET"
+        if not target.startswith("collection") and target != "receipt":
+            item["responseDigest"] = digest(item["response"])
+            state["managementEvents"][index]["responseDigest"] = item["responseDigest"]
+            state["managementEvents"][index]["bodyDigest"] = digest(item["response"]["body"])
+            receipt["collection"]["evidence"] = state["managementEvents"]
+        _save(gate.path, state)
+    receipt["gateDigest"] = digest(state)
+    receipt["collection"]["packetDigest"] = digest({key: value for key, value in receipt["collection"].items() if key != "packetDigest"})
+    path.write_text(json.dumps(receipt))
+    record.update(receiptDigest=digest(receipt), gateDigest=digest(state), collectionDigest=digest(receipt["collection"]))
+    ledger.attach_evidence(ticket, record["receiptDigest"], record["gateDigest"], record["collectionDigest"])
+    before = ledger.snapshot()
+    before_gate = gate.snapshot()
+    with pytest.raises(ValueError):
+        ledger.finish_limits_preparation(ticket, record)
+    assert ledger.snapshot() == before
+    assert gate.snapshot() == before_gate
+
+
+def test_limits_preparation_dispatch_never_persists_raw_refresh_response(tmp_path):
+    ledger, ticket, row, value, _generation = preparation_reservation(tmp_path)
+    create(row["gatePath"], value)
+    gate = Gate(row["gatePath"], "limits")
+    gate.claim()
+    response = preparation_response("refresh")
+    response["body"]["access_token"] = "SECRET"
+    with pytest.raises(ValueError, match="sanitized refresh"):
+        gate.management_dispatch("observation", "refresh", lambda _deadline: response)
+    state = gate.snapshot()
+    assert state["total"] == 1
+    assert state["managementEvents"][0]["completed"] is False
+    assert "SECRET" not in (gate.path / "state.json").read_text()
+    assert ledger.snapshot()["reservations"][ticket["reservation"]]["state"] == "held"
 
 
 def test_limits_preparation_cannot_use_generic_finish(tmp_path):
@@ -300,6 +403,8 @@ def test_limits_preparation_released_nonce_cannot_be_reused(tmp_path):
     row["gatePath"] = str((tmp_path / "replayed-gate").resolve())
     permission = envelope()
     permission.update(issuedAt=time.time() - 1, expiresAt=time.time() + 600, permissionDigest="e" * 64)
+    value["permissionDigest"] = permission["permissionDigest"]
+    row["gatePlanDigest"] = digest(value)
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="reuse"):
         ledger.reserve(permission, row, value, generation=record["generation"])

@@ -63,6 +63,71 @@ def validate_limits_preparation_plan(plan):
         raise ValueError("closed limits preparation plan required")
 
 
+def _preparation_hash(value):
+    return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{64}", value) is not None
+
+
+def validate_limits_preparation_response(slot, result):
+    """Accept only source-owned public attestations, never raw worker bodies."""
+    if slot not in LIMITS_PREPARATION_SLOTS or not _management_receipt_valid(result, slot):
+        raise ValueError("closed preparation response required")
+    if result["complete"] is False and result["workerReaped"] is True and result["body"] is None:
+        return
+    body = result["body"]
+    if result["status"] != 200 or result["complete"] is not True or result["workerReaped"] is not True or result["bodyKind"] != "json" or not isinstance(body, dict):
+        raise ValueError("sanitized successful preparation response required")
+    if slot == "oauth-tokeninfo":
+        return  # The shared token attestation has an exact, secret-free schema.
+    if slot == "refresh":
+        if (
+            set(body) != {"kind", "expiresInSeconds", "authorizedUserDigest"}
+            or body["kind"] != "limits-03-preparation-refresh-v1"
+            or type(body["expiresInSeconds"]) is not int
+            or not 420 <= body["expiresInSeconds"] <= 3600
+            or not _preparation_hash(body["authorizedUserDigest"])
+        ):
+            raise ValueError("sanitized refresh attestation required")
+        return
+    if (
+        set(body) != {"kind", "slot", "responseDigest", "value"}
+        or body["kind"] != "limits-03-preparation-metadata-v1"
+        or body["slot"] != slot or not _preparation_hash(body["responseDigest"])
+        or not isinstance(body["value"], dict)
+    ):
+        raise ValueError("sanitized metadata attestation required")
+    value = body["value"]
+    if slot == "project":
+        valid = value == {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
+    elif slot == "auth":
+        valid = value == {"name": "projects/592603257417/config"}
+    elif slot == "key":
+        parent = "projects/592603257417/locations/global"
+        valid = (
+            set(value) == {"parent", "name"} and value["parent"] == parent
+            and isinstance(value["name"], str)
+            and re.fullmatch(re.escape(parent) + r"/keys/[A-Za-z0-9_-]{1,128}", value["name"]) is not None
+        )
+    else:
+        from batch_contract import DATABASE_PROJECTION
+
+        projection = value.get("projection")
+        valid = (
+            set(value) == {"projection", "projectionDigest", "identityProjectionDigest", "responseDigest", "contractDigest"}
+            and isinstance(projection, dict)
+            and set(projection) == {"name", "uid", "databaseEdition", "type", "locationId"}
+            and projection["name"] == "projects/fireemu-35fe6/databases/(default)"
+            and projection["databaseEdition"] == "STANDARD" and projection["type"] == "FIRESTORE_NATIVE"
+            and isinstance(projection["uid"], str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", projection["uid"]) is not None
+            and isinstance(projection["locationId"], str) and re.fullmatch(r"[a-z][a-z0-9-]{0,63}", projection["locationId"]) is not None
+            and all(_preparation_hash(value[key]) for key in ("projectionDigest", "identityProjectionDigest", "responseDigest", "contractDigest"))
+            and value["identityProjectionDigest"] == digest(projection)
+            and value["contractDigest"] == digest(DATABASE_PROJECTION)
+            and value["responseDigest"] == body["responseDigest"]
+        )
+    if not valid:
+        raise ValueError("closed preparation metadata identity required")
+
+
 def validate_limits_preparation_success(state):
     """Require every declared read to have completed and its worker reaped."""
     validate_limits_preparation_plan(state["plan"])
@@ -100,7 +165,10 @@ def validate_limits_preparation_success(state):
     previous = state["started"] - state["plan"]["intervalSeconds"]
     for event in events:
         if (
-            any(type(event.get(key)) not in (int, float) or not math.isfinite(event[key])
+            set(event) != {"id", "started", "durationReserved", "deadline", "completed", "status", "complete", "workerReaped", "bodyKind", "responseDigest", "bodyDigest", "ended"}
+            or event.get("bodyKind") != "json"
+            or not _preparation_hash(event.get("responseDigest")) or not _preparation_hash(event.get("bodyDigest"))
+            or any(type(event.get(key)) not in (int, float) or not math.isfinite(event[key])
                 for key in ("started", "ended", "deadline", "durationReserved"))
             or event["durationReserved"] != 12
             or event["started"] < previous + state["plan"]["intervalSeconds"]
@@ -2173,6 +2241,8 @@ class Gate:
                     state["stopped"] = True
                 if not _management_receipt_valid(result, slot_id):
                     raise ValueError("bounded management receipt required")
+                if plan.get("transport") == LIMITS_PREPARATION_TRANSPORT:
+                    validate_limits_preparation_response(slot_id, result)
                 event.update(
                     {
                         "status": status,

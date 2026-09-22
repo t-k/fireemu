@@ -1199,6 +1199,75 @@ def _adapt_firestore_result(
     raise ValueError("REST response route shape refused")
 
 
+def make_setup_transport(
+    plan: dict[str, Any],
+    *,
+    credentials: dict[str, Any],
+    frozen_inputs: dict[str, Any],
+    capability: Any,
+    setup_secrets: dict[str, str],
+    fixture_origin: str | None = None,
+):
+    """Run only the compiler-declared setup prefix before identity proofs exist."""
+    _plan_identity(plan)
+    _frozen_inputs(plan, frozen_inputs)
+    _credential(credentials, "administrator", "administrator")
+    _credential(credentials, "api-key", "api-key")
+    if not isinstance(setup_secrets, dict):
+        raise ValueError("setup secrets required")
+    if capability is None:
+        raise ValueError("active O8 production capability required")
+    setup_bindings: dict[str, dict[str, Any]] = {}
+    sequence = 0
+
+    def transmit(
+        value: dict[str, Any],
+        *,
+        binding: bytes,
+        binding_digest: str,
+        capability_override: Any = None,
+    ) -> SetupResult:
+        nonlocal sequence
+        if not isinstance(value, dict) or not isinstance(value.get("id"), str):
+            raise ValueError("setup item required")
+        if not (value["id"].startswith("fixture/") or value["id"].startswith("account/")):
+            raise ValueError("setup-only transport refused non-setup operation")
+        active = capability if capability_override is None else capability_override
+        if active is not capability:
+            raise ValueError("setup capability binding differs")
+        snapshot = _frozen_inputs(plan, frozen_inputs)
+        if getattr(active, "inputs_digest", None) != snapshot["inputsDigest"]:
+            raise ValueError("capability inputs digest differs")
+        authorize_transport(active, binding=binding, binding_digest=binding_digest)
+        prepared = prepare_setup_request(
+            plan,
+            copy.deepcopy(value),
+            credentials=credentials,
+            account_bindings=setup_bindings,
+            setup_secrets=setup_secrets,
+        )
+        envelope = {key: prepared[key] for key in ("service", "route", "method", "path", "headers", "body")}
+        envelope["seconds"] = MAX_SECONDS
+        result = _run_worker(envelope, binding=binding, binding_digest=binding_digest, fixture_origin=fixture_origin)
+        sequence += 1
+        origin = fixture_origin.rstrip("/") if fixture_origin is not None else prepared["origin"]
+        adapted = adapt_setup_result(
+            value,
+            result,
+            endpoint=urlsplit(origin).netloc,
+            sequence=sequence,
+            account_bindings=setup_bindings,
+        )
+        if value["id"].startswith("account/") and value["id"].endswith("/signup"):
+            local_id = adapted.receipt.local_id
+            if not isinstance(local_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", local_id):
+                raise ValueError("setup signup UID shape refused")
+            setup_bindings[value["accountRef"]] = {"uid": local_id, "tenant": value.get("tenant")}
+        return adapted
+
+    return transmit
+
+
 def make_transport(
     plan: dict[str, Any],
     *,
@@ -1342,6 +1411,7 @@ __all__ = [
     "RULES_ORIGIN",
     "WORKER_ENTRY",
     "make_transport",
+    "make_setup_transport",
     "prepare_request",
     "run_worker",
     "verify_worker_binding",

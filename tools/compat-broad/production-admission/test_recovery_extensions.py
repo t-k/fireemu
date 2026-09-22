@@ -4,6 +4,7 @@ import copy
 import json
 import multiprocessing
 import os
+import subprocess
 import shutil
 import sys
 import time
@@ -912,6 +913,95 @@ def _full_compiler_auth_recovery_fixture(tmp_path):
     return ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path
 
 
+def _real_abandoned_compiler_auth_recovery_fixture(tmp_path):
+    """Produce the parent journal through a real CredentialGate subprocess."""
+    fixture = _auth_recovery_fixture(tmp_path / "template")
+    ledger, parent, child, envelope, child_plan, bindings, _evidence, resource, child_path = fixture
+    parent_path = Path(parent["ledgerPath"]).parent / "auth-parent-gate"
+    shutil.rmtree(parent_path)
+    plan = credential_gate.gate_plan(
+        "demo", "a" * 32, signing=True, wall_seconds=600, recovery_seconds=60,
+        cost_microusd=50_000, observation_window_seconds=500,
+    )
+    plan["permissionExpiresAt"] = time.time() + 3_600
+    resources = plan["jobs"]["auth-credential"]["resources"]
+    locks = [{"key": item.replace("projects/", "project/"), "mode": "WRITE"} for item in resources]
+    state = ledger.snapshot()
+    row = state["reservations"][parent["reservation"]]
+    claim = copy.deepcopy(row["claim"])
+    claim.update(
+        gatePath=str(parent_path), gatePlanDigest=digest(plan),
+        manifestDigest=digest(plan), locks=locks,
+    )
+    row["claim"] = claim
+    row["claimDigest"] = digest(claim)
+    parent["claimDigest"] = row["claimDigest"]
+    envelope["scopes"] = locks
+    _save(ledger.path, state)
+
+    child_program = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, 'tools/compat-broad/auth-credential-tokens')
+import credential_gate as c
+v = json.loads(sys.stdin.read())
+path, plan = Path(v['path']), v['plan']
+c.create(path, plan)
+g = c.CredentialGate(path)
+g.claim()
+receipt = {'status': 200, 'complete': True, 'workerReaped': True, 'bodyKind': 'json', 'body': {}}
+attestation = {'kind': 'request-byte-token-attestation-v1', 'principalDigest': 'a' * 64,
+    'requiredScopeVerified': True, 'identityMode': 'subject', 'identityVerified': True,
+    'oauthClientVerified': True, 'expiresInSeconds': 600,
+    'remainingSecondsAtVerification': 600, 'requiredSeconds': 600,
+    'complete': True, 'workerReaped': True}
+for slot in plan['management']['observation']:
+    result = dict(receipt)
+    if slot['id'] == 'oauth-tokeninfo':
+        result['body'] = attestation
+    g.management_dispatch('observation', slot['id'], lambda _deadline, result=result: result)
+for operation in plan['jobs']['auth-credential']['observation']:
+    if operation['kind'] == 'custom-sign-in':
+        try:
+            g.dispatch(operation, False, lambda: (_ for _ in ()).throw(TimeoutError('controlled response loss')))
+        except TimeoutError:
+            pass
+        break
+    body = ({'localId': 'uid-' + operation['account'], 'idToken': 'dummy-id', 'refreshToken': 'dummy-refresh'}
+            if operation['kind'] == 'sign-up' else {'error': {'message': 'CONTROLLED_REFUSAL'}})
+    status = 200 if operation['kind'] == 'sign-up' else 400
+    g.dispatch(operation, False, lambda status=status, body=body: (status, body))
+g.abandon_observation('controlled custom uncertainty')
+for operation in plan['jobs']['auth-credential']['recovery']:
+    if operation['account'] == 'custom':
+        break
+    body = {} if operation['kind'] == 'delete' else {'kind': 'identitytoolkit#GetAccountInfoResponse', 'users': []}
+    g.dispatch(operation, True, lambda body=body: (200, body))
+"""
+    run = subprocess.run(
+        [sys.executable, "-c", child_program],
+        input=json.dumps({"path": str(parent_path), "plan": plan}),
+        text=True, capture_output=True, check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    gate_state = Gate(parent_path, "auth-credential").snapshot()
+    operations = plan["jobs"]["auth-credential"]["observation"]
+    normal_index, normal_operation = next(
+        (index, operation) for index, operation in enumerate(operations)
+        if operation["kind"] == "custom-sign-in"
+    )
+    assert gate_state["jobs"]["auth-credential"]["scheduleDone"] == 40
+    assert gate_state["jobs"]["auth-credential"]["skippedByStop"] == 20
+    child.update(
+        parentClaimDigest=parent["claimDigest"], parentPlanDigest=digest(plan),
+        parentEventIndex=normal_index, parentRequestDigest=digest(normal_operation),
+        locks=locks,
+    )
+    evidence = reservations._auth_parent_projection(gate_state, child)
+    child.update(parentGateDigest=evidence["gateDigest"], parentEvidenceDigest=evidence["evidenceDigest"])
+    return ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path
+
+
 def _auth_child_gate(path, child_plan, resource, *, body=None, status=200):
     create_gate(path, child_plan)
     gate = Gate(path, "auth-recovery")
@@ -1176,6 +1266,65 @@ def test_full_compiler_custom_token_parent_begins_and_settles(tmp_path):
     ledger.settle_auth_recovery_child(child_ticket, absence_proof=proof,
         receipt_digest=digest(proof), now=1000)
     assert ledger.snapshot()["reservations"][parent["reservation"]]["recoveryChildren"][0]["state"] == "settled"
+
+
+def test_real_compiler_abandonment_closes_parent_and_reopens_ledger(tmp_path):
+    fixture = _real_abandoned_compiler_auth_recovery_fixture(tmp_path)
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
+    child_ticket, proof = _settle_auth_child_for_fixture(
+        ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path,
+    )
+    assert ledger.close_after_auth_recovery_child(
+        parent, child_ticket, receipt_digest=digest(proof), now=1000,
+    ) == parent
+    reopened = reservations.Ledger(ledger.path)
+    fresh = _fresh_auth_reservation_after_close(reopened, parent, envelope, tmp_path)
+    assert fresh["reservation"] != parent["reservation"]
+    assert reopened.close_after_auth_recovery_child(
+        parent, child_ticket, receipt_digest=digest(proof), now=1000,
+    ) == parent
+
+
+@pytest.mark.parametrize("control", ["missing-stop", "wrong-cursor"])
+def test_real_compiler_abandonment_evidence_controls_refuse(tmp_path, control):
+    fixture = _real_abandoned_compiler_auth_recovery_fixture(tmp_path)
+    _ledger, _parent, child, _envelope, _child_plan, _bindings, _evidence, _resource, child_path = fixture
+    gate_path = Path(child_path).parent / "auth-parent-gate"
+    gate_state = Gate(gate_path, "auth-credential").snapshot()
+    job = gate_state["jobs"]["auth-credential"]
+    if control == "missing-stop":
+        job.pop("stopReason", None)
+    else:
+        job["skippedByStop"] = 19
+    _save(gate_path, gate_state)
+    with pytest.raises(ValueError, match="stop"):
+        reservations._auth_parent_responsibility_projection(gate_state, child)
+
+
+def test_real_compiler_prior_uncertain_create_is_not_a_skipped_suffix(tmp_path):
+    fixture = _real_abandoned_compiler_auth_recovery_fixture(tmp_path)
+    _ledger, _parent, child, _envelope, _child_plan, _bindings, _evidence, _resource, child_path = fixture
+    gate_path = Path(child_path).parent / "auth-parent-gate"
+    gate_state = Gate(gate_path, "auth-credential").snapshot()
+    plan = gate_state["plan"]["jobs"]["auth-credential"]
+    index, operation = next(
+        (index, operation) for index, operation in enumerate(plan["observation"])
+        if operation.get("kind") == "custom-sign-in"
+        and operation.get("body", {}).get("token") == "$binding:customTokenReserved"
+    )
+    gate_state["events"].append({
+        "job": "auth-credential", "phase": "observation", "index": index,
+        "requestDigest": digest(operation), "service": "auth", "method": "POST",
+        "completed": False, "creationOutcome": "unknown", "ended": 2,
+    })
+    gate_state["observation"] += 1
+    gate_state["total"] += 1
+    job = gate_state["jobs"]["auth-credential"]
+    job["observation"] += 1
+    job["skippedByStop"] -= 1
+    _save(gate_path, gate_state)
+    with pytest.raises(ValueError, match="unresolved"):
+        reservations._auth_parent_responsibility_projection(gate_state, child)
 
 
 @pytest.mark.parametrize("management_count", [0, 1, 3])

@@ -1486,6 +1486,47 @@ def _auth_parent_responsibility_projection(gate, child_claim):
         # refresh slots, so the schedule's default ``creates`` value is not an
         # ownership declaration for this facade.
         creating = creating_indices
+        # A real Gate advances the frozen cursor across the remaining
+        # observation schedule when observation is abandoned.  Those slots
+        # have no wire event by design, but only the exact contiguous suffix
+        # described by the Gate's own stop journal is eligible for the
+        # never-dispatched disposition.  In particular, a schedule cursor by
+        # itself is not evidence: a lost response remains an unresolved
+        # creation and must retain the parent lock.
+        abandoned_observation_slots = set()
+        skipped_by_stop = job.get("skippedByStop", 0)
+        if type(skipped_by_stop) is not int or skipped_by_stop < 0:
+            raise ValueError("Auth parent responsibility stop cursor differs")
+        if skipped_by_stop:
+            stop_reason = job.get("stopReason")
+            observation_cursor = job.get("observation")
+            recovery_cursor = job.get("recovery")
+            if (
+                not isinstance(stop_reason, str)
+                or not stop_reason
+                or job.get("stopped") is not True
+                or type(observation_cursor) is not int
+                or type(recovery_cursor) is not int
+                or job.get("scheduleDone")
+                != observation_cursor + recovery_cursor + skipped_by_stop
+            ):
+                raise ValueError("Auth parent responsibility stop evidence differs")
+            skipped_slots = schedule[observation_cursor:observation_cursor + skipped_by_stop]
+            if (
+                len(skipped_slots) != skipped_by_stop
+                or any(
+                    entry.get("phase") != "observation"
+                    or entry.get("index") != observation_cursor + offset
+                    for offset, entry in enumerate(skipped_slots)
+                )
+            ):
+                raise ValueError("Auth parent responsibility stop schedule differs")
+            abandoned_observation_slots = {
+                ("observation", observation_cursor + offset)
+                for offset in range(skipped_by_stop)
+            }
+            if any(key in abandoned_observation_slots for key in event_by_slot):
+                raise ValueError("Auth parent responsibility stop journal has an event")
         created_accounts = set()
         for index in sorted(creating):
             operation = observations[index]
@@ -1503,6 +1544,9 @@ def _auth_parent_responsibility_projection(gate, child_claim):
                 # that the slot was never dispatched.
                 consumed = job.get("scheduleDone")
                 slots = [entry for entry in schedule[:consumed] if isinstance(entry, dict)]
+                if ("observation", index) in abandoned_observation_slots:
+                    responsibilities.append({"job": job_name, "phase": "observation", "index": index, "account": account, "resource": resource, "disposition": "not-dispatched"})
+                    continue
                 if any(entry.get("phase") == "observation" and entry.get("index") == index for entry in slots):
                     raise ValueError("Auth parent responsibility creating event missing")
                 responsibilities.append({"job": job_name, "phase": "observation", "index": index, "account": account, "resource": resource, "disposition": "not-dispatched"})

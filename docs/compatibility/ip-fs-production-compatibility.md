@@ -6,6 +6,14 @@ Goal ID: `IP-FS-PRODUCTION-COMPATIBILITY`
 
 Auth claim-source, MFA and Limits native updates remain local-only; executor `571d5a6bb63289893661d88470d47e8ffb4870a2` is source-only evidence. The Auth05 held attempt remains unresolved and does not change this condition or the `COMPAT_VERIFIED 0 / 14` parent count.
 
+## Current saved REST replay revalidation (`648`)
+
+Four bounded saved-production REST conditions are independently approved against source `648aabe56cf6147128ffadf565d93ca7a92013c1`: `FS-EVID-TRANSFORMS-021` (18 MATCH), `FS-EVID-PRECONDITIONS-022` (34 MATCH), `FS-EVID-AGGREGATIONS-029` (23 MATCH) and `FS-EVID-PROJECTION-LISTING-027` (18 MATCH). Each has zero MISMATCH and zero INDETERMINATE rows. The aggregation and projection/listing replays use the verified 648 artifact SHA-256 `7737f6c389aff0a0f280757591af3b81f11edfbc8438cb69268da0f4c2237026` and runtime-input map digest `7e2b0bc7037e0caf9f979f052c69a3820a398c8df72de8dbd19f1aac2f524331`; independent reviews joined the artifact to the retained locked build receipt and runtime-input map.
+
+The aggregation replay is retained at `docs.local/runs/saved-aggregations-native-648-20260922/`; the projection/listing comparison uses the corrected replay at `docs.local/runs/saved-projection-native-648-20260922-corrected/`. The earlier mistaken projection directory remains historical and is not relabeled. Reviews: [`saved-aggregations-native-648-independent-review.md`](../../docs.local/reviews/saved-aggregations-native-648-independent-review.md) and [`saved-projection-native-648-independent-review.md`](../../docs.local/reviews/saved-projection-native-648-independent-review.md).
+
+These are finite normalized comparisons of retained production observations. They made no fresh production requests, do not establish general query/index or pagination compatibility, and do not promote a parent. Their row counts are not combined into a finite-condition total. `COMPAT_VERIFIED` remains `0 / 14`.
+
 ## Checkpoint 8d7: finite production and local progress
 
 This checkpoint is source `8d7a02de0d60564184d0cf80292e2278cd6e9d2c`; the request-byte exact-replay runtime source is `ba4a026363d6ec05267cf646439c10d729ab805f`, and the retained artifact SHA-256 is `903728746e512d158363c092196e015f79805ab513757a5924d319c8dac0996d`.

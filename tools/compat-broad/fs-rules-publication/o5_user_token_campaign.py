@@ -169,7 +169,7 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
             "service": "firestore",
             "route": "document-create",
             "method": "PATCH",
-            "path": entry["resource"] + "?currentDocument.exists=false",
+            "path": "/v1/" + entry["resource"] + "?currentDocument.exists=false",
             "document": entry["document"],
             "resource": entry["resource"],
             "fields": entry["fields"],
@@ -189,7 +189,11 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 "method": "POST",
                 "accountRef": entry["ref"],
                 "tenant": entry["tenant"],
-                "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"},
+                "response": {
+                    "localId": "response-bound",
+                    "idToken": "response-bound",
+                    "expiresIn": "response-bound",
+                },
             }
         )
     owner = next(entry for entry in plan["ownedAccounts"] if entry["ref"] == "owner-a")
@@ -203,7 +207,7 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 "accountRef": owner["ref"],
                 "tenant": owner["tenant"],
                 "claimsDigest": digest(owner["claims"]),
-                "response": {"localId": "response-bound", "idToken": "response-bound"},
+                "response": {"localId": "response-bound"},
             },
             {
                 "id": "account/owner-a/signin",

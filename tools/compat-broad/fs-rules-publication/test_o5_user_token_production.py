@@ -146,6 +146,7 @@ def test_setup_plan_is_source_backed_and_excludes_precreated_tenant_and_row_acti
     assert all(item["service"] == "firestore" for item in setup["fixtures"])
     assert all(item["route"] == "document-create" for item in setup["fixtures"])
     assert all(item["method"] == "PATCH" for item in setup["fixtures"])
+    assert all(item["path"].startswith("/v1/projects/fireemu-35fe6/") for item in setup["fixtures"])
     assert all(item["precondition"] == {"exists": False} for item in setup["fixtures"])
     assert all(item["response"]["updateTime"] == "response-bound" for item in setup["fixtures"])
     assert [item["id"] for item in setup["auth"]] == [
@@ -161,6 +162,7 @@ def test_setup_plan_is_source_backed_and_excludes_precreated_tenant_and_row_acti
     ]
     assert not any(item["route"] in {"tenants:create", "tenants:delete"} for item in setup["auth"])
     assert not any("post-signin" in item["id"] for item in setup["auth"])
+    assert next(item for item in setup["auth"] if item["route"] == "accounts:update")["response"] == {"localId": "response-bound"}
 
 
 @pytest.mark.parametrize("field", ["approval", "manifest", "permission", "capabilityInputs"])

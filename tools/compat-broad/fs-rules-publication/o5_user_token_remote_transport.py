@@ -17,6 +17,7 @@ import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -62,6 +63,50 @@ class WorkerExchangeError(ValueError):
     def __init__(self, reason: str, *, worker_reaped: bool) -> None:
         super().__init__(reason)
         self.worker_reaped = worker_reaped
+
+
+@dataclass(frozen=True)
+class SetupPublicReceipt:
+    """Serializable setup provenance with all credential material removed."""
+
+    item_id: str
+    http_status: int
+    endpoint: str
+    wire_sequence: int
+    local_id: str | None = None
+    name: str | None = None
+    fields_digest: str | None = None
+    update_time: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in {
+                "id": self.item_id,
+                "httpStatus": self.http_status,
+                "endpoint": self.endpoint,
+                "wireSequence": self.wire_sequence,
+                "localId": self.local_id,
+                "name": self.name,
+                "fieldsDigest": self.fields_digest,
+                "updateTime": self.update_time,
+            }.items()
+            if value is not None
+        }
+
+
+@dataclass(frozen=True)
+class SetupPrivateHandoff:
+    """Transient credential handoff; never use this object as a receipt."""
+
+    id_token: str | None = None
+    expires_in: str | None = None
+
+
+@dataclass(frozen=True)
+class SetupResult:
+    receipt: SetupPublicReceipt
+    private: SetupPrivateHandoff
 
 
 def _reap_owned(
@@ -620,7 +665,18 @@ def adapt_setup_result(
         }
         if digest(fields) != digest(expected_fields):
             raise ValueError("setup fields digest refused")
-        return {**wire, "localId": None, "name": body["name"], "fieldsDigest": item["response"]["fieldsDigest"], "updateTime": body["updateTime"]}
+        return SetupResult(
+            receipt=SetupPublicReceipt(
+                item_id=wire["id"],
+                http_status=wire["httpStatus"],
+                endpoint=wire["endpoint"],
+                wire_sequence=wire["wireSequence"],
+                name=body["name"],
+                fields_digest=item["response"]["fieldsDigest"],
+                update_time=body["updateTime"],
+            ),
+            private=SetupPrivateHandoff(),
+        )
     if not isinstance(body.get("localId"), str):
         raise ValueError("setup localId response refused")
     bound = (account_bindings or {}).get(item.get("accountRef"))
@@ -629,7 +685,18 @@ def adapt_setup_result(
     expected = item["response"]
     if item["route"] != "accounts:update" and (not isinstance(body.get("idToken"), str) or not isinstance(body.get("expiresIn"), str)):
         raise ValueError("setup token response refused")
-    return {**wire, "localId": body["localId"], "idToken": body.get("idToken"), "expiresIn": body.get("expiresIn")}
+    return SetupResult(
+        receipt=SetupPublicReceipt(
+            item_id=wire["id"],
+            http_status=wire["httpStatus"],
+            endpoint=wire["endpoint"],
+            wire_sequence=wire["wireSequence"],
+            local_id=body["localId"],
+        ),
+        private=SetupPrivateHandoff(
+            id_token=body.get("idToken"), expires_in=body.get("expiresIn")
+        ),
+    )
 
 
 def _account_path(tenant: str | None, suffix: str) -> str:

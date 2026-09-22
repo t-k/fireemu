@@ -41,6 +41,21 @@ const CONFIG = {
   firestore: { edition: "standard", apiMode: "native", rules: "firestore.rules" },
   daemon: { clockStart: "2026-01-02T03:04:05Z" },
 };
+export function configForCase(entry = CASE) {
+  const config = structuredClone(CONFIG);
+  if (entry.indexFilePath) {
+    requireThat(
+      entry.indexFilePath === "conformance/firestore.indexes.json" &&
+        entry.indexFileBlob === "7c1ef93940752d8981ae29cfea40c210f27560f8" &&
+        entry.indexFileSha256 === "sha256-8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c" &&
+        entry.indexFilesDigest === "sha256-ad4a66f22bbfb41fd0a2e7585ed0cbd82f88e854a915049ee724e9f2afd4d01a" &&
+        entry.indexFileBytes === 2484,
+      "index-file-config-pin",
+    );
+    config.firestore.indexFile = "firestore.indexes.json";
+  }
+  return config;
+}
 const RULES =
   "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{x=**} { allow read, write: if false; } } }\n";
 
@@ -202,7 +217,8 @@ async function replay(prepared, options, directory) {
   if (entry.adapter === "batch-write") await stageLegacy(prepared, join(directory, "legacy"));
   await publishJson(join(directory, "program.json"), prepared.program);
   await publishJson(join(directory, "programs.json"), [prepared.program]);
-  await publishJson(join(directory, "fireemu.json"), CONFIG);
+  const config = configForCase(entry);
+  await publishJson(join(directory, "fireemu.json"), config);
   await publish(join(directory, "firestore.rules"), RULES);
   const binaryPath = join(directory, "fireemu");
   const artifact = await snapshotBinary(options.binary, binaryPath);
@@ -251,7 +267,7 @@ async function replay(prepared, options, directory) {
               args: [...args],
               binarySha256: artifact.sha256,
               sourceCommit: prepared.state.head,
-              configSha256: sha256(Buffer.from(JSON.stringify(CONFIG, null, 2) + "\n")),
+              configSha256: sha256(Buffer.from(JSON.stringify(config, null, 2) + "\n")),
               rulesSha256: sha256(RULES),
               environmentSha256: digestJson(cleanEnv),
               retainedManifestSha256: build?.retainedManifestSha256,
@@ -320,7 +336,7 @@ async function replay(prepared, options, directory) {
     artifact,
     sourceUnchanged: unchanged,
     localSha256: sha256(localBytes),
-    configSha256: digestJson(CONFIG),
+    configSha256: digestJson(config),
     rulesSha256: sha256(RULES),
     requestCount: session.requestCount,
     cleanupRequests: session.cleanup.requests,
@@ -351,7 +367,7 @@ async function loadRecording(prepared, runDir) {
       recording.productionProjectionDigest === digestJson(prepared.production) &&
       recording.execution?.localSha256 === sha256(bytes) &&
       recording.sessionSha256 === sha256(sessionBytes) &&
-      recording.execution.configSha256 === digestJson(CONFIG) &&
+      recording.execution.configSha256 === digestJson(configForCase(prepared.entry)) &&
       recording.execution.rulesSha256 === sha256(RULES) &&
       equal(
         recording.provenance?.implementation?.adapterSha256 ?? null,
@@ -361,6 +377,10 @@ async function loadRecording(prepared, runDir) {
         prepared.entry.comparatorSliceSha256 &&
       recording.provenance.implementation.sessionBlob === prepared.entry.sessionBlob &&
       recording.provenance.implementation.credentialsBlob === prepared.entry.credentialsBlob &&
+      equal(
+        recording.provenance.implementation.indexFile ?? null,
+        prepared.provenance.implementation.indexFile ?? null,
+      ) &&
       equal(recording.provenance?.oracle, prepared.provenance.oracle),
     "recording-contract-mismatch",
   );

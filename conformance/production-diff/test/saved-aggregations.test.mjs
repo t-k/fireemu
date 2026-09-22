@@ -13,9 +13,9 @@ import { fileURLToPath } from "node:url";
 import { CASE, CASES, AGGREGATIONS_CASE as entry, selectCase } from "../registry.mjs";
 import { blobSha, digestJson, sha256, validateProgram, selectProduction,
   compareRecords, resultEnvelope, gateExitCode } from "../core.mjs";
-import { comparatorModuleSource, importText } from "../legacy.mjs";
+import { comparatorModuleSource, importText, prepare, stageLegacy } from "../legacy.mjs";
 import { cleanEnvironment } from "../io.mjs";
-import { verifySession, parseArgs, main } from "../pilot.mjs";
+import { verifySession, parseArgs, main, configForCase } from "../pilot.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const program = JSON.parse(await fs.readFile(join(HERE, "fixtures/saved-aggregations-program.json"), "utf8"));
@@ -80,6 +80,35 @@ function matrixControl() {
   } } }, ...reference() };
 }
 const fieldsAt = (local, id) => local[entry.programId].steps[id].body[0].result.aggregateFields;
+
+test("aggregation replay pins the historical index file without changing other cases", () => {
+  const aggregationConfig = configForCase(entry);
+  assert.equal(aggregationConfig.firestore.indexFile, "firestore.indexes.json");
+  assert.equal(configForCase(CASE).firestore.indexFile, undefined);
+  assert.equal(aggregationConfig.firestore.apiMode, "native");
+  assert.equal(aggregationConfig.profile, "strict");
+  assert.equal(entry.indexFilePath, "conformance/firestore.indexes.json");
+  assert.equal(entry.indexFileBytes, 2484);
+  assert.equal(entry.indexFileSha256, "sha256-8a4d4bd7a72c3ce2bed4e0f8c4adc0cdb3a7c428477578295e44a11ae063d01c");
+});
+test("aggregation preparation refuses drifted historical index provenance", async () => {
+  const repo = resolve(HERE, "../../..");
+  await assert.rejects(
+    prepare(repo, { ...entry, indexFileSha256: "sha256-" + "0".repeat(64) }),
+    /index-file/,
+  );
+});
+test("aggregation preparation stages the byte-exact historical index file", async () => {
+  const repo = resolve(HERE, "../../..");
+  const prepared = await prepare(repo, entry);
+  const directory = await fs.mkdtemp(join(tmpdir(), "fireemu-agg-index-"));
+  try {
+    await stageLegacy(prepared, join(directory, "legacy"), directory);
+    assert.deepEqual(await fs.readFile(join(directory, "firestore.indexes.json")), prepared.indexBytes);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
 
 // Registry/input boundaries: preserving the exact OLD request program is essential.
 test("all 23 steps, six seeds, setup and cleanup bind to FS-QUERY-INDEX", () => {

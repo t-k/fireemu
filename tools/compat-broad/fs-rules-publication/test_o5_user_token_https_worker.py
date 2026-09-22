@@ -94,6 +94,18 @@ def test_setup_routes_reject_unbound_shapes(envelope):
         worker.exchange(envelope, fixture_origin="http://127.0.0.1:1")
 
 
+def test_client_setup_rejects_administrator_bearer():
+    envelope = _setup_envelope(
+        "accounts:signInWithPassword",
+        "POST",
+        "/v1/accounts:signInWithPassword?key=fixture-key",
+        {"email": "owner@example.test", "password": "secret", "returnSecureToken": True},
+    )
+    envelope["headers"]["Authorization"] = "Bearer administrator"
+    with pytest.raises(ValueError, match="must not use authorization"):
+        worker.exchange(envelope, fixture_origin="http://127.0.0.1:1")
+
+
 class _SlowHandler(http.server.BaseHTTPRequestHandler):
     mode = "header"
 

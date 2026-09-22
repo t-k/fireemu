@@ -2,6 +2,14 @@
 
 Auth claim-source, MFA and Limits native updates remain local-only; executor `571d5a6bb63289893661d88470d47e8ffb4870a2` is source-only evidence. The Auth05 held attempt remains unresolved.
 
+## Checkpoint 8d7: finite production and local progress
+
+This checkpoint is source `8d7a02de0d60564184d0cf80292e2278cd6e9d2c`; the request-byte exact-replay references are `ba4` and `9037`.
+
+The request-byte fresh02 exact-replay evidence now has three production boundary inputs at 10,485,759/10,485,760/10,485,761 bytes, each returning HTTP 200, matching the immutable fresh02 production outcomes. The bounded response evidence is reviewed, but the 17-write per-probe projection is not independently accepted; the legacy collector's `over:unexpected-success` and `cleanupComplete=false` remain immutable, and the parent is not accepted. The 10 MiB production quota remains unproven. See `docs.local/reviews/requestbytes-exact-replay-review.md` and `docs.local/reviews/requestbytes-three-case-acceptance-design.md`.
+
+Limits preparation v5 records six actual metadata calls with HTTP 200 and reaped workers, followed by release; its 600 micro-USD stable-task allocation is preparation accounting only. No final data or index execution occurred. Final packet and fresh bearer handoff remain pending. Auth source-only work at `971` plus the prior local suite, and the `13b` fixture result (one failure among 165, then 60 focused checks at `c19`), are local verification counts, not compatibility evidence. The corrected Write-stream record compares 15 rows with five differing slots and leaves 32 rows; the older evidence remains valid only for its frozen source/runtime, while current `13b` correctly refuses the changed source/runtime case. These updates do not change `COMPAT_VERIFIED 0 / 14` or aggregate the finite condition total.
+
 ## Fresh request-byte production attempt (`FS-LIMIT-API-REQUEST-BYTES`, fresh02)
 
 The fresh02 production attempt was an authentic, source-bound but incomplete observation from source `2a1e95a9835094ad640b4f012c8dddf9557e5647` and retained artifact SHA-256 `2bf7267b841dc879d7c2eb98ea7a93b4b27279494ab86318282ad797fedbeabe`. The exact boundary inputs `10,485,759`, `10,485,760` and `10,485,761` bytes returned HTTP 200/200/200 in production; the native comparator returned 200/200/400, so the over-boundary result is `over:unexpected-success` and the condition is not accepted. The collection recorded 105 observations, 153 recovery operations and four preflight management calls: 262 charged calls, 51 typed absence proofs, and three postflight management slots `NOT_RUN`. At publication, the receipt was `collection-incomplete`, `mayHaveCreated=true`, `postflightComplete=false`, `releaseEligible=false`, and its recorded reservation state was `held`; cleanup safety evidence existed but contractual completion and release were absent.

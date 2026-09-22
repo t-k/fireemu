@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import ClassVar
 
@@ -18,9 +19,9 @@ import o5_user_token_identity_proof as proof
 import o5_user_token_remote_transport as remote
 import pytest
 from broad_contract import digest
-from shared_gate import Gate
 from o5_user_token_case import compile_case
 from o5_user_token_collector import _request
+from shared_gate import Gate
 
 PORTCTL = os.environ.get("FIREEMU_PORTCTL")
 
@@ -105,7 +106,11 @@ def fixture_origin():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        port = int(reservation["port"]) if reservation is not None else int(server.server_address[1])
+        port = (
+            int(reservation["port"])
+            if reservation is not None
+            else int(server.server_address[1])
+        )
         yield f"http://127.0.0.1:{port}"
     finally:
         server.shutdown()
@@ -201,73 +206,202 @@ def test_caller_cannot_construct_a_trusted_proof():
         )
 
 
-def test_setup_ack_mints_sealed_proof_without_network(tmp_path):
-    token = _token(uid="fresh-uid", custom={"o5role": "editor"})
-    request_digest = digest({"setup": "signup"})
-    item = {"id": "account/owner-a/signup", "service": "identity", "route": "accounts:signUp", "accountRef": "owner-a", "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"}}
-    response_body = {"localId": "fresh-uid", "idToken": token, "expiresIn": "3600"}
-    setup_result = remote.adapt_setup_result(item, {"status": 200, "body": response_body}, endpoint="fixture", sequence=1, request_digest=request_digest)
-    handoff, receipt = setup_result.private, setup_result.receipt
-    plan = {"kind": "setup-test-plan"}
-    event = {"id": "setup/account/owner-a/signup", "completed": True, "workerReaped": True, "responseDigest": digest(response_body), "principalRef": "owner-a", "nonce": "d" * 32, "uid": "fresh-uid", "requestDigest": request_digest}
-    gate_path = tmp_path / "gate"
-    gate_path.mkdir(mode=0o700, exist_ok=True)
-    (gate_path / "lock").write_text("")
-    (gate_path / "state.json").write_text(json.dumps({"plan": plan, "planDigest": digest(plan), "managementEvents": [event]}))
-    os.chmod(gate_path / "lock", 0o600)
-    os.chmod(gate_path / "state.json", 0o600)
-    gate = Gate(gate_path, {})
-    acknowledgment = {
-        "kind": "setup-ack",
-        "principalRef": "owner-a",
-        "uid": "fresh-uid",
-        "tenant": None,
-        "tokenHash": __import__("hashlib").sha256(token.encode()).hexdigest(),
-        "requestDigest": request_digest,
-        "responseDigest": digest(response_body),
-        "eventDigest": digest(event),
-        "planDigest": digest(plan),
-        "nonce": "d" * 32,
-        "slotId": "setup/account/owner-a/signup",
-    }
-    issued = proof.mint_acknowledged_setup_proof(
-        "owner-a",
-        private_handoff=handoff,
-        setup_receipt=receipt,
-        gate_authority=gate,
-        gate_acknowledgment=acknowledgment,
-        expected_provider="password",
-        expected_tenant=None,
-        expected_claims={"o5role": "editor"},
-        request_digest=request_digest,
-        fixture_origin="http://127.0.0.1:12345",
-        now=int(time.time()),
+@pytest.fixture(scope="module")
+def acknowledged_setup(tmp_path_factory, request):
+    """Actual pinned setup workers and durable Gate, never a fabricated event."""
+    import o5_user_token_collector as collector
+    import o5_user_token_descriptor as lane
+    import o5_user_token_production_bridge as bridge
+    import shared_gate
+    from o8_admission import revoke_production_capability
+    from test_o5_user_token_production import _producer_server, _ProducerHandler
+    from test_o5_user_token_remote_transport import _fixture_capability
+
+    directory = tmp_path_factory.mktemp("identity-setup")
+    plan = lane.plan_compiler("a" * 32)
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    binding, binding_digest = remote.worker_binding()
+    capability = _fixture_capability(plan, binding, binding_digest, frozen)
+    gate_path = directory / "gate"
+    shared_gate.create(
+        gate_path, lane.gate_plan(plan, permission_expires_at=time.time() + 1200)
     )
-    assert issued.trusted() and issued.uid == "fresh-uid"
-    assert issued.request_digest == request_digest
+    gate = Gate(gate_path, plan["campaignId"])
+    journal = collector.open_ownership_journal(
+        directory / "ownership.jsonl",
+        run_id="identity-setup",
+        plan_digest=plan["planDigest"],
+    )
+    server = _producer_server()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{server.server_address[1]}"
+    handoffs = {}
+    _ProducerHandler._plan = plan
+    _ProducerHandler.requests = []
+    _ProducerHandler.setup_uids = {}
+    failure_after = getattr(request, "param", None)
+    _ProducerHandler.fail_setup_after = failure_after
+    try:
+        with (
+            pytest.raises(ValueError, match="setup") if failure_after else nullcontext()
+        ):
+            bridge.run_bound_setup(
+                plan=plan,
+                gate=gate,
+                credentials={
+                    "administrator": "fixture-admin",
+                    "api-key": "fixture-key",
+                },
+                setup_secrets={
+                    row["ref"]: "fixture-password" for row in plan["ownedAccounts"]
+                },
+                account_bindings={},
+                capability=capability,
+                fixture_origin=origin,
+                binding=binding,
+                binding_digest=binding_digest,
+                journal=journal,
+                ownership={},
+                identity_handoffs=handoffs,
+            )
+        assert len(_ProducerHandler.requests) == (
+            failure_after + 1 if failure_after else 19
+        )
+        yield plan, gate, handoffs, origin, _ProducerHandler
+    finally:
+        revoke_production_capability(capability)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        _ProducerHandler.fail_setup_after = None
 
 
-def test_setup_ack_rejects_token_or_gate_binding_changes(tmp_path):
-    token = _token(uid="fresh-uid")
-    request_digest = digest({"setup": "signup"})
-    item = {"id": "account/owner-a/signup", "service": "identity", "route": "accounts:signUp", "accountRef": "owner-a", "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"}}
-    response_body = {"localId": "fresh-uid", "idToken": token, "expiresIn": "3600"}
-    setup_result = remote.adapt_setup_result(item, {"status": 200, "body": response_body}, endpoint="fixture", sequence=1, request_digest=request_digest)
-    handoff, receipt = setup_result.private, setup_result.receipt
-    plan = {"kind": "setup-test-plan"}
-    event = {"id": "setup/account/owner-a/signup", "completed": True, "workerReaped": True, "responseDigest": digest(response_body), "principalRef": "owner-a", "nonce": "d" * 32, "uid": "fresh-uid", "requestDigest": request_digest}
-    gate_path = tmp_path / "gate"
-    gate_path.mkdir(mode=0o700, exist_ok=True)
-    (gate_path / "lock").write_text("")
-    (gate_path / "state.json").write_text(json.dumps({"plan": plan, "planDigest": digest(plan), "managementEvents": [event]}))
-    os.chmod(gate_path / "lock", 0o600)
-    os.chmod(gate_path / "state.json", 0o600)
-    gate = Gate(gate_path, {})
-    acknowledgment = {"kind": "setup-ack", "principalRef": "owner-a", "uid": "fresh-uid", "tenant": None, "tokenHash": __import__("hashlib").sha256(token.encode()).hexdigest(), "requestDigest": request_digest, "responseDigest": digest(response_body), "eventDigest": digest(event), "planDigest": digest(plan), "nonce": "d" * 32, "slotId": "setup/account/owner-a/signup"}
-    for mutation in ({"tokenHash": "e" * 64}, {"principalRef": "other"}, {"uid": "other"}):
-        candidate = {**acknowledgment, **mutation}
-        with pytest.raises(ValueError):
-            proof.mint_acknowledged_setup_proof("owner-a", private_handoff=handoff, setup_receipt=receipt, gate_authority=gate, gate_acknowledgment=candidate, expected_provider="password", expected_tenant=None, expected_claims={}, request_digest=request_digest, now=int(time.time()))
+def _mint_arguments(setup, ref="owner-a"):
+    import hashlib
+
+    plan, gate, handoffs, origin, _handler = setup
+    handoff = handoffs[ref]
+    event = handoff["event"]
+    account = next(row for row in plan["ownedAccounts"] if row["ref"] == ref)
+    token, _response_digest, request_digest = handoff["private"].proof_material()
+    return {
+        "principal_ref": ref,
+        "private_handoff": handoff["private"],
+        "setup_receipt": handoff["receipt"],
+        "gate_authority": gate,
+        "gate_acknowledgment": {
+            "kind": "setup-ack",
+            "principalRef": ref,
+            "uid": handoff["receipt"].local_id,
+            "tenant": account["tenant"],
+            "tokenHash": hashlib.sha256(token.encode()).hexdigest(),
+            "requestDigest": request_digest,
+            "responseDigest": event["responseDigest"],
+            "eventDigest": digest(event),
+            "planDigest": gate.snapshot()["planDigest"],
+            "nonce": plan["nonce"],
+            "slotId": event["id"],
+        },
+        "expected_provider": "anonymous"
+        if account["kind"] == "anonymous"
+        else "password",
+        "expected_tenant": account["tenant"],
+        "expected_claims": account["claims"],
+        "request_digest": request_digest,
+        "fixture_origin": origin,
+    }
+
+
+def test_setup_ack_mints_sealed_proof_without_network(acknowledged_setup):
+    import o5_user_token_production_bridge as bridge
+
+    plan, gate, handoffs, origin, handler = acknowledged_setup
+    before = gate.snapshot()
+    proofs = bridge.setup_identity_proofs(plan, gate, handoffs, fixture_origin=origin)
+    assert set(proofs) == set(handoffs)
+    assert all(issued.trusted() for issued in proofs.values())
+    assert proofs["owner-a"].claims_digest == digest(
+        next(row["claims"] for row in plan["ownedAccounts"] if row["ref"] == "owner-a")
+    )
+    assert gate.snapshot() == before
+    assert len(handler.requests) == 19
+
+
+@pytest.mark.parametrize("acknowledged_setup", [1], indirect=True)
+def test_setup_ack_signup_before_claim_update_has_only_issued_claims(
+    acknowledged_setup,
+):
+    args = _mint_arguments(acknowledged_setup)
+    args["expected_claims"] = {}
+    before = args["gate_authority"].snapshot()
+    issued = proof.mint_acknowledged_setup_proof(**args)
+    assert issued.trusted() and issued.claims_digest == digest({})
+    args["expected_claims"] = {"o5role": "editor"}
+    with pytest.raises(ValueError, match="subject"):
+        proof.mint_acknowledged_setup_proof(**args)
+    assert args["gate_authority"].snapshot() == before
+    assert len(acknowledged_setup[-1].requests) == 2
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "principal",
+        "nonce",
+        "slot",
+        "uid",
+        "token",
+        "request",
+        "response",
+        "event",
+        "plan",
+        "claims",
+        "foreign-handoff",
+        "foreign-receipt",
+        "raw-as-wrapper",
+    ],
+)
+def test_setup_ack_rejects_token_or_gate_binding_changes(acknowledged_setup, mutation):
+    args = _mint_arguments(acknowledged_setup)
+    ack = args["gate_acknowledgment"]
+    if mutation == "principal":
+        # All caller labels agree; only the real durable event contradicts them.
+        args["principal_ref"] = ack["principalRef"] = "other-b"
+    elif mutation == "nonce":
+        ack["nonce"] = "b" * 32
+    elif mutation == "slot":
+        ack["slotId"] = "observation:setup/account/other-b/signup"
+    elif mutation == "uid":
+        ack["uid"] = "foreign-uid"
+    elif mutation == "token":
+        ack["tokenHash"] = "e" * 64
+    elif mutation == "request":
+        args["request_digest"] = ack["requestDigest"] = "e" * 64
+    elif mutation == "response":
+        ack["responseDigest"] = "e" * 64
+    elif mutation == "event":
+        ack["eventDigest"] = "e" * 64
+    elif mutation == "plan":
+        ack["planDigest"] = "e" * 64
+    elif mutation == "claims":
+        args["expected_claims"] = {}
+    elif mutation == "foreign-handoff":
+        args["private_handoff"] = acknowledged_setup[2]["other-b"]["private"]
+        token, _, request_digest = args["private_handoff"].proof_material()
+        ack["tokenHash"] = __import__("hashlib").sha256(token.encode()).hexdigest()
+        args["request_digest"] = ack["requestDigest"] = request_digest
+    elif mutation == "foreign-receipt":
+        args["setup_receipt"] = acknowledged_setup[2]["other-b"]["receipt"]
+        ack["uid"] = args["setup_receipt"].local_id
+    elif mutation == "raw-as-wrapper":
+        ack["responseDigest"] = args["private_handoff"].proof_material()[1]
+    before = args["gate_authority"].snapshot()
+    with pytest.raises(ValueError):
+        proof.mint_acknowledged_setup_proof(**args)
+    assert args["gate_authority"].snapshot() == before
+    assert len(acknowledged_setup[-1].requests) == 19
 
 
 def test_issuance_proof_binds_the_same_token_before_firestore(fixture_origin):

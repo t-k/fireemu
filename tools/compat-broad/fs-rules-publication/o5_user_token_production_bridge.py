@@ -26,6 +26,7 @@ from o5_user_token_collector import (
     RulesManagementReceipt,
     RulesManagementSession,
     open_ownership_journal,
+    start_context,
 )
 from o5_user_token_descriptor import CAMPAIGN, collector, gate_plan
 from o5_user_token_identity_proof import mint_acknowledged_setup_proof
@@ -630,7 +631,16 @@ def run_bound_collection(
     ) -> dict[str, Any]:
         """Keep actual wire facts and project only typed ownership to Gate."""
         return rules_gate_receipt(
-            plan, operation, execute(operation, deadline=deadline)
+            plan,
+            operation,
+            execute(
+                {
+                    key: value
+                    for key, value in operation.items()
+                    if key not in {"managementSlot", "managementPhase"}
+                },
+                deadline=deadline,
+            ),
         )
 
     if (
@@ -657,6 +667,13 @@ def run_bound_collection(
     ownership: dict[str, dict[str, Any]] = {}
     private_handoffs: dict[str, Any] = {}
     identity_handoffs: dict[str, Any] = {}
+    context = start_context(
+        plan,
+        environment=acquisition["environment"]["kind"],
+        journal=journal,
+        deadline_seconds=300.0,
+        recovery_deadline_seconds=600.0,
+    )
     try:
         setup_receipts = run_bound_setup(
             plan=plan,
@@ -676,6 +693,10 @@ def run_bound_collection(
         identity_proofs = setup_identity_proofs(
             plan, gate, identity_handoffs, fixture_origin=fixture_origin
         )
+        credentials = {
+            **credentials,
+            **{ref: proof.token for ref, proof in identity_proofs.items()},
+        }
         for ref, proof in identity_proofs.items():
             account_bindings[ref] = {
                 "uid": proof.uid,
@@ -722,6 +743,7 @@ def run_bound_collection(
             journal=journal,
             ownership=ownership,
             management_session=session,
+            context=context,
         )
     finally:
         journal.close()

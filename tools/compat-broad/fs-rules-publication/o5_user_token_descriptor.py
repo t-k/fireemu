@@ -313,6 +313,7 @@ def collector(
     journal: Any = None,
     ownership: Any = None,
     recovery_dispatch: Any = None,
+    context: Any = None,
 ) -> dict[str, Any]:
     """Drive the lane's collector as the production side, bound.
 
@@ -332,6 +333,7 @@ def collector(
         management_session=management_session,
         journal=journal,
         ownership=ownership,
+        context=context,
         recovery_dispatch=recovery_dispatch,
     )
 

@@ -1144,6 +1144,7 @@ def test_atomic_commit_permission_denial_projects_canonical_refusal():
     assert result["restErrorCode"] == 403
     assert result["responseDigest"] == digest({"error": {"code": 403, "status": "PERMISSION_DENIED"}})
     assert result["refusal"]["canonicalRowDigest"] == prepared["canonicalRowDigest"]
+    assert prepared["canonicalRowDigest"] == digest(commit_plan["observation"][operation["index"]])
     assert result["effects"] == []
     with pytest.raises(ValueError, match="REST error response shape refused"):
         remote._adapt_firestore_result(

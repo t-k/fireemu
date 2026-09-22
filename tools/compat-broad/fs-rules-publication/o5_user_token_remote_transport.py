@@ -501,6 +501,7 @@ def _observation(
         raise ValueError("expired credential cannot authorize writes")
     path = _resource(operation["resources"][0], nonce=nonce)
     headers = _headers(token)
+    canonical_row_digest = digest(observations[index])
     if operation["method"] == "get":
         return {
             "service": "firestore",
@@ -510,7 +511,7 @@ def _observation(
             "method": "GET",
             "headers": headers,
             "body": None,
-            "canonicalRowDigest": digest(operation),
+            "canonicalRowDigest": canonical_row_digest,
             "principalRef": principal,
         }
     return {
@@ -521,7 +522,7 @@ def _observation(
         "method": "POST",
         "headers": headers,
         "body": {"writes": _commit_writes(plan, operation["writes"], account_bindings)},
-        "canonicalRowDigest": digest(operation),
+        "canonicalRowDigest": canonical_row_digest,
         "principalRef": principal,
     }
 
@@ -1586,6 +1587,7 @@ def make_transport(
         return {
             **result["body"],
             "httpStatus": result["status"],
+            "responseDigest": digest(result["body"]),
             "complete": True,
             "workerReaped": True,
             "endpoint": endpoint,

@@ -7,6 +7,7 @@ checks; this bridge never creates credentials or manufactures identity proof.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import time
@@ -425,6 +426,42 @@ def bound_execute(
     return execute
 
 
+def management_session(*, plan, gate, ledger, ticket, execute, journal, ownership):
+    """Bind the Rules slice to the one existing setup/resource lifecycle."""
+    if journal.path is None or journal.failures:
+        raise ValueError("durable ownership journal required")
+    snapshot = gate.snapshot()
+    schedule = snapshot["plan"]["management"]
+    lifecycle = {
+        "observationIds": list(RULES_MANAGEMENT_OBSERVATION),
+        "recoveryIds": list(RULES_MANAGEMENT_RECOVERY),
+    }
+    prefix = {
+        "planDigest": plan["planDigest"],
+        "journalDigest": hashlib.sha256(Path(journal.path).read_bytes()).hexdigest(),
+        "proofDigest": digest(ownership),
+        "observationIds": [
+            slot["id"]
+            for slot in schedule["observation"]
+            if slot["id"] not in lifecycle["observationIds"]
+        ],
+        "recoveryIds": [
+            slot["id"]
+            for slot in schedule["recovery"]
+            if slot["id"] not in lifecycle["recoveryIds"]
+        ],
+    }
+    return RulesManagementSession(
+        gate=gate,
+        ledger=ledger,
+        ticket=ticket,
+        execute=execute,
+        plan=plan,
+        setup_prefix=prefix,
+        lifecycle_slice=lifecycle,
+    )
+
+
 def run_bound_collection(
     *,
     plan: dict[str, Any],
@@ -503,12 +540,14 @@ def run_bound_collection(
             ownership=ownership,
             private_handoffs=private_handoffs,
         )
-        session = RulesManagementSession(
+        session = management_session(
             gate=gate,
             ledger=ledger,
             ticket=ticket,
             execute=execute_management,
             plan=plan,
+            journal=journal,
+            ownership=ownership,
         )
         bundle = collector(
             plan,

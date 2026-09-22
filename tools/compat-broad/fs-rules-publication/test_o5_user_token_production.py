@@ -570,7 +570,7 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
             "budget": dict(envelope["limits"]),
             "durationSeconds": 600,
         }
-        ledger.reserve(envelope, claim, frozen_gate)
+        ticket = ledger.reserve(envelope, claim, frozen_gate)
         shared_gate.create(gate_path, frozen_gate)
         gate = shared_gate.Gate(gate_path, plan["campaignId"])
         capability = _fixture_capability(
@@ -612,6 +612,19 @@ def test_setup_failure_stops_gate_and_preserves_ledger_reservation(
             for account in plan["ownedAccounts"]:
                 assert ownership[account["ref"]]["tenantId"] == account.get("tenant")
             assert len(snapshot["managementUsed"]) == 19
+            session = bridge.management_session(
+                plan=plan,
+                gate=gate,
+                ledger=ledger,
+                ticket=ticket,
+                execute=None,
+                journal=journal,
+                ownership=ownership,
+            )
+            assert session.lifecycle_slice["observationIds"] == list(
+                bridge.RULES_MANAGEMENT_OBSERVATION
+            )
+            assert gate.snapshot() == snapshot
             return
         assert snapshot["stopped"] is True
         assert len(snapshot["managementUsed"]) == failure_after + 1

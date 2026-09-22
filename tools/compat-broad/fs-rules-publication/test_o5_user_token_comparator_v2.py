@@ -233,9 +233,13 @@ def test_a_fully_bound_gate_proves_atomic_denials_and_preserves_classification()
             if event["id"] != "observation:data/17"
         ]
 
+    def insert_malformed_event(snapshot):
+        snapshot["managementEvents"].insert(0, None)
+
     invalid_replays = [
         ("unprefixed event id", drop_canonical_alias),
         ("missing event", remove_event),
+        ("malformed event", insert_malformed_event),
         (
             "wrong nonce",
             lambda snapshot: snapshot["plan"].update(nonce="b" * 32),
@@ -274,6 +278,18 @@ def test_a_fully_bound_gate_proves_atomic_denials_and_preserves_classification()
             "incomplete event",
             lambda snapshot: alter_event(
                 snapshot, 17, lambda event: event.update(completed=False)
+            ),
+        ),
+        (
+            "outer completion disagrees with receipt",
+            lambda snapshot: alter_event(
+                snapshot, 17, lambda event: event.update(complete=False)
+            ),
+        ),
+        (
+            "outer reaping disagrees with receipt",
+            lambda snapshot: alter_event(
+                snapshot, 17, lambda event: event.update(workerReaped=False)
             ),
         ),
         (

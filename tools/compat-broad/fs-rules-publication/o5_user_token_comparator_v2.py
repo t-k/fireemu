@@ -542,7 +542,9 @@ def _gate_no_effect_subjects(gate: Any, plan: dict[str, Any]) -> frozenset[str]:
         and row.get("expect", {}).get("status") == "PERMISSION_DENIED"
     }
     events = snapshot.get("managementEvents")
-    if not isinstance(events, list):
+    if not isinstance(events, list) or any(
+        not isinstance(event, Mapping) for event in events
+    ):
         return frozenset()
     accepted: set[str] = set()
     for index, row in rows.items():
@@ -563,9 +565,11 @@ def _gate_no_effect_subjects(gate: Any, plan: dict[str, Any]) -> frozenset[str]:
         body = receipt.get("body") if isinstance(receipt, Mapping) else None
         refusal = body.get("refusal") if isinstance(body, Mapping) else None
         if not (
-            event.get("completed") is True
+            isinstance(receipt, Mapping)
+            and event.get("complete") is receipt.get("complete") is True
+            and event.get("workerReaped") is receipt.get("workerReaped") is True
+            and event.get("completed") is True
             and event.get("status") == 403
-            and isinstance(receipt, Mapping)
             and receipt.get("complete") is True
             and receipt.get("workerReaped") is True
             and isinstance(body, Mapping)

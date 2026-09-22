@@ -35,15 +35,31 @@ _PRICE_PER_DOCUMENT_READ_USD = 0.06 / 100_000
 _PRICE_PER_DOCUMENT_WRITE_USD = 0.18 / 100_000
 
 RULES_MANAGEMENT_OBSERVATION = (
-    "baseline-release-get", "baseline-ruleset-get", "baseline-executable-get",
-    "create-a", "create-a-get", "patch-a", "patch-a-get", "patch-a-executable",
-    "create-b", "create-b-get", "patch-b", "patch-b-get", "patch-b-executable",
+    "baseline-release-get",
+    "baseline-ruleset-get",
+    "baseline-executable-get",
+    "create-a",
+    "create-a-get",
+    "patch-a",
+    "patch-a-get",
+    "patch-a-executable",
+    "create-b",
+    "create-b-get",
+    "patch-b",
+    "patch-b-get",
+    "patch-b-executable",
 )
 RULES_MANAGEMENT_RECOVERY = (
-    "restore-patch", "restore-get", "restore-executable",
+    "restore-patch",
+    "restore-get",
+    "restore-executable",
     "restore-get-executable",
-    "delete-a-get", "delete-a", "delete-a-absence",
-    "delete-b-get", "delete-b", "delete-b-absence",
+    "delete-a-get",
+    "delete-a",
+    "delete-a-absence",
+    "delete-b-get",
+    "delete-b",
+    "delete-b-absence",
 )
 
 
@@ -51,9 +67,14 @@ def rules_management_plan() -> dict[str, Any]:
     """Compiler-owned fixed Gate slots for response-derived Rules operations."""
     return {
         "dispatchKind": "closed-v1",
-        "observation": [{"id": value, "timeout": 12.0} for value in RULES_MANAGEMENT_OBSERVATION],
-        "recovery": [{"id": value, "timeout": 12.0} for value in RULES_MANAGEMENT_RECOVERY],
-        "totalRequests": len(RULES_MANAGEMENT_OBSERVATION) + len(RULES_MANAGEMENT_RECOVERY),
+        "observation": [
+            {"id": value, "timeout": 12.0} for value in RULES_MANAGEMENT_OBSERVATION
+        ],
+        "recovery": [
+            {"id": value, "timeout": 12.0} for value in RULES_MANAGEMENT_RECOVERY
+        ],
+        "totalRequests": len(RULES_MANAGEMENT_OBSERVATION)
+        + len(RULES_MANAGEMENT_RECOVERY),
         "requestCostMicrousd": 1,
         "wallClockDeadlineSeconds": 600.0,
         "recoveryDeadlineSeconds": 300.0,
@@ -75,7 +96,13 @@ def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
             label = row["ruleset"].lower()
             entries.extend(
                 {"id": slot, "timeout": 12.0}
-                for slot in (f"create-{label}", f"create-{label}-get", f"patch-{label}", f"patch-{label}-get", f"patch-{label}-executable")
+                for slot in (
+                    f"create-{label}",
+                    f"create-{label}-get",
+                    f"patch-{label}",
+                    f"patch-{label}-get",
+                    f"patch-{label}-executable",
+                )
             )
             active = row["ruleset"]
         if row.get("principalAction"):
@@ -85,7 +112,10 @@ def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
             )
         entries.append({"id": f"data/{row['index']}", "timeout": 2.0})
     cleanup = [
-        {"id": f"cleanup/document/{resource.rsplit('/', 1)[-1]}/{stage}", "timeout": 2.0}
+        {
+            "id": f"cleanup/document/{resource.rsplit('/', 1)[-1]}/{stage}",
+            "timeout": 2.0,
+        }
         for resource in plan["ownedResources"]
         for stage in ("read", "delete", "absence")
     ] + [
@@ -96,7 +126,114 @@ def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
     value["observation"] = entries
     value["recovery"] = cleanup + value["recovery"]
     value["totalRequests"] = len(entries) + len(value["recovery"])
+    effects = {}
+    for item in (*setup["fixtures"], *setup["auth"]):
+        subject = (
+            "document/" + item["document"]
+            if item["service"] == "firestore"
+            else "account/" + item["accountRef"]
+        )
+        action = (
+            "write"
+            if item["id"].endswith("/claim-update")
+            else "read"
+            if item["id"].endswith("/signin")
+            else "create"
+        )
+        effects["setup/" + item["id"]] = [{"subject": subject, "action": action}]
+    documents = {resource.rsplit("/", 1)[-1] for resource in plan["ownedResources"]}
+    for row in plan["observation"]:
+        effects[f"data/{row['index']}"] = (
+            [
+                {
+                    "subject": "document/" + write["document"],
+                    "action": {"create": "create", "delete": "delete"}.get(
+                        write["operation"], "write"
+                    ),
+                }
+                for write in row["writes"]
+            ]
+            if row["writes"]
+            else [
+                {"subject": "document/" + document, "action": "read"}
+                for document in row["targets"]
+                if document in documents
+            ]
+        )
+        if action := row.get("principalAction"):
+            subject = "account/" + action["ref"]
+            effects[f"action/{row['index']}/mutation"] = [
+                {
+                    "subject": subject,
+                    "action": "delete" if action["action"] == "delete" else "write",
+                }
+            ]
+            effects[f"action/{row['index']}/readback"] = [
+                {"subject": subject, "action": "read"}
+            ]
+    for entry in value["observation"]:
+        entry["effects"] = effects.get(entry["id"], [])
+    for entry in value["recovery"]:
+        slot = entry["id"]
+        if slot.startswith("cleanup/"):
+            subject, step = slot.removeprefix("cleanup/").rsplit("/", 1)
+        else:
+            subject = (
+                "release/baseline"
+                if slot.startswith("restore-")
+                else "ruleset/" + slot.split("-")[1]
+            )
+            step = slot
+        entry["dependency"] = {"subject": subject, "step": step}
     return value
+
+
+def rules_management_contract(plan: dict[str, Any]) -> dict[str, Any]:
+    """Bind cleanup authority to the exact subjects and their compiled effects."""
+    observation = gate_management_plan(plan)["observation"]
+    subjects = [
+        {
+            "id": "document/" + resource.rsplit("/", 1)[-1],
+            "kind": "document",
+            "resource": resource,
+        }
+        for resource in plan["ownedResources"]
+    ] + [
+        {
+            "id": "account/" + account["ref"],
+            "kind": "account",
+            "resource": account["ref"],
+        }
+        for account in plan["ownedAccounts"]
+    ]
+    for subject in subjects:
+        subject["creationSlots"] = [
+            slot["id"]
+            for slot in observation
+            if any(
+                effect == {"subject": subject["id"], "action": "create"}
+                for effect in slot["effects"]
+            )
+        ]
+        subject["mutationSlots"] = [
+            slot["id"]
+            for slot in observation
+            if any(
+                effect["subject"] == subject["id"]
+                and effect["action"] in {"write", "delete"}
+                for effect in slot["effects"]
+            )
+        ]
+    return {
+        "kind": "rules-management-dependencies-v1",
+        "subjects": subjects,
+        "rulesets": {
+            label.lower(): digest(value["source"])
+            for label, value in plan["rulesets"].items()
+        },
+        "tenantId": plan["tenant"],
+    }
+
 
 OWNER_PRECONDITIONS = (
     "project and database identity confirmed by the owner",
@@ -158,9 +295,8 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
     # Per account: sign-up, plus a claim write and a re-sign-in when it carries
     # a custom claim, plus one administrator action and one lookup readback
     # when the account is revoked, disabled or deleted between two rows.
-    auth_requests = (
-        sum(3 if entry["claims"] else 1 for entry in accounts)
-        + sum(2 for entry in accounts if entry.get("postSignIn"))
+    auth_requests = sum(3 if entry["claims"] else 1 for entry in accounts) + sum(
+        2 for entry in accounts if entry.get("postSignIn")
     )
     # Rules management includes baseline reads, response-derived create/read,
     # activation/readback, exact restore, and guarded delete/absence proof.
@@ -213,7 +349,11 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
             "fields": entry["fields"],
             "fieldsDigest": digest(entry["fields"]),
             "precondition": {"exists": False},
-            "response": {"name": entry["resource"], "fieldsDigest": digest(entry["fields"]), "updateTime": "response-bound"},
+            "response": {
+                "name": entry["resource"],
+                "fieldsDigest": digest(entry["fields"]),
+                "updateTime": "response-bound",
+            },
         }
         for entry in plan["fixtures"]
     ]
@@ -254,7 +394,11 @@ def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
                 "method": "POST",
                 "accountRef": owner["ref"],
                 "tenant": owner["tenant"],
-                "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"},
+                "response": {
+                    "localId": "response-bound",
+                    "idToken": "response-bound",
+                    "expiresIn": "response-bound",
+                },
             },
         ]
     )

@@ -40,6 +40,7 @@ from o5_user_token_campaign import (
     PERMISSION_ENVELOPE,
     admitted_manifest_digest,
     gate_management_plan,
+    rules_management_contract,
     rules_management_plan,
 )
 from o5_user_token_campaign import (
@@ -219,7 +220,9 @@ def cost_model() -> dict[str, Any]:
     }
 
 
-def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = None) -> dict[str, Any]:
+def gate_plan(
+    plan: dict[str, Any], *, permission_expires_at: float | None = None
+) -> dict[str, Any]:
     """Freeze the Rules management envelope consumed by ``Gate``."""
     validate_case(plan)
     management = gate_management_plan(plan)
@@ -232,6 +235,7 @@ def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = Non
         "nonce": plan["nonce"],
         "planDigest": plan["planDigest"],
         "management": management,
+        "rulesManagementContract": rules_management_contract(plan),
         "observationRequests": len(management["observation"]),
         "dataRequests": len(plan["observation"]),
         "managementRequests": management["totalRequests"],

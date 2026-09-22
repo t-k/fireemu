@@ -311,7 +311,9 @@ async function replay(prepared, options, directory) {
       signal: processResult.signal,
       listenerClosed: portClosed,
     },
-    launchReceiptSha256: sha256(await readSource(directory, "launch-receipt.json", 128 * 1024)),
+    ...(entry.adapter === "g0"
+      ? { launchReceiptSha256: sha256(await readSource(directory, "launch-receipt.json", 128 * 1024)) }
+      : {}),
     cleanup: session.cleanup,
     artifact,
     sourceUnchanged: unchanged,

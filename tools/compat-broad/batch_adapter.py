@@ -40,6 +40,97 @@ HOSTS = {
 }
 
 
+class WorkerProcessError(ValueError):
+    """A bounded worker failure with truthful, secret-free process state."""
+
+    def __init__(self, message, process_receipt):
+        super().__init__(message)
+        self.process_receipt = process_receipt
+
+
+def _process_receipt(
+    *, pid, returncode, worker_reaped, termination, deadline_exceeded=False, started=True
+):
+    return {
+        "pid": pid,
+        "returncode": returncode,
+        "workerReaped": worker_reaped,
+        "termination": termination,
+        "deadlineExceeded": deadline_exceeded,
+        "started": started,
+    }
+
+
+def _run_worker(payload, timeout, *, include_process_receipt):
+    if not include_process_receipt:
+        try:
+            result = subprocess.run(
+                [sys.executable, "-I", "-S", "-B", str(HERE / "batch_wire.py")],
+                input=payload,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                env={k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "LANG") if k in os.environ},
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            raise ValueError("whole request deadline exceeded") from None
+        if result.returncode != 0:
+            raise ValueError("bounded transport failed")
+        return result.stdout, None
+
+    deadline = time.monotonic() + timeout
+    env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "LANG") if k in os.environ}
+    try:
+        worker = subprocess.Popen(
+            [sys.executable, "-I", "-S", "-B", str(HERE / "batch_wire.py")],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+    except OSError:
+        receipt = _process_receipt(
+            pid=None,
+            returncode=None,
+            worker_reaped=False,
+            termination="start-failed",
+            started=False,
+        )
+        raise WorkerProcessError("bounded worker failed to start", receipt) from None
+
+    timed_out = False
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            raise subprocess.TimeoutExpired(worker.args, timeout)
+        stdout, _stderr = worker.communicate(input=payload, timeout=remaining)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        worker.kill()
+        # SIGKILL is sent only to this Popen child.  Drain and wait so the
+        # receipt never claims reaping until the OS reports the child exited.
+        stdout, _stderr = worker.communicate()
+
+    returncode = worker.returncode
+    receipt = _process_receipt(
+        pid=worker.pid,
+        returncode=returncode,
+        worker_reaped=returncode is not None,
+        termination="deadline" if timed_out else "exited",
+        deadline_exceeded=timed_out,
+    )
+    if not receipt["workerReaped"]:
+        raise WorkerProcessError("bounded worker was not reaped", receipt)
+    if timed_out:
+        raise WorkerProcessError("whole request deadline exceeded", receipt)
+    if returncode != 0:
+        raise WorkerProcessError("bounded transport failed", receipt)
+    return stdout, receipt
+
+
 def _creation_version(name, fields, status, body):
     """Return a version only for an exact acknowledged conditional create."""
     if (
@@ -86,7 +177,17 @@ def request_headers(token, *, local, form):
     return headers
 
 
-def wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
+def wire(
+    url,
+    method,
+    body,
+    headers,
+    *,
+    local=False,
+    timeout=12,
+    receipt=False,
+    process_receipt=False,
+):
     parsed = urllib.parse.urlsplit(url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     if local:
@@ -116,25 +217,41 @@ def wire(url, method, body, headers, *, local=False, timeout=12, receipt=False):
             "method": method,
             "body": data,
             "headers": headers,
-            "receipt": receipt,
+            "receipt": receipt or process_receipt,
         }
     )
-    env = {k: os.environ[k] for k in ("PATH", "SYSTEMROOT", "LANG") if k in os.environ}
+    output, process = _run_worker(
+        payload, timeout, include_process_receipt=process_receipt
+    )
     try:
-        result = subprocess.run(
-            [sys.executable, str(HERE / "batch_wire.py")],
-            input=payload,
-            text=True,
-            capture_output=True,
-            timeout=timeout,
-            env=env,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        raise ValueError("whole request deadline exceeded") from None
-    if result.returncode != 0:
-        raise ValueError("bounded transport failed")
-    return json.loads(result.stdout)
+        decoded = json.loads(output)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        if process is not None:
+            raise WorkerProcessError("bounded worker returned malformed output", process) from None
+        raise ValueError("bounded transport returned malformed output") from None
+    if process is None:
+        return decoded
+    if not isinstance(decoded, dict) or not isinstance(decoded.get("http"), dict):
+        raise WorkerProcessError("bounded worker returned malformed output", process)
+    http = decoded["http"]
+    required = ("status", "complete", "bodyKind")
+    if any(key not in http for key in required) or "body" not in decoded:
+        raise WorkerProcessError("bounded worker returned malformed output", process)
+    if (
+        not isinstance(http["status"], int)
+        or isinstance(http["status"], bool)
+        or not isinstance(http["complete"], bool)
+        or not isinstance(http["bodyKind"], str)
+    ):
+        raise WorkerProcessError("bounded worker returned malformed output", process)
+    return {
+        "status": http["status"],
+        "complete": http["complete"],
+        "workerReaped": process["workerReaped"],
+        "bodyKind": http["bodyKind"],
+        "body": decoded["body"],
+        "process": process,
+    }
 
 
 def observer_digest():

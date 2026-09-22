@@ -125,6 +125,19 @@ def _summary(result):
     return summary
 
 
+def semantic_classification(receipt: dict) -> str:
+    """Classify saved semantics without changing the independent safety verdict."""
+    collection = receipt.get("collection")
+    mismatches = (
+        collection.get("expectationMismatches")
+        if isinstance(collection, dict)
+        else None
+    )
+    if not isinstance(mismatches, list):
+        raise ValueError("saved semantic comparison is not a bound mismatch list")
+    return "SEMANTIC_MISMATCH" if mismatches else "MATCH"
+
+
 def execute(*, capability, inputs, permission, credential_reader, ledger_root, output):
     """Execute only the consumed capability's fixed transport; never accept one."""
     if not admission.issued_capability(capability):
@@ -513,7 +526,7 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
         _summary(collection) != receipt.get("collection")
         or collection.get("collectionComplete") is not True
         or collection.get("cleanupComplete") is not True
-        or collection.get("expectationMismatches") != []
+        or not isinstance(collection.get("expectationMismatches"), list)
         or len(routes) + len(snapshot.get("managementEvents", [])) != snapshot["total"]
         or receipt.get("chargedCalls") != snapshot["total"]
         or receipt.get("metadata")

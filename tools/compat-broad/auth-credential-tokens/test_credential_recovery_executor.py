@@ -43,6 +43,8 @@ RUNTIME_CLOSURE = (
     "tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py",
     "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
     "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
+    "tools/compat-broad/auth-credential-tokens/credential_wire.py",
+    "tools/compat-broad/batch_wire.py",
     "tools/compat-broad/auth-credential-tokens/credential_https_worker.py",
     "tools/compat-broad/shared_gate.py",
     "tools/compat-broad/production-admission/reservations.py",
@@ -521,6 +523,242 @@ def test_stop_worker_escalates_and_reaps_term_ignoring_child() -> None:
         os.waitpid(child_pid, os.WNOHANG)
 
 
+@pytest.mark.parametrize("fault", ["select", "read", "interrupt"])
+def test_supervisor_fault_reaps_real_worker_and_preserves_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    _parent, _source_root, _execution_root, packet = _packet(tmp_path)
+    plan = packet["plan"]
+    o7, o8 = packet["o7"], packet["o8"]
+    credential_fd = _credential_fd(tmp_path)
+    controller_pid = os.getpid()
+    child_pids: list[int] = []
+    cleanup_pids: list[int] = []
+    original_fork = executor.os.fork
+    original_stop = executor._stop_worker
+    original_select = executor.select.select
+    original_read = executor.os.read
+
+    def record_fork() -> int:
+        pid = original_fork()
+        if pid > 0:
+            child_pids.append(pid)
+        return pid
+
+    def record_stop(pid: int) -> None:
+        cleanup_pids.append(pid)
+        original_stop(pid)
+
+    def fault_select(read, write, error, timeout=None):
+        if os.getpid() == controller_pid and fault == "select":
+            raise OSError("supervisor select fault")
+        return original_select(read, write, error, timeout)
+
+    def fault_read(fd: int, count: int) -> bytes:
+        if os.getpid() == controller_pid and fault == "read":
+            raise OSError("supervisor read fault")
+        return original_read(fd, count)
+
+    monkeypatch.setattr(executor.os, "fork", record_fork)
+    monkeypatch.setattr(executor, "_stop_worker", record_stop)
+    monkeypatch.setattr(executor.select, "select", fault_select)
+    monkeypatch.setattr(executor.os, "read", fault_read)
+    try:
+        expected = KeyboardInterrupt if fault == "interrupt" else OSError
+        if fault == "interrupt":
+
+            def interrupt_select(read, write, error, timeout=None):
+                if os.getpid() == controller_pid:
+                    raise KeyboardInterrupt()
+                return original_select(read, write, error, timeout)
+
+            monkeypatch.setattr(executor.select, "select", interrupt_select)
+        with pytest.raises(expected):
+            executor._run_gate_worker(
+                plan=plan,
+                o7=o7,
+                o8=o8,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                allocation_now=1001.0,
+                clock=lambda: 1001.0,
+                read_handoff=executor.read_private_handoff,
+                transport=lambda *_args, **_kwargs: (
+                    200,
+                    {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []},
+                ),
+            )
+    finally:
+        os.close(credential_fd)
+        if child_pids and not cleanup_pids:
+            original_stop(child_pids[0])
+    assert len(child_pids) == 1
+    assert cleanup_pids == child_pids
+    with pytest.raises(ChildProcessError):
+        os.waitpid(child_pids[0], os.WNOHANG)
+
+
+@pytest.mark.parametrize("fault", ["write-close", "monotonic"])
+def test_postfork_initialization_fault_closes_pipe_and_reaps_real_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    _parent, _source_root, _execution_root, packet = _packet(tmp_path)
+    plan = packet["plan"]
+    o7, o8 = packet["o7"], packet["o8"]
+    credential_fd = _credential_fd(tmp_path)
+    controller_pid = os.getpid()
+    child_pids: list[int] = []
+    pipe_fds: list[tuple[int, int]] = []
+    cleanup_pids: list[int] = []
+    original_fork = executor.os.fork
+    original_pipe = executor.os.pipe
+    original_close = executor.os.close
+    original_monotonic = executor.time.monotonic
+    original_stop = executor._stop_worker
+    fault_instance: BaseException
+    if fault == "write-close":
+        fault_instance = OSError("post-fork write-end close fault")
+    else:
+        fault_instance = KeyboardInterrupt("post-fork monotonic fault")
+    forked = False
+    fired = False
+
+    def record_pipe() -> tuple[int, int]:
+        fds = original_pipe()
+        pipe_fds.append(fds)
+        return fds
+
+    def record_fork() -> int:
+        nonlocal forked
+        pid = original_fork()
+        if pid > 0:
+            child_pids.append(pid)
+            forked = True
+        return pid
+
+    def fault_close(fd: int) -> None:
+        nonlocal fired
+        if (
+            os.getpid() == controller_pid
+            and forked
+            and not fired
+            and fault == "write-close"
+        ):
+            fired = True
+            raise fault_instance
+        original_close(fd)
+
+    def fault_monotonic() -> float:
+        nonlocal fired
+        if (
+            os.getpid() == controller_pid
+            and forked
+            and not fired
+            and fault == "monotonic"
+        ):
+            fired = True
+            raise fault_instance
+        return original_monotonic()
+
+    def record_stop(pid: int) -> None:
+        cleanup_pids.append(pid)
+        original_stop(pid)
+
+    monkeypatch.setattr(executor.os, "pipe", record_pipe)
+    monkeypatch.setattr(executor.os, "fork", record_fork)
+    monkeypatch.setattr(executor.os, "close", fault_close)
+    monkeypatch.setattr(executor.time, "monotonic", fault_monotonic)
+    monkeypatch.setattr(executor, "_stop_worker", record_stop)
+    try:
+        with pytest.raises(type(fault_instance)) as raised:
+            executor._run_gate_worker(
+                plan=plan,
+                o7=o7,
+                o8=o8,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                allocation_now=1001.0,
+                clock=lambda: 1001.0,
+                read_handoff=executor.read_private_handoff,
+                transport=lambda *_args, **_kwargs: (
+                    200,
+                    {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []},
+                ),
+            )
+        assert raised.value is fault_instance
+    finally:
+        os.close(credential_fd)
+        if child_pids and not cleanup_pids:
+            original_stop(child_pids[0])
+    assert len(child_pids) == 1
+    assert cleanup_pids == child_pids
+    assert len(pipe_fds) == 1
+    for fd in pipe_fds[0]:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    with pytest.raises(ChildProcessError):
+        os.waitpid(child_pids[0], os.WNOHANG)
+
+
+def test_supervisor_fault_preserves_exception_when_cleanup_reports_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _parent, _source_root, _execution_root, packet = _packet(tmp_path)
+    credential_fd = _credential_fd(tmp_path)
+    controller_pid = os.getpid()
+    child_pids: list[int] = []
+    cleanup_pids: list[int] = []
+    original_fork = executor.os.fork
+    original_stop = executor._stop_worker
+    original_select = executor.select.select
+    supervisor_fault = OSError("supervisor select fault")
+    cleanup_fault = RuntimeError("cleanup reporting fault")
+
+    def record_fork() -> int:
+        pid = original_fork()
+        if pid > 0:
+            child_pids.append(pid)
+        return pid
+
+    def fault_select(read, write, error, timeout=None):
+        if os.getpid() == controller_pid:
+            raise supervisor_fault
+        return original_select(read, write, error, timeout)
+
+    def stop_and_report(pid: int) -> None:
+        cleanup_pids.append(pid)
+        original_stop(pid)
+        raise cleanup_fault
+
+    monkeypatch.setattr(executor.os, "fork", record_fork)
+    monkeypatch.setattr(executor.select, "select", fault_select)
+    monkeypatch.setattr(executor, "_stop_worker", stop_and_report)
+    try:
+        with pytest.raises(OSError) as raised:
+            executor._run_gate_worker(
+                plan=packet["plan"],
+                o7=packet["o7"],
+                o8=packet["o8"],
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                allocation_now=1001.0,
+                clock=lambda: 1001.0,
+                read_handoff=executor.read_private_handoff,
+                transport=lambda *_args, **_kwargs: (
+                    200,
+                    {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []},
+                ),
+            )
+        assert raised.value is supervisor_fault
+    finally:
+        os.close(credential_fd)
+        if child_pids and not cleanup_pids:
+            original_stop(child_pids[0])
+    assert cleanup_pids == child_pids
+    with pytest.raises(ChildProcessError):
+        os.waitpid(child_pids[0], os.WNOHANG)
+
+
 def test_executor_reconstructs_the_real_signing_compiler_id_token_sub_parent(
     tmp_path: Path,
 ) -> None:
@@ -765,12 +1003,27 @@ def test_packet_parent_ticket_binding_is_required(tmp_path: Path) -> None:
     assert ledger.lifecycle == []
 
 
-@pytest.mark.parametrize("relative", [executor.EXECUTOR_ENTRY, recovery.WORKER_ENTRY])
+@pytest.mark.parametrize(
+    "relative",
+    [
+        executor.EXECUTOR_ENTRY,
+        recovery.WORKER_ENTRY,
+        "tools/compat-broad/auth-credential-tokens/credential_wire.py",
+        "tools/compat-broad/batch_wire.py",
+    ],
+)
 def test_runtime_executor_source_must_be_in_reviewed_closure(
     tmp_path: Path, relative: str
 ) -> None:
     parent, source_root, execution_root, packet = _packet(tmp_path)
-    (execution_root / relative).unlink()
+    mutated = execution_root / relative
+    if relative in {
+        "tools/compat-broad/auth-credential-tokens/credential_wire.py",
+        "tools/compat-broad/batch_wire.py",
+    }:
+        mutated.write_bytes(mutated.read_bytes() + b"\n# reviewed decoder mutation\n")
+    else:
+        mutated.unlink()
     ledger = RecordingLedger(parent)
     credential_fd = _credential_fd(tmp_path)
     try:

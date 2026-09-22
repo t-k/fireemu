@@ -51,6 +51,8 @@ RUNTIME_CLOSURE = (
     "tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py",
     "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
     "tools/compat-broad/auth-credential-tokens/credential_remote_transport.py",
+    "tools/compat-broad/auth-credential-tokens/credential_wire.py",
+    "tools/compat-broad/batch_wire.py",
     recovery.WORKER_ENTRY,
     "tools/compat-broad/shared_gate.py",
     "tools/compat-broad/production-admission/reservations.py",
@@ -530,6 +532,20 @@ def _run_gate_worker(
 ) -> tuple[int, dict[str, Any]]:
     """Fork, supervise and reap the sole process that owns the Gate."""
     read_fd, write_fd = os.pipe()
+    payload = bytearray()
+    status: int | None = None
+    eof = False
+    stop_attempted = False
+    worker_reaped = False
+
+    def stop_worker_once() -> None:
+        nonlocal stop_attempted, worker_reaped
+        if stop_attempted or worker_reaped:
+            return
+        stop_attempted = True
+        _stop_worker(pid)
+        worker_reaped = True
+
     try:
         pid = os.fork()
     except OSError:
@@ -578,18 +594,15 @@ def _run_gate_worker(
             os.close(write_fd)
             os._exit(1)
 
-    os.close(write_fd)
-    hard_deadline = time.monotonic() + max(
-        0.0, float(plan["deadlineAt"]) - allocation_now
-    )
-    payload = bytearray()
-    status: int | None = None
-    eof = False
     try:
+        os.close(write_fd)
+        hard_deadline = time.monotonic() + max(
+            0.0, float(plan["deadlineAt"]) - allocation_now
+        )
         while status is None or not eof:
             remaining = hard_deadline - time.monotonic()
             if remaining <= 0:
-                _stop_worker(pid)
+                stop_worker_once()
                 _refuse("recovery worker deadline expired")
             readable, _, _ = select.select([read_fd], [], [], min(remaining, 0.25))
             if readable:
@@ -599,35 +612,46 @@ def _run_gate_worker(
                 else:
                     payload.extend(chunk)
                     if len(payload) > MAX_HANDOFF_BYTES:
-                        _stop_worker(pid)
+                        stop_worker_once()
                         _refuse("bounded recovery worker receipt required")
             if status is None:
                 waited, wait_status = os.waitpid(pid, os.WNOHANG)
                 if waited == pid:
                     status = wait_status
-    finally:
-        os.close(read_fd)
-    if status is None:
-        _, status = os.waitpid(pid, 0)
-    try:
-        value = json.loads(bytes(payload))
-    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
-        _refuse("recovery worker receipt required")
-    if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+                    worker_reaped = True
+        if status is None:
+            _, status = os.waitpid(pid, 0)
+        try:
+            value = json.loads(bytes(payload))
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+            _refuse("recovery worker receipt required")
+        if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+            if (
+                isinstance(value, dict)
+                and value.get("kind") == "auth-credential-recovery-worker-failure-v1"
+            ):
+                reason = value.get("reason")
+                if isinstance(reason, str) and reason:
+                    _refuse(f"recovery worker refused ({reason})")
+            _refuse("recovery worker failed")
         if (
-            isinstance(value, dict)
-            and value.get("kind") == "auth-credential-recovery-worker-failure-v1"
+            not isinstance(value, dict)
+            or value.get("kind") != "auth-credential-recovery-worker-receipt-v1"
         ):
-            reason = value.get("reason")
-            if isinstance(reason, str) and reason:
-                _refuse(f"recovery worker refused ({reason})")
-        _refuse("recovery worker failed")
-    if (
-        not isinstance(value, dict)
-        or value.get("kind") != "auth-credential-recovery-worker-receipt-v1"
-    ):
-        _refuse("recovery worker receipt required")
-    return pid, value
+            _refuse("recovery worker receipt required")
+        return pid, value
+    except BaseException:
+        try:
+            stop_worker_once()
+        except BaseException as cleanup_error:  # noqa: BLE001 -- preserve original.
+            del cleanup_error
+        raise
+    finally:
+        for fd in (read_fd, write_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def execute_recovery(

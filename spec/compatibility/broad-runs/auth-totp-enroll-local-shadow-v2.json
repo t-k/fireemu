@@ -671,63 +671,63 @@
     "owner": {
       "accounts": [
         {
-          "email": "o2-mfa-enrollment-age-300-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-enrollment-age-300-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-300"
         },
         {
-          "email": "o2-mfa-enrollment-age-450-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-enrollment-age-450-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-450"
         },
         {
-          "email": "o2-mfa-enrollment-age-600-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-enrollment-age-600-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "enrollment-age-600"
         },
         {
-          "email": "o2-mfa-interaction-anonymous-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-interaction-anonymous-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "interaction-anonymous"
         },
         {
-          "email": "o2-mfa-interaction-unverified-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-interaction-unverified-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "interaction-unverified"
         },
         {
-          "email": "o2-mfa-pending-age-1800-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-pending-age-1800-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-1800"
         },
         {
-          "email": "o2-mfa-pending-age-300-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-pending-age-300-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-300"
         },
         {
-          "email": "o2-mfa-pending-age-450-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-pending-age-450-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-450"
         },
         {
-          "email": "o2-mfa-pending-age-600-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-pending-age-600-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-age-600"
         },
         {
-          "email": "o2-mfa-pending-control-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-pending-control-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "pending-control"
         },
         {
-          "email": "o2-mfa-totp-lifecycle-a9881c1749ec47588ef61ba7fbf9cdbc@example.com",
+          "email": "o2-mfa-totp-lifecycle-c191796d4176493e84892a37507ba001@example.com",
           "ownership": "created-by-this-run",
           "role": "totp-lifecycle"
         }
       ],
-      "namespace": "o2/AUTH-MFA-AGE-TOTP-01/a9881c1749ec47588ef61ba7fbf9cdbc",
-      "nonceDigest": "d4b7fe40c6d7fa02cfcd40487212601585104a768e04c72d50e78dabaa275cfb"
+      "namespace": "o2/AUTH-MFA-AGE-TOTP-01/c191796d4176493e84892a37507ba001",
+      "nonceDigest": "42b2789ce32335be315a2edd3bcb8295f3189399b40121f2f2bfc4b1882c32c9"
     },
     "ownerPreconditions": [
       "Identity Platform (not legacy Firebase Authentication) is enabled on the project, because multi-factor configuration lives there.",
@@ -1237,7 +1237,7 @@
   "maxRequests": 400,
   "productionExecuted": false,
   "provenance": {
-    "digest": "f23f6306939160df9321044a2f328871e0a5de21ee27e3a3e612467055f42351",
+    "digest": "ca1e40c0fc8c5e83d53e1d141e1322b5bbaf9ffc9399aea4f0654ac70d64fd55",
     "evidence": "recomputed-from-worktree",
     "paths": {
       "tools/compat-broad/auth-totp-enroll/mfa_admission.py": "3c2187c81423124147bdc061b017a714a356e2bf210fe3d78c4af62e1edc4093",
@@ -1246,12 +1246,12 @@
       "tools/compat-broad/auth-totp-enroll/mfa_comparator.py": "41aa4014b764761a3359e7c9ce1768225d74896283709d2d248999f2fe6c732e",
       "tools/compat-broad/auth-totp-enroll/mfa_config_lock.py": "874502103c6ca9c7f738687f032f44e6d8ce28c47a9a3fd015080b3378567039",
       "tools/compat-broad/auth-totp-enroll/mfa_descriptor.py": "13aa360ddb791639acec0e1b83f36f2f3458164379fcb01760a3c9ffab3a53bd",
-      "tools/compat-broad/auth-totp-enroll/mfa_gate.py": "277b90f2d3b1263e04cbc4e270fc921b5d51a040f23d75a9f329b111eb315ad9",
+      "tools/compat-broad/auth-totp-enroll/mfa_gate.py": "7ac7083dc248993124bbc5f3df2c0cfa752b322b893526ef4577b824091f18e8",
       "tools/compat-broad/auth-totp-enroll/mfa_local_shadow.py": "f8f3f382275ec8f4890bd74fcfc08abcf10e6b1aab469ccdb2ab21bfee719d28",
       "tools/compat-broad/auth-totp-enroll/mfa_manifest.py": "e98060ef42b434fb20e5b750cb9737c8d28edcd7c76456b9ed4310888b2625df",
       "tools/compat-broad/auth-totp-enroll/mfa_o8.py": "df6c2d8f3ee1b2f3b48d19dc92fe39e2ae95f8f65df1bee18425a235604a6bf1",
       "tools/compat-broad/auth-totp-enroll/mfa_persistence.py": "a1ec21d846f1410a0d8cc647d3d8901da3eaeec1413cd65ac918f19820140333",
-      "tools/compat-broad/auth-totp-enroll/mfa_production.py": "152d84ea474fb51f17d36044319b3ece4a95026b7e469f3277351dcc177cabce",
+      "tools/compat-broad/auth-totp-enroll/mfa_production.py": "faa1524717a29deaf90dba847c655ca14ef46c82f551320e3a29426b94a0cf70",
       "tools/compat-broad/auth-totp-enroll/mfa_production_transport.py": "310f16841cd8584ed16ba20d4c7fc7a29bac75e5d6d87e236c73baf42e62f0d0",
       "tools/compat-broad/auth-totp-enroll/mfa_provenance.py": "6d7f46ec2636999aea5c15fc675a1924df142fbae6c47355e14836912133408e",
       "tools/compat-broad/auth-totp-enroll/mfa_request_budget.py": "c2336054b52aaf0e6167f80be9a22f14a57c8e4532f14e99d558d68090127a55",
@@ -1277,7 +1277,7 @@
       "attemptedAccounts": 11,
       "authorizesCleanup": false,
       "journalComplete": true,
-      "recordSha256": "029b962e2e10d39609794898c2941f0d82933211c20d6b8d5edbf2aa3f775ac7",
+      "recordSha256": "f0dc24f0a2615a75f4057886cca884eec4deaed8e0292c3b567961cb009250ac",
       "remainingKnownAccounts": 0,
       "resourceCleanupComplete": true,
       "schema": "o2-mfa-local-responsibility-v1",
@@ -1286,7 +1286,7 @@
     },
     "ownedAccounts": 11,
     "remainingOwnedResources": 0,
-    "runId": "3d896c74ff1d44e1968ea9e5102f8b79"
+    "runId": "4b466ebe3340479c9112160f5768b2fa"
   },
   "requestBudget": {
     "authorizesCleanup": false,
@@ -1295,17 +1295,17 @@
     "maxRequests": 400,
     "observationLimit": 372,
     "observationLimitHit": false,
-    "observationRequests": 155,
+    "observationRequests": 156,
     "phase": "closed",
-    "planDigest": "9adb367c1e292564755f24dc46c1a2cdfc915152efa1b95e4f8453491453b33f",
+    "planDigest": "468e270e5ea7dca9e7cb7f80203446e630ff1ba21340905d216381874d4bb93c",
     "recoveryAccounts": 11,
     "recoveryEntered": true,
     "recoveryRequests": 22,
-    "requestsCharged": 177,
+    "requestsCharged": 178,
     "reservedRecoveryRequests": 28,
     "schema": "o2-mfa-local-request-budget-v1"
   },
-  "requestsCharged": 177,
+  "requestsCharged": 178,
   "rows": [
     {
       "errorCode": null,
@@ -1540,16 +1540,16 @@
     }
   ],
   "runtimeIdentity": {
-    "artifactSha256": "017315d9c40d209c23d650f526bebc90631a8429c08e867d8388e070db236a89",
+    "artifactSha256": "21208a68d60905d9e9b3d75c0bc71d4fb045ebdf1d9d02fb403baa234d295aef",
     "configurationDigest": "21bdb9a6fd429f4d6638fa4fc27531ed3dc12e2880ae959a9afcc54d91cbf236",
-    "executionCommit": "9b3a5b4137b9a4a5b43f0c475573c9d8f868665f",
-    "runId": "3d896c74ff1d44e1968ea9e5102f8b79"
+    "executionCommit": "6c592c9f6361a6cef6e7c58cda487b512b9e35aa",
+    "runId": "4b466ebe3340479c9112160f5768b2fa"
   },
   "schema": "o2-mfa-local-shadow-v1",
   "side": "local",
   "worktree": {
     "clean": true,
-    "commit": "9b3a5b4137b9a4a5b43f0c475573c9d8f868665f",
+    "commit": "6c592c9f6361a6cef6e7c58cda487b512b9e35aa",
     "resolved": true
   }
 }

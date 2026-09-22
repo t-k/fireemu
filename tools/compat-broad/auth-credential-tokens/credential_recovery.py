@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+import shared_gate
 from broad_contract import digest
 
 CAMPAIGN = "AUTH-CREDENTIAL-TOKENS-01"
@@ -405,6 +406,8 @@ def compile_recovery_plan(parent: Mapping[str, Any], *, recovery_nonce: str, pro
             }
         },
     }
+    if recovery_seconds < shared_gate._recovery_time(gate_plan, gate_plan["requestSeconds"]):
+        _refuse("recovery deadline cannot fund Gate reserve")
     plan: dict[str, Any] = {"kind": KIND, "campaignId": CAMPAIGN, "operationClass": OPERATION_CLASS, "project": PROJECT, "recoveryNonce": recovery_nonce, "recoveryNonceDigest": digest(recovery_nonce), "issuedAt": issued_at, "deadlineSeconds": deadline_seconds, "deadlineAt": issued_at + deadline_seconds, "budget": copy.deepcopy(CHILD_BUDGET), "parent": {"ticketDigest": digest(parent.get("ticket")), "claimDigest": snapshot["claim"].get("claimDigest", digest(snapshot["claim"])), "planDigest": digest(snapshot["plan"]), "gateDigest": digest(snapshot["gate"]), "eventIndex": snapshot["eventIndex"], "requestDigest": digest(snapshot["operation"]), "resource": resource, "state": "held"}, "customUid": resource.rsplit("/", 1)[1], "customUidDigest": digest(resource.rsplit("/", 1)[1]), "resource": resource, "operationDigest": digest(operation), "operation": operation, "gatePlan": gate_plan, "provenance": provenance_value}
     plan["planDigest"] = digest(_stable_plan(plan))
     _validate_shape(plan)
@@ -500,6 +503,13 @@ def build_child_claim(parent: Mapping[str, Any], plan: Mapping[str, Any], *, per
     child_gate_plan = copy.deepcopy(authority_plan["gatePlan"])
     child_gate_plan["wallSeconds"] = duration
     child_gate_plan["jobs"][GATE_JOB]["schedule"][0]["seconds"] = min(5.0, float(duration))
+    if (
+        child_gate_plan["recoverySeconds"] >= child_gate_plan["wallSeconds"]
+        or child_gate_plan["recoverySeconds"] < shared_gate._recovery_time(
+            child_gate_plan, child_gate_plan["requestSeconds"]
+        )
+    ):
+        _refuse("recovery deadline cannot fund child Gate reserve")
     resource = authority_plan["resource"]
     locks = [{"key": f"project/{PROJECT}/auth/accounts/{authority_plan['customUid']}", "mode": "WRITE"}]
     claim = {"kind": CHILD_KIND, "version": 1, "campaignId": CAMPAIGN, "manifestDigest": digest(child_gate_plan), "nonceDigest": authority_plan["recoveryNonceDigest"], "gatePath": gate_path, "gateJob": GATE_JOB, "parentGateJob": snapshot["job"], "gatePlanDigest": digest(child_gate_plan), "parentClaimDigest": snapshot["claim"].get("claimDigest", digest(snapshot["claim"])), "parentPlanDigest": digest(snapshot["plan"]), "parentGateDigest": snapshot["evidence"]["gateDigest"], "parentEvidenceDigest": snapshot["evidence"]["evidenceDigest"], "parentEventIndex": snapshot["eventIndex"], "parentRequestDigest": digest(snapshot["operation"]), "recoveryNonce": authority_plan["recoveryNonce"], "resourceDigest": digest([resource]), "ownedResources": [resource], "locks": locks, "budget": copy.deepcopy(CHILD_BUDGET), "durationSeconds": duration, "generation": copy.deepcopy(authority_plan["provenance"]["generation"]), "ownerIdentity": owner_identity, "recoveryOwner": recovery_owner, "operationClass": OPERATION_CLASS, "readCount": 1, "inspectionCount": 1, "absenceCount": 1, "deleteCount": 0, "expiresAt": authority_plan["deadlineAt"], "executionHost": host, "permissionDigest": digest(permission), "sourceBindingDigest": authority_plan["gatePlan"]["sourceBindingDigest"], "transportBindingDigest": authority_plan["gatePlan"]["transportBindingDigest"], "o7BindingDigest": authority_plan["gatePlan"]["o7BindingDigest"], "o8BindingDigest": authority_plan["gatePlan"]["o8BindingDigest"]}

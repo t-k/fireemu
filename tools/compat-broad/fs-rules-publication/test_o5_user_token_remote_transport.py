@@ -100,6 +100,29 @@ class _DelayedObservationHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
+class _FreshSetupHandler(http.server.BaseHTTPRequestHandler):
+    def do_PATCH(self) -> None:
+        payload = {"name": self.path.removeprefix("/v1/").split("?", 1)[0], "fields": {}, "updateTime": "2026-09-22T00:00:00Z"}
+        self._reply(payload)
+
+    def do_POST(self) -> None:
+        if self.path.endswith("accounts:update"):
+            payload = {"localId": "fresh-uid-7", "displayName": "owner"}
+        else:
+            payload = {"localId": "fresh-uid-7", "idToken": "fresh-token", "expiresIn": "3600"}
+        self._reply(payload)
+
+    def _reply(self, payload: dict[str, object]) -> None:
+        encoded = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
 @pytest.fixture
 def fixture_origin():
     reservation = None
@@ -385,6 +408,61 @@ def test_per_call_deadline_cannot_extend_factory_timeout():
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_setup_transport_derives_fresh_uid_before_claims_and_signin():
+    plan = _setup_fixture_plan()
+    plan.update({"campaignId": remote.CAMPAIGN, "project": "fireemu-35fe6", "database": "(default)", "nonce": "a" * 32, "tenant": "tenant1234"})
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _FreshSetupHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transport = remote.make_setup_transport(
+            plan,
+            credentials={"administrator": "fixture-admin", "api-key": "fixture-key"},
+            setup_secrets={"owner-a": "secret"},
+            frozen_inputs=frozen,
+            capability=capability,
+            fixture_origin=f"http://127.0.0.1:{server.server_port}",
+        )
+        signup = {"id": "account/owner-a/signup", "service": "identity", "route": "accounts:signUp", "method": "POST", "accountRef": "owner-a", "tenant": None, "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"}}
+        signin = {**signup, "id": "account/owner-a/signin", "route": "accounts:signInWithPassword"}
+        claims = {"id": "account/owner-a/claim-update", "service": "identity", "route": "accounts:update", "method": "POST", "accountRef": "owner-a", "tenant": None, "claimsDigest": digest({"owner": "yes"}), "response": {"localId": "response-bound"}}
+        result = transport(signup, binding=source, binding_digest=source_digest)
+        assert result.receipt.local_id == "fresh-uid-7"
+        transport(claims, binding=source, binding_digest=source_digest)
+        signin_result = transport(signin, binding=source, binding_digest=source_digest)
+        assert signin_result.receipt.local_id == "fresh-uid-7"
+    finally:
+        _ACTIVE.discard(capability)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_recovery_transport_requires_nonempty_sealed_partial_proofs():
+    plan, _operation, _resource = minimal_wire_plan()
+    with pytest.raises(ValueError, match="acknowledged identity proofs"):
+        remote.make_recovery_transport(
+            plan,
+            credentials={"administrator": "fixture-admin"},
+            frozen_inputs={"plan": plan, "planDigest": digest(plan), "inputsDigest": digest({"plan": plan, "planDigest": digest(plan)})},
+            identity_proofs={},
+            capability=object(),
+        )
+
+
+def test_principal_action_readback_is_a_separate_typed_request():
+    plan = {"campaignId": remote.CAMPAIGN, "project": "fireemu-35fe6", "database": "(default)", "nonce": "a" * 32, "tenant": "tenant1234", "ownedAccounts": [{"ref": "owner-a", "tenant": None}]}
+    operation = {"kind": "principal-action-readback", "phase": "principal", "principalRef": "owner-a", "credentialRef": "administrator", "credentialClass": "administrator"}
+    request = remote.prepare_request(plan, operation, credentials={"administrator": "fixture-admin"}, account_bindings={"owner-a": {"uid": "fresh-uid", "tenant": None}})
+    assert request["route"] == "principal-action-readback"
+    assert request["path"] == "/v1/projects/fireemu-35fe6/accounts:lookup"
+    assert request["body"] == {"localId": ["fresh-uid"]}
 
 
 def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
@@ -683,6 +761,7 @@ def test_transport_adapts_official_document_response_through_real_worker(fixture
         "httpStatus": 200,
         "documentPresent": True,
         "fields": {"count": 1},
+        "responseDigest": digest(_FixtureHandler.response_body),
         "complete": True,
         "workerReaped": True,
         "endpoint": fixture_origin.removeprefix("http://"),
@@ -819,6 +898,7 @@ def test_transport_adapts_official_permission_error_through_real_worker(fixture_
         "httpStatus": 403,
         "documentPresent": False,
         "fields": None,
+        "responseDigest": digest(_FixtureHandler.response_body),
         "complete": True,
         "workerReaped": True,
         "endpoint": fixture_origin.removeprefix("http://"),
@@ -990,8 +1070,9 @@ def test_recovery_document_receipt_uses_version_without_observation_fields(plan)
     )
     assert got["documentPresent"] is True
     assert got["version"] == "2026-09-22T00:00:00Z"
-    assert "fields" not in got
-    accepted, failure = _accept(got, RECOVERY_RECEIPT_KEYS)
+    assert got["fields"] == {"count": 1}
+    assert got["responseDigest"] == digest({"name": resource, "fields": {"count": {"integerValue": "1"}}, "updateTime": "2026-09-22T00:00:00Z"})
+    accepted, failure = _accept({key: got[key] for key in RECOVERY_RECEIPT_KEYS if key in got}, RECOVERY_RECEIPT_KEYS)
     assert failure is None
     assert accepted is not None
 
@@ -1019,7 +1100,10 @@ def test_recovery_not_found_receipt_uses_canonical_code_and_no_fields(plan):
     assert got["code"] == 5
     assert got["version"] is None
     assert "fields" not in got
-    accepted, failure = _accept(got, RECOVERY_RECEIPT_KEYS)
+    accepted, failure = _accept(
+        {key: got[key] for key in RECOVERY_RECEIPT_KEYS if key in got},
+        RECOVERY_RECEIPT_KEYS,
+    )
     assert failure is None
     assert accepted is not None
 
@@ -1034,6 +1118,8 @@ def test_commit_and_observation_error_receipts_use_null_fields(plan):
         endpoint="127.0.0.1:1234",
     )
     assert got["fields"] is None
+    assert len(got["effects"]) == 1
+    assert got["responseDigest"] == digest({"writeResults": [{"updateTime": "2026-09-22T00:00:00Z"}], "commitTime": "2026-09-22T00:00:00Z"})
     get_plan, get_operation, _ = minimal_wire_plan()
     get_prepared = remote.prepare_request(get_plan, get_operation, credentials={"unauthenticated": ""})
     error = remote._adapt_firestore_result(
@@ -1043,6 +1129,37 @@ def test_commit_and_observation_error_receipts_use_null_fields(plan):
         endpoint="127.0.0.1:1234",
     )
     assert error["fields"] is None
+
+
+def test_atomic_commit_permission_denial_projects_canonical_refusal():
+    commit_plan, operation, _ = minimal_wire_plan("commit", "create")
+    prepared = remote.prepare_request(commit_plan, operation, credentials={"unauthenticated": ""})
+    result = remote._adapt_firestore_result(
+        prepared,
+        {"status": 403, "body": {"error": {"code": 403, "status": "PERMISSION_DENIED"}}},
+        sequence=1,
+        endpoint="127.0.0.1:1234",
+    )
+    assert result["code"] == 7
+    assert result["restErrorCode"] == 403
+    assert result["responseDigest"] == digest({"error": {"code": 403, "status": "PERMISSION_DENIED"}})
+    assert result["refusal"]["canonicalRowDigest"] == prepared["canonicalRowDigest"]
+    assert prepared["canonicalRowDigest"] == digest(commit_plan["observation"][operation["index"]])
+    assert result["effects"] == []
+    with pytest.raises(ValueError, match="REST error response shape refused"):
+        remote._adapt_firestore_result(
+            prepared,
+            {"status": 403, "body": {"error": {"code": 403, "status": "PERMISSION_DENIED"}, "writeResults": []}},
+            sequence=1,
+            endpoint="127.0.0.1:1234",
+        )
+    with pytest.raises(ValueError, match="REST error response shape refused"):
+        remote._adapt_firestore_result(
+            prepared,
+            {"status": 403, "body": {"error": {"code": 403, "status": "OTHER"}}},
+            sequence=1,
+            endpoint="127.0.0.1:1234",
+        )
 
 
 def test_plan_shape_keeps_o5_accounts_rows_and_rulesets(plan):

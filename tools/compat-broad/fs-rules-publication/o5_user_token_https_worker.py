@@ -15,7 +15,8 @@ from typing import Any
 
 MAX_REQUEST_BYTES = 1_048_576
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
-MAX_SECONDS = 8.0
+MAX_SECONDS = 12.0
+DEFAULT_SECONDS = 8.0
 FIXED_ORIGINS = {
     "firestore": "https://firestore.googleapis.com",
     "identity": "https://identitytoolkit.googleapis.com",
@@ -114,7 +115,7 @@ def _route(service: Any, route: Any, method: Any, path: Any) -> None:
         return
     if (
         service == "identity"
-        and route in {"account-recovery", "principal-action"}
+        and route in {"account-recovery", "principal-action", "principal-action-readback"}
         and method == "POST"
         and _ACCOUNT.fullmatch(path)
     ):
@@ -241,7 +242,8 @@ def exchange(
     if service in {"identity", "rules"} and not client_setup and "authorization" not in lowered:
         raise ValueError("authorization header required")
     seconds = envelope["seconds"]
-    if type(seconds) not in (int, float) or not 0 < seconds <= MAX_SECONDS:
+    maximum_seconds = MAX_SECONDS if service == "rules" else DEFAULT_SECONDS
+    if type(seconds) not in (int, float) or not 0 < seconds <= maximum_seconds:
         raise ValueError("bounded worker deadline required")
     body = _bounded_body(envelope["body"])
     if route in {"ruleset-create", "release-patch"}:

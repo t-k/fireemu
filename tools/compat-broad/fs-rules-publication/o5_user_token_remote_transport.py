@@ -37,7 +37,8 @@ WORKER_ENTRY = f"{LANE_DIRECTORY}/o5_user_token_https_worker.py"
 FIRESTORE_ORIGIN = "https://firestore.googleapis.com"
 IDENTITY_ORIGIN = "https://identitytoolkit.googleapis.com"
 RULES_ORIGIN = "https://firebaserules.googleapis.com"
-MAX_SECONDS = 8.0
+MAX_SECONDS = 12.0
+DEFAULT_SECONDS = 8.0
 _REAP_RESERVE_SECONDS = 0.5
 MAX_ENVELOPE_BYTES = 1_048_576
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -53,8 +54,9 @@ _RULESET_NAME = re.compile(
 _RELEASE_NAME = re.compile(
     r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$"
 )
-_WORKER_SHA256 = "437c7c9fb1796dca76bd0d81b4d50c690709bc219b05917b238a14461ff9e586"
+_WORKER_SHA256 = "3d46aa0db14d558f44ccad6e09a593cbb5e0bca3eb52e29c9d046acd1a84c9b2"
 _OWNED_CHILDREN: set[int] = set()
+_SETUP_HANDOFF_SEAL = object()
 
 
 class WorkerExchangeError(ValueError):
@@ -98,11 +100,20 @@ class SetupPublicReceipt:
 class SetupPrivateHandoff:
     """Transient credential handoff; never use this object as a receipt."""
 
-    __slots__ = ("_id_token", "_expires_in")
+    __slots__ = ("_id_token", "_expires_in", "_response_digest", "_request_digest", "_seal")
 
-    def __init__(self, *, id_token: str | None = None, expires_in: str | None = None):
+    def __init__(self, *, id_token: str | None = None, expires_in: str | None = None, response_digest: str | None = None, request_digest: str | None = None, _seal: object | None = None):
+        if _seal is not _SETUP_HANDOFF_SEAL:
+            raise TypeError("private setup handoff is transport-issued")
         self._id_token = id_token
         self._expires_in = expires_in
+        self._response_digest = response_digest
+        self._request_digest = request_digest
+        self._seal = _seal
+
+    @classmethod
+    def _issued(cls, *, id_token: str | None = None, expires_in: str | None = None, response_digest: str | None = None, request_digest: str | None = None) -> "SetupPrivateHandoff":
+        return cls(id_token=id_token, expires_in=expires_in, response_digest=response_digest, request_digest=request_digest, _seal=_SETUP_HANDOFF_SEAL)
 
     def __repr__(self) -> str:
         return "SetupPrivateHandoff(<redacted>)"
@@ -112,6 +123,11 @@ class SetupPrivateHandoff:
 
     def expires_in_for_followup(self) -> str | None:
         return self._expires_in
+
+    def proof_material(self) -> tuple[str | None, str | None, str | None]:
+        if self._seal is not _SETUP_HANDOFF_SEAL:
+            raise ValueError("private setup handoff seal required")
+        return self._id_token, self._response_digest, self._request_digest
 
 
 class SetupResult:
@@ -485,6 +501,7 @@ def _observation(
         raise ValueError("expired credential cannot authorize writes")
     path = _resource(operation["resources"][0], nonce=nonce)
     headers = _headers(token)
+    canonical_row_digest = digest(observations[index])
     if operation["method"] == "get":
         return {
             "service": "firestore",
@@ -494,6 +511,8 @@ def _observation(
             "method": "GET",
             "headers": headers,
             "body": None,
+            "canonicalRowDigest": canonical_row_digest,
+            "principalRef": principal,
         }
     return {
         "service": "firestore",
@@ -503,6 +522,8 @@ def _observation(
         "method": "POST",
         "headers": headers,
         "body": {"writes": _commit_writes(plan, operation["writes"], account_bindings)},
+        "canonicalRowDigest": canonical_row_digest,
+        "principalRef": principal,
     }
 
 
@@ -671,6 +692,7 @@ def adapt_setup_result(
     endpoint: str,
     sequence: int,
     account_bindings: dict[str, Any] | None = None,
+    request_digest: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(result, dict) or type(result.get("status")) is not int or not isinstance(result.get("body"), dict):
         raise ValueError("setup response envelope refused")
@@ -698,7 +720,7 @@ def adapt_setup_result(
                 fields_digest=digest(fields),
                 update_time=body["updateTime"],
             ),
-            private=SetupPrivateHandoff(),
+            private=SetupPrivateHandoff._issued(),
         )
     if not isinstance(body.get("localId"), str):
         raise ValueError("setup localId response refused")
@@ -721,8 +743,8 @@ def adapt_setup_result(
             wire_sequence=wire["wireSequence"],
             local_id=body["localId"],
         ),
-        private=SetupPrivateHandoff(
-            id_token=body.get("idToken"), expires_in=body.get("expiresIn")
+        private=SetupPrivateHandoff._issued(
+            id_token=body.get("idToken"), expires_in=body.get("expiresIn"), response_digest=digest(body), request_digest=request_digest
         ),
     )
 
@@ -800,6 +822,21 @@ def _principal(
         "headers": _headers(token),
         "body": body,
     }
+
+
+def _principal_readback(
+    plan: dict[str, Any], operation: dict[str, Any], credentials: dict[str, Any], account_bindings: dict[str, Any] | None
+) -> dict[str, Any]:
+    required = {"kind", "phase", "principalRef", "credentialRef", "credentialClass"}
+    if set(operation) != required or operation.get("kind") != "principal-action-readback" or operation.get("phase") != "principal" or operation["credentialRef"] != "administrator" or operation["credentialClass"] != "administrator":
+        raise ValueError("principal readback shape refused")
+    ref = operation["principalRef"]
+    account = next((entry for entry in plan.get("ownedAccounts", []) if isinstance(entry, dict) and entry.get("ref") == ref), None)
+    bound = (account_bindings or {}).get(ref)
+    if not isinstance(account, dict) or not isinstance(bound, dict) or not isinstance(bound.get("uid"), str) or bound.get("tenant") != account.get("tenant"):
+        raise ValueError("principal readback binding required")
+    token = _credential(credentials, "administrator", "administrator")
+    return {"service": "identity", "route": "principal-action-readback", "origin": IDENTITY_ORIGIN, "path": _account_path(account.get("tenant"), "lookup"), "method": "POST", "headers": _headers(token), "body": {"localId": [bound["uid"]]}}
 
 
 def _recovery(
@@ -922,6 +959,8 @@ def prepare_request(
         return _rules_route(plan, operation, credentials)
     if operation.get("kind") == "principal-action":
         return _principal(plan, operation, credentials, account_bindings)
+    if operation.get("kind") == "principal-action-readback":
+        return _principal_readback(plan, operation, credentials, account_bindings)
     if operation.get("phase") == "recovery":
         return _recovery(
             plan, operation, credentials, nonce=nonce, account_bindings=account_bindings
@@ -954,7 +993,7 @@ def _run_worker(
     if fixture_origin is not None:
         argv.extend(("--fixture-origin", fixture_origin))
     started = time.monotonic()
-    seconds = float(envelope.get("seconds", MAX_SECONDS))
+    seconds = float(envelope.get("seconds", DEFAULT_SECONDS))
     deadline = started + seconds
     child = subprocess.Popen(
         argv,
@@ -1102,6 +1141,44 @@ def _adapt_firestore_result(
     error = body.get("error")
     if status < 200 or status >= 300:
         if (
+            prepared.get("service") == "firestore"
+            and prepared.get("route") == "observation-commit"
+            and prepared.get("method") == "POST"
+            and prepared.get("path") == f"/v1/projects/{PROJECT}/databases/(default)/documents:commit"
+            and status == 403
+            and set(body) == {"error"}
+            and isinstance(error, dict)
+            and error.get("code") == 403
+            and error.get("status") == "PERMISSION_DENIED"
+            and isinstance(prepared.get("canonicalRowDigest"), str)
+            and "principalRef" in prepared
+        ):
+            response_digest = digest(body)
+            return {
+                "status": "PERMISSION_DENIED",
+                "code": 7,
+                "restErrorCode": 403,
+                "httpStatus": 403,
+                "complete": True,
+                "workerReaped": True,
+                "documentPresent": False,
+                "fields": None,
+                "effects": [],
+                "responseDigest": response_digest,
+                "refusal": {
+                    "kind": "atomic-commit-permission-denied-v1",
+                    "canonicalRowDigest": prepared["canonicalRowDigest"],
+                    "principalRef": prepared["principalRef"],
+                    "operation": "Commit",
+                    "code": 7,
+                    "restErrorCode": 403,
+                    "status": "PERMISSION_DENIED",
+                },
+                **wire,
+            }
+        if prepared.get("route") == "observation-commit" and status == 403:
+            raise ValueError("REST error response shape refused")
+        if (
             not isinstance(error, dict)
             or type(error.get("code")) is not int
             or error["code"] != status
@@ -1115,6 +1192,7 @@ def _adapt_firestore_result(
                 "httpStatus": 404,
                 "documentPresent": False,
                 "version": None,
+                "responseDigest": digest(body),
                 "complete": True,
                 **wire,
             }
@@ -1124,6 +1202,7 @@ def _adapt_firestore_result(
             "httpStatus": status,
             "documentPresent": False,
             "fields": None,
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }
@@ -1134,14 +1213,15 @@ def _adapt_firestore_result(
         expected = prepared["path"][len("/v1/") :]
         if not isinstance(name, str) or name != expected or not isinstance(fields, dict) or not isinstance(body.get("updateTime"), str):
             raise ValueError("REST recovery Document response shape refused")
-        for value in fields.values():
-            _decode_firestore_value(value)
+        decoded_fields = {key: _decode_firestore_value(value) for key, value in fields.items()}
         return {
             "status": "OK",
             "code": 0,
             "httpStatus": status,
             "documentPresent": True,
+            "fields": decoded_fields,
             "version": body["updateTime"],
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }
@@ -1157,6 +1237,7 @@ def _adapt_firestore_result(
             "httpStatus": status,
             "documentPresent": True,
             "fields": {key: _decode_firestore_value(value) for key, value in fields.items()},
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }
@@ -1178,12 +1259,23 @@ def _adapt_firestore_result(
             )
         ):
             raise ValueError("REST Commit response shape refused")
+        effects = [
+            {
+                "index": index,
+                "writeDigest": digest(write),
+                "updateTime": result.get("updateTime"),
+                "transformResults": result.get("transformResults"),
+            }
+            for index, (write, result) in enumerate(zip(writes, write_results))
+        ]
         return {
             "status": "OK",
             "code": 0,
             "httpStatus": status,
             "documentPresent": True,
             "fields": None,
+            "effects": effects,
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }
@@ -1193,10 +1285,178 @@ def _adapt_firestore_result(
             "code": 0,
             "httpStatus": status,
             "documentPresent": False,
+            "responseDigest": digest(body),
             "complete": True,
             **wire,
         }
     raise ValueError("REST response route shape refused")
+
+
+def make_setup_transport(
+    plan: dict[str, Any],
+    *,
+    credentials: dict[str, Any],
+    frozen_inputs: dict[str, Any],
+    capability: Any,
+    setup_secrets: dict[str, str],
+    fixture_origin: str | None = None,
+):
+    """Run only the compiler-declared setup prefix before identity proofs exist."""
+    _plan_identity(plan)
+    _frozen_inputs(plan, frozen_inputs)
+    _credential(credentials, "administrator", "administrator")
+    _credential(credentials, "api-key", "api-key")
+    if not isinstance(setup_secrets, dict):
+        raise ValueError("setup secrets required")
+    if capability is None:
+        raise ValueError("active O8 production capability required")
+    setup_bindings: dict[str, dict[str, Any]] = {}
+    sequence = 0
+
+    def transmit(
+        value: dict[str, Any],
+        *,
+        binding: bytes,
+        binding_digest: str,
+        capability_override: Any = None,
+    ) -> SetupResult:
+        nonlocal sequence
+        if not isinstance(value, dict) or not isinstance(value.get("id"), str):
+            raise ValueError("setup item required")
+        if not (value["id"].startswith("fixture/") or value["id"].startswith("account/")):
+            raise ValueError("setup-only transport refused non-setup operation")
+        active = capability if capability_override is None else capability_override
+        if active is not capability:
+            raise ValueError("setup capability binding differs")
+        snapshot = _frozen_inputs(plan, frozen_inputs)
+        if getattr(active, "inputs_digest", None) != snapshot["inputsDigest"]:
+            raise ValueError("capability inputs digest differs")
+        authorize_transport(active, binding=binding, binding_digest=binding_digest)
+        prepared = prepare_setup_request(
+            plan,
+            copy.deepcopy(value),
+            credentials=credentials,
+            account_bindings=setup_bindings,
+            setup_secrets=setup_secrets,
+        )
+        envelope = {key: prepared[key] for key in ("service", "route", "method", "path", "headers", "body")}
+        envelope["seconds"] = DEFAULT_SECONDS
+        result = _run_worker(envelope, binding=binding, binding_digest=binding_digest, fixture_origin=fixture_origin)
+        sequence += 1
+        origin = fixture_origin.rstrip("/") if fixture_origin is not None else prepared["origin"]
+        adapted = adapt_setup_result(
+            value,
+            result,
+            endpoint=urlsplit(origin).netloc,
+            sequence=sequence,
+            account_bindings=setup_bindings,
+            request_digest=digest({"method": prepared["method"], "path": prepared["path"], "body": prepared["body"]}),
+        )
+        if value["id"].startswith("account/") and value["id"].endswith("/signup"):
+            local_id = adapted.receipt.local_id
+            if not isinstance(local_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", local_id):
+                raise ValueError("setup signup UID shape refused")
+            setup_bindings[value["accountRef"]] = {"uid": local_id, "tenant": value.get("tenant")}
+        return adapted
+
+    return transmit
+
+
+def make_recovery_transport(
+    plan: dict[str, Any],
+    *,
+    credentials: dict[str, Any],
+    frozen_inputs: dict[str, Any],
+    identity_proofs: dict[str, IdentityProof],
+    capability: Any,
+    fixture_origin: str | None = None,
+    deadline: float | None = None,
+    timeout_seconds: float | None = None,
+):
+    """Dispatch only Gate-acknowledged recovery operations with a partial proof map."""
+    _plan_identity(plan)
+    _frozen_inputs(plan, frozen_inputs)
+    _credential(credentials, "administrator", "administrator")
+    if not isinstance(identity_proofs, dict) or not identity_proofs:
+        raise ValueError("acknowledged identity proofs required")
+    account_bindings: dict[str, dict[str, Any]] = {}
+    for ref, proof in identity_proofs.items():
+        if not isinstance(ref, str) or not isinstance(proof, IdentityProof) or proof.principal_ref != ref or not proof.trusted():
+            raise ValueError("trusted acknowledged identity proofs required")
+        account_bindings[ref] = {"uid": proof.uid, "provider": proof.provider, "tenant": proof.tenant, "claimsDigest": proof.claims_digest, "authTime": proof.auth_time}
+    if capability is None:
+        raise ValueError("active O8 production capability required")
+    if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+        raise ValueError("absolute transport deadline required")
+    if timeout_seconds is not None and (type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= MAX_SECONDS):
+        raise ValueError("bounded transport timeout required")
+    sequence = 0
+
+    def effective_seconds(
+        call_deadline: float | None, call_timeout: float | None, service: str
+    ) -> float:
+        if call_deadline is not None and (type(call_deadline) not in (int, float) or not math.isfinite(call_deadline)):
+            raise ValueError("absolute transport deadline required")
+        if call_timeout is not None and (type(call_timeout) not in (int, float) or not math.isfinite(call_timeout) or not 0 < call_timeout <= MAX_SECONDS):
+            raise ValueError("bounded transport timeout required")
+        deadlines = [value for value in (deadline, call_deadline) if value is not None]
+        timeouts = [value for value in (timeout_seconds, call_timeout) if value is not None]
+        seconds = min([MAX_SECONDS if service == "rules" else DEFAULT_SECONDS, *[float(value) for value in timeouts]])
+        if deadlines:
+            seconds = min(seconds, min(float(value) - time.monotonic() for value in deadlines))
+        return seconds
+
+    def transmit(
+        value: dict[str, Any],
+        *,
+        binding: bytes,
+        binding_digest: str,
+        deadline: float | None = None,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        nonlocal sequence
+        if not isinstance(value, dict) or value.get("phase") != "recovery":
+            raise ValueError("recovery-only transport refused non-recovery operation")
+        snapshot = _frozen_inputs(plan, frozen_inputs)
+        if getattr(capability, "inputs_digest", None) != snapshot["inputsDigest"]:
+            raise ValueError("capability inputs digest differs")
+        authorize_transport(capability, binding=binding, binding_digest=binding_digest)
+        prepared = prepare_request(plan, copy.deepcopy(value), credentials=credentials, account_bindings=account_bindings, identity_proofs=identity_proofs)
+        seconds = effective_seconds(deadline, timeout_seconds, prepared["service"])
+        if seconds <= 0:
+            raise WorkerExchangeError("recovery transport deadline exhausted", worker_reaped=False)
+        envelope = {key: prepared[key] for key in ("service", "route", "method", "path", "headers", "body")}
+        envelope["seconds"] = seconds
+        result = _run_worker(envelope, binding=binding, binding_digest=binding_digest, fixture_origin=fixture_origin)
+        sequence += 1
+        origin = fixture_origin.rstrip("/") if fixture_origin is not None else prepared["origin"]
+        endpoint = urlsplit(origin).netloc
+        if prepared["service"] == "firestore":
+            adapted = _adapt_firestore_result(prepared, result, sequence=sequence, endpoint=endpoint)
+            adapted["workerReaped"] = True
+            return adapted
+        if not isinstance(result["body"], dict):
+            raise ValueError("recovery Auth response refused")
+        body = result["body"]
+        if result["status"] < 200 or result["status"] >= 300:
+            error = body.get("error")
+            if not isinstance(error, dict) or not isinstance(error.get("message"), str):
+                raise ValueError("recovery Auth error response shape refused")
+            return {
+                "status": error.get("status", "AUTH_ERROR"),
+                "code": error.get("code", result["status"]),
+                "httpStatus": result["status"],
+                "documentPresent": False,
+                "fields": None,
+                "responseDigest": digest(body),
+                "complete": True,
+                "workerReaped": True,
+                "endpoint": endpoint,
+                "wireSequence": sequence,
+            }
+        return {**body, "httpStatus": result["status"], "responseDigest": digest(body), "complete": True, "workerReaped": True, "endpoint": endpoint, "wireSequence": sequence}
+
+    return transmit
 
 
 def make_transport(
@@ -1219,7 +1479,7 @@ def make_transport(
     transport_timeout = timeout_seconds
 
     def effective_seconds(
-        call_deadline: float | None, call_timeout: float | None
+        call_deadline: float | None, call_timeout: float | None, service: str
     ) -> float:
         deadlines = [value for value in (transport_deadline, call_deadline) if value is not None]
         timeouts = [value for value in (transport_timeout, call_timeout) if value is not None]
@@ -1227,7 +1487,7 @@ def make_transport(
             raise ValueError("absolute transport deadline required")
         if call_timeout is not None and (type(call_timeout) not in (int, float) or not math.isfinite(call_timeout) or not 0 < call_timeout <= MAX_SECONDS):
             raise ValueError("bounded transport timeout required")
-        seconds = min([MAX_SECONDS, *[float(value) for value in timeouts]])
+        seconds = min([MAX_SECONDS if service == "rules" else DEFAULT_SECONDS, *[float(value) for value in timeouts]])
         if deadlines:
             seconds = min(seconds, min(float(value) - time.monotonic() for value in deadlines))
         return seconds
@@ -1301,7 +1561,7 @@ def make_transport(
             key: prepared[key]
             for key in ("service", "route", "method", "path", "headers", "body")
         }
-        seconds = effective_seconds(deadline, timeout_seconds)
+        seconds = effective_seconds(deadline, timeout_seconds, prepared["service"])
         if seconds <= 0:
             raise WorkerExchangeError("transport deadline exhausted", worker_reaped=False)
         envelope["seconds"] = seconds
@@ -1327,6 +1587,7 @@ def make_transport(
         return {
             **result["body"],
             "httpStatus": result["status"],
+            "responseDigest": digest(result["body"]),
             "complete": True,
             "workerReaped": True,
             "endpoint": endpoint,
@@ -1342,6 +1603,8 @@ __all__ = [
     "RULES_ORIGIN",
     "WORKER_ENTRY",
     "make_transport",
+    "make_setup_transport",
+    "make_recovery_transport",
     "prepare_request",
     "run_worker",
     "verify_worker_binding",

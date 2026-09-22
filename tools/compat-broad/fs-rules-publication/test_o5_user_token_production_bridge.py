@@ -1,0 +1,234 @@
+"""Bounded tests for the Rules production bridge seam."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE.parent / "o8-core"))
+sys.path.insert(0, str(HERE.parent / "production-admission"))
+sys.path.insert(0, str(HERE))
+
+import o5_user_token_case as case
+import o5_user_token_production_bridge as bridge
+import o5_user_token_descriptor as descriptor
+import shared_gate
+from o5_user_token_collector import open_ownership_journal
+from o5_user_token_campaign import validate_production_packet
+from broad_contract import digest
+from reservations import Ledger
+
+
+def _plan():
+    return case.compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant-test")
+
+
+def test_initial_packet_uses_admin_and_api_key_without_preexisting_users(tmp_path):
+    plan = _plan()
+    path = tmp_path / "gate"
+    shared_gate.create(path, descriptor.gate_plan(plan))
+    result = validate_production_packet(
+        plan,
+        approval={"status": "approved"},
+        permission={"campaignId": plan["campaignId"], "planDigest": plan["planDigest"]},
+        capability_inputs={"plan": plan, "planDigest": digest(plan)},
+        credentials={"administrator": "fixture-admin", "api-key": "fixture-key"},
+        account_bindings={},
+        identity_proofs={},
+        gate=shared_gate.Gate(path, "rules-management"),
+        ledger=Ledger.create(tmp_path / "ledger"),
+        ticket={},
+    )
+    assert result["requestUpperBound"] == 144
+
+
+def test_shared_inventory_preserves_authoritative_gate_status(tmp_path):
+    plan = _plan()
+    path = tmp_path / "gate"
+    shared_gate.create(path, descriptor.gate_plan(plan))
+    gate = shared_gate.Gate(path, "rules-management")
+    ownership = {}
+    before = gate.snapshot()
+    bridge.refresh_ownership(gate, ownership)
+    assert len(ownership) == 21
+    assert all(state["status"] == "not-attempted" for state in ownership.values())
+    assert gate.snapshot() == before
+
+
+def test_worker_timeout_uses_the_compiled_slot_bound():
+    assert bridge.worker_timeout({"kind": "rules-lifecycle"}, None) == 12.0
+    assert bridge.worker_timeout({"kind": "observation"}, None) == 2.0
+    assert bridge.worker_timeout({"phase": "recovery"}, None) == 2.0
+
+
+def test_worker_timeout_refuses_expired_deadline():
+    with pytest.raises(TimeoutError, match="deadline"):
+        bridge.worker_timeout({"kind": "observation"}, 0.0)
+
+
+def test_data_denial_projects_only_exact_remote_atomic_commit_evidence():
+    plan = _plan()
+    row = next(row for row in plan["observation"] if row["method"] == "commit")
+    raw = {
+        "httpStatus": 403,
+        "complete": True,
+        "workerReaped": True,
+        "responseDigest": "a" * 64,
+        "effects": [],
+        "refusal": {
+            "kind": "atomic-commit-permission-denied-v1",
+            "canonicalRowDigest": digest(row),
+            "principalRef": row["principal"],
+            "operation": "Commit",
+            "code": 7,
+            "restErrorCode": 403,
+            "status": "PERMISSION_DENIED",
+        },
+    }
+    receipt = bridge.data_gate_receipt(plan, row["index"], raw)
+    assert receipt["status"] == 403
+    assert receipt["body"]["effects"] == []
+    assert receipt["body"]["refusal"] == {
+        "kind": "rules-atomic-commit-refusal-v1",
+        "slotId": f"data/{row['index']}",
+        "rowDigest": digest(row),
+        "principal": row["principal"],
+        "operation": "Commit",
+        "restCode": 403,
+        "status": "PERMISSION_DENIED",
+        "canonicalCode": 7,
+    }
+    raw["refusal"]["canonicalRowDigest"] = "b" * 64
+    with pytest.raises(ValueError, match="refusal"):
+        bridge.data_gate_receipt(plan, row["index"], raw)
+
+
+def test_rules_receipt_preserves_real_status_and_keeps_rest_body_outside_gate():
+    raw = {
+        "httpStatus": 404,
+        "complete": True,
+        "workerReaped": True,
+        "endpoint": "127.0.0.1:17400",
+        "wireSequence": 22,
+        "error": {"code": 404},
+    }
+    operation = {
+        "kind": "rules-lifecycle",
+        "managementPhase": "recovery",
+        "managementSlot": "delete-a-absence",
+        "action": "get",
+        "rulesetName": "projects/fireemu-35fe6/rulesets/issued-a",
+    }
+    receipt = bridge.rules_gate_receipt(_plan(), operation, raw)
+    assert receipt["status"] == 404
+    assert receipt["body"]["effects"] == [
+        {
+            "subject": "ruleset/a",
+            "proof": {"kind": "absence", "resource": operation["rulesetName"]},
+        }
+    ]
+    assert receipt.response_body == {"error": {"code": 404}}
+    assert "error" not in receipt["body"]
+    assert receipt.endpoint == raw["endpoint"]
+    assert receipt.wire_sequence == 22
+
+
+@pytest.mark.parametrize("missing", ["httpStatus", "complete", "workerReaped"])
+def test_rules_receipt_never_defaults_missing_wire_facts(missing):
+    raw = {
+        "httpStatus": 200,
+        "complete": True,
+        "workerReaped": True,
+        "endpoint": "127.0.0.1:17400",
+        "wireSequence": 1,
+        "name": "projects/fireemu-35fe6/releases/cloud.firestore",
+        "rulesetName": "projects/fireemu-35fe6/rulesets/baseline",
+    }
+    raw.pop(missing)
+    operation = {
+        "kind": "rules-lifecycle",
+        "managementPhase": "observation",
+        "managementSlot": "baseline-release-get",
+        "action": "release-get",
+    }
+    with pytest.raises(ValueError, match="wire"):
+        bridge.rules_gate_receipt(_plan(), operation, raw)
+
+
+def test_setup_refuses_failed_durable_journal_before_gate_or_worker(tmp_path):
+    plan = _plan()
+    gate_path = tmp_path / "gate"
+    shared_gate.create(gate_path, descriptor.gate_plan(plan))
+    gate = shared_gate.Gate(gate_path, "rules-management")
+    journal = open_ownership_journal(
+        tmp_path, run_id="journal-failure", plan_digest=plan["planDigest"]
+    )
+    before = gate.snapshot()
+    with pytest.raises(ValueError, match="journal"):
+        bridge.run_bound_setup(
+            plan=plan,
+            gate=gate,
+            credentials={},
+            setup_secrets={},
+            account_bindings={},
+            capability=None,
+            fixture_origin=None,
+            binding=b"",
+            binding_digest="",
+            journal=journal,
+            ownership={},
+        )
+    assert gate.snapshot() == before
+
+
+def test_bridge_binds_compiler_accounting_144():
+    plan = _plan()
+    accounting = bridge.validate_compiled_accounting(plan)
+    assert accounting["requestUpperBound"] == 144
+    assert accounting["rulesRequests"] == 23
+    assert accounting["recoveryRequests"] == 63
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["observationRequests", "rulesRequests", "recoveryRequests", "requestUpperBound"],
+)
+def test_bridge_rejects_accounting_drift_without_wire(mutation):
+    plan = _plan()
+    original = bridge.campaign_budget
+    bridge.campaign_budget = lambda _plan: {**original(plan), mutation: 1}
+    try:
+        with pytest.raises(ValueError, match="accounting"):
+            bridge.validate_compiled_accounting(plan)
+    finally:
+        bridge.campaign_budget = original
+
+
+def test_bound_execute_rejects_missing_capability_before_transport():
+    plan = _plan()
+    with pytest.raises(ValueError, match="capability"):
+        bridge.bound_execute(
+            plan,
+            credentials={},
+            frozen_inputs={"sourceInputs": {}},
+            account_bindings={},
+            identity_proofs={},
+            capability=None,
+        )
+
+
+def test_bound_execute_rejects_expired_deadline_before_worker():
+    plan = _plan()
+    with pytest.raises(ValueError, match="worker source|capability"):
+        bridge.bound_execute(
+            plan,
+            credentials={},
+            frozen_inputs={"sourceInputs": {}},
+            account_bindings={},
+            identity_proofs={},
+            capability=object(),
+        )

@@ -27,6 +27,12 @@ from o5_user_token_collector import (
     collect as _collect,
     RulesManagementReceipt,
     RulesManagementSession,
+    open_ownership_journal,
+    start_context,
+    _rules_management_proof,
+    _management_cursor,
+    recover_owned,
+    _scan_management_receipt,
 )
 from o5_user_token_descriptor import gate_plan
 from reservations import Ledger
@@ -119,7 +125,15 @@ def bound(
         gate_path = root / "gate"
         ledger = Ledger.create(root / "ledger")
         plan_gate = gate_plan(plan, permission_expires_at=time.time() + 3600)
-        limits = {"requests": 56, "accounts": 0, "resources": 1, "costMicrousd": 23}
+        required_requests = plan_gate["observationRequests"] + sum(
+            len(job["recovery"]) for job in plan_gate["jobs"].values()
+        ) + len(plan_gate["management"]["recovery"]) + plan_gate.get("coordinatorRequests", 0)
+        limits = {
+            "requests": required_requests,
+            "accounts": 0,
+            "resources": 1,
+            "costMicrousd": plan_gate["costMicrousd"],
+        }
         envelope = {"permissionDigest": digest({"kind": "bound-test"}), "issuedAt": time.time() - 1, "expiresAt": time.time() + 3600, "limits": limits, "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}]}
         claim = {"campaignId": plan["campaignId"], "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str(gate_path.resolve()), "gatePlanDigest": digest(plan_gate), "locks": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}], "budget": limits, "durationSeconds": 600}
         ticket = ledger.reserve(envelope, claim, plan_gate)
@@ -146,7 +160,7 @@ def _management_executor(plan: dict, transport):
         action = request["action"]
         label = request.get("label") or ("A" if request.get("rulesetName") == names["A"] else "B")
         source_digest = digest(plan["rulesets"][label]["source"])
-        scripted = transport({"phase": "ruleset", "ruleset": label, "sourceDigest": source_digest})
+        scripted = transport({"phase": "ruleset", "managementPhase": request.get("managementPhase", "observation"), "action": action, "ruleset": label, "rulesetName": request.get("rulesetName"), "sourceDigest": source_digest})
         endpoint = scripted.get("endpoint")
         wire_sequence = scripted.get("wireSequence")
         scripted_name = scripted.get("releaseName")
@@ -205,7 +219,15 @@ def collect(plan, execute, *, role, run_id, acquisition=None, management_session
         gate_path = root / "gate"
         ledger = Ledger.create(root / "ledger")
         plan_gate = gate_plan(plan, permission_expires_at=time.time() + 3600)
-        limits = {"requests": 56, "accounts": 0, "resources": 1, "costMicrousd": 23}
+        required_requests = plan_gate["observationRequests"] + sum(
+            len(job["recovery"]) for job in plan_gate["jobs"].values()
+        ) + len(plan_gate["management"]["recovery"]) + plan_gate.get("coordinatorRequests", 0)
+        limits = {
+            "requests": required_requests,
+            "accounts": 0,
+            "resources": 1,
+            "costMicrousd": plan_gate["costMicrousd"],
+        }
         envelope = {"permissionDigest": digest({"kind": "bound-test"}), "issuedAt": time.time() - 1, "expiresAt": time.time() + 3600, "limits": limits, "concurrency": 1, "scopes": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}]}
         claim = {"campaignId": plan["campaignId"], "manifestDigest": digest(plan), "nonceDigest": digest(plan["nonce"]), "gatePath": str(gate_path.resolve()), "gatePlanDigest": digest(plan_gate), "locks": [{"key": f"project/{PROJECT}", "mode": "EXCLUSIVE"}], "budget": limits, "durationSeconds": 600}
         ticket = ledger.reserve(envelope, claim, plan_gate)
@@ -268,6 +290,294 @@ def test_a_bound_run_records_releases_wire_facts_and_observer_identity() -> None
     wall = bundle["transport"]["wallClock"]
     assert wall["startedAt"] <= wall["finishedAt"]
     assert bundle["provenance"]["case"]["tenant"] == "o5-user-token-tenant"
+
+
+def test_partial_create_readback_keeps_unverified_ownership_held(tmp_path) -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    base = bound_transport(plan, ROLE_PRODUCTION)
+
+    def lost_create_readback(request: dict) -> dict:
+        receipt = base(request)
+        if request.get("managementPhase") == "observation" and request.get("action") == "get" and request.get("ruleset") == "A":
+            receipt["complete"] = False
+        return receipt
+
+    journal_path = tmp_path / "rules-management.jsonl"
+    bundle = bound(
+        ROLE_PRODUCTION,
+        transport=lost_create_readback,
+        journal_path=journal_path,
+    )[0]
+    management = bundle["transport"]["rulesManagement"]
+    assert bundle["recordingComplete"] is False
+    assert management["owned"]["A"]["phase"] == "created-unverified"
+    assert management["recovery"]["held"] == [management["owned"]["A"]["name"]]
+    assert not any(request.get("phase") == "ruleset" and request.get("action") == "delete" for request in base.requests)
+    ownership = [
+        json.loads(line)
+        for line in journal_path.read_text().splitlines()
+        if json.loads(line)["kind"] == "rules-management-ownership"
+    ]
+    kinds = [json.loads(line)["kind"] for line in journal_path.read_text().splitlines()]
+    assert "rules-management-intent" in kinds
+    assert "rules-management-baseline" in kinds
+    assert ownership[-1]["phase"] == "created-unverified"
+
+
+def test_lost_patch_restores_only_after_current_release_proves_owned_target() -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    base = bound_transport(plan, ROLE_PRODUCTION)
+
+    def lost_patch(request: dict) -> dict:
+        receipt = base(request)
+        if request.get("managementPhase") == "observation" and request.get("action") == "release-patch" and request.get("ruleset") == "A":
+            receipt["complete"] = False
+        return receipt
+
+    bundle = bound(ROLE_PRODUCTION, transport=lost_patch)[0]
+    management = bundle["transport"]["rulesManagement"]
+    assert bundle["recordingComplete"] is False
+    assert management["owned"]["A"]["phase"] == "patch-uncertain"
+    assert management["recovery"]["restored"] is True
+    assert management["recovery"]["held"] == []
+
+
+def test_foreign_current_release_refuses_partial_restore_and_retains_owned_names() -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    base = bound_transport(plan, ROLE_PRODUCTION)
+
+    def foreign_after_patch(request: dict) -> dict:
+        receipt = base(request)
+        if request.get("managementPhase") == "recovery" and request.get("action") == "release-get":
+            receipt["body"]["rulesetName"] = f"projects/{PROJECT}/rulesets/foreign"
+        return receipt
+
+    bundle = bound(ROLE_PRODUCTION, transport=foreign_after_patch)[0]
+    management = bundle["transport"]["rulesManagement"]
+    assert bundle["recordingComplete"] is False
+    assert bundle["abort"] == "rules-management-recovery"
+    assert management["recovery"]["held"]
+    assert not any(request.get("phase") == "ruleset" and request.get("action") == "delete" for request in base.requests)
+
+
+def test_management_worker_exception_at_first_slot_keeps_uncertain_gate_state() -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    base = bound_transport(plan, ROLE_PRODUCTION)
+
+    def raises(request: dict) -> dict:
+        if request.get("phase") == "ruleset" and request.get("managementPhase") == "observation":
+            raise RuntimeError("worker lost")
+        return base(request)
+
+    bundle = bound(ROLE_PRODUCTION, transport=raises)[0]
+    management = bundle["transport"]["rulesManagement"]
+    assert bundle["recordingComplete"] is False
+    assert bundle["abort"] == "collector:RuntimeError"
+    assert management["recovery"]["cleanupComplete"] is False
+    assert management["recovery"]["held"] == []
+    assert not any(request.get("managementPhase") == "recovery" for request in base.requests)
+
+
+def test_management_worker_exception_after_create_retains_issued_name_without_delete() -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    base = bound_transport(plan, ROLE_PRODUCTION)
+
+    def raises_after_create(request: dict) -> dict:
+        if request.get("phase") == "ruleset" and request.get("managementPhase") == "observation" and request.get("action") == "get" and request.get("ruleset") == "A":
+            raise RuntimeError("readback lost")
+        return base(request)
+
+    bundle = bound(ROLE_PRODUCTION, transport=raises_after_create)[0]
+    management = bundle["transport"]["rulesManagement"]
+    assert management["owned"]["A"]["phase"] == "created-unverified"
+    assert management["recovery"]["held"] == [management["owned"]["A"]["name"]]
+    assert not any(request.get("phase") == "ruleset" and request.get("action") == "delete" for request in base.requests)
+
+
+def test_baseline_recovery_uses_patch_slot_then_release_readback() -> None:
+    bundle, transport = bound(ROLE_PRODUCTION)
+    management = bundle["transport"]["rulesManagement"]
+    recovery = [
+        request
+        for request in transport.requests
+        if request.get("phase") == "ruleset" and request.get("managementPhase") == "recovery"
+    ]
+    assert [request["action"] for request in recovery[:4]] == [
+        "release-get",
+        "release-patch",
+        "release-get",
+        "release-get-executable",
+    ]
+    assert recovery[1]["rulesetName"] == management["baseline"]["rulesetName"]
+
+
+def test_session_accepts_only_a_compiler_bound_setup_observation_and_recovery_prefix(tmp_path) -> None:
+    plan = plan_for(ROLE_PRODUCTION)
+    compiled = gate_plan(plan)
+    observation_prefix = ["setup/fixture/setup-doc"]
+    recovery_prefix = ["setup-recovery/fixture/setup-doc/read"]
+    compiled["management"]["observation"] = [
+        {"id": observation_prefix[0], "timeout": 8.0},
+        *compiled["management"]["observation"],
+    ]
+    compiled["management"]["recovery"] = [
+        {"id": recovery_prefix[0], "timeout": 8.0},
+        *compiled["management"]["recovery"],
+    ]
+    gate_path = tmp_path / "gate"
+    ledger_path = tmp_path / "ledger"
+    claim = {
+        "campaignId": plan["campaignId"],
+        "manifestDigest": digest(plan),
+        "nonceDigest": digest(plan["nonce"]),
+        "gatePath": str(gate_path.resolve()),
+        "gatePlanDigest": digest(compiled),
+    }
+    gate = type("Gate", (), {"path": gate_path, "snapshot": lambda self: {"plan": compiled}})()
+    ledger = type(
+        "Ledger",
+        (),
+        {
+            "path": ledger_path,
+            "snapshot": lambda self: {"reservations": {"reservation-1": {"claim": claim}}},
+        },
+    )()
+    ticket = {"reservation": "reservation-1", "ledgerPath": str(ledger_path)}
+    proof = {
+        "observationIds": observation_prefix,
+        "recoveryIds": recovery_prefix,
+        "planDigest": plan["planDigest"],
+        "journalDigest": "journal-proof",
+        "proofDigest": "ownership-proof",
+    }
+    session = RulesManagementSession(
+        gate=gate,
+        ledger=ledger,
+        ticket=ticket,
+        execute=lambda *_args, **_kwargs: {},
+        plan=plan,
+        setup_prefix=proof,
+    )
+    assert session.setup_observation_prefix == observation_prefix
+    assert session.setup_recovery_prefix == recovery_prefix
+    with pytest.raises(ValueError, match="compiled setup prefix proof"):
+        RulesManagementSession(
+            gate=gate,
+            ledger=ledger,
+            ticket=ticket,
+            execute=lambda *_args, **_kwargs: {},
+            plan=plan,
+        )
+
+
+def test_management_scan_allows_only_validated_endpoint_domains() -> None:
+    assert _scan_management_receipt({"endpoint": PRODUCTION_ENDPOINT}) is None
+    assert _scan_management_receipt({"endpoint": LOCAL_ENDPOINT}) is None
+    assert _scan_management_receipt({"note": "firestore.googleapis.com"}) == "credential-leak:token-shaped-value"
+
+
+def test_rules_management_proof_persists_only_typed_projection() -> None:
+    raw = {
+        "name": "projects/fireemu-35fe6/rulesets/server-a",
+        "source": {"files": [{"name": "firestore.rules", "content": "allow read;"}]},
+        "privateToken": "must-not-cross-gate",
+    }
+    proof = _rules_management_proof(
+        "create-a-get",
+        {"action": "get", "rulesetName": raw["name"]},
+        raw,
+        200,
+    )
+    receipt = RulesManagementReceipt(
+        {"status": 200, "complete": True, "workerReaped": True, "body": proof},
+        response_body=raw,
+    )
+    assert receipt["body"]["kind"] == "rules-management-proof-v1"
+    assert "privateToken" not in json.dumps(receipt["body"])
+    assert receipt.response_body == raw
+
+
+def test_start_context_is_reused_without_budget_reset(tmp_path) -> None:
+    plan = plan_for(ROLE_LOCAL_SHADOW)
+    journal = open_ownership_journal(
+        tmp_path / "run.jsonl", run_id="context-run", plan_digest=plan["planDigest"]
+    )
+    context = start_context(plan, environment=ENVIRONMENT_LOCAL, journal=journal)
+    assert context.journal is journal
+    assert context.attempted == []
+    budget = context.budget
+    context.attempted.append(plan["ownedResources"][0])
+    assert context.budget is budget
+    journal.close()
+
+
+def test_management_cursor_keeps_gate_skips_separate_from_receipts() -> None:
+    gate = type(
+        "Gate",
+        (),
+        {
+            "snapshot": lambda self: {
+                "managementUsed": ["observation:setup/one", "recovery:cleanup/document/x/read"],
+                "managementSkipped": [
+                    {"id": "recovery:cleanup/document/x/delete", "disposition": "held"}
+                ],
+            }
+        },
+    )()
+    cursor = _management_cursor(gate)
+    assert cursor == {
+        "used": ["observation:setup/one", "recovery:cleanup/document/x/read"],
+        "skipped": ["recovery:cleanup/document/x/delete"],
+        "ordered": [],
+    }
+
+
+def test_recover_owned_does_not_dispatch_unacknowledged_subjects(tmp_path) -> None:
+    plan = plan_for(ROLE_LOCAL_SHADOW)
+    calls: list[dict] = []
+
+    def execute(request: dict) -> dict:
+        calls.append(request)
+        receipt = {
+            "complete": True,
+            "status": "OK",
+            "documentPresent": False,
+            "endpoint": LOCAL_ENDPOINT,
+            "wireSequence": len(calls),
+        }
+        if request.get("account") is not None:
+            receipt.pop("documentPresent")
+            receipt["accountPresent"] = False
+        return receipt
+
+    from o5_user_token_collector import _Budget, _Journal, _Wire
+
+    budget = _Budget(
+        requests=1,
+        recovery=3 * (len(plan["ownedResources"]) + len(plan["ownedAccounts"])),
+        rulesets=0,
+        actions=0,
+        deadline_seconds=600,
+        recovery_deadline_seconds=900,
+        clock=time.monotonic,
+    )
+    journal = _Journal(tmp_path / "owned.jsonl")
+    try:
+        result = recover_owned(
+            plan,
+            execute,
+            budget,
+            _Wire(ENVIRONMENT_LOCAL),
+            [],
+            journal,
+            ownership={plan["ownedResources"][0]: {"phase": "acknowledged"}},
+        )
+    finally:
+        journal.close()
+    assert calls
+    assert all(request.get("resource") == plan["ownedResources"][0] for request in calls)
+    assert result["held"]
+    assert result["notAttempted"] == []
 
 
 def test_a_bound_run_is_admitted_by_the_acquisition_comparator() -> None:

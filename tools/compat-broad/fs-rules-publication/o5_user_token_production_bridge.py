@@ -785,9 +785,40 @@ def recover_setup_failure(
             "held": list(ownership),
             "blockedReason": "worker-reap-unconfirmed",
         }
-    proofs = setup_identity_proofs(
-        plan, gate, identity_handoffs, fixture_origin=fixture_origin, partial=True
-    )
+    proofs: dict[str, Any] = {}
+    proof_failures: dict[str, str] = {}
+    for ref, handoff in identity_handoffs.items():
+        try:
+            proofs.update(
+                setup_identity_proofs(
+                    plan,
+                    gate,
+                    {ref: handoff},
+                    fixture_origin=fixture_origin,
+                    partial=True,
+                )
+            )
+        except Exception as error:  # noqa: BLE001 -- keep unrelated proofs usable
+            proof_failures[ref] = type(error).__name__
+
+    acknowledged_accounts: set[str] = set()
+    for account in plan["ownedAccounts"]:
+        ref = account["ref"]
+        state = ownership.get(ref) or ownership.get("account/" + ref)
+        if not isinstance(state, dict):
+            continue
+        if state.get("phase") in {"acknowledged", "creation-unconfirmed"} or state.get(
+            "status"
+        ) == "owned":
+            acknowledged_accounts.add(ref)
+    unsafe_accounts = acknowledged_accounts - set(proofs)
+    for ref in unsafe_accounts:
+        proof_failures.setdefault(ref, "missing")
+
+    recovery_plan = dict(plan)
+    recovery_plan["ownedAccounts"] = [
+        account for account in plan["ownedAccounts"] if account["ref"] in proofs
+    ]
     bindings = {
         ref: {
             "uid": proof.uid,
@@ -832,8 +863,20 @@ def recover_setup_failure(
         ownership=ownership,
     )
     cleanup = recover_owned(
-        plan, dispatch, context=context, ownership=ownership, recovery_dispatch=dispatch
+        recovery_plan,
+        dispatch,
+        context=context,
+        ownership=ownership,
+        recovery_dispatch=dispatch,
     )
+    if unsafe_accounts:
+        cleanup["held"] = sorted(set(cleanup.get("held", [])) | unsafe_accounts)
+        cleanup["outstandingAccounts"] = sorted(
+            set(cleanup.get("outstandingAccounts", [])) | unsafe_accounts
+        )
+        cleanup["cleanupComplete"] = False
+    if proof_failures:
+        cleanup["proofFailures"] = dict(sorted(proof_failures.items()))
     try:
         skip_unused_recovery(gate)
     except ValueError:
@@ -1068,6 +1111,14 @@ def run_bound_collection(
             )
         except Exception as journal_error:  # noqa: BLE001 -- preserve the primary failure
             cleanup = {**cleanup, "journalFailure": type(journal_error).__name__}
+        journal_failures = list(getattr(journal, "failures", []))
+        if journal_failures:
+            cleanup = {
+                **cleanup,
+                "cleanupComplete": False,
+                "blockedReason": "journal-failure",
+                "journalFailures": journal_failures,
+            }
         try:
             primary_error.recovery_outcome = cleanup
             primary_error.failure_stage = failure_stage

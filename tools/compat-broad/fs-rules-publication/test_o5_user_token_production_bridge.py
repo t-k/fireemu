@@ -236,9 +236,18 @@ def test_bound_execute_rejects_expired_deadline_before_worker():
         )
 
 
-@pytest.mark.parametrize("failure", ["identity", "transport", "session", "collector"])
+@pytest.mark.parametrize(
+    ("failure", "journal_failure"),
+    [
+        ("identity", False),
+        ("transport", False),
+        ("session", False),
+        ("collector", False),
+        ("identity", True),
+    ],
+)
 def test_post_setup_failures_recover_owned_resources_and_preserve_outcome(
-    tmp_path, monkeypatch, failure
+    tmp_path, monkeypatch, failure, journal_failure
 ):
     """Every post-side-effect boundary must enter the shared recovery path."""
     plan = {"campaignId": bridge.CAMPAIGN, "nonce": "a" * 32, "planDigest": "plan"}
@@ -259,13 +268,18 @@ def test_post_setup_failures_recover_owned_resources_and_preserve_outcome(
     journal = Namespace(
         path=tmp_path / "journal",
         failures=[],
-        record=lambda *args, **kwargs: None,
         close=lambda: setattr(journal, "closed", True),
         closed=False,
     )
+
+    def record(*args, **kwargs):
+        if journal_failure:
+            journal.failures.append("journal-record:OSError")
+
+    journal.record = record
     ownership = {"owned-account-A": {"phase": "acknowledged"}}
     recovery = {
-        "cleanupComplete": False,
+        "cleanupComplete": journal_failure,
         "held": ["owned-account-A"],
         "recoveryFailure": "ValueError",
     }
@@ -353,6 +367,80 @@ def test_post_setup_failures_recover_owned_resources_and_preserve_outcome(
         "management-session",
         "collector-startup",
     }
-    assert caught.value.recovery_outcome == recovery
+    if journal_failure:
+        assert caught.value.recovery_outcome["cleanupComplete"] is False
+        assert caught.value.recovery_outcome["journalFailures"] == [
+            "journal-record:OSError"
+        ]
+    else:
+        assert caught.value.recovery_outcome == recovery
     assert journal.closed is True
     assert released == []
+
+
+def test_recovery_keeps_confirmed_documents_when_one_identity_proof_fails(monkeypatch):
+    plan = {
+        "ownedResources": ["document-a"],
+        "ownedAccounts": [
+            {"ref": "account-good", "tenant": None},
+            {"ref": "account-bad", "tenant": None},
+        ],
+    }
+    ownership = {
+        "document-a": {"phase": "acknowledged"},
+        "account-good": {"phase": "acknowledged"},
+        "account-bad": {"phase": "acknowledged"},
+    }
+    gate = Namespace(snapshot=lambda: {"coordinatorInflight": False})
+    context = Namespace(attempted=[])
+    proof = Namespace(
+        uid="uid-good",
+        provider="password",
+        tenant=None,
+        claims_digest="claims",
+        auth_time=1,
+    )
+    proof_calls = []
+    recovered_plan = []
+
+    def proofs(_plan, _gate, handoffs, **kwargs):
+        ref = next(iter(handoffs))
+        proof_calls.append(ref)
+        if ref == "account-bad":
+            raise ValueError("injected-proof-failure")
+        return {ref: proof}
+
+    monkeypatch.setattr(bridge, "refresh_ownership", lambda _gate, _ownership: None)
+    monkeypatch.setattr(bridge, "setup_identity_proofs", proofs)
+    monkeypatch.setattr(bridge, "make_recovery_transport", lambda *args, **kwargs: object())
+    monkeypatch.setattr(bridge, "collection_dispatch", lambda *args, **kwargs: object())
+
+    def recover(recovery_plan, *args, **kwargs):
+        recovered_plan.append(recovery_plan)
+        return {"cleanupComplete": True, "held": []}
+
+    monkeypatch.setattr(bridge, "recover_owned", recover)
+    monkeypatch.setattr(bridge, "skip_unused_recovery", lambda _gate: None)
+
+    result = bridge.recover_setup_failure(
+        plan=plan,
+        gate=gate,
+        context=context,
+        ownership=ownership,
+        identity_handoffs={"account-good": object(), "account-bad": object()},
+        credentials={"administrator": "fixture"},
+        frozen_inputs={},
+        capability=object(),
+        fixture_origin=None,
+        binding=b"worker",
+        binding_digest="digest",
+    )
+
+    assert proof_calls == ["account-good", "account-bad"]
+    assert recovered_plan[0]["ownedResources"] == ["document-a"]
+    assert [account["ref"] for account in recovered_plan[0]["ownedAccounts"]] == [
+        "account-good"
+    ]
+    assert result["cleanupComplete"] is False
+    assert result["held"] == ["account-bad"]
+    assert result["proofFailures"] == {"account-bad": "ValueError"}

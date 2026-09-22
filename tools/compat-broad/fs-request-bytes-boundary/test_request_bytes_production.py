@@ -181,6 +181,8 @@ def test_safe_semantic_mismatch_runs_postflight_and_releases(
     assert collection["cleanupComplete"] is False
     assert collection["cleanupSafetyComplete"] is True
     assert collection["failures"] == ["over:unexpected-success"]
+    assert collection["formalCompatibilityClaim"] is False
+    assert collection["semanticOutcome"] == "unexpected-over-success"
     assert len(calls) == 258
     output = tmp_path / "output"
     gate = shared_gate.Gate(
@@ -583,6 +585,46 @@ def test_saved_verifier_recomputes_cleanup_safety_boolean(
     release_path.write_text(json.dumps(release))
 
     with pytest.raises(ValueError, match="saved route journal differs"):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+
+
+@pytest.mark.parametrize("mutation", ["remove-failure", "forge-typed-refusal"])
+def test_saved_verifier_rejects_rehashed_semantic_tampering(
+    built, tmp_path, monkeypatch, mutation
+):
+    wire_fixture(monkeypatch, over_success=True)
+    assert launcher.main(built.argv(tmp_path)) == 0
+    output = tmp_path / "output"
+    collection_path = output / "collection/result.json"
+    collection = json.loads(collection_path.read_bytes())
+    if mutation == "remove-failure":
+        collection["failures"] = []
+    else:
+        collection.update(
+            completed=True,
+            cleanupComplete=True,
+            formalCompatibilityClaim=True,
+            failures=[],
+            semanticOutcome="typed-over-refusal",
+        )
+    collection_path.write_text(json.dumps(collection))
+    receipt_path = output / "receipt.json"
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["collection"] = collection
+    receipt["evidenceFiles"]["collection/result.json"] = hashlib.sha256(
+        collection_path.read_bytes()
+    ).hexdigest()
+    receipt_path.write_text(json.dumps(receipt))
+    release_path = output / "release.json"
+    release = json.loads(release_path.read_bytes())
+    release["receiptDigest"] = digest(receipt)
+    release_path.write_text(json.dumps(release))
+
+    with pytest.raises(ValueError):
         production.verify_saved(
             output,
             expected_inputs_digest=built.inputs["inputsDigest"],

@@ -389,6 +389,7 @@ def test_unexpected_over_success_keeps_creation_proof_for_cleanup(tmp_path):
     assert result["cleanupComplete"] is False
     assert result["cleanupSafetyComplete"] is True
     assert "over:unexpected-success" in result["failures"]
+    assert result["semanticOutcome"] == "unexpected-over-success"
 
 
 @pytest.mark.parametrize(

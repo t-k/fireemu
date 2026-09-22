@@ -152,6 +152,12 @@ AUTH_RECOVERY_CHILD_KIND = "auth-custom-uid-recovery-child-v1"
 AUTH_RECOVERY_OPERATION_CLASS = "auth-custom-uid-lookup-only-v1"
 AUTH_RECOVERY_ABSENCE_KIND = "auth-uid-absence-proof-v1"
 AUTH_RECOVERY_PARENT_EVIDENCE_KIND = "auth-parent-uncertain-create-v1"
+AUTH_RECOVERY_LEGACY_PARENT_EVIDENCE_KIND = "auth-parent-legacy-200-unproven-v1"
+AUTH_RECOVERY_LEGACY_SOURCE_COMMIT = "2d7d9b76c0f8bf3e3716ac98b19b132d0b8e1f1f"
+AUTH_RECOVERY_LEGACY_CLAIM_DIGEST = "515fcaffc285efe7a0c7e6d4556a6427327f05e95a695f5f20ca43cdbf7af072"
+AUTH_RECOVERY_LEGACY_PLAN_DIGEST = "59d1b40a4d2b6e34dc8664470fa08d38eca0a11b35fce165649bc7b2554dc1cc"
+AUTH_RECOVERY_LEGACY_GATE_DIGEST = "6aae5fc3bde659f8b18eef8d2e58d9932c2f896a9fec1d230690cc54ee8827fe"
+AUTH_RECOVERY_LEGACY_EVENT_INDEX = 13
 AUTH_RECOVERY_CAMPAIGN = "AUTH-CREDENTIAL-TOKENS-01"
 AUTH_RECOVERY_MAX_COST_MICROUSD = 50_000
 AUTH_PARENT_OBSERVATION_KINDS = frozenset({
@@ -848,7 +854,33 @@ def _auth_binding(value, kind):
 
 
 def _auth_parent_evidence(value):
-    if not isinstance(value, dict) or set(value) != {
+    if not isinstance(value, dict):
+        raise ValueError("typed Auth parent evidence required")
+    if value.get("kind") == AUTH_RECOVERY_LEGACY_PARENT_EVIDENCE_KIND:
+        if set(value) != {
+            "kind", "gateDigest", "gatePlanDigest", "job", "eventIndex", "requestDigest",
+            "resource", "completed", "creationOutcome", "eventDigest", "responseDigest",
+            "responsibility", "reason", "evidenceDigest",
+        }:
+            raise ValueError("typed legacy Auth parent evidence required")
+        for key in ("gateDigest", "gatePlanDigest", "requestDigest", "eventDigest", "responseDigest", "evidenceDigest"):
+            _hash(value[key])
+        if (
+            value.get("job") != "auth-credential"
+            or value.get("eventIndex") != AUTH_RECOVERY_LEGACY_EVENT_INDEX
+            or not isinstance(value.get("resource"), str)
+            or value.get("completed") is not True
+            or value.get("creationOutcome") != "refused"
+            or value.get("responsibility") != "unknown-custom-create"
+            or value.get("reason") != "legacy-200-without-creation-proof"
+        ):
+            raise ValueError("typed legacy Auth parent evidence required")
+        expected = copy.deepcopy(value)
+        expected.pop("evidenceDigest")
+        if value["evidenceDigest"] != digest(expected):
+            raise ValueError("legacy Auth parent evidence digest changed")
+        return
+    if set(value) != {
         "kind", "gateDigest", "gatePlanDigest", "job", "eventIndex", "requestDigest",
         "resource", "completed", "creationOutcome", "evidenceDigest",
     } or value["kind"] != AUTH_RECOVERY_PARENT_EVIDENCE_KIND:
@@ -995,6 +1027,69 @@ def _auth_recovery_plan(child_plan, child_claim):
         raise ValueError("Auth recovery Gate schedule changed")
 
 
+def _auth_legacy_parent_matches(gate, child_claim, operation, event, job):
+    plan = gate.get("plan")
+    if (
+        digest(gate) != AUTH_RECOVERY_LEGACY_GATE_DIGEST
+        or digest(plan) != AUTH_RECOVERY_LEGACY_PLAN_DIGEST
+        or child_claim.get("parentClaimDigest") != AUTH_RECOVERY_LEGACY_CLAIM_DIGEST
+        or child_claim.get("generation", {}).get("sourceCommit") != AUTH_RECOVERY_LEGACY_SOURCE_COMMIT
+        or child_claim.get("parentEventIndex") != AUTH_RECOVERY_LEGACY_EVENT_INDEX
+        or child_claim.get("parentGateJob") != "auth-credential"
+    ):
+        return False
+    operations = plan.get("jobs", {}).get("auth-credential", {}).get("observation", [])
+    nonce = plan.get("nonce")
+    if AUTH_RECOVERY_CAMPAIGN != "AUTH-CREDENTIAL-TOKENS-01":
+        return False
+    resource = f"projects/fireemu-35fe6/auth/accounts/custom-{nonce}"
+    if (
+        not isinstance(operations, list)
+        or len(operations) <= AUTH_RECOVERY_LEGACY_EVENT_INDEX
+        or operation is not operations[AUTH_RECOVERY_LEGACY_EVENT_INDEX]
+        or operation.get("kind") != "custom-sign-in"
+        or operation.get("account") != "custom"
+        or operation.get("service") != "auth"
+        or operation.get("method") != "POST"
+        or operation.get("path") != AUTH_PARENT_CUSTOM_SIGN_IN_PATH
+        or operation.get("form") is not False
+        or operation.get("owner") is not False
+        or operation.get("body") != {"token": "$binding:customToken", "returnSecureToken": True}
+        or operation.get("resource") != resource
+        or operation.get("binds", {}).get("customUid") not in {"localId", "idToken.sub"}
+        or child_claim.get("ownedResources") != [resource]
+        or child_claim.get("parentRequestDigest") != digest(operation)
+    ):
+        return False
+    evidence = event.get("authEvidence") if isinstance(event, dict) else None
+    if (
+        event.get("requestDigest") != digest(operation)
+        or event.get("completed") is not True
+        or event.get("creationOutcome") != "refused"
+        or event.get("failure") is not None
+        or type(event.get("status")) is not int
+        or event.get("status") != 200
+        or not isinstance(event.get("responseDigest"), str)
+        or re.fullmatch(r"[a-f0-9]{64}", event["responseDigest"]) is None
+        or type(event.get("ended")) not in (int, float)
+        or not isinstance(evidence, dict)
+        or set(evidence) != {"kind", "account", "status", "creationOutcome"}
+        or evidence.get("kind") != "custom-sign-in"
+        or evidence.get("account") != "custom"
+        or evidence.get("status") != 200
+        or evidence.get("creationOutcome") != "refused"
+    ):
+        return False
+    accounts = job.get("authAccounts", {})
+    proofs = job.get("creationProofs", {})
+    return (
+        isinstance(accounts, dict)
+        and isinstance(proofs, dict)
+        and "custom" not in accounts
+        and resource not in proofs
+    )
+
+
 def _auth_parent_projection(gate, child_claim):
     if not isinstance(gate, dict) or digest(gate.get("plan")) != child_claim["parentPlanDigest"]:
         raise ValueError("Auth parent Gate plan changed")
@@ -1053,7 +1148,8 @@ def _auth_parent_projection(gate, child_claim):
     if len(events) != 1:
         raise ValueError("one uncertain Auth custom create event is required")
     event = events[0]
-    if (
+    legacy = _auth_legacy_parent_matches(gate, child_claim, operation, event, job)
+    if not legacy and (
         not isinstance(event, dict)
         or event.get("completed") is not False
         or event.get("creationOutcome") not in {"pending", "unknown"}
@@ -1065,16 +1161,21 @@ def _auth_parent_projection(gate, child_claim):
     ):
         raise ValueError("Auth parent custom create is not uncertain")
     projection = {
-        "kind": AUTH_RECOVERY_PARENT_EVIDENCE_KIND,
+        "kind": AUTH_RECOVERY_LEGACY_PARENT_EVIDENCE_KIND if legacy else AUTH_RECOVERY_PARENT_EVIDENCE_KIND,
         "gateDigest": digest(gate),
         "gatePlanDigest": digest(gate["plan"]),
         "job": job_name,
         "eventIndex": index,
         "requestDigest": event["requestDigest"],
         "resource": operation["resource"],
-        "completed": False,
-        "creationOutcome": event["creationOutcome"],
+        "completed": True if legacy else False,
+        "creationOutcome": "refused" if legacy else event["creationOutcome"],
     }
+    if legacy:
+        projection.update(
+            eventDigest=digest(event), responseDigest=event["responseDigest"],
+            responsibility="unknown-custom-create", reason="legacy-200-without-creation-proof",
+        )
     projection["evidenceDigest"] = digest(projection)
     return projection
 
@@ -2234,6 +2335,7 @@ class Ledger:
         projection = _auth_parent_projection(parent_gate, child_claim)
         if projection != parent_evidence:
             raise ValueError("Auth parent evidence differs from registered Gate")
+        _auth_parent_responsibility_projection(parent_gate, child_claim)
         for pid in [parent_gate.get("coordinatorPid")] + [job.get("pid") for job in parent_gate.get("jobs", {}).values()]:
             if pid is None:
                 continue

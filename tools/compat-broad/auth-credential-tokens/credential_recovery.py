@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 import platform
 import re
 import time
@@ -29,6 +30,12 @@ O7_KIND = "auth-credential-recovery-o7-approval-v1"
 O8_KIND = "auth-credential-recovery-o8-capability-v1"
 ABSENCE_KIND = "auth-uid-absence-proof-v1"
 PARENT_EVIDENCE_KIND = "auth-parent-uncertain-create-v1"
+LEGACY_PARENT_EVIDENCE_KIND = "auth-parent-legacy-200-unproven-v1"
+LEGACY_PARENT_SOURCE_COMMIT = "2d7d9b76c0f8bf3e3716ac98b19b132d0b8e1f1f"
+LEGACY_PARENT_CLAIM_DIGEST = "515fcaffc285efe7a0c7e6d4556a6427327f05e95a695f5f20ca43cdbf7af072"
+LEGACY_PARENT_PLAN_DIGEST = "59d1b40a4d2b6e34dc8664470fa08d38eca0a11b35fce165649bc7b2554dc1cc"
+LEGACY_PARENT_GATE_DIGEST = "6aae5fc3bde659f8b18eef8d2e58d9932c2f896a9fec1d230690cc54ee8827fe"
+LEGACY_PARENT_EVENT_INDEX = 13
 OPERATION_CLASS = "auth-custom-uid-lookup-only-v1"
 GATE_JOB = "auth-credential-recovery"
 PROJECT = "fireemu-35fe6"
@@ -112,24 +119,102 @@ def _validate_generation_transition(parent: Mapping[str, Any], child: Mapping[st
         _refuse("approved child source extension is not collector-bound")
 
 
-def _parent_evidence(gate: Mapping[str, Any], job: str, index: int, operation: Mapping[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
+def _legacy_event_matches(gate_plan: Mapping[str, Any], gate: Mapping[str, Any], parent_job: str, claim_digest: str | None = None, source_commit: str | None = None) -> bool:
+    if digest(gate_plan) != LEGACY_PARENT_PLAN_DIGEST or digest(gate) != LEGACY_PARENT_GATE_DIGEST or parent_job != "auth-credential":
+        return False
+    if claim_digest is not None and claim_digest != LEGACY_PARENT_CLAIM_DIGEST:
+        return False
+    if source_commit is not None and source_commit != LEGACY_PARENT_SOURCE_COMMIT:
+        return False
+    operations = gate_plan.get("jobs", {}).get(parent_job, {}).get("observation", [])
+    if not isinstance(operations, list) or len(operations) <= LEGACY_PARENT_EVENT_INDEX:
+        return False
+    operation = operations[LEGACY_PARENT_EVENT_INDEX]
+    expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{gate_plan.get('nonce')}"
+    if (
+        not isinstance(operation, Mapping)
+        or operation.get("kind") != "custom-sign-in"
+        or operation.get("account") != "custom"
+        or operation.get("service") != "auth"
+        or operation.get("method") != "POST"
+        or operation.get("path") != f"{IDENTITY}/accounts:signInWithCustomToken"
+        or operation.get("form") is not False
+        or operation.get("owner") is not False
+        or operation.get("body") != {"token": "$binding:customToken", "returnSecureToken": True}
+        or operation.get("resource") != expected_resource
+        or operation.get("binds", {}).get("customUid") not in {"localId", "idToken.sub"}
+    ):
+        return False
+    events = [
+        event for event in gate.get("events", [])
+        if isinstance(event, Mapping)
+        and event.get("job") == parent_job
+        and event.get("phase") == "observation"
+        and event.get("index") == LEGACY_PARENT_EVENT_INDEX
+    ]
+    if len(events) != 1:
+        return False
+    event = events[0]
+    evidence = event.get("authEvidence")
+    return (
+        event.get("requestDigest") == digest(operation)
+        and event.get("completed") is True
+        and event.get("creationOutcome") == "refused"
+        and event.get("failure") is None
+        and type(event.get("status")) is int
+        and event.get("status") == 200
+        and SHA256.fullmatch(event.get("responseDigest", "")) is not None
+        and type(event.get("ended")) in (int, float)
+        and isinstance(evidence, Mapping)
+        and set(evidence) == {"kind", "account", "status", "creationOutcome"}
+        and evidence.get("kind") == "custom-sign-in"
+        and evidence.get("account") == "custom"
+        and evidence.get("status") == 200
+        and evidence.get("creationOutcome") == "refused"
+    )
+
+
+def _legacy_workers_exited(gate: Mapping[str, Any]) -> bool:
+    jobs = gate.get("jobs")
+    pids = [gate.get("coordinatorPid")]
+    if isinstance(jobs, Mapping):
+        pids.extend(job.get("pid") for job in jobs.values() if isinstance(job, Mapping))
+    if any(type(pid) is not int or pid <= 0 for pid in pids):
+        return False
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except OSError:
+            return False
+        return False
+    return True
+
+
+def _parent_evidence(gate: Mapping[str, Any], job: str, index: int, operation: Mapping[str, Any], event: Mapping[str, Any], *, legacy: bool = False) -> dict[str, Any]:
     evidence = {
-        "kind": PARENT_EVIDENCE_KIND,
+        "kind": LEGACY_PARENT_EVIDENCE_KIND if legacy else PARENT_EVIDENCE_KIND,
         "gateDigest": digest(gate),
         "gatePlanDigest": digest(gate["plan"]),
         "job": job,
         "eventIndex": index,
         "requestDigest": digest(operation),
         "resource": operation["resource"],
-        "completed": False,
-        "creationOutcome": event["creationOutcome"],
+        "completed": True if legacy else False,
+        "creationOutcome": "refused" if legacy else event["creationOutcome"],
     }
+    if legacy:
+        evidence.update(
+            eventDigest=digest(event), responseDigest=event["responseDigest"],
+            responsibility="unknown-custom-create", reason="legacy-200-without-creation-proof",
+        )
     evidence["evidenceDigest"] = digest(evidence)
     return evidence
 
 
 def _select_unresolved_custom_event(
-    gate_plan: Mapping[str, Any], gate: Mapping[str, Any], parent_job: str
+    gate_plan: Mapping[str, Any], gate: Mapping[str, Any], parent_job: str, *, allow_legacy: bool = True
 ) -> tuple[int, Mapping[str, Any], Mapping[str, Any]]:
     jobs = gate_plan.get("jobs")
     job = jobs.get(parent_job) if isinstance(jobs, Mapping) else None
@@ -160,8 +245,36 @@ def _select_unresolved_custom_event(
         ):
             unresolved.append((index, candidate, event))
     if len(unresolved) != 1:
+        if allow_legacy and _legacy_event_matches(gate_plan, gate, parent_job):
+            index = LEGACY_PARENT_EVENT_INDEX
+            operation = gate_plan["jobs"][parent_job]["observation"][index]
+            event = next(
+                event for event in gate["events"]
+                if event.get("job") == parent_job
+                and event.get("phase") == "observation"
+                and event.get("index") == index
+            )
+            return index, operation, event
         _refuse("one unresolved Auth custom event is required")
     return unresolved[0]
+
+
+def _select_parent_event(gate_plan: Mapping[str, Any], gate: Mapping[str, Any], parent_job: str, *, claim_digest: str | None = None, source_commit: str | None = None) -> tuple[int, Mapping[str, Any], Mapping[str, Any], bool]:
+    if _legacy_event_matches(gate_plan, gate, parent_job, claim_digest, source_commit):
+        index = LEGACY_PARENT_EVENT_INDEX
+        operation = gate_plan["jobs"][parent_job]["observation"][index]
+        event = next(
+            event for event in gate["events"]
+            if event.get("job") == parent_job
+            and event.get("phase") == "observation"
+            and event.get("index") == index
+        )
+        return index, operation, event, True
+    try:
+        index, operation, event = _select_unresolved_custom_event(gate_plan, gate, parent_job, allow_legacy=False)
+    except RecoveryRefusal:
+        raise
+    return index, operation, event, False
 
 
 def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
@@ -209,12 +322,16 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
         _refuse("immutable parent Gate changed")
     if type(immutable.get("eventIndex")) is not int or immutable["eventIndex"] < 0:
         _refuse("immutable parent event index required")
-    event_index, operation, event = _select_unresolved_custom_event(gate_plan, gate, parent_job)
+    event_index, operation, event, legacy = _select_parent_event(
+        gate_plan, gate, parent_job,
+        claim_digest=claim.get("claimDigest"),
+        source_commit=generation.get("sourceCommit"),
+    )
     if event_index != immutable["eventIndex"]:
         _refuse("immutable parent event index changed")
-    expected_resource = operation.get("resource")
-    if not isinstance(expected_resource, str):
-        expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{nonce}"
+    expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{nonce}"
+    if not legacy and isinstance(operation.get("resource"), str):
+        expected_resource = operation["resource"]
     expected_parent_path = f"{IDENTITY}/accounts:signInWithCustomToken"
     expected_parent_body = {"token": "$binding:customToken", "returnSecureToken": True}
     binds = operation.get("binds")
@@ -225,13 +342,23 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
     if event.get("service") != operation["service"] or event.get("method") != operation["method"]:
         _refuse("parent custom event is not unresolved")
     _finite(event.get("ended"), "parent event end")
+    if legacy:
+        if not _legacy_event_matches(gate_plan, gate, parent_job, claim.get("claimDigest"), generation.get("sourceCommit")):
+            _refuse("legacy Auth parent tuple changed")
+        if not _legacy_workers_exited(gate):
+            _refuse("legacy Auth parent workers are not reaped")
+        accounts = runtime_job.get("authAccounts", {})
+        proofs = runtime_job.get("creationProofs", {})
+        if (not isinstance(accounts, Mapping) or not isinstance(proofs, Mapping)
+                or "custom" in accounts or expected_resource in proofs):
+            _refuse("legacy Auth custom ownership evidence changed")
     custom = responsibility.get("custom") or responsibility.get("custom-signin")
     if not isinstance(custom, Mapping) or custom.get("state") != "unknown" or custom.get("uid") is not None:
         _refuse("custom creation responsibility is not unresolved")
     return {
         "plan": copy.deepcopy(dict(gate_plan)), "claim": copy.deepcopy(dict(claim)), "gate": copy.deepcopy(dict(gate)),
         "job": parent_job, "eventIndex": event_index, "operation": copy.deepcopy(dict(operation)), "resource": expected_resource,
-        "evidence": _parent_evidence(gate, parent_job, event_index, operation, event),
+        "evidence": _parent_evidence(gate, parent_job, event_index, operation, event, legacy=legacy),
         "generation": copy.deepcopy(dict(generation)),
         "sourceCommit": immutable["sourceCommit"],
     }

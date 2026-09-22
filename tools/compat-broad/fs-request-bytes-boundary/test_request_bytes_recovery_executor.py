@@ -185,7 +185,7 @@ def test_real_executor_runs_85_slots_and_settles_child(tmp_path, owned_count):
     assert sum(operations_by_index[event["index"]]["kind"] == "recovery-absence-read" and event["status"] == 404 for event in events) == 51
 
 
-@pytest.mark.parametrize("status", [302, 307])
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
 def test_redirect_response_is_rejected_without_following_destination(tmp_path, status):
     _o7, ledger, child_ticket, parent_plan, child_gate_plan, permission, inputs, capability = _issued_fixture(tmp_path)
     target_server, target_url, target_handler = _counting_server()

@@ -22,6 +22,7 @@ from credential_cases import control_members, observation_cases
 from credential_collector import (
     BudgetExceeded,
     build_receipt,
+    claim_set,
     claim_shape,
     cleanup_report,
     enter_recovery,
@@ -784,14 +785,37 @@ def test_a_cookie_minted_for_a_different_subject_fails_the_real_case_run(
 
 def _expected_row(case: dict, *, trust_root: str = "unsigned-emulator") -> dict:
     expected = case["expectedLocal"]
+    assertions = {name: True for name in expected["assertions"]}
     row = {
         "caseId": case["id"],
         "status": expected["status"],
         "errorCode": expected["errorCode"],
-        "assertions": {name: True for name in expected["assertions"]},
+        "assertions": assertions,
         "trustRoot": trust_root,
         **control_members(case),
     }
+    if (
+        assertions.get("idTokenReturned") is True
+        or assertions.get("sessionCookieReturned") is True
+        or case["group"] == "claim-precedence"
+    ):
+        row["claims"] = claim_set(
+            claim_shape(
+                shadow.unsigned_jwt(
+                    {
+                        "aud": "fixture-claims",
+                        "sub": "fixture-user",
+                        "auth_time": 100,
+                        "iat": 102,
+                        "exp": 3702,
+                        "firebase": {
+                            "identities": {},
+                            "sign_in_provider": "password",
+                        },
+                    }
+                )
+            )
+        )
     if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
         row["boundaryPinned"] = False
     return row

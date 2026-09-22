@@ -237,6 +237,7 @@ def test_setup_recovery_plan_covers_only_created_resources() -> None:
     assert not any("claim-update" in entry["id"] or "signin" in entry["id"] for entry in recovery)
     management = lane.gate_plan(plan)["management"]
     assert [entry["id"] for entry in management["recovery"]][:51] == [entry["id"] for entry in recovery]
+    assert management["totalRequests"] == 93
 
 
 @pytest.mark.parametrize("field", ["approval", "manifest", "permission", "capabilityInputs"])

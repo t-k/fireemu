@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import http.server
 import json
@@ -297,10 +298,14 @@ def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
         account_bindings={"owner-a": {"uid": "uid-owner-a"}},
     )
     assert result.receipt.local_id == "uid-owner-a"
-    assert result.private.id_token == "secret-token"
+    assert result.private.token_for_followup() == "secret-token"
     serialized = json.dumps(result.receipt.as_dict())
     assert "secret-token" not in serialized
     assert "password" not in serialized
+    assert "secret-token" not in repr(result)
+    assert "secret-token" not in repr(result.private)
+    with pytest.raises(TypeError):
+        dataclasses.asdict(result)
 
 
 def _fixture_token(uid, provider, tenant, claims):

@@ -180,8 +180,39 @@ def validate_build(receipt: dict, artifact: str, inputs: dict) -> None:
 
 def artifact_binding(source: Path, launch_copy: Path, build: dict, inputs: dict) -> dict:
     """Bind the built executable and the exact private copy supplied to a launcher."""
+    require(
+        ".." not in source.parts,
+        "artifact binding source path contains '..'",
+    )
+    require(
+        source.is_file() and not source.is_symlink(),
+        "artifact binding source path is unavailable or is a symlink",
+    )
+    require(
+        ".." not in launch_copy.parts,
+        "artifact binding launch path contains '..'",
+    )
+    require(
+        launch_copy.is_file() and not launch_copy.is_symlink(),
+        "artifact binding launch path is unavailable or is a symlink",
+    )
+    source_metadata = source.stat()
+    launch_metadata = launch_copy.stat()
+    require(
+        source_metadata.st_nlink == 1,
+        "artifact binding source path must not be a hardlink",
+    )
+    require(
+        launch_metadata.st_nlink == 1,
+        "artifact binding launch path must not be a hardlink",
+    )
     source = source.resolve(strict=True)
     launch_copy = launch_copy.resolve(strict=True)
+    require(
+        (source_metadata.st_dev, source_metadata.st_ino)
+        != (launch_metadata.st_dev, launch_metadata.st_ino),
+        "artifact binding source and launch paths must have independent inodes",
+    )
     source_sha256 = sha(source.read_bytes())
     launch_copy_sha256 = sha(launch_copy.read_bytes())
     validate_build(build, source_sha256, inputs)

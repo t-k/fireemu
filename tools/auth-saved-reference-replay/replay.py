@@ -229,9 +229,50 @@ def validate_local_report(name: str, report: dict[str, Any], source_commit: str,
 def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: Path) -> None:
     source_path = Path(build.get("sourcePath", ""))
     launch_path = Path(build.get("launchCopyPath", ""))
-    require(source_path.is_absolute() and source_path.is_file(), "artifact binding source path is unavailable")
-    require(launch_path.is_absolute() and launch_path.is_file(), "artifact binding launch path is unavailable")
+    require(
+        source_path.is_absolute()
+        and source_path.is_file()
+        and not source_path.is_symlink(),
+        "artifact binding source path is unavailable or is a symlink",
+    )
+    require(
+        ".." not in source_path.parts,
+        "artifact binding source path contains '..'",
+    )
+    require(
+        launch_path.is_absolute()
+        and launch_path.is_file()
+        and not launch_path.is_symlink(),
+        "artifact binding launch path is unavailable or is a symlink",
+    )
+    require(
+        ".." not in launch_path.parts,
+        "artifact binding launch path contains '..'",
+    )
+    source_metadata = source_path.stat()
+    launch_metadata = launch_path.stat()
+    require(
+        source_metadata.st_nlink == 1,
+        "artifact binding source path must not be a hardlink",
+    )
+    require(
+        launch_metadata.st_nlink == 1,
+        "artifact binding launch path must not be a hardlink",
+    )
+    require(
+        source_path.resolve(strict=True) == source_path,
+        "artifact binding source path must be canonical",
+    )
+    require(
+        launch_path.resolve(strict=True) == launch_path,
+        "artifact binding launch path must be canonical",
+    )
     require(source_path != launch_path, "artifact binding source and launch paths must differ")
+    require(
+        (source_metadata.st_dev, source_metadata.st_ino)
+        != (launch_metadata.st_dev, launch_metadata.st_ino),
+        "artifact binding source and launch paths must have independent inodes",
+    )
     require(file_digest(source_path) == build.get("sourceSha256") == artifact, "artifact binding source hash mismatch")
     require(file_digest(launch_path) == build.get("launchCopySha256") == artifact, "artifact binding launch hash mismatch")
     try:

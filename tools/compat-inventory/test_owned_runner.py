@@ -96,6 +96,28 @@ def test_artifact_binding_rejects_launch_copy_substitution(tmp_path):
         artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
 
 
+def test_artifact_binding_rejects_hardlinked_launch_copy(tmp_path):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    source.write_bytes(b"source")
+    launch.hardlink_to(source)
+    receipt = {
+        "artifactSha256": __import__("hashlib").sha256(b"source").hexdigest(),
+        "inputs": {"crates/x.rs": "x"},
+        "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fireemu",
+            "--message-format=json",
+        ],
+        "exitCode": 0,
+    }
+    with pytest.raises(ValueError, match="hardlink"):
+        artifact_binding(source, launch, receipt, {"crates/x.rs": "x"})
+
+
 def test_owned_runner_refuses_ambient_configuration_and_remote_endpoints():
     validate_config(CONFIG)
     for extra in [{"profile": "emulator"}, {"firebaseJson": "other.json"}]:

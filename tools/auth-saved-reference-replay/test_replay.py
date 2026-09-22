@@ -173,6 +173,55 @@ def test_manifest_rejects_launch_copy_substitution_or_postcopy_mutation(tmp_path
         )
 
 
+def test_manifest_rejects_symlinked_artifact_copy(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    target = launch_path.with_name("real-fireemu")
+    launch_path.rename(target)
+    launch_path.symlink_to(target)
+    with pytest.raises(ValueError, match="symlink"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_hardlinked_artifact_copy(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    launch_path.unlink()
+    launch_path.hardlink_to(source_path)
+    with pytest.raises(ValueError, match="hardlink"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_rejects_parent_path_alias_for_artifact_copy(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    manifest["build"]["launchCopyPath"] = str(
+        launch_path.parent / ".." / launch_path.parent.name / launch_path.name
+    )
+    with pytest.raises(ValueError, match="contains '..'"):
+        validate_artifact_binding(
+            manifest["build"], manifest["artifactSha256"], bundle
+        )
+
+
+def test_manifest_accepts_independent_shutil_copyfile_artifact(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    launch_path.unlink()
+    shutil.copyfile(source_path, launch_path)
+    validate_artifact_binding(manifest["build"], manifest["artifactSha256"], bundle)
+
+
 def test_typed_json_distinguishes_boolean_integer_and_float():
     assert typed_equal({"value": True}, {"value": True})
     assert not typed_equal({"value": True}, {"value": 1})

@@ -153,10 +153,12 @@ fn rest_payload_limiter() -> &'static Arc<tokio::sync::Semaphore> {
     LIMITER.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(REST_PAYLOAD_UNITS)))
 }
 
-fn try_admit_rest_payload(
-    units: usize,
-) -> Option<tokio::sync::OwnedSemaphorePermit> {
-    rest_payload_limiter().clone().try_acquire_many_owned(units as u32).ok()
+fn try_admit_rest_payload(units: usize) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    let units = u32::try_from(units).expect("REST payload permit units fit in u32");
+    rest_payload_limiter()
+        .clone()
+        .try_acquire_many_owned(units)
+        .ok()
 }
 
 struct RestEnvelope {
@@ -386,8 +388,8 @@ async fn rest_call(
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let strict_commit = state.gateway.enforce_limits
-        && crate::rest::is_strict_commit_route(&method, &path);
+    let strict_commit =
+        state.gateway.enforce_limits && crate::rest::is_strict_commit_route(&method, &path);
     let body_limit = if strict_commit {
         MAX_STRICT_COMMIT_RAW_BYTES
     } else {
@@ -412,13 +414,7 @@ async fn rest_call(
             }
         }
     };
-    let bytes = match read_body(
-        req,
-        BodyAllowance::Declared(body_limit),
-        body_deadline,
-    )
-    .await
-    {
+    let bytes = match read_body(req, BodyAllowance::Declared(body_limit), body_deadline).await {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return Ok(json_response(
@@ -444,16 +440,16 @@ async fn rest_call(
     };
     let request = RestEnvelope {
         request: RestRequest {
-        method,
-        path,
-        query,
-        authorization,
-        origin: origin.clone(),
-        // The privileged emulator routes need to know whether a browser issued the request;
-        // the set of fields that says so is the shared one.
-        browser_metadata,
-        app_check,
-        body,
+            method,
+            path,
+            query,
+            authorization,
+            origin: origin.clone(),
+            // The privileged emulator routes need to know whether a browser issued the request;
+            // the set of fields that says so is the shared one.
+            browser_metadata,
+            app_check,
+            body,
         },
         _payload_permit: payload_permit,
     };

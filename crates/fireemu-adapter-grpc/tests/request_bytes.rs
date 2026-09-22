@@ -1,9 +1,11 @@
-//! `FS-LIMIT-API-REQUEST-BYTES`: the 10 MiB inclusive maximum on one API request, at the
-//! transport decode boundary of each Firestore protocol.
+//! `FS-LIMIT-API-REQUEST-BYTES`: transport payload boundaries at each Firestore protocol's
+//! decode boundary. The normal REST and `WebChannel` profiles retain the 10 MiB inclusive
+//! raw-body bound; the strict REST `:commit` route has a 16 MiB raw guard followed by a
+//! 10 MiB decoded-protobuf guard.
 //!
 //! The limit is measured on the message payload before protocol decode, so it is refused
-//! without the request ever being parsed and without the over-long body being held whole in
-//! memory: the REST and `WebChannel` bodies come through a bounded stream
+//! without an oversized raw request being parsed or held whole in memory: REST and
+//! `WebChannel` bodies come through a bounded stream
 //! (`fireemu_adapter_support::body::collect_limited`) and a gRPC message is refused by tonic
 //! before prost sees it. Both profiles refuse it, because it is a transport bound rather
 //! than a document rule and it is already in force.
@@ -15,7 +17,7 @@ use fireemu_adapter_grpc::local::LocalBackend;
 use fireemu_adapter_grpc::rest::RestState;
 use fireemu_adapter_grpc::serve::{
     serve_multiplexed, serve_multiplexed_with, API_REQUEST_BYTES, MAX_GRPC_MESSAGE_BYTES,
-    MAX_REST_BODY_BYTES,
+    MAX_REST_BODY_BYTES, MAX_STRICT_COMMIT_RAW_BYTES,
 };
 use fireemu_adapter_grpc::service::GatewayService;
 use fireemu_adapter_grpc::webchannel::MAX_FORM_BYTES;
@@ -263,6 +265,39 @@ async fn exists(addr: std::net::SocketAddr, name: &str) -> bool {
 /// REST `:commit`: the inclusive maximum writes twelve documents, one more byte is refused
 /// before any write is applied.
 async fn rest_boundary(addr: std::net::SocketAddr, expected: &ExpectedRefusal) {
+    if expected.http_status == "HTTP/1.1 400" {
+        let compact = r#"{"writes":[]}"#;
+        let accepted_body = format!(
+            "{}{}",
+            compact,
+            " ".repeat(MAX_STRICT_COMMIT_RAW_BYTES - compact.len())
+        );
+        let accepted = http(addr, "POST", COMMIT, &accepted_body).await;
+        assert!(accepted.starts_with("HTTP/1.1 200"), "{accepted}");
+        let decoded_over = http(
+            addr,
+            "POST",
+            COMMIT,
+            &rest_commit_of(MAX_STRICT_COMMIT_RAW_BYTES, "decoded-over"),
+        )
+        .await;
+        assert!(decoded_over.starts_with("HTTP/1.1 400"), "{decoded_over}");
+        assert!(
+            decoded_over.contains("decoded Commit request exceeds the local 10 MiB protobuf guard")
+        );
+        assert_nothing_published(addr, "decoded-over").await;
+        let refused_body = format!(
+            "{}{}",
+            compact,
+            " ".repeat(MAX_STRICT_COMMIT_RAW_BYTES + 1 - compact.len())
+        );
+        let refused = http(addr, "POST", COMMIT, &refused_body).await;
+        assert!(refused.starts_with("HTTP/1.1 413"), "{refused}");
+        assert!(
+            refused.contains("strict REST Commit body exceeds the local 16 MiB transport guard")
+        );
+        return;
+    }
     let accepted = http(
         addr,
         "POST",

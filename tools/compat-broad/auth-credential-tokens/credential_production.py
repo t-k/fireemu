@@ -644,6 +644,12 @@ def _execute_after_reservation(
     )
     if preparation_proof is not None:
         receipt["preparationProof"] = preparation_proof
+        if snapshot is not None and snapshot["events"] == []:
+            # No-data retirement must bind the entire actual management prefix.
+            receipt["managementEvidence"] = [
+                *preparation_proof["managementEvidence"],
+                *receipt["managementEvidence"],
+            ]
         receipt["observationApprovalDigest"] = digest(
             _read_saved(output / "observation-admission.json")
         )

@@ -103,7 +103,7 @@ def _selected_production(built):
     return built
 
 
-def test_selected_production_plan_passes_o7_then_reaches_o8_hosting_refusal(
+def test_selected_fixture_passes_hosting_then_stops_at_guarded_credential_handoff(
     tmp_path, monkeypatch, capsys
 ):
     import mfa_descriptor as campaign
@@ -114,14 +114,17 @@ def test_selected_production_plan_passes_o7_then_reaches_o8_hosting_refusal(
     assert built.descriptor.campaign_seconds == 1200
     assert built.descriptor.recovery_seconds == 300
 
-    def never(_args):
-        raise AssertionError("the credential handoff must not be read")
+    reached_handoff = []
 
-    monkeypatch.setattr(mfa_o8, "_read_handoff", never)
-    assert mfa_o8.main(_argv(built, tmp_path)) == 2
-    assert "refused (HostingRefused)" in capsys.readouterr().err
-    assert not (tmp_path / "output").exists()
-    assert json.loads((built.ledger / "state.json").read_bytes())["reservations"] == {}
+    def stop_at_handoff(_args):
+        reached_handoff.append(True)
+        raise RuntimeError("offline fixture stops at credential handoff")
+
+    monkeypatch.setattr(mfa_o8, "_read_handoff", stop_at_handoff)
+    assert mfa_o8.main(_argv(built, tmp_path)) == 1
+    assert reached_handoff == [True]
+    assert "stop point schedule-not-started" in capsys.readouterr().err
+    assert json.loads((built.ledger / "state.json").read_bytes())["reservations"]
 
 
 def test_rehearsal_inputs_are_refused_for_production_before_any_credential(

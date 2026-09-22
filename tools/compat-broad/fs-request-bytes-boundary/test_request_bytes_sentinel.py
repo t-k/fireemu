@@ -293,6 +293,56 @@ def test_sentinel_collector_incomplete_commit_is_inconclusive_and_cannot_delete(
     assert not any(op["method"] == "DELETE" for op in result["testDispatched"])
 
 
+def test_sentinel_collector_reserves_its_case_specific_commit_deadline(
+    tmp_path: Path,
+) -> None:
+    import time
+
+    plan = compile_request_bytes_sentinel_plan("demo", "(default)", NONCE)
+    started = time.monotonic()
+    seen = {}
+
+    class ProbeGate:
+        def snapshot(self):
+            return {
+                "started": started,
+                "plan": {"wallSeconds": 1200, "recoverySeconds": 600},
+            }
+
+        def dispatch(self, operation, recovery, send_wire):
+            return send_wire()
+
+        def skip_scheduled_slot(self, *args):
+            pass
+
+        def abandon_observation(self, *args):
+            pass
+
+    class Gate(dict):
+        def values(self):
+            return [self["raw-16mib-over"]]
+
+    def execute(operation, *, deadline):
+        if operation["kind"] == "conditional-create-commit":
+            seen["remaining"] = deadline - time.monotonic()
+        body = {"error": {"code": 404, "status": "NOT_FOUND"}}
+        raw = json.dumps(body, separators=(",", ":")).encode()
+        return {
+            "complete": True,
+            "failure": None,
+            "status": 404,
+            "body": body,
+            "rawBodyBase64": base64.b64encode(raw).decode("ascii"),
+            "bodyBytes": len(raw),
+        }
+
+    collect_local(
+        plan, execute, tmp_path / "run", gate=Gate({"raw-16mib-over": ProbeGate()})
+    )
+
+    assert 75 < seen["remaining"] <= 80
+
+
 def test_descriptor_freezes_one_case_and_projects_one_reserved_gate_job() -> None:
     import request_bytes_descriptor as descriptor
 

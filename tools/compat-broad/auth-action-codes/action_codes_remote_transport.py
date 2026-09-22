@@ -30,6 +30,7 @@ from broad_contract import digest
 
 NONCE = re.compile(r"^[0-9a-f]{32}$")
 AUTHORIZED_PROJECT = "fireemu-35fe6"
+AUTHORIZED_PROJECT_NUMBER = "592603257417"
 EMAIL = re.compile(r"^o1-oob-([0-9a-f]{32})-(?:a|b|absent)@example\.invalid$")
 UID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 SERVICE_PREFIX = "/identitytoolkit.googleapis.com/v1/"
@@ -378,6 +379,44 @@ def _tokeninfo_valid(status, body, *, principal: dict, scope: str, required_seco
 
 def management_receipt(*, slot_id, deadline, capability, binding, binding_digest, handoff, permission, required_seconds, fixture_origin=None):
     """Run one Action-specific live authority check through the pinned worker."""
+
+    def config_project_id(body: Any) -> str | None:
+        """Extract a project identity from an Auth Config response."""
+        project_number = globals().get("AUTHORIZED_PROJECT_NUMBER", "592603257417")
+        authorized_names = {AUTHORIZED_PROJECT, project_number}
+
+        def canonical_name(value: str) -> str:
+            return AUTHORIZED_PROJECT if value in authorized_names else value
+
+        if not isinstance(body, dict):
+            return None
+        if "name" in body:
+            name = body["name"]
+            if not isinstance(name, str):
+                return None
+            parts = name.split("/")
+            if (
+                len(parts) != 3
+                or parts[0] != "projects"
+                or not parts[1]
+                or parts[2] != "config"
+            ):
+                return None
+            project_id = parts[1]
+            declared_project_id = body.get("projectId")
+            if not isinstance(declared_project_id, (str, type(None))):
+                return None
+            if (
+                declared_project_id is not None
+                and canonical_name(declared_project_id) != canonical_name(project_id)
+            ):
+                return None
+            return canonical_name(project_id)
+        if set(body) != {"projectId"}:
+            return None
+        project_id = body.get("projectId")
+        return AUTHORIZED_PROJECT if project_id == AUTHORIZED_PROJECT else None
+
     credential_remote.authorize_transport(capability, binding=binding, binding_digest=binding_digest)
     credential_remote.verify_worker_binding(binding, binding_digest, None)
     token = handoff.get("token")
@@ -430,9 +469,7 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
             fixture_origin=fixture_origin,
         )
         status, body = exchange.status, exchange.body
-        project_id = body.get("projectId") if isinstance(body, dict) else None
-        if project_id is None and isinstance(body, dict) and isinstance(body.get("name"), str):
-            project_id = body["name"].removeprefix("projects/")
+        project_id = config_project_id(body)
         valid = status == 200 and project_id == AUTHORIZED_PROJECT
         return {
             "status": status,

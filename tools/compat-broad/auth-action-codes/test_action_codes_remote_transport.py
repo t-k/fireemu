@@ -8,6 +8,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -192,6 +193,87 @@ def _action_transport(fixture_origin=UNUSED_FIXTURE_ORIGIN):
         fixture_origin=fixture_origin,
     )
     return inputs, transport
+
+
+def _management_receipt(monkeypatch, body, *, status=200):
+    class _CredentialRemote:
+        def authorize_transport(self, *_args, **_kwargs):
+            pass
+
+        def verify_worker_binding(self, *_args, **_kwargs):
+            pass
+
+        def request_with_lifecycle(self, *_args, **_kwargs):
+            return SimpleNamespace(status=status, body=body, worker_reaped=True)
+
+        def _seconds(self, _deadline):
+            return 5
+
+    monkeypatch.setattr(action_remote, "credential_remote", _CredentialRemote())
+    return action_remote.management_receipt(
+        slot_id="auth-project-readback",
+        deadline=time.monotonic() + 5,
+        capability=object(),
+        binding=b"fixture",
+        binding_digest="fixture-digest",
+        handoff={"token": "fixture-token"},
+        permission={},
+        required_seconds=480,
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "projects/fireemu-35fe6/config"},
+        {"name": "projects/592603257417/config"},
+        {
+            "name": "projects/592603257417/config",
+            "projectId": "fireemu-35fe6",
+        },
+        {
+            "name": "projects/fireemu-35fe6/config",
+            "signIn": {"email": {"enabled": True}},
+        },
+    ],
+)
+def test_management_receipt_accepts_official_config_resource_name(monkeypatch, body):
+    result = _management_receipt(monkeypatch, body)
+
+    assert result["complete"] is True
+    assert result["body"]["projectId"] == action_remote.AUTHORIZED_PROJECT
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"name": "projects/fireemu-35fe6"},
+        {"name": "projects/fireemu-35fe6/config/extra"},
+        {"name": "projects/other-project/config"},
+        {"name": "not-a-config-resource", "projectId": "fireemu-35fe6"},
+        {
+            "name": "projects/fireemu-35fe6/config",
+            "projectId": "other-project",
+        },
+        {
+            "name": "projects/592603257417/config",
+            "projectId": "other-project",
+        },
+        {"name": "projects/592603257416/config"},
+        {"projectId": "fireemu-35fe6", "unexpected": True},
+        {"name": 42},
+    ],
+)
+def test_management_receipt_rejects_incomplete_or_foreign_config_resource(monkeypatch, body):
+    result = _management_receipt(monkeypatch, body)
+
+    assert result["complete"] is False
+
+
+def test_management_receipt_retains_exact_legacy_project_id_fixture(monkeypatch):
+    result = _management_receipt(monkeypatch, {"projectId": action_remote.AUTHORIZED_PROJECT})
+
+    assert result["complete"] is True
 
 
 def test_admin_action_slot_reaches_loopback_fixture_with_exact_shape(fixture_origin):

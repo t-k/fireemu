@@ -169,7 +169,7 @@ def validate_manifest(manifest: dict, runtime_source: Path, artifact_sha: str) -
     }
 
 
-def validate_owned_receipt(runtime_source: Path, receipt: dict, artifact_sha: str) -> None:
+def validate_owned_receipt(authority_root: Path, receipt: dict, artifact_sha: str) -> None:
     script = """
 import json, sys
 from pathlib import Path
@@ -179,12 +179,12 @@ validate_owned_receipt(json.loads(sys.stdin.read()), sys.argv[1])
 """
     env = {k: v for k, v in os.environ.items() if k not in {"GOOGLE_APPLICATION_CREDENTIALS", "FIREBASE_TOKEN"}}
     result = subprocess.run(
-        [sys.executable, "-c", script, artifact_sha, str(runtime_source)],
+        [sys.executable, "-c", script, artifact_sha, str(authority_root)],
         input=json.dumps(receipt),
         text=True,
         capture_output=True,
         check=False,
-        cwd=runtime_source,
+        cwd=authority_root,
         env=env,
     )
     if result.returncode != 0:
@@ -271,7 +271,7 @@ def run(args: argparse.Namespace) -> dict:
     require(receipt.get("failures") == [], "local acquisition has failures")
     owned = receipt.get("ownedArtifact", {})
     require(owned.get("executionCommit") == args.authority_commit, "local authority commit differs")
-    validate_owned_receipt(runtime_source, receipt, sha(artifact_bytes))
+    validate_owned_receipt(root, receipt, sha(artifact_bytes))
     require(production.get("acquisitionValidated") is True and production.get("productionExecuted") is True, "production reference receipt is not validated")
     local_plan = receipt["gate"]["plan"]
     production_plan = production["gate"]["plan"]

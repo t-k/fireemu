@@ -1140,6 +1140,7 @@ def run_bound_collection(
     binding: bytes | None = None,
     binding_digest: str | None = None,
     journal_path: Any = None,
+    compare_after_collect: bool = False,
 ) -> dict[str, Any]:
     """Run the existing collector through real Gate/Ledger ownership."""
     if plan.get("campaignId") != CAMPAIGN:
@@ -1381,6 +1382,8 @@ def run_bound_collection(
         "requestCount": len(setup_receipts),
         "receipts": setup_receipts,
     }
+    if compare_after_collect:
+        bundle["comparison"] = compare_with_cleanup_gate(bundle, plan, gate)
     if (
         bundle.get("recordingComplete") is True
         and bundle.get("cleanup", {}).get("cleanupComplete") is True

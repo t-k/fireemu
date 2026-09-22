@@ -7,7 +7,9 @@ An interrupted callback leaves a durable uncertain marker and blocks all dispatc
 from __future__ import annotations
 
 import contextlib
+import builtins
 import fcntl
+import functools
 import hashlib
 import json
 import math
@@ -15,6 +17,7 @@ import os
 import re
 import sys
 import time
+import types
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -34,6 +37,350 @@ MANAGEMENT_SKIP_REASON = "management-not-run"
 LIMITS_PREPARATION_TRANSPORT = "limits-03-baseline-preparation-v2"
 LIMITS_PREPARATION_RECEIPT = "limits-03-baseline-preparation-receipt-v1"
 LIMITS_PREPARATION_SLOTS = ("refresh", "oauth-tokeninfo", "project", "database", "auth", "key")
+RULES_MANAGEMENT_KIND = "rules-management-dependencies-v1"
+
+
+def _rules_management(plan):
+    return "rulesManagementContract" in plan
+
+
+@functools.lru_cache(maxsize=4)
+def _rules_compiler_modules(case_source, campaign_source, directory):
+    """Load the two pinned pure compilers without ambient module resolution."""
+    case = types.ModuleType("_shared_rules_case")
+    case.__file__ = str(Path(directory) / "o5_user_token_case.py")
+    exec(compile(case_source, case.__file__, "exec"), case.__dict__)  # noqa: S102 -- Source-pinned repository compiler.
+    campaign = types.ModuleType("_shared_rules_campaign")
+    campaign.__file__ = str(Path(directory) / "o5_user_token_campaign.py")
+
+    def compiler_import(name, *args, **kwargs):
+        return case if name == "o5_user_token_case" else builtins.__import__(name, *args, **kwargs)
+
+    campaign.__dict__["__builtins__"] = {**vars(builtins), "__import__": compiler_import}
+    exec(compile(campaign_source, campaign.__file__, "exec"), campaign.__dict__)  # noqa: S102 -- Source-pinned repository compiler.
+    return case, campaign
+
+
+def _validate_rules_management_plan(plan):
+    """Recompile the exact matrix, effects and cleanup dependencies locally."""
+    directory = Path(__file__).resolve().parent / "fs-rules-publication"
+    names = ("o5_user_token_case.py", "o5_user_token_campaign.py")
+    sources = [(directory / name).read_bytes() for name in names]
+    expected_sources = {name: hashlib.sha256(source).hexdigest() for name, source in zip(names, sources, strict=True)}
+    if plan.get("rulesCompilerSources") != expected_sources:
+        raise ValueError("Rules compiler source closure changed")
+    contract = plan.get("rulesManagementContract")
+    if not isinstance(contract, dict) or contract.get("kind") != RULES_MANAGEMENT_KIND:
+        raise ValueError("closed Rules management dependencies required")
+    case, compiler = _rules_compiler_modules(*sources, str(directory))
+    canonical = case.compile_case(plan.get("project"), plan.get("database"), plan.get("nonce"), contract.get("tenantId"))
+    management = compiler.gate_management_plan(canonical)
+    if (
+        plan.get("contract") != "shared-local-v1"
+        or plan.get("kind") != "fs-rules-user-token-gate-plan-v1"
+        or plan.get("campaignId") != "FS-RULES-USER-TOKEN-MATRIX-01"
+        or plan.get("project") != "fireemu-35fe6" or plan.get("database") != "(default)"
+        or plan.get("transport") != "bounded-rules-worker"
+        or plan.get("receiptKind") != "fs-rules-management-receipt-v1"
+        or plan.get("planDigest") != canonical["planDigest"]
+        or contract != compiler.rules_management_contract(canonical)
+        or plan.get("management") != management
+        or len(contract["subjects"]) != 21
+        or len(management["observation"]) != 71 or len(management["recovery"]) != 73
+        or plan.get("observationRequests") != 71 or plan.get("managementRequests") != 144
+        or plan.get("requestCostMicrousd") != 1 or plan.get("costMicrousd") != 144
+        or plan.get("wallSeconds") != 600 or plan.get("recoverySeconds") != 300
+        or plan.get("coordinatorRequests", 0) != 0 or plan.get("fixedCostMicrousd", 0) != 0
+        or plan.get("jobs") != {"rules-management": {"resources": [], "observation": [], "recovery": []}}
+    ):
+        raise ValueError("canonical Rules management plan required")
+    return canonical
+
+
+def _rules_declared(plan):
+    return [(phase + ":" + slot["id"], phase, slot)
+            for phase in PHASES for slot in plan["management"][phase]]
+
+
+def _rules_cursor(state):
+    """Merge the two journals without allowing either to reorder the queue."""
+    declared = _rules_declared(state["plan"])
+    used, skipped = state["managementUsed"], state["managementSkipped"]
+    if [event.get("id") for event in state["managementEvents"]] != used:
+        raise ValueError("Rules charged journal mismatch")
+    skip_ids = [entry.get("id") for entry in skipped]
+    if len(set(used + skip_ids)) != len(used + skip_ids):
+        raise ValueError("Rules duplicate consumed slot")
+    count = len(used) + len(skipped)
+    prefix = [identity for identity, _, _ in declared[:count]]
+    if (set(prefix) != set(used + skip_ids)
+            or [identity for identity in prefix if identity in used] != used
+            or [identity for identity in prefix if identity in skip_ids] != skip_ids):
+        raise ValueError("Rules management prefix mismatch")
+    return declared, count
+
+
+def _rules_settled(state):
+    if (state["coordinatorInflight"] or state.get("credentialRejected")
+            or any(job["inflight"] for job in state["jobs"].values())
+            or any(event.get("workerReaped") is not True for event in state["managementEvents"])):
+        raise ValueError("Rules process outcome is unknown; ownership retained")
+
+
+def _rules_proof_subjects(phase, slot):
+    if phase == "recovery":
+        return {slot["dependency"]["subject"]}
+    if slot["effects"]:
+        return {effect["subject"] for effect in slot["effects"]}
+    if slot["id"].startswith("baseline-"):
+        return {"release/baseline"}
+    for label in ("a", "b"):
+        if slot["id"] in {"create-" + label, "create-" + label + "-get"}:
+            return {"ruleset/" + label}
+        if slot["id"].startswith("patch-" + label):
+            return {"release/baseline"}
+    return set()
+
+
+def _validate_rules_receipt(plan, phase, slot, result):
+    if not _management_receipt_valid(result, slot["id"]):
+        raise ValueError("Rules bounded receipt required")
+    body = result["body"]
+    if body is None and result["complete"] is False:
+        return
+    if (not isinstance(body, dict) or set(body) != {"kind", "responseDigest", "effects"}
+            or body["kind"] != "rules-management-proof-v1"
+            or not _preparation_hash(body["responseDigest"]) or not isinstance(body["effects"], list)):
+        raise ValueError("Rules sanitized proof envelope required")
+    canonical = _validate_rules_management_plan(plan)
+    allowed = _rules_proof_subjects(phase, slot)
+    subjects = {subject["id"]: subject for subject in plan["rulesManagementContract"]["subjects"]}
+    tenants = {account["ref"]: account["tenant"] for account in canonical["ownedAccounts"]}
+    seen = set()
+    schemas = {"document": {"kind", "name", "fieldsDigest", "updateTime"},
+               "account": {"kind", "accountRef", "tenantId", "uid"},
+               "ruleset": {"kind", "name", "sourceDigest"},
+               "release": {"kind", "name", "rulesetName"},
+               "absence": {"kind", "resource"}}
+    for effect in body["effects"]:
+        if (not isinstance(effect, dict) or set(effect) != {"subject", "proof"}
+                or not isinstance(effect["subject"], str) or effect["subject"] not in allowed
+                or effect["subject"] in seen):
+            raise ValueError("Rules proof subject is not compiled")
+        subject_id, proof = effect["subject"], effect["proof"]
+        seen.add(subject_id)
+        if not isinstance(proof, dict) or set(proof) != schemas.get(proof.get("kind")):
+            raise ValueError("Rules proof fields are not sanitized")
+        kind = proof["kind"]
+        if kind == "document":
+            if (subject_id not in subjects or subjects[subject_id]["kind"] != kind
+                    or proof["name"] != subjects[subject_id]["resource"]
+                    or not _preparation_hash(proof["fieldsDigest"])
+                    or not isinstance(proof["updateTime"], str)
+                    or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z", proof["updateTime"]) is None):
+                raise ValueError("Rules document proof identity mismatch")
+        elif kind == "account":
+            if (subject_id not in subjects or subjects[subject_id]["kind"] != kind
+                    or proof["accountRef"] != subjects[subject_id]["resource"]
+                    or proof["tenantId"] != tenants.get(proof["accountRef"])
+                    or not isinstance(proof["uid"], str)
+                    or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", proof["uid"]) is None):
+                raise ValueError("Rules account proof identity mismatch")
+        elif kind == "ruleset":
+            if (subject_id not in {"ruleset/a", "ruleset/b", "release/baseline"}
+                    or not isinstance(proof["name"], str)
+                    or re.fullmatch(r"projects/fireemu-35fe6/rulesets/[A-Za-z0-9_-]{1,128}", proof["name"]) is None
+                    or not _preparation_hash(proof["sourceDigest"])
+                    or (subject_id.startswith("ruleset/") and proof["sourceDigest"] != plan["rulesManagementContract"]["rulesets"][subject_id[-1]])):
+                raise ValueError("Rules source proof mismatch")
+        elif kind == "release":
+            if (subject_id != "release/baseline" or proof["name"] != "projects/fireemu-35fe6/releases/cloud.firestore"
+                    or not isinstance(proof["rulesetName"], str)
+                    or re.fullmatch(r"projects/fireemu-35fe6/rulesets/[A-Za-z0-9_-]{1,128}", proof["rulesetName"]) is None):
+                raise ValueError("Rules release proof identity mismatch")
+        elif (phase != "recovery" or result["status"] not in (200, 404)
+              or (subject_id in subjects and proof["resource"] != subjects[subject_id]["resource"])
+              or (subject_id not in subjects and (not isinstance(proof["resource"], str)
+                  or re.fullmatch(r"projects/fireemu-35fe6/rulesets/[A-Za-z0-9_-]{1,128}", proof["resource"]) is None))):
+            raise ValueError("Rules typed absence identity mismatch")
+
+
+def _rules_data_slot(plan, phase, slot):
+    """Only the recompiled user-token matrix owns application denial outcomes."""
+    if phase != "observation":
+        return False
+    canonical = _validate_rules_management_plan(plan)
+    return any(slot["id"] == "data/" + str(row["index"]) for row in canonical["observation"])
+
+
+def _rules_subject_states(state):
+    """Derive ownership solely from acknowledged, source-bound wire events."""
+    subjects = {item["id"]: {"status": "not-attempted", "proof": None}
+                for item in state["plan"]["rulesManagementContract"]["subjects"]}
+    subjects.update({key: {"status": "not-attempted", "proof": None}
+                     for key in ("ruleset/a", "ruleset/b", "release/baseline")})
+    baseline = subjects["release/baseline"]
+    slots = {identity: (phase, slot) for identity, phase, slot in _rules_declared(state["plan"])}
+    for event in state["managementEvents"]:
+        phase, slot = slots[event["id"]]
+        receipt = event.get("rulesReceipt")
+        effects = receipt["body"]["effects"] if receipt and receipt.get("body") else []
+        proofs = {effect["subject"]: effect["proof"] for effect in effects}
+        good = event.get("completed") is True and 200 <= event.get("status", 0) < 300
+        if phase == "observation":
+            for effect in slot["effects"]:
+                subject = subjects[effect["subject"]]
+                if effect["action"] == "read":
+                    continue
+                proof = proofs.get(effect["subject"])
+                if good and proof is not None and proof["kind"] != "absence":
+                    subject.update(status="owned", proof=proof)
+                elif effect["action"] == "create" or subject["status"] != "not-attempted":
+                    subject["status"] = "held"
+            # Rules mutations have a separate canonical lifecycle dependency.
+            baseline_proof = proofs.get("release/baseline")
+            if slot["id"] == "baseline-release-get" and good and baseline_proof and baseline_proof["kind"] == "release":
+                baseline["proof"] = baseline_proof
+            if slot["id"] == "baseline-ruleset-get" and good and baseline_proof and baseline_proof["kind"] == "ruleset" and baseline.get("proof") and baseline_proof["name"] == baseline["proof"]["rulesetName"]:
+                baseline["sourceProof"] = baseline_proof
+            if slot["id"] == "baseline-executable-get" and good and baseline_proof == baseline["proof"] and baseline.get("sourceProof"):
+                baseline["verified"] = True
+            for label in ("a", "b"):
+                if slot["id"] == "create-" + label:
+                    proof = proofs.get("ruleset/" + label)
+                    subjects["ruleset/" + label].update(status="owned" if good and proof else "held", proof=proof)
+                if slot["id"] == "create-" + label + "-get":
+                    subject = subjects["ruleset/" + label]
+                    subject["status"] = "verified" if good and proofs.get("ruleset/" + label) == subject["proof"] and subject["proof"] else "held"
+                if slot["id"] == "patch-" + label:
+                    subjects["release/baseline"]["status"] = "held"
+                    subjects["release/baseline"]["patched"] = True
+        else:
+            dependency = slot["dependency"]
+            subject = subjects[dependency["subject"]]
+            proof = proofs.get(dependency["subject"])
+            if (event.get("completed") is True and proof and proof["kind"] == "absence"
+                    and event.get("status") in (200, 404) and subject["proof"] is not None
+                    and subject["status"] in ("owned", "verified", "deleted")
+                    and (not dependency["subject"].startswith("ruleset/") or proof["resource"] == subject["proof"]["name"])):
+                subject["status"] = "recovered"
+            elif dependency["step"] == "read":
+                subject["status"] = "verified" if good and proof == subject["proof"] else "held"
+            elif dependency["step"] == "delete":
+                subject["status"] = "deleted" if good and subject["status"] == "verified" else "held"
+            elif dependency["step"] == "absence":
+                subject["status"] = "held"
+            elif dependency["subject"].startswith("ruleset/"):
+                step = dependency["step"]
+                if step.endswith("-get"):
+                    subject["status"] = "verified" if good and proof == subject["proof"] else "held"
+                elif step in ("delete-a", "delete-b"):
+                    subject["status"] = "deleted" if good and subject["status"] == "verified" else "held"
+                else:
+                    subject["status"] = "held"
+            elif dependency["subject"] == "release/baseline":
+                stages = ("restore-patch", "restore-get", "restore-executable", "restore-get-executable")
+                stage = subject.get("restoreStage", 0)
+                if (stage < len(stages) and dependency["step"] == stages[stage]
+                        and good and proof == subject["proof"] and subject.get("verified")):
+                    subject["restoreStage"] = stage + 1
+                    subject["status"] = "recovered" if stage == 3 else "held"
+                else:
+                    subject["restoreFailed"] = True
+    return subjects
+
+
+def _rules_skip_reason(subject, dependency):
+    if subject["status"] == "not-attempted":
+        return "dependency-not-attempted"
+    if subject["status"] == "recovered":
+        return "typed-absence"
+    if subject["status"] == "held" and not (dependency["subject"] == "release/baseline" and subject.get("verified") and not subject.get("restoreFailed")):
+        return "dependency-held"
+    raise ValueError("Rules dependency requires its reserved wire call")
+
+
+def _rules_dispatch_dependency(state, phase, slot):
+    subjects = _rules_subject_states(state)
+    if phase == "observation":
+        if slot["id"] in ("patch-a", "patch-b"):
+            if not subjects["release/baseline"].get("verified") or subjects["ruleset/" + slot["id"][-1]]["status"] != "verified":
+                raise ValueError("Rules patch lacks verified baseline and owned ruleset")
+        return
+    dependency = slot["dependency"]
+    subject = subjects[dependency["subject"]]
+    step = dependency["step"]
+    if dependency["subject"] == "release/baseline":
+        stages = ("restore-patch", "restore-get", "restore-executable", "restore-get-executable")
+        stage = subject.get("restoreStage", 0)
+        allowed = subject.get("patched") and subject.get("verified") and not subject.get("restoreFailed") and stage < 4 and step == stages[stage]
+    elif step == "read" or step.endswith("-get"):
+        allowed = subject["status"] in ("owned", "verified")
+    elif step == "delete" or step in ("delete-a", "delete-b"):
+        allowed = subject["status"] == "verified"
+    else:
+        allowed = subject["status"] == "deleted"
+    if not allowed:
+        raise ValueError("Rules recovery lacks acknowledged dependency ownership")
+
+
+def _validate_rules_state(state, *, terminal=False):
+    _validate_rules_management_plan(state["plan"])
+    declared, count = _rules_cursor(state)
+    slots = {identity: (phase, slot) for identity, phase, slot in declared}
+    for event in state["managementEvents"]:
+        receipt = event.get("rulesReceipt")
+        if receipt is not None:
+            phase, slot = slots[event["id"]]
+            _validate_rules_receipt(state["plan"], phase, slot, receipt)
+            if (event.get("responseDigest") != digest(receipt)
+                    or event.get("bodyDigest") != digest(receipt["body"])
+                    or any(event.get(key) != receipt[key] for key in ("status", "complete", "workerReaped", "bodyKind"))
+                    or event.get("completed") != bool(receipt["complete"] and receipt["workerReaped"] and event["ended"] <= event["deadline"])):
+                raise ValueError("Rules durable response proof changed")
+        elif event.get("completed") or event.get("workerReaped"):
+            raise ValueError("Rules durable response proof missing")
+    marker = state.get("managementAbort")
+    obs_skips = [item for item in state["managementSkipped"] if item.get("phase") == "observation"]
+    if marker is not None:
+        expected = {"version": "rules-cancel-v1", "planDigest": state["planDigest"],
+                    "nonceDigest": digest(state["plan"]["nonce"]),
+                    "prefix": [identity for identity in state["managementUsed"] if identity.startswith("observation:")],
+                    "coordinatorPid": state["coordinatorPid"]}
+        if marker != expected:
+            raise ValueError("Rules cancellation binding changed")
+        remaining = [identity for identity, phase, _ in declared if phase == "observation"][len(marker["prefix"]):]
+        if obs_skips != [{"id": identity, "phase": "observation", "reason": MANAGEMENT_SKIP_REASON} for identity in remaining]:
+            raise ValueError("Rules cancellation suffix changed")
+    elif obs_skips:
+        raise ValueError("Rules observation skip lacks cancellation")
+    rec_skips = [item for item in state["managementSkipped"] if item.get("phase") == "recovery"]
+    for skipped in rec_skips:
+        if set(skipped) != {"id", "phase", "reason", "prefixDigest"}:
+            raise ValueError("Rules skip schema changed")
+        index = next(index for index, entry in enumerate(declared) if entry[0] == skipped["id"])
+        preceding = {entry[0] for entry in declared[:index]}
+        before = dict(state)
+        before["managementEvents"] = [event for event in state["managementEvents"] if event["id"] in preceding]
+        before["managementUsed"] = [identity for identity in state["managementUsed"] if identity in preceding]
+        before["managementSkipped"] = [item for item in state["managementSkipped"] if item["id"] in preceding]
+        dependency = declared[index][2]["dependency"]
+        reason = _rules_skip_reason(_rules_subject_states(before)[dependency["subject"]], dependency)
+        if skipped["reason"] != reason or skipped["prefixDigest"] != digest({"used": before["managementUsed"], "skipped": before["managementSkipped"]}):
+            raise ValueError("Rules skip evidence changed")
+    used = state["managementUsed"]
+    obs_count = sum(identity.startswith("observation:") for identity in used)
+    rec_count = len(used) - obs_count
+    if (state["total"] != len(used) or state["observation"] != obs_count
+            or state["recovery"] != rec_count or state["costMicrousd"] != len(used)
+            or state["reservedRecovery"] != 73 - rec_count - len(rec_skips)
+            or state["events"] or state["coordinatorDone"]):
+        raise ValueError("Rules management accounting changed")
+    if terminal:
+        _rules_settled(state)
+        if count != len(declared) or any(subject["status"] not in ("not-attempted", "recovered") for subject in _rules_subject_states(state).values()):
+            raise ValueError("Rules cleanup incomplete; ownership retained")
+    return count
 
 
 def validate_limits_preparation_plan(plan):
@@ -754,6 +1101,8 @@ def _observation_time(plan, seconds):
     """Time the scheduled observation slots reserve, for jobs that declared one."""
     interval = plan["intervalSeconds"]
     total = 0
+    if _rules_management(plan):
+        total += sum(entry["timeout"] + interval for entry in plan["management"]["observation"])
     for job in plan["jobs"].values():
         schedule = job_schedule(job)
         if schedule is None:
@@ -962,6 +1311,9 @@ def _recovery_time(plan, seconds):
 
 def create(path, plan):
     path = Path(path)
+    rules_management = _rules_management(plan)
+    if rules_management:
+        _validate_rules_management_plan(plan)
     preparation = plan.get("transport") == LIMITS_PREPARATION_TRANSPORT
     if preparation:
         validate_limits_preparation_plan(plan)
@@ -1035,7 +1387,7 @@ def create(path, plan):
         or _observation_time(plan, seconds)
         > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))
-        or (not resources and not preparation)
+        or (not resources and not preparation and not rules_management)
         or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= WALL_CAP_SECONDS
         or plan["recoverySeconds"] < recovery_time
         or not math.isfinite(plan["intervalSeconds"])
@@ -2077,6 +2429,8 @@ class Gate:
                 "planDigest"
             ] != getattr(self, "plan_digest", state["planDigest"]):
                 raise ValueError("shared plan changed")
+            if _rules_management(state["plan"]):
+                _validate_rules_state(state, terminal=any(job["complete"] for job in state["jobs"].values()))
             yield state
 
     def snapshot(self):
@@ -2148,13 +2502,16 @@ class Gate:
                 or (phase == "observation" and (state["stopped"] or state["events"]))
             ):
                 raise ValueError("closed management admission")
-            if state.get("managementAbort") is not None:
+            if state.get("managementAbort") is not None and not _rules_management(plan):
                 _validate_management_abort_marker(state)
             declared = [(p, entry) for p in PHASES for entry in management.get(p, [])]
             identities = [p + ":" + entry["id"] for p, entry in declared]
             used = state["managementUsed"]
             skipped = state.get("managementSkipped", [])
-            if skipped:
+            if _rules_management(plan):
+                _, cursor = _rules_cursor(state)
+                consumed = identities[:cursor]
+            elif skipped:
                 observation_count = sum(
                     identity.startswith("observation:") for identity in used
                 )
@@ -2182,6 +2539,8 @@ class Gate:
             ):
                 raise ValueError("closed management sequence")
             entry = declared[len(consumed)][1]
+            if _rules_management(plan):
+                _rules_dispatch_dependency(state, phase, entry)
             seconds = entry.get("timeout")
             if (
                 type(seconds) not in (int, float)
@@ -2236,13 +2595,18 @@ class Gate:
                 if not isinstance(result, dict):
                     raise TypeError("bounded management receipt required")
                 status = result.get("status")
-                if type(status) is int and status in (401, 403):
+                if type(status) is int and status in (401, 403) and not (
+                    _rules_management(plan) and _rules_data_slot(plan, phase, entry)
+                ):
                     state["credentialRejected"] = True
                     state["stopped"] = True
                 if not _management_receipt_valid(result, slot_id):
                     raise ValueError("bounded management receipt required")
                 if plan.get("transport") == LIMITS_PREPARATION_TRANSPORT:
                     validate_limits_preparation_response(slot_id, result)
+                if _rules_management(plan):
+                    _validate_rules_receipt(plan, phase, entry, result)
+                    event["rulesReceipt"] = result
                 event.update(
                     {
                         "status": status,
@@ -2283,6 +2647,26 @@ class Gate:
                 raise ValueError("job already claimed; ownership retained")
             job["pid"] = os.getpid()
             _save(self.path, state)
+
+    def skip_management_recovery(self, slot_id, *, expected_plan_digest, expected_prefix_digest):
+        """Consume only the next compiled Rules dependency, without a wire debit."""
+        with self.locked() as state:
+            if not _rules_management(state["plan"]) or state["coordinatorPid"] != os.getpid():
+                raise ValueError("Rules coordinator ownership required")
+            _rules_settled(state)
+            declared, count = _rules_cursor(state)
+            prefix_digest = digest({"used": state["managementUsed"], "skipped": state["managementSkipped"]})
+            if (expected_plan_digest != state["planDigest"] or expected_prefix_digest != prefix_digest
+                    or count >= len(declared) or declared[count][:2] != ("recovery:" + slot_id, "recovery")):
+                raise ValueError("Rules next recovery slot binding mismatch")
+            dependency = declared[count][2]["dependency"]
+            reason = _rules_skip_reason(_rules_subject_states(state)[dependency["subject"]], dependency)
+            state["managementSkipped"].append({"id": "recovery:" + slot_id, "phase": "recovery",
+                                               "reason": reason, "prefixDigest": prefix_digest})
+            state["reservedRecovery"] -= 1
+            _validate_rules_state(state)
+            _save(self.path, state)
+            return state
 
     def abort_management_observation(
         self,
@@ -2336,6 +2720,28 @@ class Gate:
         with self.locked() as state:
             if state.get("coordinatorPid") != os.getpid():
                 raise ValueError("management abort coordinator ownership mismatch")
+            if _rules_management(state["plan"]):
+                _rules_settled(state)
+                if any(identity.startswith("recovery:") for identity in state["managementUsed"]) or any(item["phase"] == "recovery" for item in state["managementSkipped"]):
+                    raise ValueError("Rules cancellation must precede recovery")
+                prefix = state["managementUsed"]
+                if any(value is not None and value != actual for value, actual in (
+                    (expected_plan_digest, state["planDigest"]),
+                    (expected_nonce_digest, digest(state["plan"]["nonce"])),
+                    (expected_management_prefix_digest, digest(prefix)),
+                    (expected_journal_digest, _management_journal_digest(state)),
+                )):
+                    raise ValueError("Rules cancellation binding mismatch")
+                marker = {"version": "rules-cancel-v1", "planDigest": state["planDigest"],
+                          "nonceDigest": digest(state["plan"]["nonce"]), "prefix": list(prefix),
+                          "coordinatorPid": state["coordinatorPid"]}
+                state["managementAbort"] = marker
+                state["managementSkipped"] = [{"id": "observation:" + slot["id"], "phase": "observation", "reason": MANAGEMENT_SKIP_REASON}
+                                              for slot in state["plan"]["management"]["observation"][len(prefix):]]
+                state["stopped"] = True
+                _validate_rules_state(state)
+                _save(self.path, state)
+                return state
             existing = state.get("managementAbort")
             if existing is not None:
                 _validate_management_abort_marker(state)
@@ -2997,6 +3403,14 @@ class Gate:
 
     def finish(self):
         with self.locked() as state:
+            if _rules_management(state["plan"]):
+                _validate_rules_state(state, terminal=True)
+                job = state["jobs"][self.job]
+                if job["pid"] != os.getpid() or job["inflight"]:
+                    raise ValueError("Rules finish worker ownership mismatch")
+                job["complete"] = True
+                _save(self.path, state)
+                return
             if state["plan"].get("transport") == LIMITS_PREPARATION_TRANSPORT:
                 validate_limits_preparation_success(state)
             job = state["jobs"][self.job]

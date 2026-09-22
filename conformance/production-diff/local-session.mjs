@@ -107,6 +107,9 @@ globalThis.fetch = async (url, init = {}) => {
   requireThat(totalBytes <= 8 * 1024 * 1024, "response-budget");
   row.status = response.status;
   row.responseSha256 = sha256(text);
+  // Preserve only the declared finite witness set, before <now> normalization.
+  // No additional HTTP request is made and ordinary cases retain no new bodies.
+  if (entry.rawTimestampResponseSteps?.includes(op.phase)) row.rawResponseText = text;
   if (op.phase === "reset" || op.phase === "seed") requireThat(response.ok, "setup-not-confirmed");
   // Store only fully read replies, before the recorder normalizes server times.
   if (op.phase !== "reset" && op.phase !== "seed") {

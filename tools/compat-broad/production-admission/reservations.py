@@ -1192,6 +1192,47 @@ def _auth_parent_responsibility_projection(gate, child_claim):
             raise ValueError(f"Auth parent responsibility {kind} typed evidence required")
         return {"event": position, "requestDigest": event["requestDigest"]}
 
+    def _validate_observation_semantics(operation):
+        kind = operation.get("kind")
+        project = plan["project"]
+        expected_paths = {
+            "sign-up": AUTH_PARENT_SIGNUP_PATH,
+            "custom-sign-in": AUTH_PARENT_CUSTOM_SIGN_IN_PATH,
+            "refresh": "securetoken.googleapis.com/v1/token",
+            "refresh-unknown": "securetoken.googleapis.com/v1/token",
+            "sign-in": "identitytoolkit.googleapis.com/v1/accounts:signInWithPassword",
+            "update": f"identitytoolkit.googleapis.com/v1/projects/{project}/accounts:update",
+            "lookup": "identitytoolkit.googleapis.com/v1/accounts:lookup",
+            "admin-lookup": f"identitytoolkit.googleapis.com/v1/projects/{project}/accounts:lookup",
+            "create-session-cookie": f"identitytoolkit.googleapis.com/v1/projects/{project}:createSessionCookie",
+            "send-oob-code": f"identitytoolkit.googleapis.com/v1/projects/{project}/accounts:sendOobCode",
+            "reset-password": "identitytoolkit.googleapis.com/v1/accounts:resetPassword",
+        }
+        if (
+            operation.get("service") != "auth"
+            or operation.get("method") != "POST"
+            or operation.get("path") != expected_paths[kind]
+            or operation.get("form") is not (kind in {"refresh", "refresh-unknown"})
+            or not isinstance(operation.get("body"), dict)
+        ):
+            raise ValueError("Auth parent responsibility observation operation semantics differ")
+        body = operation["body"]
+        if kind == "refresh-unknown" and body != {
+            "grant_type": "refresh_token",
+            "refresh_token": "rt1.0.0.demo-app.unissued0000000000000",
+        }:
+            raise ValueError("Auth parent responsibility observation operation body differs")
+        if kind == "refresh" and (
+            body.get("grant_type") != "refresh_token"
+            or not isinstance(body.get("refresh_token"), str)
+            or not body["refresh_token"].startswith("$binding:")
+        ):
+            raise ValueError("Auth parent responsibility observation operation body differs")
+        if kind in {"lookup", "admin-lookup"} and (
+            set(body) != {"idToken"} if kind == "lookup" else set(body) != {"localId"}
+        ):
+            raise ValueError("Auth parent responsibility observation operation body differs")
+
     def _creating_operation(index, operation):
         kind = operation.get("kind")
         path = operation.get("path")
@@ -1261,6 +1302,8 @@ def _auth_parent_responsibility_projection(gate, child_claim):
             raise ValueError("Auth parent responsibility observation operation is unsupported")
         if any(operation.get("kind") not in AUTH_PARENT_RECOVERY_KINDS for operation in recovery):
             raise ValueError("Auth parent responsibility recovery operation is unsupported")
+        for operation in observations:
+            _validate_observation_semantics(operation)
         creating_indices = {
             creating_index
             for index, operation in enumerate(observations)

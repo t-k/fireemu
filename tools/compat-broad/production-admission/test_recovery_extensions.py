@@ -754,7 +754,7 @@ def _auth_recovery_fixture_with_unplanned_account(tmp_path):
     return ledger, parent, child, envelope, child_plan, bindings, updated_evidence, resource, child_path
 
 
-def _auth_recovery_fixture_with_second_creation(tmp_path, *, unknown_kind=False, consumed_missing=False, spoofed_kind=False):
+def _auth_recovery_fixture_with_second_creation(tmp_path, *, unknown_kind=False, consumed_missing=False, spoofed_kind=False, query_route=False):
     fixture = _auth_recovery_fixture(tmp_path)
     ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
     parent_path = Path(parent["ledgerPath"]).parent / "auth-parent-gate"
@@ -763,7 +763,7 @@ def _auth_recovery_fixture_with_second_creation(tmp_path, *, unknown_kind=False,
     acct_resource = "projects/demo/auth/accounts/fireemu-cred-aaaaaaaa-0"
     operation = {
         "service": "auth", "method": "POST",
-        "path": "identitytoolkit.googleapis.com/v1/accounts:signUp",
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signUp?key=fixture" if query_route else "identitytoolkit.googleapis.com/v1/accounts:signUp",
         "form": False,
         "body": {"email": "fireemu-cred-aaaaaaaa-0@fireemu-credential.invalid", "password": "$binding:password", "returnSecureToken": True},
         "kind": "unrecognized-creating-operation" if unknown_kind else "lookup" if spoofed_kind else "sign-up",
@@ -789,12 +789,12 @@ def _auth_recovery_fixture_with_second_creation(tmp_path, *, unknown_kind=False,
     envelope["scopes"] = claim["locks"]
     parent_gate["plan"] = plan
     parent_gate["planDigest"] = digest(plan)
-    consumed_count = 2 if unknown_kind or consumed_missing or spoofed_kind else 1
+    consumed_count = 2 if unknown_kind or consumed_missing or spoofed_kind or query_route else 1
     parent_gate["total"] = consumed_count
     parent_gate["observation"] = consumed_count
     parent_gate["jobs"]["auth-credential"]["resources"] = [resource, acct_resource]
     parent_gate["jobs"]["auth-credential"]["observation"] = consumed_count
-    parent_gate["jobs"]["auth-credential"]["scheduleDone"] = 2 if unknown_kind or spoofed_kind else 1
+    parent_gate["jobs"]["auth-credential"]["scheduleDone"] = 2 if unknown_kind or spoofed_kind or query_route else 1
     if unknown_kind:
         parent_gate["events"].append({
             "job": "auth-credential", "phase": "observation", "index": 1,
@@ -1058,7 +1058,18 @@ def test_auth_recovery_close_refuses_spoofed_lookup_kind_for_signup_route(tmp_pa
     ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
     child_ticket, proof = _settle_auth_child_for_fixture(*fixture)
     before = ledger.snapshot()
-    with pytest.raises(ValueError, match="creating operation semantics"):
+    with pytest.raises(ValueError, match="operation semantics"):
+        ledger.close_after_auth_recovery_child(parent, child_ticket,
+            receipt_digest=digest(proof), now=1000)
+    assert ledger.snapshot() == before
+
+
+def test_auth_recovery_close_refuses_query_bearing_signup_route(tmp_path):
+    fixture = _auth_recovery_fixture_with_second_creation(tmp_path, query_route=True)
+    ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
+    child_ticket, proof = _settle_auth_child_for_fixture(*fixture)
+    before = ledger.snapshot()
+    with pytest.raises(ValueError, match="observation operation semantics"):
         ledger.close_after_auth_recovery_child(parent, child_ticket,
             receipt_digest=digest(proof), now=1000)
     assert ledger.snapshot() == before

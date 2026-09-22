@@ -1829,7 +1829,7 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "variables of unselected services are cleared in the child environment, and GOOGLE_CLOUD_PROJECT is set next to GCLOUD_PROJECT",
+              "behaviour": "GOOGLE_CLOUD_PROJECT is set next to GCLOUD_PROJECT; inherited emulator endpoints are preserved and selected service endpoints override them",
               "precision": "exact-for-local-semantics"
             },
             {

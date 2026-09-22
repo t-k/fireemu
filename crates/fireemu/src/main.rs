@@ -1092,15 +1092,9 @@ struct BoundAddrs {
 /// `FIREBASE_DATABASE_EMULATOR_HOST` is deliberately absent: it names a Realtime Database
 /// emulator, and fireemu has none to point it at.
 ///
-/// Two deliberate differences from the official CLI, both published:
-///
-/// - it also sets `GOOGLE_CLOUD_PROJECT` (the official CLI sets only `GCLOUD_PROJECT`),
-///   because the Google client libraries read either and a test suite should not have to
-///   care which;
-/// - it *removes* the variables of unselected services from the command's environment. The
-///   official CLI only adds, so a stale `FIRESTORE_EMULATOR_HOST` in the shell survives
-///   `--only auth` and silently points the suite at whatever used to run there. Clearing is
-///   the safe reading of "only these emulators are running".
+/// Like the official CLI, selected endpoints override inherited values; endpoints for
+/// other emulators remain inherited so removing a routing variable cannot send a SDK to
+/// production. fireemu additionally sets `GOOGLE_CLOUD_PROJECT` next to `GCLOUD_PROJECT`.
 fn child_environment(
     cfg: &RuntimeConfig,
     only: &Selection,
@@ -1186,27 +1180,6 @@ fn child_environment(
     env
 }
 
-/// The emulator variables `exec` owns: those not selected by `--only` are removed from the
-/// command's environment, so a shell configured for other emulators cannot leak into it.
-/// `FIREBASE_DATABASE_EMULATOR_HOST` is on the list although fireemu never sets it: an
-/// inherited one would point a Realtime Database client at something fireemu does not serve.
-const OWNED_VARIABLES: [&str; 14] = [
-    "FIRESTORE_EMULATOR_HOST",
-    "FIREBASE_FIRESTORE_EMULATOR_ADDRESS",
-    "FIREBASE_AUTH_EMULATOR_HOST",
-    "FIREBASE_STORAGE_EMULATOR_HOST",
-    "STORAGE_EMULATOR_HOST",
-    "FIREBASE_DATABASE_EMULATOR_HOST",
-    "FIREBASE_EMULATOR_HUB",
-    "FIREBASE_LOGGING_EMULATOR_HOST",
-    "FIREEMU_FUNCTIONS_HOST",
-    "CLOUD_EVENTARC_EMULATOR_HOST",
-    "CLOUD_TASKS_EMULATOR_HOST",
-    "PUBSUB_EMULATOR_HOST",
-    "FIREEMU_APP_CHECK_EMULATOR_HOST",
-    "FIREEMU_APP_CHECK_JWKS_URL",
-];
-
 /// The command runs in its own process group when the supervisor is not on a terminal
 /// (CI, a script), so a signal reaches its whole tree; on a terminal it stays in the
 /// foreground group so it keeps the terminal and receives Ctrl-C itself.
@@ -1269,9 +1242,6 @@ fn spawn_child(plan: &ExecPlan, env: &[(String, String)]) -> Result<ExecChild, S
         ExecCommand::Shell(script) => shell_child_command(script),
     };
     cmd.kill_on_drop(true);
-    for name in OWNED_VARIABLES {
-        cmd.env_remove(name);
-    }
     cmd.envs(env.iter().cloned());
     #[cfg(unix)]
     if own_process_group() {

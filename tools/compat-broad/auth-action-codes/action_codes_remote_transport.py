@@ -374,6 +374,7 @@ def management_receipt(*, slot_id, deadline, capability, binding, binding_digest
         status, body = exchange.status, exchange.body
         principal = permission["credentialPrincipal"]["subject"]
         scope = permission["credentialPrincipal"]["requiredScopes"][0]
+        scopes = set(str(body.get("scope", "")).split()) if isinstance(body, dict) else set()
         valid, expires = _tokeninfo_valid(
             status, body, principal=principal, scope=scope, required_seconds=required_seconds
         )

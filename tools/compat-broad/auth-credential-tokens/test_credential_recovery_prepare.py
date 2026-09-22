@@ -113,6 +113,11 @@ def _source_inputs(tmp_path: Path, parent: dict) -> tuple[Path, dict]:
         "transport.py": source_inputs[recovery.TRANSPORT_ENTRY],
         "recovery.py": recovery_digest,
     }
+    provenance["generationPaths"] = {
+        "worker.py": recovery.WORKER_ENTRY,
+        "transport.py": recovery.TRANSPORT_ENTRY,
+        "recovery.py": "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
+    }
     provenance["generation"]["collectorSourceDigest"] = recovery_digest
     return source_root, provenance
 
@@ -244,6 +249,11 @@ def test_preparation_derives_source_closure_from_canonical_parent(tmp_path: Path
         **renamed,
         "recovery.py": provenance["generation"]["sourceDigests"]["recovery.py"],
     }
+    provenance["generationPaths"] = {
+        "auth-worker": recovery.WORKER_ENTRY,
+        "auth-transport": recovery.TRANSPORT_ENTRY,
+        "recovery.py": "tools/compat-broad/auth-credential-tokens/credential_recovery.py",
+    }
     permission, o7, o8 = _reviewed(parent, provenance)
     permission_review, o7_review, o8_review = _reviews(permission, o7, o8)
 
@@ -347,6 +357,35 @@ def test_preparation_refuses_source_checkout_digest_drift(tmp_path: Path) -> Non
             permission=permission,
             o7=o7,
             o8=o8,
+            recovery_nonce="fedcba9876543210fedcba9876543210",
+            now=1000.0,
+            authority_now=1001.0,
+        )
+
+
+def test_preparation_refuses_generation_hash_permutation_and_collector_alias(
+    tmp_path: Path,
+) -> None:
+    parent = _ledger_parent()
+    source_root, provenance = _source_inputs(tmp_path, parent)
+    worker_digest = provenance["generation"]["sourceDigests"]["worker.py"]
+    provenance["generation"]["sourceDigests"]["recovery.py"] = worker_digest
+    provenance["generation"]["collectorSourceDigest"] = worker_digest
+    permission, o7, o8 = _reviewed(parent, provenance)
+    reviews = _reviews(permission, o7, o8)
+
+    with pytest.raises(recovery.RecoveryRefusal, match="generation|collector"):
+        prepare.prepare_packet(
+            parent,
+            ledger=_ReadOnlyLedger(parent),
+            provenance=provenance,
+            source_root=source_root,
+            permission=permission,
+            o7=o7,
+            o8=o8,
+            permission_review=reviews[0],
+            o7_review=reviews[1],
+            o8_review=reviews[2],
             recovery_nonce="fedcba9876543210fedcba9876543210",
             now=1000.0,
             authority_now=1001.0,

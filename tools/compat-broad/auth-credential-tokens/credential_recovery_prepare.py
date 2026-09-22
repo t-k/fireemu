@@ -235,9 +235,23 @@ def _verify_fixed_source(
         _refuse("source generation closure differs")
     if any(declared_generation.get(name) != value for name, value in canonical_sources.items()):
         _refuse("source generation closure differs")
-    verified_digests = set(source_inputs.values())
-    if any(value not in verified_digests for value in declared_generation.values()):
-        _refuse("source generation digest differs")
+    generation_paths = provenance.get("generationPaths")
+    if not isinstance(generation_paths, Mapping) or set(generation_paths) != set(declared_generation):
+        _refuse("source generation paths required")
+    if len(set(generation_paths.values())) != len(generation_paths):
+        _refuse("source generation paths differ")
+    for name, expected_digest in declared_generation.items():
+        relative = generation_paths.get(name)
+        if not isinstance(relative, str) or source_inputs.get(relative) != expected_digest:
+            _refuse("source generation path binding differs")
+        path = source_root / relative
+        if path.is_symlink() or not path.is_file():
+            _refuse("source generation input missing")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected_digest:
+            _refuse("source generation digest differs")
+    recovery_path = generation_paths.get(recovery.APPROVED_CHILD_SOURCE_EXTENSION)
+    if recovery_path != "tools/compat-broad/auth-credential-tokens/credential_recovery.py":
+        _refuse("collector source path differs")
     if generation.get("collectorSourceDigest") != declared_generation.get(recovery.APPROVED_CHILD_SOURCE_EXTENSION):
         _refuse("collector source digest differs")
 

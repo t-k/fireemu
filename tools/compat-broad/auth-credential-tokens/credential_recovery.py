@@ -175,10 +175,36 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
         _refuse("parent observation plan required")
     if type(immutable.get("eventIndex")) is not int or immutable["eventIndex"] < 0:
         _refuse("immutable parent event index required")
-    event_index = immutable["eventIndex"]
-    operation = operations[event_index] if event_index < len(operations) else None
-    if not isinstance(operation, Mapping) or operation.get("kind") != "custom-sign-in" or operation.get("account") != "custom":
-        _refuse("immutable parent custom event required")
+    unresolved: list[tuple[int, Mapping[str, Any], Mapping[str, Any]]] = []
+    events = gate.get("events")
+    if not isinstance(events, list):
+        _refuse("parent Gate events required")
+    for index, candidate in enumerate(operations):
+        if not isinstance(candidate, Mapping) or candidate.get("kind") != "custom-sign-in" or candidate.get("account") != "custom":
+            continue
+        event = next(
+            (
+                item
+                for item in events
+                if isinstance(item, Mapping)
+                and item.get("job") == parent_job
+                and item.get("phase") == "observation"
+                and item.get("index") == index
+            ),
+            None,
+        )
+        if (
+            isinstance(event, Mapping)
+            and event.get("requestDigest") == digest(candidate)
+            and event.get("completed") is False
+            and event.get("creationOutcome") in {"pending", "unknown"}
+        ):
+            unresolved.append((index, candidate, event))
+    if len(unresolved) != 1:
+        _refuse("one unresolved Auth custom event is required")
+    event_index, operation, event = unresolved[0]
+    if event_index != immutable["eventIndex"]:
+        _refuse("immutable parent event index changed")
     expected_resource = operation.get("resource")
     if not isinstance(expected_resource, str):
         expected_resource = f"projects/{PROJECT}/auth/accounts/custom-{nonce}"
@@ -189,11 +215,7 @@ def _parent_snapshot(parent: Mapping[str, Any]) -> dict[str, Any]:
         _refuse("parent custom identity binding differs")
     if operation.get("service") != "auth" or operation.get("method") != "POST" or operation.get("path") != expected_parent_path or operation.get("form") is not False or operation.get("body") != expected_parent_body or operation.get("owner") is not False or operation.get("resource") != expected_resource or immutable["resource"] != expected_resource or immutable["requestDigest"] != digest(operation):
         _refuse("parent custom resource binding differs")
-    event = next(
-        (item for item in gate.get("events", []) if isinstance(item, Mapping) and item.get("job") == parent_job and item.get("phase") == "observation" and item.get("index") == event_index),
-        None,
-    )
-    if not isinstance(event, Mapping) or event.get("requestDigest") != digest(operation) or event.get("service") != operation["service"] or event.get("method") != operation["method"] or event.get("completed") is not False or event.get("creationOutcome") not in {"pending", "unknown"}:
+    if event.get("service") != operation["service"] or event.get("method") != operation["method"]:
         _refuse("parent custom event is not unresolved")
     _finite(event.get("ended"), "parent event end")
     custom = responsibility.get("custom") or responsibility.get("custom-signin")
@@ -224,6 +246,16 @@ def _provenance(value: Mapping[str, Any]) -> dict[str, Any]:
         _sha(value_hash, "source")
         normalized_inputs[path] = value_hash
     normalized: dict[str, Any] = {"sourceCommit": source_commit, "sourceInputs": normalized_inputs, "sourceInputsDigest": digest(normalized_inputs)}
+    generation_paths = value.get("generationPaths")
+    if generation_paths is not None:
+        if not isinstance(generation_paths, Mapping):
+            _refuse("source generation paths required")
+        normalized_paths: dict[str, str] = {}
+        for name, path in generation_paths.items():
+            if not isinstance(name, str) or not isinstance(path, str) or not path.startswith("tools/") or ".." in path.split("/"):
+                _refuse("source generation paths differ")
+            normalized_paths[name] = path
+        normalized["generationPaths"] = normalized_paths
     for name, expected_path in (("worker", WORKER_ENTRY), ("transport", TRANSPORT_ENTRY), ("launcher", LAUNCHER_ENTRY)):
         binding = value.get(name)
         if not isinstance(binding, Mapping) or set(binding) != {"path", "sha256"} or binding["path"] != expected_path:

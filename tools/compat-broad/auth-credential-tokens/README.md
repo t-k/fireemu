@@ -58,7 +58,9 @@ the held parent. The preparer checks the requested nonce against the Ledger
 history, derives the child source closure from the canonical parent generation,
 verifies the clean source checkout and every declared source digest,
 and preserves the immutable parent `sourceCommit` and exact packet05 parent
-evidence.
+evidence. Provenance must also include an exact `generationPaths` map from
+every generation name to its checked-out `tools/...` path; a digest appearing
+in another source file is not accepted as equivalent.
 
 To create the review input before approvals exist, use the same command with
 `--draft-only` and omit `--permission`, `--o7`, and `--o8`. This writes only

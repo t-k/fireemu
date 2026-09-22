@@ -152,6 +152,25 @@ def test_parent_snapshot_selects_one_unresolved_event_from_real_signing_compiler
         "customIdToken": "idToken",
         "customRefresh": "refreshToken",
     }
+    second_index, second_operation = next(
+        (index, operation)
+        for index, operation in enumerate(gate_plan["jobs"][credential_gate.JOB]["observation"])
+        if operation.get("kind") == "custom-sign-in" and index != custom_index
+    )
+    parent["gate"]["events"].append({
+        "job": credential_gate.JOB,
+        "phase": "observation",
+        "index": second_index,
+        "requestDigest": digest(second_operation),
+        "service": second_operation["service"],
+        "method": second_operation["method"],
+        "completed": False,
+        "creationOutcome": "unknown",
+        "ended": 999.0,
+    })
+    parent["immutableParent"]["gateDigest"] = digest(parent["gate"])
+    with pytest.raises(recovery.RecoveryRefusal, match="one unresolved"):
+        recovery._parent_snapshot(parent)
 
 
 @pytest.mark.parametrize("field", ["path", "form", "body", "binds"])

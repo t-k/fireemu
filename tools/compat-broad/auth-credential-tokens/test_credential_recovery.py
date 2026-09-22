@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -46,6 +47,40 @@ def _parent() -> dict:
     claim = {"campaignId": recovery.CAMPAIGN, "claimDigest": "d" * 64, "gatePlanDigest": digest(plan), "nonceDigest": digest(nonce), "gateJob": "auth-credential"}
     immutable = {"kind": "auth-packet05-parent-binding-v1", "gateDigest": digest(gate), "gatePlanDigest": digest(plan), "nonce": nonce, "resource": resource, "eventIndex": 0, "requestDigest": digest(operation), "sourceCommit": "1" * 40}
     return {"state": "held", "ticket": {"reservation": "parent-ticket"}, "claim": claim, "plan": plan, "gate": gate, "receipt": {"failure": "collection-incomplete", "postflightComplete": False}, "responsibility": {"custom": {"state": "unknown", "uid": None}}, "immutableParent": immutable, "generation": _parent_generation()}
+
+
+def _dead_pid() -> int:
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    pid = process.pid
+    process.wait()
+    return pid
+
+
+def _legacy_parent(monkeypatch: pytest.MonkeyPatch) -> dict:
+    parent = _parent()
+    gate = parent["gate"]
+    job = gate["jobs"]["auth-credential"]
+    job["pid"] = _dead_pid()
+    gate["coordinatorPid"] = _dead_pid()
+    operation = gate["plan"]["jobs"]["auth-credential"]["observation"][0]
+    event = gate["events"][0]
+    event.update(
+        completed=True, creationOutcome="refused", status=200,
+        responseDigest=digest({"response": "opaque"}),
+        authEvidence={"kind": "custom-sign-in", "account": "custom", "status": 200, "creationOutcome": "refused"},
+    )
+    parent["claim"]["claimDigest"] = "d" * 64
+    parent["immutableParent"].update(
+        gateDigest=digest(gate), gatePlanDigest=digest(gate["plan"]),
+        requestDigest=digest(operation),
+    )
+    parent["claim"]["gatePlanDigest"] = digest(gate["plan"])
+    monkeypatch.setattr(recovery, "LEGACY_PARENT_SOURCE_COMMIT", "1" * 40)
+    monkeypatch.setattr(recovery, "LEGACY_PARENT_CLAIM_DIGEST", "d" * 64)
+    monkeypatch.setattr(recovery, "LEGACY_PARENT_PLAN_DIGEST", digest(gate["plan"]))
+    monkeypatch.setattr(recovery, "LEGACY_PARENT_GATE_DIGEST", digest(gate))
+    monkeypatch.setattr(recovery, "LEGACY_PARENT_EVENT_INDEX", 0)
+    return parent
 
 
 def _authorities(plan: dict) -> tuple[dict, dict, dict]:
@@ -178,6 +213,40 @@ def test_parent_snapshot_selects_one_unresolved_event_from_real_signing_compiler
     })
     parent["immutableParent"]["gateDigest"] = digest(parent["gate"])
     with pytest.raises(recovery.RecoveryRefusal, match="one unresolved"):
+        recovery._parent_snapshot(parent)
+
+
+def test_legacy_http_200_refusal_derives_a_distinct_unknown_responsibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = _legacy_parent(monkeypatch)
+    snapshot = recovery._parent_snapshot(parent)
+    evidence = snapshot["evidence"]
+    assert evidence["kind"] == recovery.LEGACY_PARENT_EVIDENCE_KIND
+    assert evidence["completed"] is True
+    assert evidence["creationOutcome"] == "refused"
+    assert evidence["responsibility"] == "unknown-custom-create"
+    assert evidence["reason"] == "legacy-200-without-creation-proof"
+    assert evidence["eventDigest"] == digest(parent["gate"]["events"][0])
+    assert evidence["responseDigest"] == parent["gate"]["events"][0]["responseDigest"]
+
+
+@pytest.mark.parametrize("mutation", ["incomplete", "non_200", "duplicate", "reserved", "ownership", "bad_response_digest"])
+def test_legacy_http_200_refusal_is_a_finite_tuple_not_a_generic_exception(monkeypatch: pytest.MonkeyPatch, mutation: str) -> None:
+    parent = _legacy_parent(monkeypatch)
+    operation = parent["gate"]["plan"]["jobs"]["auth-credential"]["observation"][0]
+    event = parent["gate"]["events"][0]
+    if mutation == "incomplete":
+        event["completed"] = False
+    elif mutation == "non_200":
+        event["status"] = 201
+    elif mutation == "duplicate":
+        parent["gate"]["events"].append(copy.deepcopy(event))
+    elif mutation == "reserved":
+        operation["body"]["token"] = "$binding:customTokenReserved"
+    elif mutation == "ownership":
+        parent["gate"]["jobs"]["auth-credential"]["authAccounts"] = {"custom": {"resource": operation["resource"]}}
+    else:
+        event["responseDigest"] = "z" * 64
+    with pytest.raises(recovery.RecoveryRefusal):
         recovery._parent_snapshot(parent)
 
 

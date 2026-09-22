@@ -2,6 +2,7 @@
 """Real filesystem/process tests of bounded shared admission; no production I/O."""
 
 import multiprocessing
+import copy
 import json
 import os
 import re
@@ -12,6 +13,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pytest
+import reservations
 from reservations import (
     CATALOGUED_CAMPAIGN_IDS,
     COMMIT_COLLECTOR_SOURCE_DIGEST,
@@ -46,6 +48,75 @@ def envelope():
         "concurrency": 4,
         "scopes": [{"key": "project/p", "mode": "EXCLUSIVE"}],
     }
+
+
+def _legacy_projection_fixture(monkeypatch):
+    nonce = "0123456789abcdef0123456789abcdef"
+    resource = f"projects/fireemu-35fe6/auth/accounts/custom-{nonce}"
+    operation = {
+        "service": "auth", "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
+        "body": {"token": "$binding:customToken", "returnSecureToken": True},
+        "form": False, "owner": False, "kind": "custom-sign-in", "account": "custom",
+        "binds": {"customUid": "localId"}, "resource": resource,
+    }
+    plan = {
+        "campaignId": "AUTH-CREDENTIAL-TOKENS-01", "project": "fireemu-35fe6", "nonce": nonce,
+        "jobs": {"auth-credential": {"observation": [operation], "recovery": []}},
+    }
+    event = {
+        "job": "auth-credential", "phase": "observation", "index": 0,
+        "requestDigest": digest(operation), "service": "auth", "method": "POST",
+        "completed": True, "creationOutcome": "refused", "status": 200,
+        "responseDigest": digest({"response": "opaque"}), "ended": 999.0,
+        "authEvidence": {"kind": "custom-sign-in", "account": "custom", "status": 200, "creationOutcome": "refused"},
+    }
+    gate = {
+        "plan": plan, "planDigest": digest(plan), "coordinatorInflight": False,
+        "jobs": {"auth-credential": {"inflight": False, "authAccounts": {}, "creationProofs": {}}},
+        "events": [event],
+    }
+    child = {
+        "parentClaimDigest": "d" * 64, "parentPlanDigest": digest(plan),
+        "parentGateJob": "auth-credential", "parentEventIndex": 0,
+        "parentRequestDigest": digest(operation), "ownedResources": [resource],
+        "generation": {"sourceCommit": "1" * 40},
+    }
+    monkeypatch.setattr(reservations, "AUTH_RECOVERY_LEGACY_SOURCE_COMMIT", "1" * 40)
+    monkeypatch.setattr(reservations, "AUTH_RECOVERY_LEGACY_CLAIM_DIGEST", "d" * 64)
+    monkeypatch.setattr(reservations, "AUTH_RECOVERY_LEGACY_PLAN_DIGEST", digest(plan))
+    monkeypatch.setattr(reservations, "AUTH_RECOVERY_LEGACY_GATE_DIGEST", digest(gate))
+    monkeypatch.setattr(reservations, "AUTH_RECOVERY_LEGACY_EVENT_INDEX", 0)
+    return gate, child, event
+
+
+def test_legacy_auth_parent_projection_is_independent_and_typed(monkeypatch):
+    gate, child, event = _legacy_projection_fixture(monkeypatch)
+    projection = reservations._auth_parent_projection(gate, child)
+    assert projection["kind"] == reservations.AUTH_RECOVERY_LEGACY_PARENT_EVIDENCE_KIND
+    assert projection["completed"] is True
+    assert projection["creationOutcome"] == "refused"
+    assert projection["eventDigest"] == digest(event)
+    assert projection["responseDigest"] == event["responseDigest"]
+    reservations._auth_parent_evidence(projection)
+
+
+@pytest.mark.parametrize("mutation", ["status", "duplicate", "claim", "route", "ownership"])
+def test_legacy_auth_parent_projection_refuses_tampered_tuple(monkeypatch, mutation):
+    gate, child, event = _legacy_projection_fixture(monkeypatch)
+    operation = gate["plan"]["jobs"]["auth-credential"]["observation"][0]
+    if mutation == "status":
+        event["status"] = 201
+    elif mutation == "duplicate":
+        gate["events"].append(copy.deepcopy(event))
+    elif mutation == "claim":
+        child["parentClaimDigest"] = "e" * 64
+    elif mutation == "route":
+        operation["path"] = "identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+    else:
+        gate["jobs"]["auth-credential"]["authAccounts"] = {"custom": {"resource": operation["resource"]}}
+    with pytest.raises(ValueError):
+        reservations._auth_parent_projection(gate, child)
 
 
 def preparation_response(slot):

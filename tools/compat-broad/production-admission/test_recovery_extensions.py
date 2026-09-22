@@ -1243,8 +1243,26 @@ def test_auth_recovery_child_is_durable_lookup_only_and_closes_parent_on_typed_a
         receipt_digest=digest(proof), now=1000) == parent
     assert ledger.snapshot()["reservations"][parent["reservation"]]["state"] == "closed-after-auth-recovery-child"
     assert len(ledger.snapshot()["reservations"][parent["reservation"]]["authRecoveryCloseResponsibilitiesDigest"]) == 64
-    assert ledger.close_after_auth_recovery_child(parent, child_ticket,
-        receipt_digest=digest(proof), now=1000) == parent
+
+
+def test_auth_recovery_allocation_runs_full_parent_responsibility_preflight(tmp_path, monkeypatch):
+    fixture = _auth_recovery_fixture(tmp_path)
+    ledger, parent, child, envelope, child_plan, bindings, evidence, _resource, _child_path = fixture
+    calls = []
+    original = reservations._auth_parent_responsibility_projection
+
+    def traced(gate, child_claim):
+        calls.append((gate, child_claim))
+        return original(gate, child_claim)
+
+    monkeypatch.setattr(reservations, "_auth_parent_responsibility_projection", traced)
+    ledger.begin_auth_recovery_extension(
+        parent, child, envelope, child_plan,
+        source_binding=bindings["source"], transport_binding=bindings["transport"],
+        o7_binding=bindings["o7"], o8_binding=bindings["o8"],
+        parent_evidence=evidence, now=1000,
+    )
+    assert len(calls) == 1
 
 
 def test_full_compiler_custom_token_parent_begins_and_settles(tmp_path):
@@ -1432,31 +1450,22 @@ def test_valid_auth_recovery_close_releases_parent_lock_for_new_reservation(tmp_
 
 def test_auth_recovery_close_refuses_unplanned_parent_account_without_mutating_ledger(tmp_path):
     ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = _auth_recovery_fixture_with_unplanned_account(tmp_path)
-    child_ticket = ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
-        source_binding=bindings["source"], transport_binding=bindings["transport"],
-        o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
-    _auth_child_gate(child_path, child_plan, resource)
-    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
-    proof = {"kind": "auth-uid-absence-proof-v1", "resource": resource, "status": 200,
-        "bodyShape": body, "bodyDigest": digest(body), "responseDigest": digest(body), "eventIndex": 0,
-        "requestDigest": digest(child_plan["jobs"]["auth-recovery"]["recovery"][0])}
-    ledger.settle_auth_recovery_child(child_ticket, absence_proof=proof,
-        receipt_digest=digest(proof), now=1000)
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="Auth parent responsibility"):
-        ledger.close_after_auth_recovery_child(parent, child_ticket,
-            receipt_digest=digest(proof), now=1000)
+        ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
     assert ledger.snapshot() == before
 
 
 def test_auth_recovery_close_refuses_missing_consumed_signup_event(tmp_path):
     fixture = _auth_recovery_fixture_with_second_creation(tmp_path, consumed_missing=True)
     ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
-    child_ticket, proof = _settle_auth_child_for_fixture(*fixture)
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="creating event missing|responsibility"):
-        ledger.close_after_auth_recovery_child(parent, child_ticket,
-            receipt_digest=digest(proof), now=1000)
+        ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
     assert ledger.snapshot() == before
 
 
@@ -1482,11 +1491,11 @@ def test_auth_recovery_close_accepts_persisted_two_account_cleanup(tmp_path):
 def test_auth_recovery_close_refuses_unknown_creating_operation_and_retains_lock(tmp_path):
     fixture = _auth_recovery_fixture_with_second_creation(tmp_path, unknown_kind=True)
     ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
-    child_ticket, proof = _settle_auth_child_for_fixture(*fixture)
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="creating|responsibility"):
-        ledger.close_after_auth_recovery_child(parent, child_ticket,
-            receipt_digest=digest(proof), now=1000)
+        ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
     assert ledger.snapshot() == before
     with pytest.raises(ValueError, match="production resource lock conflict"):
         _fresh_auth_reservation_after_close(ledger, parent, envelope, tmp_path)
@@ -1495,22 +1504,22 @@ def test_auth_recovery_close_refuses_unknown_creating_operation_and_retains_lock
 def test_auth_recovery_close_refuses_spoofed_lookup_kind_for_signup_route(tmp_path):
     fixture = _auth_recovery_fixture_with_second_creation(tmp_path, spoofed_kind=True)
     ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
-    child_ticket, proof = _settle_auth_child_for_fixture(*fixture)
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="operation semantics"):
-        ledger.close_after_auth_recovery_child(parent, child_ticket,
-            receipt_digest=digest(proof), now=1000)
+        ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
     assert ledger.snapshot() == before
 
 
 def test_auth_recovery_close_refuses_query_bearing_signup_route(tmp_path):
     fixture = _auth_recovery_fixture_with_second_creation(tmp_path, query_route=True)
     ledger, parent, child, envelope, child_plan, bindings, evidence, resource, child_path = fixture
-    child_ticket, proof = _settle_auth_child_for_fixture(*fixture)
     before = ledger.snapshot()
     with pytest.raises(ValueError, match="observation operation semantics"):
-        ledger.close_after_auth_recovery_child(parent, child_ticket,
-            receipt_digest=digest(proof), now=1000)
+        ledger.begin_auth_recovery_extension(parent, child, envelope, child_plan,
+            source_binding=bindings["source"], transport_binding=bindings["transport"],
+            o7_binding=bindings["o7"], o8_binding=bindings["o8"], parent_evidence=evidence, now=1000)
     assert ledger.snapshot() == before
 
 

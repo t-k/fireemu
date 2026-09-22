@@ -88,6 +88,41 @@ class _FixtureHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
+class _DelayedObservationHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        time.sleep(2.2)
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
+class _FreshSetupHandler(http.server.BaseHTTPRequestHandler):
+    def do_PATCH(self) -> None:
+        payload = {"name": self.path.removeprefix("/v1/").split("?", 1)[0], "fields": {}, "updateTime": "2026-09-22T00:00:00Z"}
+        self._reply(payload)
+
+    def do_POST(self) -> None:
+        if self.path.endswith("accounts:update"):
+            payload = {"localId": "fresh-uid-7", "displayName": "owner"}
+        else:
+            payload = {"localId": "fresh-uid-7", "idToken": "fresh-token", "expiresIn": "3600"}
+        self._reply(payload)
+
+    def _reply(self, payload: dict[str, object]) -> None:
+        encoded = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
 @pytest.fixture
 def fixture_origin():
     reservation = None
@@ -311,6 +346,104 @@ def test_transport_accepts_bounded_deadline_and_timeout_parameters():
     assert callable(transport)
 
 
+def test_two_second_transport_deadline_reaps_loopback_worker():
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _DelayedObservationHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        source, source_digest = remote.worker_binding()
+        envelope = {
+            "service": "firestore",
+            "route": "observation-get",
+            "method": "GET",
+            "path": "/v1/projects/fireemu-35fe6/databases/(default)/documents/o5-user-token/naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cases/owned-a",
+            "headers": {"x-goog-user-project": "fireemu-35fe6"},
+            "body": None,
+            "seconds": 2.0,
+        }
+        with pytest.raises(remote.WorkerExchangeError, match="walltime") as error:
+            remote.run_worker(
+                envelope,
+                binding=source,
+                binding_digest=source_digest,
+                fixture_origin=f"http://127.0.0.1:{server.server_port}",
+            )
+        assert error.value.worker_reaped is True
+        assert not remote._OWNED_CHILDREN
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_per_call_deadline_cannot_extend_factory_timeout():
+    plan, operation, _resource = minimal_wire_plan()
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _DelayedObservationHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=f"http://127.0.0.1:{server.server_port}",
+            timeout_seconds=0.1,
+        )
+        with pytest.raises(remote.WorkerExchangeError, match="walltime|reap reserve"):
+            transmit(
+                operation,
+                binding=source,
+                binding_digest=source_digest,
+                capability=capability,
+                timeout_seconds=2.0,
+                deadline=time.monotonic() + 3.0,
+            )
+    finally:
+        _ACTIVE.discard(capability)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_setup_transport_derives_fresh_uid_before_claims_and_signin():
+    plan = _setup_fixture_plan()
+    plan.update({"campaignId": remote.CAMPAIGN, "project": "fireemu-35fe6", "database": "(default)", "nonce": "a" * 32, "tenant": "tenant1234"})
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _FreshSetupHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transport = remote.make_setup_transport(
+            plan,
+            credentials={"administrator": "fixture-admin", "api-key": "fixture-key"},
+            setup_secrets={"owner-a": "secret"},
+            frozen_inputs=frozen,
+            capability=capability,
+            fixture_origin=f"http://127.0.0.1:{server.server_port}",
+        )
+        signup = {"id": "account/owner-a/signup", "service": "identity", "route": "accounts:signUp", "method": "POST", "accountRef": "owner-a", "tenant": None, "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"}}
+        signin = {**signup, "id": "account/owner-a/signin", "route": "accounts:signInWithPassword"}
+        claims = {"id": "account/owner-a/claim-update", "service": "identity", "route": "accounts:update", "method": "POST", "accountRef": "owner-a", "tenant": None, "claimsDigest": digest({"owner": "yes"}), "response": {"localId": "response-bound"}}
+        result = transport(signup, binding=source, binding_digest=source_digest)
+        assert result.receipt.local_id == "fresh-uid-7"
+        transport(claims, binding=source, binding_digest=source_digest)
+        signin_result = transport(signin, binding=source, binding_digest=source_digest)
+        assert signin_result.receipt.local_id == "fresh-uid-7"
+    finally:
+        _ACTIVE.discard(capability)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
     item = {
         "id": "account/owner-a/signin",
@@ -341,6 +474,28 @@ def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
     assert "secret-token" not in repr(result.private)
     with pytest.raises(TypeError):
         dataclasses.asdict(result)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"localId": "uid-owner-a", "idToken": "", "expiresIn": "3600"},
+        {"localId": "uid-owner-a", "idToken": "token", "expiresIn": "0"},
+        {"localId": "uid-owner-a", "idToken": "token", "expiresIn": "not-a-duration"},
+    ],
+)
+def test_setup_auth_token_response_requires_nonempty_token_and_positive_expiry(body):
+    item = {
+        "id": "account/owner-a/signin",
+        "service": "identity",
+        "route": "accounts:signInWithPassword",
+        "method": "POST",
+        "accountRef": "owner-a",
+        "tenant": None,
+        "response": {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"},
+    }
+    with pytest.raises(ValueError, match="setup token response refused"):
+        remote.adapt_setup_result(item, {"status": 200, "body": body}, endpoint="loopback", sequence=1, account_bindings={"owner-a": {"uid": "uid-owner-a"}})
 
 
 def _fixture_token(uid, provider, tenant, claims):
@@ -586,6 +741,7 @@ def test_transport_adapts_official_document_response_through_real_worker(fixture
         "documentPresent": True,
         "fields": {"count": 1},
         "complete": True,
+        "workerReaped": True,
         "endpoint": fixture_origin.removeprefix("http://"),
         "wireSequence": 1,
     }
@@ -721,6 +877,7 @@ def test_transport_adapts_official_permission_error_through_real_worker(fixture_
         "documentPresent": False,
         "fields": None,
         "complete": True,
+        "workerReaped": True,
         "endpoint": fixture_origin.removeprefix("http://"),
         "wireSequence": 1,
     }

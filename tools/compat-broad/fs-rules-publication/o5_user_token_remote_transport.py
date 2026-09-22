@@ -695,7 +695,7 @@ def adapt_setup_result(
                 endpoint=wire["endpoint"],
                 wire_sequence=wire["wireSequence"],
                 name=body["name"],
-                fields_digest=item["response"]["fieldsDigest"],
+                fields_digest=digest(fields),
                 update_time=body["updateTime"],
             ),
             private=SetupPrivateHandoff(),
@@ -706,7 +706,12 @@ def adapt_setup_result(
     if isinstance(bound, dict) and isinstance(bound.get("uid"), str) and body["localId"] != bound["uid"]:
         raise ValueError("setup localId binding refused")
     expected = item["response"]
-    if item["route"] != "accounts:update" and (not isinstance(body.get("idToken"), str) or not isinstance(body.get("expiresIn"), str)):
+    if item["route"] != "accounts:update" and (
+        not isinstance(body.get("idToken"), str)
+        or not body["idToken"]
+        or not isinstance(body.get("expiresIn"), str)
+        or not re.fullmatch(r"[1-9][0-9]*", body["expiresIn"])
+    ):
         raise ValueError("setup token response refused")
     return SetupResult(
         receipt=SetupPublicReceipt(
@@ -1194,6 +1199,75 @@ def _adapt_firestore_result(
     raise ValueError("REST response route shape refused")
 
 
+def make_setup_transport(
+    plan: dict[str, Any],
+    *,
+    credentials: dict[str, Any],
+    frozen_inputs: dict[str, Any],
+    capability: Any,
+    setup_secrets: dict[str, str],
+    fixture_origin: str | None = None,
+):
+    """Run only the compiler-declared setup prefix before identity proofs exist."""
+    _plan_identity(plan)
+    _frozen_inputs(plan, frozen_inputs)
+    _credential(credentials, "administrator", "administrator")
+    _credential(credentials, "api-key", "api-key")
+    if not isinstance(setup_secrets, dict):
+        raise ValueError("setup secrets required")
+    if capability is None:
+        raise ValueError("active O8 production capability required")
+    setup_bindings: dict[str, dict[str, Any]] = {}
+    sequence = 0
+
+    def transmit(
+        value: dict[str, Any],
+        *,
+        binding: bytes,
+        binding_digest: str,
+        capability_override: Any = None,
+    ) -> SetupResult:
+        nonlocal sequence
+        if not isinstance(value, dict) or not isinstance(value.get("id"), str):
+            raise ValueError("setup item required")
+        if not (value["id"].startswith("fixture/") or value["id"].startswith("account/")):
+            raise ValueError("setup-only transport refused non-setup operation")
+        active = capability if capability_override is None else capability_override
+        if active is not capability:
+            raise ValueError("setup capability binding differs")
+        snapshot = _frozen_inputs(plan, frozen_inputs)
+        if getattr(active, "inputs_digest", None) != snapshot["inputsDigest"]:
+            raise ValueError("capability inputs digest differs")
+        authorize_transport(active, binding=binding, binding_digest=binding_digest)
+        prepared = prepare_setup_request(
+            plan,
+            copy.deepcopy(value),
+            credentials=credentials,
+            account_bindings=setup_bindings,
+            setup_secrets=setup_secrets,
+        )
+        envelope = {key: prepared[key] for key in ("service", "route", "method", "path", "headers", "body")}
+        envelope["seconds"] = MAX_SECONDS
+        result = _run_worker(envelope, binding=binding, binding_digest=binding_digest, fixture_origin=fixture_origin)
+        sequence += 1
+        origin = fixture_origin.rstrip("/") if fixture_origin is not None else prepared["origin"]
+        adapted = adapt_setup_result(
+            value,
+            result,
+            endpoint=urlsplit(origin).netloc,
+            sequence=sequence,
+            account_bindings=setup_bindings,
+        )
+        if value["id"].startswith("account/") and value["id"].endswith("/signup"):
+            local_id = adapted.receipt.local_id
+            if not isinstance(local_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", local_id):
+                raise ValueError("setup signup UID shape refused")
+            setup_bindings[value["accountRef"]] = {"uid": local_id, "tenant": value.get("tenant")}
+        return adapted
+
+    return transmit
+
+
 def make_transport(
     plan: dict[str, Any],
     *,
@@ -1210,6 +1284,22 @@ def make_transport(
         raise ValueError("absolute transport deadline required")
     if timeout_seconds is not None and (type(timeout_seconds) not in (int, float) or not math.isfinite(timeout_seconds) or not 0 < timeout_seconds <= MAX_SECONDS):
         raise ValueError("bounded transport timeout required")
+    transport_deadline = deadline
+    transport_timeout = timeout_seconds
+
+    def effective_seconds(
+        call_deadline: float | None, call_timeout: float | None
+    ) -> float:
+        deadlines = [value for value in (transport_deadline, call_deadline) if value is not None]
+        timeouts = [value for value in (transport_timeout, call_timeout) if value is not None]
+        if call_deadline is not None and (type(call_deadline) not in (int, float) or not math.isfinite(call_deadline)):
+            raise ValueError("absolute transport deadline required")
+        if call_timeout is not None and (type(call_timeout) not in (int, float) or not math.isfinite(call_timeout) or not 0 < call_timeout <= MAX_SECONDS):
+            raise ValueError("bounded transport timeout required")
+        seconds = min([MAX_SECONDS, *[float(value) for value in timeouts]])
+        if deadlines:
+            seconds = min(seconds, min(float(value) - time.monotonic() for value in deadlines))
+        return seconds
     frozen = copy.deepcopy(frozen_inputs)
     trusted_bindings = copy.deepcopy(account_bindings or {})
     if identity_proofs is not None:
@@ -1257,6 +1347,8 @@ def make_transport(
         binding: bytes,
         binding_digest: str,
         capability: Any = None,
+        deadline: float | None = None,
+        timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
         nonlocal sequence
         if capability is None:
@@ -1278,9 +1370,7 @@ def make_transport(
             key: prepared[key]
             for key in ("service", "route", "method", "path", "headers", "body")
         }
-        seconds = MAX_SECONDS if timeout_seconds is None else float(timeout_seconds)
-        if deadline is not None:
-            seconds = min(seconds, deadline - time.monotonic())
+        seconds = effective_seconds(deadline, timeout_seconds)
         if seconds <= 0:
             raise WorkerExchangeError("transport deadline exhausted", worker_reaped=False)
         envelope["seconds"] = seconds
@@ -1298,10 +1388,19 @@ def make_transport(
         )
         endpoint = urlsplit(origin).netloc
         if prepared["service"] == "firestore":
-            return _adapt_firestore_result(
+            adapted = _adapt_firestore_result(
                 prepared, result, sequence=sequence, endpoint=endpoint
             )
-        return {**result["body"], "endpoint": endpoint, "wireSequence": sequence}
+            adapted["workerReaped"] = True
+            return adapted
+        return {
+            **result["body"],
+            "httpStatus": result["status"],
+            "complete": True,
+            "workerReaped": True,
+            "endpoint": endpoint,
+            "wireSequence": sequence,
+        }
 
     return transmit
 
@@ -1312,6 +1411,7 @@ __all__ = [
     "RULES_ORIGIN",
     "WORKER_ENTRY",
     "make_transport",
+    "make_setup_transport",
     "prepare_request",
     "run_worker",
     "verify_worker_binding",

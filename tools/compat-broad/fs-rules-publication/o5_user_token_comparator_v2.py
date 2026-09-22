@@ -528,7 +528,10 @@ def _gate_no_effect_subjects(gate: Any, plan: dict[str, Any]) -> frozenset[str]:
     gate_plan = snapshot.get("plan") if isinstance(snapshot, Mapping) else None
     if not isinstance(gate_plan, Mapping):
         return frozenset()
-    if any(gate_plan.get(key) != plan.get(key) for key in ("campaignId", "project", "database")):
+    if any(
+        gate_plan.get(key) != plan.get(key)
+        for key in ("campaignId", "project", "database", "nonce", "planDigest")
+    ):
         return frozenset()
     if not isinstance(ownership, Mapping):
         return frozenset()
@@ -546,7 +549,14 @@ def _gate_no_effect_subjects(gate: Any, plan: dict[str, Any]) -> frozenset[str]:
         resources = row.get("resources", [])
         if not isinstance(resources, list):
             continue
-        event = next((item for item in events if item.get("id") == f"data/{index}"), None)
+        event = next(
+            (
+                item
+                for item in events
+                if item.get("id") == f"observation:data/{index}"
+            ),
+            None,
+        )
         if not isinstance(event, Mapping):
             continue
         receipt = event.get("rulesReceipt")
@@ -587,7 +597,7 @@ def _gate_no_effect_subjects(gate: Any, plan: dict[str, Any]) -> frozenset[str]:
                 and isinstance(state, Mapping)
                 and state.get("status") == "attempted-no-effect"
             ):
-                accepted.add(subject)
+                accepted.add(resource)
     return frozenset(accepted)
 
 

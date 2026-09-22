@@ -4,6 +4,7 @@ verifies, through an injected transport, with no socket and no credential."""
 from __future__ import annotations
 
 import copy
+import atexit
 import json
 import tempfile
 import time
@@ -47,6 +48,13 @@ NONCE = "a" * 32
 LOCAL_TENANT = "fireemu-00000000000000000001"
 PRODUCTION_ENDPOINT = "firestore.googleapis.com:443"
 LOCAL_ENDPOINT = "127.0.0.1:52879"
+_LIVE_FIXTURES: list[tempfile.TemporaryDirectory] = []
+
+
+@atexit.register
+def _close_live_fixtures() -> None:
+    while _LIVE_FIXTURES:
+        _LIVE_FIXTURES.pop().cleanup()
 
 
 def plan_for(role: str) -> dict:
@@ -133,8 +141,10 @@ def bound(
     from test_o5_user_token_remote_transport import account_bindings
     from test_o5_user_token_remote_transport import _fixture_capability as fixture_capability
 
-    with tempfile.TemporaryDirectory(prefix="o5-bound-rules-") as directory:
-        root = __import__("pathlib").Path(directory)
+    fixture = tempfile.TemporaryDirectory(prefix="o5-bound-rules-")
+    _LIVE_FIXTURES.append(fixture)
+    try:
+        root = __import__("pathlib").Path(fixture.name)
         server = _producer_server()
         server_thread = __import__("threading").Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
@@ -290,6 +300,11 @@ def bound(
             journal.close()
             server.shutdown()
             server.server_close()
+        transport.production_cleanup_gate = gate
+    except BaseException:
+        fixture.cleanup()
+        _LIVE_FIXTURES.remove(fixture)
+        raise
     return bundle, transport
 
 

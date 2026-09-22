@@ -50,6 +50,22 @@ export function resolveRecordedValue(value, replies) {
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveRecordedValue(item, replies)]));
 }
 
+/** Resolve the pinned recorder's path references from this run's raw replies.
+ * Encode each value once as a URL component; it never becomes a new route/origin.
+ * Page/transaction references in this bounded adapter must be non-empty strings. */
+export function resolveRecordedPath(path, replies) {
+  requireThat(typeof path === "string", "recorder-path-reference-invalid");
+  return path.replaceAll(/\{\{([^}]+)\}\}/g, (_, expression) => {
+    const [id, ...segments] = expression.split(".");
+    const value = resolveRecordedValue(
+      { $from: id, path: segments.length ? segments.join(".") : "transaction" },
+      replies,
+    );
+    requireThat(typeof value === "string" && value.length > 0, "recorder-path-reference-invalid");
+    return encodeURIComponent(value);
+  });
+}
+
 /** Dynamic cleanup names come only from a declared create reply on the owned daemon.
  * This is not production deletion authority. The full local DB is reset first. */
 export function expectedCleanupDocuments(entry, requests) {
@@ -83,11 +99,13 @@ export function expectedCleanupDocuments(entry, requests) {
 
 export function validateProgram(program, entry) {
   requireThat(
-    object(program) && program.id === entry.programId && program.area === "writes",
+    object(program) && program.id === entry.programId &&
+      program.area === (entry.programArea ?? "writes"),
     "program-identity",
   );
   requireThat(
-    Array.isArray(program.seed) && program.seed.length === 1 && Array.isArray(program.steps),
+    Array.isArray(program.seed) && program.seed.length === (entry.seedCount ?? 1) &&
+      Array.isArray(program.steps),
     "program-structure",
   );
   requireThat(
@@ -156,7 +174,7 @@ export function selectProduction(matrix, entry) {
     // Never consult .emulator, .fireemu or historical three-way summary labels.
     steps[id] = { production: structuredClone(row) };
   }
-  return { programs: [{ id: entry.programId, area: "writes", steps }] };
+  return { programs: [{ id: entry.programId, area: entry.programArea ?? "writes", steps }] };
 }
 
 export function completed(row) {

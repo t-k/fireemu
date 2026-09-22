@@ -18,6 +18,7 @@ import json
 import os
 import re
 import select
+import signal
 import stat
 import subprocess
 import sys
@@ -396,6 +397,208 @@ def _bound_child_gate_plan(
     return child_gate_plan
 
 
+def _execute_gate_worker(
+    *,
+    plan: Mapping[str, Any],
+    o7: Mapping[str, Any],
+    o8: Mapping[str, Any],
+    credential_fd: int,
+    gate_path: Path,
+    allocation_now: float,
+    clock: Callable[[], float],
+    read_handoff: Callable[[int], Mapping[str, str]],
+    transport: Callable[..., tuple[Any, Any]],
+) -> dict[str, Any]:
+    """Own one child Gate from creation through its terminal receipt."""
+    child_gate_plan = _bound_child_gate_plan(plan, o7=o7, o8=o8, now=allocation_now)
+    shared_gate.create(gate_path, child_gate_plan)
+    gate = shared_gate.Gate(gate_path, recovery.GATE_JOB)
+    gate.claim()
+    if float(clock()) >= float(plan["deadlineAt"]):
+        _refuse("recovery deadline expired")
+    handoff = dict(read_handoff(credential_fd))
+    if set(handoff) != HANDOFF_FIELDS:
+        _refuse("private credential handoff required")
+    operation = copy.deepcopy(plan["operation"])
+    body = {"localId": [plan["customUid"]]}
+    current_wall = float(clock())
+    if current_wall >= float(plan["deadlineAt"]):
+        _refuse("recovery request deadline expired")
+    request_seconds = min(
+        float(plan["gatePlan"]["requestSeconds"]),
+        float(plan["deadlineAt"]) - current_wall,
+    )
+    if request_seconds <= 0:
+        _refuse("recovery request deadline expired")
+    deadline = time.monotonic() + request_seconds
+
+    def send() -> tuple[Any, Any]:
+        return transport(
+            operation,
+            body,
+            token=handoff["token"],
+            api_key=handoff["apiKey"],
+            deadline=deadline,
+        )
+
+    status, response = gate.dispatch(operation, True, send)
+    if float(clock()) >= float(plan["deadlineAt"]) or time.monotonic() >= deadline:
+        _refuse("recovery request deadline expired")
+    expected = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+    if type(status) is not int or status != 200 or response != expected:
+        _refuse("typed-empty Auth recovery response required")
+    gate.finish()
+    if float(clock()) >= float(plan["deadlineAt"]) or time.monotonic() >= deadline:
+        _refuse("recovery request deadline expired")
+    final_gate = gate.snapshot()
+    receipt = {
+        "kind": "auth-credential-recovery-worker-receipt-v1",
+        "gateDigest": digest(final_gate),
+        "gatePlanDigest": digest(final_gate["plan"]),
+        "responseDigest": digest(expected),
+        "completed": True,
+    }
+    receipt["receiptDigest"] = digest(receipt)
+    return receipt
+
+
+def _write_worker_message(fd: int, value: Mapping[str, Any]) -> None:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    if len(payload) > MAX_HANDOFF_BYTES:
+        return
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
+
+
+def _stop_worker(pid: int) -> None:
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (OSError, ProcessLookupError):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    try:
+        os.waitpid(pid, 0)
+    except ChildProcessError:
+        return
+
+
+def _run_gate_worker(
+    *,
+    plan: Mapping[str, Any],
+    o7: Mapping[str, Any],
+    o8: Mapping[str, Any],
+    credential_fd: int,
+    gate_path: Path,
+    allocation_now: float,
+    clock: Callable[[], float],
+    read_handoff: Callable[[int], Mapping[str, str]],
+    transport: Callable[..., tuple[Any, Any]],
+) -> tuple[int, dict[str, Any]]:
+    """Fork, supervise and reap the sole process that owns the Gate."""
+    read_fd, write_fd = os.pipe()
+    try:
+        pid = os.fork()
+    except OSError:
+        os.close(read_fd)
+        os.close(write_fd)
+        _refuse("recovery worker could not start")
+    if pid == 0:
+        os.close(read_fd)
+        try:
+            os.setsid()
+            receipt = _execute_gate_worker(
+                plan=plan,
+                o7=o7,
+                o8=o8,
+                credential_fd=credential_fd,
+                gate_path=gate_path,
+                allocation_now=allocation_now,
+                clock=clock,
+                read_handoff=read_handoff,
+                transport=transport,
+            )
+            os.close(credential_fd)
+            _write_worker_message(write_fd, receipt)
+            os.close(write_fd)
+            os._exit(0)
+        except BaseException as error:  # noqa: BLE001 -- child never leaks details.
+            try:
+                os.close(credential_fd)
+            except OSError:
+                pass
+            try:
+                _write_worker_message(
+                    write_fd,
+                    {
+                        "kind": "auth-credential-recovery-worker-failure-v1",
+                        "error": type(error).__name__,
+                        "reason": (
+                            error.reason
+                            if isinstance(error, recovery.RecoveryRefusal)
+                            else "recovery worker failed"
+                        ),
+                    },
+                )
+            except OSError:
+                pass
+            os.close(write_fd)
+            os._exit(1)
+
+    os.close(write_fd)
+    hard_deadline = time.monotonic() + max(
+        0.0, float(plan["deadlineAt"]) - allocation_now
+    )
+    payload = bytearray()
+    status: int | None = None
+    eof = False
+    try:
+        while status is None or not eof:
+            remaining = hard_deadline - time.monotonic()
+            if remaining <= 0:
+                _stop_worker(pid)
+                _refuse("recovery worker deadline expired")
+            readable, _, _ = select.select([read_fd], [], [], min(remaining, 0.25))
+            if readable:
+                chunk = os.read(read_fd, MAX_HANDOFF_BYTES + 1 - len(payload))
+                if not chunk:
+                    eof = True
+                else:
+                    payload.extend(chunk)
+                    if len(payload) > MAX_HANDOFF_BYTES:
+                        _stop_worker(pid)
+                        _refuse("bounded recovery worker receipt required")
+            waited, wait_status = os.waitpid(pid, os.WNOHANG)
+            if waited == pid:
+                status = wait_status
+    finally:
+        os.close(read_fd)
+    if status is None:
+        _, status = os.waitpid(pid, 0)
+    try:
+        value = json.loads(bytes(payload))
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+        _refuse("recovery worker receipt required")
+    if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+        if (
+            isinstance(value, dict)
+            and value.get("kind") == "auth-credential-recovery-worker-failure-v1"
+        ):
+            reason = value.get("reason")
+            if isinstance(reason, str) and reason:
+                _refuse(f"recovery worker refused ({reason})")
+        _refuse("recovery worker failed")
+    if (
+        not isinstance(value, dict)
+        or value.get("kind") != "auth-credential-recovery-worker-receipt-v1"
+    ):
+        _refuse("recovery worker receipt required")
+    return pid, value
+
+
 def execute_recovery(
     packet: Mapping[str, Any],
     *,
@@ -457,55 +660,44 @@ def execute_recovery(
         now=allocation_now,
     )
     try:
-        child_gate_plan = _bound_child_gate_plan(plan, o7=o7, o8=o8, now=allocation_now)
-        shared_gate.create(destination, child_gate_plan)
-        gate = shared_gate.Gate(destination, recovery.GATE_JOB)
-        gate.claim()
-        if float(clock()) >= float(plan["deadlineAt"]):
-            _refuse("recovery deadline expired")
-        handoff = dict(read_handoff(credential_fd))
-        if set(handoff) != HANDOFF_FIELDS:
-            _refuse("private credential handoff required")
-        operation = copy.deepcopy(plan["operation"])
-        body = {"localId": [plan["customUid"]]}
-        current_wall = float(clock())
-        if current_wall >= float(plan["deadlineAt"]):
-            _refuse("recovery request deadline expired")
-        request_seconds = min(
-            float(plan["gatePlan"]["requestSeconds"]),
-            float(plan["deadlineAt"]) - current_wall,
+        _bound_child_gate_plan(plan, o7=o7, o8=o8, now=allocation_now)
+        parent_hard_deadline = time.monotonic() + max(
+            0.0, float(plan["deadlineAt"]) - allocation_now
         )
-        if request_seconds <= 0:
-            _refuse("recovery request deadline expired")
-        deadline = time.monotonic() + request_seconds
-
-        def send() -> tuple[Any, Any]:
-            return transport(
-                operation,
-                body,
-                token=handoff["token"],
-                api_key=handoff["apiKey"],
-                deadline=deadline,
-            )
-
-        status, response = gate.dispatch(operation, True, send)
-        if float(clock()) >= float(plan["deadlineAt"]) or time.monotonic() >= deadline:
-            _refuse("recovery request deadline expired")
+        worker_pid, receipt = _run_gate_worker(
+            plan=plan,
+            o7=o7,
+            o8=o8,
+            credential_fd=credential_fd,
+            gate_path=destination,
+            allocation_now=allocation_now,
+            clock=clock,
+            read_handoff=read_handoff,
+            transport=transport,
+        )
+        final_gate = shared_gate.Gate(destination, recovery.GATE_JOB).snapshot()
+        final_job = final_gate.get("jobs", {}).get(recovery.GATE_JOB, {})
+        if (
+            final_gate.get("coordinatorPid") != worker_pid
+            or final_job.get("pid") != worker_pid
+        ):
+            _refuse("recovery worker ownership changed")
         expected = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
-        if type(status) is not int or status != 200 or response != expected:
-            _refuse("typed-empty Auth recovery response required")
-        gate.finish()
-        if float(clock()) >= float(plan["deadlineAt"]) or time.monotonic() >= deadline:
+        _same(
+            receipt.get("gateDigest"), digest(final_gate), "worker Gate receipt changed"
+        )
+        _same(
+            receipt.get("gatePlanDigest"),
+            digest(final_gate["plan"]),
+            "worker Gate plan receipt changed",
+        )
+        recovery._worker_receipt(receipt, final_gate, digest(expected))
+        settle_now = float(clock())
+        if (
+            settle_now >= float(plan["deadlineAt"])
+            or time.monotonic() >= parent_hard_deadline
+        ):
             _refuse("recovery request deadline expired")
-        final_gate = gate.snapshot()
-        receipt = {
-            "kind": "auth-credential-recovery-worker-receipt-v1",
-            "gateDigest": digest(final_gate),
-            "gatePlanDigest": digest(final_gate["plan"]),
-            "responseDigest": digest(expected),
-            "completed": True,
-        }
-        receipt["receiptDigest"] = digest(receipt)
         result = recovery.settle_and_close(
             ledger,
             parent_ticket=canonical_parent["ticket"],
@@ -514,7 +706,7 @@ def execute_recovery(
             plan=plan,
             child_gate=final_gate,
             worker_receipt=receipt,
-            now=float(clock()),
+            now=settle_now,
         )
         return {
             "kind": "auth-credential-recovery-result-v1",

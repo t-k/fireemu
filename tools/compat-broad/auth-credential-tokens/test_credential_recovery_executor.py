@@ -85,11 +85,6 @@ class RecordingLedger(_ReadOnlyLedger):
         return {"state": "closed-after-auth-recovery-child"}
 
 
-def _dead_pid() -> int:
-    """Return a positive PID outside the platform's live process range."""
-    return 2_000_000_000
-
-
 def _packet(tmp_path: Path):
     parent = _ledger_parent()
     parent["claim"].pop("claimDigest", None)
@@ -392,15 +387,17 @@ def test_executor_registers_child_before_fd_read_and_runs_one_typed_empty_gate_r
 ) -> None:
     parent, source_root, execution_root, packet = _packet(tmp_path)
     ledger = RecordingLedger(parent)
-    order: list[str] = []
+    order_path = tmp_path / "order.log"
     credential_fd = _credential_fd(tmp_path)
 
     def read_fd(fd):
-        order.append("credential-read")
+        with order_path.open("a") as stream:
+            stream.write("credential-read\n")
         return executor.read_private_handoff(fd)
 
     def transport(operation, body, *, token, api_key, deadline):
-        order.append("wire")
+        with order_path.open("a") as stream:
+            stream.write("wire\n")
         assert token == "oauth-token"
         assert api_key == "web-api-key"
         assert operation["path"].endswith("/projects/fireemu-35fe6/accounts:lookup")
@@ -425,7 +422,7 @@ def test_executor_registers_child_before_fd_read_and_runs_one_typed_empty_gate_r
     finally:
         os.close(credential_fd)
 
-    assert order == ["credential-read", "wire"]
+    assert order_path.read_text().splitlines() == ["credential-read", "wire"]
     assert ledger.lifecycle == ["begin-child", "settle-child", "close-parent"]
     assert result["disposition"] == "typed-empty"
     assert result["lookupCount"] == 1
@@ -471,9 +468,7 @@ def test_executor_reconstructs_the_real_signing_compiler_id_token_sub_parent(
     )
 
 
-def test_executor_settles_and_closes_a_real_temp_ledger(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_executor_settles_and_closes_a_real_temp_ledger(tmp_path: Path) -> None:
     parent, source_root, execution_root, packet, ledger = _real_ledger_packet(tmp_path)
     assert (
         packet["executionSource"]["sourceCommit"]
@@ -481,19 +476,6 @@ def test_executor_settles_and_closes_a_real_temp_ledger(
     )
     assert not (source_root / executor.EXECUTOR_ENTRY).exists()
     credential_fd = _credential_fd(tmp_path)
-    original_finish = shared_gate.Gate.finish
-
-    def finish_with_reaped_worker(gate):
-        result = original_finish(gate)
-        state_path = tmp_path / "child-gate" / "state.json"
-        state = json.loads(state_path.read_text())
-        dead = _dead_pid()
-        state["coordinatorPid"] = dead
-        state["jobs"][recovery.GATE_JOB]["pid"] = dead
-        shared_gate._save(tmp_path / "child-gate", state)
-        return result
-
-    monkeypatch.setattr(shared_gate.Gate, "finish", finish_with_reaped_worker)
     try:
 
         def transport(*_args, **_kwargs):
@@ -517,6 +499,11 @@ def test_executor_settles_and_closes_a_real_temp_ledger(
     assert result["settlement"] == "closed-after-auth-recovery-child"
     assert row["state"] == "closed-after-auth-recovery-child"
     assert row["recoveryChildren"][0]["state"] == "settled"
+    child_gate = json.loads((tmp_path / "child-gate" / "state.json").read_text())
+    worker_pid = child_gate["coordinatorPid"]
+    assert worker_pid != os.getpid()
+    with pytest.raises(ProcessLookupError):
+        os.kill(worker_pid, 0)
 
 
 def test_absolute_deadline_is_rechecked_before_private_fd_read(tmp_path: Path) -> None:
@@ -614,6 +601,52 @@ def test_absolute_deadline_is_rechecked_after_gate_finish_before_settlement(
                 gate_path=tmp_path / "child-gate",
                 now=1001.0,
                 clock=lambda: next(clock_values),
+                transport=lambda *_args, **_kwargs: (
+                    200,
+                    {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []},
+                ),
+            )
+    finally:
+        os.close(credential_fd)
+    assert ledger.lifecycle == ["begin-child"]
+
+
+def test_absolute_deadline_is_rechecked_after_terminal_gate_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parent, source_root, execution_root, packet = _packet(tmp_path)
+    ledger = RecordingLedger(parent)
+    credential_fd = _credential_fd(tmp_path)
+    controller_pid = os.getpid()
+    snapshot_done = False
+    original_snapshot = shared_gate.Gate.snapshot
+
+    def snapshot(gate):
+        nonlocal snapshot_done
+        result = original_snapshot(gate)
+        if os.getpid() == controller_pid and str(gate.path) == str(
+            tmp_path / "child-gate"
+        ):
+            snapshot_done = True
+        return result
+
+    monkeypatch.setattr(shared_gate.Gate, "snapshot", snapshot)
+
+    def clock() -> float:
+        return 1061.0 if snapshot_done and os.getpid() == controller_pid else 1001.0
+
+    try:
+        with pytest.raises(recovery.RecoveryRefusal, match="deadline"):
+            executor.execute_recovery(
+                packet,
+                parent=parent,
+                ledger=ledger,
+                source_root=source_root,
+                execution_root=execution_root,
+                credential_fd=credential_fd,
+                gate_path=tmp_path / "child-gate",
+                now=1001.0,
+                clock=clock,
                 transport=lambda *_args, **_kwargs: (
                     200,
                     {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []},

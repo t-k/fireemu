@@ -97,6 +97,39 @@ DEFAULT_FIELD_BODY = {
 TOKEN = "offline-fixture-token"
 
 
+def _assert_lifecycle_operation(slot, operation, lifecycle_ops):
+    """Bind the fixture to the exact Firestore REST operation shape."""
+    assert isinstance(operation, dict)
+    expected_route = preflight.LIFECYCLE_ROUTE
+    expected_mask_route = expected_route + "?updateMask=indexConfig"
+    if slot in {"index-lifecycle-before", "index-lifecycle-after", "index-lifecycle-restored"}:
+        assert operation == {"method": "GET", "route": expected_route, "body": None}
+    elif slot == "index-lifecycle-apply":
+        assert operation == {
+            "method": "PATCH",
+            "route": expected_mask_route,
+            "body": {"name": preflight.LIFECYCLE_FIELD, "indexConfig": {"indexes": []}},
+        }
+    elif slot == "index-lifecycle-restore":
+        assert operation == {
+            "method": "PATCH",
+            "route": expected_mask_route,
+            "body": {"name": preflight.LIFECYCLE_FIELD},
+        }
+    elif slot == "index-lifecycle-poll":
+        assert operation == {
+            "method": "GET",
+            "route": "https://firestore.googleapis.com/v1/" + lifecycle_ops["apply"],
+            "body": None,
+        }
+    elif slot == "index-lifecycle-poll-restore":
+        assert operation == {
+            "method": "GET",
+            "route": "https://firestore.googleapis.com/v1/" + lifecycle_ops["restore"],
+            "body": None,
+        }
+
+
 class Clock:
     def __init__(self):
         self.now = 1000.0
@@ -127,8 +160,10 @@ def offline(monkeypatch):
     monkeypatch.setattr(preflight.shared, "time", clock)
     monkeypatch.setattr(production, "time", clock)
 
-    def management_fixture(slot, token, **_kwargs):
+    def management_fixture(slot, token, *, operation=None, **_kwargs):
         assert token == TOKEN
+        if slot.startswith("index-lifecycle-"):
+            _assert_lifecycle_operation(slot, operation, lifecycle_ops)
         body = {
             "project": PROJECT_BODY,
             "database": DATABASE_BODY,
@@ -445,6 +480,27 @@ def test_the_descriptor_is_complete_and_its_figures_come_from_the_compiler():
         descriptor.window_seconds
         == figures["maxWallSeconds"] + (figures["recoveryReserveSeconds"])
     )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda operation: {**operation, "route": operation["route"].replace("firestore", "other")},
+        lambda operation: {**operation, "body": {"name": preflight.LIFECYCLE_FIELD}},
+    ],
+)
+def test_lifecycle_fixture_rejects_wrong_route_or_patch_body(mutation):
+    operation = {
+        "method": "PATCH",
+        "route": preflight.LIFECYCLE_ROUTE + "?updateMask=indexConfig",
+        "body": {"name": preflight.LIFECYCLE_FIELD, "indexConfig": {"indexes": []}},
+    }
+    with pytest.raises(AssertionError):
+        _assert_lifecycle_operation(
+            "index-lifecycle-apply",
+            mutation(operation),
+            {"apply": "projects/fireemu-35fe6/databases/(default)/operations/op-apply", "restore": "projects/fireemu-35fe6/databases/(default)/operations/op-restore"},
+        )
 
 
 def test_the_figures_do_not_depend_on_the_nonce():

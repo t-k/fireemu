@@ -17,6 +17,15 @@ ADC = {
 }
 
 
+def test_prepared_final_permission_cannot_omit_terminal_baseline():
+    import limits_03_admission as admission
+
+    with pytest.raises(ValueError, match="terminal PREP baseline"):
+        admission._validate_preparation_permission(
+            {"kind": "limits-03-prepared-owner-execution-permission-v1"}
+        )
+
+
 def _approved(tmp_path, *, fixture_origin=None):
     import limits_03_baseline_prep as prep
     import o8_admission

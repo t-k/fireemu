@@ -547,6 +547,7 @@ def _run_preparation(bindings, output, handoff_fd):
                     ledger.validate(
                         ticket, duration=max(0, deadline - time.monotonic())
                     )
+                    sent = time.monotonic()
                     raw = capability._transmit(
                         {"slot": slot, "secret": secret, "deadline": deadline}
                     )
@@ -585,7 +586,7 @@ def _run_preparation(bindings, output, handoff_fd):
                             response["body"] = campaign.preflight.credential_evidence(
                                 raw,
                                 permission["credentialPrincipal"],
-                                sent=time.monotonic(),
+                                sent=sent,
                                 now=time.monotonic(),
                                 required_seconds=300,
                             )
@@ -759,6 +760,64 @@ def capture_baseline(*, bindings, output, handoff_fd):
         {key: value for key, value in packet.items() if key != "packetDigest"}
     )
     _write_receipt(output / "baseline-packet.json", packet)
+    return packet
+
+
+def validate_packet(packet):
+    """Validate the public packet before a separate final owner freeze."""
+    if not isinstance(packet, dict) or packet.get("packetDigest") != digest(
+        {key: value for key, value in packet.items() if key != "packetDigest"}
+    ):
+        raise ValueError("terminal PREP packet digest differs")
+    expected_slots = [
+        "observation:" + slot
+        for slot in ("refresh", "oauth-tokeninfo", "project", "database", "auth", "key")
+    ]
+    evidence = packet.get("evidence")
+    database = packet.get("database")
+    if (
+        packet.get("kind") != PREPARATION_KIND
+        or packet.get("campaignId") != CAMPAIGN
+        or packet.get("completed") is not True
+        or packet.get("failed") is not False
+        or packet.get("failureClass") is not None
+        or packet.get("reservationReleased") is not True
+        or packet.get("chargedCalls") != 6
+        or packet.get("costMicrousd") != 600
+        or packet.get("slots") != expected_slots
+        or not isinstance(evidence, list)
+        or len(evidence) != 6
+        or [event.get("id") for event in evidence] != expected_slots
+        or any(
+            event.get("completed") is not True
+            or event.get("workerReaped") is not True
+            or event.get("status") != 200
+            for event in evidence
+        )
+        or packet.get("project")
+        != {"projectId": campaign.PROJECT, "projectNumber": campaign.NUMBER}
+        or not isinstance(database, dict)
+        or database.get("projectionDigest") != digest(database.get("projection"))
+        or database.get("projection", {}).get("name")
+        != f"projects/{campaign.PROJECT}/databases/{campaign.DATABASE}"
+        or packet.get("preparationId") != packet.get("nonce")
+    ):
+        raise ValueError("terminal PREP packet is incomplete")
+    for key in (
+        "ticketDigest",
+        "claimDigest",
+        "sourceDigest",
+        "manifestDigest",
+        "terminalReceiptDigest",
+        "authConfigDigest",
+        "ownerIdentityDigest",
+        "principalDigest",
+    ):
+        if (
+            not isinstance(packet.get(key), str)
+            or re.fullmatch(r"[a-f0-9]{64}", packet[key]) is None
+        ):
+            raise ValueError("terminal PREP digest required")
     return packet
 
 

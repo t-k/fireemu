@@ -557,6 +557,26 @@ def validated_cleanup_gate(plan: dict[str, Any], gate: Any) -> Any:
     return gate
 
 
+def compare_with_cleanup_gate(
+    production: dict[str, Any],
+    plan: dict[str, Any],
+    gate: Any,
+    *,
+    local: dict[str, Any] | None = None,
+    manifest_digest: str | None = None,
+) -> dict[str, Any]:
+    """Run the descriptor comparator while the source-bound Gate is live."""
+    from o5_user_token_descriptor import comparator
+
+    return comparator(
+        production,
+        plan,
+        local,
+        manifest_digest=manifest_digest,
+        production_cleanup_gate=validated_cleanup_gate(plan, gate),
+    )
+
+
 def collection_dispatch(
     plan, gate, execute, *, credentials, account_bindings, identity_proofs, ownership
 ):
@@ -1377,4 +1397,5 @@ __all__ = [
     "run_bound_collection",
     "validate_compiled_accounting",
     "validated_cleanup_gate",
+    "compare_with_cleanup_gate",
 ]

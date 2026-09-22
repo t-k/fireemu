@@ -339,6 +339,7 @@ def test_the_reservation_claim_binds_the_gate_plan_and_the_lane_budget(built, tm
 def test_bootstrap_permission_has_a_separate_typed_claim_contract(built, tmp_path) -> None:
     base = admission.gate_plan_for(built.inputs, built.permission)
     template = gate_module.bootstrap_plan(base, permission_digest="0" * 64)
+    issued = time.time() - 1
     prep = {
         "kind": "auth-credential-bootstrap-permission-v1",
         "project": campaign.PROJECT,
@@ -347,8 +348,8 @@ def test_bootstrap_permission_has_a_separate_typed_claim_contract(built, tmp_pat
         "credentialPrincipal": built.permission["credentialPrincipal"],
         "authorizedUserDigest": digest({"type": "authorized_user", "client_id": "offline-client"}),
         "preparationPlanDigest": gate_module.bootstrap_plan_digest(template),
-        "issuedAt": time.time() - 1,
-        "expiresAt": time.time() + 900,
+        "issuedAt": issued,
+        "expiresAt": issued + 660,
     }
     plan = gate_module.bootstrap_plan(base, permission_digest=digest(prep))
     validated = admission.validate_bootstrap_permission(prep, plan=plan)
@@ -368,6 +369,12 @@ def test_bootstrap_permission_has_a_separate_typed_claim_contract(built, tmp_pat
     }
     ticket = reservations.Ledger(built.ledger).reserve(envelope, claim, plan)
     assert ticket["reservation"] in reservations.Ledger(built.ledger).snapshot()["reservations"]
+    short = {**prep, "expiresAt": issued + 659}
+    short_plan = gate_module.bootstrap_plan(base, permission_digest=digest(short))
+    with pytest.raises(ValueError, match="window"):
+        admission.validate_bootstrap_permission(
+            short, plan=short_plan
+        )
 
 
 def test_the_shared_ledger_hosts_the_account_shaped_gate_plan(built, tmp_path) -> None:

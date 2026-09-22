@@ -59,6 +59,31 @@ from test_o5_user_token_collector_bound import (
 NONCE = "a" * 32
 
 
+def test_closed_schedule_accounts_for_every_wire_exchange_and_one_cleanup(tmp_path):
+    plan = lane.plan_compiler(NONCE)
+    compiled = lane.gate_plan(plan)
+    management = compiled["management"]
+    observation = management["observation"]
+    recovery = management["recovery"]
+    assert len(observation) == 71
+    assert len(recovery) == 73
+    assert management["totalRequests"] == 144
+    assert compiled["observationRequests"] == 71
+    assert compiled["costMicrousd"] == 144
+    assert lane.budget()["requests"] == 144
+    assert lane.budget()["resources"] == 14
+    assert sum(slot["timeout"] + .25 for slot in observation) == 289.75
+    assert sum(slot["timeout"] + .25 for slot in recovery) == 264.25
+    assert len({slot["id"] for slot in observation + recovery}) == 144
+    assert sum(slot["id"].startswith("cleanup/") for slot in recovery) == 63
+    assert not any("setup-recovery" in slot["id"] for slot in recovery)
+    ids = [slot["id"] for slot in observation]
+    first_b = next(row for row in plan["observation"] if row["ruleset"] == "B")
+    assert ids.index("patch-b-executable") + 1 == ids.index(f"data/{first_b['index']}")
+    assert ids.index(f"data/{first_b['index'] - 1}") < ids.index("create-b")
+    shared_gate.create(tmp_path / "compiled-gate", compiled)
+
+
 def with_synthetic_build(monkeypatch, artifact_sha256: str) -> dict:
     """Point the lane's shadow record at a synthetic build for a dry run.
 

@@ -156,8 +156,7 @@ def budget() -> dict[str, Any]:
     return {
         "requests": int(estimate["requestUpperBound"]),
         "accounts": len(plan["ownedAccounts"]),
-        # The owned documents plus the tenant this campaign creates.
-        "resources": len(plan["ownedResources"]) + 1,
+        "resources": len(plan["ownedResources"]),
         "costMicrousd": COST_CEILING_MICROUSD,
     }
 
@@ -234,7 +233,7 @@ def gate_plan(plan: dict[str, Any], *, permission_expires_at: float | None = Non
         "nonce": plan["nonce"],
         "planDigest": plan["planDigest"],
         "management": management,
-        "observationRequests": len(plan["observation"]) + len(management["observation"]),
+        "observationRequests": len(management["observation"]),
         "dataRequests": len(plan["observation"]),
         "managementRequests": management["totalRequests"],
         "requestCostMicrousd": management["requestCostMicrousd"],

@@ -20,10 +20,10 @@ def _plan():
     return case.compile_case("fireemu-35fe6", "(default)", "a" * 32, "tenant-test")
 
 
-def test_bridge_binds_compiler_accounting_146():
+def test_bridge_binds_compiler_accounting_144():
     plan = _plan()
     accounting = bridge.validate_compiled_accounting(plan)
-    assert accounting["requestUpperBound"] == 146
+    assert accounting["requestUpperBound"] == 144
     assert accounting["rulesRequests"] == 23
     assert accounting["recoveryRequests"] == 63
 

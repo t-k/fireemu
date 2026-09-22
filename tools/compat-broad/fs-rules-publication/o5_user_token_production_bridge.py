@@ -27,7 +27,7 @@ from o5_user_token_remote_transport import (
 )
 from o8_admission import authorize_transport
 
-TOTAL_REQUESTS = 146
+TOTAL_REQUESTS = 144
 RULES_REQUESTS = 23
 OBSERVATION_REQUESTS = 33
 RECOVERY_REQUESTS = 63
@@ -109,12 +109,12 @@ def run_bound_setup(
 
 
 def validate_compiled_accounting(plan: dict[str, Any]) -> dict[str, int]:
-    """Require the compiler's complete 146-request accounting."""
+    """Require the compiler's complete 144-request accounting."""
     estimate = campaign_budget(plan)
     expected = {
         "observationRequests": OBSERVATION_REQUESTS,
         "fixtureRequests": 10,
-        "authRequests": 17,
+        "authRequests": 15,
         "rulesRequests": RULES_REQUESTS,
         "recoveryRequests": RECOVERY_REQUESTS,
         "requestUpperBound": TOTAL_REQUESTS,

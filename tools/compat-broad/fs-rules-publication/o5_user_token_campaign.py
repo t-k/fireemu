@@ -56,20 +56,46 @@ def rules_management_plan() -> dict[str, Any]:
         "totalRequests": len(RULES_MANAGEMENT_OBSERVATION) + len(RULES_MANAGEMENT_RECOVERY),
         "requestCostMicrousd": 1,
         "wallClockDeadlineSeconds": 600.0,
-        "recoveryDeadlineSeconds": 900.0,
+        "recoveryDeadlineSeconds": 300.0,
     }
 
 
 def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
-    """Freeze setup slots before the existing Rules management slots."""
+    """Compile every wire exchange, preserving publication and action boundaries."""
     setup = setup_plan(plan)
     value = rules_management_plan()
     entries = [
-        {"id": "setup/" + item["id"], "timeout": 12.0}
+        {"id": "setup/" + item["id"], "timeout": 2.0}
         for item in (*setup["fixtures"], *setup["auth"])
     ]
-    value["observation"] = entries + value["observation"]
-    value["totalRequests"] += setup["totalRequests"]
+    entries.extend(value["observation"][:3])
+    active = None
+    for row in plan["observation"]:
+        if row["ruleset"] != active:
+            label = row["ruleset"].lower()
+            entries.extend(
+                {"id": slot, "timeout": 12.0}
+                for slot in (f"create-{label}", f"create-{label}-get", f"patch-{label}", f"patch-{label}-get", f"patch-{label}-executable")
+            )
+            active = row["ruleset"]
+        if row.get("principalAction"):
+            entries.extend(
+                {"id": f"action/{row['index']}/{stage}", "timeout": 2.0}
+                for stage in ("mutation", "readback")
+            )
+        entries.append({"id": f"data/{row['index']}", "timeout": 2.0})
+    cleanup = [
+        {"id": f"cleanup/document/{resource.rsplit('/', 1)[-1]}/{stage}", "timeout": 2.0}
+        for resource in plan["ownedResources"]
+        for stage in ("read", "delete", "absence")
+    ] + [
+        {"id": f"cleanup/account/{account['ref']}/{stage}", "timeout": 2.0}
+        for account in plan["ownedAccounts"]
+        for stage in ("read", "delete", "absence")
+    ]
+    value["observation"] = entries
+    value["recovery"] = cleanup + value["recovery"]
+    value["totalRequests"] = len(entries) + len(value["recovery"])
     return value
 
 OWNER_PRECONDITIONS = (
@@ -131,12 +157,10 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
     accounts = plan["ownedAccounts"]
     # Per account: sign-up, plus a claim write and a re-sign-in when it carries
     # a custom claim, plus one administrator action and one lookup readback
-    # when the account is revoked, disabled or deleted between two rows. Plus
-    # one tenant create and one tenant delete.
+    # when the account is revoked, disabled or deleted between two rows.
     auth_requests = (
         sum(3 if entry["claims"] else 1 for entry in accounts)
         + sum(2 for entry in accounts if entry.get("postSignIn"))
-        + 2
     )
     # Rules management includes baseline reads, response-derived create/read,
     # activation/readback, exact restore, and guarded delete/absence proof.
@@ -144,7 +168,8 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
     # Recovery: read back, delete and verify absence for every document and
     # every account.
     recovery_requests = 3 * (resources + len(accounts))
-    total = observation + fixtures + auth_requests + rules_requests + recovery_requests
+    schedule = gate_management_plan(plan)
+    total = schedule["totalRequests"]
     reads = observation + resources + len(accounts)
     writes = fixtures + resources + 4
     cost = reads * _PRICE_PER_DOCUMENT_READ_USD + writes * _PRICE_PER_DOCUMENT_WRITE_USD
@@ -158,7 +183,7 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
         "concurrencyUpperBound": 1,
         "perRequestTimeoutSeconds": 12.0,
         "wallClockDeadlineSeconds": 600.0,
-        "recoveryDeadlineSeconds": 900.0,
+        "recoveryDeadlineSeconds": 300.0,
         "billedDocumentReads": reads,
         "billedDocumentWrites": writes,
         "estimatedCostUsd": round(cost, 6),
@@ -349,7 +374,7 @@ def validate_production_packet(
     the only issuer, and the campaign's preparation manifest stays closed.
     """
     estimate = budget(plan)
-    if estimate["requestUpperBound"] != 146:
+    if estimate["requestUpperBound"] != gate_management_plan(plan)["totalRequests"]:
         raise ValueError("production packet budget differs")
     if (
         capability_inputs.get("plan") != plan

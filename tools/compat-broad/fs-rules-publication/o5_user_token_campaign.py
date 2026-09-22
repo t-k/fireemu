@@ -12,7 +12,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from o5_user_token_case import CAMPAIGN, compile_case, digest
+from o5_user_token_case import CAMPAIGN, compile_case, digest, validate_case
 
 CAMPAIGN_CONTRACT = "fs-rules-user-token-campaign-v1"
 
@@ -151,6 +151,67 @@ def budget(plan: dict[str, Any]) -> dict[str, Any]:
         "estimatedCostUsd": round(cost, 6),
         "costCeilingUsd": 1.0,
         "estimateBasis": "public Firestore Standard list prices; not a quoted tariff",
+    }
+
+
+def setup_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Describe only setup operations that the source-backed local runner performs.
+
+    This is a transport contract, not production authority. Tenant lifecycle
+    is deliberately absent because the campaign precondition requires the
+    named tenant to exist. The three post-sign-in administrator actions belong
+    to compiled observation rows and are not setup operations.
+    """
+    validate_case(plan)
+    fixtures = [
+        {
+            "id": "fixture/" + entry["document"],
+            "service": "firestore",
+            "route": "documents:commit",
+            "method": "POST",
+            "document": entry["document"],
+            "resource": entry["resource"],
+        }
+        for entry in plan["fixtures"]
+    ]
+    auth = []
+    for entry in plan["ownedAccounts"]:
+        auth.append(
+            {
+                "id": f"account/{entry['ref']}/signup",
+                "service": "identity",
+                "route": "accounts:signUp",
+                "method": "POST",
+                "accountRef": entry["ref"],
+                "tenant": entry["tenant"],
+            }
+        )
+    owner = next(entry for entry in plan["ownedAccounts"] if entry["ref"] == "owner-a")
+    auth.extend(
+        [
+            {
+                "id": "account/owner-a/claim-update",
+                "service": "identity",
+                "route": "accounts:update",
+                "method": "POST",
+                "accountRef": owner["ref"],
+                "tenant": owner["tenant"],
+            },
+            {
+                "id": "account/owner-a/signin",
+                "service": "identity",
+                "route": "accounts:signInWithPassword",
+                "method": "POST",
+                "accountRef": owner["ref"],
+                "tenant": owner["tenant"],
+            },
+        ]
+    )
+    return {
+        "contract": "o5-user-token-setup-plan-v1",
+        "fixtures": fixtures,
+        "auth": auth,
+        "totalRequests": len(fixtures) + len(auth),
     }
 
 

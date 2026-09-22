@@ -23,7 +23,7 @@ import o5_user_token_descriptor as lane
 import o5_user_token_production as production
 import o5_user_token_remote_transport as remote
 import shared_gate
-from o5_user_token_campaign import digest
+from o5_user_token_campaign import digest, setup_plan
 from o5_user_token_collector import ROLE_PRODUCTION
 from reservations import Ledger
 from test_o5_user_token_collector_bound import acquisition_for
@@ -135,6 +135,29 @@ class _ProducerHandler(_FixtureHandler):
 def test_launcher_requires_an_externally_materialized_approved_packet() -> None:
     with pytest.raises(ValueError, match="approved O5 packet"):
         production.run_approved({})
+
+
+def test_setup_plan_is_source_backed_and_excludes_precreated_tenant_and_row_actions() -> None:
+    plan = lane.plan_compiler("a" * 32)
+    setup = setup_plan(plan)
+    assert len(setup["fixtures"]) == 10
+    assert len(setup["auth"]) == 9
+    assert setup["totalRequests"] == 19
+    assert all(item["service"] == "firestore" for item in setup["fixtures"])
+    assert all(item["route"] == "documents:commit" for item in setup["fixtures"])
+    assert [item["id"] for item in setup["auth"]] == [
+        "account/owner-a/signup",
+        "account/other-b/signup",
+        "account/anonymous-c/signup",
+        "account/tenant-d/signup",
+        "account/revoked-e/signup",
+        "account/disabled-f/signup",
+        "account/deleted-g/signup",
+        "account/owner-a/claim-update",
+        "account/owner-a/signin",
+    ]
+    assert not any(item["route"] in {"tenants:create", "tenants:delete"} for item in setup["auth"])
+    assert not any("post-signin" in item["id"] for item in setup["auth"])
 
 
 @pytest.mark.parametrize("field", ["approval", "manifest", "permission", "capabilityInputs"])

@@ -142,6 +142,26 @@ RECOVERY_CHILD_FIELDS = {
     "executionHost", "permissionDigest",
 }
 
+# Auth packet05 uses a deliberately separate recovery contract. It is not a
+# variant of the request-bytes 85-slot compiler: the child can perform one
+# lookup for the one planned custom UID, and it can never authorize deletion.
+AUTH_RECOVERY_CHILD_KIND = "auth-custom-uid-recovery-child-v1"
+AUTH_RECOVERY_OPERATION_CLASS = "auth-custom-uid-lookup-only-v1"
+AUTH_RECOVERY_ABSENCE_KIND = "auth-uid-absence-proof-v1"
+AUTH_RECOVERY_PARENT_EVIDENCE_KIND = "auth-parent-uncertain-create-v1"
+AUTH_RECOVERY_CAMPAIGN = "AUTH-CREDENTIAL-TOKENS-01"
+AUTH_RECOVERY_MAX_COST_MICROUSD = 50_000
+AUTH_RECOVERY_CHILD_FIELDS = {
+    "kind", "version", "campaignId", "manifestDigest", "nonceDigest", "gatePath",
+    "gateJob", "parentGateJob", "gatePlanDigest", "parentClaimDigest", "parentPlanDigest",
+    "parentGateDigest", "parentEvidenceDigest", "parentEventIndex", "parentRequestDigest",
+    "recoveryNonce", "resourceDigest", "ownedResources", "locks", "budget",
+    "durationSeconds", "generation", "ownerIdentity", "recoveryOwner", "operationClass",
+    "readCount", "inspectionCount", "absenceCount", "deleteCount", "expiresAt",
+    "executionHost", "permissionDigest", "sourceBindingDigest", "transportBindingDigest",
+    "o7BindingDigest", "o8BindingDigest",
+}
+
 
 ABANDON_KIND = "shared-abandoned-cleanup-close-v1"
 ABANDON_FIELDS = {"kind", "ticket", "gateDigest", "receiptPath", "receiptDigest"}
@@ -805,6 +825,267 @@ def _recovery_child_claim(value):
         raise ValueError("absolute recovery Gate path required")
 
 
+def _auth_binding(value, kind):
+    """Validate a lane-owned binding without persisting its payload."""
+    if not isinstance(value, dict) or value.get("kind") != kind:
+        raise ValueError("typed Auth recovery binding required")
+    supplied = value.get("digest", value.get("bindingDigest"))
+    if supplied is None:
+        return digest(value)
+    _hash(supplied)
+    return supplied
+
+
+def _auth_parent_evidence(value):
+    if not isinstance(value, dict) or set(value) != {
+        "kind", "gateDigest", "gatePlanDigest", "job", "eventIndex", "requestDigest",
+        "resource", "completed", "creationOutcome", "evidenceDigest",
+    } or value["kind"] != AUTH_RECOVERY_PARENT_EVIDENCE_KIND:
+        raise ValueError("typed Auth parent evidence required")
+    for key in ("gateDigest", "gatePlanDigest", "requestDigest", "evidenceDigest"):
+        _hash(value[key])
+    if (
+        not isinstance(value["job"], str)
+        or type(value["eventIndex"]) is not int
+        or value["eventIndex"] < 0
+        or not isinstance(value["resource"], str)
+        or value["completed"] is not False
+        or value["creationOutcome"] not in {"pending", "unknown"}
+    ):
+        raise ValueError("typed Auth parent evidence required")
+    expected = copy.deepcopy(value)
+    expected.pop("evidenceDigest")
+    if value["evidenceDigest"] != digest(expected):
+        raise ValueError("Auth parent evidence digest changed")
+
+
+def _auth_resource(value):
+    if not isinstance(value, str) or not re.fullmatch(
+        r"projects/[A-Za-z0-9_.:@+-]+/auth/accounts/custom-[0-9a-f]{32}", value
+    ):
+        raise ValueError("exact planned custom UID resource required")
+
+
+def _auth_recovery_child_claim(value):
+    if not isinstance(value, dict) or set(value) != AUTH_RECOVERY_CHILD_FIELDS:
+        raise ValueError("exact Auth recovery child claim required")
+    if value["kind"] != AUTH_RECOVERY_CHILD_KIND or type(value["version"]) is not int or value["version"] != 1:
+        raise ValueError("versioned Auth recovery child claim required")
+    if value["campaignId"] != AUTH_RECOVERY_CAMPAIGN:
+        raise ValueError("Auth recovery campaign family changed")
+    for key in (
+        "manifestDigest", "nonceDigest", "gatePlanDigest", "parentClaimDigest",
+        "parentPlanDigest", "parentGateDigest", "parentEvidenceDigest", "parentRequestDigest",
+        "resourceDigest", "permissionDigest", "sourceBindingDigest", "transportBindingDigest",
+        "o7BindingDigest", "o8BindingDigest",
+    ):
+        _hash(value[key])
+    _generation(value["generation"])
+    _budget(value["budget"])
+    _locks(value["locks"])
+    if value["operationClass"] != AUTH_RECOVERY_OPERATION_CLASS:
+        raise ValueError("Auth recovery operation class changed")
+    if value["budget"]["requests"] != 1 or value["budget"]["accounts"] != 1 or value["budget"]["resources"] != 1:
+        raise ValueError("one Auth recovery resource required")
+    if not 1 <= value["budget"]["costMicrousd"] <= AUTH_RECOVERY_MAX_COST_MICROUSD:
+        raise ValueError("Auth recovery cost exceeds packet ceiling")
+    if any(type(value[key]) is not int for key in ("readCount", "inspectionCount", "absenceCount", "deleteCount")) or (
+        value["readCount"] != 1
+        or value["inspectionCount"] != 1
+        or value["absenceCount"] != 1
+        or value["deleteCount"] != 0
+    ):
+        raise ValueError("Auth recovery lookup-only counts required")
+    if not isinstance(value["ownedResources"], list) or len(value["ownedResources"]) != 1:
+        raise ValueError("one Auth recovery resource required")
+    _auth_resource(value["ownedResources"][0])
+    if digest(value["ownedResources"]) != value["resourceDigest"]:
+        raise ValueError("Auth recovery resource digest changed")
+    if not isinstance(value["recoveryNonce"], str) or re.fullmatch(r"[0-9a-f]{32}", value["recoveryNonce"]) is None:
+        raise ValueError("fresh Auth recovery nonce required")
+    if value["nonceDigest"] != digest(value["recoveryNonce"]):
+        raise ValueError("Auth recovery nonce digest changed")
+    if type(value["parentEventIndex"]) is not int or value["parentEventIndex"] < 0:
+        raise ValueError("Auth parent event binding required")
+    for key in ("ownerIdentity", "recoveryOwner", "gateJob", "parentGateJob"):
+        if not _owner_value(value[key]):
+            raise ValueError("Auth recovery authority binding required")
+    if type(value["durationSeconds"]) is not int or not 1 <= value["durationSeconds"] <= 600:
+        raise ValueError("bounded Auth recovery duration required")
+    _number(value["expiresAt"])
+    if not isinstance(value["executionHost"], dict) or set(value["executionHost"]) != {"platform", "machine"}:
+        raise ValueError("exact Auth recovery execution host required")
+    if value["executionHost"] != {"platform": platform.system().lower(), "machine": platform.machine()}:
+        raise ValueError("Auth recovery execution host changed")
+    if not isinstance(value["gatePath"], str) or str(Path(value["gatePath"]).resolve()) != value["gatePath"]:
+        raise ValueError("absolute Auth recovery Gate path required")
+
+
+def _auth_recovery_plan(child_plan, child_claim):
+    if not isinstance(child_plan, dict) or child_plan.get("campaignId") != AUTH_RECOVERY_CAMPAIGN:
+        raise ValueError("Auth recovery Gate plan required")
+    if child_plan.get("nonce") != child_claim["recoveryNonce"] or digest(child_plan) != child_claim["gatePlanDigest"]:
+        raise ValueError("Auth recovery Gate plan binding changed")
+    for field in ("sourceBindingDigest", "transportBindingDigest", "o7BindingDigest", "o8BindingDigest"):
+        if child_plan.get(field) != child_claim[field]:
+            raise ValueError("Auth recovery Gate authority binding changed")
+    if (
+        child_plan.get("observationRequests") != 0
+        or child_plan.get("dataRequests") != 1
+        or child_plan.get("managementRequests") != 0
+        or child_plan.get("recoveryRequests") != 1
+        or child_plan.get("costMicrousd") != child_plan.get("requestCostMicrousd")
+        or not isinstance(child_plan.get("jobs"), dict)
+        or len(child_plan["jobs"]) != 1
+    ):
+        raise ValueError("Auth recovery Gate must contain one lookup slot")
+    job_name, job = next(iter(child_plan["jobs"].items()))
+    if job_name != child_claim["gateJob"] or not isinstance(job, dict):
+        raise ValueError("Auth recovery Gate job binding changed")
+    if job.get("observation") != [] or not isinstance(job.get("recovery"), list) or len(job["recovery"]) != 1:
+        raise ValueError("Auth recovery Gate must be lookup-only")
+    if job.get("resources") != child_claim["ownedResources"]:
+        raise ValueError("Auth recovery Gate resource binding changed")
+    operation = job["recovery"][0]
+    resource = child_claim["ownedResources"][0]
+    uid = resource.rsplit("/", 1)[1]
+    if (
+        operation.get("kind") != "auth-custom-uid-lookup"
+        or operation.get("service") != "auth"
+        or operation.get("method") != "POST"
+        or operation.get("resource") != resource
+        or operation.get("body") != {"localId": [uid]}
+        or not isinstance(operation.get("path"), str)
+        or not operation["path"].endswith("/accounts:lookup")
+        or "delete" in operation["path"].lower()
+        or operation.get("precondition") is not None
+    ):
+        raise ValueError("Auth recovery operation is not a UID lookup")
+    schedule = job.get("schedule")
+    if not isinstance(schedule, list) or len(schedule) != 1 or schedule != [{"phase": "recovery", "index": 0, "seconds": schedule[0].get("seconds")}]:
+        raise ValueError("Auth recovery Gate schedule changed")
+
+
+def _auth_parent_projection(gate, child_claim):
+    if not isinstance(gate, dict) or digest(gate.get("plan")) != child_claim["parentPlanDigest"]:
+        raise ValueError("Auth parent Gate plan changed")
+    job_name = child_claim["parentGateJob"]
+    plan_job = gate.get("plan", {}).get("jobs", {}).get(job_name)
+    job = gate.get("jobs", {}).get(job_name)
+    if not isinstance(plan_job, dict) or not isinstance(job, dict):
+        raise ValueError("Auth parent Gate job missing")  # noqa: TRY004 -- refusal contract
+    if gate.get("coordinatorInflight") or any(item.get("inflight") for item in gate.get("jobs", {}).values()):
+        raise ValueError("Auth parent Gate is still in flight")
+    operations = plan_job.get("observation", [])
+    candidates = [
+        (index, operation)
+        for index, operation in enumerate(operations)
+        if isinstance(operation, dict)
+        and operation.get("kind") == "custom-sign-in"
+        and operation.get("account") == "custom"
+        and isinstance(operation.get("resource"), str)
+    ]
+    if len(candidates) != 1:
+        raise ValueError("one uncertain Auth custom create is required")
+    index, operation = candidates[0]
+    if index != child_claim["parentEventIndex"] or operation.get("resource") != child_claim["ownedResources"][0]:
+        raise ValueError("Auth parent custom resource changed")
+    event = next(
+        (
+            item for item in gate.get("events", [])
+            if item.get("job") == job_name and item.get("phase") == "observation" and item.get("index") == index
+        ),
+        None,
+    )
+    if (
+        not isinstance(event, dict)
+        or event.get("completed") is not False
+        or event.get("creationOutcome") not in {"pending", "unknown"}
+        or type(event.get("ended")) not in (int, float)
+        or child_claim["parentRequestDigest"] != event["requestDigest"]
+    ):
+        raise ValueError("Auth parent custom create is not uncertain")
+    projection = {
+        "kind": AUTH_RECOVERY_PARENT_EVIDENCE_KIND,
+        "gateDigest": digest(gate),
+        "gatePlanDigest": digest(gate["plan"]),
+        "job": job_name,
+        "eventIndex": index,
+        "requestDigest": event["requestDigest"],
+        "resource": operation["resource"],
+        "completed": False,
+        "creationOutcome": event["creationOutcome"],
+    }
+    projection["evidenceDigest"] = digest(projection)
+    return projection
+
+
+def _auth_absence_proof(value, resource, operation):
+    if not isinstance(value, dict) or set(value) != {
+        "kind", "resource", "status", "bodyShape", "bodyDigest", "responseDigest",
+        "eventIndex", "requestDigest",
+    } or value["kind"] != AUTH_RECOVERY_ABSENCE_KIND:
+        raise ValueError("typed Auth absence proof required")
+    body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+    if (
+        value["resource"] != resource
+        or value["status"] != 200
+        or value["bodyShape"] != body
+        or value["bodyDigest"] != digest(body)
+        or value["responseDigest"] != digest(body)
+        or value["eventIndex"] != 0
+        or value["requestDigest"] != digest(operation)
+    ):
+        raise ValueError("typed Auth absence proof required")
+    _hash(value["bodyDigest"])
+    _hash(value["responseDigest"])
+
+
+def _auth_recovery_gate(gate, child_claim, proof):
+    _auth_recovery_plan(gate.get("plan"), child_claim)
+    if gate.get("planDigest") != child_claim["gatePlanDigest"] or gate.get("coordinatorInflight"):
+        raise ValueError("Auth recovery Gate binding changed")
+    job_name = child_claim["gateJob"]
+    job = gate.get("jobs", {}).get(job_name)
+    operation = gate["plan"]["jobs"][job_name]["recovery"][0]
+    if (
+        not isinstance(job, dict)
+        or job.get("inflight")
+        or job.get("complete") is not True
+        or job.get("recovery") != 1
+        or job.get("observation") != 0
+        or job.get("absent") != child_claim["ownedResources"]
+        or len(gate.get("events", [])) != 1
+    ):
+        raise ValueError("Auth recovery Gate terminal evidence incomplete")
+    event = gate["events"][0]
+    if (
+        event.get("job") != job_name
+        or event.get("phase") != "recovery"
+        or event.get("index") != 0
+        or event.get("requestDigest") != digest(operation)
+        or event.get("method") != "POST"
+        or event.get("service") != "auth"
+        or event.get("completed") is not True
+        or event.get("status") != 200
+        or event.get("responseDigest") != proof["responseDigest"]
+    ):
+        raise ValueError("Auth recovery Gate absence event changed")
+    if gate.get("skips") or job.get("creationProofs") not in (None, {}):
+        raise ValueError("Auth recovery Gate must remain lookup-only")
+    for pid in [gate.get("coordinatorPid"), job.get("pid")]:
+        if pid is None:
+            continue
+        if type(pid) is not int or pid <= 0:
+            raise ValueError("Auth recovery worker identity required")
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        raise ValueError("Auth recovery worker is still alive")
+    return operation
+
+
 def _validate_recovery_gate_plan(parent_plan, child_plan, child):
     if not isinstance(parent_plan, dict) or digest(parent_plan) != child["parentPlanDigest"]:
         raise ValueError("canonical parent plan binding changed")
@@ -1039,13 +1320,17 @@ class Ledger:
                     "closed-after-escalation",
                     "closed-after-abandon",
                     "closed-after-recovery-child",
+                    "closed-after-auth-recovery-child",
                 }:
                     raise ValueError("reservation binding changed")
                 children = row.get("recoveryChildren", [])
-                if children and row["state"] not in {"held", "closed-after-recovery-child"}:
+                if children and row["state"] not in {"held", "closed-after-recovery-child", "closed-after-auth-recovery-child"}:
                     raise ValueError("recovery child parent is not held")
                 for child in children:
-                    _recovery_child_claim(child["claim"])
+                    if child.get("claim", {}).get("kind") == AUTH_RECOVERY_CHILD_KIND:
+                        _auth_recovery_child_claim(child["claim"])
+                    else:
+                        _recovery_child_claim(child["claim"])
                     if child.get("parentClaimDigest") != row["claimDigest"] or child.get("claimDigest") != digest(child["claim"]):
                         raise ValueError("recovery child parent binding changed")
                     if child.get("state") not in {"allocated", "settled"} or child.get("envelopeDigest") not in state.get("recoveryEnvelopes", {}):
@@ -1054,6 +1339,8 @@ class Ledger:
                         if not isinstance(child.get("receiptDigest"), str) or not 1 <= len(child["receiptDigest"]) <= 256:
                             raise ValueError("recovery settlement receipt changed")
                         _hash(child.get("finalGateDigest"))
+                        if child.get("claim", {}).get("kind") == AUTH_RECOVERY_CHILD_KIND:
+                            _hash(child.get("absenceProofDigest"))
                     _number(child.get("deadline"))
                     if child["deadline"] > child["claim"]["expiresAt"] or child["deadline"] > state["recoveryEnvelopes"][child["envelopeDigest"]]["envelope"]["expiresAt"]:
                         raise ValueError("recovery child deadline changed")
@@ -1221,6 +1508,258 @@ class Ledger:
             state["reservations"][reservation] = row
             self._save(state)
             return ticket
+
+    def begin_auth_recovery_extension(
+        self,
+        parent_ticket,
+        child_claim,
+        new_envelope,
+        canonical_child_gate_plan,
+        *,
+        source_binding,
+        transport_binding,
+        o7_binding,
+        o8_binding,
+        parent_evidence,
+        now=None,
+    ):
+        """Persist the closed Auth packet05 lookup child before capability use.
+
+        The lane owns source, transport, O7 and O8 authority. This Ledger method
+        stores only their typed digests and performs no capability issuance or
+        network action. The sole child operation is an exact custom-UID lookup.
+        """
+        _auth_recovery_child_claim(child_claim)
+        _envelope(new_envelope)
+        _auth_parent_evidence(parent_evidence)
+        binding_digests = {
+            "sourceBindingDigest": _auth_binding(source_binding, "auth-source-binding-v1"),
+            "transportBindingDigest": _auth_binding(transport_binding, "auth-transport-binding-v1"),
+            "o7BindingDigest": _auth_binding(o7_binding, "auth-o7-binding-v1"),
+            "o8BindingDigest": _auth_binding(o8_binding, "auth-o8-binding-v1"),
+        }
+        if any(child_claim[key] != value for key, value in binding_digests.items()):
+            raise ValueError("Auth recovery authority binding changed")
+        if child_claim["manifestDigest"] != digest(canonical_child_gate_plan):
+            raise ValueError("Auth recovery manifest binding changed")
+        _auth_recovery_plan(canonical_child_gate_plan, child_claim)
+        if now is not None:
+            _number(now)
+        with self._locked() as state:
+            parent = self._row(state, parent_ticket)
+            if parent["state"] != "held" or parent.get("inflight") is True:
+                raise ValueError("held Auth parent without in-flight work required")
+            claim = parent["claim"]
+            if (
+                claim["campaignId"] != AUTH_RECOVERY_CAMPAIGN
+                or child_claim["parentClaimDigest"] != parent["claimDigest"]
+                or child_claim["parentPlanDigest"] != claim["gatePlanDigest"]
+                or child_claim["parentGateJob"] != _gate_job(claim)
+                or child_claim["parentGateDigest"] != parent_evidence["gateDigest"]
+                or child_claim["parentEvidenceDigest"] != parent_evidence["evidenceDigest"]
+                or child_claim["nonceDigest"] == claim["nonceDigest"]
+                or child_claim["gatePlanDigest"] == claim["gatePlanDigest"]
+                or child_claim["permissionDigest"] == state["envelopes"][parent["envelopeDigest"]]["envelope"]["permissionDigest"]
+                or child_claim["generation"] == parent.get("generation")
+                or child_claim["ownedResources"] != [parent_evidence["resource"]]
+            ):
+                raise ValueError("Auth recovery child is not bound to held parent")
+            if parent_evidence["gatePlanDigest"] != claim["gatePlanDigest"]:
+                raise ValueError("Auth parent evidence Gate binding changed")
+            parent_gate_path = claim["gatePath"]
+            parent_gate_job = _gate_job(claim)
+        parent_gate = Gate(parent_gate_path, parent_gate_job).snapshot()
+        projection = _auth_parent_projection(parent_gate, child_claim)
+        if projection != parent_evidence:
+            raise ValueError("Auth parent evidence differs from registered Gate")
+        for pid in [parent_gate.get("coordinatorPid")] + [job.get("pid") for job in parent_gate.get("jobs", {}).values()]:
+            if pid is None:
+                continue
+            if type(pid) is not int or pid <= 0:
+                raise ValueError("Auth parent worker identity required")
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            raise ValueError("Auth parent worker is still alive")
+        decision_now = time.time() if now is None else now
+        with self._locked() as state:
+            parent = self._row(state, parent_ticket)
+            claim = parent["claim"]
+            child_digest = digest(child_claim)
+            envelope_digest = digest(new_envelope)
+            existing = parent.get("recoveryChildren", [])
+            if existing:
+                if len(existing) == 1 and existing[0].get("claimDigest") == child_digest and existing[0].get("envelopeDigest") == envelope_digest:
+                    return copy.deepcopy(existing[0]["ticket"])
+                raise ValueError("one Auth recovery child only")
+            if Path(child_claim["gatePath"]).exists():
+                raise ValueError("fresh Auth recovery Gate required")
+            if any(
+                child_claim["nonceDigest"] == row.get("claim", {}).get("nonceDigest")
+                or any(
+                    child_claim["nonceDigest"] == value.get("claim", {}).get("nonceDigest")
+                    for value in row.get("recoveryChildren", [])
+                )
+                for row in state["reservations"].values()
+            ):
+                raise ValueError("Auth recovery nonce already reserved")
+            if any(entry["envelope"].get("permissionDigest") == new_envelope["permissionDigest"] for entry in state["envelopes"].values()) or any(entry["envelope"].get("permissionDigest") == new_envelope["permissionDigest"] for entry in state.get("recoveryEnvelopes", {}).values()):
+                raise ValueError("Auth recovery permission already spent")
+            if child_claim["durationSeconds"] < canonical_child_gate_plan["wallSeconds"]:
+                raise ValueError("Auth recovery duration below Gate wall")
+            if child_claim["expiresAt"] < decision_now + child_claim["durationSeconds"]:
+                raise ValueError("Auth recovery window is too short")
+            if (
+                new_envelope["permissionDigest"] != child_claim["permissionDigest"]
+                or new_envelope["limits"]["requests"] < 1
+                or new_envelope["limits"]["accounts"] < 1
+                or new_envelope["limits"]["resources"] < 1
+                or new_envelope["limits"]["costMicrousd"] < child_claim["budget"]["costMicrousd"]
+                or not new_envelope["issuedAt"] <= decision_now < new_envelope["expiresAt"]
+                or decision_now + child_claim["durationSeconds"] > new_envelope["expiresAt"]
+            ):
+                raise ValueError("Auth recovery envelope does not fund child")
+            if any(
+                not any(_ancestor(_scope(scope), _scope(lock)) and MODES[scope["mode"]] >= MODES[lock["mode"]] for scope in new_envelope["scopes"])
+                for lock in child_claim["locks"]
+            ):
+                raise ValueError("Auth recovery lock exceeds permission scope")
+            if any(
+                not any(_ancestor(_scope(parent_lock), _scope(child_lock)) and MODES[parent_lock["mode"]] >= MODES[child_lock["mode"]] for parent_lock in claim["locks"])
+                for child_lock in child_claim["locks"]
+            ):
+                raise ValueError("Auth recovery lock exceeds parent boundary")
+            if not any(
+                _ancestor(_scope(lock), _resource_scope(child_claim["ownedResources"][0])) and MODES[lock["mode"]] >= MODES["WRITE"]
+                for lock in child_claim["locks"]
+            ):
+                raise ValueError("Auth recovery resource lock missing")
+            task_budget_check(state, AUTH_RECOVERY_CAMPAIGN, child_claim["budget"]["costMicrousd"])
+            child_reservation = secrets.token_hex(32)
+            child_ticket = {
+                "ledgerPath": str(self.path), "ledgerIdentity": self.identity,
+                "reservation": child_reservation, "claimDigest": child_digest,
+                "envelopeDigest": envelope_digest, "parentReservation": parent_ticket["reservation"],
+            }
+            state.setdefault("recoveryEnvelopes", {})[envelope_digest] = {
+                "envelope": copy.deepcopy(new_envelope), "allocated": copy.deepcopy(child_claim["budget"]),
+            }
+            parent.setdefault("recoveryChildren", []).append({
+                "reservation": child_reservation, "ticket": child_ticket,
+                "claim": copy.deepcopy(child_claim), "claimDigest": child_digest,
+                "parentClaimDigest": parent["claimDigest"], "envelopeDigest": envelope_digest,
+                "state": "allocated", "deadline": decision_now + child_claim["durationSeconds"],
+            })
+            self._save(state)
+            return copy.deepcopy(child_ticket)
+
+    def bound_auth_recovery_claim(self, child_ticket):
+        """Inspect one persisted Auth child without granting any capability."""
+        if not isinstance(child_ticket, dict) or not isinstance(child_ticket.get("parentReservation"), str):
+            raise ValueError("exact Auth recovery child ticket required")  # noqa: TRY004 -- refusal contract
+        with self._locked() as state:
+            parent = state["reservations"].get(child_ticket["parentReservation"])
+            child = next((value for value in (parent or {}).get("recoveryChildren", []) if value.get("ticket") == child_ticket), None)
+            if parent is None or child is None or child_ticket.get("ledgerPath") != str(self.path) or child_ticket.get("ledgerIdentity") != self.identity:
+                raise ValueError("persisted Auth recovery child ticket required")
+            if child["claim"].get("kind") != AUTH_RECOVERY_CHILD_KIND:
+                raise ValueError("Auth recovery child kind changed")
+            return {"ticket": copy.deepcopy(child["ticket"]), "childClaim": copy.deepcopy(child["claim"]),
+                "newEnvelope": copy.deepcopy(state["recoveryEnvelopes"][child["envelopeDigest"]]["envelope"]),
+                "parentClaim": copy.deepcopy(parent["claim"]), "parentIdentity": {"reservation": child_ticket["parentReservation"], "claimDigest": parent["claimDigest"]},
+                "state": child["state"], "deadline": child["deadline"]}
+
+    def settle_auth_recovery_child(self, child_ticket, *, absence_proof, receipt_digest, now=None):
+        """Settle only a registered child Gate with a typed absent lookup."""
+        if now is not None:
+            _number(now)
+        _hash(receipt_digest)
+        bound = self.bound_auth_recovery_claim(child_ticket)
+        child_claim = bound["childClaim"]
+        gate = Gate(child_claim["gatePath"], child_claim["gateJob"]).snapshot()
+        operation = gate["plan"]["jobs"][child_claim["gateJob"]]["recovery"][0]
+        _auth_absence_proof(absence_proof, child_claim["ownedResources"][0], operation)
+        _auth_recovery_gate(gate, child_claim, absence_proof)
+        final_gate_digest = digest(gate)
+        proof_digest = digest(absence_proof)
+        with self._locked() as state:
+            parent = state["reservations"].get(child_ticket["parentReservation"])
+            child = next((value for value in (parent or {}).get("recoveryChildren", []) if value.get("ticket") == child_ticket), None)
+            if parent is None or child is None or child.get("claimDigest") != digest(child_claim):
+                raise ValueError("Auth recovery child changed during settlement")
+            if child.get("state") == "settled":
+                if child.get("receiptDigest") != receipt_digest or child.get("absenceProofDigest") != proof_digest or child.get("finalGateDigest") != final_gate_digest:
+                    raise ValueError("different Auth recovery settlement proof")
+                return copy.deepcopy(child["ticket"])
+            if child.get("state") != "allocated":
+                raise ValueError("Auth recovery child is not allocatable")
+            child["state"] = "settled"
+            child["receiptDigest"] = receipt_digest
+            child["absenceProofDigest"] = proof_digest
+            child["finalGateDigest"] = final_gate_digest
+            self._save(state)
+            return copy.deepcopy(child["ticket"])
+
+    def close_after_auth_recovery_child(self, parent_ticket, child_ticket, *, receipt_digest, now=None):
+        """Close the held Auth parent only after the child proved typed absence."""
+        if now is not None:
+            _number(now)
+        _hash(receipt_digest)
+        if not isinstance(parent_ticket, dict) or not isinstance(child_ticket, dict):
+            raise ValueError("exact Auth recovery close tickets required")  # noqa: TRY004 -- refusal contract
+        with self._locked() as state:
+            parent = self._row(state, parent_ticket)
+            child = next((value for value in parent.get("recoveryChildren", []) if value.get("ticket") == child_ticket), None)
+            if child is None or child_ticket.get("parentReservation") != parent_ticket.get("reservation"):
+                raise ValueError("Auth recovery child is not nested under parent")
+            if parent["state"] == "closed-after-auth-recovery-child":
+                if parent.get("authRecoveryCloseReceiptDigest") != receipt_digest or parent.get("authRecoveryCloseChildTicketDigest") != digest(child_ticket):
+                    raise ValueError("different Auth recovery close")
+                return copy.deepcopy(parent_ticket)
+            if parent["state"] != "held" or child.get("state") != "settled" or child.get("receiptDigest") != receipt_digest:
+                raise ValueError("settled absent Auth child and held parent required")
+            claim = copy.deepcopy(parent["claim"])
+            child_claim = copy.deepcopy(child["claim"])
+            final_gate_digest = child.get("finalGateDigest")
+            proof_digest = child.get("absenceProofDigest")
+        parent_gate = Gate(claim["gatePath"], _gate_job(claim)).snapshot()
+        evidence = _auth_parent_projection(parent_gate, child_claim)
+        if evidence["evidenceDigest"] != child_claim["parentEvidenceDigest"] or evidence["gateDigest"] != child_claim["parentGateDigest"]:
+            raise ValueError("Auth parent evidence changed during close")
+        for pid in [parent_gate.get("coordinatorPid")] + [job.get("pid") for job in parent_gate.get("jobs", {}).values()]:
+            if pid is None:
+                continue
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            raise ValueError("Auth parent worker is still alive")
+        child_gate = Gate(child_claim["gatePath"], child_claim["gateJob"]).snapshot()
+        operation = child_gate["plan"]["jobs"][child_claim["gateJob"]]["recovery"][0]
+        body = {"kind": "identitytoolkit#GetAccountInfoResponse", "users": []}
+        proof = {"kind": AUTH_RECOVERY_ABSENCE_KIND, "resource": child_claim["ownedResources"][0], "status": 200,
+            "bodyShape": body, "bodyDigest": digest(body), "responseDigest": digest(body), "eventIndex": 0,
+            "requestDigest": digest(operation)}
+        _auth_recovery_gate(child_gate, child_claim, proof)
+        if digest(child_gate) != final_gate_digest or digest(proof) != proof_digest:
+            raise ValueError("Auth recovery child terminal proof changed")
+        with self._locked() as state:
+            parent = self._row(state, parent_ticket)
+            child = next((value for value in parent.get("recoveryChildren", []) if value.get("ticket") == child_ticket), None)
+            if parent["state"] == "closed-after-auth-recovery-child":
+                if parent.get("authRecoveryCloseReceiptDigest") != receipt_digest or parent.get("authRecoveryCloseChildTicketDigest") != digest(child_ticket):
+                    raise ValueError("different Auth recovery close")
+                return copy.deepcopy(parent_ticket)
+            if parent["state"] != "held" or child is None or child.get("state") != "settled":
+                raise ValueError("Auth parent changed during close")
+            parent["state"] = "closed-after-auth-recovery-child"
+            parent["authRecoveryCloseReceiptDigest"] = receipt_digest
+            parent["authRecoveryCloseChildTicketDigest"] = digest(child_ticket)
+            parent["authRecoveryCloseChildClaimDigest"] = child["claimDigest"]
+            parent["finalGateDigest"] = final_gate_digest
+            self._save(state)
+            return copy.deepcopy(parent_ticket)
 
     def begin_recovery_extension(
         self,

@@ -27,16 +27,20 @@ use crate::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 /// message payload before protocol decode. It is an inclusive maximum, so a request of
 /// exactly this many bytes is accepted and one more byte is refused.
 ///
-/// The three Firestore transports each apply it at their own decode boundary:
+/// The normal REST, `WebChannel`, and gRPC paths each apply it at their own decode boundary:
 /// [`MAX_REST_BODY_BYTES`] on a REST body, [`crate::webchannel::MAX_FORM_BYTES`] on a
-/// `WebChannel` form body, and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. Every one is the
-/// same number, and `tests/request_bytes.rs` keeps them tied to the catalog entry.
+/// `WebChannel` form body, and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. The strict REST
+/// `:commit` route has a separate local raw allowance and then applies this decoded bound.
 pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 
 /// Maximum accepted REST request body (`FS-LIMIT-API-REQUEST-BYTES`). The body is read
 /// through a bounded stream, so an over-long request is refused without ever being held
 /// whole in memory.
 pub const MAX_REST_BODY_BYTES: usize = API_REQUEST_BYTES;
+
+/// Strict REST Commit requests have a larger finite wire allowance; decoded protobuf size is
+/// checked separately by the REST adapter.
+pub const MAX_STRICT_COMMIT_RAW_BYTES: usize = 16 * 1024 * 1024;
 
 /// Maximum accepted gRPC message (`FS-LIMIT-API-REQUEST-BYTES`), applied by tonic before the
 /// protobuf is decoded. This is the request direction only.
@@ -54,6 +58,8 @@ pub const MAX_GRPC_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
 /// Maximum Firestore REST requests that may retain bodies while waiting for synchronous work.
 pub const MAX_BLOCKING_REST_REQUESTS: usize = 64;
+const REST_PAYLOAD_UNITS: usize = 640;
+const REST_PAYLOAD_UNIT_BYTES: usize = 1024 * 1024;
 
 /// How long a request body may take to arrive once a permit has been taken for it.
 ///
@@ -106,6 +112,17 @@ fn api_request_too_large(enforce_limits: bool) -> RestResponse {
     }
 }
 
+fn strict_commit_raw_too_large() -> RestResponse {
+    RestResponse {
+        status: 413,
+        body: fireemu_adapter_support::api_error::google_rpc(
+            413,
+            "strict REST Commit body exceeds the local 16 MiB transport guard",
+            "INVALID_ARGUMENT",
+        ),
+    }
+}
+
 /// The refusal a Firestore request gets when the runtime already holds as many request
 /// bodies as it admits ([`MAX_BLOCKING_REST_REQUESTS`]).
 ///
@@ -129,6 +146,28 @@ type OutBody = UnsyncBoxBody<Bytes, BoxError>;
 fn rest_work_limiter() -> &'static Arc<tokio::sync::Semaphore> {
     static LIMITER: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
     LIMITER.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_BLOCKING_REST_REQUESTS)))
+}
+
+fn rest_payload_limiter() -> &'static Arc<tokio::sync::Semaphore> {
+    static LIMITER: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+    LIMITER.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(REST_PAYLOAD_UNITS)))
+}
+
+fn try_admit_rest_payload_from(
+    limiter: &Arc<tokio::sync::Semaphore>,
+    units: usize,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    let units = u32::try_from(units).expect("REST payload permit units fit in u32");
+    limiter.clone().try_acquire_many_owned(units).ok()
+}
+
+fn try_admit_rest_payload(units: usize) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    try_admit_rest_payload_from(rest_payload_limiter(), units)
+}
+
+struct RestEnvelope {
+    request: RestRequest,
+    _payload_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 fn try_admit_rest_work(
@@ -310,8 +349,13 @@ fn undeclared_body() -> RestResponse {
     }
 }
 
-fn body_rejection_response(rejection: BodyRejection, enforce_limits: bool) -> RestResponse {
+fn body_rejection_response(
+    rejection: BodyRejection,
+    enforce_limits: bool,
+    strict_commit: bool,
+) -> RestResponse {
     match rejection {
+        BodyRejection::TooLarge if strict_commit => strict_commit_raw_too_large(),
         BodyRejection::TooLarge => api_request_too_large(enforce_limits),
         BodyRejection::Deadline => body_read_deadline_exceeded(),
         BodyRejection::Undeclared => undeclared_body(),
@@ -348,17 +392,31 @@ async fn rest_call(
         .iter()
         .map(|v| v.to_str().unwrap_or_default().to_owned())
         .collect();
-    let bytes = match read_body(
-        req,
-        BodyAllowance::Declared(MAX_REST_BODY_BYTES),
-        body_deadline,
-    )
-    .await
-    {
+    let strict_commit =
+        state.gateway.enforce_limits && crate::rest::is_strict_commit_route(&method, &path);
+    let body_limit = if strict_commit {
+        MAX_STRICT_COMMIT_RAW_BYTES
+    } else {
+        MAX_REST_BODY_BYTES
+    };
+    // REST reads the request body for every method, including GET and an explicit
+    // Content-Length: 0. Charge the full allowance before the read so a body that was not
+    // advertised cannot bypass the retained-payload bound.
+    let payload_units = body_limit.div_ceil(REST_PAYLOAD_UNIT_BYTES);
+    let payload_permit = match try_admit_rest_payload(payload_units) {
+        Some(permit) => Some(permit),
+        None => {
+            return Ok(json_response(
+                &too_many_concurrent_requests(),
+                origin.as_deref(),
+            ));
+        }
+    };
+    let bytes = match read_body(req, BodyAllowance::Declared(body_limit), body_deadline).await {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return Ok(json_response(
-                &body_rejection_response(rejection, state.gateway.enforce_limits),
+                &body_rejection_response(rejection, state.gateway.enforce_limits, strict_commit),
                 origin.as_deref(),
             ));
         }
@@ -378,17 +436,21 @@ async fn rest_call(
             }
         }
     };
-    let request = RestRequest {
-        method,
-        path,
-        query,
-        authorization,
-        origin: origin.clone(),
-        // The privileged emulator routes need to know whether a browser issued the request;
-        // the set of fields that says so is the shared one.
-        browser_metadata,
-        app_check,
-        body,
+    drop(bytes);
+    let request = RestEnvelope {
+        request: RestRequest {
+            method,
+            path,
+            query,
+            authorization,
+            origin: origin.clone(),
+            // The privileged emulator routes need to know whether a browser issued the request;
+            // the set of fields that says so is the shared one.
+            browser_metadata,
+            app_check,
+            body,
+        },
+        _payload_permit: payload_permit,
     };
     // A write refused for lock contention does not wait on the blocking-pool thread (that
     // would hold one of the few slots for the whole wait); the slot is released, this task
@@ -402,7 +464,9 @@ async fn rest_call(
         let (attempt_state, attempt_request) = (Arc::clone(&state), Arc::clone(&request));
         let (response, contended) = tokio::task::spawn_blocking(move || {
             let _permit = attempt_permit;
-            crate::local::LocalBackend::without_waiting(|| attempt_state.handle(&attempt_request))
+            crate::local::LocalBackend::without_waiting(|| {
+                attempt_state.handle(&attempt_request.request)
+            })
         })
         .await
         .map_err(|error| std::io::Error::other(format!("Firestore REST task failed: {error}")))?;
@@ -485,7 +549,7 @@ where
         Ok(bytes) => bytes,
         Err(rejection) => {
             return json_response(
-                &body_rejection_response(rejection, enforce_limits),
+                &body_rejection_response(rejection, enforce_limits, false),
                 origin.as_deref(),
             );
         }
@@ -755,7 +819,11 @@ mod tests {
         drop(peer);
     }
 
-    use super::{api_request_too_large_message, normalize_transport_status, try_admit_rest_work};
+    use super::{
+        api_request_too_large_message, normalize_transport_status, try_admit_rest_payload_from,
+        try_admit_rest_work, RestEnvelope, MAX_REST_BODY_BYTES, MAX_STRICT_COMMIT_RAW_BYTES,
+        REST_PAYLOAD_UNIT_BYTES,
+    };
     use bytes::Bytes;
     use hyper::HeaderMap;
     use tonic::{Code, Status};
@@ -1362,5 +1430,65 @@ mod tests {
         release_tx.send(()).unwrap();
         task.await.unwrap();
         assert!(try_admit_rest_work(&limiter).is_some());
+    }
+
+    fn envelope_with_permit(permit: tokio::sync::OwnedSemaphorePermit) -> RestEnvelope {
+        RestEnvelope {
+            request: crate::rest::RestRequest {
+                method: "GET".to_owned(),
+                path: "/v1/projects/demo/databases/(default)/documents".to_owned(),
+                query: String::new(),
+                authorization: None,
+                origin: None,
+                browser_metadata: false,
+                app_check: Vec::new(),
+                body: serde_json::Value::Object(serde_json::Map::new()),
+            },
+            _payload_permit: Some(permit),
+        }
+    }
+
+    #[test]
+    fn rest_payload_admission_is_weighted_and_released_after_envelope_drop() {
+        let limiter = Arc::new(tokio::sync::Semaphore::new(2));
+        let permit = try_admit_rest_payload_from(&limiter, 2).expect("payload is admitted");
+        let envelope = std::sync::Arc::new(envelope_with_permit(permit));
+        assert!(try_admit_rest_payload_from(&limiter, 1).is_none());
+        drop(envelope);
+        assert_eq!(limiter.available_permits(), 2);
+        assert!(try_admit_rest_payload_from(&limiter, 1).is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelling_the_rest_waiter_keeps_payload_charge_until_worker_finishes() {
+        let limiter = Arc::new(tokio::sync::Semaphore::new(1));
+        let permit = try_admit_rest_payload_from(&limiter, 1).expect("payload is admitted");
+        let envelope = std::sync::Arc::new(envelope_with_permit(permit));
+        let worker_envelope = std::sync::Arc::clone(&envelope);
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let task = tokio::task::spawn_blocking(move || {
+            let _envelope = worker_envelope;
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        drop(envelope);
+        task.abort();
+        assert!(try_admit_rest_payload_from(&limiter, 1).is_none());
+        release_tx.send(()).unwrap();
+        task.await.unwrap();
+        assert!(try_admit_rest_payload_from(&limiter, 1).is_some());
+    }
+
+    #[test]
+    fn every_rest_body_read_is_charged_at_its_selected_wire_limit() {
+        assert_eq!(MAX_REST_BODY_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES), 10);
+        assert_eq!(
+            MAX_STRICT_COMMIT_RAW_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES),
+            16
+        );
     }
 }

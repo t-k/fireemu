@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use fireemu_proto_firestore::google::firestore::v1 as pb;
+use prost::Message;
 use serde_json::{json, Value};
 use tonic::{Code, Status};
 
@@ -1245,6 +1246,16 @@ impl RestState {
             transaction: transaction_bytes(body.get("transaction"))?,
             request_options: None,
         };
+        if self.gateway.enforce_limits && req.encoded_len() > 10 * 1024 * 1024 {
+            return Ok(RestResponse {
+                status: 400,
+                body: fireemu_adapter_support::api_error::google_rpc(
+                    400,
+                    "decoded Commit request exceeds the local 10 MiB protobuf guard",
+                    "INVALID_ARGUMENT",
+                ),
+            });
+        }
         let guard = self.write_guard(principal);
         let response = self.local.commit_with(&req, &*guard)?;
         Ok(ok(commit_to_json(&response)))
@@ -1599,6 +1610,32 @@ fn database_of(resource: &str) -> Result<String, Status> {
         })
 }
 
+/// Recognizes only the strict REST Commit resource route. The custom-method suffix is
+/// checked before decoding so encoded colons remain document data rather than routing syntax.
+pub(crate) fn is_strict_commit_route(method: &str, raw_path: &str) -> bool {
+    if method != "POST" {
+        return false;
+    }
+    let Some((raw_resource, action)) = raw_path.rsplit_once(':') else {
+        return false;
+    };
+    if action != "commit" {
+        return false;
+    }
+    let Ok(resource) = decode_path(raw_resource) else {
+        return false;
+    };
+    let Some(path) = resource.strip_prefix("/v1/") else {
+        return false;
+    };
+    let segments: Vec<&str> = path.split('/').collect();
+    matches!(
+        segments.as_slice(),
+        ["projects", project, "databases", database, "documents"]
+            if !project.is_empty() && !database.is_empty()
+    )
+}
+
 /// `transaction`, `readTime` and `newTransaction` form a oneof: at most one may be given.
 fn exclusive_selectors(body: &Value) -> Result<(), Status> {
     let given = ["transaction", "readTime", "newTransaction"]
@@ -1681,4 +1718,33 @@ fn precondition_from_params(
         return precondition_from_json(Some(&json!({"updateTime": t}))).map_err(|e| bad(&e));
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod strict_commit_route_tests {
+    use super::is_strict_commit_route;
+
+    #[test]
+    fn recognizes_only_the_documents_root_commit_route() {
+        assert!(is_strict_commit_route(
+            "POST",
+            "/v1/projects/demo/databases/(default)/documents:commit"
+        ));
+        assert!(!is_strict_commit_route(
+            "GET",
+            "/v1/projects/demo/databases/(default)/documents:commit"
+        ));
+        assert!(!is_strict_commit_route(
+            "POST",
+            "/v1/projects/demo/databases/(default)/documents/cases:commit"
+        ));
+        assert!(!is_strict_commit_route(
+            "POST",
+            "/v1/projects/demo/databases/(default)/documents%3Acommit"
+        ));
+        assert!(!is_strict_commit_route(
+            "POST",
+            "/v1/projects/demo/databases/(default)/documents:commit?x=1"
+        ));
+    }
 }

@@ -30,6 +30,11 @@ SCHEMA = "o2-mfa-campaign-v1"
 PROJECT = "fireemu-35fe6"
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
 SELECTOR_NAME = "pending-age-300-v1"
+SELECTED_REQUEST_CONTINGENCY = {
+    "resumeTokeninfoRequests": 3,
+    "abandonTokeninfoRequests": 1,
+    "restoreFallbackRequests": 4,
+}
 SELECTED_CASE_IDS = (
     "age-300s-start",
     "age-300s-finalize",
@@ -152,6 +157,7 @@ def selector_spec(selector: str | None) -> dict[str, Any] | None:
         "recoveryRequests": 4,
         "managementRequests": 6,
         "declaredRequests": 22,
+        "requestContingency": deepcopy(SELECTED_REQUEST_CONTINGENCY),
         "maxWallSeconds": 1200,
         "criticalPathSeconds": 301,
         "slackSeconds": 119,

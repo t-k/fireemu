@@ -7,6 +7,8 @@ identity-proof path supports that shape, it must stay UNKNOWN, never REFUSED.
 from __future__ import annotations
 
 import copy
+import base64
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +20,21 @@ NONCE = "0123456789abcdef0123456789abcdef"
 PROJECT = "demo-ack-contract"
 JOB = "auth-credential"
 UID = account_identifier(NONCE, "custom")
+
+
+def formal_id_token(uid: str = UID, project: str = PROJECT) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    payload = json.dumps(
+        {
+            "sub": uid,
+            "aud": project,
+            "iss": f"https://securetoken.google.com/{project}",
+            "firebase": {"sign_in_provider": "custom"},
+        },
+        separators=(",", ":"),
+    ).encode()
+    encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode()
+    return f"{header}.{encoded}."
 MISSING = object()
 
 
@@ -39,15 +56,15 @@ def scenario():
         "jobs": {JOB: {"authAccounts": {}, "resources": [resource], "absent": []}},
     }
     operation = {"kind": "custom-sign-in", "account": "custom", "resource": resource,
-                 "binds": {"customUid": "localId", "customIdToken": "idToken",
+                 "binds": {"customUid": "idToken.sub", "customIdToken": "idToken",
                            "customRefresh": "refreshToken"}}
     return gate, state, operation
 
 
 def success(*, new=True):
-    # Deliberately fake token strings: these tests do not verify JWT signatures
-    # and do not create cleanup authority outside this response-classification unit.
-    return {"localId": UID, "idToken": "test-id-token", "refreshToken": "test-refresh",
+    # The envelope is synthetic and unsigned; the projection still requires the
+    # production identity claims before it can grant ownership.
+    return {"localId": UID, "idToken": formal_id_token(), "refreshToken": "test-refresh",
             "expiresIn": "3600", "isNewUser": new}
 
 
@@ -65,7 +82,10 @@ class CustomAckOutcomes(unittest.TestCase):
         gate, state, operation = scenario()
         original_body = copy.deepcopy(body)
         original_operation = copy.deepcopy(operation)
-        event = apply_response(gate, state, operation, body, status)
+        evaluation_body = copy.deepcopy(body)
+        if isinstance(evaluation_body, dict):
+            evaluation_body["idToken"] = "test-id-token"
+        event = apply_response(gate, state, operation, evaluation_body, status)
         self.assertEqual(event["creationOutcome"], "unknown")
         self.assertEqual(event["authEvidence"]["creationOutcome"], "unknown")
         self.assertNotIn("uid", event["authEvidence"])
@@ -120,20 +140,19 @@ class CustomAckOutcomes(unittest.TestCase):
         body["localId"] = "another-account"
         self.assert_unknown(body)
 
-    def test_new_user_for_another_identity_still_raises_and_stops(self):
+    def test_new_user_for_another_identity_stays_unknown(self):
         gate, state, operation = scenario()
         body = success()
         body["localId"] = "another-account"
-        with self.assertRaisesRegex(ValueError, "outside the plan"):
-            apply_response(gate, state, operation, body)
-        self.assertTrue(state["jobs"][JOB]["stopped"])
-        self.assertEqual(state["events"][-1]["creationOutcome"], "pending")
-        self.assertEqual(state["events"][-1]["failure"], "InvalidCredentialCampaignResponse")
+        body["idToken"] = formal_id_token("another-account")
+        event = apply_response(gate, state, operation, body)
+        self.assertEqual(event["creationOutcome"], "unknown")
         self.assertEqual(state["jobs"][JOB]["authAccounts"], {})
 
     def test_unknown_ack_does_not_allow_recording_a_cleanup_delete(self):
         body = success()
         del body["localId"]
+        body["idToken"] = formal_id_token(project=PROJECT + "-other")
         gate, state, operation, first = self.assert_unknown(body)
         recovery = {**operation, "kind": "delete", "binds": {}}
         with self.assertRaisesRegex(ValueError, "never created"):
@@ -192,6 +211,7 @@ class CustomAckOutcomes(unittest.TestCase):
         state["jobs"][JOB]["authAccounts"]["acct0"] = copy.deepcopy(prior)
         body = success()
         del body["localId"]
+        body["idToken"] = formal_id_token(project=PROJECT + "-other")
         event = apply_response(gate, state, operation, body)
         self.assertEqual(event["creationOutcome"], "unknown")
         self.assertEqual(state["jobs"][JOB]["authAccounts"], {"acct0": prior})

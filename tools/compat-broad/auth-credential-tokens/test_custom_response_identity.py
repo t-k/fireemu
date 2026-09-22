@@ -279,6 +279,19 @@ class GateProjectionTests(unittest.TestCase):
         self.assertEqual(gate._observed, {})
         self.assertTrue(state["jobs"][JOB]["stopped"])
 
+    def test_legacy_or_empty_bindings_cannot_fallback_to_untrusted_local_id(self):
+        for binds in ({"customUid": "localId"}, {}):
+            gate, state, op = make_gate()
+            op["binds"] = binds
+            body = response(local_id=True, claims={"aud": "wrong-project"})
+            if binds:
+                with self.assertRaisesRegex(ValueError, "custom identity binding contract differs"):
+                    record(gate, state, op, body)
+            else:
+                event = record(gate, state, op, body)
+                self.assertEqual(event["creationOutcome"], "unknown")
+            self.assertEqual(state["jobs"][JOB]["authAccounts"], {})
+
     def test_duplicate_creation_is_still_refused(self):
         gate, state, op = make_gate()
         record(gate, state, op, response())
@@ -404,4 +417,3 @@ class RunnerTrackingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -360,7 +360,7 @@ def _refused(code: str) -> tuple[int, dict]:
     return 400, {"error": {"message": code}}
 
 
-def _service(*, cookie_subject: str | None = None) -> dict:
+def _service(*, cookie_subject: str | None = None, project: str = "demo-app") -> dict:
     """A minimal in-memory Identity service, enough to drive `run_cases` end to end.
 
     Every request the declared case list makes is answered here, so the shadow's own
@@ -377,15 +377,17 @@ def _service(*, cookie_subject: str | None = None) -> dict:
         # of them and not only the sessions that survived the run.
         "issuedSecrets": [],
     }
+    token_issuer = f"https://securetoken.google.com/{project}"
+    session_issuer = f"https://session.firebase.google.com/{project}"
 
     def issue(session: dict) -> str:
         account = state["accounts"][session["uid"]]
         claims = {**account["customAttributes"], **session["claims"]}
         state["issuedSecrets"].append(token := shadow.unsigned_jwt(
             {
-                "iss": TOKEN_ISSUER,
+                "iss": token_issuer,
                 "sub": session["uid"],
-                "aud": "demo-app",
+                "aud": project,
                 "firebase": {"sign_in_provider": "custom"},
                 "auth_time": session["authTime"],
                 "iat": state["now"],
@@ -435,7 +437,7 @@ def _service(*, cookie_subject: str | None = None) -> dict:
         return 200, {
             "sessionCookie": shadow.unsigned_jwt(
                 {
-                    "iss": SESSION_ISSUER,
+                    "iss": session_issuer,
                     "sub": cookie_subject or source["sub"],
                     "auth_time": source["auth_time"],
                     "iat": state["now"],

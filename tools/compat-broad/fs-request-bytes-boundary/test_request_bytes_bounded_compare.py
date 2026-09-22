@@ -72,6 +72,19 @@ def test_response_field_tampering_is_refused(local_copy: Path, tmp_path: Path) -
         path.write_bytes(original)
 
 
+def test_boolean_and_string_fields_are_not_equal(local_copy: Path, tmp_path: Path) -> None:
+    path = local_copy / "collection/response-018.body"
+    original = path.read_bytes()
+    value = json.loads(original)
+    value["fields"]["blob"]["stringValue"] = False
+    path.write_text(json.dumps(value), encoding="utf-8")
+    try:
+        with pytest.raises(ComparisonError):
+            _run(local_copy, tmp_path / "rejected.json")
+    finally:
+        path.write_bytes(original)
+
+
 def test_write_version_tampering_is_refused(local_copy: Path, tmp_path: Path) -> None:
     path = local_copy / "collection/response-017.body"
     original = path.read_bytes()
@@ -98,6 +111,19 @@ def test_final_absence_tampering_is_refused(local_copy: Path, tmp_path: Path) ->
         path.write_bytes(original)
 
 
+def test_final_absence_resource_tampering_is_refused(local_copy: Path, tmp_path: Path) -> None:
+    path = local_copy / "collection/row-037.json"
+    original = path.read_bytes()
+    value = json.loads(original)
+    value["resource"] = "foreign/resource"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    try:
+        with pytest.raises(ComparisonError):
+            _run(local_copy, tmp_path / "rejected.json")
+    finally:
+        path.write_bytes(original)
+
+
 def test_body_tampering_is_refused(local_copy: Path, tmp_path: Path) -> None:
     path = local_copy / "collection/request-under.body"
     original = path.read_bytes()
@@ -107,3 +133,11 @@ def test_body_tampering_is_refused(local_copy: Path, tmp_path: Path) -> None:
             _run(local_copy, tmp_path / "rejected.json")
     finally:
         path.write_bytes(original)
+
+
+def test_existing_output_is_never_overwritten(local_copy: Path, tmp_path: Path) -> None:
+    output = tmp_path / "existing.json"
+    output.write_text("retain", encoding="utf-8")
+    with pytest.raises(ComparisonError, match="overwrite"):
+        _run(local_copy, output)
+    assert output.read_text(encoding="utf-8") == "retain"

@@ -344,6 +344,7 @@ def comparator(
     local: dict[str, Any] | None = None,
     *,
     manifest_digest: str | None = None,
+    production_cleanup_gate: Any = None,
 ) -> dict[str, Any]:
     """Classify a production bundle against the published local shadow.
 
@@ -373,7 +374,13 @@ def comparator(
             "productionObserved": False,
             "promotionReady": False,
         }
-    return compare(production, reference, plan, manifest_digest=manifest_digest)
+    return compare(
+        production,
+        reference,
+        plan,
+        manifest_digest=manifest_digest,
+        production_cleanup_gate=production_cleanup_gate,
+    )
 
 
 def unwired(member: str):

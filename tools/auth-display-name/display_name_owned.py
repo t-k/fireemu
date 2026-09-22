@@ -32,6 +32,7 @@ from owned_runner import (
     copy_verified_artifact,
     control_get,
     local_addresses,
+    open_verified_artifact,
     sanitized_environment,
     socket_closed,
 )
@@ -121,7 +122,15 @@ def run(output):
     with tempfile.TemporaryDirectory(prefix="fireemu-display-name-owned-") as temporary:
         private = Path(temporary)
         artifact = private / "fireemu"
-        copy_verified_artifact(binary, artifact, build.get("_launchCopyFd"))
+        verified_fd = build.get("_launchCopyFd")
+        owns_fd = verified_fd is None
+        if owns_fd:
+            verified_fd = open_verified_artifact(binary)
+        try:
+            copy_verified_artifact(binary, artifact, verified_fd)
+        finally:
+            if owns_fd:
+                os.close(verified_fd)
         artifact.chmod(0o500)
         artifact_hash = sha(artifact.read_bytes())
         require(artifact_hash == build["artifactSha256"] and runtime == build["inputs"])

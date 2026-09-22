@@ -4,7 +4,7 @@
     "cleanupBound": true,
     "configurationComparison": "separate-evidence",
     "tool": "tools/auth-saved-reference-replay/replay.py",
-    "toolSha256": "a9333a0605dcc94f535d85267ae6f0b1cfed25d0c60724ae359c7cc31db31246",
+    "toolSha256": "a5e8d7e9cec4c28834ce0706f4d6cba986a751f2493420a22fabec1b334a2296",
     "typedScalarComparison": true
   },
   "corpora": [
@@ -64,31 +64,31 @@
     "productionCommunication": false,
     "singleArtifactRequired": true,
     "tool": "tools/auth-saved-reference-replay/run_replay.py",
-    "toolSha256": "c8067838bc9ae70ce0bcb6092f6e7798edaa58b778e30f8ce79dfbe743a16937",
+    "toolSha256": "9e770de4a64ae3a3d779cd496fb80f8a4bbcc968d8da2240a49dfea21a0d4892",
     "ownedRunnerHelper": {
       "tool": "tools/compat-inventory/owned_runner.py",
-      "toolSha256": "e5c58858a4196927e006486add673e92d9c18ebccc7df3947e7694d43bf21f9a"
+      "toolSha256": "589ee5a198f7417340ea4a6a633330c89a27ddfb16b55249574e450b12f0804c"
     },
     "ownedRunners": [
       {
         "id": "auth-basic-v2",
         "tool": "tools/auth-basic-v2/auth_v2_owned.py",
-        "toolSha256": "5b5c928f8d5a1e4af86668208068433e16dfa1b5b3453034f18ac430d0e73be8"
+        "toolSha256": "7b764ce5e373ccba1eeae88de175d3335c3ca0186cfa378b6c11e39f687563e8"
       },
       {
         "id": "auth-profile",
         "tool": "tools/auth-profile/profile_owned.py",
-        "toolSha256": "69945acfc7bc2e13262a8f8ad05a0ffe11329c48354c027c82fbcf49d52653d5"
+        "toolSha256": "9b3398dd224bcda80bad085e2dac673851e11856c039af49fec8e76cca069c29"
       },
       {
         "id": "auth-display-name",
         "tool": "tools/auth-display-name/display_name_owned.py",
-        "toolSha256": "27de3637e3276b8160304d8dc1547516c9749ec1a4d9cda911261b70d1a0113f"
+        "toolSha256": "a26f366718bbb46ea9188b03915209d6b97e9deedbf72375cf7317729ee1aa49"
       },
       {
         "id": "auth-password",
         "tool": "tools/auth-password/password_owned.py",
-        "toolSha256": "01b049c1685a56bf0c70692056440ff5d37842f76a77669c16796f8e60ce4af6"
+        "toolSha256": "e05d43d41289321d79e4e06d7fd5258e7528afeee126c6cbe48a433032b0b959"
       }
     ]
   },

@@ -247,13 +247,14 @@ def validate_local_report(name: str, report: dict[str, Any], source_commit: str,
     return {"localRecordedAt": report.get("recordedAt"), "localCases": report["cases"], "localCleanup": report["cleanup"], "localArtifactSha256": artifact["sha256"], "localBuildInputs": digest(build["inputs"]), "localProbeInputs": digest(report["probeInputs"]) if "probeInputs" in report else None, "localConfigurationSha256": configuration.get("sha256"), "localConfigurationFileSha256": configuration.get("fileSha256"), "runtimeSourceCommit": source_commit, "ownedProcess": {"exitCode": process["exitCode"], "stopped": process["stopped"], "listenersClosed": process["listenersClosed"]}}
 
 
-def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: Path) -> None:
+def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: Path) -> dict[str, int]:
+    """Validate evidence and return a caller-owned verified launch FD capability."""
     source_path = Path(build.get("sourcePath", ""))
     launch_path = Path(build.get("launchCopyPath", ""))
     os_module = __import__("os")
     stat_module = __import__("stat")
 
-    def read_stable(path: Path, role: str) -> tuple[str, tuple[int, int], Path]:
+    def read_stable(path: Path, role: str) -> tuple[str, tuple[int, int], Path, int]:
         require(path.is_absolute(), f"artifact binding {role} path is unavailable")
         require(".." not in path.parts, f"artifact binding {role} path contains '..'")
         try:
@@ -343,39 +344,59 @@ def validate_artifact_binding(build: dict[str, Any], artifact: str, local_root: 
                 bound_path = os_module.stat(path, follow_symlinks=False)
             except OSError as exc:
                 raise ValueError(f"artifact binding {role} path disappeared") from exc
-        finally:
+        except BaseException:
             os_module.close(bound_descriptor)
-        require(
-            stat_module.S_ISREG(bound.st_mode)
-            and bound.st_nlink == 1
-            and identity(bound) == identity(after),
-            f"artifact binding {role} path changed before use",
-        )
-        require(
-            stat_module.S_ISREG(bound_path.st_mode)
-            and bound_path.st_nlink == 1
-            and identity(bound_path) == identity(bound),
-            f"artifact binding {role} path changed before use",
-        )
+            raise
+        try:
+            require(
+                stat_module.S_ISREG(bound.st_mode)
+                and bound.st_nlink == 1
+                and identity(bound) == identity(after),
+                f"artifact binding {role} path changed before use",
+            )
+            require(
+                stat_module.S_ISREG(bound_path.st_mode)
+                and bound_path.st_nlink == 1
+                and identity(bound_path) == identity(bound),
+                f"artifact binding {role} path changed before use",
+            )
+        except BaseException:
+            os_module.close(bound_descriptor)
+            raise
         return (
             hashlib.sha256(b"".join(chunks)).hexdigest(),
             (after.st_dev, after.st_ino),
             canonical,
+            bound_descriptor,
         )
 
-    source_digest, source_identity, _source_canonical = read_stable(source_path, "source")
-    launch_digest, launch_identity, launch_canonical = read_stable(launch_path, "launch")
-    require(source_path != launch_path, "artifact binding source and launch paths must differ")
-    require(
-        source_identity != launch_identity,
-        "artifact binding source and launch paths must have independent inodes",
+    source_digest, source_identity, _source_canonical, source_descriptor = read_stable(
+        source_path, "source"
     )
-    require(source_digest == build.get("sourceSha256") == artifact, "artifact binding source hash mismatch")
-    require(launch_digest == build.get("launchCopySha256") == artifact, "artifact binding launch hash mismatch")
     try:
-        launch_canonical.relative_to(local_root.resolve())
-    except ValueError as exc:
-        raise ValueError("artifact binding launch path escapes private output") from exc
+        launch_digest, launch_identity, launch_canonical, launch_descriptor = read_stable(
+            launch_path, "launch"
+        )
+    except BaseException:
+        os_module.close(source_descriptor)
+        raise
+    try:
+        os_module.close(source_descriptor)
+        require(source_path != launch_path, "artifact binding source and launch paths must differ")
+        require(
+            source_identity != launch_identity,
+            "artifact binding source and launch paths must have independent inodes",
+        )
+        require(source_digest == build.get("sourceSha256") == artifact, "artifact binding source hash mismatch")
+        require(launch_digest == build.get("launchCopySha256") == artifact, "artifact binding launch hash mismatch")
+        try:
+            launch_canonical.relative_to(local_root.resolve())
+        except ValueError as exc:
+            raise ValueError("artifact binding launch path escapes private output") from exc
+    except BaseException:
+        os_module.close(launch_descriptor)
+        raise
+    return {"_launchFd": launch_descriptor}
 
 
 def compare(name: str, local: dict[str, Any], receipt: dict[str, Any], expected_source_commit: str | None = None, spec_entry: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -403,8 +424,11 @@ def validate_manifest(local_root: Path, source_commit: str, spec: dict[str, Any]
     require(build["exitCode"] == 0 and build.get("artifactSha256") == manifest.get("artifactSha256"), "run manifest build failed")
     artifact = manifest.get("artifactSha256")
     require(SHA256_RE.fullmatch(artifact or "") is not None, "run manifest artifact hash is malformed")
-    validate_artifact_binding(build, artifact, local_root)
-    require(typed_equal(build.get("inputs"), expected_runtime_inputs()), "run manifest source inputs do not match the current tree")
+    binding = validate_artifact_binding(build, artifact, local_root)
+    try:
+        require(typed_equal(build.get("inputs"), expected_runtime_inputs()), "run manifest source inputs do not match the current tree")
+    finally:
+        os.close(binding["_launchFd"])
     entries = manifest.get("corpora")
     require(isinstance(entries, dict) and set(entries) == set(CORPORA), "run manifest corpus binding changed")
     expected_configuration = None

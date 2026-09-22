@@ -243,6 +243,25 @@ def test_manifest_accepts_independent_shutil_copyfile_artifact(tmp_path):
     validate_artifact_binding(manifest["build"], manifest["artifactSha256"], bundle)
 
 
+def test_manifest_returns_fd_capability_for_path_replacement(tmp_path):
+    bundle, _source = write_complete_failed_bundle(tmp_path)
+    manifest = json.loads((bundle / "run-manifest.json").read_text())
+    source_path = Path(manifest["build"]["sourcePath"])
+    launch_path = Path(manifest["build"]["launchCopyPath"])
+    binding = validate_artifact_binding(
+        manifest["build"], manifest["artifactSha256"], bundle
+    )
+    verified_fd = binding.pop("_launchFd")
+    try:
+        preserved = launch_path.with_name("preserved-launch-fireemu")
+        launch_path.rename(preserved)
+        launch_path.hardlink_to(source_path)
+        assert replay.os.fstat(verified_fd).st_ino != source_path.stat().st_ino
+        assert replay.os.pread(verified_fd, 1024, 0) == source_path.read_bytes()
+    finally:
+        replay.os.close(verified_fd)
+
+
 def test_manifest_rejects_launch_replacement_during_descriptor_read(
     tmp_path, monkeypatch
 ):

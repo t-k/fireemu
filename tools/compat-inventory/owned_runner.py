@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import signal
 import socket
 import stat
@@ -186,13 +185,13 @@ def artifact_binding(
     inputs: dict,
     launch_fd: int | None = None,
 ) -> dict:
-    """Bind the built executable and the exact private copy supplied to a launcher."""
+    """Bind the built executable and return a caller-owned verified launch FD."""
     os_module = __import__("os")
     stat_module = __import__("stat")
 
     def read_stable(
         path: Path, role: str, supplied_fd: int | None = None
-    ) -> tuple[Path, str, tuple[int, int]]:
+    ) -> tuple[Path, str, tuple[int, int], int]:
         require(".." not in path.parts, f"artifact binding {role} path contains '..'")
         try:
             resolved = path.resolve(strict=True)
@@ -287,51 +286,99 @@ def artifact_binding(
                 bound_path = os_module.stat(path, follow_symlinks=False)
             except OSError as exc:
                 raise ValueError(f"artifact binding {role} path disappeared") from exc
-        finally:
+        except BaseException:
             os_module.close(bound_descriptor)
-        require(
-            stat_module.S_ISREG(bound.st_mode)
-            and bound.st_nlink == 1
-            and identity(bound) == identity(after),
-            f"artifact binding {role} path changed before use",
-        )
-        require(
-            stat_module.S_ISREG(bound_path.st_mode)
-            and bound_path.st_nlink == 1
-            and identity(bound_path) == identity(bound),
-            f"artifact binding {role} path changed before use",
-        )
-        return resolved, sha(b"".join(chunks)), (after.st_dev, after.st_ino)
+            raise
+        try:
+            require(
+                stat_module.S_ISREG(bound.st_mode)
+                and bound.st_nlink == 1
+                and identity(bound) == identity(after),
+                f"artifact binding {role} path changed before use",
+            )
+            require(
+                stat_module.S_ISREG(bound_path.st_mode)
+                and bound_path.st_nlink == 1
+                and identity(bound_path) == identity(bound),
+                f"artifact binding {role} path changed before use",
+            )
+        except BaseException:
+            os_module.close(bound_descriptor)
+            raise
+        return resolved, sha(b"".join(chunks)), (after.st_dev, after.st_ino), bound_descriptor
 
-    source, source_sha256, source_identity = read_stable(source, "source")
-    launch_copy, launch_copy_sha256, launch_identity = read_stable(
-        launch_copy, "launch", launch_fd
-    )
-    require(
-        source_identity != launch_identity,
-        "artifact binding source and launch paths must have independent inodes",
-    )
-    validate_build(build, source_sha256, inputs)
-    require(launch_copy_sha256 == source_sha256, "artifact launch copy mismatch")
+    source, source_sha256, source_identity, source_descriptor = read_stable(source, "source")
+    try:
+        launch_copy, launch_copy_sha256, launch_identity, verified_launch_fd = read_stable(
+            launch_copy, "launch", launch_fd
+        )
+    except BaseException:
+        os_module.close(source_descriptor)
+        raise
+    try:
+        os_module.close(source_descriptor)
+        require(
+            source_identity != launch_identity,
+            "artifact binding source and launch paths must have independent inodes",
+        )
+        validate_build(build, source_sha256, inputs)
+        require(launch_copy_sha256 == source_sha256, "artifact launch copy mismatch")
+    except BaseException:
+        os_module.close(verified_launch_fd)
+        raise
     return {
         "sourcePath": str(source),
         "sourceSha256": source_sha256,
         "launchCopyPath": str(launch_copy),
         "launchCopySha256": launch_copy_sha256,
+        "_launchFd": verified_launch_fd,
     }
 
 
+def open_verified_artifact(path: Path) -> int:
+    """Open a canonical, regular, independently linked artifact for FD use."""
+    require(".." not in path.parts, "artifact path contains '..'")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("artifact path is unavailable") from exc
+    require(
+        resolved == path.absolute(),
+        "artifact path must be canonical and must not use a symlink parent",
+    )
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ValueError("artifact path is unavailable or is a symlink") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        require(
+            stat.S_ISREG(metadata.st_mode),
+            "artifact descriptor is not a regular file",
+        )
+        require(
+            metadata.st_nlink == 1,
+            "artifact descriptor must name an independent file",
+        )
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
 def copy_verified_artifact(
-    source: Path, destination: Path, verified_fd: int | None = None
+    source: Path, destination: Path, verified_fd: int
 ) -> None:
-    """Copy from a previously verified descriptor when one is supplied."""
-    if verified_fd is None:
-        shutil.copyfile(source, destination)
-        return
+    """Copy only from a previously verified descriptor; ``source`` is provenance only."""
     before = os.fstat(verified_fd)
     require(
         stat.S_ISREG(before.st_mode),
         "verified artifact descriptor is not a regular file",
+    )
+    require(
+        before.st_nlink == 1,
+        "verified artifact descriptor must name an independent file",
     )
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     descriptor = os.open(destination, flags, 0o600)
@@ -555,7 +602,16 @@ def owned_child(directory: Path, nonce: str) -> None:
 def run_owned(binary: Path, output: Path, build: dict | None = None) -> dict:
     from aggregation_corpus import CONFIG, index_definition
 
-    binary = binary.resolve(strict=True)
+    require(".." not in binary.parts, "owned artifact path contains '..'")
+    try:
+        resolved_binary = binary.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("owned artifact path is unavailable") from exc
+    require(
+        resolved_binary == binary.absolute(),
+        "owned artifact path must be canonical and must not use a symlink parent",
+    )
+    binary = resolved_binary
     reject_mutation_artifact(binary)
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -571,8 +627,7 @@ def run_owned(binary: Path, output: Path, build: dict | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="fireemu-owned-artifact-") as temporary:
         private = Path(temporary)
         artifact = private / "fireemu"
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        verified_fd = os.open(binary, flags)
+        verified_fd = open_verified_artifact(binary)
         try:
             copy_verified_artifact(binary, artifact, verified_fd)
         finally:

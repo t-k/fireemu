@@ -54,23 +54,29 @@ def run(output_root: Path) -> dict:
     launch_path.chmod(0o500)
     flags = os_module.O_RDONLY | getattr(os_module, "O_CLOEXEC", 0) | getattr(os_module, "O_NOFOLLOW", 0)
     launch_fd = os_module.open(launch_path, flags)
+    verified_launch_fd = None
     try:
+        binding = artifact_binding(
+            source_path, launch_path, build, build["inputs"], launch_fd
+        )
+        verified_launch_fd = binding.pop("_launchFd")
         build = {
             **build,
-            **artifact_binding(
-                source_path, launch_path, build, build["inputs"], launch_fd
-            ),
+            **binding,
         }
     except BaseException:
+        if verified_launch_fd is not None:
+            os_module.close(verified_launch_fd)
         os_module.close(launch_fd)
         raise
+    os_module.close(launch_fd)
 
     try:
         source_commit = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
         ).strip()
     except BaseException:
-        os_module.close(launch_fd)
+        os_module.close(verified_launch_fd)
         raise
     try:
         reports = {}
@@ -78,7 +84,7 @@ def run(output_root: Path) -> dict:
             runner = load_runner(RUNNERS[name])
             runner.build_artifact = lambda: (
                 launch_path,
-                {**build, "_launchCopyFd": launch_fd},
+                {**build, "_launchCopyFd": verified_launch_fd},
             )
             report = runner.run(output_root / name)
             require(
@@ -108,7 +114,7 @@ def run(output_root: Path) -> dict:
                 f"{name}: fixed artifact or cleanup binding failed",
             )
     finally:
-        os_module.close(launch_fd)
+        os_module.close(verified_launch_fd)
     manifest = {
         "schemaVersion": 2,
         "kind": "auth-saved-reference-replay-local-v2",

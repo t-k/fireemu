@@ -156,12 +156,61 @@ def test_verified_fd_copy_survives_launch_path_replacement(tmp_path):
     launch.write_bytes(b"independent-launch")
     descriptor = os.open(launch, os.O_RDONLY)
     try:
-        launch.unlink()
+        preserved = launch.with_name("preserved-launch-fireemu")
+        launch.rename(preserved)
         launch.hardlink_to(source)
         copy_verified_artifact(launch, destination, descriptor)
     finally:
         os.close(descriptor)
     assert destination.read_bytes() == b"independent-launch"
+
+
+def test_artifact_binding_returns_fd_capability_for_path_replacement(
+    tmp_path,
+):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    destination = tmp_path / "destination-fireemu"
+    source.write_bytes(b"source")
+    launch.write_bytes(b"source")
+    receipt = {
+        "artifactSha256": __import__("hashlib").sha256(b"source").hexdigest(),
+        "inputs": {"crates/x.rs": "x"},
+        "command": [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "fireemu",
+            "--message-format=json",
+        ],
+        "exitCode": 0,
+    }
+    binding = artifact_binding(source, launch, receipt, receipt["inputs"])
+    verified_fd = binding.pop("_launchFd")
+    try:
+        preserved = launch.with_name("preserved-launch-fireemu")
+        launch.rename(preserved)
+        launch.hardlink_to(source)
+        copy_verified_artifact(launch, destination, verified_fd)
+        assert os.fstat(verified_fd).st_ino != source.stat().st_ino
+    finally:
+        os.close(verified_fd)
+    assert destination.read_bytes() == b"source"
+
+
+def test_verified_fd_copy_rejects_preexisting_hardlink(tmp_path):
+    source = tmp_path / "source-fireemu"
+    launch = tmp_path / "launch-fireemu"
+    destination = tmp_path / "destination-fireemu"
+    source.write_bytes(b"source")
+    launch.hardlink_to(source)
+    verified_fd = os.open(launch, os.O_RDONLY)
+    try:
+        with pytest.raises(ValueError, match="independent file"):
+            copy_verified_artifact(launch, destination, verified_fd)
+    finally:
+        os.close(verified_fd)
 
 
 def test_artifact_binding_rejects_launch_replacement_during_descriptor_read(

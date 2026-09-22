@@ -20,6 +20,29 @@ This lane prepares a bounded production observation of the `AUTH-CREDENTIAL` con
 | `credential_remote_transport.py`, `credential_https_worker.py` | The digest-pinned HTTPS worker and the capability-bound transport (identitytoolkit, securetoken, iamcredentials only). |
 | `credential_production.py` | One admitted execution: reserve, Gate, preflight, cases, cleanup, receipt, release. |
 | `credential_o8.py` | The launcher. Exit 0 released, 1 held with a receipt, 2 refused before any wire call. |
+| `credential_recovery_prepare.py` | The offline packet05 recovery preparer. It reads the held parent and Ledger, creates a fresh child nonce plus permission/O7/O8 documents, and never sends a request or mutates the Ledger. |
+
+## Offline packet05 recovery preparation
+
+The recovery preparer is the commander-facing entrypoint for an unresolved
+custom sign-in. It requires the held parent packet, source-bound provenance, and
+the canonical shared Ledger. The output directory must be new and outside the
+Ledger root; all files are mode `0600` in a mode `0700` directory.
+
+```sh
+uv run --python 3.12 python tools/compat-broad/auth-credential-tokens/credential_recovery_prepare.py \
+  --parent /private/auth-packet05/parent.json \
+  --provenance /private/auth-packet05/provenance.json \
+  --ledger /private/auth-packet05/ledger \
+  --output /private/auth-packet05/recovery-preparation
+```
+
+The command prints only a status line. It produces `plan.json`,
+`permission.json`, `o7.json`, `o8.json`, `parent-evidence.json`, and the same
+redacted bundle as `packet.json`. It does not call `begin_child`, consume O8,
+send production traffic, read credentials, or close the held parent. The
+preparer checks the requested nonce against the Ledger history and preserves
+the immutable parent `sourceCommit` and exact packet05 parent evidence.
 
 ## Signing dependence
 

@@ -382,8 +382,12 @@ def validate_authority_bundle(plan: Mapping[str, Any], *, permission: Mapping[st
             _refuse("fresh O7/O8 window does not cover child")
     if o7.get("status") != "approved" or o8.get("status") != "issued" or o8.get("oneShot") is not True or o8.get("consumed") is not False:
         _refuse("fresh O7/O8 status differs")
+    if not (plan["issuedAt"] <= permission["issuedAt"] <= o7["issuedAt"] <= o8["issuedAt"]):
+        _refuse("fresh authority issue ordering differs")
     current = time.time() if now is None else now
     _finite(current, "authority check time")
+    if current < min(permission["issuedAt"], o7["issuedAt"], o8["issuedAt"]):
+        _refuse("fresh O7/O8 authority is not active")
     if current >= min(permission["expiresAt"], o7["expiresAt"], o8["expiresAt"]):
         _refuse("fresh O7/O8 authority expired")
 

@@ -270,6 +270,18 @@ def test_a_hosted_run_reaches_every_case_cleans_up_and_finishes(tmp_path, monkey
     gate.finish()
     snapshot = gate.snapshot()
     plan = snapshot["plan"]
+    creation_events = [
+        event for event in snapshot["events"]
+        if event.get("authEvidence", {}).get("creationOutcome") == "created"
+    ]
+    assert creation_events and all(
+        event["authEvidence"].get("uid")
+        and event["authEvidence"].get("resource")
+        == gate_module.account_resource(
+            plan["project"], plan["nonce"], event["authEvidence"]["account"]
+        )
+        for event in creation_events
+    )
     assert account_evidence(snapshot) == {
         "createdAccounts": 3,
         "deletedAccounts": 3,

@@ -878,6 +878,11 @@ class CredentialGate(FrozenGate):
                         "resource": resource,
                         "createEvent": position,
                     }
+                    # This is the validated creation projection consumed by
+                    # shared Gate ownership checks. Never populate it for an
+                    # unknown or typed-refused response.
+                    evidence["uid"] = uid
+                    evidence["resource"] = resource
                     outcome = "created"
                 elif status == 200 and kind == "custom-sign-in":
                     # A 200 that did not create is a reused account, never owned here.

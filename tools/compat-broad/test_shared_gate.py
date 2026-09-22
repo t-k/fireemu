@@ -13,6 +13,8 @@ from shared_gate import (
     create,
     unconfirmed_creates,
 )
+from shared_gate import _auth_creation_ownership
+from broad_contract import digest
 
 
 def plan():
@@ -37,6 +39,61 @@ def plan():
             for k in ("a", "b")
         },
     }
+
+
+def _custom_ownership_state(*, uid="custom-uid", resource="projects/p/auth/accounts/custom"):
+    operation = {
+        "id": "custom-sign-in",
+        "kind": "custom-sign-in",
+        "service": "auth",
+        "account": "custom",
+        "method": "POST",
+        "path": "identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken",
+        "form": False,
+        "body": {"token": "$binding:customToken", "returnSecureToken": True},
+        "resource": resource,
+    }
+    delete = {"kind": "delete", "account": "custom", "resource": resource}
+    state = {
+        "plan": {"jobs": {"job": {"observation": [operation]}}, "nonce": "a" * 32},
+        "events": [{
+            "phase": "observation",
+            "index": 0,
+            "completed": True,
+            "creationOutcome": "created",
+            "requestDigest": digest(operation),
+            "authEvidence": {
+                "kind": "custom-sign-in",
+                "account": "custom",
+                "uid": uid,
+                "resource": resource,
+                "creationOutcome": "created",
+            },
+        }],
+        "jobs": {
+            "job": {"authAccounts": {"custom": {"uid": uid, "resource": resource, "createEvent": 0}}}
+        },
+    }
+    return state, state["jobs"]["job"], delete
+
+
+def test_custom_signin_new_user_creation_projection_authorizes_exact_cleanup():
+    state, job, delete = _custom_ownership_state()
+    assert _auth_creation_ownership(state, job, delete) is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda operation: operation.update({"path": "identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"}),
+        lambda operation: operation["body"].update({"returnSecureToken": False}),
+        lambda operation: operation.update({"account": "other"}),
+    ],
+)
+def test_custom_signin_ownership_rejects_route_body_and_account_tampering(mutation):
+    state, job, delete = _custom_ownership_state()
+    mutation(state["plan"]["jobs"]["job"]["observation"][0])
+    assert _auth_creation_ownership(state, job, delete) is False
 
 
 def compete(path, key, ready, start, results, crash=False):

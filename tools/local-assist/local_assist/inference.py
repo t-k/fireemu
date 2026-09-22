@@ -21,6 +21,10 @@ from local_assist.transport import Transport, TransportError
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 PROMPT_FORMAT_VERSION = 1
+# Validation changes invalidate prior cached "ok" outcomes even when prompt text
+# and model identity are unchanged. This is not the server/model version.
+RESPONSE_CONTRACT_VERSION = 2
+TERMINAL_FINISH_REASONS = ("stop", "length", "tool_calls", "function_call", "content_filter")
 # Rough cost of the JSON scaffolding and chat template around the content.
 TEMPLATE_RESERVE_TOKENS = 256
 CATEGORIES = (
@@ -323,12 +327,29 @@ def _extract_json(content: str) -> object:
 
 
 def _reply_content(reply: dict) -> Reply:
+    if not isinstance(reply, dict):
+        raise TransportError("server-error", "reply is not an object", inflight=True)
     choices = reply.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-        raise TransportError("server-error", "reply has no choices")
+        raise TransportError("server-error", "reply has no choices", inflight=True)
+    if len(choices) != 1:
+        raise TransportError("server-error", "reply has multiple choices", inflight=True)
     choice = choices[0]
+    finish = choice.get("finish_reason")
+    # HTTP completion and parseable JSON do not prove generation completion.
+    # Do not repair/resend or clear the in-flight marker on an unknown state.
+    if not isinstance(finish, str) or finish not in TERMINAL_FINISH_REASONS:
+        raise TransportError(
+            "server-error", "reply has no recognized terminal finish_reason", inflight=True
+        )
+    if "truncated" in reply and not isinstance(reply["truncated"], bool):
+        raise TransportError("server-error", "reply truncated is not boolean", inflight=True)
     message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
     content = message.get("content")
+    # Refused/tool-directed completions may have null content. They remain
+    # terminal failures below and never reach JSON finding validation.
+    if content is None and finish != "stop":
+        content = ""
     if not isinstance(content, str):
         raise TransportError("server-error", "reply content is not a string")
     usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
@@ -349,11 +370,6 @@ def _reply_content(reply: dict) -> Reply:
             if key in timings
         }
     model = reply.get("model") if isinstance(reply.get("model"), str) else None
-    finish = (
-        choice.get("finish_reason")
-        if isinstance(choice.get("finish_reason"), str)
-        else None
-    )
     return Reply(
         content=content,
         finish=finish,
@@ -467,6 +483,7 @@ def cache_key(
             for i in inputs
         ],
         "promptVersion": prompt.version,
+        "responseContractVersion": RESPONSE_CONTRACT_VERSION,
         "responseFormat": response_format,
         "runtime": runtime.to_dict(),
     }
@@ -558,11 +575,10 @@ def run_inference(
     for attempt in range(2):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return Outcome(
-                finishStatus="timeout",
-                reason="deadline exhausted before the request",
-                repairAttempted=attempt == 1,
-            )
+            outcome.finishStatus = "timeout"
+            outcome.reason = "deadline exhausted before the request"
+            outcome.repairAttempted = attempt == 1
+            return outcome
         try:
             raw = transport(
                 "POST",
@@ -572,12 +588,13 @@ def run_inference(
             )
             reply = _reply_content(raw)
         except TransportError as error:
-            return Outcome(
-                finishStatus=error.status,
-                reason=error.reason,
-                repairAttempted=attempt == 1,
-                serverStateUnknown=error.inflight,
-            )
+            # Keep usage/model metadata from an answered first attempt. A failed
+            # repair has no measured usage of its own; never invent zero usage.
+            outcome.finishStatus = error.status
+            outcome.reason = error.reason
+            outcome.repairAttempted = attempt == 1
+            outcome.serverStateUnknown = error.inflight
+            return outcome
         outcome.usage = _merge_usage(outcome.usage, reply.usage)
         outcome.modelReported = reply.model
         outcome.repairAttempted = attempt == 1
@@ -601,6 +618,10 @@ def run_inference(
         if reply.finish == "length":
             outcome.finishStatus = "schema-invalid"
             outcome.reason = "output truncated by max_tokens (finish_reason=length)"
+            return outcome
+        if reply.finish != "stop":
+            outcome.finishStatus = "schema-invalid"
+            outcome.reason = "completion did not finish normally (finish_reason is not stop)"
             return outcome
         content = reply.content
         try:

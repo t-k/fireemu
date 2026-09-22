@@ -10,12 +10,14 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -51,7 +53,7 @@ _RULESET_NAME = re.compile(
 _RELEASE_NAME = re.compile(
     r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$"
 )
-_WORKER_SHA256 = "5b964123a6d311bce8f86906a43b23349a4577c8571865f40aad67a8152e2bb1"
+_WORKER_SHA256 = "f186be6be77794c9692eb9627001debaea336eff88fd463bac70e8a10db4a403"
 _OWNED_CHILDREN: set[int] = set()
 
 
@@ -61,6 +63,66 @@ class WorkerExchangeError(ValueError):
     def __init__(self, reason: str, *, worker_reaped: bool) -> None:
         super().__init__(reason)
         self.worker_reaped = worker_reaped
+
+
+@dataclass(frozen=True)
+class SetupPublicReceipt:
+    """Serializable setup provenance with all credential material removed."""
+
+    item_id: str
+    http_status: int
+    endpoint: str
+    wire_sequence: int
+    local_id: str | None = None
+    name: str | None = None
+    fields_digest: str | None = None
+    update_time: str | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in {
+                "id": self.item_id,
+                "httpStatus": self.http_status,
+                "endpoint": self.endpoint,
+                "wireSequence": self.wire_sequence,
+                "localId": self.local_id,
+                "name": self.name,
+                "fieldsDigest": self.fields_digest,
+                "updateTime": self.update_time,
+            }.items()
+            if value is not None
+        }
+
+
+class SetupPrivateHandoff:
+    """Transient credential handoff; never use this object as a receipt."""
+
+    __slots__ = ("_id_token", "_expires_in")
+
+    def __init__(self, *, id_token: str | None = None, expires_in: str | None = None):
+        self._id_token = id_token
+        self._expires_in = expires_in
+
+    def __repr__(self) -> str:
+        return "SetupPrivateHandoff(<redacted>)"
+
+    def token_for_followup(self) -> str | None:
+        return self._id_token
+
+    def expires_in_for_followup(self) -> str | None:
+        return self._expires_in
+
+
+class SetupResult:
+    __slots__ = ("receipt", "private")
+
+    def __init__(self, *, receipt: SetupPublicReceipt, private: SetupPrivateHandoff):
+        self.receipt = receipt
+        self.private = private
+
+    def __repr__(self) -> str:
+        return f"SetupResult(receipt={self.receipt!r}, private=<redacted>)"
 
 
 def _reap_owned(
@@ -260,7 +322,7 @@ def _write_resource(document: Any, plan: dict[str, Any]) -> str:
         raise ValueError("write document required")  # noqa: TRY004
     for resource in plan.get("ownedResources", []):
         if isinstance(resource, str) and resource.endswith("/cases/" + document):
-            return "/v1/" + resource
+            return resource
     raise ValueError("write document outside owned namespace")
 
 
@@ -487,6 +549,170 @@ def _rules_route(
         executable = action == "release-get-executable"
         return {"service": "rules", "route": "release-get-executable" if executable else "release-get", "origin": RULES_ORIGIN, "path": "/v1/" + release + (":getExecutable" if executable else ""), "method": "GET", "headers": headers, "body": None}
     raise ValueError("rules lifecycle action refused")
+
+
+def _setup_item(plan: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+        raise ValueError("setup item shape refused")
+    if item["id"].startswith("fixture/"):
+        document = item["id"][len("fixture/") :]
+        entry = next((row for row in plan.get("fixtures", []) if row.get("document") == document), None)
+        if not isinstance(entry, dict):
+            raise ValueError("setup fixture binding refused")
+        expected = {
+            "id": item["id"],
+            "service": "firestore",
+            "route": "document-create",
+            "method": "PATCH",
+            "path": "/v1/" + entry["resource"] + "?currentDocument.exists=false",
+            "document": entry["document"],
+            "resource": entry["resource"],
+            "fields": entry["fields"],
+            "fieldsDigest": digest(entry["fields"]),
+            "precondition": {"exists": False},
+            "response": {
+                "name": entry["resource"],
+                "fieldsDigest": digest(entry["fields"]),
+                "updateTime": "response-bound",
+            },
+        }
+    elif item["id"].startswith("account/"):
+        parts = item["id"].split("/")
+        if len(parts) != 3 or parts[0] != "account":
+            raise ValueError("setup account binding refused")
+        ref, action = parts[1], parts[2]
+        account = next((row for row in plan.get("ownedAccounts", []) if row.get("ref") == ref), None)
+        if not isinstance(account, dict):
+            raise ValueError("setup account binding refused")
+        if action == "signup":
+            response = {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"}
+            route = "accounts:signUp"
+        elif action == "claim-update" and ref == "owner-a":
+            response = {"localId": "response-bound"}
+            route = "accounts:update"
+        elif action == "signin" and ref == "owner-a":
+            response = {"localId": "response-bound", "idToken": "response-bound", "expiresIn": "response-bound"}
+            route = "accounts:signInWithPassword"
+        else:
+            raise ValueError("setup account route refused")
+        expected = {
+            "id": item["id"],
+            "service": "identity",
+            "route": route,
+            "method": "POST",
+            "accountRef": ref,
+            "tenant": account.get("tenant"),
+            "response": response,
+        }
+        if action == "claim-update":
+            expected["claimsDigest"] = digest(account.get("claims", {}))
+    else:
+        raise ValueError("setup item id refused")
+    if item != expected:
+        raise ValueError("setup item differs from frozen plan")
+    return expected
+
+
+def prepare_setup_request(
+    plan: dict[str, Any],
+    item: dict[str, Any],
+    *,
+    credentials: dict[str, Any],
+    account_bindings: dict[str, Any] | None = None,
+    setup_secrets: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build one compiler-owned setup request; never creates admission authority."""
+    expected = _setup_item(plan, copy.deepcopy(item))
+    admin = _credential(credentials, "administrator", "administrator")
+    if expected["service"] == "firestore":
+        resource = expected["resource"]
+        return {
+            "service": "firestore",
+            "route": "document-create",
+            "origin": FIRESTORE_ORIGIN,
+            "path": expected["path"],
+            "method": "PATCH",
+            "headers": _headers(admin),
+            "body": {"name": resource, "fields": {key: _typed(value, account_bindings) for key, value in expected["fields"].items()}},
+        }
+    account = next(row for row in plan["ownedAccounts"] if row["ref"] == expected["accountRef"])
+    secret = (setup_secrets or {}).get(expected["accountRef"])
+    if not isinstance(secret, str) or not secret or any(char.isspace() for char in secret):
+        raise ValueError("transient setup secret required")
+    tenant = expected["tenant"]
+    headers = _headers(admin)
+    if expected["route"] == "accounts:signUp":
+        body = {"returnSecureToken": True}
+        if account.get("email") is not None:
+            body.update({"email": account["email"], "password": secret})
+        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signUp"), "method": "POST", "headers": headers, "body": body}
+    if expected["route"] == "accounts:update":
+        bound = (account_bindings or {}).get(expected["accountRef"], {})
+        if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
+            raise ValueError("owner UID binding required")
+        return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "update"), "method": "POST", "headers": headers, "body": {"localId": bound["uid"], "customAttributes": json.dumps(account["claims"], separators=(",", ":"))}}
+    bound = (account_bindings or {}).get(expected["accountRef"], {})
+    if not isinstance(bound, dict) or not isinstance(bound.get("uid"), str):
+        raise ValueError("owner UID binding required")
+    return {"service": "identity", "route": expected["route"], "origin": IDENTITY_ORIGIN, "path": _account_path(tenant, "signInWithPassword"), "method": "POST", "headers": headers, "body": {"email": account["email"], "password": secret, "returnSecureToken": True}}
+
+
+def adapt_setup_result(
+    item: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    endpoint: str,
+    sequence: int,
+    account_bindings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not isinstance(result, dict) or type(result.get("status")) is not int or not isinstance(result.get("body"), dict):
+        raise ValueError("setup response envelope refused")
+    status, body = result["status"], result["body"]
+    if not 200 <= status < 300:
+        raise ValueError("setup response status refused")
+    wire = {"id": item["id"], "httpStatus": status, "endpoint": endpoint, "wireSequence": sequence}
+    if item["service"] == "firestore":
+        if body.get("name") != item["response"]["name"] or not isinstance(body.get("updateTime"), str) or not isinstance(body.get("fields"), dict):
+            raise ValueError("setup Document response refused")
+        fields = {key: _decode_firestore_value(value) for key, value in body["fields"].items()}
+        expected_fields = {
+            key: _decode_firestore_value(_typed(value, account_bindings))
+            for key, value in item.get("fields", {}).items()
+        }
+        if digest(fields) != digest(expected_fields):
+            raise ValueError("setup fields digest refused")
+        return SetupResult(
+            receipt=SetupPublicReceipt(
+                item_id=wire["id"],
+                http_status=wire["httpStatus"],
+                endpoint=wire["endpoint"],
+                wire_sequence=wire["wireSequence"],
+                name=body["name"],
+                fields_digest=item["response"]["fieldsDigest"],
+                update_time=body["updateTime"],
+            ),
+            private=SetupPrivateHandoff(),
+        )
+    if not isinstance(body.get("localId"), str):
+        raise ValueError("setup localId response refused")
+    bound = (account_bindings or {}).get(item.get("accountRef"))
+    if isinstance(bound, dict) and isinstance(bound.get("uid"), str) and body["localId"] != bound["uid"]:
+        raise ValueError("setup localId binding refused")
+    expected = item["response"]
+    if item["route"] != "accounts:update" and (not isinstance(body.get("idToken"), str) or not isinstance(body.get("expiresIn"), str)):
+        raise ValueError("setup token response refused")
+    return SetupResult(
+        receipt=SetupPublicReceipt(
+            item_id=wire["id"],
+            http_status=wire["httpStatus"],
+            endpoint=wire["endpoint"],
+            wire_sequence=wire["wireSequence"],
+            local_id=body["localId"],
+        ),
+        private=SetupPrivateHandoff(
+            id_token=body.get("idToken"), expires_in=body.get("expiresIn")
+        ),
+    )
 
 
 def _account_path(tenant: str | None, suffix: str) -> str:
@@ -783,6 +1009,153 @@ def run_worker(
     )
 
 
+_MAX_FIRESTORE_VALUE_DEPTH = 32
+
+
+def _decode_firestore_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > _MAX_FIRESTORE_VALUE_DEPTH:
+        raise ValueError("Firestore value depth refused")
+    if not isinstance(value, dict) or len(value) != 1:
+        raise ValueError("Firestore value shape refused")
+    kind, payload = next(iter(value.items()))
+    if kind == "nullValue":
+        if payload is not None:
+            raise ValueError("Firestore null value refused")
+        return payload
+    if kind == "booleanValue":
+        if type(payload) is not bool:
+            raise ValueError("Firestore boolean value refused")
+        return payload
+    if kind == "stringValue":
+        if not isinstance(payload, str):
+            raise ValueError("Firestore string value refused")
+        return payload
+    if kind == "doubleValue":
+        if type(payload) not in {int, float} or not math.isfinite(payload):
+            raise ValueError("Firestore double value refused")
+        return payload
+    if kind == "integerValue":
+        if not isinstance(payload, str) or not re.fullmatch(r"-?(0|[1-9][0-9]*)", payload):
+            raise ValueError("Firestore integer value refused")
+        return int(payload)
+    if kind == "mapValue":
+        if not isinstance(payload, dict) or set(payload) - {"fields"}:
+            raise ValueError("Firestore map value refused")
+        fields = payload.get("fields", {})
+        if not isinstance(fields, dict):
+            raise ValueError("Firestore map value refused")
+        return {
+            key: _decode_firestore_value(nested, depth=depth + 1)
+            for key, nested in fields.items()
+        }
+    if kind == "arrayValue":
+        if not isinstance(payload, dict) or set(payload) - {"values"}:
+            raise ValueError("Firestore array value refused")
+        values = payload.get("values", [])
+        if not isinstance(values, list):
+            raise ValueError("Firestore array value refused")
+        return [_decode_firestore_value(nested, depth=depth + 1) for nested in values]
+    if kind in {"timestampValue", "bytesValue", "referenceValue"}:
+        if not isinstance(payload, str):
+            raise ValueError("Firestore scalar value refused")
+        return payload
+    if kind == "geoPointValue":
+        if not isinstance(payload, dict) or set(payload) != {"latitude", "longitude"}:
+            raise ValueError("Firestore geo point value refused")
+        latitude = payload["latitude"]
+        longitude = payload["longitude"]
+        if (
+            type(latitude) not in {int, float}
+            or type(longitude) not in {int, float}
+            or not math.isfinite(latitude)
+            or not math.isfinite(longitude)
+        ):
+            raise ValueError("Firestore geo point value refused")
+        return {"latitude": latitude, "longitude": longitude}
+    raise ValueError("Firestore value kind refused")
+
+
+def _adapt_firestore_result(
+    prepared: dict[str, Any], result: dict[str, Any], *, sequence: int, endpoint: str
+) -> dict[str, Any]:
+    status = result.get("status")
+    body = result.get("body")
+    if type(status) is not int or not isinstance(body, dict):
+        raise ValueError("REST response envelope refused")
+    wire = {"endpoint": endpoint, "wireSequence": sequence}
+    error = body.get("error")
+    if status < 200 or status >= 300:
+        if (
+            not isinstance(error, dict)
+            or type(error.get("code")) is not int
+            or error["code"] != status
+            or not isinstance(error.get("status"), str)
+        ):
+            raise ValueError("REST error response shape refused")
+        return {
+            "status": error["status"],
+            "code": error["code"],
+            "httpStatus": status,
+            "documentPresent": False,
+            "fields": {},
+            "complete": True,
+            **wire,
+        }
+    route = prepared["route"]
+    if route in {"observation-get", "document-recovery-get"}:
+        name = body.get("name")
+        fields = body.get("fields")
+        expected = prepared["path"][len("/v1/") :]
+        if not isinstance(name, str) or name != expected or not isinstance(fields, dict):
+            raise ValueError("REST Document response shape refused")
+        return {
+            "status": "OK",
+            "code": 0,
+            "httpStatus": status,
+            "documentPresent": True,
+            "fields": {key: _decode_firestore_value(value) for key, value in fields.items()},
+            "complete": True,
+            **wire,
+        }
+    if route == "observation-commit":
+        write_results = body.get("writeResults")
+        writes = prepared.get("body", {}).get("writes")
+        if (
+            not isinstance(write_results, list)
+            or not isinstance(writes, list)
+            or len(write_results) != len(writes)
+            or not isinstance(body.get("commitTime"), str)
+            or any(
+                not isinstance(result, dict)
+                or (
+                    not isinstance(result.get("updateTime"), str)
+                    and not isinstance(result.get("transformResults"), list)
+                )
+                for result in write_results
+            )
+        ):
+            raise ValueError("REST Commit response shape refused")
+        return {
+            "status": "OK",
+            "code": 0,
+            "httpStatus": status,
+            "documentPresent": True,
+            "fields": {},
+            "complete": True,
+            **wire,
+        }
+    if route == "document-recovery-delete" and body == {}:
+        return {
+            "status": "OK",
+            "code": 0,
+            "httpStatus": status,
+            "documentPresent": False,
+            "complete": True,
+            **wire,
+        }
+    raise ValueError("REST response route shape refused")
+
+
 def make_transport(
     plan: dict[str, Any],
     *,
@@ -874,11 +1247,12 @@ def make_transport(
             if fixture_origin is not None
             else prepared["origin"]
         )
-        return {
-            **result["body"],
-            "endpoint": urlsplit(origin).netloc,
-            "wireSequence": sequence,
-        }
+        endpoint = urlsplit(origin).netloc
+        if prepared["service"] == "firestore":
+            return _adapt_firestore_result(
+                prepared, result, sequence=sequence, endpoint=endpoint
+            )
+        return {**result["body"], "endpoint": endpoint, "wireSequence": sequence}
 
     return transmit
 

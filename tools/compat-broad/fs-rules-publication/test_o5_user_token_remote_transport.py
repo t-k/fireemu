@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import hashlib
 import http.server
 import json
@@ -34,6 +35,8 @@ PORTCTL = os.environ.get("FIREEMU_PORTCTL")
 class _FixtureHandler(http.server.BaseHTTPRequestHandler):
     requests: ClassVar[list[dict[str, object]]] = []
     issuance_body: ClassVar[dict[str, object] | None] = None
+    response_status: ClassVar[int | None] = None
+    response_body: ClassVar[dict[str, object] | None] = None
 
     def do_POST(self) -> None:
         size = int(self.headers.get("Content-Length", "0"))
@@ -46,19 +49,33 @@ class _FixtureHandler(http.server.BaseHTTPRequestHandler):
                 "headers": dict(self.headers),
             }
         )
-        if self.path.startswith("/v1/accounts:"):
+        if self.__class__.response_status is not None:
+            payload = json.dumps(self.__class__.response_body or {}).encode()
+            status = self.__class__.response_status
+        elif self.path.startswith("/v1/accounts:"):
             payload = json.dumps(self.__class__.issuance_body or {}).encode()
+            status = 200
+        elif self.path.endswith("/documents:commit"):
+            request_json = json.loads(body)
+            writes = request_json.get("writes", [])
+            payload = json.dumps(
+                {
+                    "writeResults": [
+                        {"updateTime": "2026-09-22T00:00:00Z"} for _ in writes
+                    ],
+                    "commitTime": "2026-09-22T00:00:00Z",
+                }
+            ).encode()
+            status = 200
         else:
             payload = json.dumps(
                 {
-                    "complete": True,
-                    "status": "OK",
-                    "releaseName": "fixture-release",
-                    "readbackKind": "release-get",
-                    "readbackDigest": "d" * 64,
+                    "name": self.path.removeprefix("/v1/"),
+                    "fields": {},
                 }
             ).encode()
-        self.send_response(200)
+            status = 200
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
@@ -112,6 +129,8 @@ def fixture_origin():
     finally:
         server.shutdown()
         server.server_close()
+        _FixtureHandler.response_status = None
+        _FixtureHandler.response_body = None
         if reservation is not None:
             subprocess.run(
                 [
@@ -146,6 +165,147 @@ def account_bindings(plan):
         }
         for account in plan["ownedAccounts"]
     }
+
+
+def minimal_wire_plan(method="get", operation="create"):
+    resource = (
+        "projects/fireemu-35fe6/databases/(default)/documents/"
+        "o5-user-token/naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cases/review-doc"
+    )
+    row = {
+        "caseId": "review-wire-contract",
+        "index": 0,
+        "ruleset": "A",
+        "method": method,
+        "resources": [resource],
+        "writes": (
+            [{"document": "review-doc", "operation": operation, "fields": {"count": 1}}]
+            if method == "commit"
+            else None
+        ),
+        "createdDocuments": ["review-doc"] if method == "commit" and operation == "create" else [],
+        "credential": {"ref": "unauthenticated", "class": "absent"},
+        "principal": None,
+    }
+    return {
+        "campaignId": remote.CAMPAIGN,
+        "project": "fireemu-35fe6",
+        "database": "(default)",
+        "nonce": "a" * 32,
+        "tenant": "tenant1234",
+        "ownedAccounts": [],
+        "ownedResources": [resource],
+        "observation": [row],
+        "rulesets": {"A": {"source": "rules-a"}, "B": {"source": "rules-b"}},
+    }, row, resource
+
+
+def _setup_fixture_plan():
+    resource = (
+        "projects/fireemu-35fe6/databases/(default)/documents/"
+        "o5-user-token/naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/cases/setup-doc"
+    )
+    return {
+        "fixtures": [{"document": "setup-doc", "resource": resource, "fields": {}}],
+        "ownedAccounts": [
+            {
+                "ref": "owner-a",
+                "email": "owner@example.test",
+                "tenant": None,
+                "claims": {"owner": "yes"},
+            }
+        ],
+    }
+
+
+def test_setup_fixture_uses_bound_patch_and_official_loopback_response(fixture_origin):
+    plan = _setup_fixture_plan()
+    item = {
+        "id": "fixture/setup-doc",
+        "service": "firestore",
+        "route": "document-create",
+        "method": "PATCH",
+        "path": "/v1/" + plan["fixtures"][0]["resource"] + "?currentDocument.exists=false",
+        "document": "setup-doc",
+        "resource": plan["fixtures"][0]["resource"],
+        "fields": {},
+        "fieldsDigest": digest({}),
+        "precondition": {"exists": False},
+        "response": {
+            "name": plan["fixtures"][0]["resource"],
+            "fieldsDigest": digest({}),
+            "updateTime": "response-bound",
+        },
+    }
+    request = remote.prepare_setup_request(
+        plan, item, credentials={"administrator": "fixture-admin"}
+    )
+    assert request["path"].startswith("/v1/projects/fireemu-35fe6/")
+    result = {
+        "status": 200,
+        "body": {
+            "name": plan["fixtures"][0]["resource"],
+            "fields": {},
+            "updateTime": "2026-09-22T00:00:00Z",
+        },
+    }
+    got = remote.adapt_setup_result(item, result, endpoint="loopback", sequence=1)
+    assert got.receipt.name == plan["fixtures"][0]["resource"]
+    assert got.receipt.fields_digest == digest({})
+    assert "fixture-admin" not in json.dumps(got.receipt.as_dict())
+
+
+def test_setup_claim_update_requires_route_specific_owner_binding():
+    plan = _setup_fixture_plan()
+    item = {
+        "id": "account/owner-a/claim-update",
+        "service": "identity",
+        "route": "accounts:update",
+        "method": "POST",
+        "accountRef": "owner-a",
+        "tenant": None,
+        "claimsDigest": digest(plan["ownedAccounts"][0]["claims"]),
+        "response": {"localId": "response-bound"},
+    }
+    with pytest.raises(ValueError, match="owner UID binding required"):
+        remote.prepare_setup_request(
+            plan,
+            item,
+            credentials={"administrator": "fixture-admin"},
+            setup_secrets={"owner-a": "secret"},
+        )
+
+
+def test_setup_auth_token_is_private_and_public_receipt_is_redacted():
+    item = {
+        "id": "account/owner-a/signin",
+        "service": "identity",
+        "route": "accounts:signInWithPassword",
+        "method": "POST",
+        "accountRef": "owner-a",
+        "tenant": None,
+        "response": {
+            "localId": "response-bound",
+            "idToken": "response-bound",
+            "expiresIn": "response-bound",
+        },
+    }
+    result = remote.adapt_setup_result(
+        item,
+        {"status": 200, "body": {"localId": "uid-owner-a", "idToken": "secret-token", "expiresIn": "3600"}},
+        endpoint="loopback",
+        sequence=1,
+        account_bindings={"owner-a": {"uid": "uid-owner-a"}},
+    )
+    assert result.receipt.local_id == "uid-owner-a"
+    assert result.private.token_for_followup() == "secret-token"
+    serialized = json.dumps(result.receipt.as_dict())
+    assert "secret-token" not in serialized
+    assert "password" not in serialized
+    assert "secret-token" not in repr(result)
+    assert "secret-token" not in repr(result.private)
+    with pytest.raises(TypeError):
+        dataclasses.asdict(result)
 
 
 def _fixture_token(uid, provider, tenant, claims):
@@ -350,8 +510,212 @@ def test_prepare_accepts_actual_multi_resource_commit_rows(plan):
             for write in prepared["body"]["writes"]
         )
         for write in prepared["body"]["writes"]:
-            assert write["update"]["name"].startswith("/v1/projects/fireemu-35fe6/")
+            assert write["update"]["name"].startswith("projects/fireemu-35fe6/")
+            assert not write["update"]["name"].startswith("/v1/")
             assert "currentDocument" in write
+
+
+def test_transport_adapts_official_document_response_through_real_worker(fixture_origin):
+    plan, operation, resource = minimal_wire_plan()
+    _FixtureHandler.response_status = 200
+    _FixtureHandler.response_body = {
+        "name": resource,
+        "fields": {"count": {"integerValue": "1"}},
+        "createTime": "2026-09-22T00:00:00Z",
+        "updateTime": "2026-09-22T00:00:00Z",
+    }
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=fixture_origin,
+        )
+        got = transmit(
+            operation,
+            binding=source,
+            binding_digest=source_digest,
+            capability=capability,
+        )
+    finally:
+        _ACTIVE.discard(capability)
+    assert got == {
+        "status": "OK",
+        "code": 0,
+        "httpStatus": 200,
+        "documentPresent": True,
+        "fields": {"count": 1},
+        "complete": True,
+        "endpoint": fixture_origin.removeprefix("http://"),
+        "wireSequence": 1,
+    }
+
+
+def test_transport_rejects_forged_normalized_firestore_document_response(fixture_origin):
+    plan, operation, _resource = minimal_wire_plan()
+    _FixtureHandler.response_status = 200
+    _FixtureHandler.response_body = {"complete": True, "status": "OK"}
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=fixture_origin,
+        )
+        with pytest.raises(ValueError, match="REST Document response shape refused"):
+            transmit(
+                operation,
+                binding=source,
+                binding_digest=source_digest,
+                capability=capability,
+            )
+    finally:
+        _ACTIVE.discard(capability)
+
+
+def test_transport_rejects_malformed_firestore_typed_value(fixture_origin):
+    plan, operation, resource = minimal_wire_plan()
+    _FixtureHandler.response_status = 200
+    _FixtureHandler.response_body = {
+        "name": resource,
+        "fields": {"count": {"stringValue": {"not": "a string"}}},
+    }
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=fixture_origin,
+        )
+        with pytest.raises(ValueError, match="Firestore string value refused"):
+            transmit(
+                operation,
+                binding=source,
+                binding_digest=source_digest,
+                capability=capability,
+            )
+    finally:
+        _ACTIVE.discard(capability)
+
+
+def test_transport_adapts_official_commit_response_through_real_worker(fixture_origin):
+    plan, operation, _resource = minimal_wire_plan("commit", "create")
+    _FixtureHandler.response_status = 200
+    _FixtureHandler.response_body = {
+        "writeResults": [{"updateTime": "2026-09-22T00:00:00Z"}],
+        "commitTime": "2026-09-22T00:00:00Z",
+    }
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=fixture_origin,
+        )
+        got = transmit(
+            operation,
+            binding=source,
+            binding_digest=source_digest,
+            capability=capability,
+        )
+    finally:
+        _ACTIVE.discard(capability)
+    assert got["status"] == "OK"
+    assert got["code"] == 0
+    assert got["httpStatus"] == 200
+    assert got["documentPresent"] is True
+    assert got["complete"] is True
+    assert got["endpoint"] == fixture_origin.removeprefix("http://")
+    assert got["wireSequence"] == 1
+
+
+def test_transport_adapts_official_permission_error_through_real_worker(fixture_origin):
+    plan, operation, _resource = minimal_wire_plan()
+    _FixtureHandler.response_status = 403
+    _FixtureHandler.response_body = {
+        "error": {
+            "code": 403,
+            "status": "PERMISSION_DENIED",
+            "message": "Missing or insufficient permissions.",
+        }
+    }
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=fixture_origin,
+        )
+        got = transmit(
+            operation,
+            binding=source,
+            binding_digest=source_digest,
+            capability=capability,
+        )
+    finally:
+        _ACTIVE.discard(capability)
+    assert got == {
+        "status": "PERMISSION_DENIED",
+        "code": 403,
+        "httpStatus": 403,
+        "documentPresent": False,
+        "fields": {},
+        "complete": True,
+        "endpoint": fixture_origin.removeprefix("http://"),
+        "wireSequence": 1,
+    }
+
+
+def test_transport_rejects_incomplete_official_commit_response(fixture_origin):
+    plan, operation, _resource = minimal_wire_plan("commit", "create")
+    _FixtureHandler.response_status = 200
+    _FixtureHandler.response_body = {"writeResults": [], "commitTime": "2026-09-22T00:00:00Z"}
+    source, source_digest = remote.worker_binding()
+    frozen = {"plan": plan, "planDigest": digest(plan)}
+    frozen["inputsDigest"] = digest(frozen)
+    capability = _fixture_capability(plan, source, source_digest, frozen)
+    try:
+        transmit = remote.make_transport(
+            plan,
+            credentials={"unauthenticated": ""},
+            frozen_inputs=frozen,
+            identity_proofs={},
+            fixture_origin=fixture_origin,
+        )
+        with pytest.raises(ValueError, match="REST Commit response shape refused"):
+            transmit(
+                operation,
+                binding=source,
+                binding_digest=source_digest,
+                capability=capability,
+            )
+    finally:
+        _ACTIVE.discard(capability)
 
 
 def test_prepare_rejects_unknown_pseudo_write_and_mismatched_cleanup_precondition(plan):
@@ -494,7 +858,8 @@ def test_worker_uses_fixture_origin_and_never_redirects(fixture_origin):
         fixture_origin=fixture_origin,
     )
     assert result["status"] == 200
-    assert result["body"]["complete"] is True
+    assert result["body"]["writeResults"] == []
+    assert result["body"]["commitTime"] == "2026-09-22T00:00:00Z"
     assert (
         _FixtureHandler.requests[0]["path"]
         == "/v1/projects/fireemu-35fe6/databases/(default)/documents:commit"

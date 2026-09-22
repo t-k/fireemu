@@ -52,7 +52,7 @@ _RULESET_NAME = re.compile(
 _RELEASE_NAME = re.compile(
     r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$"
 )
-_WORKER_SHA256 = "5b964123a6d311bce8f86906a43b23349a4577c8571865f40aad67a8152e2bb1"
+_WORKER_SHA256 = "f186be6be77794c9692eb9627001debaea336eff88fd463bac70e8a10db4a403"
 _OWNED_CHILDREN: set[int] = set()
 
 
@@ -627,8 +627,6 @@ def adapt_setup_result(
     if isinstance(bound, dict) and isinstance(bound.get("uid"), str) and body["localId"] != bound["uid"]:
         raise ValueError("setup localId binding refused")
     expected = item["response"]
-    if item["route"] == "accounts:update" and set(body) - {"localId"}:
-        raise ValueError("setup claims response refused")
     if item["route"] != "accounts:update" and (not isinstance(body.get("idToken"), str) or not isinstance(body.get("expiresIn"), str)):
         raise ValueError("setup token response refused")
     return {**wire, "localId": body["localId"], "idToken": body.get("idToken"), "expiresIn": body.get("expiresIn")}

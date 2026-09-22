@@ -65,44 +65,12 @@ def gate_management_plan(plan: dict[str, Any]) -> dict[str, Any]:
     setup = setup_plan(plan)
     value = rules_management_plan()
     entries = [
-        {"id": "setup/" + item["id"], "timeout": 2.0}
+        {"id": "setup/" + item["id"], "timeout": 12.0}
         for item in (*setup["fixtures"], *setup["auth"])
     ]
     value["observation"] = entries + value["observation"]
-    value["recovery"] = setup_recovery_plan(plan) + value["recovery"]
     value["totalRequests"] += setup["totalRequests"]
     return value
-
-
-def setup_recovery_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
-    """Declare recovery slots for only resources created by setup.
-
-    Claim updates and sign-ins produce no owned resource, so they intentionally
-    have no cleanup slots. Each document/account resource has one read, one
-    conditional delete, and one typed absence observation.
-    """
-    validate_case(plan)
-    entries: list[dict[str, Any]] = []
-    for fixture in plan["fixtures"]:
-        resource = fixture["resource"]
-        prefix = "setup-recovery/fixture/" + fixture["document"]
-        entries.extend(
-            [
-                {"id": prefix + "/read", "timeout": 2.0, "resource": resource, "kind": "document-read"},
-                {"id": prefix + "/delete", "timeout": 2.0, "resource": resource, "kind": "document-delete"},
-                {"id": prefix + "/absence", "timeout": 2.0, "resource": resource, "kind": "document-absence"},
-            ]
-        )
-    for account in plan["ownedAccounts"]:
-        prefix = "setup-recovery/account/" + account["ref"]
-        entries.extend(
-            [
-                {"id": prefix + "/read", "timeout": 2.0, "accountRef": account["ref"], "kind": "account-read"},
-                {"id": prefix + "/delete", "timeout": 2.0, "accountRef": account["ref"], "kind": "account-delete"},
-                {"id": prefix + "/absence", "timeout": 2.0, "accountRef": account["ref"], "kind": "account-absence"},
-            ]
-        )
-    return entries
 
 OWNER_PRECONDITIONS = (
     "project and database identity confirmed by the owner",

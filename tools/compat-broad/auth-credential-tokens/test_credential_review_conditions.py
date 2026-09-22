@@ -47,6 +47,8 @@ FULL_RUN_REQUESTS = 42
 from credential_collector import (
     BudgetExceeded,
     build_receipt,
+    claim_set,
+    claim_shape,
     cleanup_report,
     enter_recovery,
     mark_deleted,
@@ -375,26 +377,44 @@ def test_review_cookie_conditions_publish_no_subject() -> None:
 # --- the six boundary conditions ------------------------------------------------
 
 
+def _synthetic_claim_projection() -> dict:
+    token = shadow.unsigned_jwt({
+        "aud": "fixture-claims",
+        "sub": "fixture-user",
+        "auth_time": 100,
+        "iat": 102,
+        "exp": 3702,
+        "firebase": {"identities": {}, "sign_in_provider": "password"},
+    })
+    return claim_set(claim_shape(token))
+
+
+def _review_row(case: dict) -> dict:
+    assertions = {name: True for name in case["expectedLocal"]["assertions"]}
+    row = {
+        "caseId": case["id"],
+        "status": case["expectedLocal"]["status"],
+        "errorCode": case["expectedLocal"]["errorCode"],
+        "assertions": assertions,
+        "trustRoot": "unsigned-emulator",
+        **control_members(case),
+    }
+    if (
+        assertions.get("idTokenReturned") is True
+        or assertions.get("sessionCookieReturned") is True
+        or case["group"] == "claim-precedence"
+    ):
+        row["claims"] = _synthetic_claim_projection()
+    if case["id"] == SAME_SECOND_CASE_ID:
+        row.update(
+            boundaryPinned=True,
+            boundarySeconds={"authTime": 100, "validSince": 100},
+        )
+    return row
+
+
 def _review_rows() -> list[dict]:
-    return [
-        {
-            "caseId": case["id"],
-            "status": case["expectedLocal"]["status"],
-            "errorCode": case["expectedLocal"]["errorCode"],
-            "assertions": {name: True for name in case["expectedLocal"]["assertions"]},
-            "trustRoot": "unsigned-emulator",
-            **control_members(case),
-            **(
-                {
-                    "boundaryPinned": True,
-                    "boundarySeconds": {"authTime": 100, "validSince": 100},
-                }
-                if case["id"] == SAME_SECOND_CASE_ID
-                else {}
-            ),
-        }
-        for case in observation_cases()
-    ]
+    return [_review_row(case) for case in observation_cases()]
 
 
 def _cleaned_tracker() -> dict:

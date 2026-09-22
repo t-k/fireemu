@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import sys
@@ -21,6 +22,8 @@ from credential_cases import (
 )
 from credential_collector import (
     build_receipt,
+    claim_set,
+    claim_shape,
     mark_deleted,
     new_budget,
     new_tracker,
@@ -42,6 +45,15 @@ def _row(case: dict) -> dict:
         "trustRoot": "unsigned-emulator",
         **control_members(case),
     }
+    if (row["assertions"].get("idTokenReturned") is True
+            or row["assertions"].get("sessionCookieReturned") is True
+            or case["group"] == "claim-precedence"):
+        # Synthetic token, passed through the actual collector projection. No
+        # signature verification or production observation is claimed by a fixture.
+        def segment(value):
+            return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
+        token = segment({"alg": "none"}) + "." + segment({"sub": "fixture-user"}) + "."
+        row["claims"] = claim_set(claim_shape(token))
     if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
         row["boundaryPinned"] = False
     return row

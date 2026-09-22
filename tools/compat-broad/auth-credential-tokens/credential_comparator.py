@@ -104,13 +104,64 @@ def compare_claim_sets(local: Any, production: Any) -> str:
     production token without it still compare equal on everything else. A malformed
     claim set on either side is a mismatch, never a match by default.
     """
-    if not isinstance(local, dict) or not isinstance(production, dict):
-        return CLAIM_SET_MISMATCH
-    if not _json_value(local) or not _json_value(production):
+    if not _claim_shape_complete(local) or not _claim_shape_complete(production):
         return CLAIM_SET_MISMATCH
     if _same_json(strip_local_only_claims(local), strip_local_only_claims(production)):
         return CLAIM_SET_MATCH
     return CLAIM_SET_MISMATCH
+
+
+
+def _claim_shape_complete(claims: Any) -> bool:
+    """Validate the collector's projection, not the validity of the JWT itself.
+
+    A complete empty projection is legal; a missing projection is not. Do this
+    before dropping local-only fields, otherwise an incomplete local marker can
+    erase the very inconsistency that should prevent a comparison.
+    """
+    if type(claims) is not dict or not _json_value(claims):
+        return False
+    if set(claims) != {"claimNames", "claimTypes", "firebase"}:
+        return False
+
+    def names_and_types(node: dict[str, Any]) -> bool:
+        names, types = node.get("claimNames"), node.get("claimTypes")
+        return (
+            type(names) is list
+            and all(type(name) is str for name in names)
+            and len(names) == len(set(names))
+            and type(types) is dict
+            and set(names) == set(types)
+            and all(type(kind) is str and kind in {
+                "null", "bool", "int", "float", "string", "array", "object"
+            } for kind in types.values())
+        )
+
+    if not names_and_types(claims):
+        return False
+    firebase = claims["firebase"]
+    if claims["claimTypes"].get("firebase") != "object":
+        return firebase is None
+    return (
+        type(firebase) is dict
+        and set(firebase) == {"claimNames", "claimTypes"}
+        and names_and_types(firebase)
+    )
+
+
+def _row_claims_complete(row: dict[str, Any], case: dict[str, Any]) -> bool:
+    """A returned token must carry its measured claim shape, not just a flag."""
+    assertions = row["assertions"]
+    required = (
+        assertions.get("idTokenReturned") is True
+        or assertions.get("sessionCookieReturned") is True
+        or (case["group"] == "claim-precedence"
+            and row["status"] == 200 and row.get("errorCode") is None)
+    )
+    claims = row.get(CLAIMS_MEMBER)
+    if claims is None:
+        return not required
+    return _claim_shape_complete(claims)
 
 
 def _json_value(value: Any, depth: int = 0, active: set[int] | None = None) -> bool:
@@ -376,6 +427,7 @@ def compare(local: Any, production: Any) -> dict[str, Any]:
         if any(
             unobserved_reason(side[case_id]) is not None
             or not _assertion_shape_complete(side[case_id], case)
+            or not _row_claims_complete(side[case_id], case)
             or any(type(value) is not bool for value in side[case_id]["assertions"].values())
             or (side[case_id].get("errorCode") is not None
                 and type(side[case_id]["errorCode"]) is not str)

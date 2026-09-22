@@ -18,6 +18,7 @@ import o5_user_token_identity_proof as proof
 import o5_user_token_remote_transport as remote
 import pytest
 from broad_contract import digest
+from shared_gate import Gate
 from o5_user_token_case import compile_case
 from o5_user_token_collector import _request
 
@@ -200,11 +201,20 @@ def test_caller_cannot_construct_a_trusted_proof():
         )
 
 
-def test_setup_ack_mints_sealed_proof_without_network():
+def test_setup_ack_mints_sealed_proof_without_network(tmp_path):
     token = _token(uid="fresh-uid", custom={"o5role": "editor"})
     handoff = remote.SetupPrivateHandoff(id_token=token, expires_in="3600")
     receipt = remote.SetupPublicReceipt(item_id="account/owner-a/signup", http_status=200, endpoint="fixture", wire_sequence=1, local_id="fresh-uid")
     request_digest = digest({"setup": "signup"})
+    plan = {"kind": "setup-test-plan"}
+    event = {"id": "setup/account/owner-a/signup", "completed": True, "workerReaped": True, "responseDigest": "a" * 64}
+    gate_path = tmp_path / "gate"
+    gate_path.mkdir(mode=0o700, exist_ok=True)
+    (gate_path / "lock").write_text("")
+    (gate_path / "state.json").write_text(json.dumps({"plan": plan, "planDigest": digest(plan), "managementEvents": [event]}))
+    os.chmod(gate_path / "lock", 0o600)
+    os.chmod(gate_path / "state.json", 0o600)
+    gate = Gate(gate_path, {})
     acknowledgment = {
         "kind": "setup-ack",
         "principalRef": "owner-a",
@@ -213,8 +223,8 @@ def test_setup_ack_mints_sealed_proof_without_network():
         "tokenHash": __import__("hashlib").sha256(token.encode()).hexdigest(),
         "requestDigest": request_digest,
         "responseDigest": "a" * 64,
-        "eventDigest": "b" * 64,
-        "planDigest": "c" * 64,
+        "eventDigest": digest(event),
+        "planDigest": digest(plan),
         "nonce": "d" * 32,
         "slotId": "setup/account/owner-a/signup",
     }
@@ -222,6 +232,7 @@ def test_setup_ack_mints_sealed_proof_without_network():
         "owner-a",
         private_handoff=handoff,
         setup_receipt=receipt,
+        gate_authority=gate,
         gate_acknowledgment=acknowledgment,
         expected_provider="password",
         expected_tenant=None,
@@ -234,16 +245,25 @@ def test_setup_ack_mints_sealed_proof_without_network():
     assert issued.request_digest == request_digest
 
 
-def test_setup_ack_rejects_token_or_gate_binding_changes():
+def test_setup_ack_rejects_token_or_gate_binding_changes(tmp_path):
     token = _token(uid="fresh-uid")
     handoff = remote.SetupPrivateHandoff(id_token=token, expires_in="3600")
     receipt = remote.SetupPublicReceipt(item_id="account/owner-a/signup", http_status=200, endpoint="fixture", wire_sequence=1, local_id="fresh-uid")
     request_digest = digest({"setup": "signup"})
-    acknowledgment = {"kind": "setup-ack", "principalRef": "owner-a", "uid": "fresh-uid", "tenant": None, "tokenHash": __import__("hashlib").sha256(token.encode()).hexdigest(), "requestDigest": request_digest, "responseDigest": "a" * 64, "eventDigest": "b" * 64, "planDigest": "c" * 64, "nonce": "d" * 32, "slotId": "setup/account/owner-a/signup"}
+    plan = {"kind": "setup-test-plan"}
+    event = {"id": "setup/account/owner-a/signup", "completed": True, "workerReaped": True, "responseDigest": "a" * 64}
+    gate_path = tmp_path / "gate"
+    gate_path.mkdir(mode=0o700, exist_ok=True)
+    (gate_path / "lock").write_text("")
+    (gate_path / "state.json").write_text(json.dumps({"plan": plan, "planDigest": digest(plan), "managementEvents": [event]}))
+    os.chmod(gate_path / "lock", 0o600)
+    os.chmod(gate_path / "state.json", 0o600)
+    gate = Gate(gate_path, {})
+    acknowledgment = {"kind": "setup-ack", "principalRef": "owner-a", "uid": "fresh-uid", "tenant": None, "tokenHash": __import__("hashlib").sha256(token.encode()).hexdigest(), "requestDigest": request_digest, "responseDigest": "a" * 64, "eventDigest": digest(event), "planDigest": digest(plan), "nonce": "d" * 32, "slotId": "setup/account/owner-a/signup"}
     for mutation in ({"tokenHash": "e" * 64}, {"principalRef": "other"}, {"uid": "other"}):
         candidate = {**acknowledgment, **mutation}
         with pytest.raises(ValueError):
-            proof.mint_acknowledged_setup_proof("owner-a", private_handoff=handoff, setup_receipt=receipt, gate_acknowledgment=candidate, expected_provider="password", expected_tenant=None, expected_claims={}, request_digest=request_digest, now=int(time.time()))
+            proof.mint_acknowledged_setup_proof("owner-a", private_handoff=handoff, setup_receipt=receipt, gate_authority=gate, gate_acknowledgment=candidate, expected_provider="password", expected_tenant=None, expected_claims={}, request_digest=request_digest, now=int(time.time()))
 
 
 def test_issuance_proof_binds_the_same_token_before_firestore(fixture_origin):

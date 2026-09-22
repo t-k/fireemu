@@ -114,7 +114,7 @@ def _route(service: Any, route: Any, method: Any, path: Any) -> None:
         return
     if (
         service == "identity"
-        and route in {"account-recovery", "principal-action"}
+        and route in {"account-recovery", "principal-action", "principal-action-readback"}
         and method == "POST"
         and _ACCOUNT.fullmatch(path)
     ):

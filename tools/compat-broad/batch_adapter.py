@@ -41,6 +41,9 @@ HOSTS = {
 }
 MAX_WORKER_STDOUT = 131072
 MAX_WORKER_STDERR = 8192
+MAX_WORKER_URL = 65536
+MAX_WORKER_HEADERS = 65536
+MAX_WORKER_INPUT = 262144
 
 
 class WorkerProcessError(ValueError):
@@ -328,6 +331,26 @@ def wire(
         raise ValueError("remote origin refused")
     if parsed.fragment or timeout <= 0 or timeout > 12:
         raise ValueError("invalid request boundary")
+    if not isinstance(method, str) or not method or len(method.encode()) > 128:
+        raise ValueError("request method bound exceeded")
+    try:
+        url_size = len(url.encode())
+    except (AttributeError, UnicodeEncodeError):
+        raise ValueError("request URL is invalid") from None
+    if url_size > MAX_WORKER_URL:
+        raise ValueError("request URL bound exceeded")
+    if not isinstance(headers, dict):
+        raise ValueError("request headers are invalid")
+    header_size = 0
+    for key, value in headers.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("request headers are invalid")
+        try:
+            header_size += len(key.encode()) + len(value.encode())
+        except UnicodeEncodeError:
+            raise ValueError("request headers are invalid") from None
+    if header_size > MAX_WORKER_HEADERS:
+        raise ValueError("request headers bound exceeded")
     data = (
         None
         if body is None
@@ -346,6 +369,12 @@ def wire(
             "receipt": receipt or process_receipt,
         }
     )
+    try:
+        payload_size = len(payload.encode())
+    except UnicodeEncodeError:
+        raise ValueError("request payload is invalid") from None
+    if payload_size > MAX_WORKER_INPUT:
+        raise ValueError("request payload bound exceeded")
     output, process = _run_worker(
         payload, timeout, include_process_receipt=process_receipt
     )

@@ -266,6 +266,38 @@ def test_process_receipt_bounds_simultaneous_stdout_and_stderr_flood(
     assert receipt["returncode"] is not None
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        lambda origin: (origin + "/" + "u" * 70000, {}, None),
+        lambda origin: (origin + "/ok", {"X-Large": "h" * 70000}, None),
+        lambda origin: (origin + "/ok", {}, {"nested": {"value": "n" * 200000}}),
+    ],
+)
+def test_oversized_input_is_rejected_before_worker_start(tmp_path, monkeypatch, case):
+    import batch_adapter as adapter
+
+    worker_dir = tmp_path / "worker"
+    worker_dir.mkdir()
+    marker = tmp_path / "started"
+    (worker_dir / "batch_wire.py").write_text(
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('started')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(adapter, "HERE", worker_dir)
+    url, headers, body = case("http://127.0.0.1:18081")
+    with pytest.raises(ValueError, match="bound exceeded"):
+        adapter.wire(
+            url,
+            "GET",
+            body,
+            headers,
+            local=True,
+            process_receipt=True,
+        )
+    assert not marker.exists()
+
+
 def test_process_receipt_start_failure_does_not_claim_a_worker_was_reaped(
     tmp_path, monkeypatch
 ):

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import selectors
 import signal
 import subprocess
 import sys
@@ -90,6 +91,124 @@ def _cleanup_worker(worker, *, termination, deadline_exceeded=False):
     )
 
 
+def _bounded_worker_exchange(worker, payload, deadline):
+    """Exchange bounded bytes with one worker without unbounded pipe reads."""
+    selector = selectors.DefaultSelector()
+    streams = {}
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    limits = {"stdout": MAX_WORKER_STDOUT, "stderr": MAX_WORKER_STDERR}
+    input_bytes = payload.encode()
+    input_offset = 0
+    failure = None
+    timed_out = False
+
+    def close_stream(name):
+        stream = streams.pop(name, None)
+        if stream is not None:
+            try:
+                selector.unregister(stream)
+            except (KeyError, ValueError):
+                pass
+            stream.close()
+
+    try:
+        for name, stream in (("stdout", worker.stdout), ("stderr", worker.stderr)):
+            streams[name] = stream
+            os.set_blocking(stream.fileno(), False)
+            selector.register(stream, selectors.EVENT_READ, name)
+        stdin = worker.stdin
+        if stdin is not None:
+            os.set_blocking(stdin.fileno(), False)
+            streams["stdin"] = stdin
+            selector.register(stdin, selectors.EVENT_WRITE, "stdin")
+
+        while streams:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            events = selector.select(remaining)
+            if not events:
+                timed_out = True
+                break
+            for key, mask in events:
+                name = key.data
+                stream = key.fileobj
+                try:
+                    if name == "stdin":
+                        if input_offset == len(input_bytes):
+                            close_stream("stdin")
+                            continue
+                        written = os.write(stream.fileno(), input_bytes[input_offset:])
+                        input_offset += written
+                        if input_offset == len(input_bytes):
+                            close_stream("stdin")
+                    else:
+                        chunk = os.read(stream.fileno(), 65536)
+                        if not chunk:
+                            close_stream(name)
+                            continue
+                        output[name].extend(chunk)
+                        if len(output[name]) > limits[name]:
+                            failure = "output-limit"
+                            break
+                except (BrokenPipeError, OSError):
+                    failure = "exchange-failed"
+                    break
+            if failure is not None:
+                break
+    finally:
+        selector.close()
+
+    if failure is not None or timed_out:
+        if worker.poll() is None:
+            try:
+                worker.kill()
+            except OSError:
+                pass
+        try:
+            worker.wait(timeout=0.1)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    else:
+        try:
+            worker.wait(timeout=max(0.0, min(0.1, deadline - time.monotonic())))
+        except (OSError, subprocess.TimeoutExpired):
+            failure = "exchange-failed"
+            if worker.poll() is None:
+                try:
+                    worker.kill()
+                except OSError:
+                    pass
+                try:
+                    worker.wait(timeout=0.1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+
+    for stream in list(streams.values()):
+        stream.close()
+    receipt = _process_receipt(
+        pid=worker.pid,
+        returncode=worker.poll(),
+        worker_reaped=worker.poll() is not None,
+        termination="deadline" if timed_out else (failure or "exited"),
+        deadline_exceeded=timed_out,
+    )
+    if failure is not None:
+        raise WorkerProcessError(
+            "bounded worker output exceeded"
+            if failure == "output-limit"
+            else "bounded worker exchange failed",
+            receipt,
+        ) from None
+    if timed_out:
+        raise WorkerProcessError("whole request deadline exceeded", receipt) from None
+    try:
+        return bytes(output["stdout"]).decode(), receipt
+    except UnicodeDecodeError:
+        raise WorkerProcessError("bounded worker returned malformed output", receipt) from None
+
+
 def _run_worker(payload, timeout, *, include_process_receipt):
     if not include_process_receipt:
         try:
@@ -129,39 +248,10 @@ def _run_worker(payload, timeout, *, include_process_receipt):
         )
         raise WorkerProcessError("bounded worker failed to start", receipt) from None
 
-    timed_out = False
-    try:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            timed_out = True
-            raise subprocess.TimeoutExpired(worker.args, timeout)
-        stdout, stderr = worker.communicate(input=payload, timeout=remaining)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        receipt = _cleanup_worker(
-            worker, termination="deadline", deadline_exceeded=True
-        )
-        raise WorkerProcessError("whole request deadline exceeded", receipt) from None
-    except (OSError, ValueError):
-        receipt = _cleanup_worker(worker, termination="exchange-failed")
-        raise WorkerProcessError("bounded worker exchange failed", receipt) from None
-
-    if len(stdout.encode()) > MAX_WORKER_STDOUT or len(stderr.encode()) > MAX_WORKER_STDERR:
-        receipt = _cleanup_worker(worker, termination="output-limit")
-        raise WorkerProcessError("bounded worker output exceeded", receipt) from None
-
-    returncode = worker.returncode
-    receipt = _process_receipt(
-        pid=worker.pid,
-        returncode=returncode,
-        worker_reaped=returncode is not None,
-        termination="deadline" if timed_out else "exited",
-        deadline_exceeded=timed_out,
-    )
+    stdout, receipt = _bounded_worker_exchange(worker, payload, deadline)
+    returncode = receipt["returncode"]
     if not receipt["workerReaped"]:
         raise WorkerProcessError("bounded worker was not reaped", receipt)
-    if timed_out:
-        raise WorkerProcessError("whole request deadline exceeded", receipt)
     if returncode != 0:
         raise WorkerProcessError("bounded transport failed", receipt)
     return stdout, receipt

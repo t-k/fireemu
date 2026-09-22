@@ -37,7 +37,8 @@ WORKER_ENTRY = f"{LANE_DIRECTORY}/o5_user_token_https_worker.py"
 FIRESTORE_ORIGIN = "https://firestore.googleapis.com"
 IDENTITY_ORIGIN = "https://identitytoolkit.googleapis.com"
 RULES_ORIGIN = "https://firebaserules.googleapis.com"
-MAX_SECONDS = 8.0
+MAX_SECONDS = 12.0
+DEFAULT_SECONDS = 8.0
 _REAP_RESERVE_SECONDS = 0.5
 MAX_ENVELOPE_BYTES = 1_048_576
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -53,8 +54,9 @@ _RULESET_NAME = re.compile(
 _RELEASE_NAME = re.compile(
     r"^projects/fireemu-35fe6/releases/[A-Za-z0-9_.-]{1,128}$"
 )
-_WORKER_SHA256 = "cea85b4d407eaf6e31b0894bd1783f0bde7086bf3b760f4ed5efdcee48f7fcb6"
+_WORKER_SHA256 = "3d46aa0db14d558f44ccad6e09a593cbb5e0bca3eb52e29c9d046acd1a84c9b2"
 _OWNED_CHILDREN: set[int] = set()
+_SETUP_HANDOFF_SEAL = object()
 
 
 class WorkerExchangeError(ValueError):
@@ -98,11 +100,20 @@ class SetupPublicReceipt:
 class SetupPrivateHandoff:
     """Transient credential handoff; never use this object as a receipt."""
 
-    __slots__ = ("_id_token", "_expires_in")
+    __slots__ = ("_id_token", "_expires_in", "_response_digest", "_request_digest", "_seal")
 
-    def __init__(self, *, id_token: str | None = None, expires_in: str | None = None):
+    def __init__(self, *, id_token: str | None = None, expires_in: str | None = None, response_digest: str | None = None, request_digest: str | None = None, _seal: object | None = None):
+        if _seal is not _SETUP_HANDOFF_SEAL:
+            raise TypeError("private setup handoff is transport-issued")
         self._id_token = id_token
         self._expires_in = expires_in
+        self._response_digest = response_digest
+        self._request_digest = request_digest
+        self._seal = _seal
+
+    @classmethod
+    def _issued(cls, *, id_token: str | None = None, expires_in: str | None = None, response_digest: str | None = None, request_digest: str | None = None) -> "SetupPrivateHandoff":
+        return cls(id_token=id_token, expires_in=expires_in, response_digest=response_digest, request_digest=request_digest, _seal=_SETUP_HANDOFF_SEAL)
 
     def __repr__(self) -> str:
         return "SetupPrivateHandoff(<redacted>)"
@@ -112,6 +123,11 @@ class SetupPrivateHandoff:
 
     def expires_in_for_followup(self) -> str | None:
         return self._expires_in
+
+    def proof_material(self) -> tuple[str | None, str | None, str | None]:
+        if self._seal is not _SETUP_HANDOFF_SEAL:
+            raise ValueError("private setup handoff seal required")
+        return self._id_token, self._response_digest, self._request_digest
 
 
 class SetupResult:
@@ -671,6 +687,7 @@ def adapt_setup_result(
     endpoint: str,
     sequence: int,
     account_bindings: dict[str, Any] | None = None,
+    request_digest: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(result, dict) or type(result.get("status")) is not int or not isinstance(result.get("body"), dict):
         raise ValueError("setup response envelope refused")
@@ -698,7 +715,7 @@ def adapt_setup_result(
                 fields_digest=digest(fields),
                 update_time=body["updateTime"],
             ),
-            private=SetupPrivateHandoff(),
+            private=SetupPrivateHandoff._issued(),
         )
     if not isinstance(body.get("localId"), str):
         raise ValueError("setup localId response refused")
@@ -721,8 +738,8 @@ def adapt_setup_result(
             wire_sequence=wire["wireSequence"],
             local_id=body["localId"],
         ),
-        private=SetupPrivateHandoff(
-            id_token=body.get("idToken"), expires_in=body.get("expiresIn")
+        private=SetupPrivateHandoff._issued(
+            id_token=body.get("idToken"), expires_in=body.get("expiresIn"), response_digest=digest(body), request_digest=request_digest
         ),
     )
 
@@ -971,7 +988,7 @@ def _run_worker(
     if fixture_origin is not None:
         argv.extend(("--fixture-origin", fixture_origin))
     started = time.monotonic()
-    seconds = float(envelope.get("seconds", MAX_SECONDS))
+    seconds = float(envelope.get("seconds", DEFAULT_SECONDS))
     deadline = started + seconds
     child = subprocess.Popen(
         argv,
@@ -1264,7 +1281,7 @@ def make_setup_transport(
             setup_secrets=setup_secrets,
         )
         envelope = {key: prepared[key] for key in ("service", "route", "method", "path", "headers", "body")}
-        envelope["seconds"] = MAX_SECONDS
+        envelope["seconds"] = DEFAULT_SECONDS
         result = _run_worker(envelope, binding=binding, binding_digest=binding_digest, fixture_origin=fixture_origin)
         sequence += 1
         origin = fixture_origin.rstrip("/") if fixture_origin is not None else prepared["origin"]
@@ -1274,6 +1291,7 @@ def make_setup_transport(
             endpoint=urlsplit(origin).netloc,
             sequence=sequence,
             account_bindings=setup_bindings,
+            request_digest=digest({"method": prepared["method"], "path": prepared["path"], "body": prepared["body"]}),
         )
         if value["id"].startswith("account/") and value["id"].endswith("/signup"):
             local_id = adapted.receipt.local_id
@@ -1324,7 +1342,7 @@ def make_recovery_transport(
             raise ValueError("capability inputs digest differs")
         authorize_transport(capability, binding=binding, binding_digest=binding_digest)
         prepared = prepare_request(plan, copy.deepcopy(value), credentials=credentials, account_bindings=account_bindings, identity_proofs=identity_proofs)
-        seconds = MAX_SECONDS if timeout_seconds is None else float(timeout_seconds)
+        seconds = DEFAULT_SECONDS if timeout_seconds is None else float(timeout_seconds)
         if deadline is not None:
             seconds = min(seconds, deadline - time.monotonic())
         if seconds <= 0:
@@ -1366,7 +1384,7 @@ def make_transport(
     transport_timeout = timeout_seconds
 
     def effective_seconds(
-        call_deadline: float | None, call_timeout: float | None
+        call_deadline: float | None, call_timeout: float | None, service: str
     ) -> float:
         deadlines = [value for value in (transport_deadline, call_deadline) if value is not None]
         timeouts = [value for value in (transport_timeout, call_timeout) if value is not None]
@@ -1374,7 +1392,7 @@ def make_transport(
             raise ValueError("absolute transport deadline required")
         if call_timeout is not None and (type(call_timeout) not in (int, float) or not math.isfinite(call_timeout) or not 0 < call_timeout <= MAX_SECONDS):
             raise ValueError("bounded transport timeout required")
-        seconds = min([MAX_SECONDS, *[float(value) for value in timeouts]])
+        seconds = min([MAX_SECONDS if service == "rules" else DEFAULT_SECONDS, *[float(value) for value in timeouts]])
         if deadlines:
             seconds = min(seconds, min(float(value) - time.monotonic() for value in deadlines))
         return seconds
@@ -1448,7 +1466,7 @@ def make_transport(
             key: prepared[key]
             for key in ("service", "route", "method", "path", "headers", "body")
         }
-        seconds = effective_seconds(deadline, timeout_seconds)
+        seconds = effective_seconds(deadline, timeout_seconds, prepared["service"])
         if seconds <= 0:
             raise WorkerExchangeError("transport deadline exhausted", worker_reaped=False)
         envelope["seconds"] = seconds

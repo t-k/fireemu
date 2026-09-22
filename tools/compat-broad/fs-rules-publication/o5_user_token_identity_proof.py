@@ -348,6 +348,7 @@ def mint_acknowledged_setup_proof(
 ) -> IdentityProof:
     """Mint a proof from a durably acknowledged setup exchange without network I/O."""
     from shared_gate import Gate
+    from o5_user_token_remote_transport import SetupPrivateHandoff, SetupPublicReceipt
 
     if not isinstance(gate_authority, Gate):
         raise ValueError("durable Gate authority required")
@@ -377,11 +378,14 @@ def mint_acknowledged_setup_proof(
         raise ValueError("setup Gate event is not durably completed")
     if event.get("responseDigest") != gate_acknowledgment["responseDigest"] or digest(event) != gate_acknowledgment["eventDigest"]:
         raise ValueError("setup Gate event binding differs")
-    token_reader = getattr(private_handoff, "token_for_followup", None)
-    token = token_reader() if callable(token_reader) else None
-    uid = getattr(setup_receipt, "local_id", None)
+    if not isinstance(private_handoff, SetupPrivateHandoff) or not isinstance(setup_receipt, SetupPublicReceipt):
+        raise ValueError("typed setup handoff and receipt required")
+    token, response_digest, handoff_request_digest = private_handoff.proof_material()
+    uid = setup_receipt.local_id
     if not isinstance(token, str) or not token or not isinstance(uid, str) or uid != gate_acknowledgment["uid"]:
         raise ValueError("acknowledged setup handoff required")
+    if response_digest != gate_acknowledgment["responseDigest"] or handoff_request_digest != request_digest:
+        raise ValueError("setup handoff provenance differs")
     if hashlib.sha256(token.encode()).hexdigest() != gate_acknowledgment["tokenHash"]:
         raise ValueError("setup token acknowledgment differs")
     claims = _payload(token)

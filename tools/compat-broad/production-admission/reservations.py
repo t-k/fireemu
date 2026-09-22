@@ -948,17 +948,22 @@ def _auth_recovery_plan(child_plan, child_claim):
         raise ValueError("Auth recovery Gate resource binding changed")
     operation = job["recovery"][0]
     resource = child_claim["ownedResources"][0]
-    uid = resource.rsplit("/", 1)[1]
+    project = resource.split("/", 2)[1]
+    expected_binding = {"custom": {"resource": resource, "uidBinding": "customUid"}}
+    expected_path = f"identitytoolkit.googleapis.com/v1/projects/{project}/accounts:lookup"
     if (
-        operation.get("kind") != "auth-custom-uid-lookup"
+        child_plan.get("project") != project
+        or job.get("accountBindings") != expected_binding
+        or operation.get("kind") != "uid-absence"
         or operation.get("service") != "auth"
         or operation.get("method") != "POST"
+        or operation.get("account") != "custom"
+        or operation.get("uidBinding") != "customUid"
         or operation.get("resource") != resource
-        or operation.get("body") != {"localId": [uid]}
-        or not isinstance(operation.get("path"), str)
-        or not operation["path"].endswith("/accounts:lookup")
-        or "delete" in operation["path"].lower()
-        or operation.get("precondition") is not None
+        or operation.get("body") != {"localId": ["$binding:customUid"]}
+        or operation.get("path") != expected_path
+        or operation.get("form") is not False
+        or operation.get("owner") is not True
     ):
         raise ValueError("Auth recovery operation is not a UID lookup")
     schedule = job.get("schedule")
@@ -1566,6 +1571,13 @@ class Ledger:
                 raise ValueError("Auth recovery child is not bound to held parent")
             if parent_evidence["gatePlanDigest"] != claim["gatePlanDigest"]:
                 raise ValueError("Auth parent evidence Gate binding changed")
+            parent_snapshot = {
+                "state": parent["state"],
+                "claim": copy.deepcopy(claim),
+                "claimDigest": parent["claimDigest"],
+                "envelopeDigest": parent["envelopeDigest"],
+                "generation": copy.deepcopy(parent.get("generation")),
+            }
             parent_gate_path = claim["gatePath"]
             parent_gate_job = _gate_job(claim)
         parent_gate = Gate(parent_gate_path, parent_gate_job).snapshot()
@@ -1586,6 +1598,14 @@ class Ledger:
         with self._locked() as state:
             parent = self._row(state, parent_ticket)
             claim = parent["claim"]
+            if (
+                parent["state"] != parent_snapshot["state"]
+                or parent["claim"] != parent_snapshot["claim"]
+                or parent["claimDigest"] != parent_snapshot["claimDigest"]
+                or parent["envelopeDigest"] != parent_snapshot["envelopeDigest"]
+                or parent.get("generation") != parent_snapshot["generation"]
+            ):
+                raise ValueError("parent changed during Auth recovery admission")
             child_digest = digest(child_claim)
             envelope_digest = digest(new_envelope)
             existing = parent.get("recoveryChildren", [])
@@ -1668,6 +1688,7 @@ class Ledger:
             return {"ticket": copy.deepcopy(child["ticket"]), "childClaim": copy.deepcopy(child["claim"]),
                 "newEnvelope": copy.deepcopy(state["recoveryEnvelopes"][child["envelopeDigest"]]["envelope"]),
                 "parentClaim": copy.deepcopy(parent["claim"]), "parentIdentity": {"reservation": child_ticket["parentReservation"], "claimDigest": parent["claimDigest"]},
+                "parentState": parent["state"], "childEnvelopeDigest": child["envelopeDigest"],
                 "state": child["state"], "deadline": child["deadline"]}
 
     def settle_auth_recovery_child(self, child_ticket, *, absence_proof, receipt_digest, now=None):
@@ -1677,6 +1698,15 @@ class Ledger:
         _hash(receipt_digest)
         bound = self.bound_auth_recovery_claim(child_ticket)
         child_claim = bound["childClaim"]
+        settlement_snapshot = {
+            "parentState": bound["parentState"],
+            "parentClaim": bound["parentClaim"],
+            "parentClaimDigest": bound["parentIdentity"]["claimDigest"],
+            "childClaim": copy.deepcopy(child_claim),
+            "childClaimDigest": digest(child_claim),
+            "childEnvelopeDigest": bound["childEnvelopeDigest"],
+            "childState": bound["state"],
+        }
         gate = Gate(child_claim["gatePath"], child_claim["gateJob"]).snapshot()
         operation = gate["plan"]["jobs"][child_claim["gateJob"]]["recovery"][0]
         _auth_absence_proof(absence_proof, child_claim["ownedResources"][0], operation)
@@ -1686,7 +1716,16 @@ class Ledger:
         with self._locked() as state:
             parent = state["reservations"].get(child_ticket["parentReservation"])
             child = next((value for value in (parent or {}).get("recoveryChildren", []) if value.get("ticket") == child_ticket), None)
-            if parent is None or child is None or child.get("claimDigest") != digest(child_claim):
+            if (
+                parent is None
+                or child is None
+                or parent.get("state") != settlement_snapshot["parentState"]
+                or parent.get("claim") != settlement_snapshot["parentClaim"]
+                or parent.get("claimDigest") != settlement_snapshot["parentClaimDigest"]
+                or child.get("claim") != settlement_snapshot["childClaim"]
+                or child.get("claimDigest") != settlement_snapshot["childClaimDigest"]
+                or child.get("envelopeDigest") != settlement_snapshot["childEnvelopeDigest"]
+            ):
                 raise ValueError("Auth recovery child changed during settlement")
             if child.get("state") == "settled":
                 if child.get("receiptDigest") != receipt_digest or child.get("absenceProofDigest") != proof_digest or child.get("finalGateDigest") != final_gate_digest:
@@ -1721,6 +1760,19 @@ class Ledger:
                 raise ValueError("settled absent Auth child and held parent required")
             claim = copy.deepcopy(parent["claim"])
             child_claim = copy.deepcopy(child["claim"])
+            close_snapshot = {
+                "parentState": parent["state"],
+                "parentClaim": copy.deepcopy(parent["claim"]),
+                "parentClaimDigest": parent["claimDigest"],
+                "parentEnvelopeDigest": parent["envelopeDigest"],
+                "childClaim": copy.deepcopy(child_claim),
+                "childClaimDigest": child["claimDigest"],
+                "childEnvelopeDigest": child["envelopeDigest"],
+                "childState": child["state"],
+                "childReceiptDigest": child.get("receiptDigest"),
+                "childProofDigest": child.get("absenceProofDigest"),
+                "childFinalGateDigest": child.get("finalGateDigest"),
+            }
             final_gate_digest = child.get("finalGateDigest")
             proof_digest = child.get("absenceProofDigest")
         parent_gate = Gate(claim["gatePath"], _gate_job(claim)).snapshot()
@@ -1748,10 +1800,30 @@ class Ledger:
             parent = self._row(state, parent_ticket)
             child = next((value for value in parent.get("recoveryChildren", []) if value.get("ticket") == child_ticket), None)
             if parent["state"] == "closed-after-auth-recovery-child":
-                if parent.get("authRecoveryCloseReceiptDigest") != receipt_digest or parent.get("authRecoveryCloseChildTicketDigest") != digest(child_ticket):
+                if (
+                    parent.get("authRecoveryCloseReceiptDigest") != receipt_digest
+                    or parent.get("authRecoveryCloseChildTicketDigest") != digest(child_ticket)
+                    or parent.get("authRecoveryCloseChildClaimDigest") != close_snapshot["childClaimDigest"]
+                    or parent.get("finalGateDigest") != close_snapshot["childFinalGateDigest"]
+                ):
+                    if close_snapshot["parentState"] == "held":
+                        raise ValueError("Auth parent changed during close")
                     raise ValueError("different Auth recovery close")
                 return copy.deepcopy(parent_ticket)
-            if parent["state"] != "held" or child is None or child.get("state") != "settled":
+            if (
+                parent.get("state") != close_snapshot["parentState"]
+                or parent.get("claim") != close_snapshot["parentClaim"]
+                or parent.get("claimDigest") != close_snapshot["parentClaimDigest"]
+                or parent.get("envelopeDigest") != close_snapshot["parentEnvelopeDigest"]
+                or child is None
+                or child.get("claim") != close_snapshot["childClaim"]
+                or child.get("claimDigest") != close_snapshot["childClaimDigest"]
+                or child.get("envelopeDigest") != close_snapshot["childEnvelopeDigest"]
+                or child.get("state") != close_snapshot["childState"]
+                or child.get("receiptDigest") != close_snapshot["childReceiptDigest"]
+                or child.get("absenceProofDigest") != close_snapshot["childProofDigest"]
+                or child.get("finalGateDigest") != close_snapshot["childFinalGateDigest"]
+            ):
                 raise ValueError("Auth parent changed during close")
             parent["state"] = "closed-after-auth-recovery-child"
             parent["authRecoveryCloseReceiptDigest"] = receipt_digest

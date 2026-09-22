@@ -1028,6 +1028,53 @@ def run_bound_collection(
         deadline_seconds=300.0,
         recovery_deadline_seconds=600.0,
     )
+    setup_receipts: list[dict[str, Any]] = []
+    stage = "setup"
+
+    def safe_recover(*, primary_error, failure_stage):
+        """Recover only acknowledged setup ownership and retain both outcomes."""
+        try:
+            cleanup = recover_setup_failure(
+                plan=plan,
+                gate=gate,
+                context=context,
+                ownership=ownership,
+                identity_handoffs=identity_handoffs,
+                credentials=credentials,
+                frozen_inputs=frozen_inputs,
+                capability=capability,
+                fixture_origin=fixture_origin,
+                binding=binding,
+                binding_digest=binding_digest,
+            )
+        except Exception as recovery_error:  # noqa: BLE001 -- retain both failure classes
+            cleanup = {
+                "cleanupComplete": False,
+                "held": sorted(ownership),
+                "recoveryFailure": type(recovery_error).__name__,
+            }
+        try:
+            journal.record(
+                "setup-failure",
+                {
+                    "stage": failure_stage,
+                    "failure": type(primary_error).__name__,
+                    "recovery": {
+                        "cleanupComplete": cleanup.get("cleanupComplete") is True,
+                        "recoveryFailure": cleanup.get("recoveryFailure"),
+                        "held": list(cleanup.get("held", [])),
+                    },
+                },
+            )
+        except Exception as journal_error:  # noqa: BLE001 -- preserve the primary failure
+            cleanup = {**cleanup, "journalFailure": type(journal_error).__name__}
+        try:
+            primary_error.recovery_outcome = cleanup
+            primary_error.failure_stage = failure_stage
+        except (AttributeError, TypeError) as annotation_error:
+            cleanup = {**cleanup, "annotationFailure": type(annotation_error).__name__}
+        return cleanup
+
     try:
         try:
             setup_receipts = run_bound_setup(
@@ -1045,23 +1092,12 @@ def run_bound_collection(
                 private_handoffs=private_handoffs,
                 identity_handoffs=identity_handoffs,
             )
-        except Exception as error:
-            cleanup = recover_setup_failure(
-                plan=plan,
-                gate=gate,
-                context=context,
-                ownership=ownership,
-                identity_handoffs=identity_handoffs,
-                credentials=credentials,
-                frozen_inputs=frozen_inputs,
-                capability=capability,
-                fixture_origin=fixture_origin,
-                binding=binding,
-                binding_digest=binding_digest,
-            )
+        except Exception as error:  # noqa: BLE001 -- setup must retain recovery responsibility
+            cleanup = safe_recover(primary_error=error, failure_stage=stage)
             return {
                 "recordingComplete": False,
                 "abort": "setup:" + type(error).__name__,
+                "primaryError": {"stage": stage, "type": type(error).__name__},
                 "productionExecuted": False,
                 "productionReady": False,
                 "rows": [],
@@ -1074,6 +1110,7 @@ def run_bound_collection(
                     ),
                 },
             }
+        stage = "identity-proof"
         identity_proofs = setup_identity_proofs(
             plan, gate, identity_handoffs, fixture_origin=fixture_origin
         )
@@ -1101,6 +1138,7 @@ def run_bound_collection(
                 for ref, proof in identity_proofs.items()
             },
         }
+        stage = "transport"
         execute = bound_execute(
             plan,
             credentials=credentials,
@@ -1110,6 +1148,7 @@ def run_bound_collection(
             capability=capability,
             fixture_origin=fixture_origin,
         )
+        stage = "dispatch"
         dispatch = collection_dispatch(
             plan,
             gate,
@@ -1119,7 +1158,9 @@ def run_bound_collection(
             identity_proofs=identity_proofs,
             ownership=ownership,
         )
+        stage = "ownership-refresh"
         refresh_ownership(gate, ownership)
+        stage = "management-session"
         session = management_session(
             gate=gate,
             ledger=ledger,
@@ -1129,6 +1170,7 @@ def run_bound_collection(
             journal=journal,
             ownership=ownership,
         )
+        stage = "collector-startup"
         bundle = collector(
             plan,
             dispatch,
@@ -1140,6 +1182,9 @@ def run_bound_collection(
             context=context,
             recovery_dispatch=dispatch,
         )
+    except Exception as error:
+        safe_recover(primary_error=error, failure_stage=stage)
+        raise
     finally:
         journal.close()
     bundle["setup"] = {

@@ -809,6 +809,8 @@ class Adapter:
             return
         body = step.get("body")
         writes = body.get("writes") if isinstance(body, dict) else None
+        if writes == [] and result == {}:
+            return
         results = result.get("writeResults") if isinstance(result, dict) else None
         if not isinstance(writes, list) or not isinstance(results, list) or len(writes) != len(results):
             raise ValueError("document commit acknowledgement incomplete")

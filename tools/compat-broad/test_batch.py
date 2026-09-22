@@ -1014,5 +1014,35 @@ def test_request_headers_bind_only_remote_privileged_quota():
                     "Bearer offline-token" if token else None
                 )
                 assert headers["Content-Type"] == (
-                    "application/x-www-form-urlencoded" if form else "application/json"
+                "application/x-www-form-urlencoded" if form else "application/json"
                 )
+
+
+def test_empty_commit_acknowledgement_is_valid_but_nonempty_requires_results():
+    import batch_adapter as a
+
+    run = object.__new__(a.Adapter)
+    run._record_document_writes(
+        {
+            "method": "POST",
+            "path": "/v1/projects/demo/databases/(default)/documents:commit",
+            "body": {"writes": []},
+        },
+        200,
+        {},
+    )
+
+    with pytest.raises(ValueError, match="document commit acknowledgement incomplete"):
+        run._record_document_writes(
+            {
+                "method": "POST",
+                "path": "/v1/projects/demo/databases/(default)/documents:commit",
+                "body": {
+                    "writes": [
+                        {"delete": "projects/demo/databases/(default)/documents/x"}
+                    ]
+                },
+            },
+            200,
+            {},
+        )

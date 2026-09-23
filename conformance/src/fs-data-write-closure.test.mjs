@@ -3,11 +3,19 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
+import {
+  prepareSandboxCorpus,
+  selectComparableSandboxRecipes,
+} from "./fs-data-write-sandbox-run.mjs";
+
 const closurePath = fileURLToPath(
   new URL("../../spec/compatibility/closure/FS-DATA-WRITE.json", import.meta.url),
 );
 const fixturePath = fileURLToPath(
   new URL("../fs-data-write-production-matrix.json", import.meta.url),
+);
+const manifestPath = fileURLToPath(
+  new URL("../fs-data-write-recipe-digests.json", import.meta.url),
 );
 
 const requiredConditions = new Set([
@@ -151,6 +159,23 @@ test("new strict-only map observation remains pending production recording", () 
   );
   assert.ok(condition.recipeIds.includes("writes/limits/aggregate-map/strict-only"));
   assert.equal(condition.status, "PENDING_RECORDING");
+});
+
+test("recorded conditions contain no changed or unrecorded runnable recipes", async () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const { corpus } = await prepareSandboxCorpus();
+  const selected = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
+  const pending = new Set([...selected.pendingRestIds, ...selected.pendingStreamIds]);
+  const failures = closure.conditions
+    .filter(({ status }) => ["PRODUCTION_RECORDED", "VERIFIED"].includes(status))
+    .flatMap(({ conditionId, recipeIds }) =>
+      recipeIds
+        .filter((recipeId) => pending.has(recipeId))
+        .map((recipeId) => `${conditionId}: ${recipeId}`),
+    );
+  assert.deepEqual(failures, []);
 });
 
 test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition", () => {

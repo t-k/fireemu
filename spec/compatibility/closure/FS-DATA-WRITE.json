@@ -78,7 +78,7 @@
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
       "recipeIds": ["writes/limits/index-entries-per-document", "writes/limits/index-entry-sum/500-20000"],
       "boundaryStatus": "PENDING_RECORDING",
-      "status": "PRODUCTION_RECORDED"
+      "status": "PENDING_RECORDING"
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-BYTES",

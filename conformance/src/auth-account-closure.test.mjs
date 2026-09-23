@@ -161,7 +161,14 @@ test("AUTH-ACCOUNT closure inventory cannot silently omit a declared condition",
       const off = rows
         .filter(({ status, row }) => status !== "MATCH" && !documented.has(row))
         .map(({ row }) => row);
-      if (condition.conditionId !== "AUTH-ACCOUNT/final-artifact-regression") {
+      if (condition.conditionId === "AUTH-ACCOUNT/closure-review") {
+        assert.equal(closure.closureReview?.decision, "APPROVED", label);
+        assert.equal(
+          closure.closureReview.finalArtifactSha256,
+          condition.evidence.finalArtifactSha256,
+          `${label}: the approval names the artifact the evidence is bound to`,
+        );
+      } else if (condition.conditionId !== "AUTH-ACCOUNT/final-artifact-regression") {
         assert.deepEqual(off, [], `${label}: every row matches production`);
       } else {
         // The regression's figures are read from the committed evidence, not typed by hand.

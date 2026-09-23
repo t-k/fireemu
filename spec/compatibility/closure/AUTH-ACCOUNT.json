@@ -1,10 +1,15 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-ACCOUNT",
-  "parentStatus": "PENDING_CLOSURE_REVIEW",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-24",
+    "reviewer": "independent clean-context closure and security review (round 3)",
+    "reviewedCommit": "3eb68306a",
+    "finalArtifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
+    "followUps": "Non-blocking Should items are tracked outside the closure (security hardening of hash verification under the store lock, duplicate-email password reset, export restorability of out-of-bound hashes, standard scrypt parallelism bound, handwritten figures)."
   },
   "scopeDecisions": [
     {
@@ -1020,12 +1025,56 @@
       "conditionId": "AUTH-ACCOUNT/closure-review",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "AUTH-ACCOUNT"
+        "AUTH-ACCOUNT",
+        "auth-account"
       ],
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
+        "sourceCommit": "b25d7499290d4321000cb8ba99d975274a20daed",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "reviews": [
+          {
+            "round": 1,
+            "verdict": "CONDITIONAL_APPROVE",
+            "on": "7be532ad9"
+          },
+          {
+            "round": 2,
+            "verdict": "REJECT",
+            "on": "061853092",
+            "mustFix": "restored imported-hash specs bypassed parameter ranges"
+          },
+          {
+            "round": 3,
+            "verdict": "APPROVE",
+            "on": "3eb68306a"
+          }
+        ]
+      }
     }
   ]
 }

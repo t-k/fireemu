@@ -123,8 +123,10 @@ def _valid_http_receipt(actual: Any) -> bool:
         and SHA256.fullmatch(wire["bodySha256"]) is not None
         and isinstance(actual.get("code"), str)
         and bool(actual["code"])
-        and isinstance(actual.get("message"), str)
-        and bool(actual["message"])
+        and (
+            200 <= actual["status"] < 300
+            or (isinstance(actual.get("message"), str) and bool(actual["message"]))
+        )
     )
 
 
@@ -242,6 +244,19 @@ def compare_evidence(
             }
         ):
             return _indeterminate("historical-program-or-step-inapplicable")
+        selected = cases.get("selectedPrograms")
+        if not isinstance(selected, list):
+            return _indeterminate("current-program-unbound")
+        current_programs = [
+            item
+            for item in selected
+            if isinstance(item, dict) and item.get("id") == PROGRAM_ID
+        ]
+        if (
+            len(current_programs) != 1
+            or _digest(current_programs[0]) != EXPECTED_PROGRAM_DIGEST
+        ):
+            return _indeterminate("current-program-or-step-inapplicable")
         got = {key: actual.get(key) for key in ("status", "code", "message")}
         difference = next(
             (

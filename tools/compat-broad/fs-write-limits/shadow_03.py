@@ -185,7 +185,9 @@ def run(output: Path, part: str = "ALL", index_profile: str = "historical") -> d
         # The supervisor launches the child with a fixed argument list and a
         # sanitized environment, so the part is carried by the entrypoint.
         child_script=(
-            HERE / "shadow_03b.py" if part == "B" else Path(__file__).resolve()
+            HERE / f"shadow_03{part.lower()}.py"
+            if part in ("A", "B")
+            else Path(__file__).resolve()
         ),
         project="demo-firestore-probe",
         configuration={"daemon": {"authProjectNumbers": {}}},
@@ -225,7 +227,9 @@ def main(argv: list[str] | None = None) -> int:
     # The campaign is one allocation; the selections remain for a run that has
     # to be split for some other reason.
     parser.add_argument("--part", choices=("A", "B", "ALL"), default="ALL")
-    parser.add_argument("--index-profile", choices=("historical", "nx-local"), default="historical")
+    parser.add_argument(
+        "--index-profile", choices=("historical", "nx-local"), default="historical"
+    )
     args = parser.parse_args(argv)
     if args.child is not None:
         if not args.nonce:

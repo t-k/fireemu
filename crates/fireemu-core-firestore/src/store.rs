@@ -5079,6 +5079,14 @@ fn validate_value(
             let mut total = 32u64;
             for (name, value) in fields {
                 validate_stored_field_name(name)?;
+                // Production accepts a direct field of an array-held map at 1,494 UTF-8
+                // bytes and refuses 1,495, even when the full implied path is shorter
+                // than 1,500 bytes. This is distinct from the ordinary field-path limit.
+                if scope == LimitScope::Production && inside_array && name.len() > 1_494 {
+                    return Err(FirestoreError::InvalidArgument(
+                        "Property array contains an invalid nested entity.".into(),
+                    ));
+                }
                 let nested_path = property_path.child(name);
                 total = add_size(total, string_size(name)?)?;
                 total = add_size(total, validate_value(value, false, &nested_path, scope)?)?;

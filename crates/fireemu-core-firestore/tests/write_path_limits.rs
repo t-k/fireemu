@@ -312,9 +312,10 @@ fn a_field_path_implied_through_an_array_is_strict_only() {
             Value::Integer(1),
         )]))])
     };
-    // "arr" + "." + 1497 = 1501 canonical bytes; the name alone is inside FS-LIMIT-FIELD-NAME.
-    let over = deep(1_497);
-    let at = deep(1_496);
+    // Production accepts a 1,494-byte direct key inside an array map and rejects 1,495,
+    // independently of the ordinary 1,500-byte stored-field-name maximum.
+    let over = deep(1_495);
+    let at = deep(1_494);
 
     let mut store = state(LimitScope::OfficialEmulator);
     store
@@ -325,11 +326,11 @@ fn a_field_path_implied_through_an_array_is_strict_only() {
     let mut store = state(LimitScope::Production);
     store
         .commit(&[set("a/at", "arr", at)], None, t(0))
-        .expect("the inclusive maximum is accepted");
+        .expect("the production array-map key boundary is accepted");
     let refused = store.commit(&[set("a/over", "arr", over)], None, t(1));
     assert!(
         matches!(refused, Err(FirestoreError::InvalidArgument(ref m))
-            if m == "field path is 1501 bytes, maximum is 1500"),
+            if m == "Property array contains an invalid nested entity."),
         "{}",
         outcome(&refused)
     );
@@ -478,9 +479,8 @@ fn an_indexed_value_is_truncated_at_the_boundary_and_never_refused() {
     }
 }
 
-/// The exact shape the review named: a field name at the `FS-LIMIT-FIELD-NAME` maximum inside
-/// an array, whose implied path is `"arr" + "." + 1500 = 1504` bytes. The name on its own is
-/// legal, so nothing before this refused it.
+/// A field name at the ordinary `FS-LIMIT-FIELD-NAME` maximum inside an array is legal as a
+/// name, but production's tighter direct array-map key boundary refuses the nested entity.
 #[test]
 fn the_reviewed_array_field_path_fixture_is_emulator_ok_and_strict_refused() {
     let document = || {
@@ -500,7 +500,7 @@ fn the_reviewed_array_field_path_fixture_is_emulator_ok_and_strict_refused() {
     let refused = store.commit(&[set("a/b", "arr", document())], None, t(0));
     assert!(
         matches!(refused, Err(FirestoreError::InvalidArgument(ref m))
-            if m == "field path is 1504 bytes, maximum is 1500"),
+            if m == "Property array contains an invalid nested entity."),
         "{}",
         outcome(&refused)
     );

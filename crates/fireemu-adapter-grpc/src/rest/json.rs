@@ -787,16 +787,21 @@ pub fn precondition_from_json(v: Option<&Value>) -> Result<Option<pb::Preconditi
         return Ok(None);
     };
     strict_keys(v, &["exists", "updateTime"])?;
-    if v.get("exists").is_some() && v.get("updateTime").is_some() {
+    // ProtoJSON null leaves a oneof member unset. Keep false as a present
+    // exists condition, and keep an empty enclosing Precondition present so
+    // the backend's existing empty-condition validation is not bypassed.
+    let exists = v.get("exists").filter(|value| !value.is_null());
+    let update_time = v.get("updateTime").filter(|value| !value.is_null());
+    if exists.is_some() && update_time.is_some() {
         // A oneof carries one member.
         return err("Payload isn't valid for request.");
     }
-    let condition_type = if let Some(e) = v.get("exists") {
+    let condition_type = if let Some(e) = exists {
         Some(pb::precondition::ConditionType::Exists(
             e.as_bool()
                 .ok_or_else(|| JsonError("currentDocument.exists must be a boolean".into()))?,
         ))
-    } else if let Some(t) = v.get("updateTime") {
+    } else if let Some(t) = update_time {
         Some(pb::precondition::ConditionType::UpdateTime(
             timestamp_from_json(t)?,
         ))

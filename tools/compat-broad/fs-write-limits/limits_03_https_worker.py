@@ -114,14 +114,52 @@ def run():
                 {"status": response.status, "contentType": content_type}
             ).encode(),
         )
-        declared = response.getheader("Content-Length")
-        if declared is not None:
+        # Limits-03 expects typed JSON results (200, 400 or 404). Refuse
+        # no-content/upgrade statuses even when empty: http.client forces their
+        # length to zero, so it cannot expose illegal attached octets reliably.
+        if 100 <= response.status < 200 or response.status in (204, 205, 304):
+            # http.client forces these responses to length zero, hiding any
+            # illegal octets that follow the header block from read1().
+            failure("response-incomplete")
+            return
+        # Match the local limits observer's closed framing contract. Inspect
+        # all fields before read1() can hide conflicting lengths or codings.
+        lengths = response.headers.get_all("Content-Length", [])
+        codings = response.headers.get_all("Transfer-Encoding", [])
+        content_encodings = response.headers.get_all("Content-Encoding", [])
+        # This worker preserves raw response bytes and has no content decoder;
+        # Content-Encoding (including identity) is outside the JSON contract.
+        if content_encodings:
+            failure("response-incomplete")
+            return
+        if codings and (
+            lengths
+            or len(codings) != 1
+            or codings[0].strip(" \t").lower() != "chunked"
+        ):
+            failure("response-incomplete")
+            return
+        if codings and not response.chunked:
+            # http.client only recognizes the exact token; after validating
+            # legal surrounding OWS, restore the parser state it should use.
+            response.chunked = True
+            response.chunk_left = None
+            response.length = None
+        declared = None
+        if lengths:
+            value = lengths[0].strip(" \t")
+            if len(lengths) != 1 or not value or any(
+                digit not in "0123456789" for digit in value
+            ):
+                failure("invalid-content-length")
+                return
             try:
-                if int(declared) > _MAX_RESPONSE:
-                    failure("response-oversize")
-                    return
+                declared = int(value)
             except ValueError:
                 failure("invalid-content-length")
+                return
+            if declared > _MAX_RESPONSE:
+                failure("response-oversize")
                 return
         while True:
             chunk = response.read1(16_384)
@@ -132,7 +170,7 @@ def run():
                 failure("response-oversize")
                 return
             frame(b"B", chunk)
-        if declared is not None and int(declared) != total:
+        if declared is not None and declared != total:
             failure("response-incomplete")
         else:
             frame(b"E", b"")

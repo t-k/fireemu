@@ -885,6 +885,7 @@ def sentinel_parent_handoff(
     )
     recording_complete = (
         journal_complete
+        and source_bound
         and no_production_claim
         and result.get("cleanupComplete") is True
         and result.get("resourceAbsence") is True

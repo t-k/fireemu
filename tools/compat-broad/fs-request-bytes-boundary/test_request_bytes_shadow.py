@@ -175,6 +175,7 @@ def test_sentinel_shadow_cannot_publish_a_legacy_comparison(
 
 
 def _sentinel_parent_case(result, *, semantic_outcome="sentinel-typed-refusal"):
+    # Gate-level collector summary only; do not invent journal rows or sidecars.
     plan = {
         "caseId": "FS-LIMIT-API-REQUEST-BYTES-RAW-16MIB-OVER",
         "project": "demo-firestore-probe",
@@ -194,7 +195,7 @@ def _sentinel_parent_case(result, *, semantic_outcome="sentinel-typed-refusal"):
     return plan, result
 
 
-def test_sentinel_parent_handoff_records_a_bounded_local_only_case() -> None:
+def test_complete_typed_refusal_summary_hands_off_as_local_only() -> None:
     plan, result = _sentinel_parent_case({})
 
     handoff = shadow_module.sentinel_parent_handoff(result, plan, source_bound=True)
@@ -276,7 +277,7 @@ def test_sentinel_parent_handoff_requires_unchanged_source_binding() -> None:
 
     handoff = shadow_module.sentinel_parent_handoff(result, plan, source_bound=False)
 
-    assert handoff["recordingComplete"] is True
+    assert handoff["recordingComplete"] is False
     assert handoff["stateValidation"] is False
     assert handoff["cases"][0]["status"] == "indeterminate"
 

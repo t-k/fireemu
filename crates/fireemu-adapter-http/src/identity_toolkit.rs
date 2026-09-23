@@ -8688,6 +8688,11 @@ fn batch_row_imported_hash(
     };
     let hash =
         password_hash::base64_decode(hash).ok_or_else(|| error(400, "INVALID_PASSWORD_HASH"))?;
+    // proto3 reads empty bytes as unset: an empty hash is no password credential (external
+    // review 2026-09-24; unobserved in production).
+    if hash.is_empty() {
+        return Ok(None);
+    }
     let salt = match opt_str(row, "salt")? {
         Some(salt) => {
             password_hash::base64_decode(salt).ok_or_else(|| error(400, "INVALID_SALT"))?

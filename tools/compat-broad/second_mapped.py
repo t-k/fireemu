@@ -31,11 +31,102 @@ from second_admission import (
     origins,
     require_operation,
 )
-from second_cases import auth_cases, auth_invariants
-from second_mapping import compare_second
+from second_cases import auth_cases, auth_invariants, firestore_cases
+from second_mapping import compare_second, validate_rows, validate_trace
+
+
+def validated_pair_state(direct, mapped):
+    """Require both complete observed receipts to pass the independent validators."""
+    try:
+        for result in (direct, mapped):
+            if not isinstance(result, dict) or result.get("safety") is not True:
+                return False
+            validate_rows(result, observed_outcomes=True)
+            if validate_trace(result, observed_outcomes=True) is not True:
+                return False
+    except Exception:
+        return False
+    return True
+
 
 ADMIN = f"identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:"
 CLIENT = "identitytoolkit.googleapis.com/v1/accounts:"
+
+
+def acknowledged_diagnostic_cleanup_proof(
+    program_id,
+    name,
+    diagnostic_operation,
+    diagnostic_status,
+    diagnostic_ack,
+    after_status,
+    after_document,
+):
+    """Return a cleanup proof only for the exactly admitted mask mutation."""
+    if program_id != FS_IDS[0] or diagnostic_status != 200 or after_status != 200:
+        return None
+    program = next(
+        (value for value in firestore_cases() if value["id"] == program_id), None
+    )
+    if program is None or len(program["seed"]) != 1:
+        return None
+    seed_fields = program["seed"][0]["fields"]
+    if seed_fields != {
+        "n": {"integerValue": "2"},
+        "g": {"stringValue": "q"},
+        "a": {"mapValue": {"fields": {"b": {"integerValue": "7"}}}},
+    }:
+        return None
+    try:
+        normal, _ = fs_recipe(program_id, "normal", name, {})
+        expected_operation, _ = fs_recipe(program_id, "diagnostic", name, {})
+    except (ValueError, KeyError, TypeError):
+        return None
+    if diagnostic_operation != expected_operation:
+        return None
+    normal_paths = [
+        value for key, value in normal["query"] if key == "updateMask.fieldPaths"
+    ]
+    diagnostic_paths = [
+        value
+        for key, value in diagnostic_operation["query"]
+        if key == "updateMask.fieldPaths"
+    ]
+    if normal_paths != ["a.b"] or diagnostic_paths != ["a", "a.b"]:
+        return None
+
+    expected_fields = copy.deepcopy(seed_fields)
+    normal_map = normal["body"]["fields"]["a"]["mapValue"]["fields"]
+    expected_fields["a"]["mapValue"]["fields"]["b"] = copy.deepcopy(normal_map["b"])
+    diagnostic_value = diagnostic_operation["body"]["fields"]["a"]
+    diagnostic_map = diagnostic_value["mapValue"]["fields"]
+    diagnostic_child = diagnostic_map.get("b")
+    if diagnostic_child is None:
+        return None
+    expected_fields["a"] = copy.deepcopy(diagnostic_value)
+    expected_fields["a"]["mapValue"]["fields"]["b"] = copy.deepcopy(diagnostic_child)
+
+    def complete_document(value):
+        return (
+            isinstance(value, dict)
+            and value.get("name") == name
+            and value.get("fields") == expected_fields
+            and isinstance(value.get("updateTime"), str)
+            and bool(value["updateTime"])
+        )
+
+    if (
+        not complete_document(diagnostic_ack)
+        or not complete_document(after_document)
+        or diagnostic_ack["updateTime"] != after_document["updateTime"]
+    ):
+        return None
+    return {
+        "name": name,
+        "updateTime": diagnostic_ack["updateTime"],
+        "fieldsDigest": digest(expected_fields),
+        "responseDigest": digest(after_document),
+    }
 
 
 class LocalAdapter(Adapter):
@@ -572,6 +663,7 @@ def execute_45(a, output, runtime_identity):
             if status != 200:
                 raise ValueError("seed failed")
             versions, reads = {}, {}
+            diagnostic_ack = None
             a.versions = versions
             for step in program["steps"]:
                 a.phase = step["id"]
@@ -580,6 +672,12 @@ def execute_45(a, output, runtime_identity):
                     program["id"], step["id"], name, versions
                 )
                 status, body = a.send(actual)
+                if step["id"] == "diagnostic":
+                    diagnostic_ack = {
+                        "operation": copy.deepcopy(actual),
+                        "status": status,
+                        "body": copy.deepcopy(body),
+                    }
                 observation = copy.deepcopy(a.last_observation)
                 if step["id"] in ("original", "before", "after"):
                     absent = (
@@ -623,6 +721,27 @@ def execute_45(a, output, runtime_identity):
                     elif step["id"] == "after" and status == 404:
                         a.creation_proofs.pop(name, None)
                     reads[step["id"]] = None if absent else body
+                    if step["id"] == "after" and diagnostic_ack is not None:
+                        proof = acknowledged_diagnostic_cleanup_proof(
+                            program["id"],
+                            name,
+                            diagnostic_ack["operation"],
+                            diagnostic_ack["status"],
+                            diagnostic_ack["body"],
+                            status,
+                            body,
+                        )
+                        if proof is not None:
+                            a.creation_proofs[name] = proof
+                            a.record(
+                                {
+                                    "kind": "diagnostic-cleanup-proof",
+                                    "name": name,
+                                    "updateTime": proof["updateTime"],
+                                    "fieldsDigest": proof["fieldsDigest"],
+                                    "responseDigest": proof["responseDigest"],
+                                }
+                            )
                 rows.append(
                     {
                         "id": program["id"] + "/" + step["id"],
@@ -742,6 +861,9 @@ def child(output, nonce):
         for k in ("artifactSha256", "executionCommit", "configurationDigest")
     }
     comparison = run_pair(local, output / "pair", runtime_identity)
+    direct_receipt = json.loads((output / "pair/direct/result.json").read_bytes())
+    mapped_receipt = json.loads((output / "pair/mapped/result.json").read_bytes())
+    state_validation = validated_pair_state(direct_receipt, mapped_receipt)
     cases = [
         {
             "id": r["id"],
@@ -770,6 +892,7 @@ def child(output, nonce):
             "manifest": manifest(),
             "manifestDigest": digest(manifest()),
             "recordingComplete": comparison["recordingComplete"],
+            "stateValidation": state_validation,
             "localObservations": {"comparison": comparison},
             "productionExecuted": False,
         },
@@ -777,6 +900,7 @@ def child(output, nonce):
     if (
         not comparison["recordingComplete"]
         or not comparison["safety"]
+        or not state_validation
         or comparison["mapping"] != "match"
     ):
         raise ValueError(

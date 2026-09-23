@@ -57,12 +57,19 @@ const programDigest = (program) => sha256(JSON.stringify(program));
 
 /** Normalization and request semantics a saved row depends on; a change makes it stale. */
 async function harnessDigest() {
-  const source = await readFile(join(CONFORMANCE_DIR, "src/auth-account/harness.mjs"), "utf8");
-  return sha256(`${source}\n${JSON.stringify(BASELINE_CONFIG)}`);
+  const sources = await Promise.all(
+    ["harness.mjs", "session.mjs"].map((file) =>
+      readFile(join(CONFORMANCE_DIR, "src/auth-account", file), "utf8"),
+    ),
+  );
+  return sha256(`${sources.join("\n")}\n${JSON.stringify(BASELINE_CONFIG)}`);
 }
 
-const ceiling = (programs) =>
-  programs.reduce((total, p) => total + p.steps.length + 6 + (p.config ? 70 : 0), 20);
+/** Per recording: every step once; the harness gets its own, generous cleanup budget. */
+const ceilings = (programs) => ({
+  maxRequests: programs.reduce((total, p) => total + p.steps.length, 0),
+  maxHarnessRequests: programs.reduce((total, p) => total + 10 + (p.config ? 70 : 0), 20),
+});
 
 async function assertCleanTree() {
   const { stdout } = await execFileAsync(
@@ -119,7 +126,7 @@ async function recordOnce(programs, run, web, token) {
   });
   return runCorpus(programs, ctx, {
     settleMs: 10_000,
-    maxRequests: ceiling(programs),
+    ...ceilings(programs),
     baselineConfig: BASELINE_CONFIG,
     log: (line) => console.log(line),
   });
@@ -244,7 +251,7 @@ async function sessionLocal() {
   const out = await runCorpus(programs, ctx, {
     baselineConfig: process.env.AUTH_ACCOUNT_LOCAL_BASELINE === "1" ? BASELINE_CONFIG : undefined,
     applyBaseline: true,
-    maxRequests: ceiling(programs),
+    ...ceilings(programs),
   });
   await writeFile(process.env.AUTH_ACCOUNT_OUT, JSON.stringify(out));
 }

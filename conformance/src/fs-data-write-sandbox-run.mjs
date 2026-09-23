@@ -40,6 +40,83 @@ export function assertMatchingSandboxCorpus(fixture, currentCorpus, localCorpus)
   return currentDigest;
 }
 
+/** Compare an older recording only where the serialized program recipe is unchanged. */
+export function selectComparableSandboxRecipes(fixture, manifest, currentCorpus, localCorpus) {
+  const currentDigest = sha256(JSON.stringify(currentCorpus));
+  if (sha256(JSON.stringify(localCorpus)) !== currentDigest) {
+    throw new Error("local corpus differs from the current recipe");
+  }
+  if (manifest?.schemaVersion !== 1 || manifest.corpusSha256 !== fixture?.evidence?.corpusSha256) {
+    throw new Error("manifest corpus differs from the production fixture");
+  }
+  if (manifest.sourceCommit !== fixture.evidence.harnessRevision) {
+    throw new Error("manifest source differs from the production fixture");
+  }
+  const recordedIds = Object.keys(fixture.programs ?? {}).toSorted();
+  if (
+    JSON.stringify(recordedIds) !== JSON.stringify(Object.keys(manifest.programs ?? {}).toSorted())
+  ) {
+    throw new Error("manifest programs differ from the production fixture");
+  }
+  if (Object.keys(fixture.streams ?? {}).some((id) => !manifest.streams?.[id])) {
+    throw new Error("manifest streams differ from the production fixture");
+  }
+  const selectedPrograms = (currentCorpus.restPrograms ?? []).filter(
+    (program) => manifest.programs[program.id] === sha256(JSON.stringify(program)),
+  );
+  const matchedRestIds = selectedPrograms.map((program) => program.id).toSorted();
+  const pendingRestIds = [
+    ...new Set([
+      ...recordedIds,
+      ...(currentCorpus.restPrograms ?? []).map((program) => program.id),
+    ]),
+  ]
+    .filter((id) => !matchedRestIds.includes(id))
+    .toSorted();
+  const currentStreams = (currentCorpus.streamRecipes ?? []).filter(
+    (recipe) => recipe.transport === "grpc",
+  );
+  const selectedStreams = currentStreams.filter(
+    (recipe) => manifest.streams?.[recipe.id] === sha256(JSON.stringify(recipe)),
+  );
+  const matchedStreamIds = selectedStreams.map((recipe) => recipe.id).toSorted();
+  const pendingStreamIds = [
+    ...new Set([
+      ...Object.keys(fixture.streams ?? {}),
+      ...currentStreams.map((recipe) => recipe.id),
+    ]),
+  ]
+    .filter((id) => !matchedStreamIds.includes(id))
+    .toSorted();
+  const keep = (entries, ids) => Object.fromEntries(ids.map((id) => [id, entries[id]]));
+  return {
+    fixture: {
+      ...fixture,
+      programs: keep(fixture.programs, matchedRestIds),
+      streams: keep(fixture.streams ?? {}, matchedStreamIds),
+    },
+    corpus: {
+      ...currentCorpus,
+      restPrograms: selectedPrograms,
+      streamRecipes: selectedStreams,
+      restRequestCount: selectedPrograms.reduce(
+        (total, program) => total + program.steps.length,
+        0,
+      ),
+    },
+    matchedRestIds,
+    pendingRestIds,
+    matchedStreamIds,
+    pendingStreamIds,
+  };
+}
+
+export function comparisonExitCode(differences, pendingRestIds, pendingStreamIds) {
+  if (differences.length > 0) return 1;
+  if (pendingRestIds.length > 0 || pendingStreamIds.length > 0) return 2;
+  return 0;
+}
+
 export async function prepareSandboxCorpus() {
   const { stdout } = await execFileAsync(
     "uv",
@@ -380,14 +457,46 @@ async function compareLocal(runDir) {
     await readFile(join(CONFORMANCE_DIR, "fs-data-write-production-matrix.json"), "utf8"),
   );
   const localCorpus = JSON.parse(await readFile(join(runDir, "corpus.json"), "utf8"));
-  const corpusDigest = assertMatchingSandboxCorpus(fixture, corpus, localCorpus);
+  const corpusDigest = sha256(JSON.stringify(corpus));
   const rest = JSON.parse(await readFile(join(runDir, "rest-results.json"), "utf8"));
   const stream = JSON.parse(await readFile(join(runDir, "stream-results.json"), "utf8"));
-  const differences = compareSandboxArtifact(fixture, rest, stream, corpus);
-  process.stdout.write(
-    `${JSON.stringify({ corpusDigest, mismatches: differences.length, differences })}\n`,
+  let comparison;
+  if (fixture.evidence.corpusSha256 === corpusDigest) {
+    assertMatchingSandboxCorpus(fixture, corpus, localCorpus);
+    comparison = {
+      fixture,
+      corpus,
+      matchedRestIds: corpus.restPrograms.map((program) => program.id),
+      pendingRestIds: [],
+      matchedStreamIds: corpus.streamRecipes
+        .filter((recipe) => recipe.transport === "grpc")
+        .map((recipe) => recipe.id),
+      pendingStreamIds: [],
+    };
+  } else {
+    const manifest = JSON.parse(
+      await readFile(join(CONFORMANCE_DIR, "fs-data-write-recipe-digests.json"), "utf8"),
+    );
+    comparison = selectComparableSandboxRecipes(fixture, manifest, corpus, localCorpus);
+  }
+  const comparedRest = Object.fromEntries(comparison.matchedRestIds.map((id) => [id, rest[id]]));
+  const comparedStreams = Object.fromEntries(
+    comparison.matchedStreamIds.map((id) => [id, stream[id]]),
   );
-  if (differences.length > 0) process.exitCode = 1;
+  const differences = compareSandboxArtifact(
+    comparison.fixture,
+    comparedRest,
+    comparedStreams,
+    comparison.corpus,
+  );
+  process.stdout.write(
+    `${JSON.stringify({ corpusDigest, recordedCorpusDigest: fixture.evidence.corpusSha256, comparedPrograms: comparison.matchedRestIds.length, comparedStreams: comparison.matchedStreamIds.length, pendingRestIds: comparison.pendingRestIds, pendingStreamIds: comparison.pendingStreamIds, mismatches: differences.length, differences })}\n`,
+  );
+  process.exitCode = comparisonExitCode(
+    differences,
+    comparison.pendingRestIds,
+    comparison.pendingStreamIds,
+  );
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

@@ -22,6 +22,7 @@
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",
     "firestore:production": "node src/firestore-probe/run.mjs record-production",
+    "firestore:check-production": "node src/firestore-probe/run.mjs check-production",
     "fs-data-write:check": "node src/fs-data-write-local-check.mjs",
     "auth-probe": "node src/auth-probe/run.mjs record",
     "auth-probe:check": "node src/auth-probe/run.mjs check",

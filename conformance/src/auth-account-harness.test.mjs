@@ -469,6 +469,11 @@ test("transient answers are indeterminate, behaviour is not", () => {
 test("the fixture scan refuses secrets and foreign identifiers", () => {
   const secrets = ["AIza-test-key", "ya29.test-admin", SANDBOX_PROJECT, "999888777666"];
   scanFixture(JSON.stringify({ a: "<idToken>", passwordHash: "UkVEQUNURUQ=" }), secrets);
+  scanFixture(
+    JSON.stringify({ details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo" }] }),
+    secrets,
+    "a proto Any type key is not an email",
+  );
   for (const bad of [
     { k: "AIza-test-key" },
     { k: "Bearer ya29.other" },
@@ -479,6 +484,7 @@ test("the fixture scan refuses secrets and foreign identifiers", () => {
     { passwordHash: "c2VjcmV0" },
     { salt: "c2FsdA==" },
     { email: "someone@gmail.com" },
+    { email: "\u30c6\u30b9\u30c8@gmail.com" },
   ]) {
     assert.throws(() => scanFixture(JSON.stringify(bad), secrets), /fixture/);
   }

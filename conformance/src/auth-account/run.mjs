@@ -134,16 +134,66 @@ async function recordOnce(programs, run, web, token) {
   });
 }
 
+/**
+ * Writes the committed fixture from two recordings. Kept separate from recording so that a
+ * refusal here (for example by the secret scan) never loses a production run: the recordings
+ * are saved privately first and `rebuild-fixture` can retry from them.
+ */
+async function writeFixture({ programs, recordings, meta, secrets }) {
+  const [first, second] = recordings;
+  const fixture = existsSync(FIXTURE)
+    ? JSON.parse(await readFile(FIXTURE, "utf8"))
+    : { version: 1, recordedAgainst: {}, programs: {} };
+  fixture.recordedAgainst = {
+    target: "production Identity Toolkit and Secure Token REST, Identity Platform sandbox",
+    project: RECORDED_PROJECT,
+    note: "Two recordings per program. Tokens, generated ids, hashes, salts, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
+    baselineConfig: BASELINE_CONFIG,
+  };
+  for (const program of programs) {
+    const one = first.results[program.id];
+    const two = second.results[program.id];
+    if (!one || !two) continue;
+    const differing = Object.fromEntries(
+      Object.entries(two.steps).filter(([id, rec]) => !sameRecording(rec, one.steps[id])),
+    );
+    fixture.programs[program.id] = {
+      corpusDigest: programDigest(program),
+      harnessDigest: meta.harness,
+      recordedAt: meta.startedAt,
+      gitSha: meta.sha,
+      ...(one.config ? { config: one.config } : {}),
+      steps: one.steps,
+      ...(Object.keys(differing).length ? { second: differing } : {}),
+    };
+  }
+  fixture.programs = Object.fromEntries(
+    Object.entries(fixture.programs).toSorted(([a], [b]) => a.localeCompare(b)),
+  );
+  const text = `${JSON.stringify(fixture, null, 2)}\n`;
+  scanFixture(text, secrets);
+  await writeFile(FIXTURE, text);
+  return diffRecordings(first.results, second.results);
+}
+
 async function recordProduction() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
-  if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
+  const privateRoot = process.env.FIREEMU_AUTH_ACCOUNT_PRIVATE_DIR;
+  if (!ledger || !privateRoot) {
+    throw new Error("FIREEMU_SANDBOX_LEDGER and FIREEMU_AUTH_ACCOUNT_PRIVATE_DIR are required");
+  }
   await assertCleanTree();
   const programs = selectedPrograms();
   const corpusRequests = validateCorpus(programs);
-  const sha = await gitSha();
-  const harness = await harnessDigest();
+  const meta = {
+    sha: await gitSha(),
+    harness: await harnessDigest(),
+    startedAt: new Date().toISOString(),
+    programs: programs.map((p) => p.id),
+  };
   const web = await sandboxWebConfig();
-  const startedAt = new Date().toISOString();
+  const runDir = join(privateRoot, `auth-account-production-${meta.startedAt.replaceAll(":", "")}`);
+  await mkdir(runDir, { recursive: true });
   const recordings = [];
   let outcome = "recorded";
   let error;
@@ -151,62 +201,35 @@ async function recordProduction() {
   try {
     for (const offset of [0, 1]) {
       adminTokenValue = await adminToken();
-      recordings.push(
-        await recordOnce(programs, String(Date.now() + offset), web, adminTokenValue),
+      const recording = await recordOnce(
+        programs,
+        String(Date.now() + offset),
+        web,
+        adminTokenValue,
       );
+      recordings.push(recording);
+      await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording));
     }
   } catch (caught) {
     outcome = caught.fatal ? "aborted-fatal" : "aborted";
     error = String(caught.message ?? caught);
     if (caught.partial) recordings.push(caught.partial);
   }
+  await writeFile(join(runDir, "meta.json"), JSON.stringify({ ...meta, outcome, error }, null, 2));
   const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
   const failures = recordings.flatMap((r) => r.failures);
   try {
     if (!error) {
-      const [first, second] = recordings;
-      const fixture = existsSync(FIXTURE)
-        ? JSON.parse(await readFile(FIXTURE, "utf8"))
-        : { version: 1, recordedAgainst: {}, programs: {} };
-      fixture.recordedAgainst = {
-        target: "production Identity Toolkit and Secure Token REST, Identity Platform sandbox",
-        project: RECORDED_PROJECT,
-        note: "Two recordings per program. Tokens, generated ids, hashes, salts, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
-        baselineConfig: BASELINE_CONFIG,
-      };
-      for (const program of programs) {
-        const one = first.results[program.id];
-        const two = second.results[program.id];
-        if (!one || !two) continue;
-        const differing = Object.fromEntries(
-          Object.entries(two.steps).filter(([id, rec]) => !sameRecording(rec, one.steps[id])),
-        );
-        fixture.programs[program.id] = {
-          corpusDigest: programDigest(program),
-          harnessDigest: harness,
-          recordedAt: startedAt,
-          gitSha: sha,
-          ...(one.config ? { config: one.config } : {}),
-          steps: one.steps,
-          ...(Object.keys(differing).length ? { second: differing } : {}),
-        };
-      }
-      fixture.programs = Object.fromEntries(
-        Object.entries(fixture.programs).toSorted(([a], [b]) => a.localeCompare(b)),
-      );
-      const text = `${JSON.stringify(fixture, null, 2)}\n`;
-      scanFixture(text, [web.apiKey, adminTokenValue, SANDBOX_PROJECT, web.projectNumber]);
-      await writeFile(FIXTURE, text);
+      const nondeterministic = await writeFixture({
+        programs,
+        recordings,
+        meta,
+        secrets: [web.apiKey, adminTokenValue, SANDBOX_PROJECT, web.projectNumber],
+      });
       if (failures.length) outcome = "recorded-with-program-failures";
       console.log(
         JSON.stringify(
-          {
-            programs: programs.length,
-            corpusRequests,
-            requests,
-            nondeterministic: diffRecordings(first.results, second.results),
-            failures,
-          },
+          { programs: programs.length, corpusRequests, requests, nondeterministic, failures },
           null,
           2,
         ),
@@ -214,7 +237,7 @@ async function recordProduction() {
     }
   } catch (caught) {
     outcome = "not-written";
-    error = String(caught.message ?? caught);
+    error = `${String(caught.message ?? caught)} (recordings kept in ${runDir})`;
   } finally {
     await appendFile(
       ledger,
@@ -222,13 +245,13 @@ async function recordProduction() {
         ts: new Date().toISOString(),
         project: SANDBOX_PROJECT,
         database: null,
-        gitSha: sha,
+        gitSha: meta.sha,
         corpusDigest: sha256(JSON.stringify(programs)),
         requests,
         estimatedUsd: 0,
         outcome,
         taskId: TASK_ID,
-        programs: programs.map((p) => p.id),
+        programs: meta.programs,
         configAtEnd: recordings.map((r) => r.configAtEnd ?? "unknown"),
         ...(error ? { error } : {}),
       })}\n`,
@@ -236,6 +259,27 @@ async function recordProduction() {
   }
   if (error) throw new Error(error);
   if (failures.length) process.exitCode = 1;
+}
+
+/** Retries the fixture from a saved run directory; sends nothing to production. */
+async function rebuildFixture(runDir) {
+  const meta = JSON.parse(await readFile(join(runDir, "meta.json"), "utf8"));
+  if (meta.harness !== (await harnessDigest()))
+    throw new Error("harness changed since the recording");
+  const recordings = await Promise.all(
+    [1, 2].map(async (n) =>
+      JSON.parse(await readFile(join(runDir, `recording-${n}.json`), "utf8")),
+    ),
+  );
+  const programs = PROGRAMS.filter((p) => meta.programs.includes(p.id));
+  const web = await sandboxWebConfig();
+  const nondeterministic = await writeFixture({
+    programs,
+    recordings,
+    meta,
+    secrets: [web.apiKey, SANDBOX_PROJECT, web.projectNumber],
+  });
+  console.log(JSON.stringify({ programs: programs.length, nondeterministic }, null, 2));
 }
 
 async function sessionLocal() {
@@ -365,6 +409,7 @@ async function check() {
 
 const mode = process.argv[2];
 if (mode === "record-production") await recordProduction();
+else if (mode === "rebuild-fixture") await rebuildFixture(process.argv[3]);
 else if (mode === "check") await check();
 else if (mode === "session-local") await sessionLocal();
 else if (mode === "local") {

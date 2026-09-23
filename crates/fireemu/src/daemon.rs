@@ -532,6 +532,16 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     // This adapter-level gate is also shared with the export seam so an Auth export cannot
     // capture stores and Blocking Functions settings from different logical generations.
     let auth_operation_gate = Arc::new(Mutex::new(()));
+    // Validated when the configuration was parsed; a failure here is a configuration bug.
+    let custom_token_trust = cfg
+        .auth_custom_token_signers
+        .as_ref()
+        .map(|signers| {
+            fireemu_adapter_http::identity_toolkit::CustomTokenTrust::from_jwks(signers)
+                .map(Arc::new)
+        })
+        .transpose()
+        .map_err(|e| format!("auth.customTokenSigners: {e}"))?;
     let auth = Arc::new(AuthState {
         store: auth_store.clone(),
         clock: clock.clone(),
@@ -599,6 +609,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject
             }
         },
+        custom_token_trust,
         tenancy: Some(tenancy.clone()),
         app_check: app_check.clone(),
         app_check_policy: auth_policy,

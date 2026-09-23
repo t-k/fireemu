@@ -610,6 +610,7 @@ fn state() -> AuthState {
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        custom_token_trust: None,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -7663,6 +7664,126 @@ fn assert_tenant_stores_after_sign_in(
             1
         );
     }
+}
+
+/// A token the configured service account signed, as the Admin SDK with a real credential does.
+fn signed_custom_token(
+    key: &rsa::RsaPrivateKey,
+    issuer: &str,
+    uid: &str,
+    claims: &Value,
+    iat: i64,
+) -> String {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rsa::signature::{SignatureEncoding, Signer};
+    let header = base64url_encode(br#"{"alg":"RS256","kid":"k1","typ":"JWT"}"#);
+    let payload = json!({
+        "aud": CUSTOM_TOKEN_AUDIENCE,
+        "iss": issuer,
+        "sub": issuer,
+        "uid": uid,
+        "claims": claims,
+        "iat": iat,
+        "exp": iat + 3600,
+    });
+    let input = format!(
+        "{header}.{}",
+        base64url_encode(payload.to_string().as_bytes())
+    );
+    let signature =
+        rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(key.clone()).sign(input.as_bytes());
+    format!("{input}.{}", base64url_encode(&signature.to_vec()))
+}
+
+#[test]
+fn configured_signers_admit_only_the_tokens_they_signed() {
+    use fireemu_adapter_http::identity_toolkit::CustomTokenTrust;
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rand_core::SeedableRng;
+    use rsa::traits::PublicKeyParts;
+    let own_account = "firebase-adminsdk-x@demo-app.iam.gserviceaccount.com";
+    let other_account = "robot@other-project.iam.gserviceaccount.com";
+    let key = |seed| {
+        rsa::RsaPrivateKey::new(&mut rand_chacha::ChaCha20Rng::seed_from_u64(seed), 2048).unwrap()
+    };
+    let (own, other) = (key(11), key(12));
+    let jwks = |k: &rsa::RsaPrivateKey| {
+        json!({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "k1",
+            "n": base64url_encode(&k.n().to_bytes_be()), "e": base64url_encode(&k.e().to_bytes_be())}]})
+    };
+    let trust = CustomTokenTrust::from_jwks(
+        json!({own_account: jwks(&own), other_account: jwks(&other)})
+            .as_object()
+            .unwrap(),
+    )
+    .unwrap();
+    let s = AuthState {
+        custom_token_trust: Some(Arc::new(trust)),
+        ..strict_state()
+    };
+    let now = 1_788_004_860;
+    let sign_in = |token: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken?key=k"),
+            &json!({"token": token, "returnSecureToken": true}),
+        )
+    };
+    let (status, body) = sign_in(&signed_custom_token(
+        &own,
+        own_account,
+        "signed-1",
+        &json!({"role": "r"}),
+        now,
+    ));
+    assert_eq!(status, 200, "{body}");
+    let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    assert_eq!(claims.get("role").and_then(|v| v.as_str()), Some("r"));
+    assert_eq!(claims.get("sub").and_then(|v| v.as_str()), Some("signed-1"));
+    let refused = |token: String| {
+        let (status, body) = sign_in(&token);
+        (
+            status,
+            body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        )
+    };
+    assert_eq!(
+        refused(signed_custom_token(
+            &other,
+            other_account,
+            "signed-2",
+            &json!({}),
+            now
+        )),
+        (400, "CREDENTIAL_MISMATCH".to_owned())
+    );
+    assert_eq!(
+        refused(custom_token("signed-3", &json!({}), now + 3600)),
+        (400, "INVALID_CUSTOM_TOKEN".to_owned()),
+        "an unsigned token is refused once signers are configured"
+    );
+    assert_eq!(
+        refused(signed_custom_token(
+            &other,
+            own_account,
+            "signed-4",
+            &json!({}),
+            now
+        )),
+        (400, "INVALID_CUSTOM_TOKEN".to_owned()),
+        "a signature by another key than the issuer's"
+    );
+    assert_eq!(
+        refused(r#"{"uid":"json-token"}"#.to_owned()),
+        (400, "INVALID_CUSTOM_TOKEN".to_owned()),
+        "the emulator's JSON fake token is not a signed token"
+    );
 }
 
 #[test]

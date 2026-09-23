@@ -183,6 +183,7 @@ fn state() -> AuthState {
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        custom_token_trust: None,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -748,6 +749,7 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
+        custom_token_trust: None,
         ..state()
     };
     let signed_up = sign_up(&s, "strict-reset@example.com");

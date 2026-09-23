@@ -297,3 +297,15 @@ def test_rev3_permission_requires_owner_principal_and_bound_api_project(tmp_path
             credential_principal=principal,
             api_key_project_number="0",
         )
+    with pytest.raises(
+        ValueError, match="Auth configuration baseline SHA-256 required"
+    ):
+        fixture["descriptor"].permission_bindings(
+            fixture["plan"],
+            fixture["inputs"]["sourceCommit"],
+            fixture["inputs"]["artifactSha256"],
+            fixture["inputs"]["sourceInputs"],
+            "z" * 64,
+            credential_principal=principal,
+            api_key_project_number="592603257417",
+        )

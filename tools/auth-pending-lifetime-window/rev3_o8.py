@@ -8,6 +8,7 @@ exercise the shared O7 checks without implying owner approval or wire authority.
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -73,6 +74,7 @@ _SHARED_SOURCES = (
 )
 _SOURCE_PATHS = (*_OWNED_SOURCES, *_RECORDER_DEPENDENCIES, *_SHARED_SOURCES)
 _APPROVAL_REQUIRED_FIELDS = CAMPAIGN_APPROVAL_FIELDS
+_SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
 def compile_plan(nonce: str, *, selector: str = SELECTOR) -> dict[str, Any]:
@@ -191,8 +193,11 @@ def permission_bindings(
         raise ValueError("retained artifact digest required")
     if inputs != source_map():
         raise ValueError("revision-3 source closure differs")
-    if not isinstance(baseline_digest, str) or len(baseline_digest) != 64:
-        raise ValueError("owner-frozen Auth configuration baseline required")
+    if (
+        not isinstance(baseline_digest, str)
+        or _SHA256.fullmatch(baseline_digest) is None
+    ):
+        raise ValueError("owner-frozen Auth configuration baseline SHA-256 required")
     if (
         not isinstance(credential_principal, dict)
         or credential_principal.get("requiredScopes") != [PRINCIPAL_SCOPE]

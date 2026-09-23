@@ -2163,6 +2163,20 @@ impl AuthStore {
             .collect()
     }
 
+    /// At most `limit` users whose id sorts after `after` (all users when `None`), in user-id
+    /// order: the `accounts:batchGet` listing, whose page token is the last id of a page.
+    #[must_use]
+    pub fn users_after_local_id(&self, after: Option<&str>, limit: usize) -> Vec<&UserRecord> {
+        use std::ops::Bound::{Excluded, Unbounded};
+
+        let lower = after.map_or(Unbounded, Excluded);
+        self.users
+            .range::<str, _>((lower, Unbounded))
+            .take(limit)
+            .map(|(_, user)| user.as_ref())
+            .collect()
+    }
+
     /// User by phone number.
     #[must_use]
     pub fn user_by_phone(&self, phone: &str) -> Option<&UserRecord> {

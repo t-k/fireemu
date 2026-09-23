@@ -119,6 +119,7 @@ const idTokenMethods = program(
     }),
     signIn("rich-sign-in", "rich", fresh()),
     customSignIn("custom-sign-in-existing-email-account", token("rich")),
+    adminLookup("admin-lookup-after-custom-sign-in", "UID(rich)"),
     adminCall("set-account-claims", "update", {
       localId: "UID(rich)",
       customAttributes: '{"role":"account","level":3,"flags":{"beta":true}}',
@@ -156,6 +157,15 @@ const idTokenLegacy = program(
     client("custom-sign-in-with-claims", "signInWithCustomToken", { token: token("claims") }),
     lookupWith("lookup-with-legacy-custom-token", from("custom-sign-in:idToken")),
     cookie("cookie-from-legacy-custom-token", from("custom-sign-in:idToken"), 3600),
+    cookie("cookie-from-legacy-password-token", from("password-sign-in:idToken"), 3600),
+    client("update-with-legacy-password-token", "update", {
+      idToken: from("password-sign-in:idToken"),
+      displayName: "Legacy Name",
+    }),
+    client("delete-with-legacy-custom-token", "delete", {
+      idToken: from("custom-sign-in:idToken"),
+    }),
+    adminLookup("admin-lookup-after-legacy-delete", "UID(legacy-custom)"),
   ],
   {
     tokens: {

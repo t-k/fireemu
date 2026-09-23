@@ -6973,8 +6973,10 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
             push(u.local_id.clone());
         }
     }
+    // Every account sharing an address answers (sandbox recording 2026-09-23,
+    // `config/duplicate-email#admin-lookup-by-email`).
     for email in &emails {
-        if let Some(u) = store.user_by_email(email) {
+        for u in store.users_by_email(email) {
             push(u.local_id.clone());
         }
     }

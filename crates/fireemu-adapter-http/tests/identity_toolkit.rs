@@ -9419,6 +9419,75 @@ fn custom_attributes_read_back_as_set() {
     assert_eq!(claims["sub"], "ca");
 }
 
+/// `allowDuplicateEmails` does not let a password sign-up or an Admin create take an address
+/// in use; an import may share it, a lookup by the address answers every owner, and a
+/// password sign-in reaches the owner holding the password (sandbox recording 2026-09-23,
+/// `auth-account/config/duplicate-email`).
+#[test]
+fn duplicate_email_mode_keeps_password_accounts_unique() {
+    let s = state();
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=signIn.allowDuplicateEmails",
+        &json!({"signIn": {"allowDuplicateEmails": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sign_up = |password: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "dup@example.com", "password": password, "returnSecureToken": true}),
+        )
+    };
+    let (status, first) = sign_up("password123");
+    assert_eq!(status, 200, "{first}");
+    let (status, refused) = sign_up("password456");
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS"))
+    );
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "dup-admin", "email": "dup@example.com"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS"))
+    );
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{"localId": "dup-import", "email": "dup@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert!(imported.get("error").is_none(), "{imported}");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "dup@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["localId"], first["localId"]);
+    let (status, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"email": ["dup@example.com"]}),
+    );
+    assert_eq!(status, 200, "{found}");
+    let ids: Vec<&Value> = found["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| &u["localId"])
+        .collect();
+    assert_eq!(ids, [&first["localId"], &json!("dup-import")]);
+}
+
 #[test]
 fn client_permissions_refuse_end_users_as_admin_only_operations() {
     let s = state();

@@ -22,12 +22,14 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]
     ids = [program["id"] for program in programs]
-    assert len(ids) == len(set(ids)) == 50
+    assert len(ids) == len(set(ids)) == 52
     assert {
         "writes/limits/field-path-mask/1499",
         "writes/limits/implied-array-key/1494",
         "writes/limits/implied-array-key/1495",
         "writes/limits/index-entry-sum/500-19999",
+        "writes/limits/index-entry-string-name/2600",
+        "writes/limits/empty-document-name/5000",
     }.issubset(ids)
     assert len(corpus["streamRecipes"]) == 3
     assert {recipe["id"] for recipe in corpus["streamRecipes"]} == {

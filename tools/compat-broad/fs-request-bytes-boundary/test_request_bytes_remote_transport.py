@@ -175,6 +175,13 @@ def loopback_server():
             self.end_headers()
             self.wfile.write(payload)
 
+        def do_DELETE(self):
+            received["method"] = self.command
+            received["path"] = self.path
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
         def log_message(self, *args):
             return
 
@@ -909,6 +916,89 @@ def test_real_worker_rejects_sibling_request_byte_routes(route):
         + "?currentDocument.updateTime=2026-09-23T01%3A02%3A03Z"
     )
     assert worker._PATH.fullmatch(path) is None
+
+
+def _run_loopback_worker_request(host, method, path):
+    from request_bytes_process_exchange import _run_process_exchange
+
+    source = _loopback_worker_source(host)
+    message = (
+        json.dumps(
+            {
+                "method": method,
+                "path": path,
+                "authorization": "Bearer loopback-test-token",
+                "project": "fireemu-35fe6",
+                "bodyBytes": 0,
+                "deadline": time.monotonic() + 2,
+            },
+            separators=(",", ":"),
+        ).encode()
+        + b"\n"
+    )
+    return _run_process_exchange(
+        worker_source=source,
+        request_payload=message,
+        deadline=time.monotonic() + 2,
+        response_cap=RESPONSE_BYTES,
+        worker_sha256=hashlib.sha256(source).hexdigest(),
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+        + NONCE
+        + "/request-bytes-01/probe-u01/items/control",
+        "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+        + NONCE
+        + "/request-bytes-01/probe-u01/items/control?currentDocument.updateTime=2026-09-23T01:02:03Z",
+        "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+        + NONCE
+        + "/request-bytes-02/probe-r16m1/items/control?currentDocument.updateTime=2026-99-99T01%3A02%3A03Z",
+        "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+        + NONCE
+        + "/request-bytes-02/probe-r16m1/items/control?currentDocument.updateTime=2026-09-23T01%3A02%3A03Z&other=1",
+    ],
+)
+def test_real_worker_refuses_delete_without_canonical_version(loopback_server, path):
+    host, received = loopback_server
+
+    result = _run_loopback_worker_request(host, "DELETE", path)
+
+    assert result == (None, "", b"", "worker-failure")
+    assert "method" not in received
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "request-bytes-01/probe-u01/items/control",
+        "request-bytes-01/probe-u01/items/payload-00",
+        "request-bytes-02/probe-r16m1/items/control",
+        "request-bytes-02/probe-r16m1/items/payload-18",
+    ],
+)
+def test_real_worker_sends_only_version_bound_delete_for_owned_routes(
+    loopback_server, route
+):
+    host, received = loopback_server
+    path = (
+        "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+        + NONCE
+        + "/"
+        + route
+        + "?currentDocument.updateTime=2026-09-23T01%3A02%3A03Z"
+    )
+
+    status, content_type, body, failure = _run_loopback_worker_request(
+        host, "DELETE", path
+    )
+
+    assert (status, content_type, body, failure) == (200, "", b"", None)
+    assert received["method"] == "DELETE"
+    assert received["path"] == path
 
 
 def test_the_real_worker_refuses_a_deadline_above_the_published_ceiling(

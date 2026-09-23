@@ -6,6 +6,8 @@ import re
 import struct
 import sys
 import time
+from datetime import datetime
+from urllib.parse import quote
 
 _HOST = "firestore.googleapis.com"
 _PATH = re.compile(
@@ -18,6 +20,23 @@ _PATH = re.compile(
 )
 _TOKEN = re.compile(r"Bearer [A-Za-z0-9._~+/-]{1,8192}=*\Z")
 _PROJECT = re.compile(r"[a-z][a-z0-9-]{4,61}[a-z0-9]\Z")
+_VERSION = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z\Z")
+
+
+def _version_bound_delete(path):
+    _, separator, query = path.partition("?")
+    prefix = "currentDocument.updateTime="
+    if not separator or not query.startswith(prefix):
+        return False
+    encoded_version = query[len(prefix) :]
+    version = encoded_version.replace("%3A", ":")
+    if _VERSION.fullmatch(version) is None or quote(version, safe="") != encoded_version:
+        return False
+    try:
+        datetime.fromisoformat(version.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def frame(kind, payload):
@@ -56,6 +75,7 @@ def run():
             method not in ("GET", "POST", "DELETE")
             or not isinstance(path, str)
             or not _PATH.fullmatch(path)
+            or (method == "DELETE" and not _version_bound_delete(path))
             or not isinstance(authorization, str)
             or not _TOKEN.fullmatch(authorization)
             or not isinstance(project, str)

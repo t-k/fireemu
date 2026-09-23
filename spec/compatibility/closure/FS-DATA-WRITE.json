@@ -71,7 +71,15 @@
       "recipeIds": ["writes/limits/subcollection-depth"],
       "boundaryStatus": "BRACKETED",
       "boundaryEvidence": ["writes/limits/subcollection-depth#observation-0", "writes/limits/subcollection-depth#observation-1"],
-      "status": "PRODUCTION_RECORDED"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-subcollection-depth-3d7ceabb8-saved-comparison.json"
+      }
     },
     {
       "conditionId": "FS-LIMIT-DOCUMENT-NAME-BYTES",

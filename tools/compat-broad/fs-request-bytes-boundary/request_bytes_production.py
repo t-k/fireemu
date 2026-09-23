@@ -19,19 +19,21 @@ from urllib.parse import quote
 import request_bytes_admission as admission
 import request_bytes_descriptor as campaign
 import request_bytes_preflight as preflight
+import request_bytes_remote_transport as remote
 import reservations
 import shared_gate
 from broad_contract import digest
 from request_bytes_collector import (
     SEMANTIC_OUTCOMES,
     _validated_response,
-    commit_versions,
     cleanup_safety_complete,
     collect_local,
+    commit_versions,
     complete,
     typed_firestore_refusal,
     typed_over_refusal,
 )
+from request_bytes_compiler import RAW_16MIB_OVER_BYTES, RAW_16MIB_OVER_CASE_ID
 
 
 def _envelope(permission: dict, claim: dict) -> dict:
@@ -327,6 +329,47 @@ def _read_saved(path):
     return json.loads(path.read_bytes())
 
 
+def _saved_sentinel_body_refs(inputs, snapshot):
+    """Return only compiled sentinel body files bound by the saved Gate plan."""
+    reference = inputs.get("plan")
+    if (
+        not isinstance(reference, dict)
+        or reference.get("caseId") != RAW_16MIB_OVER_CASE_ID
+        or reference.get("caseMode") != "single-exploratory-sentinel"
+    ):
+        return {}
+    plan = campaign.execution_plan(reference)
+    if plan.get("caseMode") != "single-exploratory-sentinel":
+        return {}
+    gate_operations = [
+        operation
+        for job in snapshot.get("plan", {}).get("jobs", {}).values()
+        for operation in job.get("observation", [])
+    ]
+    allowed = {}
+    for operation in plan["observation"]:
+        body = operation.get("body")
+        if body is None or operation.get("kind") != "conditional-create-commit":
+            continue
+        body_ref = shared_gate.body_reference(body)
+        if (
+            body_ref["bytes"] != RAW_16MIB_OVER_BYTES
+            or body_ref["bytes"] != remote.MAX_SENTINEL_REQUEST_BYTES
+        ):
+            continue
+        matches = [
+            gate_operation
+            for gate_operation in gate_operations
+            if gate_operation.get("probe") == operation.get("probe")
+            and gate_operation.get("kind") == operation["kind"]
+            and gate_operation.get("bodyRef") == body_ref
+        ]
+        if len(matches) == 1:
+            name = f"collection/request-{operation['probe']}.body"
+            allowed[name] = body_ref
+    return allowed
+
+
 def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
     """Verify completed evidence against independently retained inputs and Ledger.
 
@@ -396,18 +439,27 @@ def _verify_saved(output, *, expected_inputs_digest, ledger_root, release=None):
         <= evidence.keys()
     ):
         raise ValueError("saved evidence inventory incomplete")
+    sentinel_body_refs = _saved_sentinel_body_refs(inputs, snapshot)
     for name, expected in evidence.items():
         relative = Path(name)
         path = output / relative
+        body_ref = sentinel_body_refs.get(name)
         if (
             relative.is_absolute()
             or ".." in relative.parts
             or path.is_symlink()
             or any(parent.is_symlink() for parent in path.parents if parent != output)
             or not path.is_file()
-            or path.stat().st_size > reservations.MAX_BYTES
-            or hashlib.sha256(path.read_bytes()).hexdigest() != expected
         ):
+            raise ValueError("saved evidence file differs")
+        size = path.stat().st_size
+        if size > reservations.MAX_BYTES and (
+            body_ref is None
+            or size != body_ref["bytes"]
+            or expected != body_ref["sha256"]
+        ):
+            raise ValueError("saved evidence file differs")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
             raise ValueError("saved evidence file differs")
     collection = _read_saved(output / "collection/result.json")
     routes = _read_saved(output / "routes.json")["rows"]

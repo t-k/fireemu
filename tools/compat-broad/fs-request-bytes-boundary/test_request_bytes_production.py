@@ -23,7 +23,9 @@ import request_bytes_production as production
 import request_bytes_remote_transport as remote
 import reservations
 import shared_gate
+import test_request_bytes_admission as admission_fixtures
 from broad_contract import digest
+from request_bytes_compiler import RAW_16MIB_OVER_BYTES, RAW_16MIB_OVER_CASE_ID
 from test_request_bytes_admission import (
     AUTH_BODY,
     DATABASE_BODY,
@@ -772,6 +774,123 @@ def test_release_publication_failure_reconciles_without_any_further_wire(
             expected_inputs_digest=built.inputs["inputsDigest"],
             ledger_root=built.ledger,
         )
+
+
+def test_sentinel_saved_body_ref_can_recover_release_at_exact_plan_bound_size(
+    tmp_path, monkeypatch
+):
+    work = tmp_path / "sentinel"
+    work.mkdir()
+    compile_plan = campaign.plan_compiler
+    monkeypatch.setattr(
+        campaign,
+        "plan_compiler",
+        lambda nonce, case_id=None: compile_plan(
+            nonce, case_id=case_id or RAW_16MIB_OVER_CASE_ID
+        ),
+    )
+    owner_permission = admission_fixtures.owner_permission
+
+    def sentinel_permission(*args, **kwargs):
+        permission = owner_permission(*args, **kwargs)
+        permission["gateReservationSeconds"]["upload"] = 80.0
+        return permission
+
+    monkeypatch.setattr(admission_fixtures, "owner_permission", sentinel_permission)
+    built = Admission(work)
+    shutil.rmtree(built.ledger)
+    reservations.Ledger.create(built.ledger)
+    calls, _live = wire_fixture(monkeypatch)
+    write = production._write_receipt
+
+    def fail_release(path, value):
+        if path.name == "release.json":
+            raise OSError("offline release publication failure")
+        return write(path, value)
+
+    monkeypatch.setattr(production, "_write_receipt", fail_release)
+    assert launcher.main(built.argv(work)) == 1
+    output = work / "output"
+    request_path = output / "collection/request-raw-16mib-over.body"
+    request_bytes = request_path.read_bytes()
+    assert len(request_bytes) == RAW_16MIB_OVER_BYTES == 16_777_217
+    assert not (output / "release.json").exists()
+
+    monkeypatch.setattr(production, "_write_receipt", write)
+    production.recover_release(
+        output,
+        expected_inputs_digest=built.inputs["inputsDigest"],
+        ledger_root=built.ledger,
+    )
+    receipt = production.verify_saved(
+        output,
+        expected_inputs_digest=built.inputs["inputsDigest"],
+        ledger_root=built.ledger,
+    )
+    snapshot = json.loads((output / "gate-snapshot.json").read_bytes())
+    operation = next(
+        operation
+        for job in snapshot["plan"]["jobs"].values()
+        for operation in job["observation"]
+        if operation.get("bodyRef") is not None
+    )
+    assert operation["bodyRef"]["bytes"] == RAW_16MIB_OVER_BYTES
+    assert hashlib.sha256(request_bytes).hexdigest() == operation["bodyRef"]["sha256"]
+    assert receipt["executionKind"] == "fixed-production-wire"
+    assert len(calls) == snapshot["total"] - len(snapshot["managementEvents"])
+
+    request_path.write_bytes(request_bytes + b"x")
+    with pytest.raises(ValueError, match="saved evidence file differs"):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+    request_path.write_bytes(request_bytes)
+
+    request_path.write_bytes(b"x" + request_bytes[1:])
+    with pytest.raises(ValueError, match="saved evidence file differs"):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+    request_path.write_bytes(request_bytes)
+
+    renamed_path = request_path.with_name("request-neighbor.body")
+    request_path.rename(renamed_path)
+    with pytest.raises(ValueError, match="saved evidence file differs"):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+    renamed_path.rename(request_path)
+
+    unrelated_name = next(
+        name
+        for name in receipt["evidenceFiles"]
+        if name.startswith("collection/")
+        and name != request_path.relative_to(output).as_posix()
+    )
+    unrelated_path = output / unrelated_name
+    unrelated_bytes = unrelated_path.read_bytes()
+    unrelated_path.write_bytes(b"x" * (reservations.MAX_BYTES + 1))
+    with pytest.raises(ValueError, match="saved evidence file differs"):
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+    unrelated_path.write_bytes(unrelated_bytes)
+    assert (
+        production.verify_saved(
+            output,
+            expected_inputs_digest=built.inputs["inputsDigest"],
+            ledger_root=built.ledger,
+        )
+        == receipt
+    )
 
 
 @pytest.mark.parametrize("damage", ["held", "gate", "receipt", "ticket", "symlink"])

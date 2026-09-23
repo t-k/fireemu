@@ -9087,6 +9087,29 @@ fn password_sign_in_reports_the_profile_picture() {
     assert!(signed.get("profilePicture").is_none(), "{signed}");
 }
 
+/// An Admin email change answers without `newEmail` (sandbox recording 2026-09-23,
+/// `auth-account/admin/update#change-email`).
+#[test]
+fn admin_email_change_answers_without_new_email() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "mail", "email": "before@example.com"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, updated) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "mail", "email": "after@example.com"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["email"], "after@example.com");
+    assert!(updated.get("newEmail").is_none(), "{updated}");
+}
+
 #[test]
 fn client_permissions_refuse_end_users_as_admin_only_operations() {
     let s = state();
@@ -11458,12 +11481,55 @@ fn query_sort_fixture() -> AuthState {
 }
 
 fn query_result_ids(body: &Value) -> Vec<&str> {
-    body["userInfo"]
-        .as_array()
-        .unwrap()
+    // An empty page omits `userInfo`.
+    assert!(body.get("recordsCount").is_some(), "{body}");
+    body.get("userInfo")
+        .map_or(&[][..], |rows| rows.as_array().unwrap())
         .iter()
         .map(|row| row["localId"].as_str().unwrap())
         .collect()
+}
+
+/// Descending sorts keep ties in ascending user-id order, and an empty page carries no
+/// `userInfo` (sandbox recording 2026-09-23, `auth-account/admin/query`).
+#[test]
+fn strict_admin_query_descending_ties_stay_in_user_id_order() {
+    let s = strict_state();
+    for (uid, name) in [
+        ("q1", Some("Carol")),
+        ("q2", Some("alice")),
+        ("q3", Some("Bob")),
+        ("q4", None),
+        ("q5", Some("Bob")),
+    ] {
+        let mut body = json!({"localId": uid});
+        if let Some(name) = name {
+            body["displayName"] = json!(name);
+        }
+        assert_eq!(
+            admin(&s, "POST", &format!("{ADMIN}/accounts"), &body).0,
+            200
+        );
+    }
+    let path = format!("{ADMIN}/accounts:query");
+    for (sort, order, expected) in [
+        ("NAME", "ASC", ["q4", "q3", "q5", "q1", "q2"]),
+        ("NAME", "DESC", ["q2", "q1", "q3", "q5", "q4"]),
+        ("LAST_LOGIN_AT", "DESC", ["q1", "q2", "q3", "q4", "q5"]),
+        ("USER_ID", "DESC", ["q5", "q4", "q3", "q2", "q1"]),
+    ] {
+        let (status, page) = admin(&s, "POST", &path, &json!({"sortBy": sort, "order": order}));
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(query_result_ids(&page), expected, "{sort} {order}");
+    }
+    for body in [
+        json!({"limit": "0"}),
+        json!({"expression": [{"email": "nobody@example.com"}]}),
+    ] {
+        let (status, page) = admin(&s, "POST", &path, &body);
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(page, json!({"recordsCount": "0"}));
+    }
 }
 
 #[test]
@@ -11509,7 +11575,7 @@ fn strict_admin_query_all_documented_sorts_apply_before_paging_on_both_routes() 
 }
 
 #[test]
-fn strict_admin_query_count_and_empty_pages_keep_their_distinct_contracts() {
+fn strict_admin_query_count_and_empty_pages_answer_only_the_count() {
     let s = query_sort_fixture();
     for sort in ["NAME", "CREATED_AT", "LAST_LOGIN_AT", "USER_EMAIL"] {
         let (status, count) = admin(
@@ -11526,8 +11592,8 @@ fn strict_admin_query_count_and_empty_pages_keep_their_distinct_contracts() {
             request["sortBy"] = json!(sort);
             let (status, page) = admin(&s, "POST", &format!("{ADMIN}/accounts:query"), &request);
             assert_eq!(status, 200, "{page}");
-            assert_eq!(page["recordsCount"], "0");
-            assert_eq!(page["userInfo"], json!([]));
+            // Production omits an empty page (sandbox recording 2026-09-23, limit-0).
+            assert_eq!(page, json!({"recordsCount": "0"}));
         }
     }
 }
@@ -11809,7 +11875,7 @@ fn strict_expression_filters_before_sort_paging_and_count_only() {
     ] {
         let (status, page) = admin(&s, "POST", &format!("{ADMIN}:queryAccounts"), &body);
         assert_eq!(status, 200, "{page}");
-        assert_eq!(page["userInfo"], json!([]));
+        assert!(page.get("userInfo").is_none(), "{page}");
     }
     assert_eq!(before, format!("{:?}", s.store.lock().unwrap()));
 }

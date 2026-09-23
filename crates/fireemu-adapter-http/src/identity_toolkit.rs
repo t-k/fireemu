@@ -7683,7 +7683,9 @@ fn update(
         response["emailVerified"] = json!(u.email_verified);
         response["displayName"] = json!(u.display_name);
         response["photoUrl"] = json!(u.photo_url);
-        if email_changed {
+        // Production's Admin update answer carries no `newEmail` (sandbox recording
+        // 2026-09-23, `auth-account/admin/update#change-email`).
+        if email_changed && self_service {
             response["newEmail"] = json!(u.email);
         }
     }
@@ -8066,10 +8068,12 @@ fn production_admin_query_page(
         .iter()
         .map(|user| user_json(store, &user.local_id))
         .collect::<Vec<_>>();
-    JsonResponse {
-        status: 200,
-        body: json!({"recordsCount": users.len().to_string(), "userInfo": users}),
+    // An empty page carries no `userInfo` (sandbox recording 2026-09-23, limit-0).
+    let mut body = json!({"recordsCount": users.len().to_string()});
+    if !users.is_empty() {
+        body["userInfo"] = Value::Array(users);
     }
+    JsonResponse { status: 200, body }
 }
 
 fn validate_production_admin_query_enums(body: &Value) -> Result<UserSortField, JsonResponse> {

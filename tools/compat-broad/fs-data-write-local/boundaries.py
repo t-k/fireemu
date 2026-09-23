@@ -126,6 +126,7 @@ def compile_case(family: str, position: str, nonce: str) -> dict[str, Any]:
     elif family == "document-name":
         relative = _long_resource(point, nonce)
         config = _disabled_indexes(relative.split("/")[-2])
+        overlaps = ["FS-LIMIT-INDEX-ENTRY-BYTES"]
     elif family == "field-name":
         fields = {"f" * point: _integer(1)}
         config = _disabled_indexes("c")
@@ -185,7 +186,10 @@ def compile_case(family: str, position: str, nonce: str) -> dict[str, Any]:
         "write": {"update": document, "currentDocument": {"exists": False}},
         "indexConfiguration": config,
         "expect": {
-            "accepted": position != "over" or family == "indexed-value",
+            "accepted": (
+                (position != "over" and family != "document-name")
+                or family == "indexed-value"
+            ),
             "basis": "local-test-hypothesis-not-production-observation",
             "rejectedCommitPreservesSiblings": True,
             "batchWriteSiblingsRemainIndependent": True,

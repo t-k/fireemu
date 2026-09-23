@@ -22,7 +22,7 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]
     ids = [program["id"] for program in programs]
-    assert len(ids) == len(set(ids)) == 61
+    assert len(ids) == len(set(ids)) == 69
     assert {
         "writes/limits/field-path-mask/1499",
         "writes/limits/field-path-mask/1500",
@@ -36,6 +36,14 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/limits/aggregate-map/strict-only",
         "writes/limits/non-commit-rest-request-bytes/batch-write/10485760",
         "writes/limits/non-commit-rest-request-bytes/batch-write/10485761",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/10485760",
+        "writes/limits/non-commit-rest-request-bytes/batch-get/10485761",
+        "writes/limits/non-commit-rest-request-bytes/run-query/10485760",
+        "writes/limits/non-commit-rest-request-bytes/run-query/10485761",
+        "writes/limits/non-commit-rest-request-bytes/create/10485760",
+        "writes/limits/non-commit-rest-request-bytes/create/10485761",
+        "writes/limits/non-commit-rest-request-bytes/patch/10485760",
+        "writes/limits/non-commit-rest-request-bytes/patch/10485761",
     }.issubset(ids)
     assert len(corpus["streamRecipes"]) == 4
     assert {recipe["id"] for recipe in corpus["streamRecipes"]} == {

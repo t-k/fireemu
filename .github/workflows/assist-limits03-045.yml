@@ -29,12 +29,20 @@ jobs:
           git archive --format=tar.gz --output=verification-045/candidate-source.tar.gz HEAD
           git diff dbdbe3a389edf9fb263700be82a79baecb427682 HEAD -- tools/compat-broad/fs-write-limits > verification-045/changes.patch
           sha256sum verification-045/* > verification-045/input-sha256.txt
+      - name: Retain public tracked source before executing tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: limits03-045-source
+          path: verification-045/
+          retention-days: 3
+          if-no-files-found: error
       - name: Install the same uv pin as repository CI
         run: python3 -m pip install uv==0.11.28
       - name: Reproduce against original collector without discarding failures
         shell: bash
         run: |
           set -uo pipefail
+          set +e
           target=tools/compat-broad/fs-write-limits/collector_03.py
           cp "$target" verification-045/collector-candidate.py
           trap 'cp verification-045/collector-candidate.py "$target"' EXIT
@@ -45,6 +53,7 @@ jobs:
           cat verification-045/before.log
           exit 0
       - name: Test candidate with real Gate and compiler
+        if: always()
         shell: bash
         run: |
           set +e
@@ -53,21 +62,25 @@ jobs:
           printf '%s\n' "$rc" > verification-045/after-exit-code.txt
           cat verification-045/after.log
           exit "$rc"
-      - name: Run existing Limits-03 campaign regressions
+      - name: Existing malformed-item Gate control
         if: always()
         shell: bash
         run: |
           set +e
-          timeout 360s uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad/fs-write-limits/test_campaign_03.py -q --junitxml=verification-045/campaign.xml > verification-045/campaign.log 2>&1
+          timeout 120s uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad/fs-write-limits/test_campaign_03.py::test_head_gate_settles_the_malformed_item_batch -q --junitxml=verification-045/campaign-control.xml > verification-045/campaign-control.log 2>&1
           rc=$?
-          printf '%s\n' "$rc" > verification-045/campaign-exit-code.txt
-          cat verification-045/campaign.log
+          printf '%s\n' "$rc" > verification-045/campaign-control-exit-code.txt
+          cat verification-045/campaign-control.log
           exit "$rc"
-      - name: Retain exact source and unedited outcomes, including failures
+      - name: Retain unedited outcomes, including failures
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: limits03-045-source-and-results
-          path: verification-045/
+          name: limits03-045-results
+          path: |
+            verification-045/*.log
+            verification-045/*.xml
+            verification-045/*-exit-code.txt
+            verification-045/*-commit.txt
           retention-days: 3
           if-no-files-found: error

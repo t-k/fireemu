@@ -865,7 +865,7 @@ pub enum AuthError {
     /// Password exceeds the configured UTF-16 length limit.
     PasswordTooLong,
     /// Password meets the API hard limits but violates an enabled custom policy.
-    PasswordPolicyViolation,
+    PasswordPolicyViolation(crate::password_policy::PolicyRefusal),
     /// End-user account creation is disabled by the namespace client permissions.
     UserSignupDisabled,
     /// End-user self-deletion is disabled by the namespace client permissions.
@@ -921,7 +921,7 @@ impl fmt::Display for AuthError {
             Self::InvalidEmail => f.write_str("invalid email"),
             Self::WeakPassword => f.write_str("password must be at least 6 characters"),
             Self::PasswordTooLong => f.write_str("password exceeds the maximum length"),
-            Self::PasswordPolicyViolation => f.write_str("password does not meet requirements"),
+            Self::PasswordPolicyViolation(_) => f.write_str("password does not meet requirements"),
             Self::UserSignupDisabled => f.write_str("user signup is disabled"),
             Self::UserDeletionDisabled => f.write_str("user deletion is disabled"),
             Self::SignupQuotaExceeded => f.write_str("sign-up quota exceeded"),
@@ -3388,14 +3388,15 @@ impl AuthStore {
         })
     }
 
-    /// Minimum password length enforced by Firebase.
+    /// Minimum password length enforced by Firebase, in UTF-16 units like the maximum
+    /// (three astral characters pass, sandbox recording 2026-09-23).
     pub const MIN_PASSWORD_CHARS: usize = 6;
     /// Maximum password length enforced by Firebase's default password policy.
     pub const MAX_PASSWORD_UTF16_UNITS: usize = 4096;
 
     /// Validates a password without storing it (lets callers fail before mutating).
     pub fn validate_password(password: &str) -> Result<(), AuthError> {
-        if password.chars().count() < Self::MIN_PASSWORD_CHARS {
+        if password.encode_utf16().count() < Self::MIN_PASSWORD_CHARS {
             return Err(AuthError::WeakPassword);
         }
         if password.encode_utf16().count() > Self::MAX_PASSWORD_UTF16_UNITS {
@@ -3428,9 +3429,22 @@ impl AuthStore {
             {
                 return Err(AuthError::WeakPassword);
             }
-            return Err(AuthError::PasswordPolicyViolation);
+            return Err(AuthError::PasswordPolicyViolation(
+                self.policy_refusal(violations),
+            ));
         }
         Ok(violations)
+    }
+
+    fn policy_refusal(
+        &self,
+        violations: Vec<ViolationCode>,
+    ) -> crate::password_policy::PolicyRefusal {
+        crate::password_policy::PolicyRefusal {
+            violations,
+            min_length: self.password_policy.min_length,
+            max_length: self.password_policy.max_length,
+        }
     }
 
     /// Evaluates only the configured policy for an already stored credential. Existing
@@ -3451,7 +3465,9 @@ impl AuthStore {
             .password_policy
             .rejects(PasswordPolicyOperation::SignIn, password)
         {
-            return Err(AuthError::PasswordPolicyViolation);
+            return Err(AuthError::PasswordPolicyViolation(
+                self.policy_refusal(violations),
+            ));
         }
         Ok(violations)
     }

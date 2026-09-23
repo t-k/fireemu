@@ -881,8 +881,12 @@ fn auth_error(e: &AuthError) -> JsonResponse {
             400,
             "WEAK_PASSWORD : Password should be at least 6 characters",
         ),
-        AuthError::PasswordTooLong | AuthError::PasswordPolicyViolation => {
-            error(400, "PASSWORD_DOES_NOT_MEET_REQUIREMENTS")
+        AuthError::PasswordTooLong => error(
+            400,
+            "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters",
+        ),
+        AuthError::PasswordPolicyViolation(refusal) => {
+            error(400, &password_requirements_message(refusal))
         }
         AuthError::UserSignupDisabled | AuthError::UserDeletionDisabled => {
             error(400, "OPERATION_NOT_ALLOWED")
@@ -917,6 +921,48 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         }
         AuthError::LimitExceeded(v) => error(400, &format!("INVALID_CLAIMS : {}", v.limit_id)),
     }
+}
+
+/// Production lists every unmet requirement of a custom password policy (sandbox recording
+/// 2026-09-23, auth-account/policy/enforce-custom). The maximum, upper-case, numeric and
+/// non-alphanumeric sentences and their relative order are observed; the minimum and
+/// lower-case sentences follow the same wording and are not yet observed.
+fn password_requirements_message(
+    refusal: &fireemu_core_auth::password_policy::PolicyRefusal,
+) -> String {
+    use fireemu_core_auth::password_policy::ViolationCode;
+    let sentences: Vec<String> = refusal
+        .violations
+        .iter()
+        .map(|violation| match violation {
+            ViolationCode::MinimumPasswordLength => {
+                format!(
+                    "Password must contain at least {} characters",
+                    refusal.min_length
+                )
+            }
+            ViolationCode::MaximumPasswordLength => format!(
+                "Password may contain at most {} characters",
+                refusal.max_length.unwrap_or(4096)
+            ),
+            ViolationCode::MissingLowercaseCharacter => {
+                "Password must contain a lower case character".to_owned()
+            }
+            ViolationCode::MissingUppercaseCharacter => {
+                "Password must contain an upper case character".to_owned()
+            }
+            ViolationCode::MissingNumericCharacter => {
+                "Password must contain a numeric character".to_owned()
+            }
+            ViolationCode::MissingNonAlphanumericCharacter => {
+                "Password must contain a non-alphanumeric character".to_owned()
+            }
+        })
+        .collect();
+    format!(
+        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [{}]",
+        sentences.join(", ")
+    )
 }
 
 fn mfa_error(e: &MfaError) -> JsonResponse {
@@ -7555,8 +7601,16 @@ fn update(
         if let Some(provider) = session_provider {
             match issue_tokens_with(store, &uid, None, at, None, Some(provider)) {
                 Ok(tokens) => {
-                    for key in ["idToken", "refreshToken", "expiresIn"] {
-                        response[key] = tokens[key].clone();
+                    // Production returns the refresh token and its lifetime only when the
+                    // request asks with returnSecureToken (sandbox recording 2026-09-23).
+                    let keys: &[&str] =
+                        if body.get("returnSecureToken").and_then(Value::as_bool) == Some(true) {
+                            &["idToken", "refreshToken", "expiresIn"]
+                        } else {
+                            &["idToken"]
+                        };
+                    for key in keys {
+                        response[*key] = tokens[*key].clone();
                     }
                 }
                 Err(r) => return r,

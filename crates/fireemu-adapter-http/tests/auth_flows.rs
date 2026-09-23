@@ -644,8 +644,10 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
         if expected_status == 400 {
             assert_eq!(
                 response["error"]["message"],
+                // The sign-up, update and Admin routes name the limit in production (sandbox
+                // recording 2026-09-23); the reset route shares that validation.
                 if new_password.encode_utf16().count() > AuthStore::MAX_PASSWORD_UTF16_UNITS {
-                    "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+                    "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
                 } else {
                     "WEAK_PASSWORD : Password should be at least 6 characters"
                 },

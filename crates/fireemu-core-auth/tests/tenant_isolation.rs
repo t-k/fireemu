@@ -255,7 +255,7 @@ fn project_config_follows_into_tenants_unless_overridden_and_password_policy_nev
             "eleven-char",
             NOW
         ),
-        Err(AuthError::PasswordPolicyViolation)
+        Err(AuthError::PasswordPolicyViolation(_))
     ));
     assert!(untouched
         .lock()
@@ -268,7 +268,7 @@ fn project_config_follows_into_tenants_unless_overridden_and_password_policy_nev
             "seven77",
             NOW
         ),
-        Err(AuthError::PasswordPolicyViolation)
+        Err(AuthError::PasswordPolicyViolation(_))
     ));
 }
 

@@ -32,7 +32,7 @@ use fireemu_core_auth::store::{
     AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
     InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
     OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch, RoutedStoreInstall,
-    SecondFactorAssertion, UserQueryExpression, UserSortField, VerificationCode,
+    SecondFactorAssertion, SignInConfig, UserQueryExpression, UserSortField, VerificationCode,
     VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
@@ -2188,6 +2188,11 @@ fn dispatch_with_blocking_hook(
         if live.reset_generation() != reset_generation {
             return error(409, "AUTH_STATE_RESET");
         }
+        if tenant.is_none() {
+            if let Some(denial) = project_provider_denial(handler, live.sign_in_config(), body) {
+                return denial;
+            }
+        }
         if live.generated_id_interference_count() != generated_id_interference {
             return error(
                 400,
@@ -2861,6 +2866,11 @@ fn handle_with_policy(
             return denial;
         }
     }
+    if route.class == routes::RouteClass::EndUser && store_tenant.is_none() {
+        if let Some(denial) = project_provider_denial(route.handler, store.sign_in_config(), body) {
+            return denial;
+        }
+    }
     if route.class == routes::RouteClass::EndUser {
         if let Some(denial) = end_user_client_permission_denial(route.handler, &store, body, at) {
             return denial;
@@ -3385,6 +3395,7 @@ fn apply_project_config_fields(
             field
                 if field == "passwordPolicyConfig"
                     || field.starts_with("passwordPolicyConfig.")
+                    || SIGN_IN_PROVIDER_FIELDS.contains(&field)
                     || valid_blocking_config_field(field)
                     || valid_quota_field(field) => {}
             _ => return Err(error(400, "INVALID_ARGUMENT")),
@@ -3682,7 +3693,143 @@ fn valid_project_config_field(field: &str) -> bool {
             | "blockingFunctions.forwardInboundCredentials.idToken"
             | "blockingFunctions.forwardInboundCredentials.accessToken"
             | "blockingFunctions.forwardInboundCredentials.refreshToken"
-    )
+    ) || SIGN_IN_PROVIDER_FIELDS.contains(&field)
+}
+
+/// Project config fields of the sign-in providers and test phone numbers.
+const SIGN_IN_PROVIDER_FIELDS: &[&str] = &[
+    "signIn.email",
+    "signIn.email.enabled",
+    "signIn.email.passwordRequired",
+    "signIn.anonymous",
+    "signIn.anonymous.enabled",
+    "signIn.phoneNumber",
+    "signIn.phoneNumber.enabled",
+    "signIn.phoneNumber.testPhoneNumbers",
+];
+
+/// The sign-in configuration a masked Admin config PATCH produces from `current`, or `None`
+/// when the mask names no sign-in provider field. A whole-object mask (`signIn.email`)
+/// replaces the object, so an omitted switch is off; the parent `signIn` mask replaces only
+/// the provider objects the body carries.
+fn sign_in_config_from_update(
+    current: &SignInConfig,
+    body: &Value,
+    fields: &[String],
+) -> Result<Option<SignInConfig>, JsonResponse> {
+    let invalid = || error(400, "INVALID_ARGUMENT");
+    let provider = |name: &str| {
+        body.get("signIn")
+            .and_then(|sign_in| sign_in.get(name))
+            .filter(|value| !value.is_null())
+    };
+    let switch = |name: &str, key: &str| match provider(name).and_then(|p| p.get(key)) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(invalid()),
+    };
+    let numbers = || -> Result<BTreeMap<String, String>, JsonResponse> {
+        match provider("phoneNumber").and_then(|p| p.get("testPhoneNumbers")) {
+            None | Some(Value::Null) => Ok(BTreeMap::new()),
+            Some(Value::Object(entries)) => entries
+                .iter()
+                .map(|(number, code)| {
+                    code.as_str()
+                        .map(|code| (number.clone(), code.to_owned()))
+                        .ok_or_else(invalid)
+                })
+                .collect(),
+            Some(_) => Err(invalid()),
+        }
+    };
+    let mut next = current.clone();
+    let mut changed = false;
+    for field in fields {
+        let whole = |name: &str| field == "signIn" && provider(name).is_some();
+        if field == "signIn.email" || whole("email") {
+            next.email_enabled = switch("email", "enabled")?;
+            next.password_required = switch("email", "passwordRequired")?;
+            changed = true;
+        }
+        if field == "signIn.anonymous" || whole("anonymous") {
+            next.anonymous_enabled = switch("anonymous", "enabled")?;
+            changed = true;
+        }
+        if field == "signIn.phoneNumber" || whole("phoneNumber") {
+            next.phone_enabled = switch("phoneNumber", "enabled")?;
+            next.test_phone_numbers = numbers()?;
+            changed = true;
+        }
+        match field.as_str() {
+            "signIn.email.enabled" => next.email_enabled = switch("email", "enabled")?,
+            "signIn.email.passwordRequired" => {
+                next.password_required = switch("email", "passwordRequired")?;
+            }
+            "signIn.anonymous.enabled" => next.anonymous_enabled = switch("anonymous", "enabled")?,
+            "signIn.phoneNumber.enabled" => next.phone_enabled = switch("phoneNumber", "enabled")?,
+            "signIn.phoneNumber.testPhoneNumbers" => next.test_phone_numbers = numbers()?,
+            _ => continue,
+        }
+        changed = true;
+    }
+    if !changed {
+        return Ok(None);
+    }
+    if !next.is_valid() {
+        return Err(invalid());
+    }
+    Ok(Some(next))
+}
+
+/// Adds the sign-in providers to a project config body in production's shape: an enabled
+/// provider reports `enabled`, a disabled one is omitted, and test numbers are listed.
+fn add_sign_in_config_json(body: &mut Value, config: &SignInConfig) {
+    let sign_in = &mut body["signIn"];
+    if config.email_enabled {
+        sign_in["email"] = json!({"enabled": true});
+        if config.password_required {
+            sign_in["email"]["passwordRequired"] = json!(true);
+        }
+    }
+    if config.anonymous_enabled {
+        sign_in["anonymous"] = json!({"enabled": true});
+    }
+    if config.phone_enabled || !config.test_phone_numbers.is_empty() {
+        let mut phone = serde_json::Map::new();
+        if config.phone_enabled {
+            phone.insert("enabled".to_owned(), json!(true));
+        }
+        if !config.test_phone_numbers.is_empty() {
+            phone.insert(
+                "testPhoneNumbers".to_owned(),
+                json!(config.test_phone_numbers),
+            );
+        }
+        sign_in["phoneNumber"] = Value::Object(phone);
+    }
+}
+
+/// Project sign-in providers gate their client flows as a tenant's switches do.
+fn project_provider_denial(
+    handler: routes::Handler,
+    config: &SignInConfig,
+    body: &Value,
+) -> Option<JsonResponse> {
+    if !config.phone_enabled
+        && matches!(
+            handler,
+            routes::Handler::SendVerificationCode | routes::Handler::SignInWithPhoneNumber
+        )
+    {
+        return Some(error(400, "OPERATION_NOT_ALLOWED"));
+    }
+    let metadata = fireemu_core_auth::store::TenantMetadata {
+        allow_password_signup: config.email_enabled,
+        enable_email_link_signin: config.email_enabled && !config.password_required,
+        enable_anonymous_user: config.anonymous_enabled,
+        ..fireemu_core_auth::store::TenantMetadata::default()
+    };
+    tenant_policy_denial_with_metadata(handler, Some(&metadata), body)
 }
 
 fn valid_blocking_config_field(field: &str) -> bool {
@@ -4162,8 +4309,28 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
         let sign_in = value
             .as_object()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-        if sign_in.keys().any(|key| key != "allowDuplicateEmails") {
+        if sign_in.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "allowDuplicateEmails" | "email" | "anonymous" | "phoneNumber"
+            )
+        }) {
             return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        for (provider, allowed) in [
+            ("email", &["enabled", "passwordRequired"][..]),
+            ("anonymous", &["enabled"][..]),
+            ("phoneNumber", &["enabled", "testPhoneNumbers"][..]),
+        ] {
+            match sign_in.get(provider) {
+                None | Some(Value::Null) => {}
+                Some(Value::Object(fields)) => {
+                    if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
+                        return Err(error(400, "INVALID_ARGUMENT"));
+                    }
+                }
+                Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+            }
         }
         if sign_in
             .get("allowDuplicateEmails")
@@ -4361,6 +4528,7 @@ fn project_config_management(
             store.password_policy(),
             store.signup_quota().config(),
         );
+        add_sign_in_config_json(&mut body, store.sign_in_config());
         if let Some(blocking) = state
             .blocking
             .as_ref()
@@ -4438,6 +4606,12 @@ fn project_config_management(
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
+    // Decode the sign-in providers before anything changes; they are applied after the rest.
+    let updates_sign_in = match sign_in_config_from_update(&SignInConfig::default(), body, &fields)
+    {
+        Ok(update) => update.is_some(),
+        Err(response) => return response,
+    };
     // Keep a rollback snapshot while the paired Auth candidate is published. Runtime-backed
     // bridges include private discovery markers in this snapshot so a failed Auth update cannot
     // turn an omitted Discovery trigger into Disabled.
@@ -4486,7 +4660,19 @@ fn project_config_management(
                 Ok((password_policy, signup_quota))
             },
         ) {
-            Ok(Some(config)) => config,
+            Ok(Some(config)) => {
+                if updates_sign_in {
+                    match registry.update_project_sign_in_config(project, |current| {
+                        sign_in_config_from_update(current, body, &fields)
+                            .map(|next| next.unwrap_or_else(|| current.clone()))
+                    }) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
+                        Err(response) => return rollback_blocking(response),
+                    }
+                }
+                config
+            }
             Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
             Err(response) => return rollback_blocking(response),
         }
@@ -4506,8 +4692,13 @@ fn project_config_management(
             Ok(quota) => quota,
             Err(response) => return rollback_blocking(response),
         };
+        let sign_in = match sign_in_config_from_update(store.sign_in_config(), body, &fields) {
+            Ok(sign_in) => sign_in,
+            Err(response) => return rollback_blocking(response),
+        };
         let has_policy = password_policy.is_some();
         let has_quota = signup_quota.is_some();
+        let has_sign_in = sign_in.is_some();
         let config = patch.apply_to(store.config());
         if !patch.is_empty() {
             store.set_config(config);
@@ -4520,8 +4711,13 @@ fn project_config_management(
                 return rollback_blocking(error(400, "INVALID_ARGUMENT"));
             }
         }
+        if let Some(sign_in) = sign_in {
+            if store.set_sign_in_config(sign_in).is_err() {
+                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+            }
+        }
         drop(store);
-        if !patch.is_empty() || has_policy || has_quota {
+        if !patch.is_empty() || has_policy || has_quota || has_sign_in {
             if let Some(project) = pending_project {
                 if let Err(response) = install_routed_candidate(state, project, selected_store) {
                     return rollback_blocking(response);
@@ -4541,6 +4737,7 @@ fn project_config_management(
                 store.password_policy(),
                 store.signup_quota().config(),
             );
+            add_sign_in_config_json(&mut body, store.sign_in_config());
             if let Some(blocking) = state
                 .blocking
                 .as_ref()
@@ -9720,8 +9917,15 @@ fn sign_in_with_phone_number(
     body: &Value,
     at: LogicalInstant,
 ) -> JsonResponse {
-    let (Some(session), Some(code)) = (str_field(body, "sessionInfo"), str_field(body, "code"))
-    else {
+    if let Some(proof) = str_field(body, "temporaryProof") {
+        return sign_in_with_temporary_proof(store, body, proof, at);
+    }
+    // Production names the missing code before the session (sandbox recording 2026-09-23,
+    // `auth-account/phone#missing-code`).
+    let Some(code) = str_field(body, "code") else {
+        return error(400, "MISSING_CODE");
+    };
+    let Some(session) = str_field(body, "sessionInfo") else {
         return error(400, "MISSING_SESSION_INFO");
     };
     // Checked first, consumed once the request is known to succeed.
@@ -9741,7 +9945,21 @@ fn sign_in_with_phone_number(
             .user_by_phone(&verified.phone_number)
             .is_some_and(|u| u.local_id != uid)
         {
-            return error(400, "PHONE_NUMBER_EXISTS");
+            // Production answers a link to a taken number with a proof of the verified number
+            // instead of an error (sandbox recording 2026-09-23, `phone#link-taken-phone`).
+            store.consume_phone_code(session);
+            return match store.issue_temporary_proof(&verified.phone_number, at) {
+                Ok(proof) => JsonResponse {
+                    status: 200,
+                    body: json!({
+                        "temporaryProof": proof,
+                        "phoneNumber": verified.phone_number,
+                        "temporaryProofExpiresIn":
+                            fireemu_core_auth::store::TEMPORARY_PROOF_TTL_SECONDS.to_string(),
+                    }),
+                },
+                Err(e) => auth_error(&e),
+            };
         }
         store.consume_phone_code(session);
         if let Err(e) = store.set_phone_number(&uid, Some(&verified.phone_number)) {
@@ -9773,6 +9991,33 @@ fn sign_in_with_phone_number(
             ("phoneNumber", json!(verified.phone_number)),
             ("isNewUser", json!(is_new)),
         ],
+    )
+}
+
+/// `accounts:signInWithPhoneNumber` with a `temporaryProof`: signs in to the number's owner
+/// once, as the SDK does after a link to a taken number.
+fn sign_in_with_temporary_proof(
+    store: &mut AuthStore,
+    body: &Value,
+    proof: &str,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let Some(phone) = str_field(body, "phoneNumber") else {
+        return error(400, "MISSING_PHONE_NUMBER");
+    };
+    if !store.consume_temporary_proof(proof, phone, at) {
+        return error(400, "INVALID_TEMPORARY_PROOF");
+    }
+    let (uid, is_new) = match store.sign_in_with_phone(phone, at) {
+        Ok(r) => r,
+        Err(e) => return auth_error(&e),
+    };
+    finish_sign_in(
+        store,
+        &uid,
+        at,
+        Some(fireemu_core_auth::store::Provider::Phone),
+        &[("phoneNumber", json!(phone)), ("isNewUser", json!(is_new))],
     )
 }
 

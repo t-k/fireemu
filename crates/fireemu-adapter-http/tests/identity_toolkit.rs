@@ -9488,6 +9488,198 @@ fn duplicate_email_mode_keeps_password_accounts_unique() {
     assert_eq!(ids, [&first["localId"], &json!("dup-import")]);
 }
 
+const PROJECT_CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+
+fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
+    admin(
+        s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask={mask}"),
+        body,
+    )
+}
+
+/// The Admin config sets the sign-in providers and test phone numbers the sandbox baseline
+/// uses, reads them back in production's shape, and a test number signs in with its fixed
+/// code (sandbox recording 2026-09-23, `auth-account/phone`).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn test_phone_numbers_sign_in_with_their_fixed_code() {
+    let s = state();
+    let (status, config) = patch_sign_in(
+        &s,
+        "signIn.email.enabled,signIn.email.passwordRequired,signIn.anonymous.enabled,signIn.phoneNumber.enabled,signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {
+            "email": {"enabled": true, "passwordRequired": true},
+            "anonymous": {"enabled": true},
+            "phoneNumber": {"enabled": true, "testPhoneNumbers": {"+16505550101": "123456"}},
+        }}),
+    );
+    assert_eq!(status, 200, "{config}");
+    let (status, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(status, 200, "{read}");
+    assert_eq!(
+        read["signIn"]["email"],
+        json!({"enabled": true, "passwordRequired": true})
+    );
+    assert_eq!(read["signIn"]["anonymous"], json!({"enabled": true}));
+    assert_eq!(
+        read["signIn"]["phoneNumber"],
+        json!({"enabled": true, "testPhoneNumbers": {"+16505550101": "123456"}})
+    );
+    let send_code = || {
+        post(
+            &s,
+            &format!("{V1}/accounts:sendVerificationCode"),
+            &json!({"phoneNumber": "+16505550101", "recaptchaToken": "x"}),
+        )
+    };
+    let (status, sent) = send_code();
+    assert_eq!(status, 200, "{sent}");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": "000000"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("INVALID_CODE"))
+    );
+    let (status, missing) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"]}),
+    );
+    assert_eq!(
+        (status, missing["error"]["message"].as_str()),
+        (400, Some("MISSING_CODE"))
+    );
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": "123456"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["isNewUser"], true);
+    assert_eq!(signed["phoneNumber"], "+16505550101");
+
+    // A taken number linked to another account answers a temporary proof instead of an
+    // error; the proof signs in to the number's owner once.
+    let (status, other) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "linker@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{other}");
+    let (_, sent) = send_code();
+    let (status, proof) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": "123456", "idToken": other["idToken"]}),
+    );
+    assert_eq!(status, 200, "{proof}");
+    assert_eq!(proof["phoneNumber"], "+16505550101");
+    assert_eq!(proof["temporaryProofExpiresIn"], "3600");
+    assert!(proof.get("idToken").is_none(), "{proof}");
+    let proof_body =
+        json!({"temporaryProof": proof["temporaryProof"], "phoneNumber": "+16505550101"});
+    let (status, owner) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &proof_body,
+    );
+    assert_eq!(status, 200, "{owner}");
+    assert_eq!(owner["localId"], signed["localId"]);
+    assert_eq!(owner["isNewUser"], false);
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &proof_body,
+    );
+    assert_eq!(status, 400);
+
+    // Invalid test numbers are refused and change nothing.
+    for numbers in [
+        json!({"6505550101": "123456"}),
+        json!({"+16505550101": "12345"}),
+        json!({"+16505550101": 123_456}),
+    ] {
+        let (status, refused) = patch_sign_in(
+            &s,
+            "signIn.phoneNumber.testPhoneNumbers",
+            &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": numbers}}}),
+        );
+        assert_eq!(status, 400, "{refused}");
+    }
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(
+        read["signIn"]["phoneNumber"]["testPhoneNumbers"],
+        json!({"+16505550101": "123456"})
+    );
+}
+
+/// Disabled project providers refuse their client flows with `OPERATION_NOT_ALLOWED`, and
+/// `passwordRequired` turns email-link sign-in off.
+#[test]
+fn project_sign_in_providers_gate_client_flows() {
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.email.enabled,signIn.anonymous.enabled,signIn.phoneNumber.enabled",
+        &json!({"signIn": {"email": {"enabled": false}, "anonymous": {"enabled": false}, "phoneNumber": {"enabled": false}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    for (route, body) in [
+        (
+            "signUp",
+            json!({"email": "off@example.com", "password": "password1"}),
+        ),
+        ("signUp", json!({"returnSecureToken": true})),
+        (
+            "signInWithPassword",
+            json!({"email": "off@example.com", "password": "password1"}),
+        ),
+        (
+            "sendVerificationCode",
+            json!({"phoneNumber": "+16505550101", "recaptchaToken": "x"}),
+        ),
+    ] {
+        let (status, refused) = post(&s, &format!("{V1}/accounts:{route}"), &body);
+        assert_eq!(
+            (status, refused["error"]["message"].as_str()),
+            (400, Some("OPERATION_NOT_ALLOWED")),
+            "{route}"
+        );
+    }
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert!(read["signIn"].get("email").is_none(), "{read}");
+    assert!(read["signIn"].get("anonymous").is_none(), "{read}");
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "admin@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200);
+
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.email.passwordRequired",
+        &json!({"signIn": {"email": {"passwordRequired": true}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link@example.com", "continueUrl": "http://localhost/"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("OPERATION_NOT_ALLOWED"))
+    );
+}
+
 #[test]
 fn client_permissions_refuse_end_users_as_admin_only_operations() {
     let s = state();

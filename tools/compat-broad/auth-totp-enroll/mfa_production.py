@@ -22,6 +22,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -176,7 +177,17 @@ class MfaRequestBudget:
         self._charges = self._read_charges()
 
     def _read_charges(self) -> list[dict]:
-        names = sorted(path.name for path in self.events.iterdir())
+        temporary_pattern = re.compile(r"\.(\d{6})\.json\.([A-Za-z0-9_-]{8})\Z")
+        committed_paths = {}
+        temporary_paths = []
+        for path in self.events.iterdir():
+            if re.fullmatch(r"\d{6}\.json", path.name):
+                committed_paths[path.name] = path
+                continue
+            match = temporary_pattern.fullmatch(path.name)
+            if match is None:
+                raise RequestBudgetRefused("request budget journal sequence differs")
+            temporary_paths.append((int(match.group(1)), path))
         charges = []
         previous = "0" * 64
         allowances = self.spec.get("allowances")
@@ -186,11 +197,13 @@ class MfaRequestBudget:
         ):
             raise RequestBudgetRefused("manifest-bound request budget is malformed")
         counts = {category: 0 for category in allowances}
-        for index, name in enumerate(names):
-            if name != f"{index:06d}.json":
+        for index in range(len(committed_paths)):
+            name = f"{index:06d}.json"
+            path = committed_paths.get(name)
+            if path is None:
                 raise RequestBudgetRefused("request budget journal sequence differs")
             try:
-                event = _read_private(self.events / name)
+                event = _read_private(path)
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 raise RequestBudgetRefused(
                     "request budget journal is unreadable"
@@ -199,9 +212,11 @@ class MfaRequestBudget:
             category = event.get("category")
             if (
                 event.get("schema") != "mfa-request-charge-v1"
+                or type(event.get("index")) is not int
                 or event.get("index") != index
                 or event.get("specDigest") != self.spec_digest
                 or event.get("previousDigest") != previous
+                or not isinstance(category, str)
                 or category not in allowances
                 or event.get("eventDigest") != digest(body)
             ):
@@ -211,6 +226,50 @@ class MfaRequestBudget:
                 raise RequestBudgetRefused("request budget journal exceeds allowance")
             previous = event["eventDigest"]
             charges.append(event)
+
+        if len(committed_paths) != len(charges) or len(temporary_paths) > 1:
+            raise RequestBudgetRefused("request budget journal sequence differs")
+        for index, path in temporary_paths:
+            if index > len(charges) or path.is_symlink():
+                raise RequestBudgetRefused("request budget temporary event differs")
+            try:
+                event = _read_private(path)
+            except (OSError, ValueError, json.JSONDecodeError) as error:
+                raise RequestBudgetRefused(
+                    "request budget temporary event is unreadable"
+                ) from error
+            body = {key: value for key, value in event.items() if key != "eventDigest"}
+            category = event.get("category")
+            expected_previous = charges[index - 1]["eventDigest"] if index else "0" * 64
+            if (
+                event.get("schema") != "mfa-request-charge-v1"
+                or type(event.get("index")) is not int
+                or event.get("index") != index
+                or event.get("specDigest") != self.spec_digest
+                or event.get("previousDigest") != expected_previous
+                or not isinstance(category, str)
+                or category not in allowances
+                or event.get("eventDigest") != digest(body)
+            ):
+                raise RequestBudgetRefused("request budget temporary event differs")
+            if index < len(charges):
+                if event != charges[index]:
+                    raise RequestBudgetRefused("request budget temporary event differs")
+            elif counts[category] >= allowances[category]:
+                raise RequestBudgetRefused(
+                    "request budget temporary event exceeds allowance"
+                )
+            try:
+                path.unlink()
+            except OSError as error:
+                raise RequestBudgetRefused(
+                    "request budget temporary event could not be recovered"
+                ) from error
+            directory = os.open(self.events, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         return charges
 
     @property

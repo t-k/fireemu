@@ -113,7 +113,7 @@
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#agg-map",
       "recipeIds": ["writes/limits/aggregate-map"],
       "boundaryStatus": "UNBRACKETED",
-      "status": "MISMATCH"
+      "status": "PRODUCTION_RECORDED"
     },
     {
       "conditionId": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",

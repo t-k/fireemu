@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import {
   assertMatchingSandboxCorpus,
+  comparisonExitCode,
   localTarget,
   prepareSandboxCorpus,
   productionRestEnvironment,
   remainingSandboxBudget,
+  selectComparableSandboxRecipes,
   sessionRequestCount,
   sandboxLedgerEntry,
   sandboxLedgerPath,
@@ -30,6 +33,108 @@ test("local comparison refuses a fixture or run from a different corpus", () => 
         ...corpus,
         restRequestCount: 1,
       }),
+    /local corpus/,
+  );
+});
+
+test("a partial saved replay cannot pass as complete compatibility", () => {
+  assert.equal(comparisonExitCode([], [], []), 0);
+  assert.equal(comparisonExitCode([], ["changed"], []), 2);
+  assert.equal(comparisonExitCode([], [], ["stream"]), 2);
+  assert.equal(comparisonExitCode(["mismatch"], ["changed"], []), 1);
+});
+
+test("saved production comparison selects only identical program recipes and reports changed ones", () => {
+  const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const saved = {
+    id: "saved",
+    steps: [
+      {
+        id: "write",
+        method: "POST",
+        path: "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:commit",
+      },
+    ],
+  };
+  const changed = {
+    id: "changed",
+    steps: [
+      {
+        id: "write",
+        method: "POST",
+        path: "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:commit",
+      },
+    ],
+  };
+  const recordedCorpus = {
+    schemaVersion: 1,
+    restPrograms: [saved, changed],
+    streamRecipes: [],
+    restRequestCount: 2,
+  };
+  const currentCorpus = {
+    ...recordedCorpus,
+    restPrograms: [
+      saved,
+      {
+        ...changed,
+        steps: [
+          ...changed.steps,
+          {
+            id: "readback",
+            method: "GET",
+            path: "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents/c/x",
+          },
+        ],
+      },
+    ],
+    restRequestCount: 3,
+  };
+  const manifest = {
+    schemaVersion: 1,
+    sourceCommit: "a".repeat(40),
+    corpusSha256: digest(recordedCorpus),
+    programs: { saved: digest(saved), changed: digest(changed) },
+    streams: {},
+  };
+  const fixture = {
+    evidence: { corpusSha256: digest(recordedCorpus), harnessRevision: "a".repeat(40) },
+    programs: {
+      saved: { steps: { write: { status: 200, code: "OK", body: {} } } },
+      changed: { steps: { write: { status: 200, code: "OK", body: {} } } },
+    },
+    streams: {},
+  };
+  const selected = selectComparableSandboxRecipes(fixture, manifest, currentCorpus, currentCorpus);
+  assert.deepEqual(selected.matchedRestIds, ["saved"]);
+  assert.deepEqual(selected.pendingRestIds, ["changed"]);
+  assert.deepEqual(Object.keys(selected.fixture.programs), ["saved"]);
+  assert.deepEqual(
+    selected.corpus.restPrograms.map((program) => program.id),
+    ["saved"],
+  );
+  assert.throws(
+    () =>
+      selectComparableSandboxRecipes(
+        fixture,
+        { ...manifest, sourceCommit: "b".repeat(40) },
+        currentCorpus,
+        currentCorpus,
+      ),
+    /manifest source/,
+  );
+  assert.throws(
+    () =>
+      selectComparableSandboxRecipes(
+        fixture,
+        { ...manifest, corpusSha256: "0".repeat(64) },
+        currentCorpus,
+        currentCorpus,
+      ),
+    /manifest corpus/,
+  );
+  assert.throws(
+    () => selectComparableSandboxRecipes(fixture, manifest, currentCorpus, recordedCorpus),
     /local corpus/,
   );
 });

@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -131,6 +132,39 @@ def _read_private(path: Path) -> dict:
     return value
 
 
+def _read_private_temporary(path: Path) -> tuple[bytes, int]:
+    """Read one crash residue without following links or trusting its pathname."""
+    before = path.lstat()
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or before.st_mode & 0o077
+        or before.st_size > reservations.MAX_BYTES
+    ):
+        raise ValueError("private temporary event required")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            or opened.st_uid != os.geteuid()
+            or opened.st_mode & 0o077
+            or opened.st_size > reservations.MAX_BYTES
+        ):
+            raise ValueError("private temporary event required")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            payload = stream.read(reservations.MAX_BYTES + 1)
+        if len(payload) != opened.st_size or len(payload) > reservations.MAX_BYTES:
+            raise ValueError("private temporary event changed while reading")
+        return payload, opened.st_nlink
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 class RequestBudgetRefused(ValueError):
     """The run exhausted or could not adopt its manifest-bound call budget."""
 
@@ -162,7 +196,7 @@ class MfaRequestBudget:
         else:
             try:
                 saved = _read_private(contract)
-            except (OSError, ValueError, json.JSONDecodeError) as error:
+            except (OSError, ValueError) as error:
                 raise RequestBudgetRefused(
                     "manifest-bound request budget is missing or unreadable"
                 ) from error
@@ -204,7 +238,7 @@ class MfaRequestBudget:
                 raise RequestBudgetRefused("request budget journal sequence differs")
             try:
                 event = _read_private(path)
-            except (OSError, ValueError, json.JSONDecodeError) as error:
+            except (OSError, ValueError) as error:
                 raise RequestBudgetRefused(
                     "request budget journal is unreadable"
                 ) from error
@@ -233,11 +267,27 @@ class MfaRequestBudget:
             if index > len(charges) or path.is_symlink():
                 raise RequestBudgetRefused("request budget temporary event differs")
             try:
-                event = _read_private(path)
-            except (OSError, ValueError, json.JSONDecodeError) as error:
+                payload, link_count = _read_private_temporary(path)
+                event = json.loads(payload)
+            except json.JSONDecodeError as error:
+                if (
+                    index != len(charges)
+                    or link_count != 1
+                    or not self._is_next_charge_prefix(
+                        payload, index, charges, counts, allowances
+                    )
+                ):
+                    raise RequestBudgetRefused(
+                        "request budget temporary event is unreadable"
+                    ) from error
+                self._discard_temporary_event(path)
+                continue
+            except (OSError, ValueError) as error:
                 raise RequestBudgetRefused(
                     "request budget temporary event is unreadable"
                 ) from error
+            if not isinstance(event, dict):
+                raise RequestBudgetRefused("request budget temporary event differs")
             body = {key: value for key, value in event.items() if key != "eventDigest"}
             category = event.get("category")
             expected_previous = charges[index - 1]["eventDigest"] if index else "0" * 64
@@ -253,24 +303,54 @@ class MfaRequestBudget:
             ):
                 raise RequestBudgetRefused("request budget temporary event differs")
             if index < len(charges):
-                if event != charges[index]:
+                if link_count != 2 or event != charges[index]:
                     raise RequestBudgetRefused("request budget temporary event differs")
-            elif counts[category] >= allowances[category]:
-                raise RequestBudgetRefused(
-                    "request budget temporary event exceeds allowance"
-                )
-            try:
-                path.unlink()
-            except OSError as error:
-                raise RequestBudgetRefused(
-                    "request budget temporary event could not be recovered"
-                ) from error
+            elif link_count != 1 or counts[category] >= allowances[category]:
+                raise RequestBudgetRefused("request budget temporary event differs")
+            self._discard_temporary_event(path)
+        return charges
+
+    def _is_next_charge_prefix(
+        self,
+        payload: bytes,
+        index: int,
+        charges: list[dict],
+        counts: dict,
+        allowances: dict,
+    ) -> bool:
+        previous = charges[index - 1]["eventDigest"] if index else "0" * 64
+        for category, allowance in allowances.items():
+            if counts[category] >= allowance:
+                continue
+            body = {
+                "schema": "mfa-request-charge-v1",
+                "index": index,
+                "specDigest": self.spec_digest,
+                "category": category,
+                "previousDigest": previous,
+            }
+            encoded = json.dumps(
+                {**body, "eventDigest": digest(body)},
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode()
+            if len(payload) < len(encoded) and encoded.startswith(payload):
+                return True
+        return False
+
+    def _discard_temporary_event(self, path: Path) -> None:
+        try:
+            path.unlink()
             directory = os.open(self.events, os.O_RDONLY)
             try:
                 os.fsync(directory)
             finally:
                 os.close(directory)
-        return charges
+        except OSError as error:
+            raise RequestBudgetRefused(
+                "request budget temporary event could not be recovered"
+            ) from error
 
     @property
     def used(self) -> int:

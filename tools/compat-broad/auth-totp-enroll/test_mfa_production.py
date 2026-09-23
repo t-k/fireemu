@@ -219,6 +219,66 @@ def test_request_budget_recovers_from_sigkill_at_hard_link_boundaries(
     assert reloaded.used == expected_charges + 1
 
 
+def test_request_budget_discards_only_an_exact_prefix_of_next_temp_event(tmp_path):
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"resume-tokeninfo": 2},
+    }
+    budget = mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    budget.call("resume-tokeninfo", lambda: None)
+    body = {
+        "schema": "mfa-request-charge-v1",
+        "index": 1,
+        "specDigest": mfa_production.digest(spec),
+        "category": "resume-tokeninfo",
+        "previousDigest": json.loads(
+            (tmp_path / mfa_production.CALL_BUDGET_EVENTS / "000000.json").read_bytes()
+        )["eventDigest"],
+    }
+    event = {**body, "eventDigest": mfa_production.digest(body)}
+    encoded = json.dumps(event, sort_keys=True, separators=(",", ":")).encode()
+    assert encoded.startswith(b'{"category"')
+    events = tmp_path / mfa_production.CALL_BUDGET_EVENTS
+    residue = events / ".000001.json.ABCdef12"
+    residue.write_bytes(encoded[:13])
+    residue.chmod(0o600)
+
+    resumed = mfa_production.MfaRequestBudget(tmp_path, spec)
+    assert resumed.used == 1
+    assert not residue.exists()
+    resumed.call("resume-tokeninfo", lambda: None)
+    assert resumed.used == 2
+    assert mfa_production.MfaRequestBudget(tmp_path, spec).used == 2
+
+
+def test_request_budget_refuses_malformed_temp_bytes_that_are_not_a_valid_prefix(
+    tmp_path,
+):
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"resume-tokeninfo": 1},
+    }
+    mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    events = tmp_path / mfa_production.CALL_BUDGET_EVENTS
+    residue = events / ".000000.json.ABCdef12"
+    residue.write_bytes(b'{"not-a-charge":')
+    residue.chmod(0o600)
+
+    with pytest.raises(mfa_production.RequestBudgetRefused):
+        mfa_production.MfaRequestBudget(tmp_path, spec)
+    assert residue.exists()
+
+
 @pytest.mark.parametrize("name", ["unrelated", ".000001.json.bad-name"])
 def test_request_budget_refuses_unknown_files_even_when_recovering_temp_events(
     tmp_path, name

@@ -180,8 +180,15 @@ fn derive(spec: &HashSpec, password: &[u8], salt: &[u8], stored_len: usize) -> O
             parallelization,
             dk_len,
         } => {
-            let params =
-                scrypt::Params::new(*log_n, *block_size, *parallelization, *dk_len).ok()?;
+            // `Params` only admits 10..=64-byte keys, but `scrypt::scrypt` sizes its output by
+            // the buffer, so any positive `dkLen` derives (external review 2026-09-24).
+            let params = scrypt::Params::new(
+                *log_n,
+                *block_size,
+                *parallelization,
+                scrypt::Params::RECOMMENDED_LEN,
+            )
+            .ok()?;
             let mut out = vec![0; *dk_len];
             scrypt::scrypt(password, salt, &params, &mut out).ok()?;
             out
@@ -213,8 +220,12 @@ fn derive(spec: &HashSpec, password: &[u8], salt: &[u8], stored_len: usize) -> O
     })
 }
 
-/// Whether `password` matches an imported `hash` under `spec`.
+/// Whether `password` matches an imported `hash` under `spec`. An empty hash never matches:
+/// a derivation sized by it would be empty too and compare equal.
 pub(crate) fn verify(spec: &HashSpec, password: &str, salt: &[u8], hash: &[u8]) -> bool {
+    if hash.is_empty() {
+        return false;
+    }
     if let HashSpec::Bcrypt = spec {
         return std::str::from_utf8(hash)
             .ok()
@@ -588,6 +599,47 @@ mod tests {
             .as_object()
             .expect("object")
             .clone()
+    }
+
+    #[test]
+    fn an_empty_hash_never_matches_under_any_spec() {
+        for spec in [
+            HashSpec::Pbkdf {
+                family: Family::Sha1,
+                rounds: 1000,
+            },
+            HashSpec::Pbkdf {
+                family: Family::Sha256,
+                rounds: 1000,
+            },
+            HashSpec::Md5 { rounds: 0 },
+        ] {
+            assert!(!verify(&spec, "anything", b"salt", &[]), "{spec:?}");
+            assert!(!verify(&spec, "", b"salt", &[]), "{spec:?}");
+        }
+    }
+
+    /// Identity Platform documents any positive `dkLen`; the scrypt crate's `Params` accepts
+    /// only 10..=64 bytes, so the output length must come from the buffer (external review
+    /// 2026-09-24). scrypt's final step is PBKDF2, so shorter outputs are prefixes of longer.
+    #[test]
+    fn standard_scrypt_verifies_every_positive_key_length() {
+        let spec = |dk_len| HashSpec::StandardScrypt {
+            log_n: 10,
+            block_size: 8,
+            parallelization: 1,
+            dk_len,
+        };
+        let reference = derive(&spec(64), b"password123", b"salt", 64).expect("64-byte key");
+        for dk_len in [1, 9, 10, 64, 65, 128] {
+            let derived = derive(&spec(dk_len), b"password123", b"salt", dk_len)
+                .unwrap_or_else(|| panic!("dkLen {dk_len} derives"));
+            assert_eq!(derived.len(), dk_len);
+            let shared = dk_len.min(64);
+            assert_eq!(derived[..shared], reference[..shared], "dkLen {dk_len}");
+            assert!(verify(&spec(dk_len), "password123", b"salt", &derived));
+            assert!(!verify(&spec(dk_len), "password124", b"salt", &derived));
+        }
     }
 
     #[test]

@@ -9879,6 +9879,36 @@ fn duplicate_email_mode_keeps_one_password_account_per_address_on_change() {
     assert_eq!(signed["localId"], owner["localId"]);
 }
 
+/// An empty imported hash is no credential: no password signs in with it, whatever the
+/// algorithm derives (external review 2026-09-24; proto3 reads empty bytes as unset).
+#[test]
+fn an_empty_imported_hash_never_matches() {
+    for options in [
+        json!({"hashAlgorithm": "PBKDF_SHA1", "rounds": 1000}),
+        json!({"hashAlgorithm": "PBKDF2_SHA256", "rounds": 1000}),
+        json!({"hashAlgorithm": "SHA256", "rounds": 1}),
+        json!({"hashAlgorithm": "MD5", "rounds": 0}),
+    ] {
+        let s = state();
+        let mut body = options.clone();
+        body["users"] =
+            json!([{"localId": "empty", "email": "empty@example.com", "passwordHash": ""}]);
+        let (status, imported) = admin(&s, "POST", &format!("{ADMIN}/accounts:batchCreate"), &body);
+        assert_eq!(status, 200, "{options}: {imported}");
+        for password in ["anything1", "password123"] {
+            let (status, refused) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": "empty@example.com", "password": password}),
+            );
+            assert_eq!(status, 400, "{options}: {refused}");
+        }
+        let store = s.store.lock().unwrap();
+        let uid = store.user_by_id("empty").map(|user| user.local_id.clone());
+        assert!(uid.is_some_and(|uid| store.password_digest(&uid).is_none()));
+    }
+}
+
 /// Disabled project providers refuse their client flows with `OPERATION_NOT_ALLOWED`, and
 /// `passwordRequired` turns email-link sign-in off.
 #[test]

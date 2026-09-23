@@ -1061,7 +1061,7 @@ def finish_record(
         issues.append("incomplete-resource-cleanup")
     if budget.get("integrityFailure") is not None:
         issues.append("budget-integrity-failure")
-    if not (
+    stopped_process = (
         isinstance(shutdown, dict)
         and shutdown.get("processStopped") is True
         and type(shutdown.get("remainingChildren")) is int
@@ -1070,7 +1070,18 @@ def finish_record(
         and shutdown["exitCode"] in (0, -15, -9)
         and shutdown.get("outputDrainerStopped") is True
         and shutdown.get("failures") == []
-    ):
+    )
+    no_process_started = (
+        isinstance(shutdown, dict)
+        and shutdown.get("processStarted") is False
+        and shutdown.get("processStopped") is True
+        and type(shutdown.get("remainingChildren")) is int
+        and shutdown["remainingChildren"] == 0
+        and shutdown.get("exitCode") is None
+        and shutdown.get("outputDrainerStopped") is True
+        and shutdown.get("failures") == []
+    )
+    if not (stopped_process or no_process_started):
         issues.append("process-cleanup-unconfirmed")
     record["completionIssues"] = issues
     return record, 0 if failure is None and not issues and agreement["unexpected"] == [] else 1

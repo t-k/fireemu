@@ -198,6 +198,27 @@ def test_startup_failure_publishes_only_safe_diagnostic_and_stop_status(tmp_path
     assert secret not in published
 
 
+def test_launch_failure_records_no_process_as_confirmed_noop_shutdown():
+    shutdown = {"processStarted": False, "processStopped": True, "exitCode": None,
+                "remainingChildren": 0, "outputDrainerStopped": True, "failures": []}
+    complete_rows = {}
+    for case in observation_cases():
+        expected = case["expectedLocal"]
+        complete_rows[case["id"]] = {
+            "caseId": case["id"], "status": expected["status"],
+            "errorCode": expected["errorCode"],
+            "assertions": {name: True for name in expected["assertions"]},
+            "trustRoot": "unsigned-emulator", **control_members(case),
+        }
+    record, code = shadow.finish_record(
+        rows=complete_rows, tracker=new_tracker("b" * 32), budget=shadow.shadow_budget(),
+        failure="OSError: local execution failed", shutdown=shutdown,
+        source_binding={"commit": None, "artifactSha256": "a" * 64},
+    )
+    assert code == 1
+    assert "process-cleanup-unconfirmed" not in record["completionIssues"]
+
+
 # --- cleanup must prove absence, not infer it --------------------------------
 
 

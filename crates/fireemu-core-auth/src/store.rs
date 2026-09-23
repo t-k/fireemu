@@ -603,6 +603,54 @@ impl PasswordDigest {
     }
 }
 
+/// The project's sign-in providers (Admin v2 `signIn.email`, `signIn.anonymous` and
+/// `signIn.phoneNumber`). fireemu starts with every provider enabled and email-link sign-in
+/// allowed, as the emulator does; production starts with none (sandbox recording 2026-09-23).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct SignInConfig {
+    /// `signIn.email.enabled`: password and email-link accounts.
+    pub email_enabled: bool,
+    /// `signIn.email.passwordRequired`: when set, email-link sign-in is off.
+    pub password_required: bool,
+    /// `signIn.anonymous.enabled`.
+    pub anonymous_enabled: bool,
+    /// `signIn.phoneNumber.enabled`.
+    pub phone_enabled: bool,
+    /// `signIn.phoneNumber.testPhoneNumbers`: E.164 number to its fixed six-digit code. No
+    /// message is sent for these numbers and the code never changes.
+    pub test_phone_numbers: BTreeMap<String, String>,
+}
+
+impl Default for SignInConfig {
+    fn default() -> Self {
+        Self {
+            email_enabled: true,
+            password_required: false,
+            anonymous_enabled: true,
+            phone_enabled: true,
+            test_phone_numbers: BTreeMap::new(),
+        }
+    }
+}
+
+impl SignInConfig {
+    /// Identity Platform documents at most ten test phone numbers per project.
+    pub const MAX_TEST_PHONE_NUMBERS: usize = 10;
+
+    /// Whether every test number is valid E.164 with a six-digit code, within the documented
+    /// count.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
+            && self.test_phone_numbers.iter().all(|(number, code)| {
+                AuthStore::validate_phone_number(number).is_ok()
+                    && code.len() == 6
+                    && code.bytes().all(|b| b.is_ascii_digit())
+            })
+    }
+}
+
 /// The project-level Auth configuration `auth_export/config.json` carries.
 ///
 /// fireemu records it so that an import followed by an export does not lose it. Both switches
@@ -1093,6 +1141,8 @@ pub struct AuthStore {
     lifecycle_epoch: Option<AuthLifecycleEpoch>,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
+    /// Outstanding phone `temporaryProof`s: proof to the verified number and its issue time.
+    temporary_proofs: BTreeMap<String, (String, LogicalInstant)>,
     /// Which user owns each outstanding pending sign-in (`mfaPendingCredential`), so a
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
@@ -1120,6 +1170,8 @@ pub struct AuthStore {
     /// The project-level Auth configuration an import carried, kept so an export can write
     /// it back.
     config: ProjectAuthConfig,
+    /// The project's sign-in providers and test phone numbers.
+    sign_in: SignInConfig,
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
     /// their caller explicitly requests a reservation through the typed API.
     signup_quota: SignupQuota,
@@ -1230,6 +1282,10 @@ pub const PENDING_SIGN_IN_TTL_SECONDS: i64 = 3_600;
 /// this budget, and the refused request creates nothing (`AUTH-TRANSIENT-03`).
 pub const MAX_OUTSTANDING_CODES: usize = 1_000;
 
+/// Lifetime of a phone `temporaryProof` (`temporaryProofExpiresIn`, sandbox recording
+/// 2026-09-23).
+pub const TEMPORARY_PROOF_TTL_SECONDS: i64 = 3_600;
+
 /// A cheap, saturating estimate of the heap bytes one user record holds: the fixed record
 /// plus the lengths of its owned strings, claims, second factors and federated identities.
 /// It only has to be monotonic and un-overflowable -- it gates a byte budget, it is not a
@@ -1334,6 +1390,7 @@ impl AuthStore {
             lifecycle_epoch: None,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
+            temporary_proofs: BTreeMap::new(),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
             pending_idp: PendingIdpCache::default(),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1344,6 +1401,7 @@ impl AuthStore {
             deleted_users: Vec::new(),
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
+            sign_in: SignInConfig::default(),
             signup_quota: SignupQuota::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
@@ -1614,6 +1672,7 @@ impl AuthStore {
         self.tokens_by_user = Arc::new(BTreeMap::new());
         self.oob_codes = Arc::new(BTreeMap::new());
         self.verification_codes = Arc::new(BTreeMap::new());
+        self.temporary_proofs.clear();
         self.pending_sign_in_owners = Arc::new(BTreeMap::new());
         self.pending_idp = PendingIdpCache::default();
         self.reset_generation.fetch_add(1, Ordering::AcqRel);
@@ -1654,6 +1713,8 @@ impl AuthStore {
             Arc::make_mut(&mut self.verification_codes)
                 .retain(|_, code| !Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now));
         }
+        self.temporary_proofs
+            .retain(|_, (_, issued)| !Self::expired(*issued, TEMPORARY_PROOF_TTL_SECONDS, now));
         let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
         let enrollment_grace = self.policy.enrollment_session_ttl;
         let candidates: Vec<LocalId> = self.pending_user_ids.iter().cloned().collect();
@@ -1787,6 +1848,22 @@ impl AuthStore {
     /// Records the project-level Auth configuration an import carried.
     pub fn set_config(&mut self, config: ProjectAuthConfig) {
         self.config = config;
+    }
+
+    /// The project's sign-in providers and test phone numbers.
+    #[must_use]
+    pub const fn sign_in_config(&self) -> &SignInConfig {
+        &self.sign_in
+    }
+
+    /// Replaces the sign-in providers and test phone numbers; an invalid configuration is
+    /// refused and changes nothing.
+    pub fn set_sign_in_config(&mut self, config: SignInConfig) -> Result<(), AuthError> {
+        if !config.is_valid() {
+            return Err(AuthError::InvalidPhoneNumber);
+        }
+        self.sign_in = config;
+        Ok(())
     }
 
     /// Whether a principal may create an end-user account in this namespace.
@@ -2923,7 +3000,14 @@ impl AuthStore {
             return Err(AuthError::TooManyOutstandingCodes);
         }
         let session_info = self.next_id("sms-");
-        let code = format!("{:06}", self.rng.next_u64() % 1_000_000);
+        // A test number always takes its configured code (sandbox recording 2026-09-23).
+        let random = self.rng.next_u64() % 1_000_000;
+        let code = self
+            .sign_in
+            .test_phone_numbers
+            .get(phone)
+            .cloned()
+            .unwrap_or_else(|| format!("{random:06}"));
         let entry = VerificationCode {
             session_info: session_info.clone(),
             phone_number: phone.to_owned(),
@@ -2934,6 +3018,44 @@ impl AuthStore {
         };
         Arc::make_mut(&mut self.verification_codes).insert(session_info, entry.clone());
         Ok(entry)
+    }
+
+    /// Issues a `temporaryProof` for a verified number another account holds: production
+    /// answers a link to a taken number with one (sandbox recording 2026-09-23). The proof
+    /// signs in to the number's owner once, within [`TEMPORARY_PROOF_TTL_SECONDS`].
+    pub fn issue_temporary_proof(
+        &mut self,
+        phone: &str,
+        now: LogicalInstant,
+    ) -> Result<String, AuthError> {
+        self.sweep_transient_credentials(now);
+        if self.temporary_proofs.len() >= MAX_OUTSTANDING_CODES {
+            return Err(AuthError::TooManyOutstandingCodes);
+        }
+        let proof = format!("{}{:016x}", self.next_id("proof-"), self.rng.next_u64());
+        self.temporary_proofs
+            .insert(proof.clone(), (phone.to_owned(), now));
+        Ok(proof)
+    }
+
+    /// Consumes a `temporaryProof` issued for `phone`; `false` when it is unknown, expired or
+    /// was issued for another number (nothing is consumed then).
+    pub fn consume_temporary_proof(
+        &mut self,
+        proof: &str,
+        phone: &str,
+        now: LogicalInstant,
+    ) -> bool {
+        self.sweep_transient_credentials(now);
+        if self
+            .temporary_proofs
+            .get(proof)
+            .is_some_and(|(number, _)| number == phone)
+        {
+            self.temporary_proofs.remove(proof);
+            return true;
+        }
+        false
     }
 
     /// Outstanding phone verification codes, oldest first.
@@ -4592,6 +4714,7 @@ impl AuthSnapshot {
             // the destination namespace as well. A cross-namespace data restore must not
             // silently transfer those settings.
             restored.config = live.config;
+            restored.sign_in = live.sign_in.clone();
             // The local sign-up quota is namespace-owned control state as well. Preserve both
             // its configuration and already-counted destination usage instead of transferring
             // the source project's quota window into a different project or tenant.
@@ -6639,6 +6762,36 @@ impl AuthRegistry {
         })
         .ok()
         .flatten()
+    }
+
+    /// Replaces a project's sign-in configuration under the project's operation gate.
+    /// `update` computes the new configuration from the current one; an invalid result is
+    /// refused (`Ok(None)`) and changes nothing.
+    pub fn update_project_sign_in_config<F, E>(
+        &self,
+        project: &str,
+        update: F,
+    ) -> Result<Option<SignInConfig>, E>
+    where
+        F: FnOnce(&SignInConfig) -> Result<SignInConfig, E>,
+    {
+        let Some(gate) = self.operation_gate(project, None) else {
+            return Ok(None);
+        };
+        let Ok(_operation) = gate.lock() else {
+            return Ok(None);
+        };
+        let Some(parent) = self.project_store(project) else {
+            return Ok(None);
+        };
+        let Ok(mut parent) = parent.lock() else {
+            return Ok(None);
+        };
+        let next = update(parent.sign_in_config())?;
+        if parent.set_sign_in_config(next.clone()).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(next))
     }
 
     /// Applies a project settings update after taking the namespace gate and reading the

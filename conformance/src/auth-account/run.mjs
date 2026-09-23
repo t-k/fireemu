@@ -320,10 +320,10 @@ async function sessionLocal() {
       projectNumber: LOCAL_PROJECT_NUMBER,
     },
   });
-  // fireemu starts with every sign-in provider enabled; the admin config surface for the
-  // provider fields is not implemented yet, so the baseline is only applied in production.
+  // The sandbox baseline (providers and test phone numbers) is applied to fireemu through the
+  // same Admin config surface production uses.
   const out = await runCorpus(programs, ctx, {
-    baselineConfig: process.env.AUTH_ACCOUNT_LOCAL_BASELINE === "1" ? BASELINE_CONFIG : undefined,
+    baselineConfig: BASELINE_CONFIG,
     applyBaseline: true,
     configDefaults: CONFIG_DEFAULTS,
     ...ceilings(programs),

@@ -7,6 +7,7 @@ checkout; these tests cover the decisions that must hold before a process is sta
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import sys
 import time
@@ -169,6 +170,32 @@ def test_the_shadow_never_claims_production() -> None:
         "https://identitytoolkit.googleapis.com" in source
     )  # the custom-token audience only
     assert '"productionExecuted": False' in source
+
+
+def test_startup_failure_publishes_only_safe_diagnostic_and_stop_status(tmp_path, monkeypatch):
+    binary = tmp_path / "artifact"
+    binary.write_bytes(b"fixture")
+    binary.chmod(0o700)
+    output = tmp_path / "result.json"
+    secret = "PRIVATE-STARTUP-DETAIL"
+
+    def fail_start(_binary, _workdir):
+        error = RuntimeError(secret)
+        error.diagnostics = {"phase": "readiness", "type": "StartupError",
+                             "bytes": len(secret), "sha256": hashlib.sha256(secret.encode()).hexdigest()}
+        error.shutdown = {"exitCode": -15, "processStopped": True, "remainingChildren": 0,
+                          "outputDrainerStopped": True, "failures": []}
+        raise error
+
+    monkeypatch.setattr(shadow, "start_daemon", fail_start)
+    assert shadow.main(["--binary", str(binary), "--output", str(output)]) == 1
+    published = output.read_text()
+    record = json.loads(published)
+    assert record["startupDiagnostics"] == {"phase": "readiness", "type": "StartupError",
+        "bytes": len(secret), "sha256": hashlib.sha256(secret.encode()).hexdigest()}
+    assert record["shutdown"]["processStopped"] is True
+    assert record["shutdown"]["remainingChildren"] == 0
+    assert secret not in published
 
 
 # --- cleanup must prove absence, not infer it --------------------------------

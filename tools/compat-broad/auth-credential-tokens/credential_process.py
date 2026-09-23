@@ -6,6 +6,7 @@ not an OS-wide process census, escaped descendants, or binary authenticity.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import selectors
@@ -30,6 +31,11 @@ READY_PATTERN = re.compile(rb"auth \(REST\):\s+(\S+)")
 class StartupError(Exception):
     """Fixed diagnostics only; daemon output may contain credentials."""
 
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.diagnostics: dict[str, Any] | None = None
+        self.shutdown: dict[str, Any] | None = None
+
 
 def _auth_origin(address: bytes) -> str:
     try:
@@ -44,8 +50,11 @@ def _auth_origin(address: bytes) -> str:
 
 
 class _OutputMonitor:
-    def __init__(self, stream: Any):
+    def __init__(self, stream: Any, capture: Any):
         self.stream = stream
+        self.capture = capture
+        self.digest = hashlib.sha256()
+        self.captured = 0
         self.ready = threading.Event()
         self.halt = threading.Event()
         self.origin: str | None = None
@@ -76,6 +85,11 @@ class _OutputMonitor:
                 # After ready, keep draining but retain no daemon output.
                 if self.origin is not None or self.failure is not None:
                     continue
+                retained = chunk[:max(0, MAX_STARTUP_BYTES - self.captured)]
+                if retained:
+                    self.capture.write(retained)
+                    self.digest.update(retained)
+                    self.captured += len(retained)
                 received += len(chunk)
                 if received > MAX_STARTUP_BYTES:
                     raise StartupError("startup-output-limit")
@@ -110,6 +124,10 @@ class _OutputMonitor:
         if self.thread.ident is not None:
             self.thread.join(timeout=1.0)
         return not self.thread.is_alive()
+
+    def diagnostic(self, phase: str, error_type: str) -> dict[str, Any]:
+        return {"phase": phase, "type": error_type, "bytes": self.captured,
+                "sha256": self.digest.hexdigest()}
 
 
 def _children_of(pid: int) -> list[int]:
@@ -199,17 +217,24 @@ def start_daemon(binary: Path, workdir: Path) -> tuple[subprocess.Popen[bytes], 
     env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "LANG", "LC_ALL")
            if key in os.environ}
     env.update(HOME=str(workdir), NO_COLOR="1")
-    process = subprocess.Popen(
-        [str(binary), "up", "--config", str(config), "--project", PROJECT, "--only", "auth",
-         "--http-port", "0", "--hub-port", "0", "--ui-port", "0", "--logging-port", "0"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-        bufsize=0, cwd=str(workdir), env=env, start_new_session=True,
-    )
+    capture_fd = os.open(workdir / "startup-output.bin",
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    capture = os.fdopen(capture_fd, "wb")
+    try:
+        process = subprocess.Popen(
+            [str(binary), "up", "--config", str(config), "--project", PROJECT, "--only", "auth",
+             "--http-port", "0", "--hub-port", "0", "--ui-port", "0", "--logging-port", "0"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            bufsize=0, cwd=str(workdir), env=env, start_new_session=True,
+        )
+    except BaseException:
+        capture.close()
+        raise
     process._credential_owned_group = True
     try:
         if process.stdout is None:
             raise StartupError("daemon output pipe unavailable")
-        monitor = _OutputMonitor(process.stdout)
+        monitor = _OutputMonitor(process.stdout, capture)
         process._credential_output_monitor = monitor
         monitor.thread.start()
         deadline = time.monotonic() + STARTUP_SECONDS
@@ -219,14 +244,39 @@ def start_daemon(binary: Path, workdir: Path) -> tuple[subprocess.Popen[bytes], 
             if process.poll() is not None:
                 raise StartupError("daemon exited before readiness")
             if monitor.origin is not None:
+                capture.flush()
+                os.fsync(capture.fileno())
+                capture.close()
                 return process, monitor.origin
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise StartupError("daemon startup deadline exceeded")
             monitor.ready.wait(timeout=min(0.05, remaining))
-    except BaseException:
+    except BaseException as error:
         # The caller has not received process ownership yet; do not leak it here.
         shutdown = stop_daemon(process)
+        monitor = getattr(process, "_credential_output_monitor", None)
+        capture_saved = True
+        try:
+            capture.flush()
+            os.fsync(capture.fileno())
+        except OSError:
+            capture_saved = False
+        try:
+            capture.close()
+        except OSError:
+            capture_saved = False
+        diagnostic = None
+        if capture_saved:
+            diagnostic = (monitor.diagnostic("readiness", type(error).__name__)
+                          if monitor is not None else
+                          {"phase": "launch", "type": type(error).__name__, "bytes": 0,
+                           "sha256": hashlib.sha256(b"").hexdigest()})
+        try:
+            error.diagnostics = diagnostic
+            error.shutdown = shutdown
+        except Exception:
+            pass
         if not shutdown["processStopped"]:
             raise StartupError("daemon startup failed; leader stop unconfirmed") from None
         raise

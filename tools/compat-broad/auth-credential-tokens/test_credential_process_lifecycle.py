@@ -74,6 +74,34 @@ def test_unready_daemon_cannot_block_readline_or_escape_caller_ownership(tmp_pat
         assert not monitor.thread.is_alive()
 
 
+def test_startup_failure_retains_bounded_private_output_and_verified_shutdown(tmp_path, owned):
+    secret = b"PRIVATE-STARTUP-DETAIL"
+    binary = executable(tmp_path, "os.write(1, b'PRIVATE-STARTUP-DETAIL'); time.sleep(60)")
+    work = tmp_path / "work"; work.mkdir()
+    with pytest.raises(runtime.StartupError) as caught:
+        runtime.start_daemon(binary, work)
+    error = caught.value
+    diagnostic = error.diagnostics
+    saved = work / "startup-output.bin"
+    assert saved.read_bytes() == secret
+    assert saved.stat().st_mode & 0o777 == 0o600
+    assert diagnostic == {"phase": "readiness", "type": "StartupError",
+                          "bytes": len(secret), "sha256": __import__("hashlib").sha256(secret).hexdigest()}
+    assert error.shutdown["processStopped"] is True
+    assert error.shutdown["remainingChildren"] == 0
+    assert secret.decode() not in json.dumps(diagnostic)
+
+
+def test_startup_output_is_capped_at_the_private_capture_limit(tmp_path, owned):
+    binary = executable(tmp_path, "os.write(1,b'x'*(runtime_limit+1)); time.sleep(60)".replace(
+        "runtime_limit", str(runtime.MAX_STARTUP_BYTES)))
+    work = tmp_path / "work"; work.mkdir()
+    with pytest.raises(runtime.StartupError) as caught:
+        runtime.start_daemon(binary, work)
+    assert (work / "startup-output.bin").stat().st_size <= runtime.MAX_STARTUP_BYTES
+    assert caught.value.diagnostics["bytes"] <= runtime.MAX_STARTUP_BYTES
+
+
 @pytest.mark.parametrize("address", ["127.0.0.1:8123", "[::1]:8123"])
 def test_readiness_accepts_numeric_endpoints_and_output_is_drained_after_ready(tmp_path, owned, address):
     binary = executable(tmp_path, f"os.write(1,b'auth (REST): {address}\\n'); time.sleep(.1)\n"
@@ -94,7 +122,7 @@ def test_readiness_accepts_numeric_endpoints_and_output_is_drained_after_ready(t
 def test_monitor_initialization_failure_still_reaps_started_daemon(tmp_path, owned, monkeypatch):
     binary = executable(tmp_path, "time.sleep(60)")
     work = tmp_path / "work"; work.mkdir()
-    def broken(_stream):
+    def broken(*_args):
         raise OSError("private startup details")
     monkeypatch.setattr(runtime, "_OutputMonitor", broken)
     with pytest.raises(OSError):

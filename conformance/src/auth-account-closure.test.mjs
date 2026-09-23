@@ -103,9 +103,38 @@ test("AUTH-ACCOUNT closure inventory cannot silently omit a declared condition",
       `${label}: every Auth condition names the configuration it is observed under`,
     );
     if (condition.status === "VERIFIED") {
-      assert.equal(condition.evidence?.productionRecordings?.length, 2, label);
+      const runs = condition.evidence?.productionRecordings ?? [];
+      assert.ok(runs.length > 0, `${label}: names its production runs`);
+      for (const run of runs) {
+        assert.equal(run.recordings, 2, `${label}: every production run is recorded twice`);
+        assert.equal(run.project, "fireemu-oracle-idp", label);
+      }
       assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/, label);
       assert.ok(condition.evidence?.comparisonPath, label);
+      // A verified row is backed by the committed comparison of the same artifact: every row
+      // of its programs matches production.
+      const comparison = JSON.parse(
+        readFileSync(
+          fileURLToPath(new URL(`../../${condition.evidence.comparisonPath}`, import.meta.url)),
+          "utf8",
+        ),
+      );
+      assert.equal(comparison.artifactSha256, condition.evidence.finalArtifactSha256, label);
+      const recipes = condition.recipeIds.filter(
+        (id) => id.startsWith("auth-account/") || id === "auth-account",
+      );
+      const covered = (row) => {
+        const program = row.split("#")[0];
+        return recipes.some(
+          (r) => r === "auth-account" || program === r || program.startsWith(`${r}/`),
+        );
+      };
+      const rows = comparison.rows.filter(({ row }) => covered(row));
+      assert.ok(rows.length > 0, `${label}: has compared rows`);
+      if (condition.conditionId !== "AUTH-ACCOUNT/final-artifact-regression") {
+        const off = rows.filter(({ status }) => status !== "MATCH").map(({ row }) => row);
+        assert.deepEqual(off, [], `${label}: every row matches production`);
+      }
     }
   }
 });

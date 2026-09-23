@@ -1130,6 +1130,12 @@ fn sign_up_sign_in_lookup_and_refresh() {
     );
     assert_eq!(status, 400);
     assert_eq!(bad["error"]["message"], "INVALID_REFRESH_TOKEN");
+    // Secure Token errors have their own shape in production (sandbox recording 2026-09-23):
+    // a gRPC status name and no `errors` list.
+    assert_eq!(
+        bad,
+        json!({"error": {"code": 400, "message": "INVALID_REFRESH_TOKEN", "status": "INVALID_ARGUMENT"}})
+    );
 }
 
 #[test]
@@ -6278,7 +6284,8 @@ fn end_user_update_session_failure_precedes_admin_field_authorization() {
                 "revoked",
                 &revoked_token,
                 Some(&revoked_uid),
-                "TOKEN_EXPIRED : credentials revoked",
+                // Production has no detail for a revoked token (sandbox recording 2026-09-23).
+                "TOKEN_EXPIRED",
             ),
             (
                 "disabled",
@@ -12021,6 +12028,153 @@ fn imported_hashes_production_accepts_are_password_credentials() {
         assert_eq!(
             user["providerUserInfo"][0]["providerId"], "password",
             "{id}: {found}"
+        );
+    }
+}
+
+/// A client delete with the token of an account that no longer exists is `USER_NOT_FOUND` in
+/// production (sandbox recording 2026-09-23, auth-account/client/delete-effects#delete-again).
+#[test]
+fn deleting_again_with_a_deleted_accounts_token_is_user_not_found() {
+    let s = state();
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "gone@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_eq!(status, 200);
+    let (status, again) = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_eq!(status, 400, "{again}");
+    assert_eq!(again["error"]["message"], "USER_NOT_FOUND");
+}
+
+/// A password change moves validSince to the change's second: tokens issued in an earlier
+/// second are `TOKEN_EXPIRED` for lookup, update and refresh, in production (sandbox recording
+/// 2026-09-23: auth-account/admin/disable#refresh-after-re-enable after an Admin password
+/// update, auth-account/policy/default/client-update after client password updates).
+#[test]
+fn a_password_change_expires_tokens_from_earlier_seconds() {
+    for admin_change in [false, true] {
+        let s = strict_state();
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "pw@example.com", "password": "password123", "returnSecureToken": true}),
+        );
+        advance(&s, 2);
+        let (status, changed) = if admin_change {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:update"),
+                &json!({"localId": signed["localId"], "password": "password456"}),
+            )
+        } else {
+            let (_, fresh) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": "pw@example.com", "password": "password123", "returnSecureToken": true}),
+            );
+            post(
+                &s,
+                &format!("{V1}/accounts:update"),
+                &json!({"idToken": fresh["idToken"], "password": "password456", "returnSecureToken": true}),
+            )
+        };
+        assert_eq!(status, 200, "{changed}");
+        advance(&s, 1);
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(
+            (status, looked["error"]["message"].as_str()),
+            (400, Some("TOKEN_EXPIRED")),
+            "admin={admin_change}: {looked}"
+        );
+        if admin_change {
+            // Observed for an Admin change only; the client-change refresh is re-recorded
+            // with a second boundary before it is pinned.
+            let (status, refreshed) = post(
+                &s,
+                "/securetoken.googleapis.com/v1/token",
+                &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"]}),
+            );
+            assert_eq!(
+                (status, refreshed["error"]["message"].as_str()),
+                (400, Some("TOKEN_EXPIRED")),
+                "{refreshed}"
+            );
+        }
+    }
+}
+
+/// After an Admin deletes an account and creates a new one with the same UID, the old refresh
+/// token is `TOKEN_EXPIRED`, not `USER_NOT_FOUND`, in production (sandbox recording 2026-09-23,
+/// auth-account/admin/uid-reuse#first-refresh-token-after-reuse); without reuse it stays
+/// `USER_NOT_FOUND`.
+#[test]
+fn a_reused_uids_old_refresh_token_is_expired() {
+    let s = strict_state();
+    for (id, reuse, expected) in [
+        ("reused", true, "TOKEN_EXPIRED"),
+        ("gone", false, "USER_NOT_FOUND"),
+    ] {
+        let email = format!("{id}@example.com");
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": id, "email": email, "password": "password123"}),
+        );
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": email, "password": "password123", "returnSecureToken": true}),
+        );
+        advance(&s, 2);
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": id}),
+        );
+        if reuse {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts"),
+                &json!({"localId": id, "email": format!("{id}-2@example.com")}),
+            );
+        }
+        let (status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"]}),
+        );
+        assert_eq!(
+            (status, refreshed["error"]["message"].as_str()),
+            (400, Some(expected)),
+            "{id}: {refreshed}"
+        );
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(
+            status, 400,
+            "{id}: the old ID token never reads the new account: {looked}"
         );
     }
 }

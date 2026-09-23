@@ -1037,7 +1037,7 @@ pub struct AuthStore {
     /// Rejection-only identities of refresh credentials retired by user deletion. No raw
     /// tokens, user IDs or claims. Retained until reset (no TTL or silent eviction); memory
     /// grows with deleted issued credentials and is included in snapshot byte accounting.
-    deleted_refresh_digests: Arc<BTreeSet<[u8; 32]>>,
+    deleted_refresh_digests: Arc<BTreeMap<[u8; 32], [u8; 32]>>,
     /// Refresh-token values owned by each user. Revocation and deletion touch one user's
     /// sessions instead of scanning every live session.
     tokens_by_user: Arc<BTreeMap<LocalId, BTreeSet<String>>>,
@@ -1286,7 +1286,7 @@ impl AuthStore {
             by_sequence: BTreeMap::new(),
             counter: 0,
             refresh_tokens: Arc::new(BTreeMap::new()),
-            deleted_refresh_digests: Arc::new(BTreeSet::new()),
+            deleted_refresh_digests: Arc::new(BTreeMap::new()),
             tokens_by_user: Arc::new(BTreeMap::new()),
             next_id_override: None,
             next_sequence: 0,
@@ -1542,9 +1542,12 @@ impl AuthStore {
         }
         self.by_sequence.remove(&user.sequence);
         if let Some(tokens) = self.tokens_by_user.get(&key) {
+            // The owner is kept only as a digest, so a reused UID can be recognised without
+            // retaining the identifier itself.
+            let owner = sha256(key.as_str().as_bytes());
             let deleted = Arc::make_mut(&mut self.deleted_refresh_digests);
             for token in tokens {
-                deleted.insert(sha256(token.as_bytes()));
+                deleted.insert(sha256(token.as_bytes()), owner);
             }
         }
         self.remove_refresh_tokens_for(&key);
@@ -1569,7 +1572,7 @@ impl AuthStore {
         self.local_ids_for_federated.clear();
         self.by_sequence.clear();
         self.refresh_tokens = Arc::new(BTreeMap::new());
-        self.deleted_refresh_digests = Arc::new(BTreeSet::new());
+        self.deleted_refresh_digests = Arc::new(BTreeMap::new());
         self.tokens_by_user = Arc::new(BTreeMap::new());
         self.oob_codes = Arc::new(BTreeMap::new());
         self.verification_codes = Arc::new(BTreeMap::new());
@@ -3507,6 +3510,10 @@ impl AuthStore {
         let mut digest = PasswordDigest::new(salt, password);
         digest.updated_at = Some(now);
         user.password = Some(digest);
+        // A password change revokes every token issued in an earlier second, as production's
+        // validSince does (an Admin password update left a refresh token TOKEN_EXPIRED in the
+        // sandbox recording of 2026-09-23).
+        user.tokens_valid_after = user.tokens_valid_after.max(Self::whole_second(now));
         self.activate_email_owner(uid);
         Ok(())
     }
@@ -3791,7 +3798,7 @@ impl AuthStore {
         self.refresh_tokens.contains_key(token)
             || self
                 .deleted_refresh_digests
-                .contains(&sha256(token.as_bytes()))
+                .contains_key(&sha256(token.as_bytes()))
     }
 
     /// Records a completed issuance by its exact refresh session, without activating
@@ -3842,12 +3849,19 @@ impl AuthStore {
         token: &str,
         enforce_revocation: bool,
     ) -> Result<LocalId, AuthError> {
-        // A deletion record is terminal, even if an administrator reuses the same UID.
-        if self
-            .deleted_refresh_digests
-            .contains(&sha256(token.as_bytes()))
-        {
-            return Err(AuthError::UserNotFound);
+        // A deleted account's refresh token never becomes valid again. When an administrator
+        // has since reused the UID, production answers TOKEN_EXPIRED (the new account's
+        // validSince postdates the token); otherwise USER_NOT_FOUND.
+        if let Some(owner) = self.deleted_refresh_digests.get(&sha256(token.as_bytes())) {
+            let reused = self
+                .users
+                .keys()
+                .any(|uid| sha256(uid.as_str().as_bytes()) == *owner);
+            return Err(if reused {
+                AuthError::ExpiredRefreshToken
+            } else {
+                AuthError::UserNotFound
+            });
         }
         let session = self
             .refresh_tokens
@@ -4413,7 +4427,7 @@ impl AuthSnapshot {
             restored.project_id == live.project_id && restored.tenant_id == live.tenant_id;
         if !namespace_matches {
             restored.refresh_tokens = Arc::new(BTreeMap::new());
-            restored.deleted_refresh_digests = Arc::new(BTreeSet::new());
+            restored.deleted_refresh_digests = Arc::new(BTreeMap::new());
             restored.tokens_by_user = Arc::new(BTreeMap::new());
             // A cross-namespace restore must not transfer control-plane policy from the
             // captured namespace. The destination policy belongs to the destination namespace

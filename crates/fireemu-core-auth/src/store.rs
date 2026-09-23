@@ -379,6 +379,9 @@ pub struct UserRecord {
     /// `passwordUpdatedAt` of a password credential that was since removed: production keeps
     /// reporting it (sandbox recording 2026-09-23, auth-account/provider).
     pub removed_password_updated_at: Option<LogicalInstant>,
+    /// Whether an import recorded `emailVerified` explicitly: production then reports it
+    /// even for an account without an address (sandbox recording 2026-09-23).
+    pub email_verified_recorded: bool,
     /// Salted password digest (local test hashing, not Firebase's scrypt). `None` for users
     /// without a password credential.
     password: Option<PasswordDigest>,
@@ -848,6 +851,9 @@ pub struct ImportedUser {
     /// A password hash in one of production's foreign formats, when the account was imported
     /// with one instead of a plaintext password.
     pub imported_password: Option<ImportedPasswordHash>,
+    /// Whether the address may already belong to another account: production's batchCreate
+    /// does not check it (sandbox recording 2026-09-23); an artifact import still does.
+    pub allow_shared_email: bool,
     /// Enrolled TOTP second factors.
     pub totp_factors: Vec<crate::mfa::TotpFactor>,
     /// Enrolled phone second factors.
@@ -2036,7 +2042,10 @@ impl AuthStore {
             if !email.contains('@') || email.chars().any(char::is_control) {
                 return Err(ImportUserError::Account(AuthError::InvalidEmail));
             }
-            if !self.config.allow_duplicate_emails && self.email_owned_by_other(email, None) {
+            if !self.config.allow_duplicate_emails
+                && !user.allow_shared_email
+                && self.email_owned_by_other(email, None)
+            {
                 return Err(ImportUserError::Account(AuthError::EmailExists));
             }
         }
@@ -2110,6 +2119,7 @@ impl AuthStore {
                 federated: user.federated,
                 admin_created: true,
                 removed_password_updated_at: None,
+                email_verified_recorded: true,
                 password,
             }),
         );
@@ -2744,6 +2754,7 @@ impl AuthStore {
             federated: Vec::new(),
             admin_created: false,
             removed_password_updated_at: None,
+            email_verified_recorded: false,
             password: None,
         }));
         if let Some(email) = email {

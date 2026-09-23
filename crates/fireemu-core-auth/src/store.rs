@@ -2374,32 +2374,42 @@ impl AuthStore {
                 .collect();
         }
         let keep = offset.saturating_add(limit).min(self.users.len());
-        let mut candidates = BTreeMap::new();
-        for user in self
+        let matching = self
             .users
             .values()
             .map(Arc::as_ref)
-            .filter(|user| Self::matches_user_query(user, expressions))
-        {
-            candidates.insert((field.value(user), &user.local_id), user);
+            .filter(|user| Self::matches_user_query(user, expressions));
+        // Ties keep ascending user-id order in both directions: production reverses only the
+        // sort field (sandbox recording 2026-09-23, `auth-account/admin/query#sort-name-desc`).
+        if descending {
+            Self::first_sorted(
+                matching,
+                |user| (std::cmp::Reverse(field.value(user)), &user.local_id),
+                keep,
+            )
+        } else {
+            Self::first_sorted(matching, |user| (field.value(user), &user.local_id), keep)
+        }
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect()
+    }
+
+    /// The `keep` smallest users by `key`, in order, holding at most `keep + 1` at a time.
+    fn first_sorted<'a, K: Ord>(
+        users: impl Iterator<Item = &'a UserRecord>,
+        key: impl Fn(&'a UserRecord) -> K,
+        keep: usize,
+    ) -> Vec<&'a UserRecord> {
+        let mut candidates = BTreeMap::new();
+        for user in users {
+            candidates.insert(key(user), user);
             if candidates.len() > keep {
-                if descending {
-                    candidates.pop_first();
-                } else {
-                    candidates.pop_last();
-                }
+                candidates.pop_last();
             }
         }
-        if descending {
-            candidates
-                .into_values()
-                .rev()
-                .skip(offset)
-                .take(limit)
-                .collect()
-        } else {
-            candidates.into_values().skip(offset).take(limit).collect()
-        }
+        candidates.into_values().collect()
     }
 
     /// Number of users without allocating an ID list.

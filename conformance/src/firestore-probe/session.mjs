@@ -16,6 +16,11 @@ import { readFile, writeFile } from "node:fs/promises";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
+import {
+  makeWebChannelFormBody,
+  projectWebChannelResponse,
+  WEBCHANNEL_PATH,
+} from "./webchannel-request-bytes.mjs";
 
 const HOST = process.env.FIRESTORE_PROBE_HOST;
 const PROJECT = process.env.FIRESTORE_PROBE_PROJECT ?? "demo-conformance";
@@ -206,7 +211,14 @@ async function step(spec, raw) {
   for (const name of spec.credential === undefined ? [] : Object.keys(init.headers)) {
     if (name.toLowerCase() === "authorization") delete init.headers[name];
   }
-  if (spec.body !== undefined) {
+  if (spec.webchannelBodyBytes !== undefined) {
+    if (spec.method !== "POST" || spec.path !== WEBCHANNEL_PATH || spec.body !== undefined) {
+      throw new Error("invalid fixed WebChannel byte probe");
+    }
+    init.headers["content-type"] = "application/x-www-form-urlencoded;charset=UTF-8";
+    init.body = makeWebChannelFormBody(spec.webchannelBodyBytes);
+    init.redirect = "error";
+  } else if (spec.body !== undefined) {
     init.headers["content-type"] = "application/json";
     init.body =
       typeof spec.body === "string"
@@ -231,6 +243,9 @@ async function step(spec, raw) {
     throw error;
   }
   const text = await response.text();
+  if (spec.webchannelBodyBytes !== undefined) {
+    return { recorded: projectWebChannelResponse(response.status, text), raw: null };
+  }
   let body;
   try {
     body = JSON.parse(text);

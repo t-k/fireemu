@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { WEBCHANNEL_PATH } from "./firestore-probe/webchannel-request-bytes.mjs";
+
 const SANDBOX_DOCUMENTS = "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents";
 const RECORDED_PROJECT = "demo-firestore-probe";
 const MAX_REST_REQUESTS = 400;
@@ -59,7 +61,23 @@ export function validateSandboxCorpus(corpus) {
       if (!["GET", "POST", "PATCH"].includes(step.method)) {
         throw new Error("unsupported sandbox method");
       }
-      if (typeof step.path !== "string" || !step.path.startsWith(SANDBOX_DOCUMENTS)) {
+      const webchannel = step.webchannelBodyBytes !== undefined;
+      if (
+        webchannel &&
+        (![10_485_760, 10_485_761].includes(step.webchannelBodyBytes) ||
+          step.method !== "POST" ||
+          step.id !== "unknown-session" ||
+          program.steps.length !== 1 ||
+          step.path !== WEBCHANNEL_PATH ||
+          program.id !== `writes/limits/webchannel-request-bytes/${step.webchannelBodyBytes}` ||
+          step.body !== undefined)
+      ) {
+        throw new Error("invalid sandbox WebChannel route or WebChannel body size");
+      }
+      if (
+        typeof step.path !== "string" ||
+        (!webchannel && !step.path.startsWith(SANDBOX_DOCUMENTS))
+      ) {
         throw new Error("request escaped the sandbox project");
       }
       const pathname = step.path.split("?", 1)[0];

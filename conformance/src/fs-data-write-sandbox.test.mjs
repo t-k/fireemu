@@ -185,6 +185,59 @@ test("sandbox corpus refuses a route, method, or header outside its bounded proj
   );
 });
 
+test("WebChannel byte probes are limited to the fixed sandbox unknown-session route", () => {
+  const channel = {
+    id: "writes/limits/webchannel-request-bytes/10485760",
+    area: "writes",
+    steps: [
+      {
+        id: "unknown-session",
+        method: "POST",
+        path: "/google.firestore.v1.Firestore/Write/channel?database=projects%2Ffireemu-oracle-sbx%2Fdatabases%2F(default)&VER=8&RID=1&SID=missing-fireemu-byte-probe&AID=0",
+        webchannelBodyBytes: 10_485_760,
+      },
+    ],
+  };
+  const channelCorpus = { ...corpus, restPrograms: [channel], restRequestCount: 1 };
+  assert.equal(validateSandboxCorpus(channelCorpus).requestCount, 1);
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...channelCorpus,
+        restPrograms: [
+          {
+            ...channel,
+            steps: [
+              {
+                ...channel.steps[0],
+                path: channel.steps[0].path.replace("fireemu-oracle-sbx", "fireemu-35fe6"),
+              },
+            ],
+          },
+        ],
+      }),
+    /sandbox WebChannel route/,
+  );
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...channelCorpus,
+        restPrograms: [
+          { ...channel, steps: [{ ...channel.steps[0], webchannelBodyBytes: 10_485_762 }] },
+        ],
+      }),
+    /WebChannel body size/,
+  );
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...channelCorpus,
+        restPrograms: [{ ...channel, steps: [{ ...channel.steps[0], method: "GET" }] }],
+      }),
+    /sandbox WebChannel route/,
+  );
+});
+
 test("two recordings must agree row by row before a fixture can be frozen", () => {
   const first = { "writes/control": { steps: { read: { status: 404, code: "NOT_FOUND" } } } };
   const second = { "writes/control": { steps: { read: { code: "NOT_FOUND", status: 404 } } } };

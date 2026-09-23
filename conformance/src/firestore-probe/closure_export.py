@@ -18,6 +18,7 @@ PROJECT = "fireemu-oracle-sbx"
 DOCS = f"projects/{PROJECT}/databases/(default)/documents"
 COMMIT = f"/v1/{DOCS}:commit"
 BATCH_GET = f"/v1/{DOCS}:batchGet"
+WEBCHANNEL_PATH = "/google.firestore.v1.Firestore/Write/channel?database=projects%2Ffireemu-oracle-sbx%2Fdatabases%2F(default)&VER=8&RID=1&SID=missing-fireemu-byte-probe&AID=0"
 
 
 def _invalid_collection_program(suffix: str, collection_id: str) -> dict[str, Any]:
@@ -72,6 +73,21 @@ def build_corpus() -> dict[str, Any]:
         _invalid_collection_program("dot", "."),
         _invalid_collection_program("dot-dot", ".."),
         _invalid_collection_program("reserved", "__reserved__"),
+        *(
+            {
+                "id": f"writes/limits/webchannel-request-bytes/{size}",
+                "area": "writes",
+                "steps": [
+                    {
+                        "id": "unknown-session",
+                        "method": "POST",
+                        "path": WEBCHANNEL_PATH,
+                        "webchannelBodyBytes": size,
+                    }
+                ],
+            }
+            for size in (10_485_760, 10_485_761)
+        ),
     ]
     stream_recipes = [
         {
@@ -123,7 +139,10 @@ def build_corpus() -> dict[str, Any]:
         raise ValueError("duplicate FS-DATA-WRITE program ID")
     for program in programs:
         for step in program["steps"]:
-            if not step["path"].startswith(f"/v1/{DOCS}"):
+            if not (
+                step["path"].startswith(f"/v1/{DOCS}")
+                or step["path"] == WEBCHANNEL_PATH
+            ):
                 raise ValueError("program escaped the sandbox project")
     return {
         "schemaVersion": 1,

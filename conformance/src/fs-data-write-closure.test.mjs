@@ -289,7 +289,7 @@ test("final artifact closure names both saved production regression commands", (
   assert.notEqual(condition.status, "VERIFIED");
 });
 
-test("request-byte transports distinguish prepared REST and gRPC input from missing WebChannel corpus", () => {
+test("request-byte transports remain pending production recording after local corpus checks", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const nonCommitRest = closure.conditions.find(
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
@@ -304,7 +304,7 @@ test("request-byte transports distinguish prepared REST and gRPC input from miss
   const webchannel = closure.conditions.find(
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/webchannel",
   );
-  assert.equal(webchannel.status, "PENDING_CORPUS");
+  assert.equal(webchannel.status, "PENDING_RECORDING");
   assert.equal(webchannel.boundaryStatus, "PENDING_RECORDING");
 });
 

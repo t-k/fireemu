@@ -6652,19 +6652,21 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         return Value::Null;
     };
     let mfa = mfa_info(store, uid, false);
+    // Production lists phone first, then federated identities in link order, then password
+    // (sandbox recording 2026-09-23: auth-account/provider, admin/create, admin/import).
     let mut providers: Vec<Value> = Vec::new();
+    if let Some(phone) = &u.phone_number {
+        providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
+    }
+    for f in &u.federated {
+        providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
+    }
     // The official record lists a `password` provider for an email with a password or an
     // email-link sign-in, and nothing for an address that has neither.
     if let Some(email) = &u.email {
         if store.has_password(uid) || u.provider == fireemu_core_auth::store::Provider::EmailLink {
             providers.push(json!({"providerId": "password", "rawId": email, "federatedId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
         }
-    }
-    if let Some(phone) = &u.phone_number {
-        providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
-    }
-    for f in &u.federated {
-        providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
     }
     // Production omits most default-valued fields (proto3 JSON): no empty `mfaInfo` or
     // `providerUserInfo`, `emailVerified` only with an address. `disabled` and `validSince`
@@ -6993,17 +6995,21 @@ fn reject_control_characters(value: &str, field: &str) -> Result<(), JsonRespons
 
 /// `{providerId, rawId, email?, displayName?, photoUrl?}` of a link request.
 fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
+    // Production's refusals (sandbox recording 2026-09-23, auth-account/provider).
+    let missing = || {
+        error(
+            400,
+            "MISSING_IDENTIFIER : providerId & rawId are both required for provider linking",
+        )
+    };
     let provider_id = opt_str(v, "providerId")?
         .filter(|p| !p.is_empty())
-        .ok_or_else(|| error(400, "INVALID_ARGUMENT : providerId is required"))?;
+        .ok_or_else(missing)?;
     let raw_id = opt_str(v, "rawId")?
         .filter(|p| !p.is_empty())
-        .ok_or_else(|| error(400, "INVALID_ARGUMENT : rawId is required"))?;
+        .ok_or_else(missing)?;
     if matches!(provider_id, "password" | "phone" | "emailLink") {
-        return Err(error(
-            400,
-            "INVALID_ARGUMENT : linkProviderUserInfo takes a federated providerId",
-        ));
+        return Err(error(400, "INVALID_PROVIDER_ID"));
     }
     let identity = FederatedIdentity {
         provider_id: provider_id.to_owned(),
@@ -7190,11 +7196,9 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         for p in string_list(providers, "deleteProvider")? {
             match p.as_str() {
                 "phone" => phone_number = Change::Clear,
-                // The official emulator drops the address with the credential.
-                "password" => {
-                    clear_password = true;
-                    clear_email = true;
-                }
+                // Production keeps the address when the password provider is removed
+                // (sandbox recording 2026-09-23); the official emulator drops it.
+                "password" => clear_password = true,
                 "emailLink" => {
                     return Err(error(
                         400,

@@ -538,13 +538,82 @@ class ManagementSession:
         return None
 
     def _lifecycle_attestation(self, slot, response):
-        return {key: response.get(key) for key in ("complete", "workerReaped", "status", "bodyKind", "body")}
+        state = getattr(self, "_lifecycle", {})
+        if slot == "index-lifecycle-apply":
+            state["applyResponse"] = {
+                key: response.get(key)
+                for key in ("complete", "workerReaped", "status", "bodyKind")
+            }
+            state["applyResponseBodyDigest"] = digest(response.get("body"))
+            body = response.get("body")
+            error = body.get("error") if isinstance(body, dict) else None
+            if isinstance(error, dict):
+                state["applyError"] = {
+                    "code": error.get("code"),
+                    "status": error.get("status"),
+                }
+            self._lifecycle = state
+        attestation = {
+            key: response.get(key)
+            for key in ("complete", "workerReaped", "status", "bodyKind", "body")
+        }
+        if slot == "index-lifecycle-restored":
+            baseline = state.get("before")
+            exact_restore = (
+                response.get("complete") is True
+                and response.get("workerReaped") is True
+                and response.get("status") == 200
+                and isinstance(baseline, dict)
+                and response.get("body") == baseline
+            )
+            apply_response = state.get("applyResponse", {})
+            if (
+                exact_restore
+                and apply_response.get("complete") is True
+                and apply_response.get("workerReaped") is True
+                and apply_response.get("bodyKind") == "json"
+                and apply_response.get("status") == 400
+                and state.get("applyError")
+                == {"code": 400, "status": "INVALID_ARGUMENT"}
+            ):
+                disposition = "rejected-no-op-restored"
+            elif exact_restore and state.get("afterVerified") is True:
+                disposition = "deployed-exemption-restored"
+            else:
+                disposition = (
+                    "uncertain-apply-restored" if exact_restore else "restore-unproven"
+                )
+            resource = response.get("body")
+            if isinstance(resource, dict):
+                attestation["body"] = {
+                    **resource,
+                    "_lifecycleApplyDisposition": disposition,
+                }
+        return attestation
 
     def _accept_lifecycle_response(self, slot, response):
         if response.get("complete") is not True or response.get("workerReaped") is not True or response.get("status") != 200:
             raise ValueError("lifecycle management response incomplete")
         body = response.get("body")
         state = getattr(self, "_lifecycle", {})
+        if slot == "index-lifecycle-restored":
+            if (
+                not isinstance(body, dict)
+                or body.get("_lifecycleApplyDisposition")
+                not in {
+                    "rejected-no-op-restored",
+                    "deployed-exemption-restored",
+                    "uncertain-apply-restored",
+                    "restore-unproven",
+                }
+            ):
+                raise ValueError("restored lifecycle disposition required")
+            state["applyDisposition"] = body["_lifecycleApplyDisposition"]
+            body = {
+                key: value
+                for key, value in body.items()
+                if key != "_lifecycleApplyDisposition"
+            }
         if slot == "index-lifecycle-before":
             config = body.get("indexConfig") if isinstance(body, dict) else None
             if (
@@ -585,6 +654,7 @@ class ManagementSession:
             ):
                 raise ValueError("lifecycle after projection or unrelated configuration differs")
             state["after"] = body
+            state["afterVerified"] = True
         elif slot == "index-lifecycle-restore":
             name = body.get("name") if isinstance(body, dict) else None
             prefix = "projects/fireemu-35fe6/databases/(default)/operations/"
@@ -679,10 +749,25 @@ def validate_saved_management(receipt, snapshot, permission):
             raise ValueError("saved credential attestation differs")
         validate_principal(permission["credentialPrincipal"])
 
-    lifecycle = {row["id"]: row["response"].get("body") for row in rows if row["id"].split(":", 1)[1] in LIFECYCLE_SLOTS}
+    lifecycle = {
+        row["id"]: row["response"].get("body")
+        for row in rows
+        if row["id"].split(":", 1)[1] in LIFECYCLE_SLOTS
+    }
     before = lifecycle.get("observation:index-lifecycle-before")
     after = lifecycle.get("observation:index-lifecycle-after")
-    restored = lifecycle.get("recovery:index-lifecycle-restored")
+    restored_attestation = lifecycle.get("recovery:index-lifecycle-restored")
+    if (
+        not isinstance(restored_attestation, dict)
+        or restored_attestation.get("_lifecycleApplyDisposition")
+        != "deployed-exemption-restored"
+    ):
+        raise ValueError("saved lifecycle restore disposition differs")
+    restored = {
+        key: value
+        for key, value in restored_attestation.items()
+        if key != "_lifecycleApplyDisposition"
+    }
     for key in ("observation:index-lifecycle-poll", "recovery:index-lifecycle-poll-restore"):
         poll = lifecycle.get(key)
         if not isinstance(poll, dict) or poll.get("done") is not True or poll.get("error") is not None:

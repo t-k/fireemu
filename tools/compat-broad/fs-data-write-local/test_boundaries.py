@@ -10,8 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 import boundaries
+import pytest
 
 NONCE = "a" * 32
 FAMILIES = [
@@ -77,8 +77,8 @@ def composite_sizes(case):
     return result
 
 
-@pytest.mark.parametrize("family,position", itertools.product(FAMILIES, POINTS))
-def test_each_payload_hits_its_claimed_boundary_without_another_limit_hiding_it(family, position):
+@pytest.mark.parametrize("family,position", list(itertools.product(FAMILIES, POINTS)))
+def test_each_payload_hits_its_claimed_metric_and_declares_competing_limits(family, position):
     case = boundaries.compile_case(family, position, NONCE)
     maximum = boundaries.FAMILIES[family][1]
     point = maximum + {"below": -1, "exact": 0, "over": 1}[position]
@@ -88,7 +88,11 @@ def test_each_payload_hits_its_claimed_boundary_without_another_limit_hiding_it(
     assert NONCE in parts[-1]
     assert case["write"]["update"] == case["document"]
     assert case["write"]["currentDocument"] == {"exists": False}
-    assert case["expect"]["accepted"] is (position != "over" or family == "indexed-value")
+    expected_acceptance = (
+        (position != "over" and family != "document-name")
+        or family == "indexed-value"
+    )
+    assert case["expect"]["accepted"] is expected_acceptance
     if family == "collection-id":
         measured = len(parts[-2].encode())
     elif family == "document-id":
@@ -98,6 +102,7 @@ def test_each_payload_hits_its_claimed_boundary_without_another_limit_hiding_it(
     elif family == "document-name":
         measured = 16 + sum(len(p.encode()) + 1 for p in parts)
         assert max(len(p.encode()) for p in parts) <= 1500
+        assert case["overlappingLimits"] == ["FS-LIMIT-INDEX-ENTRY-BYTES"]
     elif family == "field-name":
         measured = max(len(p[-1].encode()) for p in paths(fields))
         assert case["overlappingLimits"] == ["FS-LIMIT-FIELD-PATH-BYTES"]
@@ -148,6 +153,13 @@ def test_full_inventory_keeps_existing_four_limits_separate_and_is_not_execution
     assert value["nativeExecuted"] is False
     assert value["compatibility"] == "not-observed"
     assert value["target"] == "isolated-local-backend-per-case"
+
+
+@pytest.mark.parametrize("position", POINTS)
+def test_document_name_fixture_exposes_the_competing_index_entry_limit(position):
+    case = boundaries.compile_case("document-name", position, NONCE)
+    assert case["expect"]["accepted"] is False
+    assert case["overlappingLimits"] == ["FS-LIMIT-INDEX-ENTRY-BYTES"]
 
 
 @pytest.mark.parametrize("value", [None, True, 42, [], {}, "", "A" * 32, "a" * 31, "a" * 33])

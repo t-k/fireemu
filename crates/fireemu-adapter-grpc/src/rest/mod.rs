@@ -1141,6 +1141,7 @@ impl RestState {
                             .unwrap_or(0),
                         page_token: body
                             .get("pageToken")
+                            .filter(|value| !value.is_null())
                             .map(|value| {
                                 value.as_str().ok_or_else(|| {
                                     bad(&json::JsonError("pageToken must be a string".into()))
@@ -1208,7 +1209,13 @@ impl RestState {
             partition_count,
             page_token: body
                 .get("pageToken")
-                .and_then(Value::as_str)
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or_else(|| bad(&json::JsonError("pageToken must be a string".into())))
+                })
+                .transpose()?
                 .unwrap_or_default()
                 .to_owned(),
             page_size: json::int32(body.get("pageSize"), "pageSize")

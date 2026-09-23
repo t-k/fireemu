@@ -33,8 +33,10 @@ _shared = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_shared)
 
 MAX_REQUEST_BYTES = 10_485_761
+MAX_SENTINEL_REQUEST_BYTES = 16_777_217
 RESPONSE_BYTES = 2 * 1024 * 1024
 REQUEST_TARGETS = (10_485_759, 10_485_760, 10_485_761)
+SENTINEL_PROBE = "raw-16mib-over"
 
 
 def _request_cap(value: Any) -> int:
@@ -42,10 +44,10 @@ def _request_cap(value: Any) -> int:
         isinstance(value, bool)
         or not isinstance(value, int)
         or value <= 0
-        or value > MAX_REQUEST_BYTES
+        or (value > MAX_REQUEST_BYTES and value != MAX_SENTINEL_REQUEST_BYTES)
     ):
         raise ValueError(
-            f"request_byte_limit must be an integer in 1..{MAX_REQUEST_BYTES}"
+            "request_byte_limit must be within the legacy cap or equal the exact sentinel size"
         )
     return value
 
@@ -57,6 +59,51 @@ def _canonical_body(operation: dict[str, Any]) -> bytes:
     return json.dumps(
         body, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
+
+
+def _is_compiled_sentinel_commit(operation: dict[str, Any], body: bytes) -> bool:
+    if (
+        operation.get("probe") != SENTINEL_PROBE
+        or len(body) != MAX_SENTINEL_REQUEST_BYTES
+    ):
+        return False
+    match = re.fullmatch(
+        r"/v1/projects/([A-Za-z0-9_-]+)/databases/(\(default\)|[A-Za-z0-9_-]+)/documents:commit",
+        operation.get("path", ""),
+    )
+    if match is None:
+        return False
+
+    # Bind the exceptional size to the compiler's one finite body, including its
+    # nonce-owned resource names and create-only write preconditions.
+    from request_bytes_compiler import compile_request_bytes_sentinel_plan
+
+    project, database = match.groups()
+    body_value = operation.get("body")
+    if not isinstance(body_value, dict):
+        return False
+    writes = body_value.get("writes", [])
+    if not writes or not isinstance(writes, list):
+        return False
+    first = writes[0]
+    try:
+        first_name = first["update"]["name"]
+        prefix = re.fullmatch(
+            rf"projects/{re.escape(project)}/databases/{re.escape(database)}/documents/oracle/([0-9a-f]{{32}})/request-bytes-02/probe-r16m1/items/control",
+            first_name,
+        )
+    except (KeyError, TypeError):
+        return False
+    if prefix is None:
+        return False
+
+    plan = compile_request_bytes_sentinel_plan(project, database, prefix.group(1))
+    compiled = next(
+        row for row in plan["observation"] if row["kind"] == "conditional-create-commit"
+    )
+    return operation.get("path") == compiled["path"] and body == _canonical_body(
+        compiled
+    )
 
 
 def _validate(
@@ -93,9 +140,11 @@ def _validate(
         "cleanup-verify-absence",
         "cleanup-version-bound-delete",
     }:
-        if not isinstance(resource, str) or not re.fullmatch(
-            r"projects/[A-Za-z0-9_-]+/databases/(?:\(default\)|[A-Za-z0-9_-]+)/documents/oracle/[0-9a-f]{32}/request-bytes-0[1-3]/probe-[ueo][0-9]{2}/items/(?:control|payload-[0-9]{2})",
-            resource,
+        legacy_resource = r"projects/[A-Za-z0-9_-]+/databases/(?:\(default\)|[A-Za-z0-9_-]+)/documents/oracle/[0-9a-f]{32}/request-bytes-0[1-3]/probe-[ueo][0-9]{2}/items/(?:control|payload-[0-9]{2})"
+        sentinel_resource = r"projects/[A-Za-z0-9_-]+/databases/(?:\(default\)|[A-Za-z0-9_-]+)/documents/oracle/[0-9a-f]{32}/request-bytes-02/probe-r16m1/items/(?:control|payload-(?:0[0-9]|1[0-8]))"
+        if not isinstance(resource, str) or not (
+            re.fullmatch(legacy_resource, resource)
+            or re.fullmatch(sentinel_resource, resource)
         ):
             raise ValueError("invalid resource")
         base = "/v1/" + resource
@@ -115,9 +164,16 @@ def _validate(
     if len(body) > request_limit:
         raise ValueError("request exceeds request_byte_limit before I/O")
     if operation.get("kind") == "conditional-create-commit":
-        if operation.get("method") != "POST" or len(body) not in REQUEST_TARGETS:
+        sentinel = operation.get("probe") == SENTINEL_PROBE
+        approved_size = (
+            _is_compiled_sentinel_commit(operation, body)
+            and request_limit == MAX_SENTINEL_REQUEST_BYTES
+            if sentinel
+            else len(body) in REQUEST_TARGETS
+        )
+        if operation.get("method") != "POST" or not approved_size:
             raise ValueError(
-                "Commit body is outside the approved request-byte boundary"
+                "Commit body is outside the approved request-byte boundary or sentinel"
             )
     elif body:
         raise ValueError("only Commit operations may carry a body")

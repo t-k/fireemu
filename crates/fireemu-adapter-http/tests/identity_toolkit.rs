@@ -4170,7 +4170,7 @@ fn batch_import_treats_null_optional_fields_as_unset() {
         }),
     );
     assert_eq!(status, 200, "{response}");
-    assert_eq!(response["error"], json!([]), "{response}");
+    assert!(response.get("error").is_none(), "{response}");
 
     assert!(s
         .store
@@ -4278,7 +4278,7 @@ fn batch_import_treats_omitted_null_and_empty_repeated_fields_consistently() {
             &json!({"users": [row]}),
         );
         assert_eq!(status, 200, "{response}");
-        assert_eq!(response["error"], json!([]), "{response}");
+        assert!(response.get("error").is_none(), "{response}");
     }
 
     let (status, lookup) = admin(
@@ -4438,7 +4438,9 @@ fn account_lifecycle_keeps_admin_and_client_post_state_consistent() {
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": [uid]}),
     );
-    assert!(reenabled_view["users"][0].get("disabled").is_none());
+    // An Admin-created account keeps `disabled: false` after re-enable (sandbox recording
+    // 2026-09-23, auth-account/admin/disable#admin-lookup-after).
+    assert_eq!(reenabled_view["users"][0]["disabled"], false);
     let (status, client_signed) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -5618,7 +5620,7 @@ fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semant
             }]}),
         );
         assert_eq!(status, 200, "{imported}");
-        assert!(imported["error"].as_array().unwrap().is_empty());
+        assert!(imported.get("error").is_none());
     }
     for units in [4095, 4096] {
         let (status, signed) = post(
@@ -5662,7 +5664,7 @@ fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semant
         }]}),
     );
     assert_eq!(status, 200, "{imported}");
-    assert!(imported["error"].as_array().unwrap().is_empty());
+    assert!(imported.get("error").is_none());
     let (status, signed) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -5681,7 +5683,7 @@ fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semant
         }]}),
     );
     assert_eq!(status, 200, "{unsupported}");
-    assert!(unsupported["error"].as_array().unwrap().is_empty());
+    assert!(unsupported.get("error").is_none());
     let (status, sign_in) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -5760,7 +5762,7 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
             );
             assert!(s.store.lock().unwrap().user_by_id(&local_id).is_none());
         } else {
-            assert!(imported["error"].as_array().unwrap().is_empty());
+            assert!(imported.get("error").is_none());
             let (status, signed) = post(
                 &s,
                 &format!("{V1}/accounts:signInWithPassword"),
@@ -5986,7 +5988,7 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
         "successful overwrite request failed: status {status}"
     );
     assert!(
-        replaced["error"].as_array().is_some_and(Vec::is_empty),
+        replaced.get("error").is_none(),
         "successful overwrite returned row errors"
     );
     let (status, _signed_replacement) = post(
@@ -11797,7 +11799,7 @@ fn imported_production_hash_formats_sign_in_with_their_password_only() {
             &request,
         );
         assert_eq!(status, 200, "{name}: {response}");
-        assert_eq!(response["error"], json!([]), "{name}: {response}");
+        assert!(response.get("error").is_none(), "{name}: {response}");
         let sign_in = |password: &str| {
             post(
                 &s,
@@ -11846,4 +11848,41 @@ fn invalid_hash_parameters_refuse_the_whole_import() {
         assert_eq!(response["error"]["message"], code, "{options}");
         assert!(s.store.lock().unwrap().user_by_id("refused").is_none());
     }
+}
+
+/// Production (sandbox recording 2026-09-23): an account created through the Admin API carries
+/// `disabled` and `validSince` in every read, a client-created anonymous account neither, and
+/// the Admin create response always carries `email`, empty when none was given.
+#[test]
+fn admin_created_accounts_report_disabled_and_valid_since_like_production() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "admin-made"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["email"], json!(""));
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["admin-made"]}),
+    );
+    assert_eq!(found["users"][0]["disabled"], json!(false), "{found}");
+    assert!(found["users"][0]["validSince"].is_string(), "{found}");
+
+    let (_, anonymous) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"returnSecureToken": true}),
+    );
+    let (_, looked) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": anonymous["idToken"]}),
+    );
+    assert!(looked["users"][0].get("disabled").is_none(), "{looked}");
+    assert!(looked["users"][0].get("validSince").is_none(), "{looked}");
 }

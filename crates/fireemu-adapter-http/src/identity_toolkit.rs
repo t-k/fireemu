@@ -6575,13 +6575,16 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     for f in &u.federated {
         providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
     }
-    // Production omits every default-valued field (proto3 JSON): no `disabled: false`, no
-    // empty `mfaInfo` or `providerUserInfo`, `emailVerified` only with an address, and
-    // `validSince` once tokens were ever revoked or a password set. The password hash is the
+    // Production omits most default-valued fields (proto3 JSON): no empty `mfaInfo` or
+    // `providerUserInfo`, `emailVerified` only with an address. `disabled` and `validSince`
+    // are present for an account the Admin API created (the sandbox recording of 2026-09-23),
+    // and otherwise `disabled` only when true and `validSince` once tokens were ever revoked
+    // or a password set. The password hash is the
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
-    let valid_since = (has_password || u.tokens_revoked).then_some(u.tokens_valid_after);
+    let valid_since =
+        (has_password || u.tokens_revoked || u.admin_created).then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
         "tenantId": store.tenant_id(),
@@ -6590,7 +6593,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "photoUrl": u.photo_url,
         "phoneNumber": u.phone_number,
         "emailVerified": u.email.as_ref().map(|_| u.email_verified),
-        "disabled": u.disabled.then_some(true),
+        "disabled": (u.disabled || u.admin_created).then_some(u.disabled),
         // Absent, not "{}", when no claim is set: what the Admin SDK reads back as no claims.
         "customAttributes": (u.custom_claims.canonical_json() != "{}").then(|| u.custom_claims.canonical_json()),
         "providerUserInfo": (!providers.is_empty()).then_some(providers),
@@ -7618,6 +7621,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         u.display_name = display_name;
         u.photo_url = photo_url;
         u.disabled = disabled;
+        u.admin_created = true;
     }
     if let Err(e) = store.set_phone_factors(&uid, factors, at) {
         let _ = store.delete_user_by_id(uid.as_str());
@@ -7625,7 +7629,8 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
     }
     JsonResponse {
         status: 200,
-        body: json!({"kind": "identitytoolkit#SignupNewUserResponse", "localId": uid.as_str(), "email": email, "tenantId": store.tenant_id()}),
+        // Production always carries `email` here, empty when the request gave none.
+        body: json!({"kind": "identitytoolkit#SignupNewUserResponse", "localId": uid.as_str(), "email": email.as_deref().unwrap_or(""), "tenantId": store.tenant_id()}),
     }
 }
 
@@ -8256,7 +8261,12 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
     }
     JsonResponse {
         status: 200,
-        body: json!({"kind": "identitytoolkit#UploadAccountResponse", "error": errors}),
+        // Production omits `error` when every row was imported.
+        body: if errors.is_empty() {
+            json!({"kind": "identitytoolkit#UploadAccountResponse"})
+        } else {
+            json!({"kind": "identitytoolkit#UploadAccountResponse", "error": errors})
+        },
     }
 }
 

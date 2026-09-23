@@ -334,6 +334,8 @@ pub struct RefreshSession {
 }
 
 /// User record.
+// The flags mirror independent fields of the Identity Toolkit account record.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserRecord {
     /// Local ID.
@@ -371,6 +373,9 @@ pub struct UserRecord {
     pub tokens_revoked: bool,
     /// Linked federated identities.
     pub federated: Vec<FederatedIdentity>,
+    /// Whether the account was created through the Admin API (create or import). Production
+    /// then reports `disabled` and `validSince` in every read of it.
+    pub admin_created: bool,
     /// Salted password digest (local test hashing, not Firebase's scrypt). `None` for users
     /// without a password credential.
     password: Option<PasswordDigest>,
@@ -2088,6 +2093,7 @@ impl AuthStore {
                 tokens_valid_after: user.tokens_valid_after,
                 tokens_revoked: user.tokens_valid_after > Self::whole_second(user.created_at),
                 federated: user.federated,
+                admin_created: true,
                 password,
             }),
         );
@@ -2720,6 +2726,7 @@ impl AuthStore {
             tokens_valid_after: Self::whole_second(now),
             tokens_revoked: false,
             federated: Vec::new(),
+            admin_created: false,
             password: None,
         }));
         if let Some(email) = email {

@@ -14,6 +14,7 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
+import { normalizeRecordedResponse } from "./production-normalization.mjs";
 
 const HOST = process.env.FIRESTORE_PROBE_HOST;
 const PROJECT = process.env.FIRESTORE_PROBE_PROJECT ?? "demo-conformance";
@@ -173,33 +174,6 @@ function resolve(value, raw) {
   return value;
 }
 
-const INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
-
-/**
- * Server-generated values become placeholders. An instant is server-generated when its
- * year is 2026 or later: every seeded timestamp in the corpus is dated before 2025, the
- * official emulator runs on the wall clock and fireemu's probe configuration pins its clock
- * to 2026, so the rule separates the two without a list of key names. Transaction ids are
- * opaque on both sides.
- */
-function normalize(value, key = "") {
-  if (typeof value === "string") {
-    if (PROJECT !== RECORD_PROJECT) value = value.replaceAll(PROJECT, RECORD_PROJECT);
-    if (INSTANT.test(value) && Number(value.slice(0, 4)) >= 2026) return "<now>";
-    if (key === "transaction") return "<txn>";
-    // Page tokens are opaque and shaped differently by each side; a generated document id
-    // is twenty alphanumerics that no seeded id in this corpus has.
-    if (key === "nextPageToken") return "<token>";
-    if (key === "name") return value.replace(/\/[A-Za-z0-9]{20}$/, "/<auto-id>");
-    return value;
-  }
-  if (Array.isArray(value)) return value.map((v) => normalize(v, key));
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, normalize(v, k)]));
-  }
-  return value;
-}
-
 /**
  * `{{step.a.b}}` in a request path becomes the URL-encoded raw value step `step` recorded at
  * `a.b`; a bare `{{step}}` is that step's `transaction`.
@@ -260,13 +234,28 @@ async function step(spec, raw) {
       recorded: {
         status: response.status,
         code: error.status ?? String(error.code ?? ""),
-        message: normalize(String(error.message ?? "").slice(0, 400)),
+        message: normalizeRecordedResponse(String(error.message ?? "").slice(0, 400), {
+          project: PROJECT,
+          recordProject: RECORD_PROJECT,
+          scope: "error",
+        }),
       },
       raw: body,
     };
   }
   return {
-    recorded: { status: response.status, code: "OK", body: normalize(body) },
+    recorded: {
+      status: response.status,
+      code: "OK",
+      body: normalizeRecordedResponse(body, {
+        project: PROJECT,
+        recordProject: RECORD_PROJECT,
+        scope:
+          spec.path.includes("/databases") && !spec.path.includes("/documents")
+            ? "database-metadata"
+            : "document",
+      }),
+    },
     raw: body,
   };
 }
@@ -279,36 +268,44 @@ async function main() {
   }
   const programs = JSON.parse(await readFile(IN, "utf8"));
   const results = {};
-  for (const program of programs) {
-    await clear();
-    for (const database of program.databases ?? []) await clear(database);
-    try {
-      await seed(program.seed);
-    } catch (error) {
-      results[program.id] = { seedError: String(error.message ?? error).slice(0, 400) };
-      continue;
-    }
-    const raw = new Map();
-    const steps = {};
-    for (const spec of program.steps) {
-      let outcome;
+  const touchedDatabases = new Set(["(default)"]);
+  try {
+    for (const program of programs) {
+      await clear();
+      for (const database of program.databases ?? []) {
+        touchedDatabases.add(database);
+        await clear(database);
+      }
       try {
-        outcome = await step(spec, raw);
+        await seed(program.seed);
       } catch (error) {
-        outcome = {
-          recorded: { status: 0, code: "probe-error", message: String(error.message ?? error) },
-          raw: null,
+        results[program.id] = { seedError: String(error.message ?? error).slice(0, 400) };
+        continue;
+      }
+      const raw = new Map();
+      const steps = {};
+      for (const spec of program.steps) {
+        let outcome;
+        try {
+          outcome = await step(spec, raw);
+        } catch (error) {
+          outcome = {
+            recorded: { status: 0, code: "probe-error", message: String(error.message ?? error) },
+            raw: null,
+          };
+        }
+        raw.set(spec.id, outcome.raw);
+        steps[spec.id] = {
+          ...outcome.recorded,
+          ...(spec.credential === undefined
+            ? {}
+            : { credential: credentialMetadata({ kind: spec.credential }) }),
         };
       }
-      raw.set(spec.id, outcome.raw);
-      steps[spec.id] = {
-        ...outcome.recorded,
-        ...(spec.credential === undefined
-          ? {}
-          : { credential: credentialMetadata({ kind: spec.credential }) }),
-      };
+      results[program.id] = { steps };
     }
-    results[program.id] = { steps };
+  } finally {
+    for (const database of touchedDatabases) await clear(database);
   }
   await writeFile(OUT, `${JSON.stringify(results, null, 2)}\n`);
 }

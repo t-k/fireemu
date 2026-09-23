@@ -262,7 +262,7 @@
       "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
       "recipeIds": ["writes/limits/non-commit-rest-request-bytes"],
       "boundaryStatus": "PENDING_RECORDING",
-      "status": "PENDING_CORPUS"
+      "status": "PENDING_RECORDING"
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",

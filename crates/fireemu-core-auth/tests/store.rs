@@ -194,7 +194,7 @@ fn email_creation_canonicalizes_storage_and_rejects_case_variant_duplicates() {
 }
 
 #[test]
-fn duplicate_email_mode_allows_distinct_accounts_and_keeps_the_latest_lookup_target() {
+fn duplicate_email_mode_refuses_password_duplicates_and_admits_idp_accounts() {
     let mut s = store();
     let password_user = s
         .create_user(NewUser::email("shared@example.com"), t0())
@@ -204,14 +204,15 @@ fn duplicate_email_mode_allows_distinct_accounts_and_keeps_the_latest_lookup_tar
         ..ProjectAuthConfig::default()
     });
 
-    let password_user_2 = s
-        .create_user(NewUser::email("shared@example.com"), t(1))
-        .expect("duplicate-email mode permits another password/Admin account");
-    assert_ne!(password_user, password_user_2);
+    // Production refuses a second password or Admin account even in duplicate-email mode
+    // (sandbox recording 2026-09-23, `config/duplicate-email#sign-up-duplicate`).
+    assert_eq!(
+        s.create_user(NewUser::email("shared@example.com"), t(1)),
+        Err(AuthError::EmailExists)
+    );
     assert_eq!(
         s.user_by_email("shared@example.com").unwrap().local_id,
-        password_user_2,
-        "the latest password/Admin account is the active email lookup target"
+        password_user
     );
 
     let result = s

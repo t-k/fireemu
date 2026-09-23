@@ -924,7 +924,16 @@ fn rejected_email_change_preserves_code_for_an_inactive_duplicate_owner() {
 
     let owner_user = sign_up(&s, "oob-inactive-owner@example.com");
     let target_a = sign_up(&s, "oob-inactive-target@example.com");
-    let target_b = sign_up(&s, "oob-inactive-target@example.com");
+    // A second owner of the address can only be imported: production refuses a second
+    // password account even in duplicate-email mode.
+    let (status, imported) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:batchCreate"),
+        &json!({"users": [{"localId": "oob-inactive-target-b", "email": "oob-inactive-target@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert!(imported.get("error").is_none(), "{imported}");
+    let target_b = json!({"localId": "oob-inactive-target-b"});
     let (status, verified) = admin(
         &s,
         &format!("{V1}/projects/demo-app/accounts:update"),
@@ -2550,34 +2559,28 @@ fn the_inspection_routes_are_project_scoped_and_can_wipe_accounts() {
 }
 
 #[test]
-fn allow_duplicate_emails_applies_to_password_accounts_and_active_lookup() {
+fn allow_duplicate_emails_still_refuses_a_second_password_account() {
     let s = state();
     let config_path = format!("{EMU}/config");
-    let (status, enabled) = {
-        let response = handle_with(
-            &s,
-            "PATCH",
-            &config_path,
-            &owner(),
-            &json!({"signIn": {"allowDuplicateEmails": true}}),
-        );
-        (response.status, response.body)
-    };
-    assert_eq!(status, 200, "{enabled}");
-    assert_eq!(enabled["signIn"]["allowDuplicateEmails"], true);
-
-    let first = sign_up(&s, "duplicate@example.com");
-    let second = sign_up(&s, "duplicate@example.com");
-    assert_ne!(first["localId"], second["localId"]);
-
-    let (status, lookup) = admin(
+    let enabled = handle_with(
         &s,
-        &format!("{V1}/projects/demo-app/accounts:lookup"),
-        &json!({"email": ["duplicate@example.com"]}),
+        "PATCH",
+        &config_path,
+        &owner(),
+        &json!({"signIn": {"allowDuplicateEmails": true}}),
     );
-    assert_eq!(status, 200);
-    assert_eq!(lookup["users"][0]["localId"], second["localId"]);
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+    assert_eq!(enabled.body["signIn"]["allowDuplicateEmails"], true);
 
+    // Sandbox recording 2026-09-23, `config/duplicate-email#sign-up-duplicate`.
+    let first = sign_up(&s, "duplicate@example.com");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "EMAIL_EXISTS");
     let (status, signed_in) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -2586,28 +2589,8 @@ fn allow_duplicate_emails_applies_to_password_accounts_and_active_lookup() {
     assert_eq!(status, 200, "{signed_in}");
     assert_eq!(
         claims(signed_in["idToken"].as_str().unwrap())["sub"],
-        second["localId"]
+        first["localId"]
     );
-
-    let (status, updated) = admin(
-        &s,
-        &format!("{V1}/projects/demo-app/accounts:update"),
-        &json!({"localId": first["localId"], "email": "duplicate@example.com"}),
-    );
-    assert_eq!(status, 200, "{updated}");
-
-    let (status, _) = post(
-        &s,
-        &format!("{V1}/accounts:delete"),
-        &json!({"idToken": second["idToken"]}),
-    );
-    assert_eq!(status, 200);
-    let (status, _) = post(
-        &s,
-        &format!("{V1}/accounts:signInWithPassword"),
-        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
-    );
-    assert_eq!(status, 400);
 }
 
 #[test]

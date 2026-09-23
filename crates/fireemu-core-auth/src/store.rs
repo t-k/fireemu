@@ -2760,10 +2760,9 @@ impl AuthStore {
             if !storable_email(email) {
                 return Err(AuthError::InvalidEmail);
             }
-            if enforce_unique_email
-                && !self.config.allow_duplicate_emails
-                && self.email_owned_by_other(email, None)
-            {
+            // `allowDuplicateEmails` does not extend to password or Admin-created accounts:
+            // production refuses them with EMAIL_EXISTS (sandbox recording 2026-09-23).
+            if enforce_unique_email && self.email_owned_by_other(email, None) {
                 return Err(AuthError::EmailExists);
             }
         }
@@ -3740,7 +3739,7 @@ impl AuthStore {
         verifier: &dyn ImportedHashVerifier,
     ) -> Result<(LocalId, Vec<ViolationCode>), AuthError> {
         let private = self.config.enable_improved_email_privacy;
-        let Some(user) = self.user_by_email(email) else {
+        let Some(user) = self.password_owner_by_email(email) else {
             if private {
                 let dummy = PasswordDigest {
                     salt: [0_u8; 16],
@@ -3814,7 +3813,38 @@ impl AuthStore {
             .map(|(uid, _violations)| uid)
     }
 
-    /// Looks up a user by email.
+    /// Every account holding `email`, in creation order.
+    #[must_use]
+    pub fn users_by_email(&self, email: &str) -> Vec<&UserRecord> {
+        let email = Self::canonicalize_email(email);
+        let mut owners: Vec<&UserRecord> = self
+            .local_ids_for_email
+            .get(&email)
+            .into_iter()
+            .flatten()
+            .filter_map(|uid| self.users.get(uid).map(Arc::as_ref))
+            .collect();
+        owners.sort_by_key(|user| user.sequence);
+        owners
+    }
+
+    /// The account a password sign-in with `email` reaches: the active owner when it holds a
+    /// password, else the earliest owner that does (an imported duplicate without a password
+    /// does not hide the password account, sandbox recording 2026-09-23).
+    fn password_owner_by_email(&self, email: &str) -> Option<&UserRecord> {
+        let active = self.user_by_email(email)?;
+        if active.password.is_some() {
+            return Some(active);
+        }
+        Some(
+            self.users_by_email(email)
+                .into_iter()
+                .find(|user| user.password.is_some())
+                .unwrap_or(active),
+        )
+    }
+
+    /// User by email: the active owner of the address.
     #[must_use]
     pub fn user_by_email(&self, email: &str) -> Option<&UserRecord> {
         let email = Self::canonicalize_email(email);
@@ -9273,8 +9303,9 @@ mod broad_project_number_tests {
         let token = store
             .issue_refresh_session(&a, at, None, CustomClaims::default(), None)
             .unwrap();
+        // Only a provider-scoped account may share the address in duplicate-email mode.
         let b = store
-            .create_user_with_id(NewUser::email("shared@example.com"), Some("b"), at)
+            .create_idp_user(NewUser::email("shared@example.com"), at)
             .unwrap();
         assert_eq!(
             store.user_by_email("shared@example.com").unwrap().local_id,

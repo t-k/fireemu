@@ -15,6 +15,36 @@ import {
   sameRecording,
 } from "./harness.mjs";
 
+/**
+ * Whether a read-back config value reflects what was written: every written field is present
+ * with the same value (the server adds output-only fields such as lastUpdateTime), and an
+ * unset value reads back as absent or as a policy that is neither enforced nor versioned.
+ */
+export function configMatches(actual, wanted) {
+  if (wanted === undefined || wanted === null) {
+    if (actual === undefined || actual === null) return true;
+    if (typeof actual !== "object") return false;
+    return (
+      actual.passwordPolicyEnforcementState !== "ENFORCE" && !actual.passwordPolicyVersions?.length
+    );
+  }
+  if (Array.isArray(wanted)) {
+    return (
+      Array.isArray(actual) &&
+      actual.length === wanted.length &&
+      wanted.every((item, i) => configMatches(actual[i], item))
+    );
+  }
+  if (typeof wanted === "object") {
+    return (
+      actual !== null &&
+      typeof actual === "object" &&
+      Object.entries(wanted).every(([key, value]) => configMatches(actual[key], value))
+    );
+  }
+  return sameRecording(actual, wanted);
+}
+
 /** An error that must stop the whole run: the sandbox may no longer be in a known state. */
 const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 
@@ -109,7 +139,7 @@ export function createSession(
     });
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const now = await readConfig(mask);
-      if (mask.every((path) => sameRecording(now[path] ?? null, values[path] ?? null))) {
+      if (mask.every((path) => configMatches(now[path], values[path]))) {
         if (settleMs) await sleep(settleMs);
         return now;
       }
@@ -135,7 +165,15 @@ export function createSession(
       }
       for (const step of program.steps) {
         if (step.delayMs) await sleep(step.delayMs);
-        const { recorded, json } = await send(step, raw);
+        let outcome;
+        try {
+          outcome = await send(step, raw);
+        } catch (error) {
+          if (error.fatal || !/recorded nothing at/.test(String(error.message))) throw error;
+          // An earlier step did not return what this one needs: record that, keep going.
+          outcome = { recorded: { status: -1, unresolved: String(error.message) }, json: null };
+        }
+        const { recorded, json } = outcome;
         raw.set(step.id, json);
         steps[step.id] = recorded;
         log(`${program.id}#${step.id} ${recorded.status}`);
@@ -171,7 +209,7 @@ export async function runCorpus(programs, ctx, options = {}) {
     } else {
       const current = await session.readConfig(mask);
       const drift = mask.filter(
-        (path) => !sameRecording(current[path] ?? null, options.baselineConfig[path]),
+        (path) => !configMatches(current[path], options.baselineConfig[path]),
       );
       if (drift.length)
         throw fatal(`sandbox baseline differs at ${drift.join(", ")}; fix the sandbox first`);

@@ -10,11 +10,11 @@ import time
 _HOST = "firestore.googleapis.com"
 _PATH = re.compile(
     r"/v1/projects/[a-z][a-z0-9-]{4,61}[a-z0-9]/databases/\(default\)/documents"
-    r"(?::commit|/oracle/[0-9a-f]{32}/request-bytes-01/probe-[ueo]01/items/"
+    r"(?::commit|(?:/oracle/[0-9a-f]{32}/request-bytes-01/probe-[ueo]01/items/"
     r"(?:control|payload-(?:0[0-9]|1[0-5]))"
     r"|/oracle/[0-9a-f]{32}/request-bytes-02/probe-r16m1/items/"
     r"(?:control|payload-(?:0[0-9]|1[0-8]))"
-    r"(?:\?currentDocument\.updateTime=[A-Za-z0-9%:.-]+)?)\Z"
+    r")(?:\?currentDocument\.updateTime=[A-Za-z0-9%:.-]+)?)\Z"
 )
 _TOKEN = re.compile(r"Bearer [A-Za-z0-9._~+/-]{1,8192}=*\Z")
 _PROJECT = re.compile(r"[a-z][a-z0-9-]{4,61}[a-z0-9]\Z")

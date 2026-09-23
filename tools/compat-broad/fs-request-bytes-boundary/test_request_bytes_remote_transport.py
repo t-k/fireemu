@@ -842,6 +842,75 @@ def test_real_worker_path_is_closed_to_the_twenty_sentinel_resources():
     assert worker._PATH.fullmatch(invalid) is None
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "request-bytes-01/probe-u01/items/control",
+        "request-bytes-01/probe-u01/items/payload-00",
+        "request-bytes-02/probe-r16m1/items/control",
+        "request-bytes-02/probe-r16m1/items/payload-18",
+    ],
+)
+def test_real_worker_owns_only_compiled_request_byte_routes(route):
+    import request_bytes_https_worker as worker
+
+    path = (
+        "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+        + NONCE
+        + "/"
+        + route
+    )
+    assert worker._PATH.fullmatch(path)
+    assert worker._PATH.fullmatch(
+        path + "?currentDocument.updateTime=2026-09-23T01%3A02%3A03Z"
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "request-bytes-01/probe-u01/items/control",
+        "request-bytes-01/probe-u01/items/payload-00",
+        "request-bytes-02/probe-r16m1/items/control",
+        "request-bytes-02/probe-r16m1/items/payload-18",
+    ],
+)
+def test_real_worker_accepts_version_bound_delete_for_owned_routes(route):
+    import request_bytes_https_worker as worker
+
+    path = (
+        "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+        + NONCE
+        + "/"
+        + route
+        + "?currentDocument.updateTime=2026-09-23T01%3A02%3A03Z"
+    )
+    assert worker._PATH.fullmatch(path)
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "request-bytes-01/probe-x01/items/control",
+        "request-bytes-01/probe-u01/items/payload-16",
+        "request-bytes-02/probe-r16m1/items/payload-19",
+        "request-bytes-03/probe-u01/items/control",
+        "request-bytes-01/probe-u01/items/control/child",
+    ],
+)
+def test_real_worker_rejects_sibling_request_byte_routes(route):
+    import request_bytes_https_worker as worker
+
+    path = (
+        "/v1/projects/fireemu-35fe6/databases/(default)/documents/oracle/"
+        + NONCE
+        + "/"
+        + route
+        + "?currentDocument.updateTime=2026-09-23T01%3A02%3A03Z"
+    )
+    assert worker._PATH.fullmatch(path) is None
+
+
 def test_the_real_worker_refuses_a_deadline_above_the_published_ceiling(
     loopback_server,
 ):

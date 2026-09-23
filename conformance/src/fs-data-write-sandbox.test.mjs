@@ -2,10 +2,45 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  compareSandboxArtifact,
   compareRecordings,
   freezeSandboxFixture,
   validateSandboxCorpus,
 } from "./fs-data-write-sandbox.mjs";
+
+test("artifact comparison gates success bodies and error codes without gating error prose", () => {
+  const production = {
+    programs: {
+      "writes/control": {
+        steps: {
+          read: { status: 400, code: "INVALID_ARGUMENT", message: "production detail" },
+          write: { status: 200, code: "OK", body: { fields: { b: 2, a: 1 } } },
+        },
+      },
+    },
+    streams: { "writes/stream": { status: { code: 0 }, events: [{ type: "end" }] } },
+  };
+  const local = {
+    "writes/control": {
+      steps: {
+        read: { status: 400, code: "INVALID_ARGUMENT", message: "local detail" },
+        write: { status: 200, code: "OK", body: { fields: { a: 1, b: 2 } } },
+      },
+    },
+  };
+  assert.deepEqual(compareSandboxArtifact(production, local, production.streams), []);
+  local["writes/control"].steps.write.body.fields.a = 3;
+  assert.deepEqual(compareSandboxArtifact(production, local, production.streams), [
+    "writes/control#write",
+  ]);
+  local["writes/control"].steps.write.body.fields.a = 1;
+  assert.deepEqual(
+    compareSandboxArtifact(production, local, {
+      "writes/stream": { status: { code: 3 }, events: [{ type: "end" }] },
+    }),
+    ["writes/stream#grpc"],
+  );
+});
 
 const step = {
   id: "read",
@@ -148,15 +183,16 @@ test("fixture refuses an OAuth bearer echoed into a REST error body", () => {
     },
   };
   assert.throws(
-    () => freezeSandboxFixture({
-      corpus,
-      first: observed,
-      second: observed,
-      recordedAt: ["2026-09-23T00:00:00Z", "2026-09-23T00:01:00Z"],
-      harnessRevision: "a".repeat(40),
-      sdkVersions: { firebaseAdmin: "14.3.2" },
-      credentialToken: token,
-    }),
+    () =>
+      freezeSandboxFixture({
+        corpus,
+        first: observed,
+        second: observed,
+        recordedAt: ["2026-09-23T00:00:00Z", "2026-09-23T00:01:00Z"],
+        harnessRevision: "a".repeat(40),
+        sdkVersions: { firebaseAdmin: "14.3.2" },
+        credentialToken: token,
+      }),
     /credential/,
   );
 });

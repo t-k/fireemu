@@ -763,6 +763,26 @@ fn secure_token_error_shape(mut response: JsonResponse) -> JsonResponse {
     response
 }
 
+/// Production answers an Admin create with a longer id with an internal error and creates
+/// nothing (sandbox exploration 2026-09-24).
+fn local_id_too_long(id: &str) -> bool {
+    id.encode_utf16().count() > fireemu_core_auth::store::MAX_LOCAL_ID_UTF16_UNITS
+}
+
+/// Production's generic backend failure (sandbox recording 2026-09-23).
+fn backend_internal_error() -> JsonResponse {
+    const MESSAGE: &str = "Internal error encountered.";
+    JsonResponse {
+        status: 500,
+        body: json!({"error": {
+            "code": 500,
+            "message": MESSAGE,
+            "errors": [{"message": MESSAGE, "domain": "global", "reason": "backendError"}],
+            "status": "INTERNAL",
+        }}),
+    }
+}
+
 fn error(status: u16, message: &str) -> JsonResponse {
     JsonResponse {
         status,
@@ -6684,6 +6704,11 @@ fn sign_in_with_custom_token(
     let Some(uid) = uid else {
         return error(400, "MISSING_IDENTIFIER");
     };
+    // Custom-token uids keep the Admin SDK's 128-character bound; the wider Admin create
+    // bound was observed only for accounts:create.
+    if uid.chars().count() > 128 {
+        return auth_error(&AuthError::InvalidLocalId);
+    }
     let uid = uid.as_str();
     let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
     if reject_expired
@@ -8065,6 +8090,9 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         Ok(p) => p,
         Err(r) => return r,
     };
+    if requested_id.as_deref().is_some_and(local_id_too_long) {
+        return backend_internal_error();
+    }
     let new_user = match &email {
         Some(email) => NewUser {
             email: Some(email.clone()),

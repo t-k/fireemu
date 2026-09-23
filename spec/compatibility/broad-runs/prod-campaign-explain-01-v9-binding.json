@@ -10,9 +10,9 @@
   },
   "indeterminateOnIncompleteLifecycle": true,
   "kind": "production-campaign-explain-01-comparison-v3",
-  "manifestDigest": "6642b007becbdb4a4bc1e78ec6dbf263ba4074c41391b0960bb13f57d5ff8419",
+  "manifestDigest": "ed3590a1a8d12e1a31061222697bb13c667bd83f2acecf10ccf7fb0d5b419400",
   "normalization": "shared-campaign-typed-json-v2",
-  "observerSha256": "8d5a60024d198601469b37c13c1225d6cfbcc13e145d9b6340d69cf589ff356e",
+  "observerSha256": "d364d520e37fd061805f8694ba2a841c7a02321245fb0c0af6a27f2221099d79",
   "requireSameObserver": true,
   "retainMismatch": true
 }

@@ -139,6 +139,40 @@ def run_child(
     cases = json.loads(cases_path.read_bytes())
     if not isinstance(cases, dict):
         raise ValueError("bounded replay child report must be an object")  # noqa: TRY004 -- Keep malformed child reports as one refusal type.
+    selected_case_ids = {
+        f"firestore:reads/read-time#{step['id']}"
+        for step in bounded_firestore_program(firestore_program)[0]["steps"]
+    }
+    selected_observations = {}
+    case_rows = cases.get("cases")
+    if isinstance(case_rows, list):
+        for row in case_rows:
+            if (
+                isinstance(row, dict)
+                and isinstance(row.get("id"), str)
+                and row["id"] in selected_case_ids
+            ):
+                selected_observations.setdefault(row["id"], []).append(row)
+    observations_complete = (
+        len(selected_case_ids) == 10
+        and len(selected_observations) == len(selected_case_ids)
+        and all(
+            len(rows) == 1
+            and isinstance(rows[0].get("actual"), dict)
+            and type(rows[0]["actual"].get("status")) is int
+            and rows[0]["actual"]["status"] > 0
+            and not (
+                isinstance(rows[0]["actual"].get("code"), str)
+                and rows[0]["actual"]["code"]
+                in {"no-response", "probe-error", "non-json"}
+            )
+            for rows in selected_observations.values()
+        )
+    )
+    upstream_recording_complete = cases.get("recordingComplete")
+    recording_complete = observations_complete and (
+        "recordingComplete" not in cases or upstream_recording_complete is True
+    )
     try:
         instance = json.loads((output / "instance.json").read_bytes())
         if (
@@ -162,8 +196,9 @@ def run_child(
     )
     cases["postStateReadback"] = poststate
     cases["stateValidation"] = state_validation
+    cases["recordingComplete"] = recording_complete
     cases_path.write_text(json.dumps(cases, indent=2) + "\n")
-    return 0 if state_validation else 2
+    return 0 if state_validation and recording_complete else 2
 
 
 def main(argv=None, *, child_runner=run_child) -> int:

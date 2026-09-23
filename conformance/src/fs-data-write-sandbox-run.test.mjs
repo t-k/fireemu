@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 
 import {
+  MAX_STREAM_FRAMES,
   assertMatchingSandboxCorpus,
   comparisonExitCode,
   localTarget,
@@ -143,7 +144,14 @@ test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", 
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
   assert.equal(corpus.restPrograms.length, 63);
   assert.equal(restRequestCount, 217);
-  assert.equal(liveStreamCount, 2);
+  assert.equal(liveStreamCount, 3);
+  assert.equal(MAX_STREAM_FRAMES, 5);
+  assert.equal(
+    corpus.streamRecipes
+      .filter((recipe) => recipe.transport === "grpc")
+      .reduce((total, recipe) => total + recipe.maxFrames, 0),
+    5,
+  );
 });
 
 test("all sandbox run directories share the canonical root ledger", () => {

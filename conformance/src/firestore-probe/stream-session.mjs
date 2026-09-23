@@ -12,17 +12,18 @@ const grpc = require("@grpc/grpc-js");
 const SAVED_ID = "writes/write-stream-transaction";
 const TRAILERS_ID = "writes/write-stream-terminal/trailing-metadata";
 const HALF_CLOSE_ID = "writes/write-stream-terminal/half-close";
+const RESPONSE_HALF_CLOSE_ID = "writes/write-stream-terminal/response-before-half-close";
 const SAVED_SOURCE = "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json";
 const SANDBOX_PROJECT = "fireemu-oracle-sbx";
 
-/** Keep live gRPC sends limited to the two reviewed terminal actions. */
+/** Keep live gRPC sends limited to the three bounded terminal actions. */
 export function validateStreamRecipes(recipes) {
-  if (!Array.isArray(recipes) || recipes.length !== 3) {
+  if (!Array.isArray(recipes) || recipes.length !== 4) {
     throw new Error("unsupported stream recipe set");
   }
   const byId = new Map(recipes.map((recipe) => [recipe.id, recipe]));
   if (
-    byId.size !== 3 ||
+    byId.size !== 4 ||
     byId.get(SAVED_ID)?.transport !== "saved-reference" ||
     byId.get(SAVED_ID)?.source !== SAVED_SOURCE ||
     byId.get(TRAILERS_ID)?.transport !== "grpc" ||
@@ -30,11 +31,21 @@ export function validateStreamRecipes(recipes) {
     byId.get(TRAILERS_ID)?.maxFrames !== 2 ||
     byId.get(HALF_CLOSE_ID)?.transport !== "grpc" ||
     byId.get(HALF_CLOSE_ID)?.action !== "half-close-after-handshake" ||
-    byId.get(HALF_CLOSE_ID)?.maxFrames !== 1
+    byId.get(HALF_CLOSE_ID)?.maxFrames !== 1 ||
+    byId.get(RESPONSE_HALF_CLOSE_ID)?.transport !== "grpc" ||
+    byId.get(RESPONSE_HALF_CLOSE_ID)?.action !== "empty-write-response-before-half-close" ||
+    byId.get(RESPONSE_HALF_CLOSE_ID)?.maxFrames !== 2
   ) {
     throw new Error("unsupported stream recipe");
   }
-  return { live: [byId.get(TRAILERS_ID), byId.get(HALF_CLOSE_ID)], saved: byId.get(SAVED_ID) };
+  return {
+    live: [byId.get(TRAILERS_ID), byId.get(HALF_CLOSE_ID), byId.get(RESPONSE_HALF_CLOSE_ID)],
+    saved: byId.get(SAVED_ID),
+  };
+}
+
+export function shouldHalfCloseAfterResponse(recipe, responseCount) {
+  return recipe.id === RESPONSE_HALF_CLOSE_ID ? responseCount === 2 : responseCount === 1;
 }
 
 function opaqueShape(value) {
@@ -97,7 +108,7 @@ export function terminalComplete({ status, sawEnd, sawClose, sentFrames, expecte
 export async function runStreamRecipe(recipe, { target, projectId, host, port, token }) {
   const connection = validateStreamTarget({ target, projectId, host, port });
   if (typeof token !== "string" || token.length === 0) throw new Error("stream bearer is required");
-  if (![TRAILERS_ID, HALF_CLOSE_ID].includes(recipe?.id))
+  if (![TRAILERS_ID, HALF_CLOSE_ID, RESPONSE_HALF_CLOSE_ID].includes(recipe?.id))
     throw new Error("unsupported live stream recipe");
   const client = new v1.FirestoreClient({
     servicePath: connection.host,
@@ -117,7 +128,7 @@ export async function runStreamRecipe(recipe, { target, projectId, host, port, t
     let sentFrames = 0;
     let sawClose = false;
     let sawEnd = false;
-    let firstResponse = false;
+    let responseCount = 0;
     let settled = false;
     let grace;
     const timer = setTimeout(
@@ -181,13 +192,17 @@ export async function runStreamRecipe(recipe, { target, projectId, host, port, t
     try {
       call.on("data", (response) => {
         events.push({ type: "data", value: projectStreamResponse(response) });
-        if (firstResponse) return;
-        firstResponse = true;
-        if (recipe.id === TRAILERS_ID) {
+        responseCount += 1;
+        if (responseCount === 1 && recipe.id !== HALF_CLOSE_ID) {
           call.write({ streamToken: response.streamToken, writes: [{}] });
           sentFrames += 1;
         }
-        call.end();
+        if (shouldHalfCloseAfterResponse(recipe, responseCount)) {
+          if (recipe.id === RESPONSE_HALF_CLOSE_ID) {
+            events.push({ type: "half-close-after-response", responseCount });
+          }
+          call.end();
+        }
       });
       call.on("status", (value) => {
         status = projectStreamStatus(value);

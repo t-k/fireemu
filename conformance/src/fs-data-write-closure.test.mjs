@@ -85,6 +85,13 @@ const requiredRecipes = new Map([
     new Set(["writes/limits/aggregate-map", "writes/limits/aggregate-map/strict-only"]),
   ],
   [
+    "FS-DATA-WRITE/write-stream-half-close",
+    new Set([
+      "writes/write-stream-terminal/half-close",
+      "writes/write-stream-terminal/response-before-half-close",
+    ]),
+  ],
+  [
     "FS-DATA-WRITE/final-artifact-regression",
     new Set([
       "firestore/historical-324",

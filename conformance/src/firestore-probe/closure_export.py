@@ -91,6 +91,12 @@ def build_corpus() -> dict[str, Any]:
             "action": "half-close-after-handshake",
             "maxFrames": 1,
         },
+        {
+            "id": "writes/write-stream-terminal/response-before-half-close",
+            "transport": "grpc",
+            "action": "empty-write-response-before-half-close",
+            "maxFrames": 2,
+        },
     ]
     ids = [program["id"] for program in programs]
     if len(ids) != len(set(ids)):

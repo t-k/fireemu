@@ -5,6 +5,7 @@ import {
   projectStreamResponse,
   projectStreamStatus,
   terminalComplete,
+  shouldHalfCloseAfterResponse,
   validateStreamRecipes,
   validateStreamTarget,
 } from "./stream-session.mjs";
@@ -27,10 +28,16 @@ const recipes = [
     action: "half-close-after-handshake",
     maxFrames: 1,
   },
+  {
+    id: "writes/write-stream-terminal/response-before-half-close",
+    transport: "grpc",
+    action: "empty-write-response-before-half-close",
+    maxFrames: 2,
+  },
 ];
 
-test("only the two fixed sandbox stream recipes are live", () => {
-  assert.equal(validateStreamRecipes(recipes).live.length, 2);
+test("only the three fixed sandbox stream recipes are live", () => {
+  assert.equal(validateStreamRecipes(recipes).live.length, 3);
   assert.throws(
     () => validateStreamRecipes([{ ...recipes[1], action: "write-arbitrary-document" }]),
     /unsupported stream recipe/,
@@ -39,6 +46,12 @@ test("only the two fixed sandbox stream recipes are live", () => {
     () => validateStreamRecipes([{ ...recipes[1], maxFrames: 3 }]),
     /unsupported stream recipe/,
   );
+});
+
+test("response-gated half-close waits for the empty-write response", () => {
+  assert.equal(shouldHalfCloseAfterResponse(recipes[3], 1), false);
+  assert.equal(shouldHalfCloseAfterResponse(recipes[3], 2), true);
+  assert.equal(shouldHalfCloseAfterResponse(recipes[1], 1), true);
 });
 
 test("a clean half-close completes on status plus end without a close event", () => {

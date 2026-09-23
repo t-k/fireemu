@@ -185,7 +185,7 @@
     {
       "conditionId": "FS-DATA-WRITE/write-stream-half-close",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["writes/write-stream-terminal/half-close"],
+      "recipeIds": ["writes/write-stream-terminal/half-close", "writes/write-stream-terminal/response-before-half-close"],
       "boundaryStatus": "NOT_APPLICABLE",
       "status": "MISMATCH"
     },

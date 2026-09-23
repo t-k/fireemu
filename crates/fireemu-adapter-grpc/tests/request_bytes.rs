@@ -1,6 +1,6 @@
 //! `FS-LIMIT-API-REQUEST-BYTES`: transport payload boundaries at each Firestore protocol's
 //! decode boundary. The normal REST and `WebChannel` profiles retain the 10 MiB inclusive
-//! raw-body bound; the strict REST `:commit` route has a 16 MiB raw guard followed by a
+//! raw-body bound; the strict REST `:commit` route has a production-observed 11 MiB raw guard followed by a
 //! 10 MiB decoded-protobuf guard.
 //!
 //! The limit is measured on the message payload before protocol decode, so it is refused
@@ -266,6 +266,7 @@ async fn exists(addr: std::net::SocketAddr, name: &str) -> bool {
 /// before any write is applied.
 async fn rest_boundary(addr: std::net::SocketAddr, expected: &ExpectedRefusal) {
     if expected.http_status == "HTTP/1.1 400" {
+        assert_eq!(MAX_STRICT_COMMIT_RAW_BYTES, 11 * 1024 * 1024);
         let compact = r#"{"writes":[]}"#;
         let accepted_body = format!(
             "{}{}",
@@ -292,9 +293,17 @@ async fn rest_boundary(addr: std::net::SocketAddr, expected: &ExpectedRefusal) {
             " ".repeat(MAX_STRICT_COMMIT_RAW_BYTES + 1 - compact.len())
         );
         let refused = http(addr, "POST", COMMIT, &refused_body).await;
-        assert!(refused.starts_with("HTTP/1.1 413"), "{refused}");
+        assert!(refused.starts_with("HTTP/1.1 400"), "{refused}");
+        assert!(refused.contains("Request payload size exceeds the limit: 11534336 bytes."));
+        let sentinel = format!(
+            "{}{}",
+            compact,
+            " ".repeat(16 * 1024 * 1024 + 1 - compact.len())
+        );
+        let refused_sentinel = http(addr, "POST", COMMIT, &sentinel).await;
         assert!(
-            refused.contains("strict REST Commit body exceeds the local 16 MiB transport guard")
+            refused_sentinel.starts_with("HTTP/1.1 400"),
+            "{refused_sentinel}"
         );
         return;
     }

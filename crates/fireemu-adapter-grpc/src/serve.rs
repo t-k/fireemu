@@ -6,7 +6,7 @@
 use std::convert::Infallible;
 use std::sync::{Arc, OnceLock};
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Body, Frame, Incoming};
@@ -38,9 +38,10 @@ pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 /// whole in memory.
 pub const MAX_REST_BODY_BYTES: usize = API_REQUEST_BYTES;
 
-/// Strict REST Commit requests have a larger finite wire allowance; decoded protobuf size is
-/// checked separately by the REST adapter.
-pub const MAX_STRICT_COMMIT_RAW_BYTES: usize = 16 * 1024 * 1024;
+/// Production accepts an 11 MiB raw REST Commit body and refuses one more byte; decoded
+/// protobuf size is checked separately by the REST adapter.
+pub const MAX_STRICT_COMMIT_RAW_BYTES: usize = 11 * 1024 * 1024;
+const MAX_STRICT_COMMIT_REJECTION_DRAIN_BYTES: usize = 32 * 1024 * 1024;
 
 /// Maximum accepted gRPC message (`FS-LIMIT-API-REQUEST-BYTES`), applied by tonic before the
 /// protobuf is decoded. This is the request direction only.
@@ -114,10 +115,12 @@ fn api_request_too_large(enforce_limits: bool) -> RestResponse {
 
 fn strict_commit_raw_too_large() -> RestResponse {
     RestResponse {
-        status: 413,
+        status: 400,
         body: fireemu_adapter_support::api_error::google_rpc(
-            413,
-            "strict REST Commit body exceeds the local 16 MiB transport guard",
+            400,
+            &format!(
+                "Request payload size exceeds the limit: {MAX_STRICT_COMMIT_RAW_BYTES} bytes."
+            ),
             "INVALID_ARGUMENT",
         ),
     }
@@ -317,6 +320,44 @@ where
     }
 }
 
+/// A strict Commit over its raw limit is drained without retaining the overflow. Replying
+/// while the client is still uploading can reset the HTTP/1 connection before it sees the
+/// production-shaped 400. The finite drain cap and deadline still bound hostile senders.
+async fn read_strict_commit_body(
+    req: Request<Incoming>,
+    deadline: std::time::Duration,
+) -> Result<Bytes, BodyRejection> {
+    let mut body = req.into_body();
+    let read = async {
+        let mut retained = BytesMut::new();
+        let mut total = 0usize;
+        let mut too_large = false;
+        while let Some(frame) = body.frame().await {
+            let frame = frame.map_err(|_| BodyRejection::TooLarge)?;
+            if let Ok(data) = frame.into_data() {
+                total = total.saturating_add(data.len());
+                if total > MAX_STRICT_COMMIT_REJECTION_DRAIN_BYTES {
+                    return Err(BodyRejection::TooLarge);
+                }
+                if total > MAX_STRICT_COMMIT_RAW_BYTES {
+                    too_large = true;
+                    retained.clear();
+                } else if !too_large {
+                    retained.extend_from_slice(&data);
+                }
+            }
+        }
+        if too_large {
+            Err(BodyRejection::TooLarge)
+        } else {
+            Ok(retained.freeze())
+        }
+    };
+    tokio::time::timeout(deadline, read)
+        .await
+        .unwrap_or(Err(BodyRejection::Deadline))
+}
+
 /// The refusal a body that never finished arriving gets.
 ///
 /// `408` is the HTTP answer for a request the client did not finish sending;
@@ -412,7 +453,11 @@ async fn rest_call(
             ));
         }
     };
-    let bytes = match read_body(req, BodyAllowance::Declared(body_limit), body_deadline).await {
+    let bytes = match if strict_commit {
+        read_strict_commit_body(req, body_deadline).await
+    } else {
+        read_body(req, BodyAllowance::Declared(body_limit), body_deadline).await
+    } {
         Ok(bytes) => bytes,
         Err(rejection) => {
             return Ok(json_response(
@@ -1488,7 +1533,7 @@ mod tests {
         assert_eq!(MAX_REST_BODY_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES), 10);
         assert_eq!(
             MAX_STRICT_COMMIT_RAW_BYTES.div_ceil(REST_PAYLOAD_UNIT_BYTES),
-            16
+            11
         );
     }
 }

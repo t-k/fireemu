@@ -97,6 +97,16 @@ def build_corpus() -> dict[str, Any]:
             "action": "empty-write-response-before-half-close",
             "maxFrames": 2,
         },
+        *(
+            {
+                "id": f"writes/limits/grpc-unary-request-bytes/{size}",
+                "transport": "grpc",
+                "action": "get-document-transaction-bytes",
+                "wireBytes": size,
+                "maxFrames": 1,
+            }
+            for size in (10_485_760, 10_485_761)
+        ),
     ]
     ids = [program["id"] for program in programs]
     if len(ids) != len(set(ids)):

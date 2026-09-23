@@ -13,17 +13,35 @@ const SAVED_ID = "writes/write-stream-transaction";
 const TRAILERS_ID = "writes/write-stream-terminal/trailing-metadata";
 const HALF_CLOSE_ID = "writes/write-stream-terminal/half-close";
 const RESPONSE_HALF_CLOSE_ID = "writes/write-stream-terminal/response-before-half-close";
+const UNARY_EXACT_ID = "writes/limits/grpc-unary-request-bytes/10485760";
+const UNARY_OVER_ID = "writes/limits/grpc-unary-request-bytes/10485761";
 const SAVED_SOURCE = "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json";
 const SANDBOX_PROJECT = "fireemu-oracle-sbx";
+const UNARY_BYTE_TARGETS = new Set([10_485_760, 10_485_761]);
 
-/** Keep live gRPC sends limited to the three bounded terminal actions. */
+export async function makeUnaryRequestByWireBytes(targetBytes) {
+  if (!UNARY_BYTE_TARGETS.has(targetBytes)) throw new Error("unsupported unary byte target");
+  const client = new v1.FirestoreClient({ projectId: SANDBOX_PROJECT });
+  try {
+    const name = `projects/${SANDBOX_PROJECT}/databases/(default)/documents/byteProbe/x`;
+    const serialize = client._protos.google.firestore.v1.GetDocumentRequest.serialize;
+    const request = { name, transaction: Buffer.alloc(targetBytes - 76) };
+    const wireBytes = serialize(request).length;
+    if (wireBytes !== targetBytes) throw new Error("unary request wire size differs");
+    return { request, wireBytes };
+  } finally {
+    await client.close();
+  }
+}
+
+/** Keep live gRPC sends limited to the fixed terminal and request-byte actions. */
 export function validateStreamRecipes(recipes) {
-  if (!Array.isArray(recipes) || recipes.length !== 4) {
+  if (!Array.isArray(recipes) || recipes.length !== 6) {
     throw new Error("unsupported stream recipe set");
   }
   const byId = new Map(recipes.map((recipe) => [recipe.id, recipe]));
   if (
-    byId.size !== 4 ||
+    byId.size !== 6 ||
     byId.get(SAVED_ID)?.transport !== "saved-reference" ||
     byId.get(SAVED_ID)?.source !== SAVED_SOURCE ||
     byId.get(TRAILERS_ID)?.transport !== "grpc" ||
@@ -34,12 +52,20 @@ export function validateStreamRecipes(recipes) {
     byId.get(HALF_CLOSE_ID)?.maxFrames !== 1 ||
     byId.get(RESPONSE_HALF_CLOSE_ID)?.transport !== "grpc" ||
     byId.get(RESPONSE_HALF_CLOSE_ID)?.action !== "empty-write-response-before-half-close" ||
-    byId.get(RESPONSE_HALF_CLOSE_ID)?.maxFrames !== 2
+    byId.get(RESPONSE_HALF_CLOSE_ID)?.maxFrames !== 2 ||
+    byId.get(UNARY_EXACT_ID)?.transport !== "grpc" ||
+    byId.get(UNARY_EXACT_ID)?.action !== "get-document-transaction-bytes" ||
+    byId.get(UNARY_EXACT_ID)?.wireBytes !== 10_485_760 ||
+    byId.get(UNARY_EXACT_ID)?.maxFrames !== 1 ||
+    byId.get(UNARY_OVER_ID)?.transport !== "grpc" ||
+    byId.get(UNARY_OVER_ID)?.action !== "get-document-transaction-bytes" ||
+    byId.get(UNARY_OVER_ID)?.wireBytes !== 10_485_761 ||
+    byId.get(UNARY_OVER_ID)?.maxFrames !== 1
   ) {
     throw new Error("unsupported stream recipe");
   }
   return {
-    live: [byId.get(TRAILERS_ID), byId.get(HALF_CLOSE_ID), byId.get(RESPONSE_HALF_CLOSE_ID)],
+    live: [byId.get(TRAILERS_ID), byId.get(HALF_CLOSE_ID), byId.get(RESPONSE_HALF_CLOSE_ID), byId.get(UNARY_EXACT_ID), byId.get(UNARY_OVER_ID)],
     saved: byId.get(SAVED_ID),
   };
 }
@@ -108,10 +134,55 @@ export function terminalComplete({ status, sawEnd, sawClose, sentFrames, expecte
   return Boolean(status && (sawEnd || sawClose) && sentFrames === expectedFrames);
 }
 
+async function runUnaryRequestByteRecipe(recipe, { connection, projectId, token }) {
+  const { request, wireBytes } = await makeUnaryRequestByWireBytes(recipe.wireBytes);
+  const client = new v1.FirestoreClient({
+    servicePath: connection.host,
+    port: connection.port,
+    projectId,
+    sslCreds: connection.tls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(),
+    fallback: false,
+  });
+  try {
+    let result;
+    try {
+      const [response] = await client.getDocument(request, {
+        deadline: new Date(Date.now() + 30_000),
+        retry: { retryCodes: [] },
+        otherArgs: { headers: { authorization: `Bearer ${token}` } },
+      });
+      result = {
+        sentFrames: 1,
+        wireBytes,
+        status: { code: 0, details: "", trailers: [] },
+        response: normalize(response),
+      };
+    } catch (error) {
+      if (error?.code === 4) throw new Error("indeterminate: unary client deadline");
+      const status = projectStreamStatus(error);
+      result = { sentFrames: 1, wireBytes, status };
+    }
+    const recorded = normalizeRecordedResponse(result, {
+      project: SANDBOX_PROJECT,
+      recordProject: "demo-firestore-probe",
+      scope: "error",
+    });
+    if (JSON.stringify(recorded).includes(token) || JSON.stringify(recorded).includes(SANDBOX_PROJECT)) {
+      throw new Error("unary recording contains private identity or credential");
+    }
+    return recorded;
+  } finally {
+    await client.close();
+  }
+}
+
 /** Run one fixed, no-document-write terminal probe using the real Firestore gRPC client. */
 export async function runStreamRecipe(recipe, { target, projectId, host, port, token }) {
   const connection = validateStreamTarget({ target, projectId, host, port });
   if (typeof token !== "string" || token.length === 0) throw new Error("stream bearer is required");
+  if ([UNARY_EXACT_ID, UNARY_OVER_ID].includes(recipe?.id)) {
+    return runUnaryRequestByteRecipe(recipe, { connection, projectId, token });
+  }
   if (![TRAILERS_ID, HALF_CLOSE_ID, RESPONSE_HALF_CLOSE_ID].includes(recipe?.id))
     throw new Error("unsupported live stream recipe");
   const client = new v1.FirestoreClient({

@@ -26,7 +26,7 @@ const RECORDED_PROJECT = "demo-firestore-probe";
 // Leave headroom, but reject attempt 1001 before the network send.
 const REST_CAP = 1000;
 const ATTEMPT_ESTIMATE_USD = 0.5;
-export const MAX_STREAM_FRAMES = 5;
+export const MAX_STREAM_FRAMES = 7;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 export function assertMatchingSandboxCorpus(fixture, currentCorpus, localCorpus) {

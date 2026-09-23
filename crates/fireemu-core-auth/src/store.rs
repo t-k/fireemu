@@ -1993,9 +1993,14 @@ impl AuthStore {
         self.users.get(uid).and_then(|u| u.password.as_ref())
     }
 
-    /// Installs a user from an import request, validating any supplied password.
+    /// Installs a user from an import request. The password is stored as given: production
+    /// applies neither the minimum length nor the project's password policy to
+    /// `accounts:batchCreate` (sandbox recording 2026-09-23); callers bound its size.
     pub fn import_user(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
-        self.import_user_with_password_policy(user, true)
+        if let Some((_, plaintext)) = &user.password {
+            Self::validate_imported_password(plaintext).map_err(ImportUserError::Account)?;
+        }
+        self.import_user_record(user)
     }
 
     /// Restores a user from a previously exported artifact, exactly as it was recorded.
@@ -2013,15 +2018,11 @@ impl AuthStore {
     /// credential accepted by an earlier runtime, and restoring it must not rewrite or reject
     /// that credential as if it were a new password.
     pub fn import_user_trusted(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
-        self.import_user_with_password_policy(user, false)
+        self.import_user_record(user)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn import_user_with_password_policy(
-        &mut self,
-        mut user: ImportedUser,
-        enforce_password_policy: bool,
-    ) -> Result<LocalId, ImportUserError> {
+    fn import_user_record(&mut self, mut user: ImportedUser) -> Result<LocalId, ImportUserError> {
         if user.local_id.is_empty()
             || user.local_id.chars().count() > 128
             || user.local_id.chars().any(char::is_control)
@@ -2065,11 +2066,6 @@ impl AuthStore {
             .map_err(|e| ImportUserError::Account(AuthError::LimitExceeded(e)))?;
         let password = match user.password {
             Some((salt, plaintext)) => {
-                if enforce_password_policy {
-                    self.validate_password_for(PasswordPolicyOperation::Registration, &plaintext)
-                        .map(|_| ())
-                        .map_err(ImportUserError::Account)?;
-                }
                 // The digest is fireemu's own; the emulator form is kept beside it so an
                 // export can write back exactly what it read.
                 let mut bytes = [0u8; 16];
@@ -3433,6 +3429,19 @@ impl AuthStore {
     pub const MIN_PASSWORD_CHARS: usize = 6;
     /// Maximum password length enforced by Firebase's default password policy.
     pub const MAX_PASSWORD_UTF16_UNITS: usize = 4096;
+
+    /// Validates an imported raw password: production stores one below the minimum length
+    /// (sandbox recording 2026-09-23); the maximum and the control-character refusal remain
+    /// local bounds.
+    pub fn validate_imported_password(password: &str) -> Result<(), AuthError> {
+        if password.encode_utf16().count() > Self::MAX_PASSWORD_UTF16_UNITS {
+            return Err(AuthError::PasswordTooLong);
+        }
+        if password.chars().any(char::is_control) {
+            return Err(AuthError::WeakPassword);
+        }
+        Ok(())
+    }
 
     /// Validates a password without storing it (lets callers fail before mutating).
     pub fn validate_password(password: &str) -> Result<(), AuthError> {

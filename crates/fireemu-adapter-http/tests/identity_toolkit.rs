@@ -8507,6 +8507,82 @@ fn second45_invalid_token_precedes_new_shape_validation_without_mutation() {
     }
 }
 
+fn enforce_custom_password_policy(s: &AuthState) {
+    let (status, body) = admin(
+        s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=passwordPolicyConfig",
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": [{"customStrengthOptions": {
+                "minPasswordLength": 8,
+                "maxPasswordLength": 20,
+                "containsUppercaseCharacter": true,
+                "containsLowercaseCharacter": true,
+                "containsNumericCharacter": true,
+                "containsNonAlphanumericCharacter": true
+            }}]
+        }}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+/// `batchCreate` stores a raw password without the minimum length or the project's policy,
+/// and signs in with it (sandbox recording 2026-09-23, `policy/*#import-raw-weak`).
+#[test]
+fn batch_import_stores_raw_passwords_below_the_policy() {
+    let default_policy = state();
+    let enforced = state();
+    enforce_custom_password_policy(&enforced);
+    for (s, password) in [(&default_policy, "12345"), (&enforced, "password")] {
+        let (status, imported) = admin(
+            s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{"localId": "weak", "email": "weak@example.com", "rawPassword": password}]}),
+        );
+        assert_eq!(status, 200, "{imported}");
+        assert!(imported.get("error").is_none(), "{imported}");
+        let (status, signed) = post(
+            s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "weak@example.com", "password": password}),
+        );
+        assert_eq!(status, 200, "{signed}");
+    }
+}
+
+/// Under an enforced custom policy, an Admin update names the unmet requirements before it
+/// looks the account up; the default minimum is checked after (sandbox recording 2026-09-23,
+/// `policy/enforce-custom#admin-update-weak` and `policy/default/routes#admin-update-weak`).
+#[test]
+fn admin_password_update_checks_a_custom_policy_before_the_account() {
+    let enforced = state();
+    enforce_custom_password_policy(&enforced);
+    let (status, refused) = admin(
+        &enforced,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "nobody", "password": "password"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: ["),
+        "{refused}"
+    );
+    let (status, refused) = admin(
+        &state(),
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "nobody", "password": "12345"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_NOT_FOUND");
+}
+
 #[test]
 fn admin_v2_password_policy_leaf_masks_preserve_unselected_fields() {
     let s = state();
@@ -8884,6 +8960,28 @@ fn admin_v2_password_policy_invalid_selected_update_is_atomic() {
             true
         );
     }
+}
+
+/// The SDK policy lists production's 30 non-alphanumeric characters in production's order
+/// (sandbox recording 2026-09-23, `policy/enforce-custom#password-policy`).
+#[test]
+fn password_policy_lists_production_symbols_in_production_order() {
+    let s = state();
+    enforce_custom_password_policy(&s);
+    let (status, policy) = admin(
+        &s,
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/passwordPolicy?key=fake-api-key",
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{policy}");
+    let listed: String = policy["allowedNonAlphanumericCharacters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(listed, r#"^$*.[]{}()?"!@#%&/\,><':;|_~`-"#);
 }
 
 #[test]

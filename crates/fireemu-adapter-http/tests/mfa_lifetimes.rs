@@ -68,6 +68,7 @@ fn state(strict: bool) -> AuthState {
         stateless_refresh_tokens: true,
         idp_continuations: IdpContinuationPolicy::LocalBounded,
         query_limits: AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
         app_check: None,
         app_check_policy: None,

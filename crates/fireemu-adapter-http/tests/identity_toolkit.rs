@@ -607,6 +607,7 @@ fn state() -> AuthState {
         stateless_refresh_tokens: true,
         idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -628,6 +629,7 @@ fn strict_state() -> AuthState {
             fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded,
         query_limits: AuthQueryLimits::ProductionBounded,
         stateless_refresh_tokens: false,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
         ..state()
@@ -635,8 +637,24 @@ fn strict_state() -> AuthState {
 }
 
 fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
-    let r = handle(state, "POST", path, body);
+    let path = with_client_key(state, path, "fake-api-key");
+    let r = handle(state, "POST", &path, body);
     (r.status, r.body)
+}
+
+/// Client SDKs always send their API key. Under a profile that refuses keyless client calls,
+/// the plain helper adds it to client routes that do not carry one, as an SDK would.
+fn with_client_key(state: &AuthState, path: &str, key: &str) -> String {
+    let project_scoped = path.contains("/projects/") || path.starts_with("/emulator");
+    let keyed = path.contains("key=") || path.contains("apiKey=");
+    if state.client_api_key != fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required
+        || project_scoped
+        || keyed
+    {
+        return path.to_owned();
+    }
+    let separator = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{separator}key={key}")
 }
 
 #[test]
@@ -3234,6 +3252,73 @@ fn blocking_auth_never_replays_a_response_onto_a_different_generated_user() {
     assert!(store.user_by_email("original@example.com").is_none());
 }
 
+const UNREGISTERED_CALLER: &str = "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";
+
+/// Production refuses an Admin route called without an `Authorization` header by whether the
+/// request still carries an API key, and a strict-profile client route called with neither
+/// (sandbox recording 2026-09-23, `auth-account/privilege/credentials`).
+#[test]
+fn requests_without_credentials_are_refused_with_production_shapes() {
+    for s in [state(), strict_state()] {
+        let keyed = post(
+            &s,
+            &format!("{ADMIN}/accounts:lookup?key=fake-api-key"),
+            &json!({"localId": ["x"]}),
+        );
+        let insufficient =
+            "INSUFFICIENT_PERMISSION : Only authenticated requests can specify target_project_id.";
+        assert_eq!(keyed.0, 400, "{}", keyed.1);
+        assert_eq!(
+            keyed.1,
+            json!({"error": {"code": 400, "message": insufficient, "errors": [
+                {"message": insufficient, "domain": "global", "reason": "invalid"}
+            ]}})
+        );
+        let bare = post(
+            &s,
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": ["x"]}),
+        );
+        assert_eq!(bare.0, 403, "{}", bare.1);
+        assert_eq!(
+            bare.1,
+            json!({"error": {"code": 403, "message": UNREGISTERED_CALLER, "errors": [
+                {"message": UNREGISTERED_CALLER, "domain": "global", "reason": "forbidden"}
+            ], "status": "PERMISSION_DENIED"}})
+        );
+    }
+    let strict = strict_state();
+    let keyless = handle(
+        &strict,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(keyless.status, 403, "{}", keyless.body);
+    assert_eq!(keyless.body["error"]["message"], UNREGISTERED_CALLER);
+    assert_eq!(keyless.body["error"]["status"], "PERMISSION_DENIED");
+    let keyed = post(
+        &strict,
+        &format!("{V1}/accounts:signUp?key=fake-api-key"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(keyed.0, 200, "{}", keyed.1);
+    let owner_call = handle_with(
+        &strict,
+        "POST",
+        &format!("{V1}/accounts:lookup"),
+        &owner(),
+        &json!({"localId": ["x"]}),
+    );
+    assert_ne!(owner_call.status, 403, "{}", owner_call.body);
+    let emulator = post(
+        &state(),
+        &format!("{V1}/accounts:signUp"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(emulator.0, 200, "{}", emulator.1);
+}
+
 #[test]
 fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_project() {
     let s = state();
@@ -3245,7 +3330,7 @@ fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_projec
         &RequestHeaders::default(),
         &body,
     );
-    assert_eq!(anon.status, 401);
+    assert_eq!(anon.status, 403);
     let mut foreign = owner();
     foreign.origin = Some("https://evil.example".to_owned());
     assert_eq!(
@@ -3830,7 +3915,7 @@ fn provider_ids_and_semantic_validation_are_kind_specific_and_atomic() {
     let saml = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/inboundSamlConfigs";
     assert_eq!(
         handle_with(&s, "GET", oidc, &RequestHeaders::default(), &json!({})).status,
-        401
+        403
     );
     assert_eq!(
         handle_with(
@@ -11416,7 +11501,7 @@ fn sorted_admin_query_does_not_admit_an_end_user_or_a_wrong_project() {
     for suffix in ["/accounts:query", ":queryAccounts"] {
         let path = format!("{ADMIN}{suffix}");
         let (status, _) = post(&s, &path, &request);
-        assert_eq!(status, 401);
+        assert_eq!(status, 403);
         let (status, _) = admin(
             &s,
             "POST",
@@ -11502,7 +11587,7 @@ fn strict_admin_query_body_tenant_is_scoped_and_never_silently_ignored() {
         );
         assert_eq!(status, 200, "{count}");
         assert_eq!(count["recordsCount"], "1");
-        assert_eq!(post(&s, &path, &body).0, 401);
+        assert_eq!(post(&s, &path, &body).0, 403);
         for malformed in [json!(false), json!(7), json!([]), json!({})] {
             let (status, refused) = admin(
                 &s,
@@ -11743,7 +11828,7 @@ fn account_expression_is_namespace_scoped_and_keeps_management_authorization() {
         let (status, page) = admin(&s, "POST", &path, &body);
         assert_eq!(status, 200, "{page}");
         assert_eq!(query_result_ids(&page), expected);
-        assert_eq!(post(&s, &path, &body).0, 401);
+        assert_eq!(post(&s, &path, &body).0, 403);
         let mut foreign = owner();
         foreign.origin = Some("https://external.invalid".into());
         assert_eq!(handle_with(&s, "POST", &path, &foreign, &body).status, 403);

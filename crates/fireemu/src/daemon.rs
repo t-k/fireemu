@@ -583,6 +583,14 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded
             }
         },
+        client_api_key: match cfg.profile {
+            crate::config::CompatibilityProfile::Emulator => {
+                fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional
+            }
+            crate::config::CompatibilityProfile::Strict => {
+                fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required
+            }
+        },
         fake_custom_token_expiry: match cfg.profile {
             crate::config::CompatibilityProfile::Emulator => {
                 fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore

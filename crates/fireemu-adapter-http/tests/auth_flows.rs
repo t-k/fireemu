@@ -180,6 +180,7 @@ fn state() -> AuthState {
         stateless_refresh_tokens: true,
         idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -189,8 +190,24 @@ fn state() -> AuthState {
 }
 
 fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
-    let r = handle(state, "POST", path, body);
+    let path = with_client_key(state, path, "fake-api-key");
+    let r = handle(state, "POST", &path, body);
     (r.status, r.body)
+}
+
+/// Client SDKs always send their API key. Under a profile that refuses keyless client calls,
+/// the plain helper adds it to client routes that do not carry one, as an SDK would.
+fn with_client_key(state: &AuthState, path: &str, key: &str) -> String {
+    let project_scoped = path.contains("/projects/") || path.starts_with("/emulator");
+    let keyed = path.contains("key=") || path.contains("apiKey=");
+    if state.client_api_key != fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required
+        || project_scoped
+        || keyed
+    {
+        return path.to_owned();
+    }
+    let separator = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{separator}key={key}")
 }
 
 fn finalize_mfa(state: &AuthState, body: &Value) -> (u16, Value) {
@@ -728,6 +745,7 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
             fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded,
         stateless_refresh_tokens: false,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
         ..state()

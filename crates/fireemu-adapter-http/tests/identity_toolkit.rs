@@ -9370,6 +9370,55 @@ fn value_classes_follow_production() {
     assert!(body.get("error").is_none(), "{body}");
 }
 
+/// Custom attributes read back as the text they were set with, key order included, an
+/// explicit `{}` stays visible, and `user_id` is not a reserved name; the ID token still
+/// carries the account's own `user_id` (sandbox recording 2026-09-23,
+/// `auth-account/admin/custom-attributes`).
+#[test]
+fn custom_attributes_read_back_as_set() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "ca", "email": "ca@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let readback = || {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": ["ca"]}),
+        )
+        .1["users"][0]
+            .get("customAttributes")
+            .cloned()
+    };
+    assert_eq!(readback(), None);
+    for text in [r#"{"role":"editor","level":3}"#, "{}", r#"{"user_id":"x"}"#] {
+        let (status, updated) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "ca", "customAttributes": text}),
+        );
+        assert_eq!(status, 200, "{text}: {updated}");
+        assert_eq!(readback(), Some(json!(text)));
+    }
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "ca@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let token =
+        fireemu_core_auth::jwt::decode_unsigned(signed["idToken"].as_str().unwrap()).unwrap();
+    let claims: Value = serde_json::from_str(&token.payload_json).unwrap();
+    assert_eq!(claims["user_id"], "ca");
+    assert_eq!(claims["sub"], "ca");
+}
+
 #[test]
 fn client_permissions_refuse_end_users_as_admin_only_operations() {
     let s = state();

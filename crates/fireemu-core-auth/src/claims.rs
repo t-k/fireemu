@@ -103,7 +103,9 @@ fn write_map(out: &mut String, entries: &BTreeMap<String, ClaimValue>) {
     out.push('}');
 }
 
-/// Claim names reserved by OIDC / Firebase that custom claims may not use.
+/// Claim names reserved by OIDC / Firebase that custom claims may not use. `user_id` is not
+/// among them: production stores it (sandbox recording 2026-09-23) and the ID token's own
+/// `user_id` still takes precedence when the token is assembled.
 pub const RESERVED_CLAIM_NAMES: &[&str] = &[
     "acr",
     "amr",
@@ -126,7 +128,6 @@ pub const RESERVED_CLAIM_NAMES: &[&str] = &[
     "phone_number",
     "sign_in_provider",
     "sub",
-    "user_id",
 ];
 
 /// Claim names the Firebase Functions SDK rejects in Blocking Auth responses.
@@ -176,9 +177,19 @@ impl fmt::Display for CustomClaimsError {
 impl std::error::Error for CustomClaimsError {}
 
 /// Custom claims set through the Admin SDK.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CustomClaims {
     entries: BTreeMap<String, ClaimValue>,
+    /// The `customAttributes` text the claims were set from, which production reads back as
+    /// given (key order and an empty `{}` included). Any later change drops it.
+    source: Option<String>,
+}
+
+/// Claims compare by their entries: the text they were set from is a presentation detail.
+impl PartialEq for CustomClaims {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries == other.entries
+    }
 }
 
 impl CustomClaims {
@@ -190,6 +201,7 @@ impl CustomClaims {
         if RESERVED_CLAIM_NAMES.contains(&name) {
             return Err(CustomClaimsError::ReservedName(name.to_owned()));
         }
+        self.source = None;
         self.entries.insert(name.to_owned(), value);
         Ok(())
     }
@@ -207,6 +219,7 @@ impl CustomClaims {
         if BLOCKING_RESPONSE_RESERVED_CLAIM_NAMES.contains(&name) {
             return Err(CustomClaimsError::ReservedName(name.to_owned()));
         }
+        self.source = None;
         self.entries.insert(name.to_owned(), value);
         Ok(())
     }
@@ -219,7 +232,11 @@ impl CustomClaims {
 
     /// Removes a claim, returning whether it was present.
     pub fn remove(&mut self, name: &str) -> bool {
-        self.entries.remove(name).is_some()
+        let removed = self.entries.remove(name).is_some();
+        if removed {
+            self.source = None;
+        }
+        removed
     }
 
     /// Entries in canonical order.
@@ -244,7 +261,27 @@ impl CustomClaims {
         for (name, value) in &members {
             claims.insert(name, ClaimValue::from_json(value))?;
         }
+        claims.source = Some(text.to_owned());
         Ok(claims)
+    }
+
+    /// The same claims, remembered as set from `text` (the `customAttributes` value the
+    /// caller parsed them from).
+    #[must_use]
+    pub fn with_source(mut self, text: &str) -> Self {
+        self.source = Some(text.to_owned());
+        self
+    }
+
+    /// The `customAttributes` value an account reports: the text the claims were set from,
+    /// else their canonical JSON; `None` for claims never set.
+    #[must_use]
+    pub fn attributes_text(&self) -> Option<String> {
+        match &self.source {
+            Some(text) => Some(text.clone()),
+            None if self.entries.is_empty() => None,
+            None => Some(self.canonical_json()),
+        }
     }
 
     /// Canonical JSON encoding.

@@ -1559,6 +1559,8 @@ impl RestState {
 
 /// Percent-decodes every path segment (document IDs may carry spaces, Unicode, `%`);
 /// an escape that would introduce a `/` changes the structure and is refused.
+const ENCODED_SLASH_PATH_ERROR: &str = "encoded '/' in a path segment";
+
 fn decode_path(path: &str) -> Result<String, Status> {
     let mut out = String::with_capacity(path.len());
     for (i, segment) in path.split('/').enumerate() {
@@ -1582,7 +1584,7 @@ fn decode_path(path: &str) -> Result<String, Status> {
         let text = String::from_utf8(raw)
             .map_err(|_| Status::invalid_argument("path segment is not UTF-8"))?;
         if text.contains('/') {
-            return Err(Status::invalid_argument("encoded '/' in a path segment"));
+            return Err(Status::invalid_argument(ENCODED_SLASH_PATH_ERROR));
         }
         out.push_str(&text);
     }
@@ -1597,7 +1599,7 @@ fn observed_create_collection_slash_error(
 ) -> Status {
     if req.method != "POST"
         || action.is_some()
-        || original.message() != "encoded '/' in a path segment"
+        || original.message() != ENCODED_SLASH_PATH_ERROR
         || !raw_resource.starts_with("/v1/projects/")
     {
         return original;
@@ -1772,6 +1774,14 @@ fn precondition_from_params(
 #[cfg(test)]
 mod strict_commit_route_tests {
     use super::is_strict_commit_route;
+
+    #[test]
+    fn encoded_slash_path_error_uses_the_shared_contract() {
+        let error =
+            super::decode_path("/v1/projects/demo/databases/(default)/documents/bad%2Finside")
+                .unwrap_err();
+        assert_eq!(error.message(), super::ENCODED_SLASH_PATH_ERROR);
+    }
 
     #[test]
     fn recognizes_only_the_documents_root_commit_route() {

@@ -79,6 +79,12 @@
       "decision": "Multi-expression query semantics are decided by production observation in auth-account/admin/query, not by documentation.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-23"
+    },
+    {
+      "id": "A12",
+      "decision": "The gson parser message production returns for malformed customAttributes JSON is a documented message-text divergence; the INVALID_CLAIMS refusal itself must match.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24"
     }
   ],
   "conditions": [
@@ -507,7 +513,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "MISMATCH",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           {
@@ -524,8 +530,17 @@
           "MATCH": 30,
           "MISMATCH": 1
         },
-        "mismatchedRows": [
-          "auth-account/admin/custom-attributes#invalid-json"
+        "documentedDivergences": [
+          {
+            "row": "auth-account/admin/custom-attributes#invalid-json",
+            "kind": "message-text",
+            "production": "400 INVALID_CLAIMS : com.google.gson.stream.MalformedJsonException: <gson parser position and path> (with a gson troubleshooting link)",
+            "fireemu": "400 INVALID_CLAIMS : customAttributes must be a JSON object",
+            "reason": "Status, error code and refusal match; only the text after INVALID_CLAIMS differs. Reproducing gson's parser diagnostics for arbitrary malformed JSON is out of proportion to its value.",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "scopeDecision": "A12"
+          }
         ]
       }
     },
@@ -998,7 +1013,7 @@
           "clippy": "cargo clippy --workspace --all-targets -- -D warnings: clean"
         }
       },
-      "note": "The one AUTH-ACCOUNT mismatch is the custom-attributes wording row, recorded under that condition."
+      "note": "The one AUTH-ACCOUNT row that differs is the documented message-text divergence of custom-attributes (scope decision A12)."
     },
     {
       "conditionId": "AUTH-ACCOUNT/closure-review",

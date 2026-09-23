@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -29,6 +30,12 @@ SAVED_PROGRAM_SHA256 = (
 )
 PROGRAM_DIGEST = "adf956497d20db3a8bb48f036886b169b033a3883b4d2e3371152accf111100a"
 POSTSTATE_DOCUMENT = f"projects/{PROJECT}/databases/(default)/documents/rt/a"
+POSTSTATE_RESPONSE_LIMIT = 64 * 1024
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, file, code, message, headers, new_url):
+        return None
 
 
 def load_saved_program(path: Path) -> dict:
@@ -70,18 +77,41 @@ def read_poststate(firestore_origin: str) -> dict:
     payload = None
     try:
         origin = local_origin(firestore_origin)
+        opener = build_opener(ProxyHandler({}), _NoRedirect())
         request = Request(
             f"{origin}/v1/{POSTSTATE_DOCUMENT}",
             headers={"Authorization": "Bearer owner"},
             method="GET",
         )
-        with urlopen(request, timeout=5) as response:
+        with opener.open(request, timeout=5) as response:
             status = response.status
             if status == 200:
-                payload = json.loads(response.read())
+                content_length = response.headers.get("Content-Length")
+                expected_length = (
+                    int(content_length) if content_length is not None else None
+                )
+                if (
+                    expected_length is not None
+                    and not 0 <= expected_length <= POSTSTATE_RESPONSE_LIMIT
+                ):
+                    raise ValueError("invalid read-time state response length")
+                body = response.read(POSTSTATE_RESPONSE_LIMIT + 1)
+                if len(body) > POSTSTATE_RESPONSE_LIMIT:
+                    raise ValueError("read-time state response exceeds size limit")
+                if expected_length is not None and len(body) != expected_length:
+                    raise ValueError("truncated read-time state response")
+                payload = json.loads(body)
     except HTTPError as error:
         status = error.code
-    except (URLError, TimeoutError, OSError, ValueError):
+        error.close()
+    except (
+        URLError,
+        http.client.HTTPException,
+        TimeoutError,
+        OSError,
+        TypeError,
+        ValueError,
+    ):
         pass
 
     name_matches = (

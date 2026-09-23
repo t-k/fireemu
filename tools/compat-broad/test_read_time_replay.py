@@ -35,7 +35,7 @@ def test_saved_read_time_record_rejects_byte_mutation(tmp_path):
         load_saved_program(mutated)
 
 
-def _poststate_server(status, body):
+def _poststate_server(status, body, *, redirect_to=None, declared_length=None):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -43,10 +43,19 @@ def _poststate_server(status, body):
             requests.append(
                 (self.command, self.path, self.headers.get("Authorization"))
             )
+            if redirect_to is not None:
+                self.send_response(status)
+                self.send_header("Location", redirect_to)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             encoded = body if isinstance(body, bytes) else json.dumps(body).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header(
+                "Content-Length",
+                str(declared_length if declared_length is not None else len(encoded)),
+            )
             self.end_headers()
             self.wfile.write(encoded)
 
@@ -76,6 +85,135 @@ def _write_instance(output, origin, nonce="n-1"):
             }
         )
     )
+
+
+def _isolated_read_poststate(origin, proxy_origin):
+    script = Path("tools/compat-broad/read_time_replay.py").resolve()
+    import_statement = (
+        f"import sys; sys.path.insert(0, {str(script.parent)!r}); "
+        "from read_time_replay import read_poststate; import json; "
+        "print(json.dumps(read_poststate(sys.argv[1])))"
+    )
+    environment = os.environ.copy()
+    for key in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy"):
+        environment.pop(key, None)
+    environment["HTTP_PROXY"] = proxy_origin
+    environment["http_proxy"] = proxy_origin
+    return subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-c", import_statement, origin],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+
+
+def test_poststate_readback_bypasses_proxy_environment():
+    from read_time_replay import POSTSTATE_DOCUMENT
+
+    body = {"name": POSTSTATE_DOCUMENT, "fields": {"v": {"integerValue": "2"}}}
+    target, target_thread, target_requests = _poststate_server(200, body)
+    proxy, proxy_thread, proxy_requests = _poststate_server(200, body)
+    try:
+        result = _isolated_read_poststate(
+            f"http://127.0.0.1:{target.server_port}",
+            f"http://127.0.0.1:{proxy.server_port}",
+        )
+
+        assert result.returncode == 0
+        assert json.loads(result.stdout) == {
+            "status": 200,
+            "documentNameMatches": True,
+            "integerValueIsTwo": True,
+        }
+        assert target_requests == [("GET", f"/v1/{POSTSTATE_DOCUMENT}", "Bearer owner")]
+        assert proxy_requests == []
+    finally:
+        target.shutdown()
+        target.server_close()
+        target_thread.join(timeout=2)
+        proxy.shutdown()
+        proxy.server_close()
+        proxy_thread.join(timeout=2)
+
+
+def test_poststate_readback_does_not_follow_redirect_or_forward_owner_header():
+    from read_time_replay import POSTSTATE_DOCUMENT, read_poststate
+
+    destination, destination_thread, destination_requests = _poststate_server(
+        200, {"name": POSTSTATE_DOCUMENT, "fields": {"v": {"integerValue": "2"}}}
+    )
+    redirect, redirect_thread, redirect_requests = _poststate_server(
+        302,
+        b"",
+        redirect_to=f"http://127.0.0.1:{destination.server_port}/capture",
+    )
+    try:
+        result = read_poststate(f"http://127.0.0.1:{redirect.server_port}")
+
+        assert result == {
+            "status": 302,
+            "documentNameMatches": False,
+            "integerValueIsTwo": False,
+        }
+        assert redirect_requests == [
+            ("GET", f"/v1/{POSTSTATE_DOCUMENT}", "Bearer owner")
+        ]
+        assert destination_requests == []
+    finally:
+        redirect.shutdown()
+        redirect.server_close()
+        redirect_thread.join(timeout=2)
+        destination.shutdown()
+        destination.server_close()
+        destination_thread.join(timeout=2)
+
+
+def test_poststate_readback_rejects_oversized_body(tmp_path):
+    from read_time_replay import POSTSTATE_DOCUMENT, read_poststate
+
+    encoded = json.dumps(
+        {"name": POSTSTATE_DOCUMENT, "fields": {"v": {"integerValue": "2"}}}
+    ).encode()
+    body = encoded + b" " * (64 * 1024 + 1)
+    server, thread, requests = _poststate_server(200, body)
+    try:
+        result = read_poststate(f"http://127.0.0.1:{server.server_port}")
+
+        assert result == {
+            "status": 200,
+            "documentNameMatches": False,
+            "integerValueIsTwo": False,
+        }
+        assert requests == [("GET", f"/v1/{POSTSTATE_DOCUMENT}", "Bearer owner")]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_poststate_readback_rejects_truncated_body():
+    from read_time_replay import POSTSTATE_DOCUMENT, read_poststate
+
+    body = json.dumps(
+        {"name": POSTSTATE_DOCUMENT, "fields": {"v": {"integerValue": "2"}}}
+    ).encode()
+    server, thread, requests = _poststate_server(
+        200, body, declared_length=len(body) + 10
+    )
+    try:
+        result = read_poststate(f"http://127.0.0.1:{server.server_port}")
+
+        assert result == {
+            "status": 200,
+            "documentNameMatches": False,
+            "integerValueIsTwo": False,
+        }
+        assert requests == [("GET", f"/v1/{POSTSTATE_DOCUMENT}", "Bearer owner")]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_child_readback_sets_validation_only_for_exact_document_and_integer_two(

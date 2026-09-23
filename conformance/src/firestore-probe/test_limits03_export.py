@@ -62,3 +62,15 @@ def test_sandbox_limits_omit_legacy_shared_owner_reference() -> None:
                 assert body["fields"], program["id"]
                 affected += 1
     assert affected >= 20
+
+
+def test_index_entry_count_pair_rebalances_after_owner_removal() -> None:
+    programs = {program["id"]: program for program in _build_programs()}
+    steps = programs["writes/limits/index-entries-per-document"]["steps"]
+    values = [
+        step["body"]["fields"]["a"]["arrayValue"]["values"]
+        for step in steps[:2]
+    ]
+    assert [len(item) for item in values] == [19_999, 20_000]
+    assert all(len({value["integerValue"] for value in item}) == len(item) for item in values)
+    assert all("_sharedOwner" not in json.dumps(step) for step in steps)

@@ -72,14 +72,14 @@ fn nested_reference_charges_are_namespace_independent() {
 }
 
 #[test]
-fn indexed_reference_truncation_uses_the_correct_relative_charge() {
+fn indexed_references_keep_the_full_relative_charge() {
     for &(project, database) in NAMESPACES {
         // 16 + (735 + 1) + (tail + 1) = 753 + tail.
-        for (tail, full, indexed) in [(746, 1499, 1499), (747, 1500, 1500), (748, 1501, 1500)] {
+        for (tail, full) in [(746, 1499), (747, 1500), (748, 1501)] {
             let relative = format!("{}/{}", "a".repeat(735), "b".repeat(tail));
             let value = reference(project, database, &relative);
             assert_eq!(field_value_size(&value), Ok(full));
-            assert_eq!(indexed_value_size(&value), Ok(indexed));
+            assert_eq!(indexed_value_size(&value), Ok(full));
         }
     }
 }

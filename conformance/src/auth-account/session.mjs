@@ -64,7 +64,13 @@ function assign(object, path, value) {
 
 export function createSession(
   ctx,
-  { timeoutMs = 60_000, settleMs = 0, maxRequests = Infinity, log = () => {} } = {},
+  {
+    timeoutMs = 60_000,
+    settleMs = 0,
+    maxRequests = Infinity,
+    maxHarnessRequests = Infinity,
+    log = () => {},
+  } = {},
 ) {
   let requests = 0;
   let harnessRequests = 0;
@@ -73,10 +79,17 @@ export function createSession(
     const request = buildRequest(step, ctx, raw);
     guardRequest(request, ctx, { harness });
     const { url, init } = request;
-    if (requests + harnessRequests >= maxRequests)
-      throw fatal(`request ceiling ${maxRequests} reached`);
-    if (harness) harnessRequests += 1;
-    else requests += 1;
+    // Recorded steps and the harness's own cleanup have separate ceilings, so a corpus that
+    // runs away can never block the wipe and config restore that follow it.
+    if (harness) {
+      if (harnessRequests >= maxHarnessRequests) {
+        throw fatal(`harness request ceiling ${maxHarnessRequests} reached`);
+      }
+      harnessRequests += 1;
+    } else {
+      if (requests >= maxRequests) throw fatal(`request ceiling ${maxRequests} reached`);
+      requests += 1;
+    }
     let response;
     try {
       response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });

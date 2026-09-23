@@ -57,7 +57,7 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 # that decides which, so the transport cannot outrun what the Gate reserved.
 TIMEOUT = TRANSPORT_CEILING_SECONDS
 WORKER_ENTRY = "tools/compat-broad/fs-write-limits/limits_03_https_worker.py"
-_WORKER_SHA256 = "bd3f9918f732e3edf95d5330924a2a2df234bd5a67aa8f659ac07e798b37508c"
+_WORKER_SHA256 = "cca47769c29929485eb0decb3e27f6fbef5b8f95ebf6bfaa76de4abc35d80499"
 _TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{1,8192}=*")
 _VERSION = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z")
 _DIAGNOSTIC_LIMIT = 512

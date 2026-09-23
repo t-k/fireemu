@@ -2289,9 +2289,25 @@ fn note_password_updated_at(
 fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, ArtifactError> {
     let refuse = |message: String| ArtifactError::new("auth", path, message);
     header_safe_account(record, &refuse)?;
-    if let Some((member, _)) = record.extra.first() {
+    let mut imported_password = None;
+    for (member, value) in &record.extra {
+        if member == IMPORTED_PASSWORD_MEMBER && imported_password.is_none() {
+            imported_password = Some(imported_password_of(value).ok_or_else(|| {
+                refuse(format!(
+                    "account {}: {IMPORTED_PASSWORD_MEMBER} is not {{spec, hash, salt}}",
+                    record.local_id
+                ))
+            })?);
+            continue;
+        }
         return Err(refuse(format!(
             "account {} contains unsupported member {member:?}; fireemu cannot preserve it during import",
+            record.local_id
+        )));
+    }
+    if imported_password.is_some() && record.password_hash.is_some() {
+        return Err(refuse(format!(
+            "account {}: both passwordHash and {IMPORTED_PASSWORD_MEMBER}",
             record.local_id
         )));
     }
@@ -2421,8 +2437,11 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
             .map(federated_identity)
             .collect(),
         password,
-        imported_password: None,
-        allow_shared_email: false,
+        imported_password,
+        // A restore reproduces a state the runtime held: accounts batchCreate let share an
+        // address come back without switching duplicate emails on (external review
+        // 2026-09-24).
+        allow_shared_email: true,
         totp_factors,
         phone_factors,
     })
@@ -3364,6 +3383,51 @@ fn export_auth(
     Ok(())
 }
 
+/// The fireemu-only account member that carries a foreign hash `accounts:batchCreate`
+/// imported (the Identity Toolkit document has no algorithm field for it), so an export and
+/// restore keep the credential instead of dropping it (external review 2026-09-24).
+const IMPORTED_PASSWORD_MEMBER: &str = "fireemuImportedPassword";
+
+fn imported_password_json(
+    hash: &fireemu_core_auth::store::ImportedPasswordHash,
+) -> fireemu_core_export::json::Json {
+    use fireemu_core_export::json::Json;
+    Json::Object(vec![
+        ("spec".to_owned(), Json::String(hash.spec.clone())),
+        (
+            "hash".to_owned(),
+            Json::String(fireemu_core_types::hash::base64_standard(&hash.hash)),
+        ),
+        (
+            "salt".to_owned(),
+            Json::String(fireemu_core_types::hash::base64_standard(&hash.salt)),
+        ),
+    ])
+}
+
+fn imported_password_of(
+    value: &fireemu_core_export::json::Json,
+) -> Option<fireemu_core_auth::store::ImportedPasswordHash> {
+    use fireemu_core_export::json::Json;
+    let Json::Object(members) = value else {
+        return None;
+    };
+    let text = |key: &str| {
+        members.iter().find_map(|(name, value)| match value {
+            Json::String(text) if name == key => Some(text.as_str()),
+            _ => None,
+        })
+    };
+    if members.len() != 3 {
+        return None;
+    }
+    Some(fireemu_core_auth::store::ImportedPasswordHash {
+        spec: text("spec")?.to_owned(),
+        hash: decode_base64(text("hash")?)?,
+        salt: decode_base64(text("salt")?)?,
+    })
+}
+
 /// One account as the Identity Toolkit document an export carries.
 fn exported_account(
     store: &fireemu_core_auth::store::AuthStore,
@@ -3380,6 +3444,18 @@ fn exported_account(
         ),
         None => (None, None),
     };
+    // A foreign hash `accounts:batchCreate` imported travels in the fireemu-only member.
+    let imported_extra = store
+        .password_digest(&user.local_id)
+        .filter(|digest| digest.emulator_form().is_none())
+        .and_then(fireemu_core_auth::store::PasswordDigest::imported_hash)
+        .map(|hash| {
+            vec![(
+                IMPORTED_PASSWORD_MEMBER.to_owned(),
+                imported_password_json(hash),
+            )]
+        })
+        .unwrap_or_default();
     let has_password = password_hash.is_some() || store.has_password(&user.local_id);
     let email_link_signin =
         user.provider == fireemu_core_auth::store::Provider::EmailLink && !has_password;
@@ -3435,7 +3511,7 @@ fn exported_account(
         tenant_id: tenant_id.map(str::to_owned),
         provider_user_info: providers,
         mfa_info,
-        extra: Vec::new(),
+        extra: imported_extra,
     }
 }
 
@@ -5044,6 +5120,73 @@ mod tests {
             .message
             .contains("tenant \"broken\" store is poisoned"));
         assert!(default.lock().unwrap().user_by_id(uid.as_str()).is_some());
+    }
+
+    /// Accounts `accounts:batchCreate` let share an address restore from their own export
+    /// without switching duplicate emails on (external review 2026-09-24).
+    #[test]
+    fn imported_accounts_sharing_an_email_restore_from_their_export() {
+        use fireemu_core_auth::{mfa::TotpPolicy, store::AuthStore};
+        use fireemu_core_export::auth::UserRecord;
+        use fireemu_core_types::determinism::SplitMix64;
+        let path = std::path::Path::new("offline.json");
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        for uid in ["a", "b"] {
+            let record = UserRecord {
+                local_id: uid.to_owned(),
+                email: Some("shared@example.com".to_owned()),
+                created_at: Some("100000".to_owned()),
+                ..UserRecord::default()
+            };
+            let mut user = super::imported_user(&record, path).unwrap();
+            user.allow_shared_email = true;
+            store.import_user(user).unwrap();
+        }
+        assert!(!store.config().allow_duplicate_emails);
+        let mut restored = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+        for uid in ["a", "b"] {
+            let exported = super::exported_account(&store, store.user_by_id(uid).unwrap(), None);
+            let imported = super::imported_user(&exported, path).unwrap();
+            restored.import_user_trusted(imported).unwrap();
+        }
+        assert_eq!(restored.users_by_email("shared@example.com").len(), 2);
+        assert!(!restored.config().allow_duplicate_emails);
+    }
+
+    /// A foreign hash imported through `accounts:batchCreate` survives an export and restore
+    /// instead of being dropped (external review 2026-09-24).
+    #[test]
+    fn an_imported_foreign_hash_round_trips_through_export() {
+        use fireemu_core_auth::{
+            mfa::TotpPolicy,
+            store::{AuthStore, ImportedPasswordHash},
+        };
+        use fireemu_core_export::auth::UserRecord;
+        use fireemu_core_types::determinism::SplitMix64;
+        let path = std::path::Path::new("offline.json");
+        let hash = ImportedPasswordHash {
+            spec: "{\"algorithm\":\"SHA256\",\"rounds\":1}".to_owned(),
+            hash: vec![1, 2, 3, 250],
+            salt: vec![4, 5],
+        };
+        let record = UserRecord {
+            local_id: "h".to_owned(),
+            email: Some("hashed@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            ..UserRecord::default()
+        };
+        let mut user = super::imported_user(&record, path).unwrap();
+        user.imported_password = Some(hash.clone());
+        let mut store = AuthStore::new("demo-app", SplitMix64::new(1), TotpPolicy::default());
+        store.import_user(user).unwrap();
+        let exported = super::exported_account(&store, store.user_by_id("h").unwrap(), None);
+        assert!(exported.password_hash.is_none());
+        let restored_user = super::imported_user(&exported, path).unwrap();
+        assert_eq!(restored_user.imported_password, Some(hash));
+        let mut restored = AuthStore::new("demo-app", SplitMix64::new(2), TotpPolicy::default());
+        restored.import_user_trusted(restored_user).unwrap();
+        let uid = restored.user_by_id("h").unwrap().local_id.clone();
+        assert!(restored.password_digest(&uid).is_some());
     }
 
     #[test]

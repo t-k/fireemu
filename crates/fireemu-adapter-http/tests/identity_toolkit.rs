@@ -4531,7 +4531,8 @@ fn admin_lookup_resolves_every_identifier_and_batch_get_pages_over_get() {
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": [1]}),
     );
-    assert_eq!(status, 400);
+    // Production reads a numeric identifier as a string (sandbox recording 2026-09-23).
+    assert_eq!(status, 200);
 
     let (status, page1) = admin(
         &s,
@@ -4558,13 +4559,18 @@ fn admin_lookup_resolves_every_identifier_and_batch_get_pages_over_get() {
     );
     assert_eq!(page3["users"].as_array().map(Vec::len), Some(1));
     assert!(page3.get("nextPageToken").is_none());
-    let (status, _) = admin(
+    // maxResults 0 is an empty page in production (sandbox recording 2026-09-23).
+    let (status, empty) = admin(
         &s,
         "GET",
         &format!("{ADMIN}/accounts:batchGet?maxResults=0"),
         &json!({}),
     );
-    assert_eq!(status, 400);
+    assert_eq!(
+        (status, empty.get("users").is_none()),
+        (200, true),
+        "{empty}"
+    );
 
     let (status, count) = admin(
         &s,
@@ -4652,8 +4658,18 @@ fn strict_admin_query_applies_the_production_page_contract() {
     assert_eq!(name_page["userInfo"][0]["localId"], "user-000");
     assert_eq!(name_page["userInfo"][1]["localId"], "user-001");
 
+    // Production accepts a limit above 500 (sandbox recording 2026-09-23).
+    assert_eq!(
+        admin(
+            &strict,
+            "POST",
+            &format!("{ADMIN}/accounts:query"),
+            &json!({"limit": "501"})
+        )
+        .0,
+        200
+    );
     for invalid in [
-        json!({"limit": "501"}),
         json!({"limit": "-1"}),
         json!({"offset": "-1"}),
         json!({"returnUserInfo": "true"}),
@@ -8001,17 +8017,14 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
         admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &json!({})).0,
         400
     );
-    // Page tokens are validated.
-    assert_eq!(
-        admin(
-            &s,
-            "GET",
-            &format!("{ADMIN}/accounts:batchGet?nextPageToken=u-a"),
-            &json!({})
-        )
-        .0,
-        400
+    // An unreadable page token is an empty page in production (sandbox recording 2026-09-23).
+    let (status, page) = admin(
+        &s,
+        "GET",
+        &format!("{ADMIN}/accounts:batchGet?nextPageToken=u-a"),
+        &json!({}),
     );
+    assert_eq!((status, page.get("users").is_none()), (200, true), "{page}");
 }
 
 #[test]
@@ -11550,11 +11563,13 @@ fn strict_query_expression_priorities_exact_union_and_duplicates_are_explicit() 
             json!([{"email":null, "phoneNumber":null, "userId":"c"}]),
             vec!["c"],
         ),
+        // Production evaluates only the first expression and treats an empty selector as
+        // unset (sandbox recording 2026-09-23, auth-account/admin/query).
         (
             json!([{"email":"a@example.com"}, {"userId":"a"}, {"userId":"c"}, {"userId":"c"}]),
-            vec!["a", "c"],
+            vec!["a"],
         ),
-        (json!([{"email":"", "userId":"a"}]), vec![]),
+        (json!([{"email":"", "userId":"a"}]), vec!["a"]),
         (json!([{"email":"%@example.com"}]), vec![]),
         (json!([{"email":"a@"}]), vec![]),
         (json!([{"userId":"A"}]), vec![]),
@@ -11583,8 +11598,9 @@ fn strict_expression_filters_before_sort_paging_and_count_only() {
         &json!({"expression":expression, "returnUserInfo":false, "sortBy":"NAME"}),
     );
     assert_eq!(status, 200, "{count}");
-    assert_eq!(count, json!({"recordsCount":"3"}));
-    for (order, expected) in [("ASC", vec!["d", "c"]), ("DESC", vec!["d", "a"])] {
+    // Only the first expression is evaluated in production (sandbox recording 2026-09-23).
+    assert_eq!(count, json!({"recordsCount":"1"}));
+    for (order, expected) in [("ASC", Vec::<&str>::new()), ("DESC", Vec::new())] {
         let (status, page) = admin(
             &s,
             "POST",
@@ -11593,7 +11609,7 @@ fn strict_expression_filters_before_sort_paging_and_count_only() {
         );
         assert_eq!(status, 200, "{page}");
         assert_eq!(query_result_ids(&page), expected);
-        assert_eq!(page["recordsCount"], "2");
+        assert_eq!(page["recordsCount"], "0");
     }
     for body in [
         json!({"expression":expression, "limit":0}),
@@ -11615,8 +11631,6 @@ fn malformed_expression_never_falls_back_to_an_unfiltered_response() {
         json!("SQL"),
         json!([null]),
         json!([[]]),
-        json!([{}]),
-        json!([{"userId":null}]),
         json!([{"email":true}]),
         json!([{"userId":4}]),
         json!([{"phoneNumber":{}}]),
@@ -11637,6 +11651,24 @@ fn malformed_expression_never_falls_back_to_an_unfiltered_response() {
             assert!(body.get("userInfo").is_none());
             assert!(body.get("recordsCount").is_none());
         }
+    }
+    // An item without a selector (or with a null one) is well-formed and unconstrained in
+    // production (sandbox recording 2026-09-23, auth-account/admin/query#expression-empty-item).
+    let (_, all) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}:queryAccounts"),
+        &json!({"returnUserInfo": false}),
+    );
+    for expression in [json!([{}]), json!([{"userId": null}])] {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:queryAccounts"),
+            &json!({"expression": expression, "returnUserInfo": false}),
+        );
+        assert_eq!(status, 200, "{expression}: {body}");
+        assert_eq!(body["recordsCount"], all["recordsCount"], "{expression}");
     }
     assert_eq!(before, format!("{:?}", s.store.lock().unwrap()));
 }
@@ -12248,4 +12280,84 @@ fn admin_email_changes_keep_email_verified() {
     );
     assert_eq!(found["users"][0]["emailVerified"], true, "{found}");
     assert!(found["users"][0].get("email").is_none(), "{found}");
+}
+
+/// Production's Admin read routes are lenient where fireemu used to refuse (sandbox
+/// recording 2026-09-23): lookups beyond 100 identifiers, numeric identifiers and
+/// `initialEmail` answer 200; batchGet with `maxResults` 0, above 1000 or a malformed page
+/// token answers 200; a POST to batchGet is a plain 404; queries accept `limit` above 500 and
+/// an empty expression; and batchGet returns the password hash material.
+#[test]
+fn admin_read_routes_are_as_lenient_as_production() {
+    let s = strict_state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "r1", "email": "r1@example.com", "password": "password123"}),
+    );
+    let lookup = |body: Value| admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &body);
+    let many: Vec<String> = (0..101).map(|i| format!("nobody-{i}")).collect();
+    for body in [
+        json!({"localId": many}),
+        json!({"localId": [42]}),
+        json!({"initialEmail": ["r1@example.com"]}),
+    ] {
+        let (status, found) = lookup(body.clone());
+        assert_eq!(status, 200, "{body}: {found}");
+    }
+    let batch_get = |query: &str| {
+        admin(
+            &s,
+            "GET",
+            &format!("{ADMIN}/accounts:batchGet?{query}"),
+            &Value::Null,
+        )
+    };
+    let (status, none) = batch_get("maxResults=0");
+    assert_eq!((status, none.get("users").is_none()), (200, true), "{none}");
+    let (status, all) = batch_get("maxResults=1001");
+    assert_eq!(status, 200, "{all}");
+    let user = &all["users"][0];
+    assert!(
+        user["passwordHash"].is_string() && user["passwordHash"] != "UkVEQUNURUQ=",
+        "{all}"
+    );
+    assert!(user["salt"].is_string(), "{all}");
+    assert_eq!(user["version"], 0, "{all}");
+    let (status, bad) = batch_get("maxResults=2&nextPageToken=not-a-token");
+    assert_eq!((status, bad.get("users").is_none()), (200, true), "{bad}");
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchGet"),
+        &json!({"maxResults": 2}),
+    );
+    assert_eq!(status, 404);
+    for body in [json!({"limit": "501"}), json!({"expression": [{}]})] {
+        let (status, queried) = admin(&s, "POST", &format!("{ADMIN}/accounts:query"), &body);
+        assert_eq!(status, 200, "{body}: {queried}");
+        assert_eq!(queried["recordsCount"], "1", "{body}: {queried}");
+    }
+}
+
+/// Production stores a displayName carrying control characters, NUL included, on update
+/// (sandbox recording 2026-09-23, `auth-account/values`).
+#[test]
+fn a_client_update_stores_control_characters_in_the_display_name() {
+    let s = strict_state();
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "cc@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    for name in ["a\u{0007}b", "a\u{0000}b"] {
+        let (status, updated) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": name}),
+        );
+        assert_eq!(status, 200, "{updated}");
+        assert_eq!(updated["displayName"], name);
+    }
 }

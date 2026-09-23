@@ -1,6 +1,9 @@
 """Offline typed inputs for Auth account/federation native tests, never a cloud runner.
 
-Expected results encode the bounded local contract. They are not production observations.
+Expected results encode the bounded local contract. They are not production observations,
+but the query rows follow what the Identity Platform sandbox answered on 2026-09-23
+(conformance/auth-account-production.json): only the first expression is evaluated, and an
+empty selector is no constraint.
 The checked-in JSON is consumed by native handler tests; Python tests alone cannot pass
 native acceptance. No tokens, credentials, permissions, or network entrypoints are accepted.
 """
@@ -33,7 +36,7 @@ def build() -> dict[str, Any]:
         ("uid", {"userId": "c"}, ["c"]),
         ("email-precedes-phone-and-uid", {"email": "a@example.com", "phoneNumber": "+15550000002", "userId": "c"}, ["a"]),
         ("phone-precedes-uid", {"email": None, "phoneNumber": "+15550000002", "userId": "c"}, ["b"]),
-        ("empty-email-is-not-wildcard", {"email": "", "userId": "a"}, []),
+        ("empty-email-falls-through", {"email": "", "userId": "a"}, ["a"]),
         ("wildcards-are-literal", {"email": "%@example.com"}, []),
         ("prefix-not-claimed", {"email": "a@"}, []),
         ("uid-case-sensitive", {"userId": "A"}, []),
@@ -41,25 +44,28 @@ def build() -> dict[str, Any]:
     ]:
         add(label, {"expression": [predicate]}, ids)
     group = [{"userId": "a"}, {"email": "a@example.com"}, {"userId": "c"}, {"userId": "d"}]
-    add("overlap-is-not-duplicate", {"expression": group}, ["a", "c", "d"])
-    add("filter-sort-page-asc", {"expression": group, "sortBy": "NAME", "offset": 1, "limit": 2}, ["d", "c"])
-    add("filter-sort-page-desc", {"expression": group, "sortBy": "NAME", "order": "DESC", "offset": 1, "limit": 2}, ["d", "a"])
-    add("filtered-count", {"expression": group, "returnUserInfo": False}, None, count=3)
+    add("only-the-first-expression", {"expression": group}, ["a"])
+    add("filter-sort-page-asc", {"expression": group, "sortBy": "NAME", "offset": 0, "limit": 2}, ["a"])
+    add("filter-sort-page-desc", {"expression": group, "sortBy": "NAME", "order": "DESC", "offset": 1, "limit": 2}, [])
+    add("filtered-count", {"expression": group, "returnUserInfo": False}, None, count=1)
     add("empty-count", {"expression": [{"userId": "none"}], "returnUserInfo": False}, None, count=0)
     add("zero-limit", {"expression": group, "limit": 0}, [])
     add("max-offset", {"expression": group, "offset": "9223372036854775807"}, [])
     for label, expression in [
         ("object-array", {}), ("sql-string", "SELECT *"), ("bool-array", False),
-        ("null-item", [None]), ("list-item", [[]]), ("empty-item", [{}]),
-        ("null-selector", [{"userId": None}]), ("bool-selector", [{"email": True}]),
+        ("null-item", [None]), ("list-item", [[]]),
+        ("bool-selector", [{"email": True}]),
         ("number-selector", [{"userId": 1}]), ("object-selector", [{"phoneNumber": {}}]),
         ("unknown-selector", [{"name": "A"}]),
         ("malformed-lower-priority", [{"email": "a@example.com", "userId": False}]),
         ("unknown-lower-priority", [{"email": "a@example.com", "anything": None}]),
         ("control-character", [{"userId": "a\n"}]),
-        ("partial-valid-array", [{"userId": "a"}, {}]),
     ]:
         add(label, {"expression": expression}, None, status=400)
+    add("empty-item-is-unconstrained", {"expression": [{}]}, ["a", "b", "c", "d"])
+    # A JSON null is an unset proto field, so it is the same as an empty item.
+    add("null-selector-is-unconstrained", {"expression": [{"userId": None}]}, ["a", "b", "c", "d"])
+    add("later-empty-item-is-ignored", {"expression": [{"userId": "a"}, {}]}, ["a"])
     for label, expression, status in [
         ("predicate-count-exact", [{"userId": "a"}] * 128, 200),
         ("predicate-count-over", [{"userId": "a"}] * 129, 400),

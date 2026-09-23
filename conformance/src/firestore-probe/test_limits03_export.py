@@ -67,10 +67,46 @@ def test_sandbox_limits_omit_legacy_shared_owner_reference() -> None:
 def test_index_entry_count_pair_rebalances_after_owner_removal() -> None:
     programs = {program["id"]: program for program in _build_programs()}
     steps = programs["writes/limits/index-entries-per-document"]["steps"]
-    values = [
-        step["body"]["fields"]["a"]["arrayValue"]["values"]
-        for step in steps[:2]
-    ]
+    values = [step["body"]["fields"]["a"]["arrayValue"]["values"] for step in steps[:2]]
     assert [len(item) for item in values] == [19_999, 20_000]
-    assert all(len({value["integerValue"] for value in item}) == len(item) for item in values)
+    assert all(
+        len({value["integerValue"] for value in item}) == len(item) for item in values
+    )
     assert all("_sharedOwner" not in json.dumps(step) for step in steps)
+
+
+def test_map_size_and_indexed_value_inputs_do_not_repeat_unbracketed_v2_shapes() -> (
+    None
+):
+    programs = {program["id"]: program for program in _build_programs()}
+    map_steps = programs["writes/limits/aggregate-map"]["steps"]
+    map_lengths = [
+        len(
+            map_steps[index]["body"]["fields"]["m"]["mapValue"]["fields"]["s"][
+                "stringValue"
+            ].encode()
+        )
+        for index in (0, 2)
+    ]
+    assert map_lengths == [1_048_458, 1_048_459]
+
+    indexed_steps = programs["writes/limits/indexed-field-value-bytes"]["steps"]
+    for step in indexed_steps:
+        assert (
+            len(step["path"].split("/documents/", 1)[1].split("?", 1)[0].encode())
+            < 2_600
+        )
+        if step["method"] == "PATCH":
+            assert (
+                step["body"]["name"]
+                == step["path"].removeprefix("/v1/").split("?", 1)[0]
+            )
+    indexed_lengths = [
+        len(
+            next(iter(indexed_steps[index]["body"]["fields"].values()))[
+                "stringValue"
+            ].encode()
+        )
+        for index in (0, 1)
+    ]
+    assert indexed_lengths == [1_499, 2_999]

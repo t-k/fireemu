@@ -76,6 +76,13 @@ def _remove_shared_owner(value: Any) -> None:
             _remove_shared_owner(child)
 
 
+def _shorten_indexed_value_name(name: str) -> str:
+    shortened, count = re.subn(r"/p/z+(?=/|\?|$)", "/p/z", name)
+    if count != 3:
+        raise ValueError("indexed-value recipe lost its long document-name segment")
+    return shortened
+
+
 def build_programs() -> list[dict[str, Any]]:
     descriptor = json.loads(DESCRIPTOR.read_text())
     compiled = _compiler_module().compile_limits_plan(
@@ -117,9 +124,18 @@ def build_programs() -> list[dict[str, Any]]:
                 "method": request["method"],
                 "path": _sandbox_index_exemption(request["path"]),
             }
+            if label == "indexed-value":
+                step["path"] = _shorten_indexed_value_name(step["path"])
             if request.get("body") is not None:
                 step["body"] = _sandbox_index_exemption(request["body"])
                 _remove_shared_owner(step["body"])
+                if label == "indexed-value" and "name" in step["body"]:
+                    step["body"]["name"] = _shorten_indexed_value_name(
+                        step["body"]["name"]
+                    )
+                if label == "agg-map" and index in (0, 2):
+                    value = step["body"]["fields"]["m"]["mapValue"]["fields"]["s"]
+                    value["stringValue"] = "x" * (1_048_458 + index // 2)
                 if label == "index-entries" and index in (0, 1):
                     values = step["body"]["fields"]["a"]["arrayValue"]["values"]
                     values.append({"integerValue": str(len(values))})

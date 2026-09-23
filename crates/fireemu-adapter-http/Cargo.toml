@@ -30,6 +30,15 @@ sha2 = { version = "0.10", features = ["oid"] }
 rand_chacha = "0.3"
 rand_core = "0.6"
 subtle = "2"
+md-5 = "0.10"
+sha1 = "0.10"
+hmac = "0.12"
+aes = "0.8"
+ctr = "0.9"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+scrypt = { version = "0.11", default-features = false }
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+bcrypt = "0.16"
 
 [lints]
 workspace = true

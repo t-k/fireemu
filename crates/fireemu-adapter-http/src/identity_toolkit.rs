@@ -64,6 +64,7 @@ const QUOTA_SIMULATION_FIELDS: [&str; 4] = [
 ];
 const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
+mod password_hash;
 mod routes;
 pub mod widget;
 mod widget_templates;
@@ -6402,7 +6403,12 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
     let Some(password) = str_field(body, "password").filter(|p| !p.is_empty()) else {
         return error(400, "MISSING_PASSWORD");
     };
-    let (uid, violations) = match store.verify_password_with_policy(email, password, at) {
+    let (uid, violations) = match store.verify_password_with_imports(
+        email,
+        password,
+        at,
+        &password_hash::ImportedHashes,
+    ) {
         Ok(result) => result,
         Err(e) => return auth_error(&e),
     };
@@ -8063,6 +8069,7 @@ fn batch_row_factors(
 fn batch_row_user(
     row: &Value,
     at: LogicalInstant,
+    hash_spec: Option<&password_hash::HashSpec>,
 ) -> Result<fireemu_core_auth::store::ImportedUser, JsonResponse> {
     use fireemu_core_auth::store::{ImportedUser, Provider};
     validate_batch_row_shapes(row)?;
@@ -8111,7 +8118,11 @@ fn batch_row_user(
     let (totp_factors, phone_factors) =
         batch_row_factors(row, local_id, email.is_some(), email_verified, at)?;
     let password = batch_row_password(row)?;
-    let provider = if password.is_some() || email.is_some() {
+    let imported_password = match (&password, hash_spec) {
+        (None, Some(spec)) => batch_row_imported_hash(row, spec)?,
+        _ => None,
+    };
+    let provider = if password.is_some() || imported_password.is_some() || email.is_some() {
         Provider::Password
     } else if phone_number.is_some() {
         Provider::Phone
@@ -8137,9 +8148,34 @@ fn batch_row_user(
         tokens_valid_after: at,
         federated,
         password,
+        imported_password,
         totp_factors,
         phone_factors,
     })
+}
+
+/// A row's `passwordHash` (and `salt`) under the request's hash algorithm, kept for the
+/// adapter's verifier. A row without a hash has no password credential.
+fn batch_row_imported_hash(
+    row: &Value,
+    spec: &password_hash::HashSpec,
+) -> Result<Option<fireemu_core_auth::store::ImportedPasswordHash>, JsonResponse> {
+    let Some(hash) = opt_str(row, "passwordHash")? else {
+        return Ok(None);
+    };
+    let hash =
+        password_hash::base64_decode(hash).ok_or_else(|| error(400, "INVALID_PASSWORD_HASH"))?;
+    let salt = match opt_str(row, "salt")? {
+        Some(salt) => {
+            password_hash::base64_decode(salt).ok_or_else(|| error(400, "INVALID_SALT"))?
+        }
+        None => Vec::new(),
+    };
+    Ok(Some(fireemu_core_auth::store::ImportedPasswordHash {
+        spec: password_hash::encode(spec),
+        hash,
+        salt,
+    }))
 }
 
 /// Admin `accounts:batchCreate` (`importUsers`): every row is attempted, and a refused row
@@ -8169,10 +8205,19 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
             }
         }
     }
+    // The hash algorithm and its parameters apply to every row of the request; production
+    // refuses the whole request when they are invalid.
+    let hash_spec = match body.get("hashAlgorithm") {
+        None | Some(Value::Null) => None,
+        Some(_) => match password_hash::spec_from_options(body) {
+            Ok(spec) => Some(spec),
+            Err(code) => return error(400, code),
+        },
+    };
     let mut errors = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let refused = |message: String| json!({"index": index, "message": message});
-        let user = match batch_row_user(row, at) {
+        let user = match batch_row_user(row, at, hash_spec.as_ref()) {
             Ok(u) => u,
             Err(r) => {
                 let message = r.body["error"]["message"]

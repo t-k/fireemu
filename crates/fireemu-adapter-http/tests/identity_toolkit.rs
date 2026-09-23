@@ -11772,3 +11772,78 @@ fn generated_account_expression_corpus_runs_through_the_native_handler() {
         }
     }
 }
+
+/// Every hash vector production accepted (conformance/src/auth-account/hash-vectors.json)
+/// imports through `accounts:batchCreate` and signs in with its password only.
+#[test]
+fn imported_production_hash_formats_sign_in_with_their_password_only() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/src/auth-account/hash-vectors.json"
+    );
+    let vectors: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let s = state();
+    for (index, (name, vector)) in vectors.as_object().unwrap().iter().enumerate() {
+        let email = format!("hash-{index}@example.com");
+        let mut request = vector["options"].clone();
+        let mut user = vector["user"].clone();
+        user["localId"] = json!(format!("hash-{index}"));
+        user["email"] = json!(email);
+        request["users"] = json!([user]);
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &request,
+        );
+        assert_eq!(status, 200, "{name}: {response}");
+        assert_eq!(response["error"], json!([]), "{name}: {response}");
+        let sign_in = |password: &str| {
+            post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": email, "password": password, "returnSecureToken": true}),
+            )
+            .0
+        };
+        assert_eq!(
+            sign_in("password124"),
+            400,
+            "{name} refuses another password"
+        );
+        assert_eq!(sign_in("password123"), 200, "{name} accepts its password");
+        assert_eq!(
+            sign_in("password123"),
+            200,
+            "{name} still signs in after the rehash"
+        );
+    }
+}
+
+#[test]
+fn invalid_hash_parameters_refuse_the_whole_import() {
+    let s = state();
+    for (options, code) in [
+        (
+            json!({"hashAlgorithm": "PBKDF_SHA1"}),
+            "INVALID_HASH_ROUNDS",
+        ),
+        (json!({"hashAlgorithm": "HMAC_SHA256"}), "EMPTY_HASH_KEY"),
+        (
+            json!({"hashAlgorithm": "ARGON2"}),
+            "INVALID_ARGON2_MEMORY_COST",
+        ),
+    ] {
+        let mut request = options.clone();
+        request["users"] = json!([{"localId": "refused", "passwordHash": "AAAA", "salt": "AAAA"}]);
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &request,
+        );
+        assert_eq!(status, 400, "{options}: {response}");
+        assert_eq!(response["error"]["message"], code, "{options}");
+        assert!(s.store.lock().unwrap().user_by_id("refused").is_none());
+    }
+}

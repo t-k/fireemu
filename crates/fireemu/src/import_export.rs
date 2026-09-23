@@ -2421,6 +2421,7 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
             .map(federated_identity)
             .collect(),
         password,
+        imported_password: None,
         totp_factors,
         phone_factors,
     })

@@ -446,6 +446,42 @@ impl UserSortField {
     }
 }
 
+/// A password hash imported in one of production's foreign formats (`accounts:batchCreate`
+/// with `hashAlgorithm`). The core has no cryptography of its own, so it keeps the hash
+/// opaquely: `spec` is the importing adapter's canonical description of the algorithm and its
+/// parameters, and only an [`ImportedHashVerifier`] from that adapter can check a password
+/// against it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImportedPasswordHash {
+    /// The adapter's canonical algorithm-and-parameters description.
+    pub spec: String,
+    /// The imported hash bytes.
+    pub hash: Vec<u8>,
+    /// The imported salt bytes (empty when the format carries none).
+    pub salt: Vec<u8>,
+}
+
+impl fmt::Debug for ImportedPasswordHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ImportedPasswordHash([redacted])")
+    }
+}
+
+/// Checks a password against an [`ImportedPasswordHash`].
+pub trait ImportedHashVerifier {
+    /// Whether `password` matches `imported`.
+    fn verify(&self, imported: &ImportedPasswordHash, password: &str) -> bool;
+}
+
+/// The verifier of a caller that imports no foreign hashes: nothing matches.
+struct NoImportedHashes;
+
+impl ImportedHashVerifier for NoImportedHashes {
+    fn verify(&self, _imported: &ImportedPasswordHash, _password: &str) -> bool {
+        false
+    }
+}
+
 /// Salted SHA-1 digest of a password. Test-only hashing: never claims scrypt compatibility.
 ///
 /// A credential also remembers the emulator salt and plaintext it was imported from, when
@@ -464,6 +500,9 @@ pub struct PasswordDigest {
     /// When the password was last set through the API (`passwordUpdatedAt`); `None` for an
     /// imported credential whose history the artifact did not carry.
     updated_at: Option<LogicalInstant>,
+    /// A foreign hash this credential was imported as, until the first successful sign-in
+    /// replaces it with fireemu's own digest.
+    imported: Option<ImportedPasswordHash>,
 }
 
 impl fmt::Debug for PasswordDigest {
@@ -482,10 +521,28 @@ impl PasswordDigest {
             digest: crate::sha1::sha1(&input),
             emulator: None,
             updated_at: None,
+            imported: None,
+        }
+    }
+
+    fn from_imported(imported: ImportedPasswordHash) -> Self {
+        Self {
+            salt: [0; 16],
+            digest: [0; 20],
+            emulator: None,
+            updated_at: None,
+            imported: Some(imported),
         }
     }
 
     fn verify(&self, password: &str) -> bool {
+        self.verify_with(password, &NoImportedHashes)
+    }
+
+    fn verify_with(&self, password: &str, verifier: &dyn ImportedHashVerifier) -> bool {
+        if let Some(imported) = &self.imported {
+            return verifier.verify(imported, password);
+        }
         let candidate = Self::new(self.salt, password).digest;
         candidate
             .iter()
@@ -771,6 +828,9 @@ pub struct ImportedUser {
     /// The emulator salt and plaintext password, when the account has a password
     /// credential.
     pub password: Option<(String, String)>,
+    /// A password hash in one of production's foreign formats, when the account was imported
+    /// with one instead of a plaintext password.
+    pub imported_password: Option<ImportedPasswordHash>,
     /// Enrolled TOTP second factors.
     pub totp_factors: Vec<crate::mfa::TotpFactor>,
     /// Enrolled phone second factors.
@@ -1991,7 +2051,7 @@ impl AuthStore {
                 digest.emulator = Some((salt, plaintext));
                 Some(digest)
             }
-            None => None,
+            None => user.imported_password.map(PasswordDigest::from_imported),
         };
         // Sequences start at one, exactly as `create_user` assigns them: the listing cursor
         // is "everything after this sequence", so a zero would make the first account
@@ -3527,6 +3587,19 @@ impl AuthStore {
         password: &str,
         now: LogicalInstant,
     ) -> Result<(LocalId, Vec<ViolationCode>), AuthError> {
+        self.verify_password_with_imports(email, password, now, &NoImportedHashes)
+    }
+
+    /// [`Self::verify_password_with_policy`] for a store whose accounts may carry imported
+    /// foreign hashes: `verifier` checks those. The first successful sign-in against an
+    /// imported hash replaces it with fireemu's own digest of the now-known password.
+    pub fn verify_password_with_imports(
+        &mut self,
+        email: &str,
+        password: &str,
+        now: LogicalInstant,
+        verifier: &dyn ImportedHashVerifier,
+    ) -> Result<(LocalId, Vec<ViolationCode>), AuthError> {
         let private = self.config.enable_improved_email_privacy;
         let Some(user) = self.user_by_email(email) else {
             if private {
@@ -3535,6 +3608,7 @@ impl AuthStore {
                     digest: [0_u8; 20],
                     emulator: None,
                     updated_at: None,
+                    imported: None,
                 };
                 let _ = dummy.verify(password);
                 return Err(AuthError::InvalidCredentials);
@@ -3544,7 +3618,9 @@ impl AuthStore {
         let (uid, disabled, ok) = (
             user.local_id.clone(),
             user.disabled,
-            user.password.as_ref().is_some_and(|p| p.verify(password)),
+            user.password
+                .as_ref()
+                .is_some_and(|p| p.verify_with(password, verifier)),
         );
         // The official emulator reports a disabled account before it checks the password.
         if disabled {
@@ -3560,8 +3636,26 @@ impl AuthStore {
         // Authenticate first, then apply the optional sign-in upgrade policy. A policy
         // refusal therefore cannot advance sign-in timestamps or issue/retire credentials.
         let violations = self.validate_existing_password_for_signin(password)?;
+        let rehash = self
+            .users
+            .get(&uid)
+            .and_then(|u| u.password.as_ref())
+            .is_some_and(|p| p.imported.is_some());
+        let salt = if rehash {
+            let mut salt = [0u8; 16];
+            salt[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+            salt[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+            Some(salt)
+        } else {
+            None
+        };
         if let Some(u) = self.users.get_mut(&uid).map(Arc::make_mut) {
             u.last_sign_in_at = Some(now);
+            if let (Some(salt), Some(previous)) = (salt, u.password.as_ref()) {
+                let mut digest = PasswordDigest::new(salt, password);
+                digest.updated_at = previous.updated_at;
+                u.password = Some(digest);
+            }
         }
         self.activate_email_owner(&uid);
         Ok((uid, violations))

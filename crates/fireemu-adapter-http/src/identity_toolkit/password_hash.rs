@@ -240,7 +240,9 @@ impl fireemu_core_auth::store::ImportedHashVerifier for ImportedHashes {
         };
         // An HMAC without a key cannot be computed; production accepts HMAC_SHA512 so at
         // import and fails the sign-in internally (sandbox recording 2026-09-23).
-        if matches!(&spec, HashSpec::Hmac { key, .. } if key.is_empty()) {
+        if matches!(&spec, HashSpec::Hmac { key, .. } if key.is_empty())
+            || !within_work_bounds(&spec, &imported.hash)
+        {
             return Err(fireemu_core_auth::store::ImportedHashFailure);
         }
         Ok(verify(&spec, password, &imported.salt, &imported.hash))
@@ -443,6 +445,40 @@ pub(crate) fn spec_from_options(options: &Value) -> Result<HashSpec, &'static st
     })
 }
 
+/// Local work bounds for imported hashes. Production's own limits for these parameters are
+/// unobserved; these keep one sign-in from exhausting the process (closure security review
+/// 2026-09-24): standard scrypt memory `128 * r * N` and parallelism, and bcrypt cost.
+const MAX_STANDARD_SCRYPT_MEMORY_BYTES: u64 = 64 << 20;
+const MAX_STANDARD_SCRYPT_PARALLELIZATION: u32 = 16;
+const MAX_STANDARD_SCRYPT_DK_LEN: usize = 1024;
+const MAX_BCRYPT_COST: u32 = 16;
+
+/// Whether deriving under `spec` stays within the local work bounds.
+pub(crate) fn within_work_bounds(spec: &HashSpec, hash: &[u8]) -> bool {
+    match spec {
+        HashSpec::StandardScrypt {
+            log_n,
+            block_size,
+            parallelization,
+            dk_len,
+        } => {
+            let memory = 1_u64
+                .checked_shl(u32::from(*log_n))
+                .and_then(|n| n.checked_mul(u64::from(*block_size)))
+                .and_then(|n| n.checked_mul(128));
+            memory.is_some_and(|m| m <= MAX_STANDARD_SCRYPT_MEMORY_BYTES)
+                && *parallelization <= MAX_STANDARD_SCRYPT_PARALLELIZATION
+                && *dk_len <= MAX_STANDARD_SCRYPT_DK_LEN
+        }
+        HashSpec::Bcrypt => std::str::from_utf8(hash)
+            .ok()
+            .and_then(|text| text.split('$').nth(2))
+            .and_then(|cost| cost.parse::<u32>().ok())
+            .is_some_and(|cost| cost <= MAX_BCRYPT_COST),
+        _ => true,
+    }
+}
+
 fn standard_scrypt_spec(options: &Value) -> Result<HashSpec, &'static str> {
     let int = |key: &str| options.get(key).and_then(Value::as_u64);
     let positive_u32 = |key: &str| {
@@ -451,7 +487,7 @@ fn standard_scrypt_spec(options: &Value) -> Result<HashSpec, &'static str> {
             .filter(|n| *n > 0)
     };
     let cost = int("cpuMemCost").filter(|n| n.is_power_of_two() && *n > 1);
-    Ok(HashSpec::StandardScrypt {
+    let spec = HashSpec::StandardScrypt {
         log_n: cost
             .and_then(|n| u8::try_from(n.trailing_zeros()).ok())
             .ok_or("INVALID_HASH_PARAMETER")?,
@@ -461,7 +497,11 @@ fn standard_scrypt_spec(options: &Value) -> Result<HashSpec, &'static str> {
             .and_then(|n| usize::try_from(n).ok())
             .filter(|n| *n > 0)
             .ok_or("INVALID_HASH_PARAMETER")?,
-    })
+    };
+    if !within_work_bounds(&spec, &[]) {
+        return Err("INVALID_HASH_PARAMETER");
+    }
+    Ok(spec)
 }
 
 fn argon2_spec(options: &Value) -> Result<HashSpec, &'static str> {

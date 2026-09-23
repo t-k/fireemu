@@ -9768,6 +9768,117 @@ fn strict_admin_query_negative_offset_is_a_backend_failure() {
     assert_eq!(refused["error"]["status"], "INTERNAL");
 }
 
+/// Imported hash parameters are held to local work bounds: an oversized standard scrypt is
+/// refused at import and a bcrypt cost above the bound fails the sign-in quickly instead of
+/// exhausting memory or CPU (closure security review 2026-09-24).
+#[test]
+fn imported_hash_work_is_bounded() {
+    let b64 = fireemu_core_types::hash::base64_standard;
+    let s = state();
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"hashAlgorithm": "STANDARD_SCRYPT", "cpuMemCost": 1_u64 << 40, "blockSize": 8,
+            "parallelization": 1, "dkLen": 64,
+            "users": [{"localId": "huge", "email": "huge@example.com", "passwordHash": b64(&[0; 64]), "salt": b64(b"salt")}]}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_HASH_PARAMETER");
+    let bcrypt = format!("$2b$31${}", "a".repeat(53));
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"hashAlgorithm": "BCRYPT",
+            "users": [{"localId": "slow", "email": "slow@example.com", "passwordHash": b64(bcrypt.as_bytes())}]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    let started = std::time::Instant::now();
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "slow@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 500, "{refused}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+/// The custom-attribute size limit applies to the stored text, so whitespace cannot carry an
+/// oversized value (closure security review 2026-09-24).
+#[test]
+fn custom_attribute_padding_counts_toward_the_size_limit() {
+    let s = state();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "pad"}),
+    );
+    assert_eq!(status, 200);
+    let padded = format!("{{\"a\":1{}}}", " ".repeat(2_000));
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "pad", "customAttributes": padded}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "CLAIMS_TOO_LARGE");
+}
+
+/// In duplicate-email mode a password account cannot move onto an address another password
+/// account holds, so the holder cannot be locked out of password sign-in (closure security
+/// review 2026-09-24; production refuses a second password account for an address).
+#[test]
+fn duplicate_email_mode_keeps_one_password_account_per_address_on_change() {
+    let s = state();
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=signIn.allowDuplicateEmails,emailPrivacyConfig.enableImprovedEmailPrivacy",
+        &json!({"signIn": {"allowDuplicateEmails": true}, "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sign_up = |email: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "password123", "returnSecureToken": true}),
+        )
+    };
+    let (_, owner) = sign_up("owner@example.com");
+    let (_, mover) = sign_up("mover@example.com");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": mover["idToken"], "email": "owner@example.com"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS")),
+        "{refused}"
+    );
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": mover["localId"], "email": "owner@example.com"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS")),
+        "{refused}"
+    );
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "owner@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["localId"], owner["localId"]);
+}
+
 /// Disabled project providers refuse their client flows with `OPERATION_NOT_ALLOWED`, and
 /// `passwordRequired` turns email-link sign-in off.
 #[test]

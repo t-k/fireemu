@@ -2318,6 +2318,19 @@ impl AuthStore {
         if !self.config.allow_duplicate_emails && self.email_owned_by_other(&email, Some(uid)) {
             return Err(AuthError::EmailExists);
         }
+        // Duplicate-email mode never gives an address two password accounts: production
+        // refuses a second one at creation (sandbox recording 2026-09-23), and a move onto the
+        // address would take its holder's password sign-in (closure security review
+        // 2026-09-24).
+        let moves_a_password = self.users.get(uid).is_some_and(|u| u.password.is_some());
+        if moves_a_password
+            && self
+                .users_by_email(&email)
+                .iter()
+                .any(|other| &other.local_id != uid && other.password.is_some())
+        {
+            return Err(AuthError::EmailExists);
+        }
         Ok(())
     }
 
@@ -4736,6 +4749,8 @@ impl AuthSnapshot {
             // silently transfer those settings.
             restored.config = live.config;
             restored.sign_in = live.sign_in.clone();
+            // A temporary proof is a credential of the captured namespace.
+            restored.temporary_proofs.clear();
             // The local sign-up quota is namespace-owned control state as well. Preserve both
             // its configuration and already-counted destination usage instead of transferring
             // the source project's quota window into a different project or tenant.

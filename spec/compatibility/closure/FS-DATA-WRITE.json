@@ -74,6 +74,12 @@
       "status": "PENDING_CORPUS"
     },
     {
+      "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#field-value",
+      "recipeIds": ["writes/limits/field-value-scalar-refusal"],
+      "status": "SAVED_REFERENCE_PENDING_FINAL"
+    },
+    {
       "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-string",
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#agg-string",
       "recipeIds": ["writes/limits/aggregate-string"],
@@ -122,9 +128,27 @@
       "status": "SAVED_REFERENCE_PENDING_FINAL"
     },
     {
+      "conditionId": "FS-DATA-WRITE/write-stream-trailing-metadata",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["writes/write-stream-terminal/trailing-metadata"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/write-stream-half-close",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["writes/write-stream-terminal/half-close"],
+      "status": "PENDING_CORPUS"
+    },
+    {
       "conditionId": "FS-DATA-WRITE/final-artifact-regression",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["writes/batch-write-malformed", "writes/limits", "writes/write-stream-transaction"],
+      "recipeIds": [
+        "firestore/historical-324",
+        "writes/batch-write-malformed",
+        "writes/limits",
+        "writes/write-stream-transaction",
+        "writes/write-stream-terminal"
+      ],
       "status": "PENDING_REVIEW"
     },
     {

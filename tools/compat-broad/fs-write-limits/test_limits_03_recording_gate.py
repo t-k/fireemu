@@ -1,6 +1,6 @@
 """Real-Gate integration regressions for limits-03 publication failures.
 
-Uses the existing real campaign compiler/Gate and test_campaign_03.Responder.
+Uses both existing campaign parts, the real Gate and test_campaign_03.Responder.
 The service/clock remain synthetic; this file never authorizes production I/O.
 """
 from __future__ import annotations
@@ -15,26 +15,29 @@ from expectations_03 import pending_rows
 from test_campaign_03 import Responder, plan_for
 
 
-@pytest.fixture
-def scenario(tmp_path, monkeypatch):
+@pytest.fixture(params=("A", "B"))
+def scenario(request, tmp_path, monkeypatch):
     clock = [10_000.0]
     monkeypatch.setattr(shared_gate, "time", SimpleNamespace(
         monotonic=lambda: clock[0],
         sleep=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
     ))
-    plan = plan_for(part="A")
+    plan = plan_for(part=request.param)
     shared_gate.create(tmp_path / "gate", plan["localGatePlan"])
     gate = shared_gate.Gate(tmp_path / "gate", "limits")
     gate.claim()
     responder = Responder()
-    first_batch = next(i for i, op in enumerate(plan["requests"]) if op["kind"] == "batch-write")
+    first_write = next(
+        i for i, op in enumerate(plan["requests"])
+        if op["kind"] in {"batch-write", "create-only-patch"}
+    )
     calls = []
 
     def wire(operation, recovery, index, request_index):
         calls.append((recovery, index, operation["method"]))
         return responder(operation, recovery, index, request_index)
 
-    return SimpleNamespace(plan=plan, gate=gate, responder=responder, batch=first_batch,
+    return SimpleNamespace(plan=plan, gate=gate, responder=responder, first_write=first_write,
                            wire=wire, calls=calls, output=tmp_path / "collection")
 
 
@@ -68,11 +71,11 @@ def test_limits03_control_completes_with_real_gate(scenario):
     assert scenario.gate.snapshot()["jobs"]["limits"]["complete"] is True
 
 
-@pytest.mark.parametrize("location", ["batch-wire", "batch-row", "recovery-wire", "recovery-row"])
+@pytest.mark.parametrize("location", ["write-wire", "write-row", "recovery-wire", "recovery-row"])
 def test_limits03_sidecar_failure_preserves_real_gate_cleanup(scenario, monkeypatch, location):
     names = {
-        "batch-wire": f"observation-{scenario.batch:02d}-wire.json",
-        "batch-row": f"observation-{scenario.batch:02d}.json",
+        "write-wire": f"observation-{scenario.first_write:02d}-wire.json",
+        "write-row": f"observation-{scenario.first_write:02d}.json",
         "recovery-wire": "cleanup-00-wire.json",
         "recovery-row": "cleanup-00.json",
     }
@@ -85,9 +88,9 @@ def test_limits03_sidecar_failure_preserves_real_gate_cleanup(scenario, monkeypa
     assert scenario.responder.documents == {}
     assert scenario.gate.snapshot()["jobs"]["limits"]["complete"] is True
     assert any(recovery for recovery, _, _ in scenario.calls)
-    if location.startswith("batch"):
-        assert len(result["rows"]) == scenario.batch + 1
-        assert not any(not recovery and index > scenario.batch for recovery, index, _ in scenario.calls)
+    if location.startswith("write"):
+        assert len(result["rows"]) == scenario.first_write + 1
+        assert not any(not recovery and index > scenario.first_write for recovery, index, _ in scenario.calls)
         assert result["rows"][-1]["complete"] is True
         assert result["rows"][-1]["status"] == 200
         assert result["rows"][-1].get("dispatchFailure") is None
@@ -111,7 +114,7 @@ def test_limits03_all_cleanup_sidecars_can_fail_without_starving_recovery(scenar
 
 
 def test_limits03_failed_abandon_never_calls_recovery_credential_hook(scenario, monkeypatch):
-    fail_sidecar(monkeypatch, f"observation-{scenario.batch:02d}.json")
+    fail_sidecar(monkeypatch, f"observation-{scenario.first_write:02d}.json")
 
     def refused(reason):
         raise OSError("injected abandonment journal failure")
@@ -129,7 +132,7 @@ def test_limits03_gate_journal_failure_is_not_swallowed_as_a_sidecar_failure(sce
     original = shared_gate._save
 
     def failed_ack(path, state):
-        if any(event.get("index") == scenario.batch and event.get("completed") is True
+        if any(event.get("index") == scenario.first_write and event.get("completed") is True
                and event.get("phase") == "observation" for event in state["events"]):
             raise OSError("injected central Gate journal failure")
         return original(path, state)
@@ -143,13 +146,13 @@ def test_limits03_gate_journal_failure_is_not_swallowed_as_a_sidecar_failure(sce
     assert not any(recovery for recovery, _, _ in scenario.calls)
 
 
-def test_limits03_lost_batch_acknowledgement_does_not_gain_delete_authority(scenario):
+def test_limits03_lost_write_acknowledgement_does_not_gain_delete_authority(scenario):
     original = scenario.wire
 
     def lost(operation, recovery, index, request_index):
         result = original(operation, recovery, index, request_index)
-        if not recovery and index == scenario.batch:
-            raise TimeoutError("injected lost BatchWrite acknowledgement")
+        if not recovery and index == scenario.first_write:
+            raise TimeoutError("injected lost write acknowledgement")
         return result
 
     scenario.wire = lost

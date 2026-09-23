@@ -70,7 +70,11 @@ def read_poststate(firestore_origin: str) -> dict:
     payload = None
     try:
         origin = local_origin(firestore_origin)
-        request = Request(f"{origin}/v1/{POSTSTATE_DOCUMENT}", method="GET")
+        request = Request(
+            f"{origin}/v1/{POSTSTATE_DOCUMENT}",
+            headers={"Authorization": "Bearer owner"},
+            method="GET",
+        )
         with urlopen(request, timeout=5) as response:
             status = response.status
             if status == 200:

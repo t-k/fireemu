@@ -40,7 +40,9 @@ def _poststate_server(status, body):
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            requests.append((self.command, self.path))
+            requests.append(
+                (self.command, self.path, self.headers.get("Authorization"))
+            )
             encoded = body if isinstance(body, bytes) else json.dumps(body).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -115,7 +117,7 @@ def test_child_readback_sets_validation_only_for_exact_document_and_integer_two(
             "documentNameMatches": True,
             "integerValueIsTwo": True,
         }
-        assert requests == [("GET", f"/v1/{_expected_document()}")]
+        assert requests == [("GET", f"/v1/{_expected_document()}", "Bearer owner")]
     finally:
         server.shutdown()
         server.server_close()
@@ -161,7 +163,7 @@ def test_child_readback_fails_closed_for_unexpected_response(tmp_path, status, b
         report = json.loads((output / "cases.json").read_text())
         assert report["stateValidation"] is False
         assert report["postStateReadback"]["status"] == status
-        assert requests == [("GET", f"/v1/{_expected_document()}")]
+        assert requests == [("GET", f"/v1/{_expected_document()}", "Bearer owner")]
         assert not {"fields", "integerValue", "value"} & set(
             report["postStateReadback"]
         )

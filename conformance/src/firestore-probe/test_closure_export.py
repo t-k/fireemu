@@ -35,11 +35,12 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/batch-write-malformed/two-fields-bad-integer",
         "writes/limits/aggregate-map/strict-only",
     }.issubset(ids)
-    assert len(corpus["streamRecipes"]) == 3
+    assert len(corpus["streamRecipes"]) == 4
     assert {recipe["id"] for recipe in corpus["streamRecipes"]} == {
         "writes/write-stream-transaction",
         "writes/write-stream-terminal/trailing-metadata",
         "writes/write-stream-terminal/half-close",
+        "writes/write-stream-terminal/response-before-half-close",
     }
     recipes = {recipe["id"]: recipe for recipe in corpus["streamRecipes"]}
     assert recipes["writes/write-stream-transaction"] == {
@@ -58,6 +59,12 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "transport": "grpc",
         "action": "half-close-after-handshake",
         "maxFrames": 1,
+    }
+    assert recipes["writes/write-stream-terminal/response-before-half-close"] == {
+        "id": "writes/write-stream-terminal/response-before-half-close",
+        "transport": "grpc",
+        "action": "empty-write-response-before-half-close",
+        "maxFrames": 2,
     }
     closure = json.loads(
         (ROOT / "spec/compatibility/closure/FS-DATA-WRITE.json").read_text()

@@ -56,7 +56,7 @@
   "digests": {
     ".github/workflows/quint.yml": "50d4edad3bc4122a6e76fbaf05b0e2e4fa2963951960e05d447b0a834d91a30e",
     "crates/fireemu-adapter-functions/src/node_selection.rs": "b0d3581e3c8887e6d39fdb76f3dd56a1be420e37905c58e87e0f46791aac5a21",
-    "crates/fireemu-adapter-http/src/identity_toolkit.rs": "f497c1c045a56e4c26ab660a9bf97e5d683ff2986dffeea3196b1555b9fd2024",
+    "crates/fireemu-adapter-http/src/identity_toolkit.rs": "c14b4e7065e2375f3935151304cce8fd070d6ad28ed3b79a39103a6f35c76ca1",
     "crates/fireemu-adapter-http/tests/auth_flows.rs": "b0c2585fc8d724fb363e8184bee1ad20ba7b59730a3e8eb326df78275bc07214",
     "crates/fireemu-core-auth/src/store.rs": "5ba4c26851516ca06e5157d1e75f1fcd7b0693e2253989afd7cc227acc6e94e6",
     "crates/fireemu-core-auth/tests/store.rs": "b39e4fd5658210b916974280f5fabcd8db65fed915ec1030f495b675c78577ad",

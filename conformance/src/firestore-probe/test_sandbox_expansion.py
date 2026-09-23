@@ -53,6 +53,22 @@ def test_raw_request_boundary_is_exact_and_keeps_readback() -> None:
         assert program["steps"][1]["id"] == "readback"
 
 
+def test_non_commit_batchwrite_request_boundary_is_exact_and_keeps_readback() -> None:
+    programs = {program["id"]: program for program in _module().build_programs()}
+    for size in (10_485_760, 10_485_761):
+        program = programs[f"writes/limits/non-commit-rest-request-bytes/batch-write/{size}"]
+        assert len(program["steps"]) == 2
+        step = program["steps"][0]
+        assert step["method"] == "POST"
+        assert step["path"].endswith("/documents:batchWrite")
+        assert len(step["body"].encode()) == size
+        writes = json.loads(step["body"])["writes"]
+        assert len(writes) == 1
+        assert program["steps"][1]["id"] == "readback"
+        assert program["steps"][1]["body"]["documents"] == [writes[0]["update"]["name"]]
+        assert all("expected" not in item for item in program["steps"])
+
+
 def test_map_aggregate_probe_exceeds_strict_value_limit_but_fits_document() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     program = programs["writes/limits/aggregate-map/strict-only"]

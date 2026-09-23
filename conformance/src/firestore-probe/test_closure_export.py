@@ -22,7 +22,7 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]
     ids = [program["id"] for program in programs]
-    assert len(ids) == len(set(ids)) == 59
+    assert len(ids) == len(set(ids)) == 61
     assert {
         "writes/limits/field-path-mask/1499",
         "writes/limits/field-path-mask/1500",
@@ -34,6 +34,8 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/limits/empty-document-name/5000",
         "writes/batch-write-malformed/two-fields-bad-integer",
         "writes/limits/aggregate-map/strict-only",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/10485760",
+        "writes/limits/non-commit-rest-request-bytes/batch-write/10485761",
     }.issubset(ids)
     assert len(corpus["streamRecipes"]) == 4
     assert {recipe["id"] for recipe in corpus["streamRecipes"]} == {
@@ -90,7 +92,6 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
             "FS-DATA-WRITE/final-artifact-regression",
             "FS-DATA-WRITE/closure-review",
         }
-        and condition["status"] != "PENDING_CORPUS"
         for recipe in condition["recipeIds"]
     ]
     assert all(

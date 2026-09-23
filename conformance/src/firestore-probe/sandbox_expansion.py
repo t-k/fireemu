@@ -95,6 +95,22 @@ def _raw_request_program(size: int) -> dict[str, Any]:
     )
 
 
+def _non_commit_batchwrite_request_program(size: int) -> dict[str, Any]:
+    name = f"{DOCS}/rawBatch/{size}"
+    payload = json.dumps({"writes": [_update(name)]}, separators=(",", ":"))
+    if len(payload) > size:
+        raise ValueError("raw BatchWrite target smaller than JSON body")
+    payload = payload[:-1] + " " * (size - len(payload)) + "}"
+    return {
+        "id": f"writes/limits/non-commit-rest-request-bytes/batch-write/{size}",
+        "area": "writes",
+        "steps": [
+            {"id": "write", "method": "POST", "path": BATCH_WRITE, "body": payload},
+            _readback([name]),
+        ],
+    }
+
+
 def _batch_variant(variant: str) -> dict[str, Any]:
     prefix = f"{DOCS}/batchInvalid"
     names = [f"{prefix}/{variant}-{suffix}" for suffix in ("first", "middle", "last")]
@@ -203,6 +219,10 @@ def _map_key_programs(
 
 def build_programs() -> list[dict[str, Any]]:
     programs = [_raw_request_program(size) for size in (11_534_336, 11_534_337)]
+    programs.extend(
+        _non_commit_batchwrite_request_program(size)
+        for size in (10_485_760, 10_485_761)
+    )
     programs.extend(
         _batch_variant(variant)
         for variant in (

@@ -147,6 +147,7 @@ test("verified conditions are bound to their saved comparisons", () => {
     "FS-LIMIT-SUBCOLLECTION-DEPTH",
     "FS-LIMIT-DOCUMENT-NAME-BYTES",
     "FS-WRITE-LIMITS-03/batch-duplicate-document",
+    "FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal",
     "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-string",
     "FS-WRITE-LIMITS-03/implied-map",
     "FS-WRITE-LIMITS-03/implied-array",
@@ -176,6 +177,19 @@ test("verified conditions are bound to their saved comparisons", () => {
     for (const recipeId of condition.recipeIds) {
       assert.deepEqual(comparison.productionPrograms[recipeId], fixture.programs[recipeId]);
       assert.deepEqual(comparison.localPrograms[recipeId], comparison.productionPrograms[recipeId]);
+    }
+    if (comparison.crossRecipeBoundary) {
+      assert.equal(comparison.crossRecipeBoundary.classification, condition.boundaryStatus);
+      assert.deepEqual(comparison.crossRecipeBoundary.evidence, condition.boundaryEvidence);
+      const crossPath = fileURLToPath(
+        new URL(`../../${comparison.crossRecipeBoundary.comparisonPath}`, import.meta.url),
+      );
+      const crossComparison = JSON.parse(readFileSync(crossPath, "utf8"));
+      assert.ok(verified.some(({ conditionId }) => conditionId === crossComparison.conditionId));
+      for (const reference of comparison.crossRecipeBoundary.evidence) {
+        const [recipeId] = reference.split("#");
+        assert.deepEqual(crossComparison.productionPrograms[recipeId], fixture.programs[recipeId]);
+      }
     }
   }
 });

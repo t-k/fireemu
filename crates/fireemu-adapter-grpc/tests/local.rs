@@ -8478,6 +8478,30 @@ async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
             },
         },
         Shape {
+            name: "empty-field-name",
+            middle_grpc: |_, first| update_write(first, &[("", i(1))]),
+            middle_rest: |_, first| serde_json::json!({"update": {"name": format!("{DOCS}/{first}"), "fields": {"": {"integerValue": "1"}}}}),
+            expected: |_| BatchWriteOutcome {
+                answer: BatchWriteAnswer::WholeRequest(
+                    3,
+                    "The property.name is the empty string.".to_owned(),
+                ),
+                present: vec![None, None, None],
+            },
+        },
+        Shape {
+            name: "reserved-field-name",
+            middle_grpc: |_, first| update_write(first, &[("__bad__", i(1))]),
+            middle_rest: |_, first| serde_json::json!({"update": {"name": format!("{DOCS}/{first}"), "fields": {"__bad__": {"integerValue": "1"}}}}),
+            expected: |_| BatchWriteOutcome {
+                answer: BatchWriteAnswer::WholeRequest(
+                    3,
+                    "field name __bad__ is reserved".to_owned(),
+                ),
+                present: vec![None, None, None],
+            },
+        },
+        Shape {
             name: "invalid-name",
             middle_grpc: |_, _| pb::Write {
                 operation: Some(pb::write::Operation::Update(pb::Document {

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use fireemu_core_firestore::field_path::FieldPath;
+use fireemu_core_firestore::field_path::{FieldPath, FieldPathError};
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::store::{
     Document, FieldTransform, FirestoreError, Precondition, TransactionId, TransformKind, Write,
@@ -119,12 +119,19 @@ pub fn decode_fields(
     let mut out = BTreeMap::new();
     for (k, v) in fields {
         if k == "__name__" {
-            return Err(DecodeError::InvalidFieldPath(
+            return Err(DecodeError::InvalidStoredFieldName(
                 "field name __name__ is reserved".into(),
             ));
         }
-        FieldPath::from_segments([k.as_str()])
-            .map_err(|error| DecodeError::InvalidFieldPath(error.to_string()))?;
+        FieldPath::from_segments([k.as_str()]).map_err(|error| match error {
+            FieldPathError::EmptySegment { .. } => {
+                DecodeError::InvalidStoredFieldName("The property.name is the empty string.".into())
+            }
+            FieldPathError::ReservedSegment { .. } => {
+                DecodeError::InvalidStoredFieldName(format!("field name {k} is reserved"))
+            }
+            _ => DecodeError::InvalidFieldPath(error.to_string()),
+        })?;
         out.insert(k.clone(), decode_value(v)?);
     }
     Ok(out)

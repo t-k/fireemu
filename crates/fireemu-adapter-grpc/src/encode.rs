@@ -264,7 +264,7 @@ pub fn decode_write(w: &pb::Write) -> Result<Write, DecodeError> {
                 update_mask: Some(Vec::new()),
             }
         }
-        None => return Err(DecodeError::InvalidQuery("write without operation".into())),
+        None => return Err(DecodeError::EmptyWriteOperation),
     };
     if w.update_mask.is_some() && !matches!(op, WriteOp::Set { .. }) {
         return Err(DecodeError::InvalidQuery(

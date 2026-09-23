@@ -36,6 +36,8 @@ pub enum DecodeError {
     InvalidValue(String),
     /// Structurally invalid query.
     InvalidQuery(String),
+    /// A write with no operation set.
+    EmptyWriteOperation,
     /// A wire feature this gateway does not model (fail closed).
     Unsupported(String),
 }
@@ -65,6 +67,7 @@ impl fmt::Display for DecodeError {
             Self::InvalidFieldPath(m) => write!(f, "invalid field path: {m}"),
             Self::InvalidValue(m) => write!(f, "invalid value: {m}"),
             Self::InvalidQuery(m) => write!(f, "invalid query: {m}"),
+            Self::EmptyWriteOperation => write!(f, "empty write operation"),
             Self::Unsupported(m) => write!(f, "unsupported: {m}"),
         }
     }

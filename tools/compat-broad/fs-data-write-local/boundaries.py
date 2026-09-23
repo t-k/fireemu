@@ -145,8 +145,8 @@ def compile_case(family: str, position: str, nonce: str) -> dict[str, Any]:
         elif family == "field-bytes":
             fields = {"v": _bytes(point)}
         elif family == "field-map":
-            # 32 map overhead + string_size("s") + string_size(payload).
-            fields = {"v": {"mapValue": {"fields": {"s": _string(point - 35)}}}}
+            # string_size("s") + string_size(payload); maps have no extra 32-byte charge.
+            fields = {"v": {"mapValue": {"fields": {"s": _string(point - 3)}}}}
         else:
             fields = {"v": {"arrayValue": {"values": [_bytes(point // 2), _bytes(point - point // 2)]}}}
     elif family == "indexed-value":

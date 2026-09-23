@@ -34,7 +34,7 @@ def storage(value):
     if kind == "stringValue":
         return len(content.encode("utf-8")) + 1
     if kind == "mapValue":
-        return 32 + sum(len(k.encode()) + 1 + storage(v) for k, v in content["fields"].items())
+        return sum(len(k.encode()) + 1 + storage(v) for k, v in content["fields"].items())
     assert kind == "arrayValue"
     return sum(storage(v) for v in content["values"])
 

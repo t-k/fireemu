@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,6 +19,7 @@ import limits_03_o8 as launcher
 import limits_03_preflight as preflight
 import limits_03_remote_transport as remote
 import pytest
+import shadow_03
 import test_limits_03_o8 as o8_fixture
 
 
@@ -93,7 +95,14 @@ def test_semantic_invalid_apply_runs_gate_bound_restore_and_stays_held(
                     if method == "GET" and "/collectionGroups/nx/fields/" in path
                 )
                 if field_reads == 2:
-                    self._respond(o8_fixture.EXEMPT_FIELD_BODY)
+                    # A rejected apply leaves the real pre-state in place.
+                    # Returning the requested exemption here falsely hid the
+                    # recovery path's early exit on this semantic failure.
+                    self._respond(
+                        o8_fixture.EXEMPT_FIELD_BODY
+                        if state["field"] == "after"
+                        else before
+                    )
                 elif field_reads >= 3 and final_readback == "unavailable":
                     self._respond({"error": {"status": "UNAVAILABLE"}}, status=503)
                 elif field_reads >= 3 and final_readback == "malformed":
@@ -264,6 +273,13 @@ def test_semantic_invalid_apply_runs_gate_bound_restore_and_stays_held(
         assert evidence["observation:index-lifecycle-apply"]["body"] == {
             "error": {"code": 400, "status": "INVALID_ARGUMENT"}
         }
+    if apply_mode in ("rejected", "incomplete-response"):
+        exemption = evidence["recovery:index-exemption"]
+        assert exemption["body"]["baselineVerified"] is False
+        assert exemption["complete"] is True
+        assert events["recovery:index-exemption"]["completed"] is True
+    if apply_mode in ("rejected", "incomplete-response"):
+        assert receipt["postflightComplete"] is False
     restored_evidence = evidence["recovery:index-lifecycle-restored"]["body"]
     if final_readback == "exact":
         assert {
@@ -280,3 +296,58 @@ def test_semantic_invalid_apply_runs_gate_bound_restore_and_stays_held(
         expected = "restore-unproven"
     assert restored_evidence["_lifecycleApplyDisposition"] == expected
     assert receipt["failure"] is not None
+
+
+@pytest.mark.parametrize(
+    ("operation", "poll", "accepted"),
+    [
+        (
+            {"name": "projects/fireemu-35fe6/databases/(default)/operations/op-apply"},
+            {
+                "name": "projects/fireemu-35fe6/databases/(default)/operations/op-apply",
+                "done": True,
+            },
+            True,
+        ),
+        (
+            {"name": "projects/fireemu-35fe6/databases/(default)/operations/op-apply"},
+            {
+                "name": "projects/fireemu-35fe6/databases/(default)/operations/op-other",
+                "done": True,
+            },
+            False,
+        ),
+        (
+            {"name": "projects/other/databases/(default)/operations/op-apply"},
+            {
+                "name": "projects/other/databases/(default)/operations/op-apply",
+                "done": True,
+            },
+            False,
+        ),
+    ],
+)
+def test_saved_lifecycle_poll_is_bound_to_its_apply_operation(
+    operation, poll, accepted
+):
+    if accepted:
+        preflight.validate_saved_lifecycle_operation_poll(operation, poll)
+    else:
+        with pytest.raises(ValueError, match="operation/poll identity"):
+            preflight.validate_saved_lifecycle_operation_poll(operation, poll)
+
+
+@pytest.mark.parametrize("part", ["A", "B", "ALL"])
+def test_shadow_supervisor_timeout_covers_the_compiled_gate_window(part):
+    from compiler_03 import compile_limits_plan
+
+    plan = compile_limits_plan("demo-firestore-probe", "(default)", "0" * 32, part)
+    wall = plan["localGatePlan"]["wallSeconds"]
+    assert shadow_03.shadow_execution_timeout(part) == (
+        math.ceil(wall) + shadow_03.SHADOW_STARTUP_HEADROOM_SECONDS
+    )
+
+
+def test_shadow_supervisor_rejects_an_undeclared_part():
+    with pytest.raises(ValueError, match="closed shadow part"):
+        shadow_03.shadow_execution_timeout("C")

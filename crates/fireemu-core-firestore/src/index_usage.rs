@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::field_path::{implied_path_too_long_message, FieldPath, FieldPathError};
 use crate::index::{IndexFieldMode, IndexQueryScope, IndexSet};
 use crate::path::DocumentPath;
-use crate::size::{index_entry_size, IndexEntryScope};
+use crate::size::{document_name_size, index_entry_size, IndexEntryScope};
 use crate::store::{get_field, FirestoreError};
 use crate::value::{IndexValue, Value};
 
@@ -65,8 +65,19 @@ impl IndexSet {
         fields: &BTreeMap<String, Value>,
     ) -> Result<IndexUsage, FirestoreError> {
         let mut usage = IndexUsage::default();
-        self.automatic_usage(document, fields, &mut Vec::new(), &mut usage)?;
         let parent = document.parent_document();
+        // The saved production corpus accepts a 4,622-byte relative name and rejects
+        // 5,000 bytes, even for an empty document. The exact transition is not yet
+        // recorded; avoid rejecting the unobserved interval until it is bracketed.
+        // document_name_size includes 17 bytes beyond the relative name length.
+        let name_bytes = document_name_size(document)
+            .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))?;
+        if name_bytes >= 5_017 {
+            return Err(FirestoreError::InvalidArgument(
+                "Index entry is too large.".into(),
+            ));
+        }
+        self.automatic_usage(document, fields, &mut Vec::new(), &mut usage)?;
         for index in self
             .composites()
             .iter()

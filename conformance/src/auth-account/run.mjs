@@ -30,9 +30,9 @@ import {
   diffRecordings,
   isTransient,
   sameRecording,
-  scanFixture,
   validateCorpus,
 } from "./harness.mjs";
+import { scanFixture } from "./fixture-scan.mjs";
 import { runCorpus } from "./session.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -70,6 +70,23 @@ const ceilings = (programs) => ({
   maxRequests: programs.reduce((total, p) => total + p.steps.length, 0),
   maxHarnessRequests: programs.reduce((total, p) => total + 10 + (p.config ? 70 : 0), 20),
 });
+
+/** Private recordings must never be committable. */
+async function assertIgnored(path) {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  try {
+    // Asked of the repository that contains the path (docs.local lives in the main checkout,
+    // not in this worktree); a path in no repository cannot be committed at all.
+    await execFileAsync("git", ["-C", path, "rev-parse", "--show-toplevel"]);
+  } catch {
+    return;
+  }
+  try {
+    await execFileAsync("git", ["-C", path, "check-ignore", "-q", path]);
+  } catch {
+    throw new Error(`${path} is not ignored by git; private recordings must not be committable`);
+  }
+}
 
 async function assertCleanTree() {
   const { stdout } = await execFileAsync(
@@ -190,10 +207,12 @@ async function recordProduction() {
     harness: await harnessDigest(),
     startedAt: new Date().toISOString(),
     programs: programs.map((p) => p.id),
+    corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
   };
   const web = await sandboxWebConfig();
+  await assertIgnored(privateRoot);
   const runDir = join(privateRoot, `auth-account-production-${meta.startedAt.replaceAll(":", "")}`);
-  await mkdir(runDir, { recursive: true });
+  await mkdir(runDir, { recursive: true, mode: 0o700 });
   const recordings = [];
   let outcome = "recorded";
   let error;
@@ -208,14 +227,18 @@ async function recordProduction() {
         adminTokenValue,
       );
       recordings.push(recording);
-      await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording));
+      await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
+        mode: 0o600,
+      });
     }
   } catch (caught) {
     outcome = caught.fatal ? "aborted-fatal" : "aborted";
     error = String(caught.message ?? caught);
     if (caught.partial) recordings.push(caught.partial);
   }
-  await writeFile(join(runDir, "meta.json"), JSON.stringify({ ...meta, outcome, error }, null, 2));
+  await writeFile(join(runDir, "meta.json"), JSON.stringify({ ...meta, outcome, error }, null, 2), {
+    mode: 0o600,
+  });
   const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
   const failures = recordings.flatMap((r) => r.failures);
   try {
@@ -272,6 +295,10 @@ async function rebuildFixture(runDir) {
     ),
   );
   const programs = PROGRAMS.filter((p) => meta.programs.includes(p.id));
+  const changed = programs.filter((p) => meta.corpusDigests?.[p.id] !== programDigest(p));
+  if (changed.length || programs.length !== meta.programs.length) {
+    throw new Error(`corpus changed since the recording: ${changed.map((p) => p.id).join(", ")}`);
+  }
   const web = await sandboxWebConfig();
   const nondeterministic = await writeFixture({
     programs,

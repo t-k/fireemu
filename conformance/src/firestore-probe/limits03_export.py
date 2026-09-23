@@ -120,6 +120,9 @@ def build_programs() -> list[dict[str, Any]]:
             if request.get("body") is not None:
                 step["body"] = _sandbox_index_exemption(request["body"])
                 _remove_shared_owner(step["body"])
+                if label == "index-entries" and index in (0, 1):
+                    values = step["body"]["fields"]["a"]["arrayValue"]["values"]
+                    values.append({"integerValue": str(len(values))})
             steps.append(step)
         programs.append({"id": recipe_id, "area": "writes", "steps": steps})
     return programs

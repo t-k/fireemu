@@ -22,7 +22,7 @@ use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, Serv
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_auth::base32;
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
-use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
+use fireemu_core_auth::jwt::{base64url_decode, encode_with, HeaderShape, JwtError};
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
 use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy, ViolationCode};
 use fireemu_core_auth::signup_quota::{
@@ -826,9 +826,15 @@ fn sign_response_tokens(
         if parts.next() != Some("") || parts.next().is_some() {
             return error(500, "INTERNAL");
         }
-        if base64url_decode(header).as_deref() != Ok(br#"{"alg":"none","typ":"JWT"}"#) {
+        let Ok(header) = base64url_decode(header) else {
             return error(500, "INTERNAL");
-        }
+        };
+        let Some(shape) = [HeaderShape::Typed, HeaderShape::Untyped]
+            .into_iter()
+            .find(|shape| header == fireemu_core_auth::jwt::unsigned_header(*shape))
+        else {
+            return error(500, "INTERNAL");
+        };
         let Ok(payload) = base64url_decode(payload) else {
             return error(500, "INTERNAL");
         };
@@ -838,7 +844,7 @@ fn sign_response_tokens(
         let Ok(payload) = std::str::from_utf8(&payload) else {
             return error(500, "INTERNAL");
         };
-        *token = encode_payload_with(payload, Some(signer));
+        *token = fireemu_core_auth::jwt::encode_payload_shaped(payload, Some(signer), shape);
     }
     response
 }
@@ -1292,6 +1298,61 @@ fn admin_guard(
                 store.project_id()
             ),
         ));
+    }
+    Ok(())
+}
+
+/// Production's API front end refuses a key the project does not own before the service reads
+/// the request (sandbox recording 2026-09-24, auth-credential/refresh/refusals#invalid-api-key).
+fn invalid_api_key(service: &str) -> JsonResponse {
+    const MESSAGE: &str = "API key not valid. Please pass a valid API key.";
+    JsonResponse {
+        status: 400,
+        body: json!({"error": {
+            "code": 400,
+            "message": MESSAGE,
+            "status": "INVALID_ARGUMENT",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "API_KEY_INVALID",
+                    "domain": "googleapis.com",
+                    "metadata": {"service": service},
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+                    "locale": "en-US",
+                    "message": MESSAGE,
+                },
+            ],
+        }}),
+    }
+}
+
+/// The Google API a request path addresses, as the front end names it.
+fn api_service(path: &str) -> &'static str {
+    if path.starts_with("/securetoken.googleapis.com/") {
+        "securetoken.googleapis.com"
+    } else {
+        "identitytoolkit.googleapis.com"
+    }
+}
+
+/// Refuses an API key the project did not declare, when it declared any.
+fn declared_api_key_check(
+    state: &AuthState,
+    path: &str,
+    query: Option<&str>,
+) -> Result<(), JsonResponse> {
+    let (Ok((Some(key), _)), Some(tenancy)) = (query_selectors(query), state.tenancy.as_ref())
+    else {
+        return Ok(());
+    };
+    let Ok(tenancy) = tenancy.read() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    if tenancy.refuses_api_key(&key) {
+        return Err(invalid_api_key(api_service(path)));
     }
     Ok(())
 }
@@ -2530,6 +2591,13 @@ fn handle_with_policy(
     // Production's API front end answers a caller without identity before the service reads
     // any selector, tenant or body (sandbox recording 2026-09-23).
     if let Err(response) = caller_identity_check(state, resolution, headers, api_key) {
+        return if api_service(path) == "securetoken.googleapis.com" {
+            secure_token_error_shape(response)
+        } else {
+            response
+        };
+    }
+    if let Err(response) = declared_api_key_check(state, path, query) {
         return response;
     }
     let emulator_clear = matches!(
@@ -6327,11 +6395,17 @@ fn select_store(
                 };
                 match tenancy.project_of_api_key(key).map(str::to_owned) {
                     Some(project) => Some(project),
-                    None if tenancy.registered().is_empty() => None,
+                    None if tenancy.registered().is_empty() || tenancy.is_default_api_key(key) => {
+                        None
+                    }
                     None => {
                         // An explicit API-key selector is an assertion about the target
                         // project. Never silently route an unknown key to the default namespace.
-                        return Err(error(400, "INVALID_API_KEY"));
+                        return Err(invalid_api_key(if exchanges_refresh_token {
+                            "securetoken.googleapis.com"
+                        } else {
+                            "identitytoolkit.googleapis.com"
+                        }));
                     }
                 }
             }
@@ -7950,15 +8024,21 @@ fn update(
     // matching the recorded disable/re-enable flow. Preserve the emulator's validSince
     // behavior, and keep credential changes and explicit revocation independent of disablement.
     let credentials_changed = plan.password.is_some() || email_changed || plan.revoke_at.is_some();
-    if credentials_changed || (stateless_refresh_tokens && plan.disable == Some(true)) {
-        let _ = store.revoke_tokens(&uid, plan.revoke_at.unwrap_or(at));
+    let implicit_revocation = plan.password.is_some() || email_changed;
+    if implicit_revocation || (stateless_refresh_tokens && plan.disable == Some(true)) {
+        let _ = store.revoke_tokens(&uid, at);
     }
-    // A privileged password replacement advances `validSince` but keeps the refresh-session
-    // record. This preserves the same-second boundary: a session issued in the replacement
-    // second is not older than the floored revocation instant. Older sessions fail as
-    // TOKEN_EXPIRED. Explicit revocation and administrative email changes still retire the
-    // session immediately. Credential-removal flags retain their existing session behavior.
-    let removes_refresh_credential = plan.revoke_at.is_some() || (email_changed && !self_service);
+    // An explicit validSince is stored as given, even when it is earlier than before; sessions
+    // are judged against it when they are used (sandbox recording 2026-09-24).
+    if let Some(valid_since) = plan.revoke_at {
+        let _ = store.set_valid_since(&uid, valid_since);
+    }
+    // A privileged password replacement or an explicit validSince advances `validSince` but
+    // keeps the refresh-session record, so a session issued in the revocation second is not
+    // older than the floored instant and older sessions fail as TOKEN_EXPIRED. Administrative
+    // email changes still retire the session immediately. Credential-removal flags retain their
+    // existing session behavior.
+    let removes_refresh_credential = email_changed && !self_service;
     if !stateless_refresh_tokens && removes_refresh_credential {
         store.revoke_refresh_tokens(&uid);
     }
@@ -8451,7 +8531,11 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
         "https://session.firebase.google.com/{}",
         store.project_id()
     ));
-    let cookie = fireemu_core_auth::jwt::encode_payload_with(&payload.to_string(), None);
+    let cookie = fireemu_core_auth::jwt::encode_payload_shaped(
+        &payload.to_string(),
+        None,
+        HeaderShape::Untyped,
+    );
     JsonResponse {
         status: 200,
         body: json!({"sessionCookie": cookie}),
@@ -9196,10 +9280,13 @@ fn refresh(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
-    if str_field(body, "grant_type") != Some("refresh_token") {
-        return error(400, "INVALID_GRANT_TYPE");
+    // An empty field is an absent one, as proto3 reads it (sandbox recording 2026-09-24).
+    match str_field(body, "grant_type") {
+        None | Some("") => return error(400, "MISSING_GRANT_TYPE"),
+        Some("refresh_token") => {}
+        Some(_) => return error(400, "INVALID_GRANT_TYPE"),
     }
-    let Some(token) = str_field(body, "refresh_token") else {
+    let Some(token) = str_field(body, "refresh_token").filter(|token| !token.is_empty()) else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
     let session = match if stateless_refresh_tokens {

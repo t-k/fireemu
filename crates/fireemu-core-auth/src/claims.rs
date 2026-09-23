@@ -361,6 +361,9 @@ pub struct IdTokenClaims {
     pub display_name: Option<String>,
     /// Profile photo URL (`picture` in the JWT).
     pub photo_url: Option<String>,
+    /// `provider_id` at the top level: production sets it to `anonymous` for an anonymous
+    /// account and leaves it out otherwise.
+    pub provider_id: Option<String>,
     /// Firebase block.
     pub firebase: FirebaseClaims,
     /// Custom claims (merged at the top level when serialized).
@@ -379,6 +382,9 @@ impl IdTokenClaims {
         entries.insert("sub".into(), ClaimValue::String(self.sub.clone()));
         entries.insert("iat".into(), ClaimValue::Int(self.iat));
         entries.insert("exp".into(), ClaimValue::Int(self.exp));
+        if let Some(provider) = &self.provider_id {
+            entries.insert("provider_id".into(), ClaimValue::String(provider.clone()));
+        }
         if let Some(email) = &self.email {
             entries.insert("email".into(), ClaimValue::String(email.clone()));
             entries.insert(

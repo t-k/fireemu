@@ -4582,6 +4582,7 @@ impl AuthStore {
             phone_number: user.phone_number.clone(),
             display_name: user.display_name.clone(),
             photo_url: user.photo_url.clone(),
+            provider_id: (user.provider == Provider::Anonymous).then(|| "anonymous".to_owned()),
             firebase: FirebaseClaims {
                 identities,
                 sign_in_provider: user.provider.sign_in_provider_claim().to_owned(),
@@ -4603,6 +4604,21 @@ impl AuthStore {
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
         user.tokens_valid_after = user.tokens_valid_after.max(Self::whole_second(now));
+        user.tokens_revoked = true;
+        self.activate_email_owner(uid);
+        Ok(())
+    }
+
+    /// Sets `validSince` to exactly `at` (floored to its second), earlier or later than before:
+    /// production evaluates it against each session's `auth_time` whenever the session is used,
+    /// so moving it back honours older sessions again (sandbox recording 2026-09-24).
+    pub fn set_valid_since(&mut self, uid: &LocalId, at: LogicalInstant) -> Result<(), AuthError> {
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
+        user.tokens_valid_after = Self::whole_second(at);
         user.tokens_revoked = true;
         self.activate_email_owner(uid);
         Ok(())

@@ -1372,9 +1372,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             Arc::new(fireemu_core_session::fault::FaultRegistry::new());
         backend.set_faults(faults.clone());
         // Which session owns which project, bucket and API key.
-        let tenancy: fireemu_core_session::tenancy::SharedTenancy = Arc::new(RwLock::new(
-            fireemu_core_session::tenancy::Tenancy::new(&cfg.auth_project),
-        ));
+        let mut default_tenancy = fireemu_core_session::tenancy::Tenancy::new(&cfg.auth_project);
+        default_tenancy.declare_default_api_keys(&cfg.auth_api_keys);
+        let tenancy: fireemu_core_session::tenancy::SharedTenancy =
+            Arc::new(RwLock::new(default_tenancy));
         backend.set_tenancy(tenancy.clone());
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,

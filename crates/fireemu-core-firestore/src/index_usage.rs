@@ -164,6 +164,21 @@ impl IndexSet {
                     IndexQueryScope::Collection => IndexEntryScope::SingleFieldCollection,
                     IndexQueryScope::CollectionGroup => IndexEntryScope::SingleFieldCollectionGroup,
                 };
+                // The saved production corpus accepts an indexed 1,500-byte string with
+                // a 2,600-byte relative name and refuses the same shape at 2,642 bytes.
+                // The transition inside that interval remains unobserved, so only guard
+                // the recorded refusal range for this indexed string shape.
+                if scope == IndexEntryScope::SingleFieldCollection
+                    && matches!(mode, IndexFieldMode::Ascending | IndexFieldMode::Descending)
+                    && matches!(value, Value::String(text) if text.len() >= 1_500)
+                    && document_name_size(document)
+                        .map_err(|error| FirestoreError::InvalidArgument(error.to_string()))?
+                        >= 2_659
+                {
+                    return Err(FirestoreError::InvalidArgument(
+                        "Index entry is too large.".into(),
+                    ));
+                }
                 if mode == IndexFieldMode::Contains {
                     let Value::Array(items) = value else {
                         continue;

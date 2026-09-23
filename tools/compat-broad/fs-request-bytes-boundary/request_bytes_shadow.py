@@ -39,6 +39,7 @@ from request_bytes_campaign import (
     compile_request_bytes_campaign,
     validate_request_bytes_campaign,
 )
+from request_bytes_collector import collect_local
 from request_bytes_compiler import (
     CAMPAIGN,
     DOCUMENT_COUNT,
@@ -47,7 +48,6 @@ from request_bytes_compiler import (
     validate_request_bytes_plan,
     validate_request_bytes_sentinel_plan,
 )
-from request_bytes_collector import collect_local
 
 PROJECT = "demo-firestore-probe"
 DATABASE = "(default)"
@@ -136,8 +136,7 @@ def sentinel_selector_enabled(output: Path) -> bool:
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
             return False
         return (
-            stream.read(len(SENTINEL_SELECTOR_CONTENT) + 1)
-            == SENTINEL_SELECTOR_CONTENT
+            stream.read(len(SENTINEL_SELECTOR_CONTENT) + 1) == SENTINEL_SELECTOR_CONTENT
         )
 
 
@@ -871,6 +870,65 @@ def shadow_gates(
     }
 
 
+def sentinel_parent_handoff(
+    result: dict[str, Any], plan: dict[str, Any], *, source_bound: bool
+) -> dict[str, Any]:
+    """Build the supervisor's one-case handoff without making a parity claim."""
+    journal = result.get("localJournal")
+    journal_complete = (
+        isinstance(journal, dict) and journal.get("captureComplete") is True
+    )
+    no_production_claim = (
+        result.get("productionExecuted") is False
+        and result.get("localOnly") is True
+        and result.get("formalCompatibilityClaim") is False
+    )
+    recording_complete = (
+        journal_complete
+        and source_bound
+        and no_production_claim
+        and result.get("cleanupComplete") is True
+        and result.get("resourceAbsence") is True
+    )
+    recognized_outcome = result.get("semanticOutcome") in {
+        "sentinel-accepted",
+        "sentinel-typed-refusal",
+    }
+    state_validation = (
+        recording_complete
+        and source_bound
+        and result.get("completed") is True
+        and recognized_outcome
+    )
+    status = "local-only" if state_validation else "indeterminate"
+    return {
+        "schemaVersion": 1,
+        "kind": f"{SHADOW_KIND}-sentinel-handoff-v1",
+        "target": "owned-local-artifact",
+        "project": plan.get("project"),
+        "productionExecuted": False,
+        "formalCompatibilityClaim": False,
+        "recordingComplete": recording_complete,
+        "stateValidation": state_validation,
+        "cases": [
+            {
+                "id": plan.get("caseId", "request-bytes-raw-16mib-over"),
+                "family": "firestore",
+                "status": status,
+                "basis": "Sentinel outcome recorded locally; production behavior remains unobserved.",
+            }
+        ],
+    }
+
+
+def write_sentinel_parent_handoff(
+    output: Path, result: dict[str, Any], plan: dict[str, Any], *, source_bound: bool
+) -> dict[str, Any]:
+    handoff = sentinel_parent_handoff(result, plan, source_bound=source_bound)
+    save(output / "cases.json", handoff)
+    return handoff
+
+
 def _commit_request_caps(plan: dict[str, Any]) -> dict[str, int]:
     return {probe["label"]: probe["bodyBytes"] for probe in plan["probes"]}
 
@@ -948,6 +1006,9 @@ def _child(output: Path, nonce: str) -> None:
         result = collect_local(plan, _executor(firestore, plan), output / "collection")
         after = source_inputs()
         bound = before == after
+        handoff = write_sentinel_parent_handoff(
+            output, result, plan, source_bound=bound
+        )
         artifact = output / "fireemu"
         save(
             output / "sentinel-shadow.json",
@@ -960,7 +1021,9 @@ def _child(output: Path, nonce: str) -> None:
                 "database": DATABASE,
                 "productionExecuted": False,
                 "formalCompatibilityClaim": False,
-                "semanticOutcome": result.get("semanticOutcome", "sentinel-inconclusive"),
+                "semanticOutcome": result.get(
+                    "semanticOutcome", "sentinel-inconclusive"
+                ),
                 "outcomeIsPrediction": False,
                 "metricStatus": plan["metricStatus"],
                 "requestBytes": plan["bounds"]["requestBytes"],
@@ -977,6 +1040,8 @@ def _child(output: Path, nonce: str) -> None:
                 "artifact": runtime_binding(artifact),
                 "cleanupComplete": result.get("cleanupComplete") is True,
                 "resourceAbsence": result.get("resourceAbsence") is True,
+                "recordingComplete": handoff["recordingComplete"],
+                "stateValidation": handoff["stateValidation"],
             },
         )
         return

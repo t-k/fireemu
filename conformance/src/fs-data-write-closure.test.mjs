@@ -39,6 +39,16 @@ const requiredConditions = new Set([
 
 const requiredRecipes = new Map([
   [
+    "FS-WRITE-LIMITS-03/batch-undecodable-value",
+    new Set([
+      "writes/batch-write-malformed/undecodable-value",
+      "writes/batch-write-malformed/bad-integer",
+      "writes/batch-write-malformed/two-fields-bad-integer",
+      "writes/batch-write-malformed/unknown-value-kind",
+      "writes/batch-write-malformed/bad-timestamp",
+    ]),
+  ],
+  [
     "FS-DATA-WRITE/map-value-key-validation",
     new Set([
       "writes/map-key-validation/reserved/write",

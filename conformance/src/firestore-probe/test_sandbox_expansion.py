@@ -62,6 +62,7 @@ def test_batchwrite_validation_variants_are_three_writes_plus_state_readback() -
         "reserved-field-name",
         "bad-mask-path",
         "bad-integer",
+        "two-fields-bad-integer",
         "unknown-value-kind",
         "bad-timestamp",
         "exists-precondition-fails",
@@ -169,3 +170,21 @@ def test_nested_map_key_validation_covers_write_and_query_without_expected_outpu
             write["steps"][0]["body"]["writes"][0]["update"]["name"]
         ]
         assert all("expected" not in step for step in write["steps"])
+
+
+def test_two_field_batch_decode_probe_distinguishes_source_order_from_sorted_order() -> (
+    None
+):
+    programs = {program["id"]: program for program in _module().build_programs()}
+    program = programs["writes/batch-write-malformed/two-fields-bad-integer"]
+    assert [step["id"] for step in program["steps"]] == ["batch-write", "readback"]
+    writes = program["steps"][0]["body"]["writes"]
+    assert len(writes) == 3
+    fields = writes[1]["update"]["fields"]
+    assert list(fields) == ["z", "a"]
+    assert fields["z"] == {"integerValue": "1"}
+    assert fields["a"] == {"integerValue": "not-a-number"}
+    assert program["steps"][1]["body"]["documents"] == [
+        write["update"]["name"] for write in writes
+    ]
+    assert all("expected" not in step for step in program["steps"])

@@ -55,9 +55,7 @@ PREPARATION_FROZEN_INPUTS_KIND = "auth-credential-bootstrap-frozen-inputs-v1"
 PREPARATION_PERMISSION_KIND = "auth-credential-bootstrap-permission-v1"
 PREPARATION_APPROVAL_KIND = "auth-credential-bootstrap-approval-v1"
 PREPARATION_MANIFEST_KIND = "auth-credential-bootstrap-manifest-v1"
-SHADOW_RECORD = (
-    "spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260923.json"
-)
+SHADOW_RECORD = "spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260923-lookup-v2.json"
 PRINCIPAL_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 SERVICE_ACCOUNT = "fireemu-oracle@fireemu-35fe6.iam.gserviceaccount.com"
 SIGNING_PERMISSION = "iam.serviceAccounts.signBlob"

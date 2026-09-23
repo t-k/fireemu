@@ -199,6 +199,10 @@
         "writes/write-stream-transaction",
         "writes/write-stream-terminal"
       ],
+      "regressionCommands": [
+        "pnpm -C conformance firestore:check-production",
+        "pnpm -C conformance fs-data-write:check"
+      ],
       "boundaryStatus": "NOT_APPLICABLE",
       "status": "PENDING_REVIEW"
     },

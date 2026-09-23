@@ -1546,7 +1546,7 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
                     tenant,
                     json!({"email": "blocked@example.com", "password": "twelve-chars-ok"})
                 ),
-                (400, "OPERATION_NOT_ALLOWED".to_owned()),
+                (400, "ADMIN_ONLY_OPERATION".to_owned()),
                 "{profile} {tenant}"
             );
             assert!(

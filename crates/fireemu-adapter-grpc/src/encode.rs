@@ -135,7 +135,24 @@ pub fn decode_mask(mask: Option<&pb::DocumentMask>) -> Result<Option<Vec<FieldPa
     let Some(mask) = mask else { return Ok(None) };
     mask.field_paths
         .iter()
-        .map(|p| FieldPath::parse(p).map_err(|e| DecodeError::InvalidFieldPath(e.to_string())))
+        .map(|p| {
+            let path =
+                FieldPath::parse(p).map_err(|e| DecodeError::InvalidFieldPath(e.to_string()))?;
+            // Production accepts 1,499 decoded field-path bytes in a mask but rejects
+            // 1,500; the stored-field path limit is a distinct inclusive boundary.
+            let decoded_bytes = path
+                .segments()
+                .iter()
+                .map(String::len)
+                .sum::<usize>()
+                .saturating_add(path.segments().len() - 1);
+            if decoded_bytes >= 1_500 {
+                return Err(DecodeError::InvalidFieldPath(
+                    "property path is longer than 1500 bytes".into(),
+                ));
+            }
+            Ok(path)
+        })
         .collect::<Result<Vec<_>, _>>()
         .map(Some)
 }

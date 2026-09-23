@@ -82,7 +82,7 @@ fn field_value_sizes_follow_the_table() {
     );
     let mut m = BTreeMap::new();
     m.insert("k".to_owned(), Value::Integer(1));
-    assert_eq!(field_value_size(&Value::Map(m)).unwrap(), 2 + 8 + 32);
+    assert_eq!(field_value_size(&Value::Map(m)).unwrap(), 2 + 8);
     let r =
         Value::Reference("projects/demo-app/databases/(default)/documents/users/jeff".to_owned());
     assert_eq!(field_value_size(&r).unwrap(), (5 + 1) + (4 + 1) + 16);

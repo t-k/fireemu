@@ -63,11 +63,11 @@ fn references_charge_only_document_segments_for_every_namespace() {
 fn nested_reference_charges_are_namespace_independent() {
     for &(project, database) in NAMESPACES {
         let value = reference(project, database, "a/b");
-        // Array sum: 20 + 20. Map: 32 + string_size("r") + array sum.
+        // Array sum: 20 + 20. Map: string_size("r") + array sum.
         let array = Value::Array(vec![value.clone(), value]);
         assert_eq!(field_value_size(&array), Ok(40));
         let map = Value::Map(BTreeMap::from([("r".to_owned(), array)]));
-        assert_eq!(field_value_size(&map), Ok(74));
+        assert_eq!(field_value_size(&map), Ok(42));
     }
 }
 

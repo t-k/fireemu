@@ -4,7 +4,7 @@
 //! string_size(s)        = utf8_byte_len(s) + 1
 //! document_name_size    = Σ string_size(segment) + 16
 //! document_size         = document_name_size + Σ string_size(field_name) + Σ value_size + 32
-//! map_size              = Σ string_size(key) + Σ value_size + 32
+//! map_size              = Σ string_size(key) + Σ value_size
 //! ```
 
 use core::fmt;
@@ -132,9 +132,7 @@ pub fn field_value_size(value: &Value) -> Result<u64, SizeError> {
             .map_err(|_| SizeError::Overflow)?
             .checked_mul(8)
             .ok_or(SizeError::Overflow)?,
-        Value::Map(entries) => fields_size(entries)?
-            .checked_add(32)
-            .ok_or(SizeError::Overflow)?,
+        Value::Map(entries) => fields_size(entries)?,
     })
 }
 

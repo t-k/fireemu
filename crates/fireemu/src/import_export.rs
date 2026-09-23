@@ -2422,6 +2422,7 @@ fn imported_user(record: &UserRecord, path: &Path) -> Result<ImportedUser, Artif
             .collect(),
         password,
         imported_password: None,
+        allow_shared_email: false,
         totp_factors,
         phone_factors,
     })

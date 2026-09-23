@@ -4196,8 +4196,8 @@ fn batch_import_treats_null_optional_fields_as_unset() {
     assert!(imported.get("mfaInfo").is_none());
     assert!(imported.get("lastLoginAt").is_none());
 
-    // `allowOverwrite: null` follows the omitted/default false path. A duplicate
-    // localId must be reported without replacing the already imported account.
+    // `allowOverwrite: null` follows the omitted/default false path, and production replaces an
+    // existing localId on that path too (sandbox recording 2026-09-23).
     let (status, response) = admin(
         &s,
         "POST",
@@ -4212,11 +4212,7 @@ fn batch_import_treats_null_optional_fields_as_unset() {
         }),
     );
     assert_eq!(status, 200, "{response}");
-    assert_eq!(
-        response["error"].as_array().map(Vec::len),
-        Some(1),
-        "{response}"
-    );
+    assert!(response.get("error").is_none(), "{response}");
     let (status, lookup) = admin(
         &s,
         "POST",
@@ -4224,8 +4220,8 @@ fn batch_import_treats_null_optional_fields_as_unset() {
         &json!({"localId": ["batch-null-fields"]}),
     );
     assert_eq!(status, 200, "{lookup}");
-    assert_eq!(lookup["users"][0]["email"], "batch-null-fields@example.com");
-    assert_ne!(lookup["users"][0]["displayName"], "must-not-replace");
+    assert_eq!(lookup["users"][0]["email"], "replacement@example.com");
+    assert_eq!(lookup["users"][0]["displayName"], "must-not-replace");
 }
 
 #[test]
@@ -5943,7 +5939,9 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
             "allowOverwrite": true,
             "users": [{
                 "localId": uid,
-                "email": "other-overwrite@example.com",
+                // A malformed address is a row refusal in production; an address owned by
+                // another account is not (sandbox recording 2026-09-23).
+                "email": "not-an-email",
                 "passwordHash": "fakeHash:salt=fakeSalt:password=replacement-password",
             }],
         }),
@@ -12556,4 +12554,49 @@ fn provider_unlinking_and_link_refusals_follow_production() {
         link(json!({"providerId": "password", "rawId": "x"})),
         "INVALID_PROVIDER_ID"
     );
+}
+
+/// batchCreate as production answered it (sandbox recording 2026-09-23,
+/// auth-account/admin/import): rows upsert by localId (a later duplicate in the request wins,
+/// an existing account is replaced without an error), an address owned by another account is
+/// accepted, sanityCheck refuses an address repeated inside the request, and an imported row
+/// always records emailVerified.
+#[test]
+fn batch_create_upserts_and_checks_duplicates_like_production() {
+    let s = strict_state();
+    let import = |body: Value| admin(&s, "POST", &format!("{ADMIN}/accounts:batchCreate"), &body);
+    let lookup = |id: &str| {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [id]}),
+        )
+        .1["users"][0]
+            .clone()
+    };
+    let (status, body) = import(
+        json!({"users": [{"localId": "i1", "email": "i1@example.com"}, {"localId": "i2", "phoneNumber": "+15550000021"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i2")["emailVerified"], false);
+    let (status, body) =
+        import(json!({"users": [{"localId": "i1", "email": "i1-new@example.com"}]}));
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i1")["email"], "i1-new@example.com");
+    let (status, body) = import(
+        json!({"users": [{"localId": "i6", "email": "i6@example.com"}, {"localId": "i6", "email": "i6b@example.com"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i6")["email"], "i6b@example.com");
+    let (status, body) =
+        import(json!({"users": [{"localId": "i7", "email": "i1-new@example.com"}]}));
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i7")["email"], "i1-new@example.com");
+    let (status, body) = import(
+        json!({"sanityCheck": true, "users": [{"localId": "i8", "email": "i8@example.com"}, {"localId": "i9", "email": "i8@example.com"}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "DUPLICATE_EMAIL : i8@example.com");
+    assert!(lookup("i8").is_null());
 }

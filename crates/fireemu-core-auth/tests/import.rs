@@ -45,6 +45,7 @@ fn account(local_id: &str) -> ImportedUser {
         federated: Vec::new(),
         password: None,
         imported_password: None,
+        allow_shared_email: false,
         totp_factors: Vec::new(),
         phone_factors: Vec::new(),
     }

@@ -6687,7 +6687,8 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "phoneNumber": u.phone_number,
         // Reported with an address, and while true even without one (production keeps the
         // flag through an Admin email removal).
-        "emailVerified": (u.email.is_some() || u.email_verified).then_some(u.email_verified),
+        "emailVerified": (u.email.is_some() || u.email_verified || u.email_verified_recorded)
+            .then_some(u.email_verified),
         "disabled": (u.disabled || u.admin_created).then_some(u.disabled),
         // Absent, not "{}", when no claim is set: what the Admin SDK reads back as no claims.
         "customAttributes": (u.custom_claims.canonical_json() != "{}").then(|| u.custom_claims.canonical_json()),
@@ -8316,6 +8317,7 @@ fn batch_row_user(
         federated,
         password,
         imported_password,
+        allow_shared_email: true,
         totp_factors,
         phone_factors,
     })
@@ -8367,12 +8369,17 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
         Some(Value::Bool(value)) => *value,
         Some(_) => return error(400, "INVALID_ARGUMENT : allowOverwrite must be a boolean"),
     };
-    if !allow_overwrite {
+    // Production upserts rows by localId whatever allowOverwrite says: a repeated localId in
+    // the request is replaced by its later row and an existing account is replaced without an
+    // error (sandbox recording 2026-09-23). The field is still type-checked above.
+    let _ = allow_overwrite;
+    // sanityCheck refuses an address repeated inside the request, before anything is imported.
+    if body.get("sanityCheck").and_then(Value::as_bool) == Some(true) {
         let mut seen = std::collections::BTreeSet::new();
         for row in rows {
-            if let Some(id) = str_field(row, "localId").filter(|id| !id.is_empty()) {
-                if !seen.insert(id) {
-                    return error(400, &format!("DUPLICATE_LOCAL_ID : {id}"));
+            if let Some(email) = str_field(row, "email").filter(|e| !e.is_empty()) {
+                if !seen.insert(canonicalize_email(email)) {
+                    return error(400, &format!("DUPLICATE_EMAIL : {email}"));
                 }
             }
         }
@@ -8416,12 +8423,6 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
         };
         let imported_hash = user.imported_password.is_some();
         let import_result = if store.user_by_id(&user.local_id).is_some() {
-            if !allow_overwrite {
-                errors.push(refused(
-                    "localId belongs to an existing account - can not overwrite.".to_owned(),
-                ));
-                continue;
-            }
             // Validate and install a replacement on a copy first. A row can fail after the
             // UID collision check (for example because its email belongs to another account),
             // and a failed import must leave the existing account untouched.

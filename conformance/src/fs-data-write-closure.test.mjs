@@ -143,8 +143,16 @@ test("verified conditions are bound to their saved comparisons", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
-  assert.ok(verified.some(({ conditionId }) => conditionId === "FS-LIMIT-SUBCOLLECTION-DEPTH"));
-  assert.ok(verified.some(({ conditionId }) => conditionId === "FS-LIMIT-DOCUMENT-NAME-BYTES"));
+  for (const conditionId of [
+    "FS-LIMIT-SUBCOLLECTION-DEPTH",
+    "FS-LIMIT-DOCUMENT-NAME-BYTES",
+    "FS-WRITE-LIMITS-03/batch-duplicate-document",
+    "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-string",
+    "FS-WRITE-LIMITS-03/implied-map",
+    "FS-WRITE-LIMITS-03/implied-array",
+  ]) {
+    assert.ok(verified.some((condition) => condition.conditionId === conditionId));
+  }
   for (const condition of verified) {
     const comparisonPath = fileURLToPath(
       new URL(`../../${condition.evidence.comparisonPath}`, import.meta.url),

@@ -1,0 +1,752 @@
+{
+  "schemaVersion": 1,
+  "conditionId": "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
+  "sourceCommit": "3d7ceabb866d0d03eecbb866a9b84aa8e8cc4f2e",
+  "artifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+  "configSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
+  "indexConfigSha256": "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+  "productionFixtureSha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+  "productionRecordingDigests": [
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+  ],
+  "localRun": "conformance/.runs/fs-data-write-local-S4xrlQ",
+  "localRestResultSha256": "46d36b0ab5d554e3b178283206859508c3dd651a1d69990c2c4690cdde300044",
+  "command": "pnpm -C conformance fs-data-write:check",
+  "comparisonCommand": "node conformance/src/fs-data-write-sandbox-run.mjs compare-local conformance/.runs/fs-data-write-local-S4xrlQ",
+  "recipeIds": [
+    "writes/limits/decoded-request-bytes/under",
+    "writes/limits/decoded-request-bytes/exact",
+    "writes/limits/decoded-request-bytes/over",
+    "writes/limits/decoded-11x1040000"
+  ],
+  "result": {
+    "comparableRecipes": 4,
+    "mismatchedRecipes": 0,
+    "wholeRunComparableRestPrograms": 49,
+    "wholeRunComparableStreams": 2,
+    "wholeRunKnownMismatchRows": 12,
+    "wholeRunPendingRestPrograms": 14,
+    "wholeRunPendingStreams": 1
+  },
+  "scopeNote": "This condition proves only acceptance of four concrete REST documents:commit JSON request shapes. It does not establish a decoded-protobuf 10 MiB ceiling or parity for non-Commit REST, WebChannel, or gRPC; those surfaces remain separate PENDING_CORPUS obligations. Complete response bodies are represented by byte lengths and SHA-256 digests to avoid duplicating roughly 42 MiB of payload per source.",
+  "productionPrograms": {
+    "writes/limits/decoded-request-bytes/under": {
+      "steps": {
+        "commit": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 430,
+          "bodySha256": "d02fe4efc6c942401b2b851675ad5743564adda4fb8b50bfae143cd496505018"
+        },
+        "readback-0": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 297,
+          "bodySha256": "b7589f60e0a68ea6fe4e62f13c8efe3f3ebaf16562dd385667ed3a20fce8f22a"
+        },
+        "readback-1": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "b0dd9d971e7079635d0452c48ff09ed7661fe30220f524bf2613795e34e3158f"
+        },
+        "readback-2": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "23c933520e8400a3c2a2fa70543b66ad7938e18cf168781dac7afb1c91ba915a"
+        },
+        "readback-3": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "035b877c7bf0986f682f8f0bf33bd8711db4594d1e4e9258e7454ef065954999"
+        },
+        "readback-4": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "a8d72667c9d5d058feddffd6ad82c8903eac40131c38100a2a14f067a1b2e3ff"
+        },
+        "readback-5": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "c12754c6dd5bb152d8b04a38a316c35e9d6ba727ac7aa977a2e1b69f94185c19"
+        },
+        "readback-6": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "1ef7e166b890c7822aaee9da3e0853ad81aa378e72589836550da8e190055c07"
+        },
+        "readback-7": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "64c5feaa7897ef2b61e191d359b6521259f4fa11898af8e63bbb16ad8dd8f527"
+        },
+        "readback-8": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "0f9ae5cf78a0287314b993c1187cbe263aaed029c5ce2fdc8c95f336cd278150"
+        },
+        "readback-9": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "977e05392f9d4840ac6f710f168aaf5212a5c9fb6986f85d7dd9da132e501ce0"
+        },
+        "readback-10": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "869dd1cc62739d6c29bf992c0aa86f6a2f15e8a6b2d07aa15995c34b79b58edb"
+        },
+        "readback-11": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "fc4dc1a3ec22174f699cd45b89b64ba28738b819ae273ec133ee40161d6a6474"
+        },
+        "readback-12": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "5c8468dbc1275204995c8d26e8b52df42adfbfd6a9942be28431ca63afac55b0"
+        },
+        "readback-13": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "87be33ece30238b11e192bbe11e517d4895e857ec71dae1e48a3005c93e1a644"
+        },
+        "readback-14": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "1e6a27c28637ae4df42d8a14b633e1ec7380077645c64f1eb4d66913e681977b"
+        },
+        "readback-15": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "e544ca4f870b403fa34d47d532d94237c6c5b6bd743df274606ec3bdb684cc01"
+        },
+        "readback-16": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "01b97e00443b9fd9b3b278a8c8fd5c7e48efe0c5caa4cbb956455618ca99f572"
+        }
+      }
+    },
+    "writes/limits/decoded-request-bytes/exact": {
+      "steps": {
+        "commit": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 430,
+          "bodySha256": "d02fe4efc6c942401b2b851675ad5743564adda4fb8b50bfae143cd496505018"
+        },
+        "readback-0": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 297,
+          "bodySha256": "9d0ea1071f9daa46ebedcab122cffd4f621865e50f22ef3a50d85f33e335d08d"
+        },
+        "readback-1": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "a54377648d194b239c7a65053faff8f4fb429f0990af2490cdcb4a3cb3ee8dbe"
+        },
+        "readback-2": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "06a42554bcd1dd9895691c572e9593e4459a850b0739c14366a1e26990f1defe"
+        },
+        "readback-3": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "ec27452182c7934cf6e7ad347e7d533dce344b02b23c17c918fc46d6ea79549a"
+        },
+        "readback-4": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "98ed4aebf9e8c11d084245b65bf6a49a3db9cebeb5e4b0db7b8e852cd517f3f5"
+        },
+        "readback-5": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "b8cc64a08c8513db948fd88bdda32e058171969682123c7dfda164df4ca43a02"
+        },
+        "readback-6": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "41b2c5188ba618c0f5b7c49d2fd99aa72cde74d2058448d40965e82e4ed9d535"
+        },
+        "readback-7": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "26872642621bea27cbaafd724d84659d945da1d3549661d59abaf0f4e3d6e261"
+        },
+        "readback-8": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "2818116e3ec17587e5ed458f5776f3471a5a0246351084c60b66d12cc82a5532"
+        },
+        "readback-9": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "16b720b6ba46a058afa51c9331b5fe1643c5f49bf1522f66dc9fe0b7201888c9"
+        },
+        "readback-10": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "629160a91e69430f6ae06e1ce2884e0f7a1b595e04551f1b23c6832dc3b52773"
+        },
+        "readback-11": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "8ffbec49694063c30ddf8be964a2da7c83c54c89a19630095b31d5ffdf0a5fc4"
+        },
+        "readback-12": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "cfbda618cb1773a9cfa1d41083792941186b2e470870b3ea12570602c0b8a873"
+        },
+        "readback-13": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "fc513cf22115c568995bdc209a54b9e51d336a0b2b48a21e46310d94f87b2edd"
+        },
+        "readback-14": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "5c81ee49ac6d2499fef7cbfcb755c7d6722694af6b2403363bb0644f60796399"
+        },
+        "readback-15": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "87d5d029194144b769e2d8273659ae3fe3c3bcc7436b60acc7433d20a0b6f135"
+        },
+        "readback-16": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "73f4641732ac9a43c620e1f8912a479a302c67be914bd66ab5e30f8220cd1f18"
+        }
+      }
+    },
+    "writes/limits/decoded-request-bytes/over": {
+      "steps": {
+        "commit": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 430,
+          "bodySha256": "d02fe4efc6c942401b2b851675ad5743564adda4fb8b50bfae143cd496505018"
+        },
+        "readback-0": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 297,
+          "bodySha256": "80bf3c0a3b3267bad3a1316965f7d6452da526006034c6ec7f0a0ddabe029801"
+        },
+        "readback-1": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "6af79f8cf511b9a0cc62b1e2f2d56ea61cdec102cc3da8dab48eb4e93f835629"
+        },
+        "readback-2": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "e83a44a146822bbb438fd40c65590536209a5c2b4fcacf81f2ac9c5af5219612"
+        },
+        "readback-3": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "1accb1db6c22c6f1e5b3ad8fcd7c339812d410cf553f651b931c238f729e6a8a"
+        },
+        "readback-4": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "399e987d6211ed91bd6f733a557c9c5cfaa9aaf7c79f9494e45458de09039dc5"
+        },
+        "readback-5": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "6258025ceb8f1181973e9cffe966c9185159674eb24e1bea93d08652bf5794e7"
+        },
+        "readback-6": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "863cec791a47fa6b530c76ae2d359c4d53176372638bfaa38f29b64acff37b1c"
+        },
+        "readback-7": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "ec2d5af11da0b10d733b968c260e302cdb7a78ac35b37fc849888e7729609dff"
+        },
+        "readback-8": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "bfd7450e85f828d66b9270c8f2b28a2250dde00b351cc8c93ed4231efba54e54"
+        },
+        "readback-9": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "1133100d9366b45acc654f9f34fa9fc0849e00c07a47c96e8c8b250db7b35d3d"
+        },
+        "readback-10": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "92355d6ef30ba2a290e77ea417c007b9e0ccc3d2c3a2f7d0a9455b8973f50c3f"
+        },
+        "readback-11": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "403a20c531e131dd074f0fecc4aa11420c6bc4ed9f3702e4e39a7190a7b033b6"
+        },
+        "readback-12": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "496c1a8964a3c57143ee6b041084f4ea30b1aaedd0af8fc129703539411be976"
+        },
+        "readback-13": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "c84285ff3f70fe9c39680bc0b0c91f78ad7dccd26c564ebbff8ce90f0e8dfc2c"
+        },
+        "readback-14": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "749daddaf55ac0c7b095ae63c33d5354b38119b0c45678338bb0d2ffdd0d4671"
+        },
+        "readback-15": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "7b89e5069d62704aaf7a9a2b4b8a1af920d42b168f50a22c3ed3c758b555e481"
+        },
+        "readback-16": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "a83dc049018d2d6fa66b2ba5d95cd611339c69588b93d3d69b5b1b679b1a91c7"
+        }
+      }
+    },
+    "writes/limits/decoded-11x1040000": {
+      "steps": {
+        "write": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 292,
+          "bodySha256": "afa7c0f61d063c1f516d2c777ecfd48f8eee651cd464b966f5620515a5be2370"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 11442114,
+          "bodySha256": "a4f8e5aa2b6f229f0eb4e71202c313a3e67aa390665a70ba0c779ef3b7febbad"
+        }
+      }
+    }
+  },
+  "localPrograms": {
+    "writes/limits/decoded-request-bytes/under": {
+      "steps": {
+        "commit": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 430,
+          "bodySha256": "d02fe4efc6c942401b2b851675ad5743564adda4fb8b50bfae143cd496505018"
+        },
+        "readback-0": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 297,
+          "bodySha256": "b7589f60e0a68ea6fe4e62f13c8efe3f3ebaf16562dd385667ed3a20fce8f22a"
+        },
+        "readback-1": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "b0dd9d971e7079635d0452c48ff09ed7661fe30220f524bf2613795e34e3158f"
+        },
+        "readback-2": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "23c933520e8400a3c2a2fa70543b66ad7938e18cf168781dac7afb1c91ba915a"
+        },
+        "readback-3": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "035b877c7bf0986f682f8f0bf33bd8711db4594d1e4e9258e7454ef065954999"
+        },
+        "readback-4": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "a8d72667c9d5d058feddffd6ad82c8903eac40131c38100a2a14f067a1b2e3ff"
+        },
+        "readback-5": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "c12754c6dd5bb152d8b04a38a316c35e9d6ba727ac7aa977a2e1b69f94185c19"
+        },
+        "readback-6": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "1ef7e166b890c7822aaee9da3e0853ad81aa378e72589836550da8e190055c07"
+        },
+        "readback-7": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "64c5feaa7897ef2b61e191d359b6521259f4fa11898af8e63bbb16ad8dd8f527"
+        },
+        "readback-8": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "0f9ae5cf78a0287314b993c1187cbe263aaed029c5ce2fdc8c95f336cd278150"
+        },
+        "readback-9": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "977e05392f9d4840ac6f710f168aaf5212a5c9fb6986f85d7dd9da132e501ce0"
+        },
+        "readback-10": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "869dd1cc62739d6c29bf992c0aa86f6a2f15e8a6b2d07aa15995c34b79b58edb"
+        },
+        "readback-11": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "fc4dc1a3ec22174f699cd45b89b64ba28738b819ae273ec133ee40161d6a6474"
+        },
+        "readback-12": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "5c8468dbc1275204995c8d26e8b52df42adfbfd6a9942be28431ca63afac55b0"
+        },
+        "readback-13": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "87be33ece30238b11e192bbe11e517d4895e857ec71dae1e48a3005c93e1a644"
+        },
+        "readback-14": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "1e6a27c28637ae4df42d8a14b633e1ec7380077645c64f1eb4d66913e681977b"
+        },
+        "readback-15": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "e544ca4f870b403fa34d47d532d94237c6c5b6bd743df274606ec3bdb684cc01"
+        },
+        "readback-16": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "01b97e00443b9fd9b3b278a8c8fd5c7e48efe0c5caa4cbb956455618ca99f572"
+        }
+      }
+    },
+    "writes/limits/decoded-request-bytes/exact": {
+      "steps": {
+        "commit": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 430,
+          "bodySha256": "d02fe4efc6c942401b2b851675ad5743564adda4fb8b50bfae143cd496505018"
+        },
+        "readback-0": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 297,
+          "bodySha256": "9d0ea1071f9daa46ebedcab122cffd4f621865e50f22ef3a50d85f33e335d08d"
+        },
+        "readback-1": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "a54377648d194b239c7a65053faff8f4fb429f0990af2490cdcb4a3cb3ee8dbe"
+        },
+        "readback-2": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "06a42554bcd1dd9895691c572e9593e4459a850b0739c14366a1e26990f1defe"
+        },
+        "readback-3": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "ec27452182c7934cf6e7ad347e7d533dce344b02b23c17c918fc46d6ea79549a"
+        },
+        "readback-4": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "98ed4aebf9e8c11d084245b65bf6a49a3db9cebeb5e4b0db7b8e852cd517f3f5"
+        },
+        "readback-5": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "b8cc64a08c8513db948fd88bdda32e058171969682123c7dfda164df4ca43a02"
+        },
+        "readback-6": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "41b2c5188ba618c0f5b7c49d2fd99aa72cde74d2058448d40965e82e4ed9d535"
+        },
+        "readback-7": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "26872642621bea27cbaafd724d84659d945da1d3549661d59abaf0f4e3d6e261"
+        },
+        "readback-8": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "2818116e3ec17587e5ed458f5776f3471a5a0246351084c60b66d12cc82a5532"
+        },
+        "readback-9": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "16b720b6ba46a058afa51c9331b5fe1643c5f49bf1522f66dc9fe0b7201888c9"
+        },
+        "readback-10": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "629160a91e69430f6ae06e1ce2884e0f7a1b595e04551f1b23c6832dc3b52773"
+        },
+        "readback-11": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "8ffbec49694063c30ddf8be964a2da7c83c54c89a19630095b31d5ffdf0a5fc4"
+        },
+        "readback-12": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "cfbda618cb1773a9cfa1d41083792941186b2e470870b3ea12570602c0b8a873"
+        },
+        "readback-13": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "fc513cf22115c568995bdc209a54b9e51d336a0b2b48a21e46310d94f87b2edd"
+        },
+        "readback-14": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "5c81ee49ac6d2499fef7cbfcb755c7d6722694af6b2403363bb0644f60796399"
+        },
+        "readback-15": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "87d5d029194144b769e2d8273659ae3fe3c3bcc7436b60acc7433d20a0b6f135"
+        },
+        "readback-16": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "73f4641732ac9a43c620e1f8912a479a302c67be914bd66ab5e30f8220cd1f18"
+        }
+      }
+    },
+    "writes/limits/decoded-request-bytes/over": {
+      "steps": {
+        "commit": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 430,
+          "bodySha256": "d02fe4efc6c942401b2b851675ad5743564adda4fb8b50bfae143cd496505018"
+        },
+        "readback-0": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 297,
+          "bodySha256": "80bf3c0a3b3267bad3a1316965f7d6452da526006034c6ec7f0a0ddabe029801"
+        },
+        "readback-1": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "6af79f8cf511b9a0cc62b1e2f2d56ea61cdec102cc3da8dab48eb4e93f835629"
+        },
+        "readback-2": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "e83a44a146822bbb438fd40c65590536209a5c2b4fcacf81f2ac9c5af5219612"
+        },
+        "readback-3": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "1accb1db6c22c6f1e5b3ad8fcd7c339812d410cf553f651b931c238f729e6a8a"
+        },
+        "readback-4": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "399e987d6211ed91bd6f733a557c9c5cfaa9aaf7c79f9494e45458de09039dc5"
+        },
+        "readback-5": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "6258025ceb8f1181973e9cffe966c9185159674eb24e1bea93d08652bf5794e7"
+        },
+        "readback-6": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "863cec791a47fa6b530c76ae2d359c4d53176372638bfaa38f29b64acff37b1c"
+        },
+        "readback-7": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "ec2d5af11da0b10d733b968c260e302cdb7a78ac35b37fc849888e7729609dff"
+        },
+        "readback-8": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "bfd7450e85f828d66b9270c8f2b28a2250dde00b351cc8c93ed4231efba54e54"
+        },
+        "readback-9": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655338,
+          "bodySha256": "1133100d9366b45acc654f9f34fa9fc0849e00c07a47c96e8c8b250db7b35d3d"
+        },
+        "readback-10": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "92355d6ef30ba2a290e77ea417c007b9e0ccc3d2c3a2f7d0a9455b8973f50c3f"
+        },
+        "readback-11": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "403a20c531e131dd074f0fecc4aa11420c6bc4ed9f3702e4e39a7190a7b033b6"
+        },
+        "readback-12": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "496c1a8964a3c57143ee6b041084f4ea30b1aaedd0af8fc129703539411be976"
+        },
+        "readback-13": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "c84285ff3f70fe9c39680bc0b0c91f78ad7dccd26c564ebbff8ce90f0e8dfc2c"
+        },
+        "readback-14": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "749daddaf55ac0c7b095ae63c33d5354b38119b0c45678338bb0d2ffdd0d4671"
+        },
+        "readback-15": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "7b89e5069d62704aaf7a9a2b4b8a1af920d42b168f50a22c3ed3c758b555e481"
+        },
+        "readback-16": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 655337,
+          "bodySha256": "a83dc049018d2d6fa66b2ba5d95cd611339c69588b93d3d69b5b1b679b1a91c7"
+        }
+      }
+    },
+    "writes/limits/decoded-11x1040000": {
+      "steps": {
+        "write": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 292,
+          "bodySha256": "afa7c0f61d063c1f516d2c777ecfd48f8eee651cd464b966f5620515a5be2370"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "bodyBytes": 11442114,
+          "bodySha256": "a4f8e5aa2b6f229f0eb4e71202c313a3e67aa390665a70ba0c779ef3b7febbad"
+        }
+      }
+    }
+  },
+  "comparisonMode": "digest-per-step",
+  "measurement": {
+    "requestBodies": "Compact JSON serialized REST documents:commit bodies",
+    "firstThreeRawBytes": [
+      10485759,
+      10485760,
+      10485761
+    ],
+    "fourthShape": "Eleven stringValue fields of 1,040,000 bytes each; compact JSON body 11,441,443 bytes",
+    "observedOutcome": "All four Commit requests and all owned readbacks return 200 OK in both saved production recordings and the current configured local artifact."
+  }
+}

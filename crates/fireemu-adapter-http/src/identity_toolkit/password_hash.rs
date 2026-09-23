@@ -234,9 +234,16 @@ impl fireemu_core_auth::store::ImportedHashVerifier for ImportedHashes {
         &self,
         imported: &fireemu_core_auth::store::ImportedPasswordHash,
         password: &str,
-    ) -> bool {
-        decode(&imported.spec)
-            .is_some_and(|spec| verify(&spec, password, &imported.salt, &imported.hash))
+    ) -> Result<bool, fireemu_core_auth::store::ImportedHashFailure> {
+        let Some(spec) = decode(&imported.spec) else {
+            return Ok(false);
+        };
+        // An HMAC without a key cannot be computed; production accepts HMAC_SHA512 so at
+        // import and fails the sign-in internally (sandbox recording 2026-09-23).
+        if matches!(&spec, HashSpec::Hmac { key, .. } if key.is_empty()) {
+            return Err(fireemu_core_auth::store::ImportedHashFailure);
+        }
+        Ok(verify(&spec, password, &imported.salt, &imported.hash))
     }
 }
 

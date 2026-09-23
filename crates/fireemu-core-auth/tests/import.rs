@@ -6,8 +6,8 @@ use fireemu_core_auth::mfa::{
     ImportedFactorError, PhoneFactor, TotpFactor, TotpPolicy, TotpSecret,
 };
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, FederatedIdentity, ImportUserError, ImportedHashVerifier,
-    ImportedPasswordHash, ImportedUser, ProjectAuthConfig, Provider,
+    AuthError, AuthStore, FederatedIdentity, ImportUserError, ImportedHashFailure,
+    ImportedHashVerifier, ImportedPasswordHash, ImportedUser, ProjectAuthConfig, Provider,
 };
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -528,8 +528,15 @@ fn an_imported_second_factor_display_name_carrying_a_control_character_is_refuse
 struct AcceptsOnly(&'static str);
 
 impl ImportedHashVerifier for AcceptsOnly {
-    fn verify(&self, imported: &ImportedPasswordHash, password: &str) -> bool {
-        imported.spec == "test-spec" && password == self.0
+    fn verify(
+        &self,
+        imported: &ImportedPasswordHash,
+        password: &str,
+    ) -> Result<bool, ImportedHashFailure> {
+        if imported.spec == "unevaluable-spec" {
+            return Err(ImportedHashFailure);
+        }
+        Ok(imported.spec == "test-spec" && password == self.0)
     }
 }
 
@@ -578,6 +585,29 @@ fn an_imported_foreign_hash_signs_in_only_through_the_verifier_and_is_then_rehas
     assert!(store
         .verify_password("hashed@example.com", "wrong", t(2))
         .is_err());
+}
+
+#[test]
+fn an_unevaluable_imported_hash_fails_the_sign_in_without_changing_the_account() {
+    let mut store = store();
+    let mut account = hashed_account("unevaluable", "unevaluable@example.com");
+    if let Some(imported) = account.imported_password.as_mut() {
+        imported.spec = "unevaluable-spec".to_owned();
+    }
+    let uid = store.import_user(account).expect("the import succeeds");
+    assert_eq!(
+        store.verify_password_with_imports(
+            "unevaluable@example.com",
+            "right",
+            t(0),
+            &AcceptsOnly("right")
+        ),
+        Err(AuthError::ImportedHashFailure)
+    );
+    assert!(store
+        .password_digest(&uid)
+        .is_some_and(|digest| digest.emulator_form().is_none()));
+    assert_eq!(store.user(&uid).and_then(|u| u.last_sign_in_at), None);
 }
 
 #[test]

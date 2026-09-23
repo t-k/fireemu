@@ -500,16 +500,29 @@ impl fmt::Debug for ImportedPasswordHash {
 
 /// Checks a password against an [`ImportedPasswordHash`].
 pub trait ImportedHashVerifier {
-    /// Whether `password` matches `imported`.
-    fn verify(&self, imported: &ImportedPasswordHash, password: &str) -> bool;
+    /// Whether `password` matches `imported`; `Err` when the imported parameters cannot be
+    /// evaluated at all (production fails the sign-in with an internal error then).
+    fn verify(
+        &self,
+        imported: &ImportedPasswordHash,
+        password: &str,
+    ) -> Result<bool, ImportedHashFailure>;
 }
+
+/// An imported hash whose parameters cannot be evaluated (for example an HMAC without a key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImportedHashFailure;
 
 /// The verifier of a caller that imports no foreign hashes: nothing matches.
 struct NoImportedHashes;
 
 impl ImportedHashVerifier for NoImportedHashes {
-    fn verify(&self, _imported: &ImportedPasswordHash, _password: &str) -> bool {
-        false
+    fn verify(
+        &self,
+        _imported: &ImportedPasswordHash,
+        _password: &str,
+    ) -> Result<bool, ImportedHashFailure> {
+        Ok(false)
     }
 }
 
@@ -568,20 +581,25 @@ impl PasswordDigest {
 
     fn verify(&self, password: &str) -> bool {
         self.verify_with(password, &NoImportedHashes)
+            .unwrap_or(false)
     }
 
-    fn verify_with(&self, password: &str, verifier: &dyn ImportedHashVerifier) -> bool {
+    fn verify_with(
+        &self,
+        password: &str,
+        verifier: &dyn ImportedHashVerifier,
+    ) -> Result<bool, ImportedHashFailure> {
         if let Some(imported) = &self.imported {
             return verifier.verify(imported, password);
         }
         let candidate = Self::new(self.salt, password).digest;
-        candidate
+        Ok(candidate
             .iter()
             .zip(self.digest.iter())
             .fold(0_u8, |difference, (left, right)| {
                 difference | (left ^ right)
             })
-            == 0
+            == 0)
     }
 
     /// The stored hash and salt bytes (fireemu's own digest, or the imported foreign hash).
@@ -964,6 +982,8 @@ pub enum AuthError {
     ExpiredRefreshToken,
     /// Caller-chosen user ID is malformed.
     InvalidLocalId,
+    /// An imported password hash whose parameters cannot be evaluated.
+    ImportedHashFailure,
     /// Caller-chosen user ID already exists.
     LocalIdExists,
     /// Phone number already used by another user.
@@ -1009,6 +1029,7 @@ impl fmt::Display for AuthError {
             Self::InvalidRefreshToken => f.write_str("invalid refresh token"),
             Self::ExpiredRefreshToken => f.write_str("expired refresh token"),
             Self::InvalidLocalId => f.write_str("invalid local id"),
+            Self::ImportedHashFailure => f.write_str("imported password hash cannot be verified"),
             Self::LocalIdExists => f.write_str("local id already exists"),
             Self::PhoneNumberExists => f.write_str("phone number already exists"),
             Self::InvalidPhoneNumber => f.write_str("invalid phone number"),
@@ -3883,17 +3904,20 @@ impl AuthStore {
             }
             return Err(AuthError::EmailNotFound);
         };
-        let (uid, disabled, ok) = (
+        let (uid, disabled, checked) = (
             user.local_id.clone(),
             user.disabled,
             user.password
                 .as_ref()
-                .is_some_and(|p| p.verify_with(password, verifier)),
+                .map_or(Ok(false), |p| p.verify_with(password, verifier)),
         );
         // The official emulator reports a disabled account before it checks the password.
         if disabled {
             return Err(AuthError::UserDisabled);
         }
+        // Production fails a sign-in against unevaluable imported parameters internally
+        // (sandbox recording 2026-09-23).
+        let ok = checked.map_err(|ImportedHashFailure| AuthError::ImportedHashFailure)?;
         if !ok {
             return Err(if private {
                 AuthError::InvalidCredentials

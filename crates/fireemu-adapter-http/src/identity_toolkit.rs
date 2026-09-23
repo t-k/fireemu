@@ -64,6 +64,8 @@ const QUOTA_SIMULATION_FIELDS: [&str; 4] = [
 ];
 const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
+mod custom_token;
+pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
 mod password_hash;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
@@ -677,6 +679,9 @@ pub struct AuthState {
     pub stateless_refresh_tokens: bool,
     /// Expiry policy for unsigned fake custom tokens.
     pub fake_custom_token_expiry: FakeCustomTokenExpiry,
+    /// Service-account keys signed custom tokens verify against (`auth.customTokenSigners`).
+    /// With none, the unsigned tokens the Admin SDK mints in emulator mode are accepted.
+    pub custom_token_trust: Option<Arc<CustomTokenTrust>>,
     /// Profile-specific Admin query behavior.
     pub query_limits: AuthQueryLimits,
     /// Whether client routes refuse a request carrying neither an API key nor a credential.
@@ -2024,7 +2029,7 @@ fn dispatch_with_blocking_hook(
         body,
         headers,
         at,
-        state.into(),
+        &state.into(),
     );
     if blocking.blocking_auth_revision() != expected_blocking_revision {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
@@ -2258,7 +2263,7 @@ fn dispatch_with_blocking_hook(
                 body,
                 headers,
                 at,
-                state.into(),
+                &state.into(),
             )
         };
         if committed_response.status != 200 {
@@ -2933,7 +2938,7 @@ fn handle_with_policy(
             body,
             headers,
             at,
-            state.into(),
+            &state.into(),
         );
         let retain_candidate = response.status == 200
             && pending_routed_project.is_some()
@@ -3012,7 +3017,7 @@ fn handle_with_policy(
             body,
             headers,
             at,
-            state.into(),
+            &state.into(),
         );
         // Determine creation from the request's returned identity and the isolated store
         // transition. A global user-count delta is not a per-request result: another actor may
@@ -3054,7 +3059,7 @@ fn handle_with_policy(
             body,
             headers,
             at,
-            state.into(),
+            &state.into(),
         );
         drop(store);
         response
@@ -3184,11 +3189,12 @@ fn privilege_check(
 }
 
 /// Runs the handler of a resolved route.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct DispatchOptions {
     totp_extension_enabled: bool,
     stateless_refresh_tokens: bool,
     fake_custom_token_expiry: FakeCustomTokenExpiry,
+    custom_token_trust: Option<Arc<CustomTokenTrust>>,
     query_limits: AuthQueryLimits,
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
 }
@@ -3199,6 +3205,7 @@ impl From<&AuthState> for DispatchOptions {
             totp_extension_enabled: state.totp_extension_enabled,
             stateless_refresh_tokens: state.stateless_refresh_tokens,
             fake_custom_token_expiry: state.fake_custom_token_expiry,
+            custom_token_trust: state.custom_token_trust.clone(),
             query_limits: state.query_limits,
             inbound_credential_policy: state.blocking.as_deref().map_or_else(
                 fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
@@ -3224,7 +3231,7 @@ fn dispatch(
     body: &Value,
     headers: &RequestHeaders,
     at: LogicalInstant,
-    options: DispatchOptions,
+    options: &DispatchOptions,
 ) -> JsonResponse {
     use routes::Handler;
     match handler {
@@ -3252,6 +3259,7 @@ fn dispatch(
             body,
             at,
             options.fake_custom_token_expiry == FakeCustomTokenExpiry::Reject,
+            options.custom_token_trust.as_deref(),
         ),
         Handler::Lookup => lookup(store, body, at, false),
         Handler::Update | Handler::AdminUpdate => update(
@@ -6662,13 +6670,20 @@ fn sign_in_with_custom_token(
     body: &Value,
     at: LogicalInstant,
     reject_expired: bool,
+    trust: Option<&CustomTokenTrust>,
 ) -> JsonResponse {
     let Some(token) = str_field(body, "token").filter(|t| !t.is_empty()) else {
         return error(400, "MISSING_CUSTOM_TOKEN");
     };
-    // Like the official emulator, a strict JSON object is accepted as a fake custom token
+    // With configured signers only a token they signed is accepted, as in production; without
+    // them, like the official emulator, a strict JSON object is accepted as a fake custom token
     // beside the unsigned JWT the Admin SDK mints.
-    let payload = if token.trim_start().starts_with('{') {
+    let payload = if let Some(trust) = trust {
+        match trust.verify(token, store.project_id()) {
+            Ok(claims) => claims,
+            Err(refusal) => return error(400, refusal.message()),
+        }
+    } else if token.trim_start().starts_with('{') {
         match fireemu_core_types::json::parse(token) {
             Ok(v) => v,
             Err(_) => {

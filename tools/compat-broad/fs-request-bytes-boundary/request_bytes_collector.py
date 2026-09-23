@@ -415,7 +415,9 @@ def _publish(directory: int, name: str, value: Any, *, bounded: bool = True) -> 
 
 
 def _journal_digest(entries: list[dict[str, Any]]) -> str:
-    encoded = json.dumps(entries, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    encoded = json.dumps(
+        entries, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -577,8 +579,10 @@ def sentinel_response_capture(
     body = receipt.get("body")
     error = body.get("error") if isinstance(body, dict) else None
     typed_error = None
-    if isinstance(error, dict) and type(error.get("code")) is int and isinstance(
-        error.get("status"), str
+    if (
+        isinstance(error, dict)
+        and type(error.get("code")) is int
+        and isinstance(error.get("status"), str)
     ):
         typed_error = {
             "code": error["code"],
@@ -1009,12 +1013,24 @@ def collect_local(
                     "sha256": hashlib.sha256(body).hexdigest(),
                 }
         expected_slots = len(plan["executionSchedule"])
-        capture_complete = (
+        capture_rows_complete = (
             len(journal_rows) == expected_slots
-            and len(journal_sidecars) == expected_slots
             and len(rows) + len(recovery) == expected_slots
-            and all("responseBodyFile" in row for row in rows + recovery)
         )
+        if is_sentinel:
+            actual_rows = [row for row in rows + recovery if row["status"] != "skipped"]
+            capture_complete = (
+                capture_rows_complete
+                and len(actual_rows) == dispatches
+                and len(journal_sidecars) == dispatches
+                and all("responseBodyFile" in row for row in actual_rows)
+            )
+        else:
+            capture_complete = (
+                capture_rows_complete
+                and len(journal_sidecars) == expected_slots
+                and all("responseBodyFile" in row for row in rows + recovery)
+            )
         local_journal = {
             "schemaVersion": 1,
             "planDigest": plan_digest,

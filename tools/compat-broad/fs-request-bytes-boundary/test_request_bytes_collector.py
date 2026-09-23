@@ -9,13 +9,13 @@ sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
 sys.path.insert(0, "tools/compat-broad")
 
 from request_bytes_collector import (
+    _journal_digest,
     commit_versions,
     over_refusal_classification,
     readback_matches,
     typed_not_found,
     typed_over_refusal,
     validate_schedule,
-    _journal_digest,
 )
 from request_bytes_compiler import compile_request_bytes_plan
 
@@ -94,7 +94,9 @@ def test_schedule_mutation_is_rejected():
 
 def test_journal_digest_is_ordered_and_byte_bound():
     first = [{"name": "row-000.json", "bytes": 12, "sha256": "a" * 64, "sequence": 0}]
-    second = first + [{"name": "response-000.body", "bytes": 3, "sha256": "b" * 64, "sequence": 0}]
+    second = first + [
+        {"name": "response-000.body", "bytes": 3, "sha256": "b" * 64, "sequence": 0}
+    ]
     assert _journal_digest(first) != _journal_digest(second)
     assert _journal_digest(second) != _journal_digest(list(reversed(second)))
 
@@ -187,6 +189,93 @@ def test_timestamp_accepts_firestore_precision_variants():
         )
         is None
     )
+
+
+def test_sentinel_capture_accounts_for_skipped_delete_slots_without_sidecars(
+    tmp_path,
+):
+    from request_bytes_collector import collect_local
+    from request_bytes_compiler import compile_request_bytes_sentinel_plan
+
+    sentinel = compile_request_bytes_sentinel_plan(
+        "local-project", "(default)", "0123456789abcdef0123456789abcdef"
+    )
+    dispatched = []
+
+    def response(status, body):
+        raw = (
+            body.encode("utf-8")
+            if isinstance(body, str)
+            else json.dumps(body, separators=(",", ":")).encode()
+        )
+        return {
+            "complete": True,
+            "failure": None,
+            "status": status,
+            "body": body,
+            "rawBodyBase64": base64.b64encode(raw).decode("ascii"),
+            "bodyBytes": len(raw),
+        }
+
+    def execute(operation):
+        dispatched.append(operation)
+        if operation["kind"] == "conditional-create-commit":
+            return response(413, "<html>gateway response</html>")
+        return response(404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+
+    result = collect_local(sentinel, execute, tmp_path / "sentinel")
+
+    assert result["completed"] is False
+    assert result["requestCount"] == 81
+    assert len(dispatched) == 81
+    assert result["rowCount"] + result["recoveryRowCount"] == 101
+    assert result["localJournal"]["rowCount"] == 101
+    assert result["localJournal"]["sidecarCount"] == 81
+    assert result["localJournal"]["captureComplete"] is True
+    run_dir = tmp_path / "sentinel"
+    rows = [json.loads(path.read_text()) for path in sorted(run_dir.glob("row-*.json"))]
+    skipped_deletes = [
+        row
+        for row in rows
+        if row["kind"] == "cleanup-version-bound-delete" and row["status"] == "skipped"
+    ]
+    assert len(skipped_deletes) == 20
+    assert all("responseBodyFile" not in row for row in skipped_deletes)
+    assert len(list(run_dir.glob("response-*.body"))) == 81
+
+
+def test_sentinel_capture_remains_incomplete_when_an_actual_response_sidecar_is_missing(
+    tmp_path,
+):
+    from request_bytes_collector import collect_local
+    from request_bytes_compiler import compile_request_bytes_sentinel_plan
+
+    sentinel = compile_request_bytes_sentinel_plan(
+        "local-project", "(default)", "0123456789abcdef0123456789abcdef"
+    )
+    dispatched = []
+
+    def execute(operation):
+        dispatched.append(operation)
+        receipt = {
+            "complete": True,
+            "failure": None,
+            "status": 404,
+            "body": {"error": {"code": 404, "status": "NOT_FOUND"}},
+        }
+        if len(dispatched) > 1:
+            raw = json.dumps(receipt["body"], separators=(",", ":")).encode()
+            receipt.update(
+                rawBodyBase64=base64.b64encode(raw).decode("ascii"),
+                bodyBytes=len(raw),
+            )
+        return receipt
+
+    result = collect_local(sentinel, execute, tmp_path / "missing-sidecar")
+
+    assert result["completed"] is False
+    assert result["localJournal"]["captureComplete"] is False
+    assert result["localJournal"]["sidecarCount"] < result["requestCount"]
 
 
 @pytest.mark.parametrize(

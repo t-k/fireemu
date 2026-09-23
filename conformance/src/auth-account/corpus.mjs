@@ -130,6 +130,10 @@ const clientPasswordChange = program("auth-account/client/password-change", [
   lookupToken("lookup-with-pre-change-token", "sign-up"),
   refresh("refresh-pre-change-token", "sign-up"),
   lookupToken("lookup-with-post-change-token", "change-password"),
+  // After a second boundary the pre-change credentials are older than validSince.
+  { ...lookupToken("lookup-with-pre-change-token-next-second", "sign-up"), delayMs: 1100 },
+  refresh("refresh-pre-change-token-next-second", "sign-up"),
+  refresh("refresh-post-change-token-next-second", "change-password"),
 ]);
 
 const clientValidation = program("auth-account/client/validation", [
@@ -206,10 +210,14 @@ const adminDisable = program("auth-account/admin/disable", [
   lookupToken("id-token-while-disabled", "sign-in-before"),
   refresh("refresh-while-disabled", "sign-in-before"),
   adminLookup("admin-lookup-while-disabled", "UID(target)"),
-  adminCall("admin-password-while-disabled", "update", {
-    localId: "UID(target)",
-    password: "password789",
-  }),
+  // A second boundary makes the password change's validSince postdate sign-in-before.
+  {
+    ...adminCall("admin-password-while-disabled", "update", {
+      localId: "UID(target)",
+      password: "password789",
+    }),
+    delayMs: 1100,
+  },
   adminCall("admin-photo-while-disabled", "update", {
     localId: "UID(target)",
     photoUrl: "https://example.com/c.png",
@@ -242,8 +250,22 @@ const adminDeleteEffects = program("auth-account/admin/delete-effects", [
 ]);
 
 const astral = "\u{1F600}";
+// Every case gets its own account and token: a successful password change moves validSince,
+// which would expire a shared token in a later second and hide the policy answer.
+const policyCase = (id, password) => [
+  adminCreate(`create-${id}`, {
+    localId: `UID(p-${id})`,
+    email: `EMAIL(p-${id})`,
+    password: "password123",
+  }),
+  signIn(`sign-in-${id}`, `EMAIL(p-${id})`),
+  client(`update-${id}`, "update", {
+    idToken: from(`sign-in-${id}`, "idToken"),
+    password,
+    returnSecureToken: false,
+  }),
+];
 const defaultPolicyClientUpdate = program("auth-account/policy/default/client-update", [
-  signUp("sign-up", "policy"),
   ...[
     ["min-6", { $repeat: "a", count: 6 }],
     ["min-5", { $repeat: "a", count: 5 }],
@@ -253,16 +275,10 @@ const defaultPolicyClientUpdate = program("auth-account/policy/default/client-up
     ["astral-2048-code-points", { $repeat: astral, count: 2048 }],
     ["astral-2048-plus-bmp", { $concat: [{ $repeat: astral, count: 2048 }, "a"] }],
     ["astral-2049-code-points", { $repeat: astral, count: 2049 }],
-    ["bmp-4096", { $repeat: "é", count: 4096 }],
-    ["bmp-4097", { $repeat: "é", count: 4097 }],
-  ].map(([id, password]) =>
-    client(`update-${id}`, "update", {
-      idToken: from("sign-up", "idToken"),
-      password,
-      returnSecureToken: false,
-    }),
-  ),
-  signIn("sign-in-with-last-accepted", "EMAIL(policy)", { $repeat: "é", count: 4096 }),
+    ["bmp-4096", { $repeat: "\u00e9", count: 4096 }],
+    ["bmp-4097", { $repeat: "\u00e9", count: 4097 }],
+  ].flatMap(([id, password]) => policyCase(id, password)),
+  signIn("sign-in-with-last-accepted", "EMAIL(p-bmp-4096)", { $repeat: "\u00e9", count: 4096 }),
 ]);
 
 const tamperedToken = program("auth-account/privilege/tampered-token", [
@@ -480,8 +496,19 @@ const customAttributes = program("auth-account/admin/custom-attributes", [
   adminLookup("readback-after-refusals", "UID(ca)"),
 ]);
 
+// Each admin-only field is tried with its own account and fresh token, so a field that
+// production accepts and that revokes tokens (validSince) cannot hide the next answer.
+const privilegeCase = (id, fields) => [
+  adminCreate(`create-${id}`, {
+    localId: `UID(priv-${id})`,
+    email: `EMAIL(priv-${id})`,
+    password: "password123",
+  }),
+  signIn(`sign-in-${id}`, `EMAIL(priv-${id})`),
+  client(`client-update-${id}`, "update", { idToken: from(`sign-in-${id}`, "idToken"), ...fields }),
+  adminLookup(`admin-readback-${id}`, `UID(priv-${id})`),
+];
 const privilegeValidToken = program("auth-account/privilege/valid-token-admin-fields", [
-  signUp("sign-up", "priv"),
   adminCreate("victim", {
     localId: "UID(victim)",
     email: "EMAIL(victim)",
@@ -494,15 +521,18 @@ const privilegeValidToken = program("auth-account/privilege/valid-token-admin-fi
     ["valid-since", { validSince: "1700000000" }],
     ["link-provider", { linkProviderUserInfo: { providerId: "google.com", rawId: "raw-priv" } }],
     ["foreign-local-id", { localId: "UID(victim)", displayName: "Hijacked" }],
-  ].map(([id, fields]) =>
-    client(`client-update-${id}`, "update", { idToken: from("sign-up", "idToken"), ...fields }),
-  ),
+  ].flatMap(([id, fields]) => privilegeCase(id, fields)),
+  adminCreate("create-selectors", {
+    localId: "UID(priv-selectors)",
+    email: "EMAIL(priv-selectors)",
+    password: "password123",
+  }),
+  signIn("sign-in-selectors", "EMAIL(priv-selectors)"),
   client("client-lookup-with-admin-selectors", "lookup", {
-    idToken: from("sign-up", "idToken"),
+    idToken: from("sign-in-selectors", "idToken"),
     localId: ["UID(victim)"],
     email: ["EMAIL(victim)"],
   }),
-  adminCall("admin-readback-self", "lookup", { email: ["EMAIL(priv)"] }),
   adminLookup("admin-readback-victim", "UID(victim)"),
 ]);
 
@@ -766,7 +796,7 @@ const uidReuse = program("auth-account/admin/uid-reuse", [
     password: "password123",
   }),
   signIn("sign-in-first", "EMAIL(reuse-first)"),
-  adminCall("delete-first", "delete", { localId: "UID(reuse)" }),
+  { ...adminCall("delete-first", "delete", { localId: "UID(reuse)" }), delayMs: 1100 },
   adminCreate("create-second", {
     localId: "UID(reuse)",
     email: "EMAIL(reuse-second)",

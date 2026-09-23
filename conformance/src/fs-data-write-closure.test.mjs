@@ -69,6 +69,35 @@ const requiredRecipes = new Map([
   ],
 ]);
 
+function verifyAcceptedCondition(condition) {
+  if (condition.status !== "VERIFIED") return;
+  assert.ok(
+    ["BRACKETED", "RULE_TRANSITION", "NOT_APPLICABLE"].includes(condition.boundaryStatus),
+    `${condition.conditionId}: unresolved boundary cannot be VERIFIED`,
+  );
+  assert.equal(condition.evidence?.productionRecordings?.length, 2);
+  assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/);
+  assert.ok(condition.evidence?.comparisonPath);
+}
+
+test("VERIFIED requires a resolved production boundary classification", () => {
+  const condition = {
+    conditionId: "example",
+    status: "VERIFIED",
+    evidence: {
+      productionRecordings: ["first", "second"],
+      finalArtifactSha256: "a".repeat(64),
+      comparisonPath: "example.json",
+    },
+  };
+  for (const boundaryStatus of ["UNBRACKETED", "PENDING_RECORDING"]) {
+    assert.throws(() => verifyAcceptedCondition({ ...condition, boundaryStatus }), /boundary/);
+  }
+  for (const boundaryStatus of ["BRACKETED", "RULE_TRANSITION", "NOT_APPLICABLE"]) {
+    assert.doesNotThrow(() => verifyAcceptedCondition({ ...condition, boundaryStatus }));
+  }
+});
+
 test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
@@ -135,11 +164,7 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
       ].includes(condition.status),
       `${condition.conditionId}: unknown status`,
     );
-    if (condition.status === "VERIFIED") {
-      assert.equal(condition.evidence?.productionRecordings?.length, 2);
-      assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/);
-      assert.ok(condition.evidence?.comparisonPath);
-    }
+    verifyAcceptedCondition(condition);
   }
   for (const [conditionId, recipes] of requiredRecipes) {
     const condition = closure.conditions.find((row) => row.conditionId === conditionId);

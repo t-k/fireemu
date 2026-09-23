@@ -319,10 +319,15 @@ def test_other_parameters_and_invalid_headers_are_not_erased(left, right):
 
 
 def test_saved_comparator_uses_current_runtime_anchor_path():
+    from broad_contract import ROOT
     from second_production_pair import PARENT_RUNTIME_ANCHOR
 
     assert PARENT_RUNTIME_ANCHOR == (
-        "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v3.json"
+        "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v4.json"
+    )
+    legacy_anchor = ROOT / "spec/compatibility/broad-runs/second45-parent-runtime-anchor-v3.json"
+    assert hashlib.sha256(legacy_anchor.read_bytes()).hexdigest() == (
+        "a05e5e564c20c1be9f354b5862f61746ed1f1b257516edfea75477a23b250d9d"
     )
 
 

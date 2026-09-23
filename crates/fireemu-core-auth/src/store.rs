@@ -376,6 +376,9 @@ pub struct UserRecord {
     /// Whether the account was created through the Admin API (create or import). Production
     /// then reports `disabled` and `validSince` in every read of it.
     pub admin_created: bool,
+    /// `passwordUpdatedAt` of a password credential that was since removed: production keeps
+    /// reporting it (sandbox recording 2026-09-23, auth-account/provider).
+    pub removed_password_updated_at: Option<LogicalInstant>,
     /// Salted password digest (local test hashing, not Firebase's scrypt). `None` for users
     /// without a password credential.
     password: Option<PasswordDigest>,
@@ -2106,6 +2109,7 @@ impl AuthStore {
                 tokens_revoked: user.tokens_valid_after > Self::whole_second(user.created_at),
                 federated: user.federated,
                 admin_created: true,
+                removed_password_updated_at: None,
                 password,
             }),
         );
@@ -2739,6 +2743,7 @@ impl AuthStore {
             tokens_revoked: false,
             federated: Vec::new(),
             admin_created: false,
+            removed_password_updated_at: None,
             password: None,
         }));
         if let Some(email) = email {
@@ -3560,10 +3565,12 @@ impl AuthStore {
     /// without a password or for an imported credential.
     #[must_use]
     pub fn password_updated_at(&self, uid: &LocalId) -> Option<LogicalInstant> {
-        self.users
-            .get(uid)
-            .and_then(|u| u.password.as_ref())
-            .and_then(|p| p.updated_at)
+        self.users.get(uid).and_then(|u| {
+            u.password
+                .as_ref()
+                .and_then(|p| p.updated_at)
+                .or(u.removed_password_updated_at)
+        })
     }
 
     /// Removes the password credential (`deleteProvider: password`, `deleteAttribute:
@@ -3574,7 +3581,11 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        let changed = user.password.take().is_some();
+        let removed = user.password.take();
+        let changed = removed.is_some();
+        if let Some(updated_at) = removed.and_then(|p| p.updated_at) {
+            user.removed_password_updated_at = Some(updated_at);
+        }
         if changed && matches!(&user.provider, Provider::Password) {
             user.provider = user
                 .federated

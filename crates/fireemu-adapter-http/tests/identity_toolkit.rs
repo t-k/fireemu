@@ -12445,3 +12445,115 @@ fn password_rules_answer_like_production() {
         assert_eq!(refused["error"]["message"], format!("PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [{missing}]"), "{password}");
     }
 }
+
+/// providerUserInfo lists phone first, then federated identities in link order, then password
+/// (sandbox recording 2026-09-23: auth-account/provider#lookup-linked, admin/create).
+#[test]
+fn provider_user_info_follows_production_order() {
+    let s = state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "ord", "email": "ord@example.com", "password": "password123"}),
+    );
+    for (provider, raw) in [("google.com", "g-1"), ("oidc.test", "o-1")] {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "ord", "linkProviderUserInfo": {"providerId": provider, "rawId": raw}}),
+        );
+    }
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "ord", "phoneNumber": "+15550000009"}),
+    );
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["ord"]}),
+    );
+    let order: Vec<&str> = found["users"][0]["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["providerId"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, ["phone", "google.com", "oidc.test", "password"]);
+}
+
+/// Unlinking providers as production answered it (sandbox recording 2026-09-23,
+/// auth-account/provider): removing the password provider keeps the address and
+/// passwordUpdatedAt, removing the last provider keeps the account, an unknown provider is a
+/// no-op, and link refusals carry production's codes.
+#[test]
+fn provider_unlinking_and_link_refusals_follow_production() {
+    let s = strict_state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "un", "email": "un@example.com", "password": "password123"}),
+    );
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "un", "linkProviderUserInfo": {"providerId": "oidc.test", "rawId": "o-1"}}),
+    );
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "un@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    let unlink = |providers: Value| {
+        post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "deleteProvider": providers}),
+        )
+    };
+    let (status, unlinked) = unlink(json!(["password"]));
+    assert_eq!(status, 200, "{unlinked}");
+    assert_eq!(unlinked["email"], "un@example.com");
+    assert!(unlinked.get("passwordHash").is_none(), "{unlinked}");
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["un"]}),
+    );
+    assert_eq!(found["users"][0]["email"], "un@example.com");
+    assert!(
+        found["users"][0]["passwordUpdatedAt"].is_number(),
+        "{found}"
+    );
+    let (status, last) = unlink(json!(["oidc.test"]));
+    assert_eq!(status, 200, "{last}");
+    assert!(last.get("providerUserInfo").is_none(), "{last}");
+    let (status, unknown) = unlink(json!(["facebook.com"]));
+    assert_eq!(status, 200, "{unknown}");
+
+    let link = |identity: Value| {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "un", "linkProviderUserInfo": identity}),
+        )
+        .1["error"]["message"]
+            .clone()
+    };
+    assert_eq!(
+        link(json!({"providerId": "google.com"})),
+        "MISSING_IDENTIFIER : providerId & rawId are both required for provider linking"
+    );
+    assert_eq!(
+        link(json!({"providerId": "password", "rawId": "x"})),
+        "INVALID_PROVIDER_ID"
+    );
+}

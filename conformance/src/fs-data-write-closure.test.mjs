@@ -144,6 +144,7 @@ test("verified conditions are bound to their saved comparisons", () => {
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
   assert.ok(verified.some(({ conditionId }) => conditionId === "FS-LIMIT-SUBCOLLECTION-DEPTH"));
+  assert.ok(verified.some(({ conditionId }) => conditionId === "FS-LIMIT-DOCUMENT-NAME-BYTES"));
   for (const condition of verified) {
     const comparisonPath = fileURLToPath(
       new URL(`../../${condition.evidence.comparisonPath}`, import.meta.url),

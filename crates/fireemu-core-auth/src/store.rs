@@ -3051,7 +3051,7 @@ impl AuthStore {
 
     /// Issues a `temporaryProof` for a verified number another account holds: production
     /// answers a link to a taken number with one (sandbox recording 2026-09-23). The proof
-    /// signs in to the number's owner once, within [`TEMPORARY_PROOF_TTL_SECONDS`].
+    /// signs in to the number's owner within [`TEMPORARY_PROOF_TTL_SECONDS`].
     pub fn issue_temporary_proof(
         &mut self,
         phone: &str,
@@ -3067,24 +3067,13 @@ impl AuthStore {
         Ok(proof)
     }
 
-    /// Consumes a `temporaryProof` issued for `phone`; `false` when it is unknown, expired or
-    /// was issued for another number (nothing is consumed then).
-    pub fn consume_temporary_proof(
-        &mut self,
-        proof: &str,
-        phone: &str,
-        now: LogicalInstant,
-    ) -> bool {
+    /// Whether `proof` is a live `temporaryProof` issued for `phone`. A proof stays usable
+    /// until it expires (corpus v2 recording 2026-09-24, a second sign-in with it succeeds).
+    pub fn check_temporary_proof(&mut self, proof: &str, phone: &str, now: LogicalInstant) -> bool {
         self.sweep_transient_credentials(now);
-        if self
-            .temporary_proofs
+        self.temporary_proofs
             .get(proof)
             .is_some_and(|(number, _)| number == phone)
-        {
-            self.temporary_proofs.remove(proof);
-            return true;
-        }
-        false
     }
 
     /// Outstanding phone verification codes, oldest first.

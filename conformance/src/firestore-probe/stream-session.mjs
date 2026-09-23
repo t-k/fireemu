@@ -58,10 +58,15 @@ export function projectStreamResponse(response) {
 
 export function projectStreamStatus(status) {
   const normalized = normalizeError(status);
+  const trailers = normalized.trailers?.map((trailer) =>
+    trailer.key === "x-debug-tracking-id" && trailer.kind === "ascii"
+      ? { ...trailer, value: trailer.value ? "nonempty-volatile-id" : "empty-volatile-id" }
+      : trailer,
+  );
   return {
     code: status.code,
     details: normalized.details ?? null,
-    ...(normalized.trailers === undefined ? {} : { trailers: normalized.trailers }),
+    ...(trailers === undefined ? {} : { trailers }),
   };
 }
 
@@ -190,7 +195,7 @@ export async function runStreamRecipe(recipe, { target, projectId, host, port, t
         maybeFinish();
       });
       call.on("error", (error) => {
-        events.push({ type: "error", value: normalizeError(error) });
+        events.push({ type: "error", value: projectStreamStatus(error) });
       });
       call.on("end", () => {
         sawEnd = true;

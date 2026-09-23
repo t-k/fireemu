@@ -125,7 +125,7 @@ export function productionRestEnvironment({ input, output, meta, token }) {
     FIRESTORE_PROBE_OUT: output,
     FIRESTORE_PROBE_META_OUT: meta,
     FIRESTORE_PROBE_MAX_REQUESTS: String(REST_CAP),
-    FIRESTORE_PROBE_TIMEOUT_MS: "60000",
+    FIRESTORE_PROBE_TIMEOUT_MS: "180000",
   };
 }
 

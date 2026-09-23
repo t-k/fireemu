@@ -25,6 +25,18 @@ def test_generated_names_hit_exact_relative_boundaries_without_empty_segments() 
         assert len(name.encode()) == length
         assert len(segments) % 2 == 0
         assert all(1 <= len(segment.encode()) <= 1500 for segment in segments)
+        assert all(segment == "c" for segment in segments[::2])
+        assert max(map(len, segments[1::2])) - min(map(len, segments[1::2])) <= 1
+
+
+def test_index_sum_names_reproduce_the_exploration_layout() -> None:
+    module = _module()
+    for target, collection_bytes, document_bytes in ((1000, 998, 1), (2000, 1400, 599)):
+        name = module.index_sum_name_of_length(target, "g2")
+        collection, document = name.split("/")
+        assert len(name.encode()) == target
+        assert len(collection.encode()) == collection_bytes
+        assert len(document.encode()) == document_bytes
 
 
 def test_raw_request_boundary_is_exact_and_keeps_readback() -> None:

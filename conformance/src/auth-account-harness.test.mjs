@@ -12,9 +12,9 @@ import {
   guardRequest,
   isTransient,
   normalizeResponse,
-  scanFixture,
   validateCorpus,
 } from "./auth-account/harness.mjs";
+import { scanFixture } from "./auth-account/fixture-scan.mjs";
 
 const production = (overrides = {}) =>
   createContext({
@@ -402,6 +402,9 @@ test("resolved requests are guarded: project, path family, mail, SMS", () => {
     },
     /example\.com/,
   );
+  for (const email of ['"a"@gmail.com', "a(x)@gmail.com", "@gmail.com"]) {
+    refused({ id: "m5", path: "v1/accounts:signUp", auth: "key", body: { email } }, /example\.com/);
+  }
   refused(
     {
       id: "m4",

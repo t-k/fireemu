@@ -227,7 +227,7 @@ export const CONFIG_PATHS = new Set([
 ]);
 
 function assertOnlyExampleEmail(text, where) {
-  for (const [, domain] of String(text).matchAll(/[^\s"'<>@(),;:]+@([^\s@"'<>/?#&]+)/g)) {
+  for (const [, domain] of String(text).matchAll(/@([^\s@"'<>/?#&]+)/g)) {
     if (domain.toLowerCase() !== "example.com") {
       throw new Error(`${where}: email outside example.com (${domain})`);
     }
@@ -323,21 +323,6 @@ export function isTransient(recorded) {
   return TRANSIENT_CODES.test(String(recorded.body?.error?.message ?? ""));
 }
 
-/** Refuses to let a committed fixture carry a secret or an identifier of a real project. */
-export function scanFixture(text, secrets) {
-  for (const secret of secrets.filter(Boolean)) {
-    if (text.includes(secret)) throw new Error("fixture contains a secret or a sandbox identifier");
-  }
-  const patterns = [/ya29\./, /eyJ[A-Za-z0-9_-]{5,}/, /AMf-/];
-  if (patterns.some((pattern) => pattern.test(text))) throw new Error("fixture contains a token");
-  for (const [, key, value] of text.matchAll(/"(passwordHash|salt)":\s*"([^"]*)"/g)) {
-    if (value !== "<bytes>" && !(key === "passwordHash" && value === REDACTED_HASH)) {
-      throw new Error("fixture contains password hash material");
-    }
-  }
-  assertOnlyExampleEmail(text, "fixture");
-}
-
 const TOKEN_KEYS = new Set([
   "idToken",
   "refreshToken",
@@ -360,7 +345,7 @@ const TIME_KEYS = new Set([
 ]);
 const ID_KEYS = new Set(["localId", "user_id", "uid"]);
 /** The fixed marker production returns instead of a hash to callers that may not see it. */
-const REDACTED_HASH = "UkVEQUNURUQ=";
+export const REDACTED_HASH = "UkVEQUNURUQ=";
 const GENERATED_ID = /^[A-Za-z0-9]{28}$/;
 const INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
 

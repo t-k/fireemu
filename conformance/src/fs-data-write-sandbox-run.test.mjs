@@ -36,8 +36,8 @@ test("local comparison refuses a fixture or run from a different corpus", () => 
 
 test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", async () => {
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
-  assert.equal(corpus.restPrograms.length, 46);
-  assert.equal(restRequestCount, 187);
+  assert.equal(corpus.restPrograms.length, 54);
+  assert.equal(restRequestCount, 203);
   assert.equal(liveStreamCount, 2);
 });
 

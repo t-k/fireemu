@@ -4,9 +4,9 @@
 //
 // A recorded token is replaced by its decoded header and claims. Signatures and key ids are
 // never compared: production signs with Google-held keys, fireemu with a local key. What is
-// compared is the algorithm, whether a key id and a type are present, and every claim. Times
-// inside a token are recorded relative to the token's own `iat`; times across steps are
-// compared through explicit relations, so no wall-clock second is ever compared.
+// compared is the algorithm, whether a key id and a type are present, and every claim. A token's
+// lifetime is recorded as `exp` relative to its own `iat`; `auth_time` and times across steps are
+// compared through explicit relations, so no wall-clock second and no latency is compared.
 
 import { createSign } from "node:crypto";
 
@@ -37,26 +37,28 @@ export function decodeJwt(token) {
   }
 }
 
-/** `iat`, `exp` and `auth_time` relative to the token's own `iat`; other claims unchanged. */
+/**
+ * `iat` and `exp` relative to the token's own `iat`. `auth_time` is a placeholder: how far it
+ * lies before `iat` measures the caller's latency, not behavior, so it is compared only through
+ * explicit relations between steps.
+ */
 function relativeTimes(claims) {
   const out = { ...claims };
   const iat = typeof claims.iat === "number" ? claims.iat : undefined;
   if (iat !== undefined) out.iat = "<iat>";
-  for (const key of ["exp", "auth_time"]) {
-    if (typeof claims[key] !== "number") continue;
-    if (iat === undefined) out[key] = `<${key}>`;
-    else if (claims[key] === iat) out[key] = "iat";
-    else if (key === "exp")
-      out[key] = `iat${claims[key] > iat ? "+" : "-"}${Math.abs(claims[key] - iat)}`;
-    else out[key] = claims[key] < iat ? "before-iat" : "after-iat";
+  if (typeof claims.exp === "number") {
+    if (iat === undefined) out.exp = "<exp>";
+    else if (claims.exp === iat) out.exp = "iat";
+    else out.exp = `iat${claims.exp > iat ? "+" : "-"}${Math.abs(claims.exp - iat)}`;
   }
+  if (typeof claims.auth_time === "number") out.auth_time = "<auth_time>";
   if (typeof out.sub === "string" && GENERATED_ID.test(out.sub)) out.sub = "<generated-localId>";
   return out;
 }
 
 /**
  * The recorded form of one JWT: its algorithm, whether a key id and a type are present (not
- * their values), and its claims with times relative to `iat`.
+ * their values), and its claims with `iat` and `exp` relative to `iat`.
  */
 export function describeJwt(token) {
   const decoded = decodeJwt(token);
@@ -74,14 +76,29 @@ export function describeJwt(token) {
   };
 }
 
-function decodeTokens(value, key) {
+/** A number equal to the project number, anywhere in decoded claims, is masked as in strings. */
+function maskNumbers(value, projectNumber) {
+  if (typeof value === "number")
+    return String(value) === projectNumber ? "<project-number>" : value;
+  if (Array.isArray(value)) return value.map((v) => maskNumbers(v, projectNumber));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, maskNumbers(v, projectNumber)]),
+    );
+  }
+  return value;
+}
+
+function decodeTokens(value, key, ctx) {
   if (JWT_KEYS.has(key) && typeof value === "string") {
     const described = describeJwt(value);
-    return described ? { "<jwt>": described } : value;
+    // A token that does not decode is never recorded raw.
+    if (!described) return "<undecodable-jwt>";
+    return { "<jwt>": maskNumbers(described, ctx.target.projectNumber) };
   }
-  if (Array.isArray(value)) return value.map((v) => decodeTokens(v, key));
+  if (Array.isArray(value)) return value.map((v) => decodeTokens(v, key, ctx));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, decodeTokens(v, k)]));
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, decodeTokens(v, k, ctx)]));
   }
   return value;
 }
@@ -98,7 +115,7 @@ export function normalizeCredentialResponse(status, text, ctx) {
   } catch {
     return { status, nonJson: true };
   }
-  return { status, body: normalizeConfig(decodeTokens(body, ""), ctx) };
+  return { status, body: normalizeConfig(decodeTokens(body, "", ctx), ctx) };
 }
 
 /**

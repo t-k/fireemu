@@ -9,10 +9,13 @@
 // Every program starts and ends with a project-wide account wipe. No program changes project
 // configuration. Harness calls (wipe, signing, clock) are not recorded as rows but are counted.
 
+import { isDeepStrictEqual } from "node:util";
+
 import { buildRequest, isTransient } from "../auth-account/harness.mjs";
 import { guardCredentialRequest, harnessRequest, substituteText } from "./harness.mjs";
 import {
   customTokenClaims,
+  decodeJwt,
   normalizeCredentialResponse,
   relate,
   signLocally,
@@ -78,6 +81,15 @@ export function createSession(
   let requests = 0;
   let harnessRequests = 0;
 
+  /** A credential that cannot be renewed stops the run: nothing after it could clean up. */
+  async function refreshCredential() {
+    try {
+      await ctx.target.refresh?.();
+    } catch (error) {
+      throw fatal(`owner credential refresh failed: ${error?.message ?? error}`);
+    }
+  }
+
   const charge = (harness) => {
     if (harness) {
       if (harnessRequests >= maxHarnessRequests) {
@@ -92,7 +104,7 @@ export function createSession(
 
   async function send(step, raw, { harness = false } = {}) {
     // An owner access token lives about an hour; the expiry program waits longer than that.
-    if (ctx.target.kind === "production" && step.auth === "admin") await ctx.target.refresh?.();
+    if (ctx.target.kind === "production" && step.auth === "admin") await refreshCredential();
     const request = buildRequest(step, ctx, raw);
     guardCredentialRequest(request, ctx, { harness });
     charge(harness);
@@ -132,8 +144,16 @@ export function createSession(
     return json;
   }
 
-  /** Deletes every account in the project. */
+  /** Deletes every account in the project; any failure leaves the sandbox unknown, so it is fatal. */
   async function wipe() {
+    try {
+      await wipeRounds();
+    } catch (error) {
+      throw error.fatal ? error : fatal(`wipe failed: ${error?.message ?? error}`);
+    }
+  }
+
+  async function wipeRounds() {
     for (let round = 0; round < 20; round += 1) {
       const page = await admin("GET", "v1/projects/{project}/accounts:batchGet", {
         query: { maxResults: 1000 },
@@ -159,15 +179,25 @@ export function createSession(
     );
     if (signer.privateKeyPem) return signLocally(claims, signer.privateKeyPem, signer.kid);
     charge(true);
-    await ctx.target.refresh?.();
+    await refreshCredential();
     const request = harnessRequest.signJwt(ctx, signer.serviceAccount, claims);
-    const response = await fetch(request.url, {
-      ...request.init,
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    let response;
+    try {
+      response = await fetch(request.url, {
+        ...request.init,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      throw fatal(`signJwt for ${spec.signer}: ${error?.cause?.code ?? error?.name ?? "error"}`);
+    }
     const body = await response.json().catch(() => null);
     if (response.status !== 200 || typeof body?.signedJwt !== "string") {
       throw fatal(`signJwt for ${spec.signer}: HTTP ${response.status}`);
+    }
+    // The locally signed stand-in must carry exactly what production signed; a signer that
+    // adds or changes a claim would make the two sides compare different tokens.
+    if (!isDeepStrictEqual(decodeJwt(body.signedJwt)?.claims, claims)) {
+      throw fatal(`signJwt for ${spec.signer} signed claims other than the requested ones`);
     }
     return body.signedJwt;
   }

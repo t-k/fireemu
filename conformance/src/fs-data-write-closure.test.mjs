@@ -350,7 +350,7 @@ test("an unrecorded empty-write response cannot inherit the known trailer mismat
   assert.ok(selected.pendingStreamIds.includes(responseId));
   assert.equal(response.status, "PENDING_RECORDING");
   assert.deepEqual(response.recipeIds, [responseId]);
-  assert.equal(halfClose.status, "MISMATCH");
+  assert.equal(halfClose.status, "PENDING_REVIEW");
   assert.ok(!halfClose.recipeIds.includes(responseId));
 });
 

@@ -369,6 +369,11 @@ pub(crate) fn spec_from_options(options: &Value) -> Result<HashSpec, &'static st
     let int = |key: &str| options.get(key).and_then(Value::as_u64);
     let bytes = |key: &str| text(key).and_then(base64_decode);
     let rounds = || int("rounds").and_then(|n| u32::try_from(n).ok());
+    // MD5 and SHA take 0..=8192 rounds (absent is 0); more is refused.
+    let digest_rounds = || match options.get("rounds") {
+        None | Some(Value::Null) => Ok(0),
+        Some(_) => rounds().filter(|n| *n <= 8192).ok_or("INVALID_HASH_ROUNDS"),
+    };
     let order = |default: Order| match text("passwordHashOrder") {
         Some("SALT_AND_PASSWORD") => Order::SaltFirst,
         Some("PASSWORD_AND_SALT") => Order::PasswordFirst,
@@ -383,11 +388,11 @@ pub(crate) fn spec_from_options(options: &Value) -> Result<HashSpec, &'static st
     let algorithm = text("hashAlgorithm").ok_or("MISSING_HASH_ALGORITHM")?;
     Ok(match algorithm {
         "MD5" => HashSpec::Md5 {
-            rounds: rounds().unwrap_or(0),
+            rounds: digest_rounds()?,
         },
         "SHA1" | "SHA256" | "SHA512" => HashSpec::Sha {
             family: family_of(algorithm),
-            rounds: rounds().unwrap_or(0),
+            rounds: digest_rounds()?,
             order: order(Order::SaltFirst),
         },
         "HMAC_MD5" | "HMAC_SHA1" | "HMAC_SHA256" | "HMAC_SHA512" => {
@@ -409,7 +414,9 @@ pub(crate) fn spec_from_options(options: &Value) -> Result<HashSpec, &'static st
             } else {
                 Family::Sha256
             },
-            rounds: rounds().filter(|n| *n > 0).ok_or("INVALID_HASH_ROUNDS")?,
+            rounds: rounds()
+                .filter(|n| (1..=120_000).contains(n))
+                .ok_or("INVALID_HASH_ROUNDS")?,
         },
         "SCRYPT" => HashSpec::FirebaseScrypt {
             key: bytes("signerKey").unwrap_or_default(),
@@ -420,7 +427,7 @@ pub(crate) fn spec_from_options(options: &Value) -> Result<HashSpec, &'static st
             memory_cost: int("memoryCost")
                 .and_then(|n| u8::try_from(n).ok())
                 .filter(|n| (1..=14).contains(n))
-                .ok_or("INVALID_HASH_MEMORY_COST")?,
+                .ok_or("INVALID_HASH_MEMORY_COSTS")?,
         },
         "STANDARD_SCRYPT" => standard_scrypt_spec(options)?,
         "BCRYPT" => HashSpec::Bcrypt,
@@ -440,13 +447,13 @@ fn standard_scrypt_spec(options: &Value) -> Result<HashSpec, &'static str> {
     Ok(HashSpec::StandardScrypt {
         log_n: cost
             .and_then(|n| u8::try_from(n.trailing_zeros()).ok())
-            .ok_or("INVALID_HASH_CPU_MEM_COST")?,
-        block_size: positive_u32("blockSize").ok_or("INVALID_HASH_BLOCK_SIZE")?,
-        parallelization: positive_u32("parallelization").ok_or("INVALID_HASH_PARALLELIZATION")?,
+            .ok_or("INVALID_HASH_PARAMETER")?,
+        block_size: positive_u32("blockSize").ok_or("INVALID_HASH_PARAMETER")?,
+        parallelization: positive_u32("parallelization").ok_or("INVALID_HASH_PARAMETER")?,
         dk_len: int("dkLen")
             .and_then(|n| usize::try_from(n).ok())
             .filter(|n| *n > 0)
-            .ok_or("INVALID_HASH_DERIVED_KEY_LENGTH")?,
+            .ok_or("INVALID_HASH_PARAMETER")?,
     })
 }
 
@@ -463,7 +470,8 @@ fn argon2_spec(options: &Value) -> Result<HashSpec, &'static str> {
     let memory_kib = within("memoryCostKib", 1..=32768).ok_or("INVALID_ARGON2_MEMORY_COST")?;
     let iterations = within("iterations", 1..=16).ok_or("INVALID_ARGON2_ITERATIONS")?;
     let parallelism = within("parallelism", 1..=16).ok_or("INVALID_ARGON2_PARALLELISM")?;
-    let hash_len = within("hashLengthBytes", 4..=1024).ok_or("INVALID_ARGON2_HASH_LENGTH")?;
+    // The reference says 4..=1024, but production accepted 3 (such a hash never matches).
+    let hash_len = within("hashLengthBytes", 1..=1024).ok_or("INVALID_ARGON2_HASH_LENGTH")?;
     let variant = match text("hashType") {
         Some("ARGON2_ID") => argon2::Algorithm::Argon2id,
         Some("ARGON2_I") => argon2::Algorithm::Argon2i,

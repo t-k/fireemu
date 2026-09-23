@@ -30,6 +30,21 @@ test("gRPC unary request body has exact protobuf byte boundaries", async () => {
   );
 });
 
+test("gRPC stream request body has exact protobuf byte boundaries without writes", async () => {
+  assert.equal(typeof streamSession.makeStreamRequestByWireBytes, "function");
+  for (const size of [10_485_760, 10_485_761]) {
+    const { request, wireBytes } = await streamSession.makeStreamRequestByWireBytes(size);
+    assert.equal(wireBytes, size);
+    assert.equal(request.database, "projects/fireemu-oracle-sbx/databases/(default)");
+    assert.ok(Buffer.isBuffer(request.streamToken));
+    assert.equal(request.writes, undefined);
+  }
+  await assert.rejects(
+    () => streamSession.makeStreamRequestByWireBytes(1),
+    /unsupported stream byte target/,
+  );
+});
+
 const recipes = [
   {
     id: "writes/write-stream-transaction",
@@ -68,10 +83,24 @@ const recipes = [
     wireBytes: 10_485_761,
     maxFrames: 1,
   },
+  {
+    id: "writes/limits/grpc-stream-request-bytes/10485760",
+    transport: "grpc",
+    action: "write-stream-token-bytes",
+    wireBytes: 10_485_760,
+    maxFrames: 1,
+  },
+  {
+    id: "writes/limits/grpc-stream-request-bytes/10485761",
+    transport: "grpc",
+    action: "write-stream-token-bytes",
+    wireBytes: 10_485_761,
+    maxFrames: 1,
+  },
 ];
 
-test("only the five fixed sandbox gRPC recipes are live", () => {
-  assert.equal(validateStreamRecipes(recipes).live.length, 5);
+test("only the seven fixed sandbox gRPC recipes are live", () => {
+  assert.equal(validateStreamRecipes(recipes).live.length, 7);
   assert.throws(
     () => validateStreamRecipes([{ ...recipes[1], action: "write-arbitrary-document" }]),
     /unsupported stream recipe/,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  assertMatchingSandboxCorpus,
   localTarget,
   prepareSandboxCorpus,
   productionRestEnvironment,
@@ -10,6 +11,28 @@ import {
   sandboxLedgerEntry,
   sandboxLedgerPath,
 } from "./fs-data-write-sandbox-run.mjs";
+
+test("local comparison refuses a fixture or run from a different corpus", () => {
+  const corpus = { schemaVersion: 1, restPrograms: [], restRequestCount: 0 };
+  const digest = "2a83e139b5c7a9b82d414b3b6fbbcac82fd1825a79932be9afdee320729542d2";
+  assert.equal(
+    assertMatchingSandboxCorpus({ evidence: { corpusSha256: digest } }, corpus, corpus),
+    digest,
+  );
+  assert.throws(
+    () =>
+      assertMatchingSandboxCorpus({ evidence: { corpusSha256: "0".repeat(64) } }, corpus, corpus),
+    /fixture corpus/,
+  );
+  assert.throws(
+    () =>
+      assertMatchingSandboxCorpus({ evidence: { corpusSha256: digest } }, corpus, {
+        ...corpus,
+        restRequestCount: 1,
+      }),
+    /local corpus/,
+  );
+});
 
 test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", async () => {
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();

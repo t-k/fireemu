@@ -7,7 +7,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CONFORMANCE_DIR, RUNS_DIR } from "./config.mjs";
-import { freezeSandboxFixture, validateSandboxCorpus } from "./fs-data-write-sandbox.mjs";
+import {
+  compareSandboxArtifact,
+  freezeSandboxFixture,
+  validateSandboxCorpus,
+} from "./fs-data-write-sandbox.mjs";
 import { validateStreamRecipes } from "./firestore-probe/stream-session.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -24,6 +28,17 @@ const REST_CAP = 1000;
 const ATTEMPT_ESTIMATE_USD = 0.5;
 const MAX_STREAM_FRAMES = 3;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
+
+export function assertMatchingSandboxCorpus(fixture, currentCorpus, localCorpus) {
+  const currentDigest = sha256(JSON.stringify(currentCorpus));
+  if (fixture?.evidence?.corpusSha256 !== currentDigest) {
+    throw new Error("fixture corpus differs from the current recipe");
+  }
+  if (sha256(JSON.stringify(localCorpus)) !== currentDigest) {
+    throw new Error("local corpus differs from the current recipe");
+  }
+  return currentDigest;
+}
 
 export async function prepareSandboxCorpus() {
   const { stdout } = await execFileAsync(
@@ -358,9 +373,28 @@ async function localChild() {
   );
 }
 
+async function compareLocal(runDir) {
+  if (typeof runDir !== "string" || !runDir) throw new Error("local run directory is required");
+  const { corpus } = await prepareSandboxCorpus();
+  const fixture = JSON.parse(
+    await readFile(join(CONFORMANCE_DIR, "fs-data-write-production-matrix.json"), "utf8"),
+  );
+  const localCorpus = JSON.parse(await readFile(join(runDir, "corpus.json"), "utf8"));
+  const corpusDigest = assertMatchingSandboxCorpus(fixture, corpus, localCorpus);
+  const rest = JSON.parse(await readFile(join(runDir, "rest-results.json"), "utf8"));
+  const stream = JSON.parse(await readFile(join(runDir, "stream-results.json"), "utf8"));
+  const differences = compareSandboxArtifact(fixture, rest, stream);
+  process.stdout.write(
+    `${JSON.stringify({ corpusDigest, mismatches: differences.length, differences })}\n`,
+  );
+  if (differences.length > 0) process.exitCode = 1;
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   if (process.argv[2] === "local-child") {
     await localChild();
+  } else if (process.argv[2] === "compare-local") {
+    await compareLocal(process.argv[3]);
   } else if (process.argv[2] === "record-production") {
     await recordProduction();
   } else if (process.argv[2] === "prepare") {
@@ -369,6 +403,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
       `${JSON.stringify({ programs: prepared.corpus.restPrograms.length, restRequests: prepared.restRequestCount, liveStreamRecipes: prepared.liveStreamCount })}\n`,
     );
   } else {
-    throw new Error("expected prepare, local-child or record-production");
+    throw new Error("expected prepare, local-child, compare-local or record-production");
   }
 }

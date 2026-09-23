@@ -64,7 +64,7 @@ NON_UPLOAD_RESERVE_SECONDS = 10.0
 _TOKEN = re.compile(r"[A-Za-z0-9._~+/-]{1,8192}=*")
 _VERSION = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,9})?Z")
 _DIAGNOSTIC_LIMIT = 512
-_WORKER_SHA256 = "fafaf76364bf144fd1b9f05cf4c0c7c8178c66369a44840b884f961cf9298dda"
+_WORKER_SHA256 = "33b7853d2dc9ae08ef28aeb3a4229abce33e8a58ae09b8ba8ed450d44a927c08"
 
 Exchange = Callable[[str, str, bytes | None, dict[str, str], float, int], Any]
 Clock = Callable[[], float]

@@ -11886,3 +11886,81 @@ fn admin_created_accounts_report_disabled_and_valid_since_like_production() {
     assert!(looked["users"][0].get("disabled").is_none(), "{looked}");
     assert!(looked["users"][0].get("validSince").is_none(), "{looked}");
 }
+
+/// Error messages the Identity Platform sandbox returned for account operations (recording
+/// of 2026-09-23, conformance/auth-account-production.json), exact to the detail after " : ".
+#[test]
+fn account_operation_errors_carry_production_messages() {
+    let s = strict_state();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "m1", "email": "m1@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 200);
+    let update = |body: Value| {
+        admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &body).1["error"]["message"].clone()
+    };
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": "{\"sub\":\"x\"}"})),
+        "FORBIDDEN_CLAIM : sub"
+    );
+    let big = format!("{{\"k\":\"{}\"}}", "v".repeat(993));
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": big})),
+        "CLAIMS_TOO_LARGE"
+    );
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": "[1,2]"})),
+        "INVALID_CLAIMS : Not a JSON Object: [1,2]"
+    );
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": "\"text\""})),
+        "INVALID_CLAIMS : Not a JSON Object: \"text\""
+    );
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": "null"})),
+        "INVALID_CLAIMS : Not a JSON Object: null"
+    );
+    assert_eq!(update(json!({"displayName": "x"})), "MISSING_LOCAL_ID");
+    assert_eq!(
+        update(json!({"localId": "m1", "deleteAttribute": ["NOT_A_FIELD"]})),
+        "Invalid value at 'delete_attribute[0]' (type.googleapis.com/google.cloud.identitytoolkit.v1.SetAccountInfoRequest.UserAttributeName), \"NOT_A_FIELD\""
+    );
+    let created = |body: Value| {
+        admin(&s, "POST", &format!("{ADMIN}/accounts"), &body).1["error"]["message"].clone()
+    };
+    assert_eq!(
+        created(json!({"localId": "m2", "phoneNumber": "6505550101"})),
+        "INVALID_PHONE_NUMBER : Invalid format."
+    );
+    let lookup = |body: Value| {
+        admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &body).1["error"]["message"].clone()
+    };
+    assert_eq!(lookup(json!({})), "MISSING_ID_TOKEN");
+    assert_eq!(lookup(json!({"localId": []})), "MISSING_ID_TOKEN");
+
+    {
+        let mut store = s.store.lock().unwrap();
+        let mut config = store.config();
+        config.enable_improved_email_privacy = true;
+        store.set_config(config);
+    }
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "m1@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    let client_update = |body: Value| {
+        post(&s, &format!("{V1}/accounts:update"), &body).1["error"]["message"].clone()
+    };
+    assert_eq!(
+        client_update(json!({"idToken": signed["idToken"], "email": "m1-new@example.com"})),
+        "OPERATION_NOT_ALLOWED : Please verify the new email before changing email."
+    );
+    assert_eq!(
+        client_update(json!({"idToken": signed["idToken"], "email": "not-an-email"})),
+        "INVALID_EMAIL"
+    );
+}

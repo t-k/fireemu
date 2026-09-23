@@ -143,8 +143,17 @@ pub fn decode_mask(mask: Option<&pb::DocumentMask>) -> Result<Option<Vec<FieldPa
     mask.field_paths
         .iter()
         .map(|p| {
-            let path =
-                FieldPath::parse(p).map_err(|e| DecodeError::InvalidFieldPath(e.to_string()))?;
+            let path = FieldPath::parse(p).map_err(|error| match error {
+                FieldPathError::PathTooLong { .. } => DecodeError::InvalidPropertyPath(
+                    "property path is longer than 1500 bytes.".into(),
+                ),
+                FieldPathError::EmptySegment { .. } if p.len() <= 4_096 => {
+                    DecodeError::InvalidPropertyPath(format!(
+                        r#"Invalid property path "{p}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+                    ))
+                }
+                _ => DecodeError::InvalidFieldPath(error.to_string()),
+            })?;
             // Production accepts 1,499 decoded field-path bytes in a mask but rejects
             // 1,500; the stored-field path limit is a distinct inclusive boundary.
             let decoded_bytes = path
@@ -154,8 +163,8 @@ pub fn decode_mask(mask: Option<&pb::DocumentMask>) -> Result<Option<Vec<FieldPa
                 .sum::<usize>()
                 .saturating_add(path.segments().len() - 1);
             if decoded_bytes >= 1_500 {
-                return Err(DecodeError::InvalidFieldPath(
-                    "property path is longer than 1500 bytes".into(),
+                return Err(DecodeError::InvalidPropertyPath(
+                    "property path is longer than 1500 bytes.".into(),
                 ));
             }
             Ok(path)

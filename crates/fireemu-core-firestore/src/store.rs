@@ -5165,11 +5165,7 @@ fn check_stored_field_paths(
 ) -> Result<(), FirestoreError> {
     if property_path.bytes > MAX_FIELD_PATH_BYTES {
         return Err(FirestoreError::InvalidArgument(
-            crate::field_path::FieldPathError::PathTooLong {
-                bytes: property_path.bytes,
-                maximum: MAX_FIELD_PATH_BYTES,
-            }
-            .to_string(),
+            crate::field_path::implied_path_too_long_message(&property_path.canonical()),
         ));
     }
     match value {

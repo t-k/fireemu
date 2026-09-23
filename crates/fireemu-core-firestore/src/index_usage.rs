@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::field_path::FieldPath;
+use crate::field_path::{implied_path_too_long_message, FieldPath, FieldPathError};
 use crate::index::{IndexFieldMode, IndexQueryScope, IndexSet};
 use crate::path::DocumentPath;
 use crate::size::{index_entry_size, IndexEntryScope};
@@ -133,8 +133,15 @@ impl IndexSet {
         let parent = document.parent_document();
         for (name, value) in fields {
             path.push(name.clone());
-            let field = FieldPath::from_segments(path.iter().map(String::as_str))
-                .map_err(|e| FirestoreError::InvalidArgument(e.to_string()))?;
+            let field =
+                FieldPath::from_segments(path.iter().map(String::as_str)).map_err(|error| {
+                    let message = if matches!(error, FieldPathError::PathTooLong { .. }) {
+                        implied_path_too_long_message(&path.join("."))
+                    } else {
+                        error.to_string()
+                    };
+                    FirestoreError::InvalidArgument(message)
+                })?;
             let canonical = field.canonical();
             for (scope, mode) in self.single_field_modes(document.collection_id(), &field) {
                 let scope = match scope {

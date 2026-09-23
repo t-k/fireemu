@@ -251,7 +251,7 @@ fn a_nested_field_path_at_the_boundary_is_accepted_and_one_more_byte_is_refused(
         );
         assert!(
             matches!(refused, Err(FirestoreError::InvalidArgument(ref m))
-                if m == "field path is 1501 bytes, maximum is 1500"),
+                if m.starts_with("Property ") && m.len() == 400),
             "{scope:?}: {}",
             outcome(&refused)
         );
@@ -261,6 +261,19 @@ fn a_nested_field_path_at_the_boundary_is_accepted_and_one_more_byte_is_refused(
         );
         assert_eq!(store.get(&path("a/control")).cloned(), before, "{scope:?}");
     }
+}
+
+#[test]
+fn an_implied_map_path_uses_the_saved_production_error_prefix() {
+    let mut store = state(LimitScope::Production);
+    let value = Value::Map(BTreeMap::from([("i".repeat(750), Value::Integer(1))]));
+    let refused = store.commit(&[set("a/b", &"o".repeat(750), value)], None, t(0));
+    let expected = format!("Property {}", "o".repeat(391));
+    assert!(
+        matches!(refused, Err(FirestoreError::InvalidArgument(ref message)) if message == &expected),
+        "{}",
+        outcome(&refused)
+    );
 }
 
 /// The refusal must come from the document's shape, not from the indexes the field happens
@@ -280,7 +293,7 @@ fn an_index_exempt_nested_field_path_over_the_boundary_is_still_refused() {
         let refused = store.commit(&[set("a/b", &name, value)], None, t(0));
         assert!(
             matches!(refused, Err(FirestoreError::InvalidArgument(ref m))
-                if m == "field path is 1501 bytes, maximum is 1500"),
+                if m.starts_with("Property ") && m.len() == 400),
             "{scope:?}: {}",
             outcome(&refused)
         );
@@ -359,7 +372,7 @@ fn a_field_path_implied_through_nested_maps_is_refused_under_both_scopes() {
         let refused = store.commit(&[set("a/b", &name, value)], None, t(0));
         assert!(
             matches!(refused, Err(FirestoreError::InvalidArgument(ref m))
-                if m == "field path is 1501 bytes, maximum is 1500"),
+                if m.starts_with("Property ") && m.len() == 400),
             "{scope:?}: {}",
             outcome(&refused)
         );

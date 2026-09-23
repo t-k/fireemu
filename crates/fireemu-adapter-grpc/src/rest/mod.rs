@@ -21,7 +21,6 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use fireemu_proto_firestore::google::firestore::v1 as pb;
-use prost::Message;
 use serde_json::{json, Value};
 use tonic::{Code, Status};
 
@@ -1254,16 +1253,6 @@ impl RestState {
             transaction: transaction_bytes(body.get("transaction"))?,
             request_options: None,
         };
-        if self.gateway.enforce_limits && req.encoded_len() > 10 * 1024 * 1024 {
-            return Ok(RestResponse {
-                status: 400,
-                body: fireemu_adapter_support::api_error::google_rpc(
-                    400,
-                    "decoded Commit request exceeds the local 10 MiB protobuf guard",
-                    "INVALID_ARGUMENT",
-                ),
-            });
-        }
         let guard = self.write_guard(principal);
         let response = self.local.commit_with(&req, &*guard)?;
         Ok(ok(commit_to_json(&response)))

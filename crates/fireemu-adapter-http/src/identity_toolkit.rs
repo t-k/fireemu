@@ -8771,7 +8771,7 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
                 continue;
             }
         };
-        let imported_hash = user.imported_password.is_some();
+        let imported_password = user.imported_password.is_some() || user.password.is_some();
         let import_result = if store.user_by_id(&user.local_id).is_some() {
             // Validate and install a replacement on a copy first. A row can fail after the
             // UID collision check (for example because its email belongs to another account),
@@ -8789,8 +8789,8 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
             store.import_user(user)
         };
         match import_result {
-            // Production stamps an imported hash with the import time.
-            Ok(uid) if imported_hash => store.set_password_updated_at(&uid, at),
+            // Production stamps an imported password, raw or hashed, with the import time.
+            Ok(uid) if imported_password => store.set_password_updated_at(&uid, at),
             Ok(_) => {}
             Err(e) => errors.push(refused(e.to_string())),
         }
@@ -9967,6 +9967,10 @@ fn sign_in_with_phone_number(
         }
         return match issue_tokens(store, &uid, None, at) {
             Ok(mut tokens) => {
+                // Production's link answer carries no email (sandbox recording 2026-09-23).
+                if let Some(fields) = tokens.as_object_mut() {
+                    fields.remove("email");
+                }
                 tokens["phoneNumber"] = json!(verified.phone_number);
                 tokens["isNewUser"] = json!(false);
                 JsonResponse {

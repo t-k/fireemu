@@ -9618,6 +9618,59 @@ fn test_phone_numbers_sign_in_with_their_fixed_code() {
     );
 }
 
+/// Linking a free number answers the session's tokens and the number, without the account's
+/// email (sandbox recording 2026-09-23, `auth-account/phone#link-phone`).
+#[test]
+fn phone_link_answers_without_the_email() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "linkme@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+16505550104", "recaptchaToken": "x"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = s.store.lock().unwrap().verification_codes()[0].code.clone();
+    let (status, linked) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": code, "idToken": account["idToken"]}),
+    );
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(linked["phoneNumber"], "+16505550104");
+    assert_eq!(linked["isNewUser"], false);
+    assert!(linked.get("email").is_none(), "{linked}");
+}
+
+/// An imported raw password is stamped with the import time like an imported hash (sandbox
+/// recording 2026-09-23, `import-hash/errors#lookup-all`).
+#[test]
+fn imported_raw_passwords_report_their_update_time() {
+    let s = state();
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{"localId": "raw", "email": "raw@example.com", "rawPassword": "password123"}]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["raw"]}),
+    );
+    assert_eq!(
+        found["users"][0]["passwordUpdatedAt"], 1_788_004_860_000_i64,
+        "{found}"
+    );
+}
+
 /// Disabled project providers refuse their client flows with `OPERATION_NOT_ALLOWED`, and
 /// `passwordRequired` turns email-link sign-in off.
 #[test]

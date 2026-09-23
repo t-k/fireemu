@@ -141,8 +141,8 @@ test("saved production comparison selects only identical program recipes and rep
 
 test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", async () => {
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
-  assert.equal(corpus.restPrograms.length, 62);
-  assert.equal(restRequestCount, 215);
+  assert.equal(corpus.restPrograms.length, 63);
+  assert.equal(restRequestCount, 217);
   assert.equal(liveStreamCount, 2);
 });
 

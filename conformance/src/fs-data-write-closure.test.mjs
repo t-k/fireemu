@@ -121,6 +121,18 @@ test("VERIFIED requires a resolved production boundary classification", () => {
   }
 });
 
+test("final artifact closure names both saved production regression commands", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/final-artifact-regression",
+  );
+  assert.deepEqual(condition.regressionCommands, [
+    "pnpm -C conformance firestore:check-production",
+    "pnpm -C conformance fs-data-write:check",
+  ]);
+  assert.notEqual(condition.status, "VERIFIED");
+});
+
 test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));

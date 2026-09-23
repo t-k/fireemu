@@ -123,14 +123,14 @@
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-BYTES",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-BYTES",
-      "recipeIds": ["writes/limits/index-entry-bytes", "writes/limits/index-entry-string-name/2600", "writes/limits/document-name-bytes", "writes/limits/empty-document-name/5000", "writes/limits/indexed-field-value-bytes", "writes/limits/index-entry-sum-per-document"],
-      "boundaryStatus": "UNBRACKETED",
+      "recipeIds": ["writes/limits/index-entry-bytes", "writes/limits/index-entry-string-name/2641", "writes/limits/index-entry-string-name/2642", "writes/limits/document-name-bytes", "writes/limits/empty-document-name/4627", "writes/limits/empty-document-name/4628", "writes/limits/indexed-field-value-bytes", "writes/limits/index-entry-sum-per-document"],
+      "boundaryStatus": "PENDING_RECORDING",
       "status": "MISMATCH"
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
-      "recipeIds": ["writes/limits/index-entry-sum-per-document", "writes/limits/index-entry-sum/500-19999", "writes/limits/index-entry-sum/2000-9549", "writes/limits/index-entry-sum/2000-9550", "writes/limits/index-entry-sum/1000-19998", "writes/limits/index-entry-sum/1000-19999"],
+      "recipeIds": ["writes/limits/index-entry-sum-per-document", "writes/limits/index-entry-sum/500-19999", "writes/limits/index-entry-sum/2000-7184", "writes/limits/index-entry-sum/2000-7185", "writes/limits/index-entry-sum/1000-12123", "writes/limits/index-entry-sum/1000-12124"],
       "boundaryStatus": "UNBRACKETED",
       "status": "MISMATCH"
     },

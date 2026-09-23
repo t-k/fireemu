@@ -22,7 +22,7 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]
     ids = [program["id"] for program in programs]
-    assert len(ids) == len(set(ids)) == 71
+    assert len(ids) == len(set(ids)) == 73
     assert {
         "writes/limits/field-path-mask/1499",
         "writes/limits/field-path-mask/1500",
@@ -30,8 +30,14 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/limits/implied-array-key/1495",
         "writes/limits/index-entry-sum/500-19999",
         "writes/limits/index-entry-sum/500-20000",
-        "writes/limits/index-entry-string-name/2600",
-        "writes/limits/empty-document-name/5000",
+        "writes/limits/index-entry-string-name/2641",
+        "writes/limits/index-entry-string-name/2642",
+        "writes/limits/empty-document-name/4627",
+        "writes/limits/empty-document-name/4628",
+        "writes/limits/index-entry-sum/1000-12123",
+        "writes/limits/index-entry-sum/1000-12124",
+        "writes/limits/index-entry-sum/2000-7184",
+        "writes/limits/index-entry-sum/2000-7185",
         "writes/batch-write-malformed/two-fields-bad-integer",
         "writes/limits/aggregate-map/strict-only",
         "writes/limits/non-commit-rest-request-bytes/batch-write/10485760",

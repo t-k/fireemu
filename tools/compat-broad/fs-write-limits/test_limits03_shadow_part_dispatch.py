@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import runpy
 import subprocess
@@ -143,7 +144,14 @@ def test_parent_selection_reaches_child_and_matches_binding(
     )
     assert result["status"] == "completed"
     assert observed["project"] == "demo-firestore-probe"
-    assert observed["execution_timeout"] == 900
+    from compiler_03 import compile_limits_plan
+
+    gate_plan = compile_limits_plan(
+        "demo-firestore-probe", "(default)", "0" * 32, part
+    )["localGatePlan"]
+    assert observed["execution_timeout"] == (
+        math.ceil(gate_plan["wallSeconds"]) + shadow.SHADOW_STARTUP_HEADROOM_SECONDS
+    )
     assert observed["recovery_grace"] == 1
     assert observed["retain_executed_artifact"] is True
     assert observed["configuration"] == {"daemon": {"authProjectNumbers": {}}}

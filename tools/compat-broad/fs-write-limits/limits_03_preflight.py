@@ -422,6 +422,7 @@ class ManagementSession:
         self.lifecycle_failed = False
         self.preflight_complete = False
         self.postflight_complete = False
+        self.recovery_validation_failures = []
         validate_principal(permission.get("credentialPrincipal"))
         validate_frozen_baselines(permission)
 
@@ -430,14 +431,17 @@ class ManagementSession:
             raise ValueError("closed management phase required")
         if phase == "recovery":
             self.lifecycle_failed = False
+            self.postflight_complete = False
+            self.recovery_validation_failures = []
         slots = (
             MANAGEMENT_OBSERVATION_IDS
             if phase == "observation"
             else MANAGEMENT_RECOVERY_IDS
         )
         for slot in slots:
+            wire_state = {}
 
-            def send(deadline, slot=slot):
+            def send(deadline, slot=slot, wire_state=wire_state):
                 self.ledger.validate(self.ticket, duration=13)
                 now = time.monotonic()
                 if (
@@ -454,6 +458,12 @@ class ManagementSession:
                 operation = self._lifecycle_operation(phase, slot)
                 response = self.capability._transmit(
                     management_call(self.inputs, phase, slot, token, deadline=deadline, operation=operation)
+                )
+                wire_state.update(
+                    {
+                        key: response.get(key)
+                        for key in ("complete", "workerReaped", "status", "bodyKind")
+                    }
                 )
                 if self.credential is not None:
                     observe_status(self.credential, response.get("status"))
@@ -491,7 +501,22 @@ class ManagementSession:
                 # so a drift is durable in the Gate state, not only in memory.
                 if slot in LIFECYCLE_SLOTS:
                     return self._lifecycle_attestation(slot, response)
-                return attestation(slot, response, self.permission)
+                public = attestation(slot, response, self.permission)
+                if (
+                    phase == "recovery"
+                    and slot in ("project", "database", "index-exemption", "auth")
+                    and response.get("complete") is True
+                    and response.get("workerReaped") is True
+                    and type(response.get("status")) is int
+                    and response["status"] == 200
+                    and response.get("bodyKind") == "json"
+                    and public.get("complete") is False
+                ):
+                    # Preserve the explicit failed baseline attestation, while
+                    # letting Gate record that its HTTP worker completed. The
+                    # validator still rejects baselineVerified=false below.
+                    public = {**public, "complete": True}
+                return public
 
             response = self.gate.management_dispatch(phase, slot, send)
             row = {
@@ -501,23 +526,83 @@ class ManagementSession:
             }
             self.evidence.append(row)
             event = self.gate.snapshot()["managementEvents"][-1]
-            if event.get("id") != row["id"] or event.get("completed") is not True:
-                raise ValueError(
-                    "management slot did not complete inside its reservation"
+            try:
+                if event.get("id") != row["id"]:
+                    raise ValueError("management response event identity differs")
+                if event.get("completed") is not True:
+                    raise ValueError(
+                        "management slot did not complete inside its reservation"
+                    )
+                if slot == "oauth-tokeninfo":
+                    if self.credential is None or response.get("complete") is not True:
+                        raise ValueError("credential attestation failed")
+                elif slot in LIFECYCLE_SLOTS:
+                    self._accept_lifecycle_response(slot, response)
+                    if self.lifecycle_failed:
+                        raise ValueError("lifecycle semantic validation failed")
+                else:
+                    validate_attestation(slot, response, self.permission)
+            except ValueError as error:
+                if not self._can_finish_recovery_reads(
+                    phase, slot, response, event, wire_state
+                ):
+                    raise
+                # Preserve this failed response and the Gate event as written.
+                # Only the already reserved recovery suffix may continue.
+                self.recovery_validation_failures.append(
+                    {"slot": slot, "failure": type(error).__name__}
                 )
-            if slot == "oauth-tokeninfo":
-                if self.credential is None or response.get("complete") is not True:
-                    raise ValueError("credential attestation failed")
-            elif slot in LIFECYCLE_SLOTS:
-                self._accept_lifecycle_response(slot, response)
-                if self.lifecycle_failed:
-                    raise ValueError("lifecycle semantic validation failed")
-            else:
-                validate_attestation(slot, response, self.permission)
+        if self.recovery_validation_failures:
+            self.lifecycle_failed = True
+            raise ValueError("recovery checks failed; restoration evidence retained")
         if phase == "observation":
             self.preflight_complete = True
         else:
             self.postflight_complete = True
+
+    def _can_finish_recovery_reads(self, phase, slot, response, event, wire_state):
+        """Allow only successful JSON reads to reach reserved restore slots."""
+        state = self._lifecycle
+        before = state.get("before")
+        if (
+            phase != "recovery"
+            or slot
+            not in (
+                "project",
+                "database",
+                "index-exemption",
+                "auth",
+                "index-lifecycle-poll-restore",
+            )
+            or not isinstance(before, dict)
+            or before.get("name") != LIFECYCLE_FIELD
+            or not isinstance(state.get("applyResponse"), dict)
+            or event.get("id") != "recovery:" + slot
+            or wire_state.get("complete") is not True
+            or wire_state.get("workerReaped") is not True
+            or type(wire_state.get("status")) is not int
+            or wire_state["status"] != 200
+            or wire_state.get("bodyKind") != "json"
+            or response.get("workerReaped") is not True
+            or event.get("workerReaped") is not True
+            or type(response.get("status")) is not int
+            or response["status"] != 200
+            or type(event.get("status")) is not int
+            or event["status"] != 200
+            or response.get("bodyKind") != "json"
+            or event.get("complete") != response.get("complete")
+            or event.get("responseDigest") != digest(response)
+            or event.get("bodyDigest") != digest(response.get("body"))
+        ):
+            return False
+        ended, deadline = event.get("ended"), event.get("deadline")
+        return (
+            type(ended) in (int, float)
+            and type(deadline) in (int, float)
+            and math.isfinite(ended)
+            and math.isfinite(deadline)
+            and ended <= deadline
+        )
 
     def _lifecycle_operation(self, phase, slot):
         state = getattr(self, "_lifecycle", {})
@@ -685,6 +770,23 @@ def expected_management_ids() -> list[str]:
     ]
 
 
+def validate_saved_lifecycle_operation_poll(operation, poll):
+    """Require a saved operation poll to name the operation that was created."""
+    prefix = "projects/fireemu-35fe6/databases/(default)/operations/"
+    name = operation.get("name") if isinstance(operation, dict) else None
+    if (
+        not isinstance(name, str)
+        or not name.startswith(prefix)
+        or re.fullmatch(r"[A-Za-z0-9._~-]+", name.removeprefix(prefix)) is None
+        or operation.get("error") is not None
+        or not isinstance(poll, dict)
+        or poll.get("name") != name
+        or poll.get("done") is not True
+        or poll.get("error") is not None
+    ):
+        raise ValueError("saved lifecycle operation/poll identity differs")
+
+
 def validate_saved_management(receipt, snapshot, permission):
     """Bind saved pre/postflight evidence to charged Gate response digests."""
     expected = expected_management_ids()
@@ -768,10 +870,14 @@ def validate_saved_management(receipt, snapshot, permission):
         for key, value in restored_attestation.items()
         if key != "_lifecycleApplyDisposition"
     }
-    for key in ("observation:index-lifecycle-poll", "recovery:index-lifecycle-poll-restore"):
-        poll = lifecycle.get(key)
-        if not isinstance(poll, dict) or poll.get("done") is not True or poll.get("error") is not None:
-            raise ValueError("saved lifecycle poll evidence differs")
+    for phase, operation_slot, poll_slot in (
+        ("observation", "index-lifecycle-apply", "index-lifecycle-poll"),
+        ("recovery", "index-lifecycle-restore", "index-lifecycle-poll-restore"),
+    ):
+        validate_saved_lifecycle_operation_poll(
+            lifecycle.get(phase + ":" + operation_slot),
+            lifecycle.get(phase + ":" + poll_slot),
+        )
     if (
         not isinstance(before, dict)
         or not isinstance(after, dict)

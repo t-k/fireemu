@@ -71,6 +71,23 @@ def _write_receipt(path: Path, receipt: dict) -> None:
         os.close(directory)
 
 
+def _index_exemption_verified(management, identifier: str) -> bool:
+    """Require a successful transport and a verified exemption projection."""
+    for row in management.evidence if management is not None else ():
+        if not isinstance(row, dict) or row.get("id") != identifier:
+            continue
+        response = row.get("response")
+        body = response.get("body") if isinstance(response, dict) else None
+        if (
+            isinstance(response, dict)
+            and response.get("complete") is True
+            and isinstance(body, dict)
+            and body.get("baselineVerified") is True
+        ):
+            return True
+    return False
+
+
 def first_creating_index(plan: dict) -> int:
     schedule = plan["localGatePlan"]["jobs"]["limits"]["schedule"]
     return next(
@@ -362,15 +379,11 @@ def execute(*, capability, inputs, permission, credential_reader, ledger_root, o
         ),
         indexExemption={
             "precondition": permission["indexExemptionPrecondition"],
-            "verifiedAtPreflight": any(
-                row["id"] == "observation:index-exemption"
-                and row["response"].get("complete") is True
-                for row in (management.evidence if management else [])
+            "verifiedAtPreflight": _index_exemption_verified(
+                management, "observation:index-exemption"
             ),
-            "verifiedAtPostflight": any(
-                row["id"] == "recovery:index-exemption"
-                and row["response"].get("complete") is True
-                for row in (management.evidence if management else [])
+            "verifiedAtPostflight": _index_exemption_verified(
+                management, "recovery:index-exemption"
             ),
             "restoreRequired": True,
             "restoreTo": permission["indexExemptionPrecondition"][

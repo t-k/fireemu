@@ -125,4 +125,25 @@ assert(measure_runs.include?("tools/bench/report.py"), "benchmark measure must r
 benchmark_report = benchmark.dig("jobs", "measure", "steps").find { |step| step["run"]&.include?("tools/bench/report.py") }
 assert(benchmark_report["if"] == "always()", "benchmark report must run on failed trials too")
 
+%w[ci.yml compatibility-inventory.yml conformance.yml functions-sdk-discovery.yml quint.yml].each do |name|
+  bounded = load_workflow(name)
+  assert(bounded.dig("concurrency", "group") == "${{ github.workflow }}-${{ github.ref }}", "#{name} must cancel stale runs for the same ref")
+  assert(bounded.dig("concurrency", "cancel-in-progress") == true, "#{name} must enable stale-run cancellation")
+end
+assert(load_workflow("compatibility-inventory.yml").dig("jobs", "offline-acquisition-integrity", "timeout-minutes") == 120, "offline acquisition must have a two-hour timeout")
+assert(load_workflow("functions-sdk-discovery.yml").dig("jobs", "real-sdk-discovery", "timeout-minutes") == 120, "manual SDK discovery must have a two-hour timeout")
+{
+  "ci.yml" => %w[lint test verify pr platforms package ui],
+  "compatibility-inventory.yml" => %w[feature-inventory-integrity offline-acquisition-integrity],
+  "conformance.yml" => %w[conformance],
+  "functions-sdk-discovery.yml" => %w[real-sdk-discovery],
+  "quint.yml" => %w[quint],
+}.each do |name, jobs|
+  workflow = load_workflow(name)
+  jobs.each do |job|
+    timeout = workflow.dig("jobs", job, "timeout-minutes")
+    assert(timeout.is_a?(Integer) && timeout.positive? && timeout <= 180, "#{name}/#{job} must have a timeout of at most three hours")
+  end
+end
+
 puts "CI workflow contract passed"

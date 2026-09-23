@@ -3,6 +3,10 @@ name: functions-sdk-discovery
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -13,6 +17,7 @@ env:
 jobs:
   real-sdk-discovery:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

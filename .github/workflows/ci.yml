@@ -6,6 +6,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -13,6 +17,7 @@ jobs:
   lint:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/normal
     steps:
@@ -51,6 +56,7 @@ jobs:
   test:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/normal
     steps:
@@ -81,6 +87,7 @@ jobs:
   verify:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -107,6 +114,7 @@ jobs:
 
   pr:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: target/minimal
     steps:
@@ -138,6 +146,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -178,6 +187,7 @@ jobs:
   package:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -205,6 +215,7 @@ jobs:
   ui:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

@@ -40,7 +40,7 @@
       ],
       "boundaryStatus": "BRACKETED",
       "boundaryEvidence": ["writes/limits/collection-id-boundary#observation-0", "writes/limits/collection-id-boundary#observation-1"],
-      "status": "MISMATCH"
+      "status": "PRODUCTION_RECORDED"
     },
     {
       "conditionId": "FS-LIMIT-SUBCOLLECTION-DEPTH",

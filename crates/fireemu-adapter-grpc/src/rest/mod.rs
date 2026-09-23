@@ -779,8 +779,10 @@ impl RestState {
     fn dispatch(&self, req: &RestRequest) -> Result<RestResponse, Status> {
         // The custom-method suffix is recognised on the raw path (an encoded colon inside a
         // document ID is data, not routing syntax); segments are decoded afterwards.
-        if let Some(rest) = decode_path(&req.path)?.strip_prefix("/emulator/v1/projects/") {
-            return self.emulator_route(req, rest);
+        if req.path.starts_with("/emulator/v1/projects/") {
+            if let Some(rest) = decode_path(&req.path)?.strip_prefix("/emulator/v1/projects/") {
+                return self.emulator_route(req, rest);
+            }
         }
         let (raw_resource, action) = match req.path.rsplit_once(':') {
             Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
@@ -790,7 +792,9 @@ impl RestState {
             Some((_, a)) if !a.contains('/') => return Ok(not_found_text()),
             _ => (req.path.as_str(), None),
         };
-        let decoded = decode_path(raw_resource)?;
+        let decoded = decode_path(raw_resource).map_err(|status| {
+            observed_create_collection_slash_error(req, raw_resource, action, status)
+        })?;
         let Some(path) = decoded.strip_prefix("/v1/") else {
             return Ok(not_found_text());
         };
@@ -1583,6 +1587,46 @@ fn decode_path(path: &str) -> Result<String, Status> {
         out.push_str(&text);
     }
     Ok(out)
+}
+
+fn observed_create_collection_slash_error(
+    req: &RestRequest,
+    raw_resource: &str,
+    action: Option<&str>,
+    original: Status,
+) -> Status {
+    if req.method != "POST"
+        || action.is_some()
+        || original.message() != "encoded '/' in a path segment"
+        || !raw_resource.starts_with("/v1/projects/")
+    {
+        return original;
+    }
+    let Some((_, relative)) = raw_resource.split_once("/documents/") else {
+        return original;
+    };
+    let segments: Vec<&str> = relative.split('/').collect();
+    if segments.len() % 2 == 0 {
+        return original;
+    }
+    let Some((raw_collection, preceding)) = segments.split_last() else {
+        return original;
+    };
+    if raw_collection.len() > 8_192
+        || !raw_collection.to_ascii_lowercase().contains("%2f")
+        || preceding
+            .iter()
+            .any(|segment| segment.to_ascii_lowercase().contains("%2f"))
+    {
+        return original;
+    }
+    let collection = fireemu_core_types::codec::percent_decode(
+        raw_collection,
+        fireemu_core_types::codec::PlusMode::Literal,
+    );
+    Status::invalid_argument(format!(
+        "Collection id \"{collection}\" is invalid because it contains \"/\"."
+    ))
 }
 
 /// Custom methods of the REST surface (`resource:method`).

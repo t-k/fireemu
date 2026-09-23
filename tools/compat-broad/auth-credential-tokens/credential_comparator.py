@@ -320,7 +320,14 @@ def _control_holds(row: dict[str, Any], requires: str, operation: str) -> bool:
     if isinstance(status, bool) or not isinstance(status, int):
         return False
     if requires == "accepted":
-        return status == 200 and row.get("errorCode") is None
+        if status != 200 or row.get("errorCode") is not None:
+            return False
+        # A 200 without the intended account does not demonstrate that the
+        # newer session works, even when both sides returned the same bad body.
+        return operation != "identity.accounts-lookup" or (
+            isinstance(row.get("assertions"), dict)
+            and row["assertions"].get("lookupMatchesAccount") is True
+        )
     return status == REVOCATION_REFUSAL_STATUS and row.get(
         "errorCode"
     ) in revocation_refusal_codes(operation)
@@ -445,6 +452,15 @@ def compare(local: Any, production: Any) -> dict[str, Any]:
         if case["nondeterminism"] == "SAME_SECOND_BOUNDARY":
             if not _boundary_is_placed(case, left, right):
                 classes[case_id] = "INDETERMINATE"
+            elif any(
+                side[case_id]["status"] == 200
+                and side[case_id]["assertions"].get("lookupMatchesAccount") is not True
+                for side in (left, right)
+            ):
+                # A body/identity defect is not a wall-clock boundary effect.
+                # Preserve an observed difference; equal bad responses place no
+                # usable same-second boundary and remain indeterminate.
+                classes[case_id] = "DIFFERENT" if not agree else "INDETERMINATE"
             elif _boundary_pinned(left[case_id]) and _boundary_pinned(right[case_id]):
                 classes[case_id] = "MATCH" if agree else "DIFFERENT"
             else:

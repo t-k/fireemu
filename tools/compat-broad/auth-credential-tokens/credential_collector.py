@@ -431,6 +431,29 @@ def id_token_matches_account(token: str, *, uid: str, project: str) -> bool:
     )
 
 
+def lookup_matches_account(status: Any, body: Any, *, uid: str) -> bool:
+    """Measure the default-namespace end-user lookup, without recording its data.
+
+    This is not Admin batch lookup, token authentication or cleanup authority.
+    Optional user fields are not new requirements. A bad or empty success stays
+    an observed false result, rather than being changed to a successful control.
+    """
+    if type(status) is not int or status != 200 or type(body) is not dict:
+        return False
+    if type(uid) is not str or not uid or "error" in body:
+        return False
+    users = body.get("users")
+    if type(users) is not list or len(users) != 1 or type(users[0]) is not dict:
+        return False
+    user = users[0]
+    return (
+        "error" not in user
+        and type(user.get("localId")) is str
+        and user["localId"] == uid
+        and user.get("tenantId") in (None, "")
+    )
+
+
 # --- owned resources ------------------------------------------------------------
 
 

@@ -38,6 +38,7 @@ from credential_collector import (
     claim_shape,
     custom_signin_response_uid,
     id_token_matches_account,
+    lookup_matches_account,
     enter_recovery,
     mark_deleted,
     new_budget,
@@ -682,7 +683,13 @@ def run_cases(
         "revocation-same-second-session",
         status,
         body,
-        {"acceptedResponse": status == 200, "boundaryPinnedFromServerValues": pinned},
+        {
+            "acceptedResponse": status == 200,
+            "boundaryPinnedFromServerValues": pinned,
+            "lookupMatchesAccount": lookup_matches_account(
+                status, body, uid=revoked["localId"]
+            ),
+        },
         boundaryPinned=pinned,
         boundarySeconds={"authTime": boundary_second, "validSince": stored},
     )
@@ -700,6 +707,9 @@ def run_cases(
         {
             "acceptedResponse": status == 200,
             "idTokenReturned": bool(later.get("idToken")),
+            "lookupMatchesAccount": lookup_matches_account(
+                status, body, uid=revoked["localId"]
+            ),
         },
         claims=_claims(later_shape),
     )

@@ -54,7 +54,7 @@ REVOCATION_REFUSAL_CODES = {
 }
 
 #: The vocabulary a receipt may use to describe an accepted response. Each name is a
-#: decidable check over decoded non-secret claim shapes, never over token bytes.
+#: decidable check over non-secret response measurements, never a recorded secret.
 ASSERTION_NAMES = (
     "acceptedResponse",
     "idTokenReturned",
@@ -73,6 +73,7 @@ ASSERTION_NAMES = (
     "sessionClaimWinsOverAccountClaim",
     "accountOnlyClaimPresent",
     "boundaryPinnedFromServerValues",
+    "lookupMatchesAccount",
 )
 
 #: Groups whose ID token comes from a custom-token sign-in. In production a custom token
@@ -219,7 +220,7 @@ def observation_cases() -> list[dict[str, Any]]:
             "observation",
             "identity.accounts-lookup",
             "An ID token whose auth_time equals the recorded validSince whole second.",
-            _accepted("acceptedResponse", "boundaryPinnedFromServerValues"),
+            _accepted("acceptedResponse", "boundaryPinnedFromServerValues", "lookupMatchesAccount"),
             inputs={"authTimeMinusValidSinceSeconds": 0},
             nondeterminism="SAME_SECOND_BOUNDARY",
             boundary_controls={
@@ -239,7 +240,7 @@ def observation_cases() -> list[dict[str, Any]]:
             "control",
             "identity.accounts-lookup",
             "A session started after validSince is accepted, so the refusal above is not blanket.",
-            _accepted("acceptedResponse", "idTokenReturned"),
+            _accepted("acceptedResponse", "idTokenReturned", "lookupMatchesAccount"),
             inputs={"authTimeMinusValidSinceSeconds": 2},
         ),
         # --- session cookies ---------------------------------------------------------

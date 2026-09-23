@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -133,6 +135,199 @@ def test_a_failed_dispatch_stays_spent_after_budget_reload(tmp_path):
     with pytest.raises(mfa_production.RequestBudgetRefused, match="exhausted"):
         resumed.call("restore-fallback", lambda: sent.append("retried"))
     assert sent == ["dispatch-started"]
+
+
+@pytest.mark.parametrize(
+    ("boundary", "expected_charges"),
+    [("before", 1), ("after", 2)],
+)
+def test_request_budget_recovers_from_sigkill_at_hard_link_boundaries(
+    tmp_path, boundary, expected_charges
+):
+    """A killed immutable writer leaves only a validated, unpublished temp event."""
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"resume-tokeninfo": 3},
+    }
+    budget = mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    budget.call("resume-tokeninfo", lambda: None)
+    marker = tmp_path / f"link-{boundary}.ready"
+    module_paths = [str(path) for path in sys.path if path]
+    script = "\n".join(
+        [
+            "import os, sys, time",
+            f"sys.path[:0] = {module_paths!r}",
+            "import mfa_production",
+            f"output = {str(tmp_path)!r}",
+            f"marker = {str(marker)!r}",
+            f"boundary = {boundary!r}",
+            "spec = {",
+            "    'schema': 'mfa-request-budget-v1',",
+            "    'inputsDigest': 'a' * 64,",
+            "    'planDigest': 'b' * 64,",
+            "    'permissionDigest': 'c' * 64,",
+            "    'allowances': {'resume-tokeninfo': 3},",
+            "}",
+            "real_link = os.link",
+            "def interrupted_link(source, destination, **kwargs):",
+            "    if boundary == 'before':",
+            "        open(marker, 'xb').close()",
+            "        while True: time.sleep(1)",
+            "    real_link(source, destination, **kwargs)",
+            "    open(marker, 'xb').close()",
+            "    while True: time.sleep(1)",
+            "os.link = interrupted_link",
+            "budget = mfa_production.MfaRequestBudget(__import__('pathlib').Path(output), spec)",
+            "budget.call('resume-tokeninfo', lambda: None)",
+            "raise AssertionError('charge unexpectedly returned before dispatch')",
+        ]
+    )
+    child = subprocess.Popen([sys.executable, "-c", script])
+    deadline = time.monotonic() + 10
+    try:
+        while not marker.exists() and time.monotonic() < deadline:
+            if child.poll() is not None:
+                pytest.fail(f"writer exited before crash boundary: {child.returncode}")
+            time.sleep(0.01)
+        assert marker.exists(), "writer did not reach the requested hard-link boundary"
+        child.kill()
+        assert child.wait(timeout=5) == -9
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
+
+    resumed = mfa_production.MfaRequestBudget(tmp_path, spec)
+    assert resumed.used == expected_charges
+    committed = sorted(
+        (tmp_path / mfa_production.CALL_BUDGET_EVENTS).glob("[0-9]*.json")
+    )
+    assert len(committed) == expected_charges
+    event_bytes = [path.read_bytes() for path in committed]
+    assert [json.loads(content)["index"] for content in event_bytes] == list(
+        range(expected_charges)
+    )
+    resumed.call("resume-tokeninfo", lambda: None)
+    assert resumed.used == expected_charges + 1
+    assert [path.read_bytes() for path in committed] == event_bytes
+    reloaded = mfa_production.MfaRequestBudget(tmp_path, spec)
+    assert reloaded.used == expected_charges + 1
+
+
+def test_request_budget_discards_only_an_exact_prefix_of_next_temp_event(tmp_path):
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"resume-tokeninfo": 2},
+    }
+    budget = mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    budget.call("resume-tokeninfo", lambda: None)
+    body = {
+        "schema": "mfa-request-charge-v1",
+        "index": 1,
+        "specDigest": mfa_production.digest(spec),
+        "category": "resume-tokeninfo",
+        "previousDigest": json.loads(
+            (tmp_path / mfa_production.CALL_BUDGET_EVENTS / "000000.json").read_bytes()
+        )["eventDigest"],
+    }
+    event = {**body, "eventDigest": mfa_production.digest(body)}
+    encoded = json.dumps(event, sort_keys=True, separators=(",", ":")).encode()
+    assert encoded.startswith(b'{"category"')
+    events = tmp_path / mfa_production.CALL_BUDGET_EVENTS
+    residue = events / ".000001.json.ABCdef12"
+    residue.write_bytes(encoded[:13])
+    residue.chmod(0o600)
+
+    resumed = mfa_production.MfaRequestBudget(tmp_path, spec)
+    assert resumed.used == 1
+    assert not residue.exists()
+    resumed.call("resume-tokeninfo", lambda: None)
+    assert resumed.used == 2
+    assert mfa_production.MfaRequestBudget(tmp_path, spec).used == 2
+
+
+def test_request_budget_refuses_malformed_temp_bytes_that_are_not_a_valid_prefix(
+    tmp_path,
+):
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"resume-tokeninfo": 1},
+    }
+    mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    events = tmp_path / mfa_production.CALL_BUDGET_EVENTS
+    residue = events / ".000000.json.ABCdef12"
+    residue.write_bytes(b'{"not-a-charge":')
+    residue.chmod(0o600)
+
+    with pytest.raises(mfa_production.RequestBudgetRefused):
+        mfa_production.MfaRequestBudget(tmp_path, spec)
+    assert residue.exists()
+
+
+@pytest.mark.parametrize("name", ["unrelated", ".000001.json.bad-name"])
+def test_request_budget_refuses_unknown_files_even_when_recovering_temp_events(
+    tmp_path, name
+):
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"resume-tokeninfo": 1},
+    }
+    mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    unknown = tmp_path / mfa_production.CALL_BUDGET_EVENTS / name
+    unknown.write_text("{}")
+    unknown.chmod(0o600)
+
+    with pytest.raises(mfa_production.RequestBudgetRefused):
+        mfa_production.MfaRequestBudget(tmp_path, spec)
+
+
+@pytest.mark.parametrize("corruption", ["gap", "tamper"])
+def test_request_budget_refuses_gaps_and_tampered_committed_events(
+    tmp_path, corruption
+):
+    import mfa_production
+
+    spec = {
+        "schema": "mfa-request-budget-v1",
+        "inputsDigest": "a" * 64,
+        "planDigest": "b" * 64,
+        "permissionDigest": "c" * 64,
+        "allowances": {"resume-tokeninfo": 2},
+    }
+    budget = mfa_production.MfaRequestBudget(tmp_path, spec, create=True)
+    budget.call("resume-tokeninfo", lambda: None)
+    budget.call("resume-tokeninfo", lambda: None)
+    first = tmp_path / mfa_production.CALL_BUDGET_EVENTS / "000000.json"
+    if corruption == "gap":
+        first.unlink()
+    else:
+        event = json.loads(first.read_bytes())
+        event["category"] = "tampered"
+        first.write_text(json.dumps(event, separators=(",", ":")))
+        first.chmod(0o600)
+
+    with pytest.raises(mfa_production.RequestBudgetRefused):
+        mfa_production.MfaRequestBudget(tmp_path, spec)
 
 
 def test_a_rehashed_request_budget_cannot_expand_the_manifest_allowance(tmp_path):

@@ -1330,6 +1330,9 @@ const valueClasses = program("auth-account/values", [
       "UID(ts-number)",
     ],
   }),
+  // The fixed 256-character id is removed by a single delete; the end-of-program wipe has not
+  // been observed with it.
+  adminCall("delete-local-id-256", "delete", { localId: { $repeat: "z", count: 256 } }),
 ]);
 
 export const PROGRAMS = [

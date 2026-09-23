@@ -223,15 +223,22 @@ fn exercise(family: &str, surface: &str) {
             body,
         );
         if surface == "batchWrite" {
-            assert_eq!(status, 200, "{}", case["id"]);
-            let statuses = response["status"].as_array().unwrap();
-            assert_eq!(statuses.len(), 3);
-            assert_eq!(status_code(&statuses[0]), 0);
-            assert_eq!(status_code(&statuses[1]), if accepted { 0 } else { 3 });
-            assert_eq!(status_code(&statuses[2]), 0);
-            assert_eq!(response["writeResults"].as_array().unwrap().len(), 3);
-            assert_field(&state, &control, 2);
-            assert_field(&state, &suffix, 3);
+            if invalid_path(&case) || (family == "field-name" && !accepted) {
+                assert_eq!(status, 400, "{}", case["id"]);
+                assert_eq!(response["error"]["status"], "INVALID_ARGUMENT");
+                assert_eq!(get(&state, &control).1, before, "control changed");
+                assert_eq!(get(&state, &suffix).0, 404, "suffix published");
+            } else {
+                assert_eq!(status, 200, "{}", case["id"]);
+                let statuses = response["status"].as_array().unwrap();
+                assert_eq!(statuses.len(), 3);
+                assert_eq!(status_code(&statuses[0]), 0);
+                assert_eq!(status_code(&statuses[1]), if accepted { 0 } else { 3 });
+                assert_eq!(status_code(&statuses[2]), 0);
+                assert_eq!(response["writeResults"].as_array().unwrap().len(), 3);
+                assert_field(&state, &control, 2);
+                assert_field(&state, &suffix, 3);
+            }
         } else {
             assert_eq!(status, if accepted { 200 } else { 400 }, "{}", case["id"]);
             if !accepted {

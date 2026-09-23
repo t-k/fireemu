@@ -4332,8 +4332,7 @@ impl LocalBackend {
         Ok((parent, writes))
     }
 
-    /// Decodes the writes of a `BatchWrite` request that are well-formed (malformed writes
-    /// are reported per write by [`Self::batch_write`]).
+    /// Decodes the writes of a `BatchWrite` request for authorization.
     pub fn plan_batch_write(req: &pb::BatchWriteRequest) -> Result<(Parent, Vec<Write>), Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         let writes = req
@@ -5516,7 +5515,7 @@ impl LocalBackend {
     ) -> Result<pb::BatchWriteResponse, Status> {
         let parent = parse_parent(&format!("{}/documents", req.database)).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.commit")?;
-        let decoded: Vec<Result<Write, Status>> = req
+        let decoded: Vec<Write> = req
             .writes
             .iter()
             .map(|w| {
@@ -5524,14 +5523,11 @@ impl LocalBackend {
                 Self::check_database_path(&parent, write.op.path())?;
                 Ok(write)
             })
-            .collect();
+            .collect::<Result<Vec<_>, Status>>()?;
         // A document named twice refuses the whole request, in production's words (matrix
         // `writes/batch-write#non-atomic-batch`: no status array, nothing landed).
         let mut targets = std::collections::BTreeSet::new();
-        for path in decoded
-            .iter()
-            .filter_map(|w| w.as_ref().ok().map(|w| w.op.path()))
-        {
+        for path in decoded.iter().map(|write| write.op.path()) {
             if !targets.insert(path.clone()) {
                 return Err(Status::invalid_argument(
                     "the same document cannot be written more than once in a single request",
@@ -5541,12 +5537,12 @@ impl LocalBackend {
         self.with_db(&parent, |db| {
             let mut write_results = Vec::with_capacity(req.writes.len());
             let mut statuses = Vec::with_capacity(req.writes.len());
-            for decoded in decoded {
+            for write in decoded {
                 let now = self.write_time();
-                let outcome = decoded.and_then(|write| {
+                let outcome = (|| {
                     guard(db, std::slice::from_ref(&write), now)?;
                     self.commit_with_events(&parent, db, std::slice::from_ref(&write), None, now)
-                });
+                })();
                 match outcome {
                     Ok(result) => {
                         let encoded = encode_commit(&result);

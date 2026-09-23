@@ -707,6 +707,81 @@ fn batch_write_rest_rejects_non_array_writes_without_mutation() {
 }
 
 #[test]
+fn batch_write_rest_rejects_invalid_middle_operation_before_any_write() {
+    let s = state(None);
+    let first = "projects/demo-app/databases/(default)/documents/batch-atomic/first";
+    let last = "projects/demo-app/databases/(default)/documents/batch-atomic/last";
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({
+            "writes": [
+                {"update": {"name": first, "fields": {"v": {"integerValue": "1"}}}},
+                {"currentDocument": {"exists": false}},
+                {"update": {"name": last, "fields": {"v": {"integerValue": "2"}}}}
+            ]
+        }),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    for name in [first, last] {
+        let (status, body) = call(&s, "GET", &format!("/v1/{name}"), Value::Null);
+        assert_eq!(status, 404, "invalid batch mutated {name}: {body}");
+    }
+}
+
+#[test]
+fn batch_write_rest_rejects_invalid_field_names_before_any_write() {
+    for field in ["", "__bad__"] {
+        let s = state(None);
+        let first = "projects/demo-app/databases/(default)/documents/batch-fields/first";
+        let middle = "projects/demo-app/databases/(default)/documents/batch-fields/middle";
+        let last = "projects/demo-app/databases/(default)/documents/batch-fields/last";
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchWrite"),
+            json!({"writes": [
+                {"update": {"name": first, "fields": {"v": {"integerValue": "1"}}}},
+                {"update": {"name": middle, "fields": {field: {"integerValue": "2"}}}},
+                {"update": {"name": last, "fields": {"v": {"integerValue": "3"}}}}
+            ]}),
+        );
+        assert_eq!(status, 400, "field {field:?}: {body}");
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+        for name in [first, middle, last] {
+            let (status, body) = call(&s, "GET", &format!("/v1/{name}"), Value::Null);
+            assert_eq!(status, 404, "field {field:?} mutated {name}: {body}");
+        }
+    }
+}
+
+#[test]
+fn batch_write_rest_rejects_reserved_nested_map_keys_before_any_write() {
+    let s = state(None);
+    let first = "projects/demo-app/databases/(default)/documents/batch-nested/first";
+    let middle = "projects/demo-app/databases/(default)/documents/batch-nested/middle";
+    let last = "projects/demo-app/databases/(default)/documents/batch-nested/last";
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": [
+            {"update": {"name": first, "fields": {"v": {"integerValue": "1"}}}},
+            {"update": {"name": middle, "fields": {"nested": {"mapValue": {"fields": {"__bad__": {"integerValue": "2"}}}}}}},
+            {"update": {"name": last, "fields": {"v": {"integerValue": "3"}}}}
+        ]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    for name in [first, middle, last] {
+        let (status, body) = call(&s, "GET", &format!("/v1/{name}"), Value::Null);
+        assert_eq!(status, 404, "invalid nested field mutated {name}: {body}");
+    }
+}
+
+#[test]
 fn batch_write_rest_rejects_malformed_nested_repeated_values_without_mutation() {
     let s = state(None);
     let target = "projects/demo-app/databases/(default)/documents/batch-shape/nested";
@@ -736,7 +811,7 @@ fn batch_write_rest_rejects_malformed_nested_repeated_values_without_mutation() 
 }
 
 #[test]
-fn batch_write_rest_reports_write_without_operation_per_item() {
+fn batch_write_rest_rejects_write_without_operation_before_dispatch() {
     let s = state(None);
     let target = "projects/demo-app/databases/(default)/documents/batch-shape/target";
     let (status, created) = call(
@@ -758,20 +833,19 @@ fn batch_write_rest_reports_write_without_operation_per_item() {
             ]
         }),
     );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(body["status"][0]["code"], 3, "{body}");
-    assert_eq!(body["status"][1], json!({}), "{body}");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
 
     let (status, after) = call(&s, "GET", &format!("/v1/{target}"), Value::Null);
     assert_eq!(
         status, 200,
-        "a valid suffix should still be dispatched after an invalid write: {after}"
+        "a malformed request must not dispatch its suffix: {after}"
     );
-    assert_eq!(after["fields"]["v"]["integerValue"], "1", "{after}");
+    assert_eq!(after["fields"]["v"]["integerValue"], "0", "{after}");
 }
 
 #[test]
-fn batch_write_rest_returns_status_for_empty_oneof_between_valid_writes() {
+fn batch_write_rest_rejects_empty_oneof_between_valid_writes() {
     let s = state(None);
     let first = "projects/demo-app/databases/(default)/documents/batch-shape/first";
     let last = "projects/demo-app/databases/(default)/documents/batch-shape/last";
@@ -787,15 +861,12 @@ fn batch_write_rest_returns_status_for_empty_oneof_between_valid_writes() {
             ]
         }),
     );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(body["status"][0], json!({}), "{body}");
-    assert_eq!(body["status"][1]["code"], 3, "{body}");
-    assert_eq!(body["status"][2], json!({}), "{body}");
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
 
-    for (path, value) in [("batch-shape/first", "1"), ("batch-shape/last", "2")] {
+    for path in ["batch-shape/first", "batch-shape/last"] {
         let (status, document) = call(&s, "GET", &format!("{DOCS}/{path}"), Value::Null);
-        assert_eq!(status, 200, "{document}");
-        assert_eq!(document["fields"]["v"]["integerValue"], value);
+        assert_eq!(status, 404, "{document}");
     }
 }
 
@@ -865,10 +936,10 @@ fn batch_write_rest_treats_null_oneof_members_as_unset() {
             json!({"writes": [{*member: null}]}),
         );
         assert_eq!(
-            status, 200,
+            status, 400,
             "null-only {member} is an unset operation: {body}"
         );
-        assert_eq!(body["status"][0]["code"], 3, "{body}");
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
         let target_path = format!("/v1/{target}");
         let (status, after) = call(&s, "GET", &target_path, Value::Null);
         assert_eq!(status, 404, "null-only {member} mutated state: {after}");
@@ -939,7 +1010,7 @@ fn batch_write_rest_rejects_malformed_labels_without_mutation() {
 }
 
 #[test]
-fn batch_write_rest_continues_after_item_failures_and_preserves_suffix() {
+fn batch_write_rest_separates_validation_failure_from_failed_precondition() {
     let s = state(None);
     for (failure_index, failure) in [
         (
@@ -990,22 +1061,29 @@ fn batch_write_rest_continues_after_item_failures_and_preserves_suffix() {
             &format!("{DOCS}:batchWrite"),
             json!({"writes": writes}),
         );
-        assert_eq!(status, 200, "{body}");
-        assert_eq!(body["status"].as_array().map(Vec::len), Some(3), "{body}");
-        assert_ne!(body["status"][failure_index]["code"], Value::Null, "{body}");
-        assert_eq!(
-            body["writeResults"].as_array().map(Vec::len),
-            Some(3),
-            "{body}"
-        );
+        if failure_index == 0 {
+            assert_eq!(status, 400, "{body}");
+            assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+        } else {
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["status"].as_array().map(Vec::len), Some(3), "{body}");
+            assert_ne!(body["status"][failure_index]["code"], Value::Null, "{body}");
+            assert_eq!(
+                body["writeResults"].as_array().map(Vec::len),
+                Some(3),
+                "{body}"
+            );
+        }
 
         for (index, path) in [(0, first_path), (1, middle_path), (2, last_path)] {
             let (status, document) = call(&s, "GET", &path, Value::Null);
-            if failure_index == 0 && index == 0 {
+            if failure_index == 0 && index != 1 {
                 assert_eq!(status, 404, "{document}");
             } else {
                 assert_eq!(status, 200, "{document}");
-                let expected = if index == 0 {
+                let expected = if failure_index == 0 {
+                    "7".to_owned()
+                } else if index == 0 {
                     "1".to_owned()
                 } else if index == 1 && failure_index == 1 {
                     "7".to_owned()

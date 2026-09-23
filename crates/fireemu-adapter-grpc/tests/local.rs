@@ -2551,13 +2551,6 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
                 update_write("n/1", &[("v", i(1))]),
                 update_write("n/2", &[("v", i(2))]),
                 update_write("n/3", &[("other", i(3))]),
-                pb::Write {
-                    operation: Some(pb::write::Operation::Update(pb::Document {
-                        name: "bad name".to_owned(),
-                        ..Default::default()
-                    })),
-                    ..Default::default()
-                },
             ],
             ..Default::default()
         })
@@ -2567,8 +2560,6 @@ async fn aggregation_batch_write_and_gateway_rejections_in_local_mode() {
     assert_eq!(resp.status[0].code, 0);
     assert_eq!(resp.status[1].code, 0);
     assert_eq!(resp.status[2].code, 0);
-    assert_eq!(resp.status[3].code, i32::from(tonic::Code::InvalidArgument));
-
     let agg = pb::RunAggregationQueryRequest {
         parent: DOCS.to_owned(),
         query_type: Some(
@@ -2872,9 +2863,9 @@ async fn batch_write_precondition_failure_is_per_write_and_later_writes_commit()
 }
 
 #[tokio::test]
-async fn batch_write_keeps_valid_rows_around_an_unspecified_operation() {
+async fn batch_write_rejects_unspecified_operation_before_valid_rows() {
     let (mut client, _clock, handle) = start().await;
-    let response = client
+    let error = client
         .batch_write(pb::BatchWriteRequest {
             database: DB.to_owned(),
             writes: vec![
@@ -2885,27 +2876,18 @@ async fn batch_write_keeps_valid_rows_around_an_unspecified_operation() {
             ..Default::default()
         })
         .await
-        .unwrap()
-        .into_inner();
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
 
-    assert_eq!(response.status.len(), 3);
-    assert_eq!(response.status[0].code, 0);
-    assert_eq!(
-        response.status[1].code,
-        i32::from(tonic::Code::InvalidArgument)
-    );
-    assert_eq!(response.status[2].code, 0);
-
-    for (name, value) in [("rows/prefix", 1), ("rows/suffix", 3)] {
-        let document = client
+    for name in ["rows/prefix", "rows/suffix"] {
+        let error = client
             .get_document(pb::GetDocumentRequest {
                 name: format!("{DOCS}/{name}"),
                 ..Default::default()
             })
             .await
-            .unwrap()
-            .into_inner();
-        assert_eq!(document.fields.get("value"), Some(&i(value)));
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::NotFound);
     }
 
     handle.abort();
@@ -7645,7 +7627,7 @@ fn assert_selection_then_pages(stats: &QueryExecutionStats, context: &str) {
 }
 
 #[tokio::test]
-async fn batch_write_continues_after_decode_and_execution_failures() {
+async fn batch_write_refuses_decode_failures_but_continues_after_failed_preconditions() {
     let (mut client, _clock, handle) = start().await;
     for decode_failure in [false, true] {
         for failure_index in [0, 1] {
@@ -7672,17 +7654,22 @@ async fn batch_write_continues_after_decode_and_execution_failures() {
                     ..Default::default()
                 }
             };
-            let response = client
+            let result = client
                 .batch_write(pb::BatchWriteRequest {
                     database: DB.to_owned(),
                     writes,
                     ..Default::default()
                 })
-                .await
-                .unwrap()
-                .into_inner();
-            assert_eq!(response.status.len(), 3);
-            assert_eq!(response.write_results.len(), 3);
+                .await;
+            let response = if decode_failure {
+                assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+                None
+            } else {
+                let response = result.unwrap().into_inner();
+                assert_eq!(response.status.len(), 3);
+                assert_eq!(response.write_results.len(), 3);
+                Some(response)
+            };
             for index in 0..3 {
                 let document = client
                     .get_document(pb::GetDocumentRequest {
@@ -7690,11 +7677,14 @@ async fn batch_write_continues_after_decode_and_execution_failures() {
                         ..Default::default()
                     })
                     .await;
-                if index == failure_index {
-                    assert_ne!(response.status[index].code, 0);
-                    assert_eq!(response.write_results[index], pb::WriteResult::default());
+                if decode_failure || index == failure_index {
+                    if let Some(response) = &response {
+                        assert_ne!(response.status[index].code, 0);
+                        assert_eq!(response.write_results[index], pb::WriteResult::default());
+                    }
                     assert_eq!(document.unwrap_err().code(), tonic::Code::NotFound);
                 } else {
+                    let response = response.as_ref().unwrap();
                     assert_eq!(response.status[index].code, 0);
                     let document = document.unwrap().into_inner();
                     assert_eq!(
@@ -8459,18 +8449,14 @@ async fn read_v_of(
 /// identical post-state. Each shape is a three-write batch whose middle write is the shape and
 /// whose neighbours are ordinary updates:
 ///
-/// - `operation-less`: a write with no operation. Per position: code 3 at position 1, the
-///   neighbours land.
-/// - `invalid-name`: a decodable `update` whose document name is not a resource name. Per
-///   position: code 3 at position 1, the neighbours land.
+/// - `operation-less`: a write with no operation. Whole request refused, nothing lands.
+/// - `invalid-name`: a decodable `update` whose name is not a resource. Whole request refused.
 /// - `duplicate-document`: the middle write names the first write's document again. Whole
 ///   request, production's wording, nothing lands (production-observed on REST,
 ///   `writes/batch-write#non-atomic-batch`).
 ///
-/// The per-position classification of the first two shapes, and the wording of their item
-/// statuses, is fireemu's current reading of the malformed-item versus precondition-failure
-/// distinction, not a production observation; the test fails if the two transports diverge,
-/// whichever way production turns out to answer.
+/// The sandbox exploration found whole-request validation refusal; the conformance fixture
+/// will supply the final production status and wording for these shapes.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
@@ -8487,12 +8473,11 @@ async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
             middle_grpc: |_, _| pb::Write::default(),
             middle_rest: |_, _| serde_json::json!({}),
             expected: |_| BatchWriteOutcome {
-                answer: BatchWriteAnswer::PerItem(vec![
-                    (0, String::new()),
-                    (3, "invalid query: write without operation".to_owned()),
-                    (0, String::new()),
-                ]),
-                present: vec![Some(0), None, Some(2)],
+                answer: BatchWriteAnswer::WholeRequest(
+                    3,
+                    "invalid query: write without operation".to_owned(),
+                ),
+                present: vec![None, None, None],
             },
         },
         Shape {
@@ -8507,12 +8492,8 @@ async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
             },
             middle_rest: |_, _| serde_json::json!({"update": {"name": "bad name", "fields": {"v": {"integerValue": "1"}}}}),
             expected: |_| BatchWriteOutcome {
-                answer: BatchWriteAnswer::PerItem(vec![
-                    (0, String::new()),
-                    (3, "invalid parent: bad name".to_owned()),
-                    (0, String::new()),
-                ]),
-                present: vec![Some(0), None, Some(2)],
+                answer: BatchWriteAnswer::WholeRequest(3, "invalid parent: bad name".to_owned()),
+                present: vec![None, None, None],
             },
         },
         Shape {

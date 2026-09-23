@@ -118,6 +118,13 @@ pub fn decode_fields(
 ) -> Result<BTreeMap<String, Value>, DecodeError> {
     let mut out = BTreeMap::new();
     for (k, v) in fields {
+        if k == "__name__" {
+            return Err(DecodeError::InvalidFieldPath(
+                "field name __name__ is reserved".into(),
+            ));
+        }
+        FieldPath::from_segments([k.as_str()])
+            .map_err(|error| DecodeError::InvalidFieldPath(error.to_string()))?;
         out.insert(k.clone(), decode_value(v)?);
     }
     Ok(out)

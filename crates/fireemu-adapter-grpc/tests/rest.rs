@@ -856,6 +856,46 @@ fn batch_write_rest_reports_the_saved_production_integer_error_without_mutation(
 }
 
 #[test]
+fn batch_write_rest_reports_saved_production_value_decode_errors() {
+    let cases = [
+        (
+            json!({"timestampValue": "yesterday"}),
+            "Invalid value at 'writes[1].update.fields[0].value.timestamp_value' (type.googleapis.com/google.protobuf.Timestamp), Field 'timestampValue', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+        ),
+        (
+            json!({"arrayValue": {"values": "not-an-array"}}),
+            "Invalid value at 'writes[1].update.fields[0].value.array_value.values' (type.googleapis.com/google.firestore.v1.Value), \"not-an-array\"",
+        ),
+        (
+            json!({"fooValue": "ignored"}),
+            "Invalid JSON payload received. Unknown name \"fooValue\" at 'writes[1].update.fields[0].value': Cannot find field.",
+        ),
+    ];
+    for (invalid, expected) in cases {
+        let s = state(None);
+        let names = ["first", "middle", "last"]
+            .map(|id| format!("projects/demo-app/databases/(default)/documents/batch-decode/{id}"));
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchWrite"),
+            json!({"writes": [
+                {"update": {"name": names[0], "fields": {"v": {"integerValue": "1"}}}},
+                {"update": {"name": names[1], "fields": {"v": invalid}}},
+                {"update": {"name": names[2], "fields": {"v": {"integerValue": "3"}}}}
+            ]}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+        assert_eq!(body["error"]["message"], expected);
+        for name in names {
+            let (status, _) = call(&s, "GET", &format!("/v1/{name}"), Value::Null);
+            assert_eq!(status, 404, "invalid middle value must prevent every write");
+        }
+    }
+}
+
+#[test]
 fn batch_write_rest_rejects_malformed_nested_repeated_values_without_mutation() {
     let s = state(None);
     let target = "projects/demo-app/databases/(default)/documents/batch-shape/nested";

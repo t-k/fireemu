@@ -92,13 +92,13 @@ def test_batchwrite_validation_variants_are_three_writes_plus_state_readback() -
 
 def test_index_and_decoded_request_boundaries_have_exact_input_shapes() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
-    for length in (2600, 2642, 2643):
+    for length in (2600,):
         write = programs[f"writes/limits/index-entry-string-name/{length}"]["steps"][0][
             "body"
         ]["writes"][0]
         assert len(write["update"]["name"].split("/documents/")[1].encode()) == length
         assert len(write["update"]["fields"]["s"]["stringValue"].encode()) == 1500
-    for length in (4621, 4622, 5000, 6127, 6128):
+    for length in (5000, 6127, 6128):
         write = programs[f"writes/limits/empty-document-name/{length}"]["steps"][0][
             "body"
         ]["writes"][0]
@@ -125,6 +125,16 @@ def test_index_and_decoded_request_boundaries_have_exact_input_shapes() -> None:
         for write in writes
     )
     assert len(program["steps"][1]["body"]["documents"]) == 11
+
+
+def test_next_recording_omits_unbracketed_name_pairs() -> None:
+    programs = {program["id"] for program in _module().build_programs()}
+    for length in (2642, 2643):
+        assert f"writes/limits/index-entry-string-name/{length}" not in programs
+    for length in (4621, 4622):
+        assert f"writes/limits/empty-document-name/{length}" not in programs
+    assert "writes/limits/index-entry-string-name/2600" in programs
+    assert "writes/limits/empty-document-name/5000" in programs
 
 
 def test_additional_field_path_boundaries_are_unbiased_and_have_readbacks() -> None:

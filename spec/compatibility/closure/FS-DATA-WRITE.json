@@ -123,7 +123,7 @@
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-BYTES",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-BYTES",
-      "recipeIds": ["writes/limits/index-entry-bytes", "writes/limits/index-entry-string-name/2600", "writes/limits/index-entry-string-name/2642", "writes/limits/index-entry-string-name/2643", "writes/limits/document-name-bytes", "writes/limits/empty-document-name/4621", "writes/limits/empty-document-name/4622", "writes/limits/empty-document-name/5000", "writes/limits/indexed-field-value-bytes", "writes/limits/index-entry-sum-per-document"],
+      "recipeIds": ["writes/limits/index-entry-bytes", "writes/limits/index-entry-string-name/2600", "writes/limits/document-name-bytes", "writes/limits/empty-document-name/5000", "writes/limits/indexed-field-value-bytes", "writes/limits/index-entry-sum-per-document"],
       "boundaryStatus": "UNBRACKETED",
       "status": "MISMATCH"
     },

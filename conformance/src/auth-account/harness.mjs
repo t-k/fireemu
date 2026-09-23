@@ -317,8 +317,9 @@ const TRANSIENT_CODES = /^(TOO_MANY_ATTEMPTS_TRY_LATER|QUOTA_EXCEEDED|RESOURCE_E
 /** A recorded answer that says nothing about behaviour: transport failure, 5xx, rate limit. */
 export function isTransient(recorded) {
   if (!recorded) return false;
-  // -1: a step whose dependency returned nothing (for example a rate-limited sign-up).
-  if (recorded.status <= 0 || recorded.status === 429 || recorded.status >= 500) return true;
+  // -1: a step whose dependency returned nothing; transient only when that dependency was.
+  if (recorded.status === -1) return recorded.dependencyTransient === true;
+  if (recorded.status === 0 || recorded.status === 429 || recorded.status >= 500) return true;
   return TRANSIENT_CODES.test(String(recorded.body?.error?.message ?? ""));
 }
 

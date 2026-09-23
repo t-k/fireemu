@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -23,7 +24,13 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
 
 from broad_contract import digest
-from compiler_03 import _CATALOG, CAMPAIGN, compile_limits_plan
+from compiler_03 import (
+    _CATALOG,
+    CAMPAIGN,
+    GATE_WALL_SECONDS_MAX,
+    compile_limits_plan,
+    slot_seconds,
+)
 from expectations_03 import (
     pending_rows,
     validate_cleanup,
@@ -93,7 +100,7 @@ def _real_child(
                 1, len(json.dumps(body).encode()) if body is not None else 0
             ),
             response_byte_limit=plan["requests"][request_index]["responseByteLimit"],
-            timeout=12,
+            timeout=slot_seconds(plan["requests"][request_index]),
         )
 
     # The historical profile cannot apply the declared exemption and therefore
@@ -176,6 +183,29 @@ def _real_child(
     )
 
 
+# The daemon and child start before their Gate clock. This headroom belongs to
+# the supervisor only; it does not add a request or expand a Gate reservation.
+SHADOW_STARTUP_HEADROOM_SECONDS = 30
+
+
+def shadow_execution_timeout(part: str) -> int:
+    """Keep the supervisor alive through the compiled Gate recovery window."""
+    if part not in ("A", "B", "ALL"):
+        raise ValueError("closed shadow part required")
+    plan = compile_limits_plan("demo-firestore-probe", "(default)", "0" * 32, part)
+    gate = plan["localGatePlan"]
+    wall, recovery = gate["wallSeconds"], gate["recoverySeconds"]
+    if (
+        type(wall) not in (int, float)
+        or type(recovery) not in (int, float)
+        or not math.isfinite(wall)
+        or not math.isfinite(recovery)
+        or not 0 < recovery < wall <= GATE_WALL_SECONDS_MAX
+    ):
+        raise ValueError("bounded compiled shadow wall/recovery required")
+    return math.ceil(wall) + SHADOW_STARTUP_HEADROOM_SECONDS
+
+
 def run(output: Path, part: str = "ALL", index_profile: str = "historical") -> dict:
     import broad
 
@@ -191,7 +221,7 @@ def run(output: Path, part: str = "ALL", index_profile: str = "historical") -> d
         ),
         project="demo-firestore-probe",
         configuration={"daemon": {"authProjectNumbers": {}}},
-        execution_timeout=900,
+        execution_timeout=shadow_execution_timeout(part),
         recovery_grace=1,
         retain_executed_artifact=True,
         index_profile=index_profile,

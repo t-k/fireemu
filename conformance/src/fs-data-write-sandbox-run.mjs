@@ -17,7 +17,10 @@ const TASK_ID = "FS-DATA-WRITE-SANDBOX";
 const TASK_LIMIT_USD = 10;
 const SANDBOX_PROJECT = "fireemu-oracle-sbx";
 const RECORDED_PROJECT = "demo-firestore-probe";
-const REST_CAP = 400;
+// 187 observation steps + 47 pre/final clears; the 100-level document chain adds about
+// 200 recursive public-API reads, while the other bounded programs add smaller clears.
+// Leave headroom, but reject attempt 1001 before the network send.
+const REST_CAP = 1000;
 const ATTEMPT_ESTIMATE_USD = 0.5;
 const MAX_STREAM_FRAMES = 3;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -80,6 +83,17 @@ export function sandboxLedgerPath(gitCommonDir) {
     throw new Error("absolute git common directory is required");
   }
   return resolve(gitCommonDir, "../docs.local/runs/sandbox-ledger.jsonl");
+}
+
+export function sessionRequestCount(meta) {
+  if (
+    !Number.isInteger(meta?.requestCount) ||
+    meta.requestCount < 0 ||
+    meta.requestCount > REST_CAP
+  ) {
+    throw new Error("session network attempt count escaped the bounded corpus");
+  }
+  return meta.requestCount;
 }
 
 export function localTarget(value) {
@@ -178,14 +192,10 @@ async function productionRecording({
       }),
     );
     const meta = JSON.parse(await readFile(metaOut, "utf8"));
-    if (
-      !Number.isInteger(meta.requestCount) ||
-      meta.requestCount < restRequestCount ||
-      meta.requestCount > REST_CAP
-    ) {
+    requestCount = sessionRequestCount(meta);
+    if (requestCount < restRequestCount) {
       throw new Error("production REST request count escaped the bounded corpus");
     }
-    requestCount = meta.requestCount;
     await runNode("production gRPC", "firestore-probe/stream-session.mjs", {
       FIRESTORE_STREAM_CORPUS: corpusIn,
       FIRESTORE_STREAM_OUT: streamOut,
@@ -211,6 +221,13 @@ async function productionRecording({
     outcome = "recorded";
     return { rest, stream, startedAt, runDir, requestCount };
   } finally {
+    if (requestCount === null) {
+      try {
+        requestCount = sessionRequestCount(JSON.parse(await readFile(metaOut, "utf8")));
+      } catch {
+        // An early transport failure may leave no metadata; the cost reservation still stands.
+      }
+    }
     const entry = sandboxLedgerEntry({
       gitSha,
       corpusDigest,

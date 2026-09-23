@@ -92,6 +92,18 @@ def test_claim_and_gate_campaign_ids_must_match_at_reservation(tmp_path):
         ledger.reserve(envelope(), claim, value, now=1100)
 
 
+def test_long_claim_cannot_extend_shorter_rev3_gate_wall(tmp_path):
+    value = rev3_plan()
+    value["wallSeconds"] = 1200
+    claim = rev3_claim(tmp_path, value, duration=1500)
+    ledger = Ledger.create(tmp_path / "ledger")
+
+    with pytest.raises(ValueError):
+        ledger.reserve(envelope(), claim, value, now=1100)
+
+    assert ledger.snapshot()["reservations"] == {}
+
+
 def test_tampered_gate_plan_digest_is_rejected(tmp_path):
     value = rev3_plan()
     claim = rev3_claim(tmp_path, value)

@@ -2207,6 +2207,7 @@ class Ledger:
                 or gate_plan.get("selector") != AUTH_REV3_SELECTOR
                 or gate_plan.get("wallSeconds", 0) > AUTH_REV3_WALL_SECONDS
                 or gate_plan.get("recoverySeconds", 0) < 300
+                or claim["durationSeconds"] != gate_plan.get("wallSeconds")
             )
         ):
             raise ValueError("closed AUTH revision-3 wall reservation required")

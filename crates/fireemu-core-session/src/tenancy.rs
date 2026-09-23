@@ -13,6 +13,9 @@ pub struct Tenancy {
     buckets: BTreeMap<String, BTreeSet<String>>,
     /// API key → registered project.
     api_keys: BTreeMap<String, String>,
+    /// The default project's declared API keys (`auth.apiKeys`). Once any is declared, a key
+    /// that no project declared is refused.
+    default_api_keys: BTreeSet<String>,
 }
 
 /// What one session owns.
@@ -67,7 +70,28 @@ impl Tenancy {
             default_project: default_project.to_owned(),
             buckets: BTreeMap::new(),
             api_keys: BTreeMap::new(),
+            default_api_keys: BTreeSet::new(),
         }
+    }
+
+    /// Declares the default project's API keys.
+    pub fn declare_default_api_keys(&mut self, keys: &[String]) {
+        self.default_api_keys.extend(keys.iter().cloned());
+    }
+
+    /// Whether `key` is one of the default project's declared API keys.
+    #[must_use]
+    pub fn is_default_api_key(&self, key: &str) -> bool {
+        self.default_api_keys.contains(key)
+    }
+
+    /// Whether `key` is refused because the default project declared its keys and no project
+    /// declared this one.
+    #[must_use]
+    pub fn refuses_api_key(&self, key: &str) -> bool {
+        !self.default_api_keys.is_empty()
+            && !self.default_api_keys.contains(key)
+            && !self.api_keys.contains_key(key)
     }
 
     /// The default project.

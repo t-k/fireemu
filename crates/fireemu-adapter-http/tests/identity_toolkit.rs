@@ -1292,6 +1292,176 @@ fn strict_profile_token_expiration_matrix_preserves_account_state() {
     }
 }
 
+/// Production evaluates `validSince` against each session's `auth_time` when the session is
+/// used, and lets an administrator move it back: equal is accepted, one second later refuses
+/// the ID token and the refresh token with `TOKEN_EXPIRED`, and moving it back before `auth_time`
+/// honours both again (sandbox recording 2026-09-24, auth-credential/revocation/valid-since).
+#[test]
+fn strict_valid_since_is_evaluated_live_and_may_move_back() {
+    let s = strict_state();
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=k"),
+        &json!({"email": "live-valid-since@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let id_token = signed_in["idToken"].clone();
+    let refresh = signed_in["refreshToken"].clone();
+    let auth_time = fireemu_core_auth::jwt::decode_unsigned(id_token.as_str().unwrap())
+        .unwrap()
+        .payload
+        .get("auth_time")
+        .and_then(fireemu_core_types::json::JsonValue::as_i64)
+        .unwrap();
+    advance(&s, 2);
+    let set_valid_since = |seconds: i64| {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": signed_in["localId"], "validSince": seconds.to_string()}),
+        );
+        assert_eq!(status, 200, "{body}");
+    };
+    let use_session = || {
+        let (lookup, looked_up) = post(
+            &s,
+            &format!("{V1}/accounts:lookup?key=k"),
+            &json!({"idToken": id_token}),
+        );
+        let (refresh_status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token?key=k",
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+        );
+        let code = |body: &Value| body["error"]["message"].as_str().unwrap_or("").to_owned();
+        (lookup, code(&looked_up), refresh_status, code(&refreshed))
+    };
+    set_valid_since(auth_time);
+    assert_eq!(
+        use_session(),
+        (200, String::new(), 200, String::new()),
+        "equal is accepted"
+    );
+    set_valid_since(auth_time + 1);
+    assert_eq!(
+        use_session(),
+        (
+            400,
+            "TOKEN_EXPIRED".to_owned(),
+            400,
+            "TOKEN_EXPIRED".to_owned()
+        ),
+        "a session older than validSince"
+    );
+    set_valid_since(auth_time - 1);
+    assert_eq!(
+        use_session(),
+        (200, String::new(), 200, String::new()),
+        "validSince moved back honours the session again"
+    );
+    let (_, account) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [signed_in["localId"]]}),
+    );
+    assert_eq!(
+        account["users"][0]["validSince"],
+        (auth_time - 1).to_string()
+    );
+}
+
+/// An anonymous session's ID token names its provider at the top level as well as under
+/// `firebase`, on sign-up and on every refresh; other accounts carry no `provider_id`
+/// (sandbox recording 2026-09-24, auth-credential/id-token/methods#anonymous-sign-up).
+#[test]
+fn anonymous_id_tokens_carry_a_top_level_provider_id() {
+    let s = strict_state();
+    let claim = |token: &Value| {
+        fireemu_core_auth::jwt::decode_unsigned(token.as_str().unwrap())
+            .unwrap()
+            .payload
+            .get("provider_id")
+            .and_then(|v| v.as_str().map(str::to_owned))
+    };
+    let (status, anonymous) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=k"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{anonymous}");
+    assert_eq!(claim(&anonymous["idToken"]).as_deref(), Some("anonymous"));
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token?key=k",
+        &json!({"grant_type": "refresh_token", "refresh_token": anonymous["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(claim(&refreshed["id_token"]).as_deref(), Some("anonymous"));
+    let (status, password) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=k"),
+        &json!({"email": "not-anonymous@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{password}");
+    assert_eq!(claim(&password["idToken"]), None);
+}
+
+/// Secure Token treats an absent or empty `grant_type` or `refresh_token` as missing, and its
+/// front end refuses a caller without identity without an `errors` list (sandbox recording
+/// 2026-09-24, auth-credential/refresh/refusals).
+#[test]
+fn secure_token_missing_fields_and_unregistered_callers_have_production_shapes() {
+    let s = strict_state();
+    let token = "/securetoken.googleapis.com/v1/token";
+    let message = |body: &Value| body["error"]["message"].as_str().unwrap_or("").to_owned();
+    for (body, expected) in [
+        (json!({"refresh_token": "anything"}), "MISSING_GRANT_TYPE"),
+        (json!({}), "MISSING_GRANT_TYPE"),
+        (
+            json!({"grant_type": "", "refresh_token": "anything"}),
+            "MISSING_GRANT_TYPE",
+        ),
+        (
+            json!({"grant_type": "refresh_token", "refresh_token": ""}),
+            "MISSING_REFRESH_TOKEN",
+        ),
+        (
+            json!({"grant_type": "refresh_token"}),
+            "MISSING_REFRESH_TOKEN",
+        ),
+        (
+            json!({"grant_type": "password", "refresh_token": "x"}),
+            "INVALID_GRANT_TYPE",
+        ),
+    ] {
+        let (status, refused) = post(&s, &format!("{token}?key=k"), &body);
+        assert_eq!(
+            (status, message(&refused)),
+            (400, expected.to_owned()),
+            "{body}"
+        );
+        assert!(refused["error"].get("errors").is_none(), "{refused}");
+    }
+    // `post` adds the key an SDK would send; this caller sends none.
+    let refused = handle(
+        &s,
+        "POST",
+        token,
+        &json!({"grant_type": "refresh_token", "refresh_token": "x"}),
+    );
+    assert_eq!(refused.status, 403);
+    assert_eq!(
+        refused.body,
+        json!({"error": {
+            "code": 403,
+            "message": "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.",
+            "status": "PERMISSION_DENIED",
+        }})
+    );
+}
+
 #[test]
 fn refresh_authentication_time_remains_revocable_in_both_profiles() {
     for strict in [false, true] {
@@ -6838,7 +7008,9 @@ fn strict_password_change_distinguishes_revoked_refresh() {
         assert_eq!(status, 400);
         assert_eq!(response["error"]["message"], "TOKEN_EXPIRED");
     }
-    for token in ["", "rt-unknown", "malformed.token"] {
+    // An empty refresh token is a missing one (sandbox recording 2026-09-24,
+    // auth-credential/refresh/refusals#empty-refresh-token).
+    for token in ["rt-unknown", "malformed.token"] {
         let (status, response) = post(
             &s,
             refresh_path,
@@ -7297,7 +7469,7 @@ fn session_cookie_rejects_wrong_project_tenant_issuer_and_audience_without_mutat
 }
 
 #[test]
-fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
+fn admin_valid_since_is_parsed_before_mutation_and_applied_as_given() {
     let s = state();
     assert_eq!(
         admin(
@@ -7384,7 +7556,9 @@ fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": ["revoked-user"]}),
     );
-    assert_eq!(looked["users"][0]["validSince"], "1788005001");
+    // Production stores an earlier validSince as given (sandbox recording 2026-09-24,
+    // auth-credential/revocation/valid-since#valid-since-before).
+    assert_eq!(looked["users"][0]["validSince"], "1788004900");
     assert_eq!(looked["users"][0]["displayName"], "numeric-applied");
 }
 
@@ -11276,6 +11450,72 @@ fn sign_up_link_authenticates_before_password_policy_and_preserves_state() {
     assert!(s.store.lock().unwrap().user_by_email(email).is_none());
 }
 
+/// With the project's API keys declared (`auth.apiKeys`), any other key is refused by the API
+/// front end before the service reads the request, on Identity Toolkit and Secure Token alike
+/// (sandbox recording 2026-09-24, auth-credential/refresh/refusals#invalid-api-key).
+#[test]
+fn undeclared_api_keys_are_refused_as_the_api_front_end_does() {
+    let mut s = strict_state();
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy.declare_default_api_keys(&["declared-key".to_owned()]);
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=declared-key"),
+        &json!({"email": "declared-key@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let invalid = |service: &str| {
+        let message = "API key not valid. Please pass a valid API key.";
+        json!({"error": {
+            "code": 400,
+            "message": message,
+            "status": "INVALID_ARGUMENT",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "API_KEY_INVALID",
+                    "domain": "googleapis.com",
+                    "metadata": {"service": service},
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+                    "locale": "en-US",
+                    "message": message,
+                },
+            ],
+        }})
+    };
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:signUp?key=other-key"),
+            &json!({"email": "other-key@example.com", "password": "password1"}),
+        ),
+        (400, invalid("identitytoolkit.googleapis.com"))
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("other-key@example.com")
+        .is_none());
+    assert_eq!(
+        post(
+            &s,
+            "/securetoken.googleapis.com/v1/token?key=other-key",
+            &json!({"grant_type": "refresh_token", "refresh_token": created["refreshToken"]}),
+        ),
+        (400, invalid("securetoken.googleapis.com"))
+    );
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token?key=declared-key",
+        &json!({"grant_type": "refresh_token", "refresh_token": created["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+}
+
 #[test]
 fn client_namespace_selectors_fail_closed_without_default_fallback() {
     let mut s = state();
@@ -11301,7 +11541,10 @@ fn client_namespace_selectors_fail_closed_without_default_fallback() {
         &json!({"email": "unknown-key@example.com", "password": "password1"}),
     );
     assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "INVALID_API_KEY");
+    assert_eq!(
+        refused["error"]["message"],
+        "API key not valid. Please pass a valid API key."
+    );
     assert!(s
         .store
         .lock()

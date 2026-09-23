@@ -242,19 +242,52 @@ pub fn encode_with(claims: &IdTokenClaims, signer: Option<&dyn IdTokenSigner>) -
     encode_payload_with(&claims.canonical_json(), signer)
 }
 
-/// Encodes an already serialized JSON payload with `signer`, or unsigned without one (a
-/// session cookie is an ID token's claims under another issuer and lifetime).
+/// Whether an issued token's header names its type. Production ID tokens carry `typ: JWT`;
+/// session cookies and the legacy Identity Toolkit token carry only `alg` and `kid` (sandbox
+/// recording 2026-09-24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderShape {
+    /// `{"alg", "kid", "typ": "JWT"}`.
+    Typed,
+    /// `{"alg", "kid"}`.
+    Untyped,
+}
+
+/// The unsigned header of each shape: the internal form a response carries until it is signed.
+#[must_use]
+pub const fn unsigned_header(shape: HeaderShape) -> &'static [u8] {
+    match shape {
+        HeaderShape::Typed => br#"{"alg":"none","typ":"JWT"}"#,
+        HeaderShape::Untyped => br#"{"alg":"none"}"#,
+    }
+}
+
+/// Encodes an already serialized JSON payload with `signer`, or unsigned without one.
 #[must_use]
 pub fn encode_payload_with(payload_json: &str, signer: Option<&dyn IdTokenSigner>) -> String {
+    encode_payload_shaped(payload_json, signer, HeaderShape::Typed)
+}
+
+/// Encodes an already serialized JSON payload in `shape` with `signer`, or unsigned without
+/// one (a session cookie is an ID token's claims under another issuer, lifetime and shape).
+#[must_use]
+pub fn encode_payload_shaped(
+    payload_json: &str,
+    signer: Option<&dyn IdTokenSigner>,
+    shape: HeaderShape,
+) -> String {
     let Some(signer) = signer else {
-        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let header = base64url_encode(unsigned_header(shape));
         return format!("{header}.{}.", base64url_encode(payload_json.as_bytes()));
     };
-    let header = format!(
-        r#"{{"alg":"{}","kid":"{}","typ":"JWT"}}"#,
-        signer.alg(),
-        signer.kid()
-    );
+    let header = match shape {
+        HeaderShape::Typed => format!(
+            r#"{{"alg":"{}","kid":"{}","typ":"JWT"}}"#,
+            signer.alg(),
+            signer.kid()
+        ),
+        HeaderShape::Untyped => format!(r#"{{"alg":"{}","kid":"{}"}}"#, signer.alg(), signer.kid()),
+    };
     let signing_input = format!(
         "{}.{}",
         base64url_encode(header.as_bytes()),

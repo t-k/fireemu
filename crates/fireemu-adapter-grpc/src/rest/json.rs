@@ -729,7 +729,13 @@ pub fn document_from_json(v: &Value, path: &FieldPath<'_>) -> Result<pb::Documen
     Ok(pb::Document {
         name: v
             .get("name")
-            .and_then(Value::as_str)
+            .filter(|value| !value.is_null())
+            .map(|value| {
+                value
+                    .as_str()
+                    .ok_or_else(|| JsonError("document.name must be a string".into()))
+            })
+            .transpose()?
             .unwrap_or_default()
             .to_owned(),
         fields: fields_from_json_at(v.get("fields"), 0, Some(&fields))?,

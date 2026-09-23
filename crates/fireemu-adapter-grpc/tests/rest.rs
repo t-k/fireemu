@@ -184,6 +184,23 @@ fn percent_escapes_in_the_rest_surface_take_two_hexadecimal_digits_or_none() {
 }
 
 #[test]
+fn encoded_slash_in_a_create_collection_id_uses_the_observed_production_error() {
+    let s = state(None);
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/bad%2Finside?documentId=x"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        body["error"]["message"],
+        "Collection id \"bad/inside\" is invalid because it contains \"/\"."
+    );
+}
+
+#[test]
 fn document_crud_over_rest() {
     let s = state(None);
     let (status, created) = call(

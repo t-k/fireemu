@@ -176,6 +176,7 @@ index d109ea9..b13aa45 100644
 +            if digest(body) != digest(state.get("before")):
                  self.lifecycle_failed = True
              state["restored"] = body
+         self._lifecycle = state
 @@ -703,6 +778,7 @@ def validate_saved_management(receipt, snapshot, permission):
          response = row.get("response")
          if (

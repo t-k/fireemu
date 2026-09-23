@@ -5,13 +5,13 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use fireemu_core_firestore::field_path::FieldPath;
-use fireemu_core_firestore::path::DocumentPath;
+use fireemu_core_firestore::path::{DocumentPath, PathError};
 use fireemu_core_firestore::query::{
     Cursor, Direction, DistanceMeasure, FieldOp, FilterExpr, FindNearest, OrderClause, Query,
     QueryScope, UnaryOp,
 };
 use fireemu_core_firestore::value::{GeoPoint, Timestamp, Value, MAX_NESTING_DEPTH};
-use fireemu_core_types::ids::{CollectionId, DatabaseId, ProjectId};
+use fireemu_core_types::ids::{CollectionId, DatabaseId, IdSyntaxError, ProjectId};
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
 
@@ -20,6 +20,8 @@ use fireemu_proto_firestore::google::firestore::v1::structured_query as sq;
 pub enum DecodeError {
     /// Malformed resource name.
     InvalidParent(String),
+    /// A document name rejected with the observed production message.
+    InvalidDocumentName(String),
     /// A database the project does not have: an id the project could never have carried, or
     /// one `databases.create` was never called for. Production answers `NOT_FOUND` for both,
     /// with the same message (`conformance/firestore-production-matrix.json`,
@@ -67,7 +69,7 @@ impl fmt::Display for DecodeError {
                  Cloud Datastore or Cloud Firestore database. "
             ),
             Self::InvalidFieldPath(m) => write!(f, "invalid field path: {m}"),
-            Self::InvalidStoredFieldName(m) => f.write_str(m),
+            Self::InvalidDocumentName(m) | Self::InvalidStoredFieldName(m) => f.write_str(m),
             Self::InvalidValue(m) => write!(f, "invalid value: {m}"),
             Self::InvalidQuery(m) => write!(f, "invalid query: {m}"),
             Self::EmptyWriteOperation => write!(f, "empty write operation"),
@@ -87,6 +89,53 @@ pub struct Parent {
     pub database: DatabaseId,
     /// Parent document when the parent is not the database root.
     pub document: Option<DocumentPath>,
+}
+
+fn observed_document_path_error(name: &str, relative: &str, error: &PathError) -> DecodeError {
+    let prefix_bytes = name.len().saturating_sub(relative.len());
+    let segments: Vec<&str> = relative.split('/').collect();
+    let message = match error {
+        PathError::OddSegmentCount { .. } if name.len() <= 8_192 => Some(format!(
+            "Document name \"{name}\" lacks \"/\" at index {}.",
+            name.len()
+        )),
+        PathError::InvalidSegment {
+            index,
+            error: IdSyntaxError::TooManyBytes { .. },
+        } if index % 2 == 0 => {
+            Some("The key path element kind is longer than 1500 bytes.".to_owned())
+        }
+        PathError::InvalidSegment {
+            index,
+            error: IdSyntaxError::DotSegment,
+        } if index % 2 == 0 && name.len() <= 8_192 => {
+            let segment = segments[*index];
+            let offset = prefix_bytes
+                + segments[..*index]
+                    .iter()
+                    .map(|part| part.len() + 1)
+                    .sum::<usize>();
+            Some(format!("Document name \"{name}\" contains a collection id \"{segment}\" at index {offset}."))
+        }
+        PathError::InvalidSegment {
+            index,
+            error: IdSyntaxError::ReservedDunder,
+        } if index % 2 == 0 => Some(format!(
+            "Collection id \"{}\" is invalid because it is reserved.",
+            segments[*index]
+        )),
+        PathError::TooDeep { .. } => {
+            Some("Key path is too long. Cannot exceed 100 elements.".to_owned())
+        }
+        PathError::NameTooLong { .. } => {
+            Some("The document name is longer than 6144 bytes.".to_owned())
+        }
+        _ => None,
+    };
+    message.map_or_else(
+        || DecodeError::InvalidParent(error.to_string()),
+        DecodeError::InvalidDocumentName,
+    )
 }
 
 /// Parses `projects/{p}/databases/{d}/documents[/{path}]`.
@@ -122,7 +171,7 @@ pub fn parse_parent(parent: &str) -> Result<Parent, DecodeError> {
                 .ok_or_else(|| DecodeError::InvalidParent(parent.to_owned()))?;
             Some(
                 DocumentPath::parse(&project, &database, relative)
-                    .map_err(|e| DecodeError::InvalidParent(e.to_string()))?,
+                    .map_err(|error| observed_document_path_error(parent, relative, &error))?,
             )
         }
     };
@@ -863,6 +912,55 @@ mod tests {
         let error = parse_parent("projects/demo/databases/(default)/documents-extra")
             .expect_err("a documents-like suffix is not a document resource");
         assert!(matches!(error, DecodeError::InvalidParent(_)));
+    }
+
+    #[test]
+    fn observed_document_name_failures_keep_production_messages() {
+        let prefix = "projects/demo-firestore-probe/databases/(default)/documents/";
+        let too_long_collection = format!("{prefix}{}/x", "c".repeat(1501));
+        let too_deep = format!("{prefix}{}", ["c/d"; 101].join("/"));
+        let mut segments = Vec::new();
+        for _ in 0..4 {
+            segments.extend(["c".to_owned(), "d".repeat(1500)]);
+        }
+        segments.extend(["c".to_owned(), "d".repeat(114)]);
+        let long_name = format!("{prefix}{}", segments.join("/"));
+        for (name, expected) in [
+            (
+                too_long_collection,
+                "The key path element kind is longer than 1500 bytes.".to_owned(),
+            ),
+            (
+                too_deep,
+                "Key path is too long. Cannot exceed 100 elements.".to_owned(),
+            ),
+            (
+                long_name,
+                "The document name is longer than 6144 bytes.".to_owned(),
+            ),
+            (
+                format!("{prefix}./x"),
+                format!(
+                    "Document name \"{prefix}./x\" contains a collection id \".\" at index 60."
+                ),
+            ),
+            (
+                format!("{prefix}../x"),
+                format!(
+                    "Document name \"{prefix}../x\" contains a collection id \"..\" at index 60."
+                ),
+            ),
+            (
+                format!("{prefix}__reserved__/x"),
+                "Collection id \"__reserved__\" is invalid because it is reserved.".to_owned(),
+            ),
+            (
+                format!("{prefix}bad/inside/x"),
+                format!("Document name \"{prefix}bad/inside/x\" lacks \"/\" at index 72."),
+            ),
+        ] {
+            assert_eq!(parse_parent(&name).unwrap_err().to_string(), expected);
+        }
     }
 
     fn nested_map(levels: u32) -> pb::Value {

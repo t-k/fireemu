@@ -297,6 +297,7 @@
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": ["writes/write-stream-terminal/half-close"],
       "boundaryStatus": "NOT_APPLICABLE",
+      "comparisonNormalizationApproval": "Owner directive 2026-09-24 FS-DATA-WRITE addendum 3 section 2: comparison-only exclusion of volatile GFE content-disposition and x-debug-tracking-id trailers; raw evidence, status, code, message, and document state remain strict.",
       "status": "PENDING_REVIEW"
     },
     {

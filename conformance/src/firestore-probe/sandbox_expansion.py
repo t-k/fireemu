@@ -227,6 +227,25 @@ def build_programs() -> list[dict[str, Any]]:
     ):
         programs.extend(_map_key_programs(label, key))
     programs.extend(_map_key_programs("type-tag", "__type__", write=False))
+    map_name = f"{DOCS}/m/x"
+    programs.append(
+        _commit_program(
+            "writes/limits/aggregate-map/strict-only",
+            [
+                _field_update(
+                    map_name,
+                    {
+                        "m": {
+                            "mapValue": {
+                                "fields": {"s": {"stringValue": "x" * 1_048_500}}
+                            }
+                        }
+                    },
+                )
+            ],
+            [map_name],
+        )
+    )
     for length in (2600, 2642, 2643):
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
         write = _field_update(name, {"s": {"stringValue": "x" * 1500}})

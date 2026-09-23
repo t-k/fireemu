@@ -53,6 +53,23 @@ def test_raw_request_boundary_is_exact_and_keeps_readback() -> None:
         assert program["steps"][1]["id"] == "readback"
 
 
+def test_map_aggregate_probe_exceeds_strict_value_limit_but_fits_document() -> None:
+    programs = {program["id"]: program for program in _module().build_programs()}
+    program = programs["writes/limits/aggregate-map/strict-only"]
+    write = program["steps"][0]["body"]["writes"][0]["update"]
+    name = write["name"]
+    assert name.endswith("/documents/m/x")
+    value = write["fields"]["m"]["mapValue"]["fields"]["s"]["stringValue"]
+    assert len(value.encode()) == 1_048_500
+    map_size = len("s") + 1 + len(value.encode()) + 1
+    document_size = (
+        16 + (len("m") + 1) + (len("x") + 1) + 32 + (len("m") + 1) + map_size
+    )
+    assert 1_048_487 < map_size < document_size <= 1_048_576
+    assert program["steps"][1]["body"]["documents"] == [name]
+    assert all("expected" not in step for step in program["steps"])
+
+
 def test_batchwrite_validation_variants_are_three_writes_plus_state_readback() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     for variant in (

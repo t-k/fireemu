@@ -22,7 +22,7 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]
     ids = [program["id"] for program in programs]
-    assert len(ids) == len(set(ids)) == 62
+    assert len(ids) == len(set(ids)) == 63
     assert {
         "writes/limits/field-path-mask/1499",
         "writes/limits/field-path-mask/1500",
@@ -33,6 +33,7 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/limits/index-entry-string-name/2600",
         "writes/limits/empty-document-name/5000",
         "writes/batch-write-malformed/two-fields-bad-integer",
+        "writes/limits/aggregate-map/strict-only",
     }.issubset(ids)
     assert len(corpus["streamRecipes"]) == 3
     assert {recipe["id"] for recipe in corpus["streamRecipes"]} == {

@@ -81,6 +81,10 @@ const requiredRecipes = new Map([
     ]),
   ],
   [
+    "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
+    new Set(["writes/limits/aggregate-map", "writes/limits/aggregate-map/strict-only"]),
+  ],
+  [
     "FS-DATA-WRITE/final-artifact-regression",
     new Set([
       "firestore/historical-324",
@@ -131,6 +135,15 @@ test("final artifact closure names both saved production regression commands", (
     "pnpm -C conformance fs-data-write:check",
   ]);
   assert.notEqual(condition.status, "VERIFIED");
+});
+
+test("new strict-only map observation remains pending production recording", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
+  );
+  assert.ok(condition.recipeIds.includes("writes/limits/aggregate-map/strict-only"));
+  assert.equal(condition.status, "PENDING_RECORDING");
 });
 
 test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition", () => {

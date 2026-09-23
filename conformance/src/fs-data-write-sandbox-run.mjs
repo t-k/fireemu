@@ -21,7 +21,7 @@ const TASK_ID = "FS-DATA-WRITE-SANDBOX";
 const TASK_LIMIT_USD = 10;
 const SANDBOX_PROJECT = "fireemu-oracle-sbx";
 const RECORDED_PROJECT = "demo-firestore-probe";
-// 187 observation steps + 47 pre/final clears; the 100-level document chain adds about
+// 217 declared REST observation steps plus pre/final clears; the 100-level document chain adds about
 // 200 recursive public-API reads, while the other bounded programs add smaller clears.
 // Leave headroom, but reject attempt 1001 before the network send.
 const REST_CAP = 1000;

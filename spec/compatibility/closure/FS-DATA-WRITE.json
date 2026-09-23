@@ -126,9 +126,9 @@
     {
       "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#agg-map",
-      "recipeIds": ["writes/limits/aggregate-map"],
+      "recipeIds": ["writes/limits/aggregate-map", "writes/limits/aggregate-map/strict-only"],
       "boundaryStatus": "UNBRACKETED",
-      "status": "PRODUCTION_RECORDED"
+      "status": "PENDING_RECORDING"
     },
     {
       "conditionId": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",

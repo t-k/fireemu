@@ -34,6 +34,13 @@ def _exact(a, b):
 
 
 def _validated(plan, rows):
+    if (
+        not isinstance(plan, dict)
+        or not isinstance(plan.get("documents"), dict)
+        or not plan["documents"]
+        or not isinstance(rows, list)
+    ):
+        raise ValueError("non-empty document plan and observation list required")
     resource = next(iter(plan["documents"].values()))["resource"]
     parts = resource.split("/")
     expected = compile_limits_plan(parts[1], parts[3], plan["nonce"], plan["part"])
@@ -200,8 +207,7 @@ def _structural(plan, rows):
     return view
 
 
-def compare_rows(production_plan, production_rows, local_plan, local_rows):
-    """No input is asserted to be production evidence merely by calling this function."""
+def _compare_rows(production_plan, production_rows, local_plan, local_rows):
     result = {
         "kind": "fs-write-limits-03-semantic-kernel-v1",
         "campaignId": "FS-WRITE-LIMITS-03",
@@ -216,6 +222,12 @@ def compare_rows(production_plan, production_rows, local_plan, local_rows):
     try:
         _validated(production_plan, production_rows)
         _validated(local_plan, local_rows)
+        # Distinct compiler parts describe different semantic scenarios.
+        # Reject a pair before normalization or producing row comparisons.
+        if production_plan["part"] != local_plan["part"]:
+            raise ValueError("campaign parts differ")
+        if len(production_rows) != len(local_rows):
+            raise ValueError("observation counts differ")
     except (ValueError, KeyError, TypeError, IndexError, AttributeError) as error:
         result["errors"].append(type(error).__name__)
         return result
@@ -254,3 +266,21 @@ def compare_rows(production_plan, production_rows, local_plan, local_rows):
             if c in classes
         )
     return result
+
+
+def compare_rows(production_plan, production_rows, local_plan, local_rows):
+    """Compare validated observations without asserting production evidence."""
+    try:
+        return _compare_rows(production_plan, production_rows, local_plan, local_rows)
+    except RecursionError:
+        return {
+            "kind": "fs-write-limits-03-semantic-kernel-v1",
+            "campaignId": "FS-WRITE-LIMITS-03",
+            "semanticOnly": True,
+            "promotionReady": False,
+            "acquisitionValidated": False,
+            "classification": "INDETERMINATE",
+            "structuralClassification": "INDETERMINATE",
+            "rows": [],
+            "errors": ["RecursionError"],
+        }

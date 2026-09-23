@@ -16,10 +16,10 @@ use crate::path::DocumentPath;
 use crate::value::Value;
 
 /// Revision of the size model. Bumped when the official formula or its interpretation changes.
-pub const SIZE_MODEL_REVISION: &str = "firestore-storage-size-2026-08-25";
+pub const SIZE_MODEL_REVISION: &str = "firestore-storage-size-2026-09-23-reference-index";
 
-/// Maximum bytes of an indexed value (`FS-LIMIT-INDEXED-FIELD-VALUE-BYTES`); larger values
-/// are truncated in the index representation only.
+/// Published maximum bytes of an indexed value (`FS-LIMIT-INDEXED-FIELD-VALUE-BYTES`);
+/// larger non-reference values are truncated for the index-size charge.
 pub const INDEXED_VALUE_TRUNCATION_BYTES: u64 = 1_500;
 
 /// Size calculation errors.
@@ -208,9 +208,15 @@ pub enum IndexEntryScope {
     CompositeCollectionGroup,
 }
 
-/// Indexed representation size of a value: the value size, truncated at 1,500 bytes.
+/// Indexed representation size of a value. Production retains the full document name of
+/// a reference value in an index entry; other values use the 1,500-byte cap.
 pub fn indexed_value_size(value: &Value) -> Result<u64, SizeError> {
-    Ok(field_value_size(value)?.min(INDEXED_VALUE_TRUNCATION_BYTES))
+    let size = field_value_size(value)?;
+    Ok(if matches!(value, Value::Reference(_)) {
+        size
+    } else {
+        size.min(INDEXED_VALUE_TRUNCATION_BYTES)
+    })
 }
 
 /// Size of one index entry.

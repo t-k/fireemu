@@ -276,7 +276,7 @@
       "enforcementStage": "commit",
       "implemented": "implemented",
       "officialText": "Maximum size of an indexed field value: 1,500 bytes; values over 1,500 bytes are truncated in the index",
-      "notes": "A truncating maximum, never a refusal. fireemu_core_firestore::size::indexed_value_size truncates every indexed value at 1,500 bytes, which is what the index-entry size limits (FS-LIMIT-INDEX-ENTRY-BYTES and FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT) are charged on. Local queries are answered by scanning documents rather than index entries, so truncation of the index key has no effect on ordering or selection here; only the size charge is modelled. Production has not been observed on this boundary."
+      "notes": "The published rule says indexed field values over 1,500 bytes are truncated, but the FS-DATA-WRITE sandbox recording shows that a long reference value is charged at its full document-name size for index-entry limits. fireemu_core_firestore::size::indexed_value_size therefore truncates non-reference values to 1,500 bytes and retains the full reference charge. This is an index-size charge, not a refusal by the indexed-value limit itself. Local queries scan documents rather than stored index entries, so truncation does not alter local ordering or selection. The recording establishes the long-reference exception for its observed path shapes, not every possible reference form."
     },
     {
       "id": "FS-LIMIT-EXPORT-IMPORT-RATE",

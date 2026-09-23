@@ -53,9 +53,10 @@ pub const FIELD_VALUE_BYTES: &str = "FS-LIMIT-FIELD-VALUE-BYTES";
 /// or a document implied it by nesting maps.
 pub const FIELD_PATH_BYTES: &str = "FS-LIMIT-FIELD-PATH-BYTES";
 
-/// `FS-LIMIT-INDEXED-FIELD-VALUE-BYTES`: a truncating maximum, applied by
-/// [`crate::size::indexed_value_size`] to every value an index entry is charged for. It
-/// refuses nothing, so it is identical under both profiles.
+/// `FS-LIMIT-INDEXED-FIELD-VALUE-BYTES`: the published truncating maximum for indexed
+/// values. [`crate::size::indexed_value_size`] retains the full charge for references,
+/// matching the saved production long-reference index-entry refusals. This limit alone
+/// refuses nothing; the resulting index-entry size may refuse the write.
 pub const INDEXED_FIELD_VALUE_BYTES: &str = "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES";
 
 /// `FS-LIMIT-API-REQUEST-BYTES`: the largest API request, applied at each transport's decode

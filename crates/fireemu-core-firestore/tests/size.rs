@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use fireemu_core_firestore::index::IndexSet;
 use fireemu_core_firestore::path::DocumentPath;
 use fireemu_core_firestore::size::{
     document_name_size, document_size, field_value_size, index_entry_size, IndexEntryScope,
@@ -163,6 +164,17 @@ fn indexed_values_over_1500_bytes_are_truncated_in_the_index_only() {
     )
     .unwrap();
     assert_eq!(entry, (1 + 1) + (1 + 1) + 16 + (1 + 1) + 1_500 + 48);
+}
+
+#[test]
+fn long_reference_index_value_rejects_the_saved_production_boundary() {
+    // The sandbox fixture's owner reference points at the written document. With a long
+    // parent name, truncating that reference to 1,500 bytes admits a write production
+    // rejects as an oversized index entry.
+    let parent_id = "p".repeat(1_490);
+    let doc = path(&["c", &parent_id, "c", &parent_id, "c", "d"]);
+    let fields = BTreeMap::from([("_sharedOwner".to_owned(), Value::Reference(doc.resource_name()))]);
+    assert!(IndexSet::default().document_index_usage(&doc, &fields).is_err());
 }
 
 #[test]

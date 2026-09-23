@@ -78,15 +78,12 @@ async function harnessDigest() {
   return sha256(`${sources.join("\n")}\n${JSON.stringify(BASELINE_CONFIG)}`);
 }
 
-/** Per recording: every step once; the harness gets its own budget for wipes and signing. */
+/** Per recording: every step once; the harness gets its own budget for wipes, signing and waits. */
 const ceilings = (programs) => ({
   maxRequests: programs.reduce((total, p) => total + p.steps.length, 0),
   maxHarnessRequests: programs.reduce(
     (total, p) =>
-      total +
-      12 +
-      Object.keys(p.tokens ?? {}).length +
-      (p.steps.some((s) => s.waitSeconds) ? 1 : 0),
+      total + 12 + Object.keys(p.tokens ?? {}).length + p.steps.filter((s) => s.waitSeconds).length,
     20,
   ),
 });
@@ -232,6 +229,28 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   return diffRecordings(first.results, second.results);
 }
 
+/**
+ * The per-IP account-creation limit is about 100 per hour, so a run is refused within an hour of
+ * this task's last aborted run.
+ */
+export function recentAbort(ledgerText, now = Date.now()) {
+  const entries = ledgerText
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((entry) => entry?.taskId === TASK_ID);
+  const last = entries.at(-1);
+  if (!last || !String(last.outcome).startsWith("aborted")) return undefined;
+  const age = now - Date.parse(last.ts);
+  return age < 3_600_000 ? last : undefined;
+}
+
 async function recordProduction() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
   const privateRoot = process.env.FIREEMU_AUTH_CREDENTIAL_PRIVATE_DIR;
@@ -239,6 +258,9 @@ async function recordProduction() {
     throw new Error("FIREEMU_SANDBOX_LEDGER and FIREEMU_AUTH_CREDENTIAL_PRIVATE_DIR are required");
   }
   await assertCleanTree();
+  const aborted = existsSync(ledger) ? recentAbort(await readFile(ledger, "utf8")) : undefined;
+  if (aborted)
+    throw new Error(`the last run aborted at ${aborted.ts}; wait an hour before retrying`);
   const programs = selectedPrograms();
   const corpusRequests = validateCredentialCorpus(programs);
   const meta = {
@@ -391,12 +413,9 @@ async function runLocal(programs) {
   const signers = Object.fromEntries(
     Object.entries(SIGNER_ACCOUNTS).map(([name, account]) => [name, localSigner(account)]),
   );
-  const trust = {};
-  for (const [name, signer] of Object.entries(signers)) {
-    const jwksPath = join(RUN_DIR, `signer-${name}.jwks.json`);
-    await writeFile(jwksPath, JSON.stringify(signer.jwks));
-    trust[signer.serviceAccount] = jwksPath;
-  }
+  const trust = Object.fromEntries(
+    Object.values(signers).map(({ serviceAccount, jwks }) => [serviceAccount, jwks]),
+  );
   await writeFile(signersPath, JSON.stringify(signers), { mode: 0o600 });
   await writeFile(
     configPath,

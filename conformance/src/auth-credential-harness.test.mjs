@@ -10,7 +10,8 @@ import {
   harnessRequest,
   validateCredentialCorpus,
 } from "./auth-credential/harness.mjs";
-import { materialize } from "./auth-credential/session.mjs";
+import { recentAbort } from "./auth-credential/run.mjs";
+import { createSession, materialize, runCorpus } from "./auth-credential/session.mjs";
 import {
   CUSTOM_TOKEN_AUDIENCE,
   customTokenClaims,
@@ -62,7 +63,7 @@ test("a JWT is recorded as header shape and claims relative to its own iat", () 
           claims: {
             iss: "https://securetoken.google.com/demo-auth-account",
             aud: "demo-auth-account",
-            auth_time: "before-iat",
+            auth_time: "<auth_time>",
             user_id: "<generated-localId>",
             sub: "<generated-localId>",
             iat: "<iat>",
@@ -280,4 +281,132 @@ test("the corpus passes its own validation and waits only in its last program", 
   );
   const moved = [PROGRAMS.at(-1), ...PROGRAMS.slice(0, -1)];
   assert.throws(() => validateCredentialCorpus(moved), /only the last program may wait/);
+});
+
+test("auth_time is never recorded against the token's own iat, so latency is not compared", () => {
+  const at = (authTime) =>
+    describeJwt(jwt({ alg: "RS256" }, { iat: 100, exp: 3700, auth_time: authTime })).claims;
+  assert.deepEqual(at(100), at(97));
+  assert.equal(at(100).auth_time, "<auth_time>");
+  assert.equal(at(100).exp, "iat+3600");
+});
+
+test("a numeric project number and an undecodable token never reach the recording", () => {
+  const token = jwt({ alg: "RS256" }, { iat: 1, project_number: 123456789012 });
+  const recorded = normalizeCredentialResponse(
+    200,
+    JSON.stringify({ idToken: token, sessionCookie: "eyJhbGciOi.broken" }),
+    local,
+  );
+  assert.equal(recorded.body.idToken["<jwt>"].claims.project_number, "<project-number>");
+  assert.equal(recorded.body.sessionCookie, "<undecodable-jwt>");
+});
+
+const productionContext = (refresh) =>
+  createContext({
+    run: "1",
+    project: "fireemu-oracle-idp",
+    target: {
+      kind: "production",
+      apiKey: "k",
+      adminToken: "t",
+      quotaProject: "fireemu-oracle-idp",
+      projectNumber: "1234",
+      refresh,
+    },
+  });
+
+async function withFetch(handler, body) {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => handler(String(url), init);
+  try {
+    return await body();
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+const json = (value, status = 200) =>
+  new Response(JSON.stringify(value), { status, headers: { "content-type": "application/json" } });
+
+test("a signer that signs other claims than requested stops the run", async () => {
+  const ctx = productionContext();
+  const session = createSession(ctx, {
+    signers: { project: { serviceAccount: SIGNER_ACCOUNTS.project } },
+  });
+  await withFetch(
+    (url, init) => {
+      if (url.includes(":signJwt")) {
+        const requested = JSON.parse(JSON.parse(init.body).payload);
+        return json({ signedJwt: jwt({ alg: "RS256" }, { ...requested, exp: 1 }) });
+      }
+      return json({ users: [] });
+    },
+    () =>
+      assert.rejects(
+        session.runProgram({ id: "p", tokens: { t: { uid: "u", omit: ["exp"] } }, steps: [] }),
+        (error) => error.fatal && /other than the requested/.test(error.message),
+      ),
+  );
+});
+
+test("an owner credential that cannot be renewed stops the whole run", async () => {
+  const ctx = productionContext(async () => {
+    throw new Error("reauthentication required");
+  });
+  await withFetch(
+    () => json({ users: [] }),
+    () =>
+      assert.rejects(
+        runCorpus(
+          [
+            { id: "a", steps: [] },
+            { id: "b", steps: [] },
+          ],
+          ctx,
+        ),
+        (error) => error.fatal && /credential refresh failed/.test(error.message),
+      ),
+  );
+});
+
+test("the expiry program asks everything of the live account before deleting it", () => {
+  const expiry = PROGRAMS.find(({ id }) => id === "auth-credential/expiry/one-hour");
+  const ids = expiry.steps.map(({ id }) => id);
+  assert.equal(ids.indexOf("delete-expired"), ids.length - 2);
+  assert.ok(ids.indexOf("refresh-after-hour") < ids.indexOf("delete-expired"));
+  const waited = expiry.steps.reduce((total, step) => total + (step.waitSeconds ?? 0), 0);
+  assert.ok(waited >= 3600 + 300, "past any five-minute skew allowance");
+});
+
+test("every validSince later than a session's auth_time is written after a second boundary", () => {
+  const laterValidSince = (step) => {
+    const sum = step.body?.validSince?.$string?.$sum;
+    return Array.isArray(sum) && sum.some((term) => typeof term === "number" && term > 0);
+  };
+  const steps = PROGRAMS.flatMap(({ steps: all }) => all).filter(laterValidSince);
+  assert.ok(steps.length > 0);
+  for (const step of steps.filter(({ id }) => id !== "valid-since-future")) {
+    assert.ok((step.delayMs ?? 0) >= 1100, step.id);
+  }
+});
+
+test("a run is refused within an hour of this task's last aborted run", () => {
+  const line = (outcome, ts, taskId = "AUTH-CREDENTIAL-SANDBOX") =>
+    JSON.stringify({ ts, outcome, taskId });
+  const now = Date.parse("2026-09-24T12:00:00Z");
+  const ledger = (...lines) => `${lines.join("\n")}\n`;
+  assert.ok(recentAbort(ledger(line("aborted-fatal", "2026-09-24T11:30:00Z")), now));
+  assert.equal(recentAbort(ledger(line("aborted", "2026-09-24T10:59:00Z")), now), undefined);
+  assert.equal(
+    recentAbort(
+      ledger(line("aborted", "2026-09-24T11:30:00Z"), line("recorded", "2026-09-24T11:40:00Z")),
+      now,
+    ),
+    undefined,
+  );
+  assert.equal(
+    recentAbort(ledger(line("aborted", "2026-09-24T11:30:00Z", "AUTH-ACCOUNT-SANDBOX")), now),
+    undefined,
+  );
 });

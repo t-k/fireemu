@@ -70,6 +70,19 @@ const adminLookup = (id, localId) => adminCall(id, "lookup", { localId: [localId
 const sessionRelations = (field, origin) => ({
   authTimeVsOrigin: { kind: "time", left: `${field}.auth_time`, right: `${origin}.auth_time` },
   iatVsOrigin: { kind: "time", left: `${field}.iat`, right: `${origin}.iat` },
+  userIdVsOrigin: { kind: "same", left: `${field}.user_id`, right: `${origin}.user_id` },
+});
+
+/** A fresh sign-in's own token: is the session's auth_time the token's issue time? */
+const fresh = (field = "idToken") => ({
+  relations: {
+    authTimeVsIat: { kind: "time", left: `${field}.auth_time`, right: `${field}.iat` },
+  },
+});
+
+/** A refresh answer also hands back a refresh token: the one it was given, or a new one? */
+const rotation = (origin) => ({
+  refreshTokenVsInput: { kind: "same", left: "refresh_token", right: `${origin}:refreshToken` },
 });
 
 const program = (id, steps, extra = {}) => ({ id, steps, ...extra });
@@ -79,19 +92,21 @@ const program = (id, steps, extra = {}) => ({ id, steps, ...extra });
 const idTokenMethods = program(
   "auth-credential/id-token/methods",
   [
-    signUp("password-sign-up", "pw"),
+    signUp("password-sign-up", "pw", fresh()),
     {
       ...signIn("password-sign-in", "pw"),
       delayMs: 1100,
       relations: sessionRelations("idToken", "password-sign-up:idToken"),
     },
-    client("anonymous-sign-up", "signUp", { returnSecureToken: true }),
+    client("anonymous-sign-up", "signUp", { returnSecureToken: true }, fresh()),
     client("phone-send-code", "sendVerificationCode", { phoneNumber: "PHONE(0)" }),
-    client("phone-sign-in", "signInWithPhoneNumber", {
-      sessionInfo: from("phone-send-code:sessionInfo"),
-      code: TEST_PHONE_CODE,
-    }),
-    customSignIn("custom-sign-in", token("plain")),
+    client(
+      "phone-sign-in",
+      "signInWithPhoneNumber",
+      { sessionInfo: from("phone-send-code:sessionInfo"), code: TEST_PHONE_CODE },
+      fresh(),
+    ),
+    customSignIn("custom-sign-in", token("plain"), fresh()),
     customSignIn("custom-sign-in-with-claims", token("claims")),
     adminCreate("admin-create-rich", {
       localId: "UID(rich)",
@@ -102,7 +117,7 @@ const idTokenMethods = program(
       photoUrl: "https://example.com/rich.png",
       phoneNumber: "PHONE(1)",
     }),
-    signIn("rich-sign-in", "rich"),
+    signIn("rich-sign-in", "rich", fresh()),
     customSignIn("custom-sign-in-existing-email-account", token("rich")),
     adminCall("set-account-claims", "update", {
       localId: "UID(rich)",
@@ -131,6 +146,7 @@ const idTokenLegacy = program(
       email: "EMAIL(legacy)",
       password: "password123",
     }),
+    lookupWith("lookup-with-legacy-password-token", from("password-sign-in:idToken")),
     client("anonymous-sign-up", "signUp", {}),
     client("custom-sign-in", "signInWithCustomToken", { token: token("plain") }),
     client("custom-sign-in-false", "signInWithCustomToken", {
@@ -191,13 +207,19 @@ const refreshExchange = program(
     {
       ...refreshWith("anonymous-refresh", from("anonymous-sign-up:refreshToken")),
       delayMs: 1100,
-      relations: sessionRelations("id_token", "anonymous-sign-up:idToken"),
+      relations: {
+        ...sessionRelations("id_token", "anonymous-sign-up:idToken"),
+        ...rotation("anonymous-sign-up"),
+      },
     },
     customSignIn("custom-sign-in", token("claims")),
     {
       ...refreshWith("custom-refresh", from("custom-sign-in:refreshToken")),
       delayMs: 1100,
-      relations: sessionRelations("id_token", "custom-sign-in:idToken"),
+      relations: {
+        ...sessionRelations("id_token", "custom-sign-in:idToken"),
+        ...rotation("custom-sign-in"),
+      },
     },
     client("phone-send-code", "sendVerificationCode", { phoneNumber: "PHONE(2)" }),
     client("phone-sign-in", "signInWithPhoneNumber", {
@@ -207,7 +229,10 @@ const refreshExchange = program(
     {
       ...refreshWith("phone-refresh", from("phone-sign-in:refreshToken")),
       delayMs: 1100,
-      relations: sessionRelations("id_token", "phone-sign-in:idToken"),
+      relations: {
+        ...sessionRelations("id_token", "phone-sign-in:idToken"),
+        ...rotation("phone-sign-in"),
+      },
     },
     // A profile change after sign-in reaches the next refreshed token.
     client("set-display-name", "update", {
@@ -319,11 +344,15 @@ const revocation = program(
     lookupWith("lookup-at-equal", from("sign-up:idToken")),
     refreshWith("refresh-at-equal", from("sign-up:refreshToken")),
     cookie("cookie-at-equal", from("sign-up:idToken"), 3600),
-    // One second later than auth_time: the session predates validSince.
-    adminCall("valid-since-after", "update", {
-      localId: from("sign-up:localId"),
-      validSince: { $string: { $sum: [from("sign-up:idToken.auth_time"), 1] } },
-    }),
+    // One second later than auth_time: the session predates validSince. The delay puts the value
+    // in the past when it is written, on both sides.
+    {
+      ...adminCall("valid-since-after", "update", {
+        localId: from("sign-up:localId"),
+        validSince: { $string: { $sum: [from("sign-up:idToken.auth_time"), 1] } },
+      }),
+      delayMs: 1100,
+    },
     lookupWith("lookup-after", from("sign-up:idToken")),
     refreshWith("refresh-after", from("sign-up:refreshToken")),
     cookie("cookie-after", from("sign-up:idToken"), 3600),
@@ -364,6 +393,7 @@ const revocation = program(
         localId: "UID(revoke-custom)",
         validSince: { $string: { $sum: [from("custom-sign-in:idToken.auth_time"), 1] } },
       }),
+      delayMs: 1100,
     },
     lookupWith("custom-lookup-after", from("custom-sign-in:idToken")),
     refreshWith("custom-refresh-after", from("custom-sign-in:refreshToken")),
@@ -605,17 +635,23 @@ const expiry = program(
   [
     signUp("sign-up", "expiry"),
     cookie("cookie-before", from("sign-up:idToken"), 300),
+    // Ten seconds past exp: any tolerance for clock skew shows here and not below.
     { ...lookupWith("lookup-expired", from("sign-up:idToken")), waitSeconds: 3610 },
     client("update-expired", "update", { idToken: from("sign-up:idToken"), displayName: "Late" }),
     cookie("cookie-from-expired", from("sign-up:idToken"), 3600),
-    client("delete-expired", "delete", { idToken: from("sign-up:idToken") }),
     customSignIn("custom-token-expired", token("expiring")),
     {
       ...refreshWith("refresh-after-hour", from("sign-up:refreshToken")),
       relations: sessionRelations("id_token", "sign-up:idToken"),
     },
     lookupWith("lookup-refreshed", from("refresh-after-hour:id_token")),
-    client("anonymous-sign-up", "signUp", { returnSecureToken: true }),
+    // Five minutes further on, past any common skew allowance.
+    { ...lookupWith("lookup-expired-later", from("sign-up:idToken")), waitSeconds: 320 },
+    cookie("cookie-from-expired-later", from("sign-up:idToken"), 3600),
+    customSignIn("custom-token-expired-later", token("expiring")),
+    // Deleting last keeps every earlier answer about a live account.
+    client("delete-expired", "delete", { idToken: from("sign-up:idToken") }),
+    adminLookup("admin-lookup-after-delete-attempt", from("sign-up:localId")),
   ],
   { tokens: { expiring: { uid: "UID(expiring)" } } },
 );

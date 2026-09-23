@@ -106,6 +106,9 @@ def build_programs() -> list[dict[str, Any]]:
             }
             if request.get("body") is not None:
                 step["body"] = _sandbox_index_exemption(request["body"])
+                body = step["body"]
+                if isinstance(body, dict) and isinstance(body.get("fields"), dict):
+                    body["fields"].pop("_sharedOwner", None)
             steps.append(step)
         programs.append({"id": recipe_id, "area": "writes", "steps": steps})
     return programs

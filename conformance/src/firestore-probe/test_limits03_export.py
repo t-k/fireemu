@@ -46,3 +46,18 @@ def test_exact_identifier_and_name_boundaries_are_retained() -> None:
     assert [
         len(path.removeprefix("/v1/").split("?", 1)[0].encode()) for path in paths
     ] == [6144, 6145]
+
+
+def test_sandbox_limits_omit_legacy_shared_owner_reference() -> None:
+    programs = _build_programs()
+    affected = 0
+    for program in programs:
+        for step in program["steps"]:
+            body = step.get("body")
+            if not isinstance(body, dict) or not isinstance(body.get("fields"), dict):
+                continue
+            assert "_sharedOwner" not in body["fields"], program["id"]
+            if step["method"] == "PATCH":
+                assert body["fields"], program["id"]
+                affected += 1
+    assert affected >= 20

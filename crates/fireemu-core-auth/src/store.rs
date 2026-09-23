@@ -612,6 +612,12 @@ impl PasswordDigest {
     }
 
     /// The emulator salt and plaintext an export has to write back, when the credential
+    /// The foreign hash an import installed, while no sign-in has replaced it.
+    #[must_use]
+    pub const fn imported_hash(&self) -> Option<&ImportedPasswordHash> {
+        self.imported.as_ref()
+    }
+
     /// came from one.
     #[must_use]
     pub fn emulator_form(&self) -> Option<(&str, &str)> {

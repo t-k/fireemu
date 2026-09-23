@@ -899,8 +899,9 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::PasswordPolicyViolation(refusal) => {
             error(400, &password_requirements_message(refusal))
         }
+        // Production names the client-permission refusal (sandbox recording 2026-09-23).
         AuthError::UserSignupDisabled | AuthError::UserDeletionDisabled => {
-            error(400, "OPERATION_NOT_ALLOWED")
+            error(400, "ADMIN_ONLY_OPERATION")
         }
         AuthError::SignupQuotaExceeded => error(400, "SIGNUP_QUOTA_EXCEEDED"),
         AuthError::SignupQuotaUnavailable => error(500, "SIGNUP_QUOTA_UNAVAILABLE"),
@@ -6605,6 +6606,9 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         ("registered", json!(true)),
         ("displayName", json!(display_name)),
     ];
+    if let Some(photo) = store.user(&uid).and_then(|u| u.photo_url.clone()) {
+        extra.push(("profilePicture", json!(photo)));
+    }
     if !violations.is_empty() {
         let policy = store.password_policy().clone();
         extra.push((
@@ -6920,12 +6924,8 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
             Ok(session) => session,
             Err(response) => return response,
         };
-        if ["localId", "email", "phoneNumber", "federatedUserId"]
-            .iter()
-            .any(|field| body.get(*field).is_some())
-        {
-            return error(400, "OPERATION_NOT_ALLOWED");
-        }
+        // Admin selectors beside a verified session are ignored: production answers with the
+        // session's subject only (sandbox recording 2026-09-23).
         return JsonResponse {
             status: 200,
             body: json!({"kind": "identitytoolkit#GetAccountInfoResponse", "users": [user_json(store, &session.uid)]}),
@@ -7461,11 +7461,14 @@ fn update(
                         return error(400, "INSUFFICIENT_PERMISSION");
                     }
                 }
-                if has_admin_field
-                    && ["mfa", "linkProviderUserInfo"]
-                        .iter()
-                        .any(|key| body.get(*key).is_some())
-                {
+                if has_admin_field && body.get("linkProviderUserInfo").is_some() {
+                    // Sandbox recording 2026-09-23 (`client-update-link-provider`).
+                    return error(
+                        400,
+                        "UNEXPECTED_PARAMETER : link_provider_user_info is not allowed with ID token.",
+                    );
+                }
+                if has_admin_field && body.get("mfa").is_some() {
                     return error(400, "OPERATION_NOT_ALLOWED");
                 }
                 if body.get("disableUser").is_some_and(|v| !v.is_null()) {

@@ -2219,7 +2219,7 @@ fn signup_and_project_patch_have_a_bounded_shared_gate() {
             (1, 0)
         );
     } else {
-        assert_eq!(signup_body["error"]["message"], "OPERATION_NOT_ALLOWED");
+        assert_eq!(signup_body["error"]["message"], "ADMIN_ONLY_OPERATION");
         assert!(store_guard
             .user_by_email("concurrent-project@example.com")
             .is_none());
@@ -2303,7 +2303,7 @@ fn signup_and_tenant_patch_have_a_bounded_shared_gate() {
             (1, 0)
         );
     } else {
-        assert_eq!(signup_body["error"]["message"], "OPERATION_NOT_ALLOWED");
+        assert_eq!(signup_body["error"]["message"], "ADMIN_ONLY_OPERATION");
         assert!(store_guard
             .user_by_email("concurrent-tenant@example.com")
             .is_none());
@@ -5017,26 +5017,42 @@ fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
                     Some(signed[0]["idToken"].clone()),
                     Some(signed[1]["idToken"].clone()),
                 ] {
+                    // A verified session answers with its own subject and ignores every
+                    // Admin selector, as production does (sandbox recording 2026-09-23,
+                    // `client-lookup-with-admin-selectors`).
+                    let subject = token.as_ref().and_then(|token| {
+                        signed
+                            .iter()
+                            .find(|account| &account["idToken"] == token)
+                            .map(|account| account["localId"].clone())
+                    });
                     let expected_error = match token.as_ref().and_then(Value::as_str) {
-                        None => "MISSING_ID_TOKEN",
-                        Some("malformed") => "INVALID_ID_TOKEN",
-                        Some(_) => "OPERATION_NOT_ALLOWED",
+                        None => Some("MISSING_ID_TOKEN"),
+                        Some("malformed") => Some("INVALID_ID_TOKEN"),
+                        Some(_) => None,
                     };
                     let mut request = json!({"admin": true});
                     request[field] = value.clone();
                     if let Some(token) = token {
                         request["idToken"] = token;
                     }
-                    let (status, refused) = post(&s, &format!("{V1}/accounts:lookup"), &request);
-                    assert_eq!(
-                        status, 400,
-                        "selector {field} must not bypass end-user identity"
-                    );
-                    assert!(refused.get("users").is_none());
-                    assert_eq!(refused["error"]["message"], expected_error);
+                    let (status, answered) = post(&s, &format!("{V1}/accounts:lookup"), &request);
+                    if let Some(expected_error) = expected_error {
+                        assert_eq!(
+                            status, 400,
+                            "selector {field} must not bypass end-user identity"
+                        );
+                        assert!(answered.get("users").is_none());
+                        assert_eq!(answered["error"]["message"], expected_error);
+                    } else {
+                        assert_eq!(status, 200, "{answered}");
+                        assert_eq!(answered["users"].as_array().unwrap().len(), 1);
+                        assert_eq!(answered["users"][0]["localId"], subject.unwrap());
+                    }
                 }
             }
-            // Even the emulator owner header cannot change an end-user handler's role.
+            // Even the emulator owner header cannot change an end-user handler's role: the
+            // session's subject is the only account answered.
             query["idToken"] = signed[0]["idToken"].clone();
             let response = handle_with(
                 &s,
@@ -5045,8 +5061,9 @@ fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
                 &owner(),
                 &query,
             );
-            assert_eq!(response.status, 400);
-            assert!(response.body.get("users").is_none());
+            assert_eq!(response.status, 200, "{}", response.body);
+            assert_eq!(response.body["users"].as_array().unwrap().len(), 1);
+            assert_eq!(response.body["users"][0]["localId"], signed[0]["localId"]);
         }
         assert_eq!(
             post(
@@ -6261,6 +6278,8 @@ fn end_user_update_rejects_admin_fields_atomically_by_presence() {
                 rejected["error"]["message"],
                 if field == "customAttributes" {
                     "INSUFFICIENT_PERMISSION"
+                } else if field == "linkProviderUserInfo" {
+                    "UNEXPECTED_PARAMETER : link_provider_user_info is not allowed with ID token."
                 } else {
                     "OPERATION_NOT_ALLOWED"
                 },
@@ -6517,6 +6536,8 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
                 refused["error"]["message"],
                 if *field == "customAttributes" {
                     "INSUFFICIENT_PERMISSION"
+                } else if *field == "linkProviderUserInfo" {
+                    "UNEXPECTED_PARAMETER : link_provider_user_info is not allowed with ID token."
                 } else {
                     "OPERATION_NOT_ALLOWED"
                 },
@@ -9030,6 +9051,79 @@ fn tenant_password_policy_null_without_mask_is_absent_and_list_projects_policy()
     );
 }
 
+/// Client permissions refuse the end-user operation with `ADMIN_ONLY_OPERATION` (sandbox
+/// recording 2026-09-23, `auth-account/config/client-permissions`).
+/// Password sign-in reports the account's photo as `profilePicture` (sandbox recording
+/// 2026-09-23, `auth-account/admin/create#sign-in-created`).
+#[test]
+fn password_sign_in_reports_the_profile_picture() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "pic@example.com", "password": "password1", "photoUrl": "https://example.com/p.png"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "nopic@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200);
+    let sign_in = |email: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": email, "password": "password1", "returnSecureToken": true}),
+        )
+    };
+    let (status, signed) = sign_in("pic@example.com");
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["profilePicture"], "https://example.com/p.png");
+    let (status, signed) = sign_in("nopic@example.com");
+    assert_eq!(status, 200, "{signed}");
+    assert!(signed.get("profilePicture").is_none(), "{signed}");
+}
+
+#[test]
+fn client_permissions_refuse_end_users_as_admin_only_operations() {
+    let s = state();
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "perm@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let updated = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=client.permissions.disabledUserSignup,client.permissions.disabledUserDeletion"),
+        &json!({"client": {"permissions": {
+            "disabledUserSignup": true,
+            "disabledUserDeletion": true
+        }}}),
+    );
+    assert_eq!(updated.0, 200, "{}", updated.1);
+    for body in [
+        json!({"email": "perm2@example.com", "password": "password1"}),
+        json!({"returnSecureToken": true}),
+    ] {
+        let (status, refused) = post(&s, &format!("{V1}/accounts:signUp"), &body);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "ADMIN_ONLY_OPERATION");
+    }
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": created["idToken"]}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "ADMIN_ONLY_OPERATION");
+}
+
 #[test]
 fn project_client_permissions_are_exposed_and_applied_atomically() {
     let s = state();
@@ -9868,7 +9962,7 @@ fn self_deletion_permission_denies_end_user_but_admin_delete_still_succeeds() {
         &json!({"idToken": signed["idToken"]}),
     );
     assert_eq!(denied.0, 400, "{}", denied.1);
-    assert_eq!(denied.1["error"]["message"], "OPERATION_NOT_ALLOWED");
+    assert_eq!(denied.1["error"]["message"], "ADMIN_ONLY_OPERATION");
     let lookup = admin(
         &s,
         "POST",

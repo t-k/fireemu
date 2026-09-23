@@ -78,7 +78,9 @@ def _name_size(relative: str) -> int:
 
 def _long_resource(size: int, nonce: str) -> str:
     # Three collection/document pairs, each segment within its own 1,500-byte limit.
-    remaining = size - len(PREFIX.encode()) - len(nonce) - 5
+    # Firestore charges the relative path's segments plus a fixed 16 bytes, not the
+    # project-qualified REST resource prefix. Five separators add five bytes here.
+    remaining = size - 17 - len(nonce) - 5
     segments = []
     for index in range(5):
         length = min(1500, remaining - (4 - index))

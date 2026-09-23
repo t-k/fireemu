@@ -96,7 +96,7 @@ def test_each_payload_hits_its_claimed_boundary_without_another_limit_hiding_it(
     elif family == "subcollection-depth":
         measured = len(parts) // 2
     elif family == "document-name":
-        measured = len(case["resource"].encode())
+        measured = 16 + sum(len(p.encode()) + 1 for p in parts)
         assert max(len(p.encode()) for p in parts) <= 1500
     elif family == "field-name":
         measured = max(len(p[-1].encode()) for p in paths(fields))

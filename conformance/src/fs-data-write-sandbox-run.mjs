@@ -383,7 +383,7 @@ async function compareLocal(runDir) {
   const corpusDigest = assertMatchingSandboxCorpus(fixture, corpus, localCorpus);
   const rest = JSON.parse(await readFile(join(runDir, "rest-results.json"), "utf8"));
   const stream = JSON.parse(await readFile(join(runDir, "stream-results.json"), "utf8"));
-  const differences = compareSandboxArtifact(fixture, rest, stream);
+  const differences = compareSandboxArtifact(fixture, rest, stream, corpus);
   process.stdout.write(
     `${JSON.stringify({ corpusDigest, mismatches: differences.length, differences })}\n`,
   );

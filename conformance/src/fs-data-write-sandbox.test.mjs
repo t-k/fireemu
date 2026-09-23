@@ -42,6 +42,68 @@ test("artifact comparison gates success bodies and error codes without gating er
   );
 });
 
+test("artifact comparison ignores only BatchGet response ordering", () => {
+  const response = (name) => ({
+    missing: `projects/demo-firestore-probe/databases/(default)/documents/c/${name}`,
+  });
+  const production = {
+    programs: {
+      "writes/readback": {
+        steps: { get: { status: 200, code: "OK", body: [response("b"), response("a")] } },
+      },
+      "writes/ordered": {
+        steps: { list: { status: 200, code: "OK", body: [response("b"), response("a")] } },
+      },
+    },
+  };
+  const local = {
+    "writes/readback": {
+      steps: { get: { status: 200, code: "OK", body: [response("a"), response("b")] } },
+    },
+    "writes/ordered": {
+      steps: { list: { status: 200, code: "OK", body: [response("a"), response("b")] } },
+    },
+  };
+  const recipes = {
+    restPrograms: [
+      {
+        id: "writes/readback",
+        steps: [
+          {
+            id: "get",
+            method: "POST",
+            path: "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchGet",
+          },
+        ],
+      },
+      {
+        id: "writes/ordered",
+        steps: [
+          {
+            id: "list",
+            method: "POST",
+            path: "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:runQuery",
+          },
+        ],
+      },
+    ],
+  };
+  assert.deepEqual(compareSandboxArtifact(production, local, {}, recipes), ["writes/ordered#list"]);
+  const unicodeProduction = {
+    programs: {
+      "writes/readback": {
+        steps: { get: { status: 200, code: "OK", body: [response("é"), response("e\u0301")] } },
+      },
+    },
+  };
+  const unicodeLocal = {
+    "writes/readback": {
+      steps: { get: { status: 200, code: "OK", body: [response("e\u0301"), response("é")] } },
+    },
+  };
+  assert.deepEqual(compareSandboxArtifact(unicodeProduction, unicodeLocal, {}, recipes), []);
+});
+
 const step = {
   id: "read",
   method: "GET",

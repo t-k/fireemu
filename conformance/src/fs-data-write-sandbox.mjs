@@ -100,7 +100,28 @@ export function compareRecordings(first, second) {
   return differences.toSorted();
 }
 
-export function compareSandboxArtifact(production, localPrograms, localStreams) {
+export function compareSandboxArtifact(production, localPrograms, localStreams, corpus) {
+  const recipes = new Map((corpus?.restPrograms ?? []).map((program) => [program.id, program]));
+  const batchGetName = (item) => item?.found?.name ?? item?.missing;
+  const comparableBody = (body, programId, stepId) => {
+    const recipe = recipes.get(programId)?.steps.find((step) => step.id === stepId);
+    if (
+      recipe?.method === "POST" &&
+      recipe.path.split("?", 1)[0].endsWith(":batchGet") &&
+      Array.isArray(body) &&
+      body.length > 0 &&
+      body.every((item) => typeof batchGetName(item) === "string")
+    ) {
+      return body.toSorted((left, right) =>
+        batchGetName(left) < batchGetName(right)
+          ? -1
+          : batchGetName(left) > batchGetName(right)
+            ? 1
+            : 0,
+      );
+    }
+    return body;
+  };
   const differences = [];
   const expectedPrograms = production?.programs ?? {};
   for (const programId of new Set([
@@ -114,7 +135,11 @@ export function compareSandboxArtifact(production, localPrograms, localStreams) 
       const actual = actualSteps[stepId];
       const decision = (step) =>
         step?.code === "OK"
-          ? { status: step.status, code: step.code, body: step.body }
+          ? {
+              status: step.status,
+              code: step.code,
+              body: comparableBody(step.body, programId, stepId),
+            }
           : { status: step?.status, code: step?.code };
       if (
         JSON.stringify(canonical(decision(expected))) !==

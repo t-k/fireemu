@@ -32,6 +32,8 @@ pub enum DecodeError {
     },
     /// Malformed field path.
     InvalidFieldPath(String),
+    /// A stored field name rejected with the production error text.
+    InvalidStoredFieldName(String),
     /// Malformed value.
     InvalidValue(String),
     /// Structurally invalid query.
@@ -65,6 +67,7 @@ impl fmt::Display for DecodeError {
                  Cloud Datastore or Cloud Firestore database. "
             ),
             Self::InvalidFieldPath(m) => write!(f, "invalid field path: {m}"),
+            Self::InvalidStoredFieldName(m) => f.write_str(m),
             Self::InvalidValue(m) => write!(f, "invalid value: {m}"),
             Self::InvalidQuery(m) => write!(f, "invalid query: {m}"),
             Self::EmptyWriteOperation => write!(f, "empty write operation"),

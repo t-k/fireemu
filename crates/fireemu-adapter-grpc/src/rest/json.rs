@@ -551,8 +551,9 @@ fn value_from_json_at(
         "integerValue" => V::IntegerValue(match inner {
             Value::String(s) => s.parse::<i64>().map_err(|_| match path {
                 Some(path) => JsonError(format!(
-                    "Invalid value at '{}' (TYPE_INT64), {s:?}",
-                    path.field("integer_value").to_proto_path()
+                    "Invalid value at '{}' (TYPE_INT64), {}",
+                    path.field("integer_value").to_proto_path(),
+                    Value::String(s.clone())
                 )),
                 None => JsonError(format!("integerValue {s:?} is not an int64")),
             })?,
@@ -1975,6 +1976,26 @@ mod tests {
                 .expect_err("unscoped parser still reports its local error")
                 .0,
             "integerValue \"not-a-number\" is not an int64"
+        );
+    }
+
+    #[test]
+    fn malformed_batch_write_integer_quotes_control_characters_as_json() {
+        let writes = FieldPath::root("writes");
+        let invalid = format!("no{}", '\u{1f}');
+        let error = write_from_json(
+            &json!({
+                "update": {
+                    "name": "projects/demo/databases/(default)/documents/items/one",
+                    "fields": {"v": {"integerValue": invalid}}
+                }
+            }),
+            &writes.index(1),
+        )
+        .expect_err("invalid int64 is refused before a BatchWrite is applied");
+        assert_eq!(
+            error.0,
+            "Invalid value at 'writes[1].update.fields[0].value.integer_value' (TYPE_INT64), \"no\\u001f\""
         );
     }
 

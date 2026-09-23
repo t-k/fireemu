@@ -154,6 +154,7 @@ test("verified conditions are bound to their saved comparisons", async () => {
     "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-string",
     "FS-WRITE-LIMITS-03/implied-map",
     "FS-WRITE-LIMITS-03/implied-array",
+    "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
   ]) {
     assert.ok(verified.some((condition) => condition.conditionId === conditionId));
   }

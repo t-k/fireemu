@@ -1,0 +1,362 @@
+{
+  "schemaVersion": 1,
+  "conditionId": "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
+  "sourceCommit": "3d7ceabb866d0d03eecbb866a9b84aa8e8cc4f2e",
+  "artifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+  "configSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
+  "indexConfigSha256": "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+  "productionFixtureSha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+  "productionRecordingDigests": [
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+  ],
+  "localRun": "conformance/.runs/fs-data-write-local-S4xrlQ",
+  "localRestResultSha256": "46d36b0ab5d554e3b178283206859508c3dd651a1d69990c2c4690cdde300044",
+  "command": "pnpm -C conformance fs-data-write:check",
+  "comparisonCommand": "node conformance/src/fs-data-write-sandbox-run.mjs compare-local conformance/.runs/fs-data-write-local-S4xrlQ",
+  "recipeIds": [
+    "writes/limits/raw-request-bytes",
+    "writes/limits/raw-11mib/11534336",
+    "writes/limits/raw-11mib/11534337"
+  ],
+  "result": {
+    "comparableRecipes": 3,
+    "mismatchedRecipes": 0,
+    "wholeRunComparableRestPrograms": 49,
+    "wholeRunComparableStreams": 2,
+    "wholeRunKnownMismatchRows": 12,
+    "wholeRunPendingRestPrograms": 14,
+    "wholeRunPendingStreams": 1
+  },
+  "scopeNote": "The two 11 MiB transition inputs use distinct document paths, and the 16 MiB-plus-one sentinel uses twenty more. Saved-production and local write outcomes match; typed readbacks show the accepted 11 MiB document and the absence of each refused target. No post-refusal readback of the prior accepted path was recorded, so preservation of that path is not established by this condition. This does not establish decoded request-byte behavior or promote FS-DATA-WRITE; other mismatches and unrecorded recipes remain open.",
+  "productionPrograms": {
+    "writes/limits/raw-request-bytes": {
+      "steps": {
+        "commit": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Request payload size exceeds the limit: 11534336 bytes."
+        },
+        "readback-0": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/control\" not found."
+        },
+        "readback-1": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-00\" not found."
+        },
+        "readback-2": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-01\" not found."
+        },
+        "readback-3": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-02\" not found."
+        },
+        "readback-4": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-03\" not found."
+        },
+        "readback-5": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-04\" not found."
+        },
+        "readback-6": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-05\" not found."
+        },
+        "readback-7": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-06\" not found."
+        },
+        "readback-8": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-07\" not found."
+        },
+        "readback-9": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-08\" not found."
+        },
+        "readback-10": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-09\" not found."
+        },
+        "readback-11": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-10\" not found."
+        },
+        "readback-12": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-11\" not found."
+        },
+        "readback-13": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-12\" not found."
+        },
+        "readback-14": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-13\" not found."
+        },
+        "readback-15": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-14\" not found."
+        },
+        "readback-16": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-15\" not found."
+        },
+        "readback-17": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-16\" not found."
+        },
+        "readback-18": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-17\" not found."
+        },
+        "readback-19": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-18\" not found."
+        }
+      }
+    },
+    "writes/limits/raw-11mib/11534336": {
+      "steps": {
+        "write": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "commitTime": "<now>",
+            "writeResults": [
+              {
+                "updateTime": "<now>"
+              }
+            ]
+          }
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/raw11/11534336",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/limits/raw-11mib/11534337": {
+      "steps": {
+        "write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Request payload size exceeds the limit: 11534336 bytes."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/raw11/11534337",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "localPrograms": {
+    "writes/limits/raw-request-bytes": {
+      "steps": {
+        "commit": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Request payload size exceeds the limit: 11534336 bytes."
+        },
+        "readback-0": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/control\" not found."
+        },
+        "readback-1": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-00\" not found."
+        },
+        "readback-2": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-01\" not found."
+        },
+        "readback-3": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-02\" not found."
+        },
+        "readback-4": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-03\" not found."
+        },
+        "readback-5": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-04\" not found."
+        },
+        "readback-6": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-05\" not found."
+        },
+        "readback-7": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-06\" not found."
+        },
+        "readback-8": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-07\" not found."
+        },
+        "readback-9": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-08\" not found."
+        },
+        "readback-10": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-09\" not found."
+        },
+        "readback-11": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-10\" not found."
+        },
+        "readback-12": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-11\" not found."
+        },
+        "readback-13": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-12\" not found."
+        },
+        "readback-14": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-13\" not found."
+        },
+        "readback-15": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-14\" not found."
+        },
+        "readback-16": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-15\" not found."
+        },
+        "readback-17": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-16\" not found."
+        },
+        "readback-18": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-17\" not found."
+        },
+        "readback-19": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/request-bytes-02/probe-r16m1/items/payload-18\" not found."
+        }
+      }
+    },
+    "writes/limits/raw-11mib/11534336": {
+      "steps": {
+        "write": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "commitTime": "<now>",
+            "writeResults": [
+              {
+                "updateTime": "<now>"
+              }
+            ]
+          }
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/raw11/11534336",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/limits/raw-11mib/11534337": {
+      "steps": {
+        "write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Request payload size exceeds the limit: 11534336 bytes."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/raw11/11534337",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -2,7 +2,13 @@
 // Programs only record answers; they never assert. Each program runs on an empty project (the
 // session wipes before and after) and uses run-unique EMAIL(...)/UID(...) values.
 
+import { readFileSync } from "node:fs";
+
 import { TEST_PHONES, TEST_PHONE_CODE } from "./harness.mjs";
+
+const HASH_VECTORS = JSON.parse(
+  readFileSync(new URL("./hash-vectors.json", import.meta.url), "utf8"),
+);
 
 /** Sign-in configuration both sides run under; production already has it (see sandbox doc). */
 export const BASELINE_CONFIG = {
@@ -761,6 +767,482 @@ const uidReuse = program("auth-account/admin/uid-reuse", [
   adminLookup("readback", "UID(reuse)"),
 ]);
 
+// ---- #22: every production import hash algorithm -------------------------------------------
+
+const hashProgram = (algorithm, names) =>
+  program(`auth-account/admin/import-hash/${algorithm}`, [
+    ...names.flatMap((name) => {
+      const tag = name.toLowerCase().replaceAll("_", "-");
+      const vector = HASH_VECTORS[name];
+      return [
+        adminCall(`import-${tag}`, "batchCreate", {
+          ...vector.options,
+          users: [{ localId: `UID(${tag})`, email: `EMAIL(${tag})`, ...vector.user }],
+        }),
+        signIn(`sign-in-${tag}`, `EMAIL(${tag})`),
+        signIn(`wrong-password-${tag}`, `EMAIL(${tag})`, "password124"),
+        signIn(`sign-in-again-${tag}`, `EMAIL(${tag})`),
+      ];
+    }),
+    adminCall("lookup-imported", "lookup", {
+      localId: names.map((name) => `UID(${name.toLowerCase().replaceAll("_", "-")})`),
+    }),
+  ]);
+
+const hashPrograms = [
+  hashProgram("HMAC_SHA512", ["HMAC_SHA512-default", "HMAC_SHA512-salt-and-password"]),
+  hashProgram("HMAC_SHA256", ["HMAC_SHA256-default", "HMAC_SHA256-salt-and-password"]),
+  hashProgram("HMAC_SHA1", ["HMAC_SHA1-default", "HMAC_SHA1-salt-and-password"]),
+  hashProgram("HMAC_MD5", ["HMAC_MD5-default", "HMAC_MD5-salt-and-password"]),
+  hashProgram("MD5", ["MD5-r0", "MD5-r1", "MD5-r2"]),
+  hashProgram("SHA1", ["SHA1-r1", "SHA1-r2", "SHA1-r1-password-and-salt"]),
+  hashProgram("SHA256", ["SHA256-r1", "SHA256-r2", "SHA256-r1-password-and-salt"]),
+  hashProgram("SHA512", ["SHA512-r1", "SHA512-r2", "SHA512-r1-password-and-salt"]),
+  hashProgram("PBKDF_SHA1", ["PBKDF_SHA1", "PBKDF_SHA1-dk64"]),
+  hashProgram("PBKDF2_SHA256", ["PBKDF2_SHA256"]),
+  hashProgram("SCRYPT", ["SCRYPT"]),
+  hashProgram("STANDARD_SCRYPT", ["STANDARD_SCRYPT"]),
+  hashProgram("BCRYPT", ["BCRYPT"]),
+  hashProgram("ARGON2", ["ARGON2-ARGON2_ID", "ARGON2-ARGON2_I", "ARGON2-ARGON2_D"]),
+];
+
+const importWith = (id, options, user = {}) =>
+  adminCall(id, "batchCreate", {
+    ...options,
+    users: [{ localId: `UID(${id})`, email: `EMAIL(${id})`, ...user }],
+  });
+const hashUser = (name) => HASH_VECTORS[name].user;
+const hashOptions = (name, drop = [], extra = {}) => {
+  const options = { ...HASH_VECTORS[name].options, ...extra };
+  for (const key of drop) delete options[key];
+  return options;
+};
+const argon = (overrides) => ({
+  hashAlgorithm: "ARGON2",
+  argon2Parameters: {
+    ...HASH_VECTORS["ARGON2-ARGON2_ID"].options.argon2Parameters,
+    ...overrides,
+  },
+});
+const hashErrors = program("auth-account/admin/import-hash/errors", [
+  importWith("hash-without-algorithm", {}, hashUser("SHA256-r1")),
+  importWith("unknown-algorithm", { hashAlgorithm: "NOT_AN_ALGORITHM" }, hashUser("SHA256-r1")),
+  importWith(
+    "hmac-without-key",
+    hashOptions("HMAC_SHA256-default", ["signerKey"]),
+    hashUser("HMAC_SHA256-default"),
+  ),
+  importWith(
+    "hmac-sha512-without-key",
+    hashOptions("HMAC_SHA512-default", ["signerKey"]),
+    hashUser("HMAC_SHA512-default"),
+  ),
+  signIn("sign-in-hmac-sha512-without-key", "EMAIL(hmac-sha512-without-key)"),
+  importWith("pbkdf-without-rounds", hashOptions("PBKDF_SHA1", ["rounds"]), hashUser("PBKDF_SHA1")),
+  importWith(
+    "pbkdf-rounds-0",
+    hashOptions("PBKDF_SHA1", [], { rounds: 0 }),
+    hashUser("PBKDF_SHA1"),
+  ),
+  importWith(
+    "pbkdf-rounds-120001",
+    hashOptions("PBKDF_SHA1", [], { rounds: 120001 }),
+    hashUser("PBKDF_SHA1"),
+  ),
+  importWith(
+    "sha256-rounds-8193",
+    hashOptions("SHA256-r1", [], { rounds: 8193 }),
+    hashUser("SHA256-r1"),
+  ),
+  importWith("md5-rounds-8193", hashOptions("MD5-r0", [], { rounds: 8193 }), hashUser("MD5-r0")),
+  importWith("scrypt-without-key", hashOptions("SCRYPT", ["signerKey"]), hashUser("SCRYPT")),
+  signIn("sign-in-scrypt-without-key", "EMAIL(scrypt-without-key)"),
+  importWith(
+    "scrypt-memory-cost-15",
+    hashOptions("SCRYPT", [], { memoryCost: 15 }),
+    hashUser("SCRYPT"),
+  ),
+  importWith(
+    "scrypt-memory-cost-0",
+    hashOptions("SCRYPT", [], { memoryCost: 0 }),
+    hashUser("SCRYPT"),
+  ),
+  importWith("scrypt-rounds-9", hashOptions("SCRYPT", [], { rounds: 9 }), hashUser("SCRYPT")),
+  importWith("scrypt-rounds-0", hashOptions("SCRYPT", [], { rounds: 0 }), hashUser("SCRYPT")),
+  importWith(
+    "standard-scrypt-without-cost",
+    hashOptions("STANDARD_SCRYPT", ["cpuMemCost"]),
+    hashUser("STANDARD_SCRYPT"),
+  ),
+  importWith(
+    "standard-scrypt-dk-len-0",
+    hashOptions("STANDARD_SCRYPT", [], { dkLen: 0 }),
+    hashUser("STANDARD_SCRYPT"),
+  ),
+  importWith(
+    "argon2-without-parameters",
+    { hashAlgorithm: "ARGON2" },
+    hashUser("ARGON2-ARGON2_ID"),
+  ),
+  importWith("argon2-memory-32769", argon({ memoryCostKib: 32769 }), hashUser("ARGON2-ARGON2_ID")),
+  importWith("argon2-iterations-17", argon({ iterations: 17 }), hashUser("ARGON2-ARGON2_ID")),
+  importWith("argon2-parallelism-0", argon({ parallelism: 0 }), hashUser("ARGON2-ARGON2_ID")),
+  importWith("argon2-hash-length-3", argon({ hashLengthBytes: 3 }), hashUser("ARGON2-ARGON2_ID")),
+  importWith(
+    "argon2-type-unspecified",
+    argon({ hashType: "HASH_TYPE_UNSPECIFIED" }),
+    hashUser("ARGON2-ARGON2_ID"),
+  ),
+  importWith("password-hash-not-base64", hashOptions("SHA256-r1"), {
+    passwordHash: "not base64!",
+    salt: "c2FsdA==",
+  }),
+  importWith("hash-without-salt", hashOptions("SHA256-r1"), {
+    passwordHash: hashUser("SHA256-r1").passwordHash,
+  }),
+  signIn("sign-in-hash-without-salt", "EMAIL(hash-without-salt)"),
+  importWith("raw-password-and-hash", hashOptions("SHA256-r1"), {
+    ...hashUser("SHA256-r1"),
+    rawPassword: "password123",
+  }),
+  adminCall("lookup-all", "lookup", {
+    localId: [
+      "UID(hash-without-algorithm)",
+      "UID(unknown-algorithm)",
+      "UID(hmac-without-key)",
+      "UID(hmac-sha512-without-key)",
+      "UID(scrypt-without-key)",
+      "UID(hash-without-salt)",
+      "UID(raw-password-and-hash)",
+    ],
+  }),
+]);
+
+// ---- #23 phone accounts, #24 provider link/unlink ------------------------------------------
+
+const sendCode = (id, phone, extra = {}) =>
+  client(id, "sendVerificationCode", { phoneNumber: phone, ...extra });
+const phoneSignIn = (id, codeStep, extra = {}) =>
+  client(id, "signInWithPhoneNumber", {
+    sessionInfo: from(codeStep, "sessionInfo"),
+    code: TEST_PHONE_CODE,
+    ...extra,
+  });
+const phoneAccounts = program("auth-account/phone", [
+  sendCode("send-code-without-recaptcha", "PHONE(0)"),
+  sendCode("send-code", "PHONE(0)", { recaptchaToken: "fake-recaptcha-token" }),
+  phoneSignIn("sign-in-new", "send-code"),
+  lookupToken("lookup-phone-user", "sign-in-new"),
+  sendCode("send-code-again", "PHONE(0)", { recaptchaToken: "fake-recaptcha-token" }),
+  phoneSignIn("sign-in-existing", "send-code-again"),
+  sendCode("send-code-wrong", "PHONE(1)", { recaptchaToken: "fake-recaptcha-token" }),
+  phoneSignIn("wrong-code", "send-code-wrong", { code: "000000" }),
+  client("invalid-session-info", "signInWithPhoneNumber", {
+    sessionInfo: "not-a-session",
+    code: TEST_PHONE_CODE,
+  }),
+  client("missing-code", "signInWithPhoneNumber", {
+    sessionInfo: from("send-code-wrong", "sessionInfo"),
+  }),
+  adminCreate("admin-create-phone", { localId: "UID(ph)", phoneNumber: "PHONE(2)" }),
+  adminCall("admin-lookup-by-phone", "lookup", { phoneNumber: ["PHONE(2)"] }),
+  signUp("email-account", "phone-link"),
+  sendCode("send-code-link", "PHONE(3)", { recaptchaToken: "fake-recaptcha-token" }),
+  phoneSignIn("link-phone", "send-code-link", { idToken: from("email-account", "idToken") }),
+  lookupToken("lookup-linked", "email-account"),
+  sendCode("send-code-collision", "PHONE(0)", { recaptchaToken: "fake-recaptcha-token" }),
+  phoneSignIn("link-taken-phone", "send-code-collision", {
+    idToken: from("email-account", "idToken"),
+  }),
+  client("unlink-phone", "update", {
+    idToken: from("email-account", "idToken"),
+    deleteProvider: ["phone"],
+  }),
+  lookupToken("lookup-unlinked", "email-account"),
+]);
+
+const providerLinkUnlink = program("auth-account/provider", [
+  adminCreate("create", { localId: "UID(pv)", email: "EMAIL(pv)", password: "password123" }),
+  adminCreate("create-other", { localId: "UID(pv-other)", email: "EMAIL(pv-other)" }),
+  adminCall("link-google", "update", {
+    localId: "UID(pv)",
+    linkProviderUserInfo: {
+      providerId: "google.com",
+      rawId: "raw-google-1",
+      email: "EMAIL(pv)",
+      displayName: "G User",
+    },
+  }),
+  adminCall("link-oidc", "update", {
+    localId: "UID(pv)",
+    linkProviderUserInfo: { providerId: "oidc.fireemu-test", rawId: "raw-oidc-1" },
+  }),
+  adminLookup("lookup-linked", "UID(pv)"),
+  adminCall("lookup-by-federated-id", "lookup", {
+    federatedUserId: [{ providerId: "google.com", rawId: "raw-google-1" }],
+  }),
+  adminCall("link-same-raw-id-elsewhere", "update", {
+    localId: "UID(pv-other)",
+    linkProviderUserInfo: { providerId: "google.com", rawId: "raw-google-1" },
+  }),
+  adminCall("link-without-raw-id", "update", {
+    localId: "UID(pv-other)",
+    linkProviderUserInfo: { providerId: "google.com" },
+  }),
+  adminCall("link-password-provider", "update", {
+    localId: "UID(pv-other)",
+    linkProviderUserInfo: { providerId: "password", rawId: "x" },
+  }),
+  signIn("sign-in", "EMAIL(pv)"),
+  client("client-unlink-google", "update", {
+    idToken: from("sign-in", "idToken"),
+    deleteProvider: ["google.com"],
+  }),
+  lookupToken("lookup-after-google-unlink", "sign-in"),
+  client("client-unlink-password", "update", {
+    idToken: from("sign-in", "idToken"),
+    deleteProvider: ["password"],
+  }),
+  adminLookup("lookup-after-password-unlink", "UID(pv)"),
+  client("client-unlink-last", "update", {
+    idToken: from("sign-in", "idToken"),
+    deleteProvider: ["oidc.fireemu-test"],
+  }),
+  adminLookup("lookup-after-last-unlink", "UID(pv)"),
+  client("client-unlink-unknown", "update", {
+    idToken: from("sign-in", "idToken"),
+    deleteProvider: ["facebook.com"],
+  }),
+]);
+
+// ---- #26-#29: configuration-dependent account behaviour ------------------------------------
+
+const duplicateEmail = program(
+  "auth-account/config/duplicate-email",
+  [
+    signUp("sign-up-first", "dup"),
+    signUp("sign-up-duplicate", "dup", "password456"),
+    adminCreate("admin-create-duplicate", { localId: "UID(dup-admin)", email: "EMAIL(dup)" }),
+    adminCall("import-duplicate", "batchCreate", {
+      users: [{ localId: "UID(dup-import)", email: "EMAIL(dup)" }],
+    }),
+    signIn("sign-in-first-password", "EMAIL(dup)"),
+    signIn("sign-in-second-password", "EMAIL(dup)", "password456"),
+    adminCall("admin-lookup-by-email", "lookup", { email: ["EMAIL(dup)"] }),
+    signUp("other", "dup-other"),
+    client("update-email-to-taken", "update", {
+      idToken: from("other", "idToken"),
+      email: "EMAIL(dup)",
+      returnSecureToken: true,
+    }),
+  ],
+  { config: { "signIn.allowDuplicateEmails": true } },
+);
+
+const privacySteps = [
+  signUp("sign-up", "privacy"),
+  signIn("wrong-password", "EMAIL(privacy)", "wrong-password"),
+  signIn("unknown-email", "EMAIL(unknown-privacy)"),
+  client("reset-for-unknown-email", "sendOobCode", {
+    requestType: "PASSWORD_RESET",
+    email: "EMAIL(unknown-reset)",
+  }),
+  signUp("sign-up-duplicate", "privacy"),
+];
+const emailPrivacyOff = program("auth-account/config/email-privacy/off", privacySteps, {
+  config: { "emailPrivacyConfig.enableImprovedEmailPrivacy": false },
+});
+const emailPrivacyOn = program("auth-account/config/email-privacy/on", privacySteps);
+
+const passwordRoutes = (prefix, weak, strong) => [
+  client(`${prefix}sign-up-weak`, "signUp", {
+    email: `EMAIL(${prefix}weak)`,
+    password: weak,
+    returnSecureToken: true,
+  }),
+  client(`${prefix}sign-up-strong`, "signUp", {
+    email: `EMAIL(${prefix}strong)`,
+    password: strong,
+    returnSecureToken: true,
+  }),
+  adminCreate(`${prefix}admin-create-weak`, {
+    localId: `UID(${prefix}aw)`,
+    email: `EMAIL(${prefix}aw)`,
+    password: weak,
+  }),
+  adminCall(`${prefix}admin-update-weak`, "update", {
+    localId: `UID(${prefix}aw)`,
+    password: weak,
+  }),
+  client(`${prefix}client-update-weak`, "update", {
+    idToken: from(`${prefix}sign-up-strong`, "idToken"),
+    password: weak,
+  }),
+  adminCall(`${prefix}import-raw-weak`, "batchCreate", {
+    users: [{ localId: `UID(${prefix}iw)`, email: `EMAIL(${prefix}iw)`, rawPassword: weak }],
+  }),
+  signIn(`${prefix}sign-in-admin-weak`, `EMAIL(${prefix}aw)`, weak),
+  signIn(`${prefix}sign-in-strong`, `EMAIL(${prefix}strong)`, strong),
+];
+const policyDefaultRoutes = program("auth-account/policy/default/routes", [
+  ...passwordRoutes("", "12345", "123456"),
+  client("sign-up-4097", "signUp", {
+    email: "EMAIL(long)",
+    password: { $repeat: "a", count: 4097 },
+    returnSecureToken: true,
+  }),
+  client("sign-up-4096", "signUp", {
+    email: "EMAIL(long)",
+    password: { $repeat: "a", count: 4096 },
+    returnSecureToken: true,
+  }),
+  adminCreate("admin-create-4097", {
+    localId: "UID(long-admin)",
+    password: { $repeat: "a", count: 4097 },
+  }),
+]);
+const customPolicy = (state, extra = {}) => ({
+  passwordPolicyConfig: {
+    passwordPolicyEnforcementState: state,
+    passwordPolicyVersions: [
+      {
+        customStrengthOptions: {
+          minPasswordLength: 8,
+          maxPasswordLength: 20,
+          containsLowercaseCharacter: true,
+          containsUppercaseCharacter: true,
+          containsNumericCharacter: true,
+          containsNonAlphanumericCharacter: true,
+        },
+      },
+    ],
+    ...extra,
+  },
+});
+const policyEnforce = program(
+  "auth-account/policy/enforce-custom",
+  [
+    ...passwordRoutes("", "password", "Passw0rd!"),
+    client("sign-up-too-long", "signUp", {
+      email: "EMAIL(toolong)",
+      password: "Passw0rd!Passw0rd!Pas",
+      returnSecureToken: true,
+    }),
+    client("sign-up-missing-upper", "signUp", {
+      email: "EMAIL(noupper)",
+      password: "passw0rd!",
+      returnSecureToken: true,
+    }),
+    client("sign-up-missing-symbol", "signUp", {
+      email: "EMAIL(nosymbol)",
+      password: "Passw0rdx",
+      returnSecureToken: true,
+    }),
+    { id: "password-policy", method: "GET", path: "v2/passwordPolicy", auth: "key" },
+  ],
+  { config: customPolicy("ENFORCE", { forceUpgradeOnSignin: true }) },
+);
+const policyNotEnforced = program(
+  "auth-account/policy/not-enforce",
+  [
+    adminCreate("create-weak", { localId: "UID(nw)", email: "EMAIL(nw)", password: "password" }),
+    signIn("sign-in-weak", "EMAIL(nw)", "password"),
+    ...passwordRoutes("off-", "password", "Passw0rd!"),
+  ],
+  { config: customPolicy("OFF") },
+);
+
+const clientPermissions = program(
+  "auth-account/config/client-permissions",
+  [
+    signUp("client-sign-up", "perm"),
+    client("anonymous-sign-up", "signUp", { returnSecureToken: true }),
+    adminCreate("admin-create", {
+      localId: "UID(perm)",
+      email: "EMAIL(perm-admin)",
+      password: "password123",
+    }),
+    signIn("sign-in-admin-created", "EMAIL(perm-admin)"),
+    client("client-delete", "delete", { idToken: from("sign-in-admin-created", "idToken") }),
+    adminLookup("lookup-after-client-delete", "UID(perm)"),
+    adminCall("admin-delete", "delete", { localId: "UID(perm)" }),
+  ],
+  {
+    config: {
+      "client.permissions.disabledUserSignup": true,
+      "client.permissions.disabledUserDeletion": true,
+    },
+  },
+);
+
+// ---- #30 value classes -----------------------------------------------------------------------
+
+const valueClasses = program("auth-account/values", [
+  signUp("sign-up", "values"),
+  ...[
+    ["display-name-empty", { displayName: "" }],
+    ["display-name-256", { displayName: { $repeat: "n", count: 256 } }],
+    ["display-name-257", { displayName: { $repeat: "n", count: 257 } }],
+    ["display-name-control", { displayName: "a\u0007b" }],
+    ["display-name-nul", { displayName: "a\u0000b" }],
+    ["display-name-null", { displayName: null }],
+    ["photo-url-not-a-url", { photoUrl: "not a url" }],
+    ["photo-url-javascript", { photoUrl: "javascript:alert(1)" }],
+    [
+      "photo-url-2048",
+      { photoUrl: { $concat: ["https://example.com/", { $repeat: "p", count: 2028 }] } },
+    ],
+    ["photo-url-empty", { photoUrl: "" }],
+  ].map(([id, fields]) =>
+    client(`client-update-${id}`, "update", { idToken: from("sign-up", "idToken"), ...fields }),
+  ),
+  lookupToken("lookup-after-client-updates", "sign-up"),
+  ...[
+    ["email-plus", "fireemu-aa-plus+tag@example.com"],
+    ["email-unicode-local", "テスト@example.com"],
+    ["email-leading-space", " EMAIL(space)"],
+    ["email-254", { $concat: [{ $repeat: "e", count: 242 }, "@example.com"] }],
+    ["email-255", { $concat: [{ $repeat: "e", count: 243 }, "@example.com"] }],
+    ["email-local-64", { $concat: [{ $repeat: "l", count: 64 }, "@example.com"] }],
+    ["email-local-65", { $concat: [{ $repeat: "l", count: 65 }, "@example.com"] }],
+  ].map(([id, email]) => adminCreate(`admin-create-${id}`, { localId: `UID(${id})`, email })),
+  ...[
+    ["phone-formatted", "+1 650-555-0104"],
+    ["phone-leading-zero", "+0 650 555 0104"],
+    ["phone-letters", "+1650555ABCD"],
+  ].map(([id, phoneNumber]) =>
+    adminCreate(`admin-create-${id}`, { localId: `UID(${id})`, phoneNumber }),
+  ),
+  adminCreate("local-id-unicode", { localId: "ユーザー-UID(u)" }),
+  adminCreate("local-id-empty", { localId: "" }),
+  adminCall("import-created-at-number", "batchCreate", {
+    users: [{ localId: "UID(ts-number)", createdAt: 1600000000000, lastLoginAt: 1600000100000 }],
+  }),
+  adminCall("import-created-at-invalid", "batchCreate", {
+    users: [{ localId: "UID(ts-invalid)", createdAt: "yesterday" }],
+  }),
+  client("sign-up-ignored-fields", "signUp", {
+    email: "EMAIL(ignored)",
+    password: "password123",
+    displayName: "Ignored?",
+    photoUrl: "https://example.com/i.png",
+    emailVerified: true,
+    returnSecureToken: true,
+  }),
+  lookupToken("lookup-ignored-fields", "sign-up-ignored-fields"),
+  adminCall("lookup-created", "lookup", {
+    localId: [
+      "UID(email-plus)",
+      "UID(email-unicode-local)",
+      "UID(email-leading-space)",
+      "UID(email-254)",
+      "UID(phone-formatted)",
+      "UID(phone-leading-zero)",
+      "UID(ts-number)",
+    ],
+  }),
+]);
+
 export const PROGRAMS = [
   clientLifecycle,
   clientProfile,
@@ -787,4 +1269,16 @@ export const PROGRAMS = [
   adminQuery,
   importBasic,
   uidReuse,
+  ...hashPrograms,
+  hashErrors,
+  phoneAccounts,
+  providerLinkUnlink,
+  duplicateEmail,
+  emailPrivacyOff,
+  emailPrivacyOn,
+  policyDefaultRoutes,
+  policyEnforce,
+  policyNotEnforced,
+  clientPermissions,
+  valueClasses,
 ];

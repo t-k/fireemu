@@ -310,7 +310,11 @@ test("normalization masks secrets, tokens, generated ids and run-window times on
             { providerId: "password", federatedId: "fireemu-aa-<run>-a@example.com" },
           ],
         },
-        { localId: "a".repeat(128), passwordHash: "UkVEQUNURUQ=", validSince: "<run-time:string:s>" },
+        {
+          localId: "a".repeat(128),
+          passwordHash: "UkVEQUNURUQ=",
+          validSince: "<run-time:string:s>",
+        },
         { localId: "", createdAt: "<run-time:number:ms>" },
       ],
       echo: `projects/${RECORDED_PROJECT}/accounts <api-key>`,
@@ -335,29 +339,67 @@ test("resolved requests are guarded: project, path family, mail, SMS", () => {
     /path/,
   );
   refused(
-    { id: "p2", path: "v1/projects/{project}/%2e%2e/fireemu-35fe6/accounts", auth: "admin", body: {} },
+    {
+      id: "p2",
+      path: "v1/projects/{project}/%2e%2e/fireemu-35fe6/accounts",
+      auth: "admin",
+      body: {},
+    },
     /path/,
   );
   refused(
-    { id: "p3", path: "v1/accounts:lookup", auth: "admin", body: { targetProjectId: "fireemu-35fe6" } },
+    {
+      id: "p3",
+      path: "v1/accounts:lookup",
+      auth: "admin",
+      body: { targetProjectId: "fireemu-35fe6" },
+    },
     /project/,
   );
-  refused({ id: "p4", path: "admin/v2/projects/{project}/config", method: "PATCH", auth: "admin", body: {} }, /path/);
+  refused(
+    {
+      id: "p4",
+      path: "admin/v2/projects/{project}/config",
+      method: "PATCH",
+      auth: "admin",
+      body: {},
+    },
+    /path/,
+  );
   refused({ id: "p5", path: "v2/accounts/mfaEnrollment:start", auth: "key", body: {} }, /path/);
   const config = buildRequest(
-    { id: "h", method: "PATCH", path: "admin/v2/projects/{project}/config", auth: "admin", body: {} },
+    {
+      id: "h",
+      method: "PATCH",
+      path: "admin/v2/projects/{project}/config",
+      auth: "admin",
+      body: {},
+    },
     ctx,
     new Map(),
   );
   guardRequest(config, ctx, { harness: true });
   assert.throws(() => guardRequest(config, ctx), /path/);
-  refused({ id: "m1", path: "v1/accounts:signUp", auth: "key", body: { email: "a@gmail.Com" } }, /example\.com/);
   refused(
-    { id: "m2", path: "v1/accounts:signUp", auth: "key", body: { email: "a@example.com.evil.org" } },
+    { id: "m1", path: "v1/accounts:signUp", auth: "key", body: { email: "a@gmail.Com" } },
     /example\.com/,
   );
   refused(
-    { id: "m3", path: "v1/accounts:signUp", auth: "key", body: { email: { $concat: ["a@", "gmail.com"] } } },
+    {
+      id: "m2",
+      path: "v1/accounts:signUp",
+      auth: "key",
+      body: { email: "a@example.com.evil.org" },
+    },
+    /example\.com/,
+  );
+  refused(
+    {
+      id: "m3",
+      path: "v1/accounts:signUp",
+      auth: "key",
+      body: { email: { $concat: ["a@", "gmail.com"] } },
+    },
     /example\.com/,
   );
   refused(
@@ -370,11 +412,21 @@ test("resolved requests are guarded: project, path family, mail, SMS", () => {
     /unknown/,
   );
   refused(
-    { id: "s1", path: "v1/accounts:sendVerificationCode", auth: "key", body: { phoneNumber: "+81312345678" } },
+    {
+      id: "s1",
+      path: "v1/accounts:sendVerificationCode",
+      auth: "key",
+      body: { phoneNumber: "+81312345678" },
+    },
     /test phone/,
   );
   refused(
-    { id: "s2", path: "v1/projects/{project}/accounts", auth: "admin", body: { phoneNumber: "+81312345678" } },
+    {
+      id: "s2",
+      path: "v1/projects/{project}/accounts",
+      auth: "admin",
+      body: { phoneNumber: "+81312345678" },
+    },
     /test phone/,
   );
 });
@@ -421,4 +473,26 @@ test("the fixture scan refuses secrets and foreign identifiers", () => {
   ]) {
     assert.throws(() => scanFixture(JSON.stringify(bad), secrets), /fixture/);
   }
+});
+
+test("config read-back matches written fields and treats cleared policies as unset", async () => {
+  const { configMatches } = await import("./auth-account/session.mjs");
+  const policy = {
+    passwordPolicyEnforcementState: "ENFORCE",
+    passwordPolicyVersions: [{ customStrengthOptions: { minPasswordLength: 8 } }],
+  };
+  assert.equal(
+    configMatches(
+      { ...policy, lastUpdateTime: "2026-09-23T10:00:00Z", forceUpgradeOnSignin: false },
+      policy,
+    ),
+    true,
+  );
+  assert.equal(configMatches({ passwordPolicyEnforcementState: "OFF" }, policy), false);
+  assert.equal(configMatches(undefined, undefined), true);
+  assert.equal(configMatches({ passwordPolicyEnforcementState: "OFF" }, undefined), true);
+  assert.equal(configMatches(policy, undefined), false);
+  assert.equal(configMatches(true, true), true);
+  assert.equal(configMatches(false, true), false);
+  assert.equal(configMatches({ "+16505550101": "123456" }, { "+16505550101": "123456" }), true);
 });

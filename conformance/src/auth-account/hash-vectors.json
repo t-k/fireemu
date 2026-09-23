@@ -1,0 +1,321 @@
+{
+  "ARGON2-ARGON2_D": {
+    "options": {
+      "argon2Parameters": {
+        "hashLengthBytes": 32,
+        "hashType": "ARGON2_D",
+        "iterations": 2,
+        "memoryCostKib": 1024,
+        "parallelism": 1
+      },
+      "hashAlgorithm": "ARGON2"
+    },
+    "user": {
+      "passwordHash": "spCiDD+UUE/Pu2A4QBznc8bQuvTPQuqU4MquEnjbV0Q=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "ARGON2-ARGON2_I": {
+    "options": {
+      "argon2Parameters": {
+        "hashLengthBytes": 32,
+        "hashType": "ARGON2_I",
+        "iterations": 2,
+        "memoryCostKib": 1024,
+        "parallelism": 1
+      },
+      "hashAlgorithm": "ARGON2"
+    },
+    "user": {
+      "passwordHash": "9dFV2IabJDAfZVjn9BLMNb3TRcKicRmyARV6EmT6afo=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "ARGON2-ARGON2_ID": {
+    "options": {
+      "argon2Parameters": {
+        "hashLengthBytes": 32,
+        "hashType": "ARGON2_ID",
+        "iterations": 2,
+        "memoryCostKib": 1024,
+        "parallelism": 1
+      },
+      "hashAlgorithm": "ARGON2"
+    },
+    "user": {
+      "passwordHash": "alx7x9eUA2KklCuymrWnfeHBRWv/eYcXCHgBxUXS19M=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "BCRYPT": {
+    "options": {
+      "hashAlgorithm": "BCRYPT"
+    },
+    "user": {
+      "passwordHash": "JDJhJDEwJGFiY2RlZmdoaWprbG1ub3BxcnN0dXUwU1lxOHR3cGN0aFMxMHV4UTI2cnYwczNPYmo4VWZ1"
+    }
+  },
+  "HMAC_MD5-default": {
+    "options": {
+      "hashAlgorithm": "HMAC_MD5",
+      "signerKey": "ZmlyZWVtdS10ZXN0LXNpZ25lci1rZXktbm90LWEtc2VjcmV0LTAxMjM0NTY3ODk="
+    },
+    "user": {
+      "passwordHash": "QtUxMKEzmP6zJlwzAtMDpw==",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "HMAC_MD5-salt-and-password": {
+    "options": {
+      "hashAlgorithm": "HMAC_MD5",
+      "passwordHashOrder": "SALT_AND_PASSWORD",
+      "signerKey": "ZmlyZWVtdS10ZXN0LXNpZ25lci1rZXktbm90LWEtc2VjcmV0LTAxMjM0NTY3ODk="
+    },
+    "user": {
+      "passwordHash": "bK8V+ubgAu+W22poiuKsjQ==",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "HMAC_SHA1-default": {
+    "options": {
+      "hashAlgorithm": "HMAC_SHA1",
+      "signerKey": "ZmlyZWVtdS10ZXN0LXNpZ25lci1rZXktbm90LWEtc2VjcmV0LTAxMjM0NTY3ODk="
+    },
+    "user": {
+      "passwordHash": "QYQ8FPnmQ8Csm5xJL4jVV+d/+rk=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "HMAC_SHA1-salt-and-password": {
+    "options": {
+      "hashAlgorithm": "HMAC_SHA1",
+      "passwordHashOrder": "SALT_AND_PASSWORD",
+      "signerKey": "ZmlyZWVtdS10ZXN0LXNpZ25lci1rZXktbm90LWEtc2VjcmV0LTAxMjM0NTY3ODk="
+    },
+    "user": {
+      "passwordHash": "/IgSkcVC9AJewSTrOQY7jRVv0wY=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "HMAC_SHA256-default": {
+    "options": {
+      "hashAlgorithm": "HMAC_SHA256",
+      "signerKey": "ZmlyZWVtdS10ZXN0LXNpZ25lci1rZXktbm90LWEtc2VjcmV0LTAxMjM0NTY3ODk="
+    },
+    "user": {
+      "passwordHash": "8VgjOzrpgL/hh8e7rOukk+Gsnf+Fhf96IUGbGTINfDk=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "HMAC_SHA256-salt-and-password": {
+    "options": {
+      "hashAlgorithm": "HMAC_SHA256",
+      "passwordHashOrder": "SALT_AND_PASSWORD",
+      "signerKey": "ZmlyZWVtdS10ZXN0LXNpZ25lci1rZXktbm90LWEtc2VjcmV0LTAxMjM0NTY3ODk="
+    },
+    "user": {
+      "passwordHash": "pBT7xLqk1MCIepnbFQe4fugpS+9zs1I8Zb2afQRHHx4=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "HMAC_SHA512-default": {
+    "options": {
+      "hashAlgorithm": "HMAC_SHA512",
+      "signerKey": "ZmlyZWVtdS10ZXN0LXNpZ25lci1rZXktbm90LWEtc2VjcmV0LTAxMjM0NTY3ODk="
+    },
+    "user": {
+      "passwordHash": "k0GYi4OwNw31kJfwJsvnvxPuGFHgZeWaDaO0f46gIl+fJgm+s73V51oSiFnDU+khFMUnYyqn46ItS+fYGzxEUg==",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "HMAC_SHA512-salt-and-password": {
+    "options": {
+      "hashAlgorithm": "HMAC_SHA512",
+      "passwordHashOrder": "SALT_AND_PASSWORD",
+      "signerKey": "ZmlyZWVtdS10ZXN0LXNpZ25lci1rZXktbm90LWEtc2VjcmV0LTAxMjM0NTY3ODk="
+    },
+    "user": {
+      "passwordHash": "oywSYQrvtBeI209UYccdtodpJp4ZO75D1StooIrQ95BfKLqdbpPt/E/NwNfgC5SmIdSTjtFz8U0v9rz2OE2OUQ==",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "MD5-r0": {
+    "options": {
+      "hashAlgorithm": "MD5",
+      "rounds": 0
+    },
+    "user": {
+      "passwordHash": "NTVjZGM2NWFmNjgyMjNiMDI3YzY5NTI3OGExOGM3Mzg=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "MD5-r1": {
+    "options": {
+      "hashAlgorithm": "MD5",
+      "rounds": 1
+    },
+    "user": {
+      "passwordHash": "OTUzMTNiMjYzNWVhZjNlNjc4NTVjY2FhMjg1MGFmNTU=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "MD5-r2": {
+    "options": {
+      "hashAlgorithm": "MD5",
+      "rounds": 2
+    },
+    "user": {
+      "passwordHash": "YjU2MzU3NjUwMzg2OTc1MDk4ODI3ZTllNzJkZjJkMTM=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "PBKDF2_SHA256": {
+    "options": {
+      "hashAlgorithm": "PBKDF2_SHA256",
+      "rounds": 1000
+    },
+    "user": {
+      "passwordHash": "kCPjarpBbvCKB586M6v7ELi8bZU6G8MqbdDxxWBWFSw=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "PBKDF_SHA1": {
+    "options": {
+      "hashAlgorithm": "PBKDF_SHA1",
+      "rounds": 1000
+    },
+    "user": {
+      "passwordHash": "IWZWjqgZ+tNB9FhoHHHtNRWdU5I=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "PBKDF_SHA1-dk64": {
+    "options": {
+      "hashAlgorithm": "PBKDF_SHA1",
+      "rounds": 1000
+    },
+    "user": {
+      "passwordHash": "IWZWjqgZ+tNB9FhoHHHtNRWdU5L2jhiSmB6JzvsSYmvTkenQR4JvJetZejxwE6Q5G855Y4PqB78ctR1Zl/y9Bw==",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SCRYPT": {
+    "options": {
+      "hashAlgorithm": "SCRYPT",
+      "memoryCost": 14,
+      "rounds": 8,
+      "saltSeparator": "AQ==",
+      "signerKey": "ZmlyZWVtdS10ZXN0LXNpZ25lci1rZXktbm90LWEtc2VjcmV0LTAxMjM0NTY3ODk="
+    },
+    "user": {
+      "passwordHash": "kpTohCD16EXInbtG8sZ026wT5qRpnJowl3OllMYOvbQgh4hjocr2yXNmGSITBS8=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SHA1-r1": {
+    "options": {
+      "hashAlgorithm": "SHA1",
+      "rounds": 1
+    },
+    "user": {
+      "passwordHash": "zhQgjrJfwsWZHkAe+mD3cOhzesE=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SHA1-r1-password-and-salt": {
+    "options": {
+      "hashAlgorithm": "SHA1",
+      "passwordHashOrder": "PASSWORD_AND_SALT",
+      "rounds": 1
+    },
+    "user": {
+      "passwordHash": "mPKMKYJQKWJjExqk3q7Df3+DvIc=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SHA1-r2": {
+    "options": {
+      "hashAlgorithm": "SHA1",
+      "rounds": 2
+    },
+    "user": {
+      "passwordHash": "+YsnGyLcSSqd7nPHgOEKTemsRhk=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SHA256-r1": {
+    "options": {
+      "hashAlgorithm": "SHA256",
+      "rounds": 1
+    },
+    "user": {
+      "passwordHash": "7tZoySWNSBRvpfduGo1x1tSJvVEUZXAyNu/ieLbD9BM=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SHA256-r1-password-and-salt": {
+    "options": {
+      "hashAlgorithm": "SHA256",
+      "passwordHashOrder": "PASSWORD_AND_SALT",
+      "rounds": 1
+    },
+    "user": {
+      "passwordHash": "vFHYE9iVQNBq3XkD5EW0zExF2wUkNLOFbG/Fh1XR7gc=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SHA256-r2": {
+    "options": {
+      "hashAlgorithm": "SHA256",
+      "rounds": 2
+    },
+    "user": {
+      "passwordHash": "MJOEsRWTi8DLIjW6uLJPLgfPp1aFYVndDtvjlOuQQms=",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SHA512-r1": {
+    "options": {
+      "hashAlgorithm": "SHA512",
+      "rounds": 1
+    },
+    "user": {
+      "passwordHash": "U2hsVTQPjSD6VGRgJQBG1ys3wV6c/9shj4KNnc9ohcITCRP2HnsS2YNmh4qlT/XO5xcvwArPtxbOKG1SYUSCpA==",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SHA512-r1-password-and-salt": {
+    "options": {
+      "hashAlgorithm": "SHA512",
+      "passwordHashOrder": "PASSWORD_AND_SALT",
+      "rounds": 1
+    },
+    "user": {
+      "passwordHash": "Rxfl9OMRX7PyrEmcvXnd4c8E5yK9oziPt0/DOhv0O9+YFxl29ShUt1Wup2ZojDovw3tYd7gopfgze0M3Tdb5hQ==",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "SHA512-r2": {
+    "options": {
+      "hashAlgorithm": "SHA512",
+      "rounds": 2
+    },
+    "user": {
+      "passwordHash": "UsUjyCk7QUSv96clbd1VyQEfbZYzzwCYGol26dxFuGEeBgchfnddXJf+VWHBNo/CaB+6qSByIIW7BzCTKAKOWQ==",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  },
+  "STANDARD_SCRYPT": {
+    "options": {
+      "blockSize": 8,
+      "cpuMemCost": 1024,
+      "dkLen": 64,
+      "hashAlgorithm": "STANDARD_SCRYPT",
+      "parallelization": 1
+    },
+    "user": {
+      "passwordHash": "EQFJM7AIB7I23wfy+f49HdwfnK7bk71NUdDqZKXxlGWQ2PLdf3W8qjoMipB3uyPGw9fA4/V82/RpSesOoVkU7A==",
+      "salt": "c2FsdC12YWx1ZS0wMQ=="
+    }
+  }
+}

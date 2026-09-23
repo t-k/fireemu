@@ -143,3 +143,23 @@ test("parent promotion requires every condition and an approved closure review",
     allVerified && closure.closureReview?.decision === "APPROVED",
   );
 });
+
+test("closure recipes and corpus programs cover each other", async () => {
+  const { PROGRAMS } = await import("./auth-account/corpus.mjs");
+  const recipes = load()
+    .conditions.flatMap(({ recipeIds }) => recipeIds)
+    .filter((id) => id.startsWith("auth-account/"));
+  const covers = (recipe, programId) => programId === recipe || programId.startsWith(`${recipe}/`);
+  for (const recipe of recipes) {
+    assert.ok(
+      PROGRAMS.some(({ id }) => covers(recipe, id)),
+      `closure recipe ${recipe} has no corpus program`,
+    );
+  }
+  for (const { id } of PROGRAMS) {
+    assert.ok(
+      recipes.some((recipe) => covers(recipe, id)),
+      `corpus program ${id} belongs to no closure recipe`,
+    );
+  }
+});

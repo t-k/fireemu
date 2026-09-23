@@ -273,6 +273,7 @@ export function guardRequest({ url, init }, ctx, { harness = false } = {}) {
       ? [/^\/v1\/token$/]
       : [
           /^\/v1\/accounts:[A-Za-z]+$/,
+          /^\/v2\/passwordPolicy$/,
           new RegExp(`^/v1/projects/${project}/accounts(:[A-Za-z]+)?$`),
           new RegExp(`^/v1/projects/${project}:queryAccounts$`),
           ...(harness ? [new RegExp(`^/admin/v2/projects/${project}/config$`)] : []),

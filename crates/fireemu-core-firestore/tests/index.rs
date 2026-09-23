@@ -181,6 +181,37 @@ fn empty_document_at_recorded_4622_byte_name_is_accepted() {
 }
 
 #[test]
+fn indexed_1500_byte_string_uses_recorded_long_name_refusal_points() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let path = |relative_bytes: usize| {
+        let document_bytes = relative_bytes - 5;
+        let first = document_bytes.div_ceil(2);
+        let second = document_bytes / 2;
+        DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            &format!("c/{}/c/{}", "d".repeat(first), "d".repeat(second)),
+        )
+        .unwrap()
+    };
+    let fields = BTreeMap::from([("s".into(), Value::String("x".repeat(1500)))]);
+    let indexes = IndexSet::default();
+    assert!(indexes.document_index_usage(&path(2600), &fields).is_ok());
+    for relative_bytes in [2642, 2643] {
+        assert_eq!(
+            indexes
+                .document_index_usage(&path(relative_bytes), &fields)
+                .unwrap_err()
+                .to_string(),
+            "invalid argument: Index entry is too large."
+        );
+    }
+}
+
+#[test]
 fn wildcard_exemption_allows_explicit_map_child_collection_group_index() {
     let mut indexes = IndexSet::default();
     let collection = CollectionId::try_new("tasks").unwrap();

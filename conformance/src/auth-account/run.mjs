@@ -46,8 +46,13 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 function selectedPrograms() {
   const prefixes = (process.env.AUTH_ACCOUNT_PROGRAMS ?? "").split(",").filter(Boolean);
+  // AUTH_ACCOUNT_PROGRAMS_EXACT=1 selects the listed ids only, so a re-record of one program
+  // does not also pick up the programs its id prefixes.
+  const exact = process.env.AUTH_ACCOUNT_PROGRAMS_EXACT === "1";
   const programs = prefixes.length
-    ? PROGRAMS.filter((p) => prefixes.some((prefix) => p.id.startsWith(prefix)))
+    ? PROGRAMS.filter((p) =>
+        prefixes.some((prefix) => (exact ? p.id === prefix : p.id.startsWith(prefix))),
+      )
     : PROGRAMS;
   if (programs.length === 0) throw new Error("no program matches AUTH_ACCOUNT_PROGRAMS");
   return programs;
@@ -383,7 +388,12 @@ function classify({ stale, production, alternative, fireemu }) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
-  if ([production, alternative, fireemu].some(isTransient)) return "INDETERMINATE";
+  // A server error production returned identically in both recordings (no `second` row) is
+  // behavior, not noise: compare it, and fireemu's own 5xx with it.
+  const repeatedServerError = production.status >= 500 && alternative === undefined;
+  const transient = (recorded) =>
+    isTransient(recorded) && !(repeatedServerError && recorded?.status >= 500);
+  if ([production, alternative, fireemu].some(transient)) return "INDETERMINATE";
   if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
   if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";
   return "MISMATCH";
@@ -425,8 +435,8 @@ async function check() {
   const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
     console.log(`\n${row.status} ${row.row}`);
-    console.log(`  production ${JSON.stringify(row.production).slice(0, 400)}`);
-    console.log(`  fireemu    ${JSON.stringify(row.fireemu).slice(0, 400)}`);
+    console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 400)}`);
+    console.log(`  fireemu    ${String(JSON.stringify(row.fireemu)).slice(0, 400)}`);
   }
   console.log(JSON.stringify({ summary, orphans, failures: local.failures }, null, 2));
   if (!rows.every((r) => passing.has(r.status)) || orphans.length || local.failures.length) {

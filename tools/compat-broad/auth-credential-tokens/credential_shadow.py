@@ -1020,6 +1020,7 @@ def finish_record(
     failure: str | None,
     shutdown: dict[str, Any],
     source_binding: dict[str, Any],
+    startup_diagnostics: dict[str, Any] | None = None,
     signing: bool = True,
 ) -> tuple[dict[str, Any], int]:
     """Assemble the record from whatever was observed, marking the rest not run."""
@@ -1049,6 +1050,7 @@ def finish_record(
         "productionExecuted": False,
         "failure": failure,
         "shutdown": shutdown,
+        "startupDiagnostics": startup_diagnostics,
         "receipt": receipt,
         "expectedLocalAgreement": agreement,
     }
@@ -1059,7 +1061,7 @@ def finish_record(
         issues.append("incomplete-resource-cleanup")
     if budget.get("integrityFailure") is not None:
         issues.append("budget-integrity-failure")
-    if not (
+    stopped_process = (
         isinstance(shutdown, dict)
         and shutdown.get("processStopped") is True
         and type(shutdown.get("remainingChildren")) is int
@@ -1068,7 +1070,18 @@ def finish_record(
         and shutdown["exitCode"] in (0, -15, -9)
         and shutdown.get("outputDrainerStopped") is True
         and shutdown.get("failures") == []
-    ):
+    )
+    no_process_started = (
+        isinstance(shutdown, dict)
+        and shutdown.get("processStarted") is False
+        and shutdown.get("processStopped") is True
+        and type(shutdown.get("remainingChildren")) is int
+        and shutdown["remainingChildren"] == 0
+        and shutdown.get("exitCode") is None
+        and shutdown.get("outputDrainerStopped") is True
+        and shutdown.get("failures") == []
+    )
+    if not (stopped_process or no_process_started):
         issues.append("process-cleanup-unconfirmed")
     record["completionIssues"] = issues
     return record, 0 if failure is None and not issues and agreement["unexpected"] == [] else 1
@@ -1111,6 +1124,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     rows, failure = {}, None
     process = None
+    startup_diagnostics = None
     shutdown = {"processStopped": False, "remainingChildren": None,
                 "exitCode": None, "outputDrainerStopped": False, "failures": []}
     problems: list[str] = []
@@ -1119,6 +1133,19 @@ def main(argv: list[str] | None = None) -> int:
         rows, failure = collect(base, budget, tracker)
     except Exception as error:
         failure = type(error).__name__ + ": local execution failed"
+        diagnostic = getattr(error, "diagnostics", None)
+        if isinstance(diagnostic, dict):
+            phase, error_type = diagnostic.get("phase"), diagnostic.get("type")
+            byte_count, digest = diagnostic.get("bytes"), diagnostic.get("sha256")
+            if (phase in {"readiness", "launch"} and isinstance(error_type, str)
+                    and error_type.isascii() and error_type.isidentifier()
+                    and type(byte_count) is int and 0 <= byte_count <= 262144
+                    and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)):
+                startup_diagnostics = {"phase": phase, "type": error_type,
+                                       "bytes": byte_count, "sha256": digest}
+        failed_shutdown = getattr(error, "shutdown", None)
+        if process is None and isinstance(failed_shutdown, dict):
+            shutdown = failed_shutdown
     finally:
         try:
             if process is not None:
@@ -1136,6 +1163,7 @@ def main(argv: list[str] | None = None) -> int:
         failure = failure or "cleanup: " + "; ".join(problems)
     record, exit_code = finish_record(
         rows=rows, tracker=tracker, budget=budget, failure=failure, shutdown=shutdown,
+        startup_diagnostics=startup_diagnostics,
         source_binding={"commit": args.commit,
                         "commitStatus": "operator-asserted; not verified by this run",
                         "artifactSha256": artifact_sha256},

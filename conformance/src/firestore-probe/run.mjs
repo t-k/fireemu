@@ -26,6 +26,7 @@ import {
 } from "../evidence.mjs";
 import { PROGRAMS } from "./programs.mjs";
 import { DIVERGENCES } from "./divergences.mjs";
+import { checkHistoricalProduction } from "./historical-production-check.mjs";
 
 const PROJECT = "demo-firestore-probe";
 const TESTD_FIRESTORE_PORT = 32291;
@@ -36,6 +37,16 @@ const MATRIX_MD = join(CONFORMANCE_DIR, "FIRESTORE-MATRIX.md");
 const PRODUCTION_JSON = join(CONFORMANCE_DIR, "firestore-production-matrix.json");
 const PRODUCTION_MD = join(CONFORMANCE_DIR, "FIRESTORE-PRODUCTION-MATRIX.md");
 const GRACE_MS = 8000;
+const HISTORICAL_PROGRAMS_DIGEST =
+  "sha256-24f0c58a215406dffe211d236a39fbd322bc365bd510149bee7e53ac6ed072b2";
+const HISTORICAL_MATRIX_DIGEST =
+  "sha256-4bcb04ac9427e73bfe89aab5bc9916f318b2ea60efbf156d79cdf47632d58f56";
+const HISTORICAL_CHANGED_STEPS = [
+  "writes/transforms#maximum-and-minimum-invalid-field-path",
+  "writes/transforms#read-after-invalid-max-min",
+  "writes/transforms#maximum-and-minimum",
+  "writes/transforms#read-after-max-min",
+];
 
 async function terminateGroup(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
@@ -528,6 +539,46 @@ async function check() {
   return 1;
 }
 
+/** Replay the pinned historical production corpus without contacting production. */
+async function checkProduction() {
+  const programsDigest = await digestFile(
+    join(CONFORMANCE_DIR, "src/firestore-probe/programs.mjs"),
+  );
+  const matrixDigest = await digestFile(PRODUCTION_JSON);
+  if (programsDigest !== HISTORICAL_PROGRAMS_DIGEST || matrixDigest !== HISTORICAL_MATRIX_DIGEST) {
+    throw new Error(
+      "historical production input changed; review recipe identity before updating digests",
+    );
+  }
+  const saved = JSON.parse(await readFile(PRODUCTION_JSON, "utf8"));
+  if (
+    saved.evidence?.verified !== true ||
+    saved.evidence?.observations?.production?.observation?.mode !== "live"
+  ) {
+    throw new Error("historical production matrix has no verified live production observation");
+  }
+  const inPath = await writePrograms();
+  const fireemu = await probeFireemu(inPath, join(RUN_DIR, "fireemu-historical-production.json"));
+  const result = checkHistoricalProduction({
+    saved,
+    live: fireemu,
+    definitions: PROGRAMS,
+    excludedKeys: HISTORICAL_CHANGED_STEPS,
+  });
+  await writeFile(
+    join(RUN_DIR, "historical-production-comparison.json"),
+    `${JSON.stringify(result, null, 2)}\n`,
+  );
+  console.log(
+    `historical production: ${result.comparable} comparable rows, ` +
+      `${result.currentMismatches.length} known mismatches, ` +
+      `${result.indeterminate.length} indeterminate; ` +
+      `${result.newMismatches.length} new mismatches, ` +
+      `${result.newIndeterminate.length} new indeterminate`,
+  );
+  return result.newMismatches.length === 0 && result.newIndeterminate.length === 0 ? 0 : 1;
+}
+
 /**
  * Runs the programs against production Firestore and compares every row with the recorded
  * official-emulator answer and with what fireemu is held to (the pinned divergence or the
@@ -756,11 +807,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     await record();
   } else if (mode === "check") {
     process.exitCode = await check();
+  } else if (mode === "check-production") {
+    process.exitCode = await checkProduction();
   } else if (mode === "both") {
     await record();
     process.exitCode = await check();
   } else {
-    console.error(`unknown mode ${mode}; expected record, check or both`);
+    console.error(`unknown mode ${mode}; expected record, check, check-production or both`);
     process.exitCode = 2;
   }
 }

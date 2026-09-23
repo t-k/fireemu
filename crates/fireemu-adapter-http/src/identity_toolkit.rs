@@ -6787,7 +6787,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
             .then_some(u.email_verified),
         "disabled": (u.disabled || u.admin_created).then_some(u.disabled),
         // Absent, not "{}", when no claim is set: what the Admin SDK reads back as no claims.
-        "customAttributes": (u.custom_claims.canonical_json() != "{}").then(|| u.custom_claims.canonical_json()),
+        "customAttributes": u.custom_claims.attributes_text(),
         "providerUserInfo": (!providers.is_empty()).then_some(providers),
         "mfaInfo": (!mfa.is_empty()).then_some(mfa),
         "passwordHash": has_password.then_some(REDACTED_PASSWORD_HASH),
@@ -7167,7 +7167,8 @@ fn parse_custom_claims(attrs: &str) -> Result<CustomClaims, JsonResponse> {
             return Err(error(400, &format!("FORBIDDEN_CLAIM : {k}")));
         }
     }
-    Ok(claims)
+    // Production reads the attributes back as they were set (sandbox recording 2026-09-23).
+    Ok(claims.with_source(attrs))
 }
 
 fn reject_unsupported(body: &Value, fields: &[&str]) -> Result<(), JsonResponse> {

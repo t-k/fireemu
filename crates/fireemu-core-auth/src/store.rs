@@ -558,6 +558,15 @@ impl PasswordDigest {
             == 0
     }
 
+    /// The stored hash and salt bytes (fireemu's own digest, or the imported foreign hash).
+    #[must_use]
+    pub fn stored_material(&self) -> (Vec<u8>, Vec<u8>) {
+        self.imported.as_ref().map_or_else(
+            || (self.digest.to_vec(), self.salt.to_vec()),
+            |imported| (imported.hash.clone(), imported.salt.clone()),
+        )
+    }
+
     /// The emulator salt and plaintext an export has to write back, when the credential
     /// came from one.
     #[must_use]

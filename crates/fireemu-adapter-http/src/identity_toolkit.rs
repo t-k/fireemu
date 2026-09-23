@@ -2626,6 +2626,11 @@ fn handle_with_policy(
             if let Err(r) = privilege_check(state, class, project, headers, method, &store) {
                 return r;
             }
+            // Production's front end answers a POST to accounts:batchGet with a plain 404
+            // (sandbox recording 2026-09-23); other method mismatches are unobserved.
+            if path.ends_with("/accounts:batchGet") {
+                return not_found();
+            }
             return error(405, "METHOD_NOT_ALLOWED");
         }
         routes::Resolution::NotFound => return not_found(),
@@ -6653,8 +6658,9 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
 /// configuration: base64 of `REDACTED`.
 const REDACTED_PASSWORD_HASH: &str = "UkVEQUNURUQ=";
 
-/// Maximum identifiers per lookup (Admin SDK `getUsers`).
-const MAX_LOOKUP_IDENTIFIERS: usize = 100;
+/// Maximum identifiers per lookup. Production accepted 101 (sandbox recording 2026-09-23);
+/// this is a local guard, not an observed quota.
+const MAX_LOOKUP_IDENTIFIERS: usize = 10_000;
 
 /// Optional string field; a present non-string (other than null) is a type error.
 fn opt_str<'a>(body: &'a Value, key: &str) -> Result<Option<&'a str>, JsonResponse> {
@@ -6690,6 +6696,9 @@ fn id_list(body: &Value, key: &str) -> Result<Vec<String>, JsonResponse> {
             for item in items {
                 match item {
                     Value::String(s) => out.push(s.clone()),
+                    // Proto3 JSON reads a number into a string field (production accepted
+                    // `localId: [42]`).
+                    Value::Number(n) => out.push(n.to_string()),
                     _ => {
                         return Err(error(
                             400,
@@ -6794,7 +6803,13 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         Ok(l) => l,
         Err(r) => return r,
     };
-    let total = local_ids.len() + emails.len() + phones.len() + federated.len();
+    // `initialEmail` is a selector production accepts; it matched nothing in the sandbox
+    // recording (2026-09-23) and fireemu keeps no initial address, so it never matches here.
+    let initial_emails = match id_list(body, "initialEmail") {
+        Ok(list) => list.len(),
+        Err(r) => return r,
+    };
+    let total = local_ids.len() + emails.len() + phones.len() + federated.len() + initial_emails;
     if total > MAX_LOOKUP_IDENTIFIERS {
         return error(
             400,
@@ -7092,10 +7107,10 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     let change = |key: &str| -> Result<Change, JsonResponse> {
         Ok(opt_str(body, key)?.map_or(Change::Keep, |v| Change::Set(v.to_owned())))
     };
-    for field in ["displayName", "photoUrl"] {
-        if let Some(value) = opt_str(body, field)? {
-            reject_control_characters(value, field)?;
-        }
+    // Production stores a displayName carrying control characters, NUL included, on update
+    // (sandbox recording 2026-09-23, auth-account/values). photoUrl stays refused until observed.
+    if let Some(value) = opt_str(body, "photoUrl")? {
+        reject_control_characters(value, "photoUrl")?;
     }
     let mut display_name = change("displayName")?;
     let mut photo_url = change("photoUrl")?;
@@ -7817,8 +7832,8 @@ fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> Json
 }
 
 /// Decode `SqlExpression`, not a SQL string. Validate every field before applying the
-/// documented priority email > phoneNumber > userId. Reject empty/unrecognized selectors
-/// rather than turning a malformed filter into an unfiltered query. Limits below are local
+/// documented priority email > phoneNumber > userId. Unrecognized or mistyped selectors are
+/// refused; an empty one is no constraint, as production answers it. Limits below are local
 /// parser safety limits, not claimed Identity Platform quotas.
 fn parse_admin_query_expressions(body: &Value) -> Result<Vec<UserQueryExpression>, JsonResponse> {
     const MAX_EXPRESSIONS: usize = 128;
@@ -7828,7 +7843,7 @@ fn parse_admin_query_expressions(body: &Value) -> Result<Vec<UserQueryExpression
         Some(Value::Array(expressions)) if expressions.len() <= MAX_EXPRESSIONS => expressions,
         _ => return Err(error(400, "INVALID_ARGUMENT : invalid expression array")),
     };
-    let mut result = BTreeSet::new();
+    let mut result = Vec::new();
     for expression in expressions {
         let Some(object) = expression.as_object() else {
             return Err(error(
@@ -7853,23 +7868,22 @@ fn parse_admin_query_expressions(body: &Value) -> Result<Vec<UserQueryExpression
                 return Err(error(400, "INVALID_ARGUMENT : invalid expression selector"));
             }
         }
-        let selected = if let Some(email) = str_field(expression, "email") {
-            UserQueryExpression::Email(canonicalize_email(email))
-        } else if let Some(phone) = str_field(expression, "phoneNumber") {
-            UserQueryExpression::PhoneNumber(phone.to_owned())
-        } else if let Some(id) = str_field(expression, "userId") {
-            UserQueryExpression::UserId(id.to_owned())
-        } else {
-            return Err(error(
-                400,
-                "INVALID_ARGUMENT : expression selector required",
-            ));
-        };
-        // Empty strings remain exact values (not wildcards), including a higher-priority
-        // empty email. A field's presence must not silently select a different predicate.
-        result.insert(selected);
+        // The first non-empty selector in email > phoneNumber > userId order; none at all is
+        // no constraint, as production answers it (sandbox recording 2026-09-23,
+        // expression-empty-item and expression-empty-string).
+        let non_empty = |key: &str| str_field(expression, key).filter(|v| !v.is_empty());
+        let selected = non_empty("email")
+            .map(|email| UserQueryExpression::Email(canonicalize_email(email)))
+            .or_else(|| {
+                non_empty("phoneNumber")
+                    .map(|phone| UserQueryExpression::PhoneNumber(phone.to_owned()))
+            })
+            .or_else(|| non_empty("userId").map(|id| UserQueryExpression::UserId(id.to_owned())));
+        result.push(selected);
     }
-    Ok(result.into_iter().collect())
+    // Production evaluates only the first expression (sandbox recording 2026-09-23,
+    // auth-account/admin/query#expression-two); every item is still type-checked above.
+    Ok(result.into_iter().next().flatten().into_iter().collect())
 }
 
 fn production_admin_query_page(
@@ -7880,8 +7894,10 @@ fn production_admin_query_page(
 ) -> JsonResponse {
     // Enum fields were validated before the count-only branch in `admin_query`.
     let descending = str_field(body, "order") == Some("DESC");
+    // Production accepts a limit above 500 (sandbox recording 2026-09-23); the upper bound
+    // here is a local guard, not an observed quota.
     let limit = match query_i64(body, "limit", 500) {
-        Ok(limit @ 0..=500) => usize::try_from(limit).unwrap_or(500),
+        Ok(limit @ 0..=10_000) => usize::try_from(limit).unwrap_or(500),
         Ok(_) | Err(()) => return error(400, "INVALID_ARGUMENT : invalid limit"),
     };
     let offset = match query_i64(body, "offset", 0) {
@@ -8391,11 +8407,13 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
             other => other.to_string(),
         })
     });
+    // Production answers maxResults 0 with no users and caps larger values at 1000 (sandbox
+    // recording 2026-09-23).
     let max = match max_text.as_deref() {
         None => 1_000usize,
         Some(t) => match t.parse::<usize>() {
-            Ok(n) if (1..=1_000).contains(&n) => n,
-            _ => return error(400, "INVALID_ARGUMENT : maxResults must be 1..=1000"),
+            Ok(n) => n.min(1_000),
+            Err(_) => return error(400, "INVALID_ARGUMENT : maxResults must be a number"),
         },
     };
     let token = params
@@ -8409,17 +8427,35 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
         .filter(|t| !t.is_empty());
     let after: u64 = match token.as_deref() {
         None => 0,
-        Some(t) => match t.strip_prefix("v1:").and_then(|n| n.parse::<u64>().ok()) {
-            Some(n) => n,
-            None => return error(400, "INVALID_PAGE_TOKEN"),
-        },
+        // An unreadable page token is an empty page in production.
+        Some(t) => t
+            .strip_prefix("v1:")
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(u64::MAX),
     };
     let page: Vec<&fireemu_core_auth::store::UserRecord> =
         store.users_after_sequence(after, max.saturating_add(1));
     let has_more = page.len() > max;
     let page = &page[..page.len().min(max)];
-    let users: Vec<Value> = page.iter().map(|u| user_json(store, &u.local_id)).collect();
-    let mut response = json!({"kind": "identitytoolkit#DownloadAccountResponse", "users": users});
+    // The Admin download carries the stored hash material production returns to a caller that
+    // may read it: fireemu's own digest and salt, and hash version 0.
+    let users: Vec<Value> = page
+        .iter()
+        .map(|u| {
+            let mut user = user_json(store, &u.local_id);
+            if let Some(digest) = store.password_digest(&u.local_id) {
+                let (hash, salt) = digest.stored_material();
+                user["passwordHash"] = json!(fireemu_core_types::hash::base64_standard(&hash));
+                user["salt"] = json!(fireemu_core_types::hash::base64_standard(&salt));
+                user["version"] = json!(0);
+            }
+            user
+        })
+        .collect();
+    let mut response = json!({"kind": "identitytoolkit#DownloadAccountResponse"});
+    if !users.is_empty() {
+        response["users"] = json!(users);
+    }
     if has_more {
         if let Some(last) = page.last() {
             response["nextPageToken"] = Value::String(format!("v1:{}", last.sequence));

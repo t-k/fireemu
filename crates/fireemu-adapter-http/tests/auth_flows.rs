@@ -533,10 +533,16 @@ fn profile_strings_reject_control_characters_on_every_route_that_stores_them() {
 
     let user = sign_up(&s, "control@example.com");
     let id_token = user["idToken"].as_str().unwrap().to_owned();
-    for (field, value) in [
-        ("displayName", "na\u{0007}me"),
-        ("photoUrl", "https://p.example/a.png\u{0000}"),
-    ] {
+    // Production stores a control character in displayName on update (sandbox recording
+    // 2026-09-23, auth-account/values); photoUrl on update stays refused until observed.
+    let (status, stored) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": id_token, "displayName": "na\u{0007}me"}),
+    );
+    assert_eq!(status, 200, "{stored}");
+    {
+        let (field, value) = ("photoUrl", "https://p.example/a.png\u{0000}");
         let (status, refused) = post(
             &s,
             &format!("{V1}/accounts:update"),

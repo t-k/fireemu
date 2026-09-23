@@ -41,6 +41,7 @@ const requiredConditions = new Set([
   "FS-DATA-WRITE/stream-transaction-precedence",
   "FS-DATA-WRITE/write-stream-trailing-metadata",
   "FS-DATA-WRITE/write-stream-half-close",
+  "FS-DATA-WRITE/write-stream-empty-write-response",
   "FS-DATA-WRITE/final-artifact-regression",
   "FS-DATA-WRITE/closure-review",
 ]);
@@ -92,12 +93,10 @@ const requiredRecipes = new Map([
     "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
     new Set(["writes/limits/aggregate-map", "writes/limits/aggregate-map/strict-only"]),
   ],
+  ["FS-DATA-WRITE/write-stream-half-close", new Set(["writes/write-stream-terminal/half-close"])],
   [
-    "FS-DATA-WRITE/write-stream-half-close",
-    new Set([
-      "writes/write-stream-terminal/half-close",
-      "writes/write-stream-terminal/response-before-half-close",
-    ]),
+    "FS-DATA-WRITE/write-stream-empty-write-response",
+    new Set(["writes/write-stream-terminal/response-before-half-close"]),
   ],
   [
     "FS-DATA-WRITE/final-artifact-regression",
@@ -176,6 +175,26 @@ test("changed field-path and indexed-value recipes remain pending recording", as
     assert.ok(selected.pendingRestIds.includes(recipeId));
     assert.equal(condition.status, "PENDING_RECORDING", conditionId);
   }
+});
+
+test("an unrecorded empty-write response cannot inherit the known trailer mismatch", async () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const { corpus } = await prepareSandboxCorpus();
+  const selected = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
+  const responseId = "writes/write-stream-terminal/response-before-half-close";
+  const response = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/write-stream-empty-write-response",
+  );
+  const halfClose = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/write-stream-half-close",
+  );
+  assert.ok(selected.pendingStreamIds.includes(responseId));
+  assert.equal(response.status, "PENDING_RECORDING");
+  assert.deepEqual(response.recipeIds, [responseId]);
+  assert.equal(halfClose.status, "MISMATCH");
+  assert.ok(!halfClose.recipeIds.includes(responseId));
 });
 
 test("recorded conditions contain no changed or unrecorded runnable recipes", async () => {

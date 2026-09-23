@@ -185,9 +185,16 @@
     {
       "conditionId": "FS-DATA-WRITE/write-stream-half-close",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["writes/write-stream-terminal/half-close", "writes/write-stream-terminal/response-before-half-close"],
+      "recipeIds": ["writes/write-stream-terminal/half-close"],
       "boundaryStatus": "NOT_APPLICABLE",
       "status": "MISMATCH"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/write-stream-empty-write-response",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["writes/write-stream-terminal/response-before-half-close"],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_RECORDING"
     },
     {
       "conditionId": "FS-DATA-WRITE/final-artifact-regression",

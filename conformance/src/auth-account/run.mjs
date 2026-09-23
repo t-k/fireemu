@@ -28,7 +28,9 @@ import {
   SANDBOX_PROJECT,
   createContext,
   diffRecordings,
+  isTransient,
   sameRecording,
+  scanFixture,
   validateCorpus,
 } from "./harness.mjs";
 import { runCorpus } from "./session.mjs";
@@ -37,6 +39,8 @@ const execFileAsync = promisify(execFile);
 const FIXTURE = join(CONFORMANCE_DIR, "auth-account-production.json");
 const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "auth-account");
 const LOCAL_PORT = 32296;
+/** The synthetic project number fireemu is configured with (auth-account.fireemu.json). */
+const LOCAL_PROJECT_NUMBER = "123456789012";
 const TASK_ID = "AUTH-ACCOUNT-SANDBOX";
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
@@ -50,6 +54,31 @@ function selectedPrograms() {
 }
 
 const programDigest = (program) => sha256(JSON.stringify(program));
+
+/** Normalization and request semantics a saved row depends on; a change makes it stale. */
+async function harnessDigest() {
+  const source = await readFile(join(CONFORMANCE_DIR, "src/auth-account/harness.mjs"), "utf8");
+  return sha256(`${source}\n${JSON.stringify(BASELINE_CONFIG)}`);
+}
+
+const ceiling = (programs) =>
+  programs.reduce((total, p) => total + p.steps.length + 6 + (p.config ? 70 : 0), 20);
+
+async function assertCleanTree() {
+  const { stdout } = await execFileAsync(
+    "git",
+    [
+      "status",
+      "--porcelain",
+      "--",
+      "src/auth-account",
+      "auth-account-production.json",
+      "auth-account.fireemu.json",
+    ],
+    { cwd: CONFORMANCE_DIR },
+  );
+  if (stdout.trim()) throw new Error(`record-production needs a clean tree:\n${stdout}`);
+}
 
 async function gitSha() {
   const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: CONFORMANCE_DIR });
@@ -65,94 +94,137 @@ async function adminToken() {
   return stdout.trim();
 }
 
-async function recordOnce(programs, run) {
+async function sandboxWebConfig() {
   const configPath = process.env.FIREEMU_AUTH_SANDBOX_WEB_CONFIG;
   if (!configPath) throw new Error("FIREEMU_AUTH_SANDBOX_WEB_CONFIG is required");
   const web = JSON.parse(await readFile(configPath, "utf8"));
   if (web.projectId !== SANDBOX_PROJECT) throw new Error("web config is not the sandbox project");
+  if (!/^\d+$/.test(web.projectNumber ?? "") || web.projectNumber !== web.messagingSenderId) {
+    throw new Error("web config has no consistent project number");
+  }
+  return web;
+}
+
+async function recordOnce(programs, run, web, token) {
   const ctx = createContext({
     run,
     project: SANDBOX_PROJECT,
     target: {
       kind: "production",
       apiKey: web.apiKey,
-      adminToken: await adminToken(),
+      adminToken: token,
       quotaProject: SANDBOX_PROJECT,
+      projectNumber: web.projectNumber,
     },
   });
-  ctx.projectNumber = web.messagingSenderId;
   return runCorpus(programs, ctx, {
     settleMs: 10_000,
+    maxRequests: ceiling(programs),
     baselineConfig: BASELINE_CONFIG,
-    log: (l) => console.log(l),
+    log: (line) => console.log(line),
   });
 }
 
 async function recordProduction() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
   if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
+  await assertCleanTree();
   const programs = selectedPrograms();
   const corpusRequests = validateCorpus(programs);
   const sha = await gitSha();
+  const harness = await harnessDigest();
+  const web = await sandboxWebConfig();
   const startedAt = new Date().toISOString();
-  const first = await recordOnce(programs, String(Date.now()));
-  const second = await recordOnce(programs, String(Date.now() + 1));
-  const nondeterministic = diffRecordings(first.results, second.results);
-  const failures = [...first.failures, ...second.failures];
-  const fixture = existsSync(FIXTURE)
-    ? JSON.parse(await readFile(FIXTURE, "utf8"))
-    : { version: 1, recordedAgainst: {}, programs: {} };
-  fixture.recordedAgainst = {
-    target: "production Identity Toolkit and Secure Token REST, Identity Platform sandbox",
-    project: RECORDED_PROJECT,
-    note: "Two recordings per program. Tokens, generated ids, hashes, salts, times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
-    baselineConfig: BASELINE_CONFIG,
-  };
-  for (const program of programs) {
-    const one = first.results[program.id];
-    const two = second.results[program.id];
-    if (!one || !two) continue;
-    const differing = Object.fromEntries(
-      Object.entries(two.steps).filter(([id, rec]) => !sameRecording(rec, one.steps[id])),
-    );
-    fixture.programs[program.id] = {
-      corpusDigest: programDigest(program),
-      recordedAt: startedAt,
-      gitSha: sha,
-      ...(one.config ? { config: one.config } : {}),
-      steps: one.steps,
-      ...(Object.keys(differing).length ? { second: differing } : {}),
-    };
+  const recordings = [];
+  let outcome = "recorded";
+  let error;
+  let adminTokenValue;
+  try {
+    for (const offset of [0, 1]) {
+      adminTokenValue = await adminToken();
+      recordings.push(
+        await recordOnce(programs, String(Date.now() + offset), web, adminTokenValue),
+      );
+    }
+  } catch (caught) {
+    outcome = caught.fatal ? "aborted-fatal" : "aborted";
+    error = String(caught.message ?? caught);
+    if (caught.partial) recordings.push(caught.partial);
   }
-  const ordered = Object.fromEntries(
-    Object.entries(fixture.programs).toSorted(([a], [b]) => a.localeCompare(b)),
-  );
-  fixture.programs = ordered;
-  await writeFile(FIXTURE, `${JSON.stringify(fixture, null, 2)}\n`);
-  const requests =
-    first.requests + second.requests + first.harnessRequests + second.harnessRequests;
-  await appendFile(
-    ledger,
-    `${JSON.stringify({
-      ts: new Date().toISOString(),
-      project: SANDBOX_PROJECT,
-      database: null,
-      gitSha: sha,
-      corpusDigest: sha256(JSON.stringify(programs)),
-      requests,
-      estimatedUsd: 0,
-      outcome: failures.length ? "harness-failure" : "recorded",
-      taskId: TASK_ID,
-      programs: programs.map((p) => p.id),
-    })}\n`,
-  );
-  console.log(
-    JSON.stringify(
-      { programs: programs.length, corpusRequests, requests, nondeterministic, failures },
-      null,
-      2,
-    ),
-  );
+  const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
+  const failures = recordings.flatMap((r) => r.failures);
+  try {
+    if (!error) {
+      const [first, second] = recordings;
+      const fixture = existsSync(FIXTURE)
+        ? JSON.parse(await readFile(FIXTURE, "utf8"))
+        : { version: 1, recordedAgainst: {}, programs: {} };
+      fixture.recordedAgainst = {
+        target: "production Identity Toolkit and Secure Token REST, Identity Platform sandbox",
+        project: RECORDED_PROJECT,
+        note: "Two recordings per program. Tokens, generated ids, hashes, salts, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
+        baselineConfig: BASELINE_CONFIG,
+      };
+      for (const program of programs) {
+        const one = first.results[program.id];
+        const two = second.results[program.id];
+        if (!one || !two) continue;
+        const differing = Object.fromEntries(
+          Object.entries(two.steps).filter(([id, rec]) => !sameRecording(rec, one.steps[id])),
+        );
+        fixture.programs[program.id] = {
+          corpusDigest: programDigest(program),
+          harnessDigest: harness,
+          recordedAt: startedAt,
+          gitSha: sha,
+          ...(one.config ? { config: one.config } : {}),
+          steps: one.steps,
+          ...(Object.keys(differing).length ? { second: differing } : {}),
+        };
+      }
+      fixture.programs = Object.fromEntries(
+        Object.entries(fixture.programs).toSorted(([a], [b]) => a.localeCompare(b)),
+      );
+      const text = `${JSON.stringify(fixture, null, 2)}\n`;
+      scanFixture(text, [web.apiKey, adminTokenValue, SANDBOX_PROJECT, web.projectNumber]);
+      await writeFile(FIXTURE, text);
+      if (failures.length) outcome = "recorded-with-program-failures";
+      console.log(
+        JSON.stringify(
+          {
+            programs: programs.length,
+            corpusRequests,
+            requests,
+            nondeterministic: diffRecordings(first.results, second.results),
+            failures,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+  } catch (caught) {
+    outcome = "not-written";
+    error = String(caught.message ?? caught);
+  } finally {
+    await appendFile(
+      ledger,
+      `${JSON.stringify({
+        ts: new Date().toISOString(),
+        project: SANDBOX_PROJECT,
+        database: null,
+        gitSha: sha,
+        corpusDigest: sha256(JSON.stringify(programs)),
+        requests,
+        estimatedUsd: 0,
+        outcome,
+        taskId: TASK_ID,
+        programs: programs.map((p) => p.id),
+        ...(error ? { error } : {}),
+      })}\n`,
+    );
+  }
+  if (error) throw new Error(error);
   if (failures.length) process.exitCode = 1;
 }
 
@@ -161,12 +233,18 @@ async function sessionLocal() {
   const ctx = createContext({
     run: process.env.AUTH_ACCOUNT_RUN,
     project: SANDBOX_PROJECT,
-    target: { kind: "local", origin: process.env.AUTH_ACCOUNT_ORIGIN },
+    target: {
+      kind: "local",
+      origin: process.env.AUTH_ACCOUNT_ORIGIN,
+      projectNumber: LOCAL_PROJECT_NUMBER,
+    },
   });
   // fireemu starts with every sign-in provider enabled; the admin config surface for the
   // provider fields is not implemented yet, so the baseline is only applied in production.
   const out = await runCorpus(programs, ctx, {
     baselineConfig: process.env.AUTH_ACCOUNT_LOCAL_BASELINE === "1" ? BASELINE_CONFIG : undefined,
+    applyBaseline: true,
+    maxRequests: ceiling(programs),
   });
   await writeFile(process.env.AUTH_ACCOUNT_OUT, JSON.stringify(out));
 }
@@ -219,54 +297,59 @@ async function runLocal(programs) {
   return { binary, ...JSON.parse(await readFile(outPath, "utf8")) };
 }
 
+function classify({ stale, production, alternative, fireemu }) {
+  if (stale) return "STALE_FIXTURE";
+  if (production === undefined) return "MISSING_FIXTURE";
+  if (fireemu === undefined) return "MISSING";
+  if ([production, alternative, fireemu].some(isTransient)) return "INDETERMINATE";
+  if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
+  if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";
+  return "MISMATCH";
+}
+
 async function check() {
   const fixture = JSON.parse(await readFile(FIXTURE, "utf8"));
-  const programs = selectedPrograms().filter((p) => fixture.programs[p.id]);
-  const local = await runLocal(programs);
+  const selected = selectedPrograms();
+  const harness = await harnessDigest();
+  const local = await runLocal(selected);
   const rows = [];
-  for (const program of programs) {
+  for (const program of selected) {
     const saved = fixture.programs[program.id];
-    const stale = saved.corpusDigest !== programDigest(program);
+    const stale =
+      saved !== undefined &&
+      (saved.corpusDigest !== programDigest(program) || saved.harnessDigest !== harness);
     for (const step of program.steps) {
-      const production = saved.steps[step.id];
-      const alternative = saved.second?.[step.id];
+      const production = saved?.steps?.[step.id];
+      const alternative = saved?.second?.[step.id];
       const fireemu = local.results[program.id]?.steps?.[step.id];
-      let status;
-      if (stale || production === undefined) status = "STALE_FIXTURE";
-      else if (fireemu === undefined) status = "MISSING";
-      else if (production.status === 429 || alternative?.status === 429) status = "INDETERMINATE";
-      else if (
-        sameRecording(production, fireemu) ||
-        (alternative && sameRecording(alternative, fireemu))
-      )
-        status = alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
-      else status = "MISMATCH";
       rows.push({
         row: `${program.id}#${step.id}`,
-        status,
+        status: classify({ stale, production, alternative, fireemu }),
         production,
         ...(alternative ? { alternative } : {}),
         fireemu,
       });
     }
   }
+  const known = new Set(PROGRAMS.map((p) => p.id));
+  const orphans = Object.keys(fixture.programs).filter((id) => !known.has(id));
   const summary = {};
   for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;
   const artifactSha256 = sha256(await readFile(local.binary));
   await writeFile(
     join(RUN_DIR, "comparison.json"),
-    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, failures: local.failures, rows }, null, 2)}\n`,
+    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
-  for (const row of rows.filter(
-    (r) => r.status !== "MATCH" && r.status !== "MATCH_NONDETERMINISTIC",
-  )) {
+  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
+  for (const row of rows.filter((r) => !passing.has(r.status))) {
     console.log(`\n${row.status} ${row.row}`);
     console.log(`  production ${JSON.stringify(row.production).slice(0, 400)}`);
     console.log(`  fireemu    ${JSON.stringify(row.fireemu).slice(0, 400)}`);
   }
-  console.log(JSON.stringify({ summary, failures: local.failures }, null, 2));
-  const ok = rows.every((r) => r.status === "MATCH" || r.status === "MATCH_NONDETERMINISTIC");
-  if (!ok || local.failures.length) process.exitCode = 1;
+  console.log(JSON.stringify({ summary, orphans, failures: local.failures }, null, 2));
+  if (!rows.every((r) => passing.has(r.status)) || orphans.length || local.failures.length) {
+    process.exitCode = 1;
+  }
 }
 
 const mode = process.argv[2];

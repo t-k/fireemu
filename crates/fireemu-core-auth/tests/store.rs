@@ -42,14 +42,15 @@ fn explicit_local_ids_are_validated_and_unique() {
         s.create_user_with_id(NewUser::email("b@example.com"), Some("custom-id"), t0()),
         Err(AuthError::LocalIdExists)
     );
-    for bad in ["", &"x".repeat(129), "has\u{1}control"] {
+    // Production stores ids of 0 to 256 characters (sandbox exploration 2026-09-24).
+    for bad in [&"x".repeat(257), "has\u{1}control"] {
         assert_eq!(
             s.create_user_with_id(NewUser::email("c@example.com"), Some(bad), t0()),
             Err(AuthError::InvalidLocalId),
             "{bad:?}"
         );
     }
-    let longest = "y".repeat(128);
+    let longest = "y".repeat(256);
     assert!(s
         .create_user_with_id(NewUser::email("d@example.com"), Some(&longest), t0())
         .is_ok());

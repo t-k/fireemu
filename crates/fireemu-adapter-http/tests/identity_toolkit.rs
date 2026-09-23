@@ -9671,6 +9671,54 @@ fn imported_raw_passwords_report_their_update_time() {
     );
 }
 
+/// An Admin create takes a `localId` of 0 to 256 characters, the empty one included, and
+/// answers a longer one with production's internal error without creating anything
+/// (sandbox exploration 2026-09-24, `docs.local/runs/auth-localid-explore-20260924`;
+/// recording 2026-09-23, `values#local-id-empty`, `admin/create#local-id-129`).
+#[test]
+fn admin_create_local_id_lengths_follow_production() {
+    let s = state();
+    for uid in [String::new(), "b".repeat(129), "c".repeat(256)] {
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid}),
+        );
+        assert_eq!(status, 200, "{}: {created}", uid.len());
+        assert_eq!(created["localId"], uid);
+    }
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [""]}),
+    );
+    assert_eq!(found["users"][0]["localId"], "", "{found}");
+    let (status, deleted) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:delete"),
+        &json!({"localId": ""}),
+    );
+    assert_eq!(status, 200, "{deleted}");
+    let long = "d".repeat(257);
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": long}),
+    );
+    assert_eq!(status, 500, "{refused}");
+    assert_eq!(
+        refused,
+        json!({"error": {"code": 500, "message": "Internal error encountered.", "errors": [
+            {"message": "Internal error encountered.", "domain": "global", "reason": "backendError"}
+        ], "status": "INTERNAL"}})
+    );
+    assert!(s.store.lock().unwrap().user_by_id(&long).is_none());
+}
+
 /// Disabled project providers refuse their client flows with `OPERATION_NOT_ALLOWED`, and
 /// `passwordRequired` turns email-link sign-in off.
 #[test]

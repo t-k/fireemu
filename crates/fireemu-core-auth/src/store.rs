@@ -1282,6 +1282,10 @@ pub const PENDING_SIGN_IN_TTL_SECONDS: i64 = 3_600;
 /// this budget, and the refused request creates nothing (`AUTH-TRANSIENT-03`).
 pub const MAX_OUTSTANDING_CODES: usize = 1_000;
 
+/// The longest caller-chosen user id production stores, in UTF-16 units: 256 is accepted and
+/// 257 is an internal error (sandbox exploration 2026-09-24).
+pub const MAX_LOCAL_ID_UTF16_UNITS: usize = 256;
+
 /// Lifetime of a phone `temporaryProof` (`temporaryProofExpiresIn`, sandbox recording
 /// 2026-09-23).
 pub const TEMPORARY_PROOF_TTL_SECONDS: i64 = 3_600;
@@ -1608,7 +1612,11 @@ impl AuthStore {
         match id {
             None => self.create_user(new, now),
             Some(id) => {
-                if id.is_empty() || id.chars().count() > 128 || id.chars().any(char::is_control) {
+                // Production stores an empty id and ids up to 256 characters (sandbox
+                // exploration 2026-09-24).
+                if id.encode_utf16().count() > MAX_LOCAL_ID_UTF16_UNITS
+                    || id.chars().any(char::is_control)
+                {
                     return Err(AuthError::InvalidLocalId);
                 }
                 if self.users.contains_key(&LocalId(id.to_owned())) {
@@ -2121,7 +2129,7 @@ impl AuthStore {
     #[allow(clippy::too_many_lines)]
     fn import_user_record(&mut self, mut user: ImportedUser) -> Result<LocalId, ImportUserError> {
         if user.local_id.is_empty()
-            || user.local_id.chars().count() > 128
+            || user.local_id.encode_utf16().count() > MAX_LOCAL_ID_UTF16_UNITS
             || user.local_id.chars().any(char::is_control)
         {
             return Err(ImportUserError::Account(AuthError::InvalidLocalId));

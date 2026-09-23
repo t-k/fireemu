@@ -139,32 +139,35 @@ test("VERIFIED requires a resolved production boundary classification", () => {
   }
 });
 
-test("verified collection-ID condition is bound to its saved comparison", () => {
+test("verified conditions are bound to their saved comparisons", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
-  const condition = closure.conditions.find(
-    ({ conditionId }) => conditionId === "FS-LIMIT-COLLECTION-ID",
-  );
-  assert.equal(condition.status, "VERIFIED");
-  const comparisonPath = fileURLToPath(
-    new URL(`../../${condition.evidence.comparisonPath}`, import.meta.url),
-  );
-  const comparison = JSON.parse(readFileSync(comparisonPath, "utf8"));
-  assert.equal(comparison.conditionId, condition.conditionId);
-  assert.deepEqual(new Set(comparison.recipeIds), new Set(condition.recipeIds));
-  assert.deepEqual(comparison.productionRecordingDigests, fixture.evidence.recordingDigests);
-  assert.deepEqual(condition.evidence.productionRecordings, comparison.productionRecordingDigests);
-  assert.equal(condition.evidence.finalArtifactSha256, comparison.artifactSha256);
-  assert.equal(comparison.result.comparableRecipes, condition.recipeIds.length);
-  assert.equal(comparison.result.mismatchedRecipes, 0);
-  assert.deepEqual(
-    new Set(Object.keys(comparison.productionPrograms)),
-    new Set(condition.recipeIds),
-  );
-  assert.deepEqual(new Set(Object.keys(comparison.localPrograms)), new Set(condition.recipeIds));
-  for (const recipeId of condition.recipeIds) {
-    assert.deepEqual(comparison.productionPrograms[recipeId], fixture.programs[recipeId]);
-    assert.deepEqual(comparison.localPrograms[recipeId], comparison.productionPrograms[recipeId]);
+  const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
+  assert.ok(verified.some(({ conditionId }) => conditionId === "FS-LIMIT-SUBCOLLECTION-DEPTH"));
+  for (const condition of verified) {
+    const comparisonPath = fileURLToPath(
+      new URL(`../../${condition.evidence.comparisonPath}`, import.meta.url),
+    );
+    const comparison = JSON.parse(readFileSync(comparisonPath, "utf8"));
+    assert.equal(comparison.conditionId, condition.conditionId);
+    assert.deepEqual(new Set(comparison.recipeIds), new Set(condition.recipeIds));
+    assert.deepEqual(comparison.productionRecordingDigests, fixture.evidence.recordingDigests);
+    assert.deepEqual(
+      condition.evidence.productionRecordings,
+      comparison.productionRecordingDigests,
+    );
+    assert.equal(condition.evidence.finalArtifactSha256, comparison.artifactSha256);
+    assert.equal(comparison.result.comparableRecipes, condition.recipeIds.length);
+    assert.equal(comparison.result.mismatchedRecipes, 0);
+    assert.deepEqual(
+      new Set(Object.keys(comparison.productionPrograms)),
+      new Set(condition.recipeIds),
+    );
+    assert.deepEqual(new Set(Object.keys(comparison.localPrograms)), new Set(condition.recipeIds));
+    for (const recipeId of condition.recipeIds) {
+      assert.deepEqual(comparison.productionPrograms[recipeId], fixture.programs[recipeId]);
+      assert.deepEqual(comparison.localPrograms[recipeId], comparison.productionPrograms[recipeId]);
+    }
   }
 });
 

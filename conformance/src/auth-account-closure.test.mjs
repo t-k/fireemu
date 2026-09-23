@@ -131,8 +131,21 @@ test("AUTH-ACCOUNT closure inventory cannot silently omit a declared condition",
       };
       const rows = comparison.rows.filter(({ row }) => covered(row));
       assert.ok(rows.length > 0, `${label}: has compared rows`);
+      // A row may differ only as an owner-decided, documented divergence of this condition.
+      const divergences = condition.evidence.documentedDivergences ?? [];
+      for (const divergence of divergences) {
+        assert.equal(divergence.decidedBy, "owner", `${label}: ${divergence.row}`);
+        assert.ok(divergence.decidedOn && divergence.reason && divergence.kind, divergence.row);
+        assert.ok(
+          closure.scopeDecisions.some(({ id }) => id === divergence.scopeDecision),
+          `${label}: ${divergence.row} names a recorded scope decision`,
+        );
+      }
+      const documented = new Set(divergences.map(({ row }) => row));
+      const off = rows
+        .filter(({ status, row }) => status !== "MATCH" && !documented.has(row))
+        .map(({ row }) => row);
       if (condition.conditionId !== "AUTH-ACCOUNT/final-artifact-regression") {
-        const off = rows.filter(({ status }) => status !== "MATCH").map(({ row }) => row);
         assert.deepEqual(off, [], `${label}: every row matches production`);
       }
     }
@@ -155,7 +168,7 @@ test("hash-format closure covers every production import algorithm", () => {
 test("scope decisions are recorded, not implied", () => {
   const closure = load();
   const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
-  for (const id of ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11"]) {
+  for (const id of ["A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11", "A12"]) {
     assert.ok(decided.has(id), `scope decision ${id} must be recorded`);
   }
   for (const decision of closure.scopeDecisions) {

@@ -9,6 +9,7 @@
 import {
   buildRequest,
   guardRequest,
+  isTransient,
   normalizeConfig,
   normalizeResponse,
   resolveValue,
@@ -21,6 +22,8 @@ import {
  * unset value reads back as absent or as a policy that is neither enforced nor versioned.
  */
 export function configMatches(actual, wanted) {
+  // Production leaves a false switch out of its response.
+  if (wanted === false) return actual === undefined || actual === null || actual === false;
   if (wanted === undefined || wanted === null) {
     if (actual === undefined || actual === null || actual === false) return true;
     if (typeof actual !== "object") return false;
@@ -185,7 +188,15 @@ export function createSession(
         } catch (error) {
           if (error.fatal || !/recorded nothing at/.test(String(error.message))) throw error;
           // An earlier step did not return what this one needs: record that, keep going.
-          outcome = { recorded: { status: -1, unresolved: String(error.message) }, json: null };
+          const dependency = /^step (\S+) recorded nothing/.exec(String(error.message))?.[1];
+          outcome = {
+            recorded: {
+              status: -1,
+              unresolved: String(error.message),
+              dependencyTransient: isTransient(steps[dependency]),
+            },
+            json: null,
+          };
         }
         const { recorded, json } = outcome;
         raw.set(step.id, json);
@@ -197,7 +208,12 @@ export function createSession(
     }
     // Cleanup always runs. Accounts first: a setting such as duplicate emails may not switch
     // back while duplicate accounts exist.
-    await wipe();
+    let wipeFailure;
+    try {
+      await wipe();
+    } catch (error) {
+      wipeFailure = error;
+    }
     if (mask.length) {
       try {
         const restored = await writeConfig(mask, baseline);
@@ -207,8 +223,10 @@ export function createSession(
         log(`SANDBOX CONFIG CHANGED by ${program.id}: ${JSON.stringify(now)}`);
         throw error;
       }
+      if (wipeFailure) throw wipeFailure;
       await wipe();
     }
+    if (wipeFailure) throw wipeFailure;
     if (failure) throw failure;
     return { steps, ...(projection ? { config: projection } : {}) };
   }

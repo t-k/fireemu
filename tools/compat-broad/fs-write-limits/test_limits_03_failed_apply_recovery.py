@@ -278,6 +278,7 @@ def test_semantic_invalid_apply_runs_gate_bound_restore_and_stays_held(
         assert exemption["body"]["baselineVerified"] is False
         assert exemption["complete"] is True
         assert events["recovery:index-exemption"]["completed"] is True
+        assert receipt["indexExemption"]["verifiedAtPostflight"] is False
     if apply_mode in ("rejected", "incomplete-response"):
         assert receipt["postflightComplete"] is False
     restored_evidence = evidence["recovery:index-lifecycle-restored"]["body"]

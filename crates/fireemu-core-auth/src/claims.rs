@@ -292,12 +292,17 @@ impl CustomClaims {
         out
     }
 
-    /// Checks `AUTH-LIMIT-CUSTOM-CLAIMS-BYTES` on the canonical JSON size.
+    /// Checks `AUTH-LIMIT-CUSTOM-CLAIMS-BYTES` on the stored text: the text the claims were set
+    /// from when there is one, so padding cannot carry more than the limit (closure security
+    /// review 2026-09-24), else the canonical JSON.
     pub fn check_size(&self) -> Result<(), LimitViolation> {
         let def = FIREBASE_AUTH_2026_08_30
             .find("AUTH-LIMIT-CUSTOM-CLAIMS-BYTES")
             .unwrap_or_else(|| unreachable!("catalog entry is checked by catalog tests"));
-        let bytes = self.canonical_json().len() as u64;
+        let bytes = self
+            .source
+            .as_ref()
+            .map_or_else(|| self.canonical_json().len(), String::len) as u64;
         match evaluate(
             def,
             bytes,

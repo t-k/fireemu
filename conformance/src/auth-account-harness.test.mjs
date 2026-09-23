@@ -455,6 +455,7 @@ test("transient answers are indeterminate, behaviour is not", () => {
   assert.equal(isTransient({ status: 400, body: { error: { message: "QUOTA_EXCEEDED" } } }), true);
   assert.equal(isTransient({ status: 400, body: { error: { message: "EMAIL_EXISTS" } } }), false);
   assert.equal(isTransient({ status: 200, body: {} }), false);
+  assert.equal(isTransient({ status: -1, unresolved: "step x recorded nothing" }), true);
 });
 
 test("the fixture scan refuses secrets and foreign identifiers", () => {
@@ -490,6 +491,8 @@ test("config read-back matches written fields and treats cleared policies as uns
   );
   assert.equal(configMatches({ passwordPolicyEnforcementState: "OFF" }, policy), false);
   assert.equal(configMatches(undefined, undefined), true);
+  assert.equal(configMatches(false, undefined), true, "an unset switch may read back false");
+  assert.equal(configMatches(true, undefined), false);
   assert.equal(configMatches({ passwordPolicyEnforcementState: "OFF" }, undefined), true);
   assert.equal(configMatches(policy, undefined), false);
   assert.equal(configMatches(true, true), true);

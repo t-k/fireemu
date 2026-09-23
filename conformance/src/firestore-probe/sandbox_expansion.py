@@ -20,14 +20,7 @@ def name_of_length(target: int, tag: str) -> str:
         document_bytes = target - slash_bytes - fixed_collection_bytes
         if not pairs <= document_bytes <= pairs * 1500:
             continue
-        lengths = [1] * pairs
-        remaining = document_bytes - pairs
-        for index in range(pairs):
-            growth = min(1499, remaining)
-            lengths[index] += growth
-            remaining -= growth
-        if remaining:
-            continue
+        lengths = [document_bytes // pairs + (index < document_bytes % pairs) for index in range(pairs)]
         segments: list[str] = []
         for index, length in enumerate(lengths):
             segments.extend(("c", (tag if index == 0 else "d")[:length].ljust(length, "d")))
@@ -35,6 +28,15 @@ def name_of_length(target: int, tag: str) -> str:
         if len(name.encode()) == target:
             return name
     raise ValueError(f"cannot form document name of {target} bytes")
+
+
+def index_sum_name_of_length(target: int, tag: str) -> str:
+    """Reproduce the exact two-segment names used by the exploratory sum probe."""
+    layout = {1000: (998, 1), 2000: (1400, 599)}
+    if target not in layout:
+        raise ValueError(f"unsupported index-sum name length: {target}")
+    collection_bytes, document_bytes = layout[target]
+    return f"{tag[:collection_bytes].ljust(collection_bytes, 'c')}/{'d' * document_bytes}"
 
 
 def _readback(names: list[str]) -> dict[str, Any]:
@@ -121,7 +123,7 @@ def build_programs() -> list[dict[str, Any]]:
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
         programs.append(_commit_program(f"writes/limits/empty-document-name/{length}", [_field_update(name, {})], [name]))
     for length, count in ((2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):
-        name = f"{DOCS}/{name_of_length(length, f'a{length}n{count}')}"
+        name = f"{DOCS}/{index_sum_name_of_length(length, f'g{length}')}"
         values = [{"integerValue": str(index)} for index in range(count)]
         write = _field_update(name, {"a": {"arrayValue": {"values": values}}})
         programs.append(_commit_program(f"writes/limits/index-entry-sum/{length}-{count}", [write], [name]))

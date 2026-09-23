@@ -41,6 +41,7 @@ test("production REST session fixes project, endpoint and all-attempt cap", () =
   assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "1000");
   assert.equal(env.FIRESTORE_PROBE_RECORD_PROJECT, "demo-firestore-probe");
   assert.equal(env.FIRESTORE_PROBE_TOKEN, "private");
+  assert.equal(env.FIRESTORE_PROBE_TIMEOUT_MS, "180000");
 });
 
 test("a failed session still reports its bounded network attempts from metadata", () => {

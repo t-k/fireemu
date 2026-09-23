@@ -93,11 +93,14 @@ test("gRPC status keeps duplicate and binary trailers without transport date", (
     getMap: () => ({
       date: "Wed, 23 Sep 2026 00:00:00 GMT",
       "grpc-status-details-bin": Buffer.from([0, 255]),
+      "x-debug-tracking-id": "volatile-123;o=0",
     }),
     get: (key) =>
       key === "grpc-status-details-bin"
         ? [Buffer.from([0, 255]), Buffer.alloc(0)]
-        : ["Wed, 23 Sep 2026 00:00:00 GMT"],
+        : key === "x-debug-tracking-id"
+          ? ["volatile-123;o=0"]
+          : ["Wed, 23 Sep 2026 00:00:00 GMT"],
   };
   assert.deepEqual(projectStreamStatus({ code: 3, details: "invalid write", metadata }), {
     code: 3,
@@ -105,6 +108,7 @@ test("gRPC status keeps duplicate and binary trailers without transport date", (
     trailers: [
       { key: "grpc-status-details-bin", kind: "binary", valueBase64: "AP8=" },
       { key: "grpc-status-details-bin", kind: "binary", valueBase64: "" },
+      { key: "x-debug-tracking-id", kind: "ascii", value: "nonempty-volatile-id" },
     ],
   });
 });

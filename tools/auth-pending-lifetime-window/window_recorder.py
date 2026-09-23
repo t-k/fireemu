@@ -116,8 +116,9 @@ def terminate(signum, frame):
     raise Terminated(signum)
 
 
-def committed_checkout():
-    return core.command(["git", "status", "--porcelain", "--", *PROBE_TREES]) == ""
+def committed_checkout(command=None):
+    command = core.command if command is None else command
+    return command(["git", "status", "--porcelain", "--", *PROBE_TREES]) == ""
 
 
 def begin(report, step):
@@ -203,10 +204,26 @@ def production_preflight(command, request):
     return key, config
 
 
-def observe(output, origin=None, clock_control=None):
+def observe(
+    output,
+    origin=None,
+    clock_control=None,
+    *,
+    request_transport=None,
+    patch_transport=None,
+    command_transport=None,
+):
     """Production when origin is None (real-time aging); otherwise an owned local fireemu
-    at origin, aged through clock_control=(control_origin, token) via the control clock."""
+    at origin, aged through clock_control=(control_origin, token) via the control clock.
+
+    Optional transports provide the narrow hosting seam for an admitted runner. Defaults
+    resolve the existing functions at call time. The request transport receives every
+    HTTP request; PATCH and subprocess calls have separate injectable transports.
+    """
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
+    request_transport = core.request if request_transport is None else request_transport
+    patch_transport = patch if patch_transport is None else patch_transport
+    command_transport = core.command if command_transport is None else command_transport
     identity = core.origins(origin)[0]
     production = origin is None
     before = inputs()
@@ -220,7 +237,7 @@ def observe(output, origin=None, clock_control=None):
         "project": PROJECT,
         "projectNumber": NUMBER if production else None,
         "probeInputs": before,
-        "probeSourceCommit": core.command(["git", "rev-parse", "HEAD"]),
+        "probeSourceCommit": command_transport(["git", "rev-parse", "HEAD"]),
         "corpus": CORPUS,
         "budget": dict(BUDGET),
         "accountsUsed": 0,
@@ -301,7 +318,7 @@ def observe(output, origin=None, clock_control=None):
                     "reserveSeconds": REQUEST_BUDGET_SECONDS,
                 }
             )
-            status, info = core.request(
+            status, info = request_transport(
                 TOKEN_INFO_URL, {"access_token": token}, form=True
             )
             require(status == 200)
@@ -339,7 +356,7 @@ def observe(output, origin=None, clock_control=None):
                             "reserveSeconds": AUTH_COMMAND_SECONDS,
                         }
                     )
-                    token = core.command(
+                    token = command_transport(
                         ["gcloud", "auth", "application-default", "print-access-token"]
                     )
                     acquired = time.monotonic()
@@ -386,7 +403,7 @@ def observe(output, origin=None, clock_control=None):
             # change is never applied past the deadline. The gcloud subprocesses inside
             # preflight carry their own timeouts; these checkpoints bound the phase entry.
             time_guard()
-            require(committed_checkout())
+            require(committed_checkout(command_transport))
             report["committedCheckout"] = True
 
             def preflight_command(argv):
@@ -399,7 +416,7 @@ def observe(output, origin=None, clock_control=None):
                         "reserveSeconds": AUTH_COMMAND_SECONDS,
                     }
                 )
-                return core.command(argv)
+                return command_transport(argv)
 
             def preflight_request(url):
                 token = admin_access()
@@ -409,7 +426,7 @@ def observe(output, origin=None, clock_control=None):
                     privileged_evidence("config:read")
                 else:
                     privileged_evidence("project:read")
-                return core.request(url, token=token, quota=True)
+                return request_transport(url, token=token, quota=True)
 
             key, report["configReadback"] = production_preflight(
                 preflight_command, preflight_request
@@ -423,8 +440,8 @@ def observe(output, origin=None, clock_control=None):
                     "config:read" if patch_body is None else "config:patch"
                 )
                 if patch_body is None:
-                    return core.request(CONFIG_URL, token=token, quota=True)
-                return patch(
+                    return request_transport(CONFIG_URL, token=token, quota=True)
+                return patch_transport(
                     f"{CONFIG_URL}?updateMask={urllib.parse.quote(mask, safe=',')}",
                     patch_body,
                     token,
@@ -494,7 +511,7 @@ def observe(output, origin=None, clock_control=None):
             counted()
             privileged_evidence(f"admin:{action}")
             begin(report, f"admin:{action}")
-            status, response = core.request(
+            status, response = request_transport(
                 f"{identity}/v1/projects/{PROJECT}/accounts:{action}",
                 body,
                 token,
@@ -508,7 +525,7 @@ def observe(output, origin=None, clock_control=None):
             counted()
             report["publicRequestCount"][phase[0]] += 1
             begin(report, action)
-            status, response = core.request(
+            status, response = request_transport(
                 f"{identity}/v1/accounts:{action}{query}", body
             )
             note(report, action, status, response)
@@ -519,7 +536,7 @@ def observe(output, origin=None, clock_control=None):
             counted()
             report["publicRequestCount"][phase[0]] += 1
             begin(report, action)
-            status, response = core.request(
+            status, response = request_transport(
                 f"{identity}/v2/accounts/{action}{query}", body
             )
             note(report, action, status, response)
@@ -687,7 +704,7 @@ def observe(output, origin=None, clock_control=None):
             if production:
                 return TEST_CODE
             begin(report, "emulator:verificationCodes")
-            status, listing = core.request(
+            status, listing = request_transport(
                 f"{origin}/emulator/v1/projects/{PROJECT}/verificationCodes"
             )
             require(status == 200)

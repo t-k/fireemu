@@ -334,7 +334,32 @@ def run(tmp_path, monkeypatch, budget=None, world_type=World, **options):
     wire(world, monkeypatch, budget=budget)
     origin = None if world.production else LOCAL_ORIGIN
     control = None if world.production else (LOCAL_ORIGIN, "control-token")
-    report = recorder.observe(world.output, origin=origin, clock_control=control)
+    calls = {"request": 0, "patch": 0, "command": 0}
+    request = recorder.core.request
+    patch = recorder.patch
+    command = recorder.core.command
+
+    def routed_request(*args, **kwargs):
+        calls["request"] += 1
+        return request(*args, **kwargs)
+
+    def routed_patch(*args, **kwargs):
+        calls["patch"] += 1
+        return patch(*args, **kwargs)
+
+    def routed_command(*args, **kwargs):
+        calls["command"] += 1
+        return command(*args, **kwargs)
+
+    report = recorder.observe(
+        world.output,
+        origin=origin,
+        clock_control=control,
+        request_transport=routed_request,
+        patch_transport=routed_patch,
+        command_transport=routed_command,
+    )
+    world.transport_calls = calls
     saved = json.loads((world.output / "observation.json").read_bytes())
     for path in world.output.rglob("*"):
         if path.is_file():
@@ -342,6 +367,15 @@ def run(tmp_path, monkeypatch, budget=None, world_type=World, **options):
             assert not artifact_contains_secret(text), path.name
     assert signal.getsignal(signal.SIGTERM) is signal.SIG_DFL
     return world, report, saved
+
+
+def test_admitted_transport_seams_receive_recorder_requests(tmp_path, monkeypatch):
+    world, report, _ = run(tmp_path, monkeypatch)
+
+    assert world.transport_calls["request"] > 0
+    assert world.transport_calls["patch"] > 0
+    assert world.transport_calls["command"] > 0
+    assert report["requestCount"] == {"observation": 45, "recovery": 25, "config": 6}
 
 
 def rows_of(saved):

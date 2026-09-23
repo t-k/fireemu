@@ -8314,7 +8314,9 @@ fn production_admin_query_page(
             Ok(offset) => offset,
             Err(_) => return error(400, "INVALID_ARGUMENT : invalid offset"),
         },
-        Ok(_) | Err(()) => return error(400, "INVALID_ARGUMENT : invalid offset"),
+        // Production fails a negative offset internally (corpus v2 recording 2026-09-24).
+        Ok(_) => return backend_internal_error(),
+        Err(()) => return error(400, "INVALID_ARGUMENT : invalid offset"),
     };
     let page = store.users_matching_sorted_page(expressions, sort, offset, limit, descending);
     let users = page
@@ -10027,8 +10029,8 @@ fn sign_in_with_phone_number(
     )
 }
 
-/// `accounts:signInWithPhoneNumber` with a `temporaryProof`: signs in to the number's owner
-/// once, as the SDK does after a link to a taken number.
+/// `accounts:signInWithPhoneNumber` with a `temporaryProof`: signs in to the number's owner,
+/// as the SDK does after a link to a taken number.
 fn sign_in_with_temporary_proof(
     store: &mut AuthStore,
     body: &Value,
@@ -10038,7 +10040,7 @@ fn sign_in_with_temporary_proof(
     let Some(phone) = str_field(body, "phoneNumber") else {
         return error(400, "MISSING_PHONE_NUMBER");
     };
-    if !store.consume_temporary_proof(proof, phone, at) {
+    if !store.check_temporary_proof(proof, phone, at) {
         return error(400, "INVALID_TEMPORARY_PROOF");
     }
     let (uid, is_new) = match store.sign_in_with_phone(phone, at) {

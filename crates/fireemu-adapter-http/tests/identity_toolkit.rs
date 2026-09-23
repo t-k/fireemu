@@ -4768,9 +4768,10 @@ fn strict_admin_query_applies_the_production_page_contract() {
         .0,
         200
     );
+    // A negative offset is production's internal error instead
+    // (`strict_admin_query_negative_offset_is_a_backend_failure`).
     for invalid in [
         json!({"limit": "-1"}),
-        json!({"offset": "-1"}),
         json!({"returnUserInfo": "true"}),
         json!({"order": "SIDEWAYS"}),
         json!({"order": 1}),
@@ -9583,18 +9584,24 @@ fn test_phone_numbers_sign_in_with_their_fixed_code() {
     assert!(proof.get("idToken").is_none(), "{proof}");
     let proof_body =
         json!({"temporaryProof": proof["temporaryProof"], "phoneNumber": "+16505550101"});
-    let (status, owner) = post(
-        &s,
-        &format!("{V1}/accounts:signInWithPhoneNumber"),
-        &proof_body,
-    );
-    assert_eq!(status, 200, "{owner}");
-    assert_eq!(owner["localId"], signed["localId"]);
-    assert_eq!(owner["isNewUser"], false);
+    // The proof is reusable within its lifetime (corpus v2 recording 2026-09-24,
+    // `phone#sign-in-with-temporary-proof-again`).
+    for _ in 0..2 {
+        let (status, owner) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPhoneNumber"),
+            &proof_body,
+        );
+        assert_eq!(status, 200, "{owner}");
+        assert_eq!(owner["localId"], signed["localId"]);
+        assert_eq!(owner["isNewUser"], false);
+    }
+    let wrong_number =
+        json!({"temporaryProof": proof["temporaryProof"], "phoneNumber": "+16505550102"});
     let (status, _) = post(
         &s,
         &format!("{V1}/accounts:signInWithPhoneNumber"),
-        &proof_body,
+        &wrong_number,
     );
     assert_eq!(status, 400);
 
@@ -9744,6 +9751,21 @@ fn keyless_hmac_sha512_sign_in_is_a_backend_failure() {
     assert_eq!(status, 500, "{refused}");
     assert_eq!(refused["error"]["status"], "INTERNAL");
     assert_eq!(refused["error"]["message"], "Internal error encountered.");
+}
+
+/// A negative query offset is production's internal error (corpus v2 recording 2026-09-24,
+/// `admin/query#negative-offset`, the same in both recordings).
+#[test]
+fn strict_admin_query_negative_offset_is_a_backend_failure() {
+    let s = strict_state();
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"offset": "-1"}),
+    );
+    assert_eq!(status, 500, "{refused}");
+    assert_eq!(refused["error"]["status"], "INTERNAL");
 }
 
 /// Disabled project providers refuse their client flows with `OPERATION_NOT_ALLOWED`, and

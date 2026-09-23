@@ -35,7 +35,23 @@ def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
     preflights = preflight_count(plan)
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     rows, cleanup, failures = [], [], []
+    recording_failures = []
     observation = declared["observation"]
+
+    def record(path, entry, phase, index):
+        # The Gate journals the acknowledged response independently. A sidecar
+        # failure is a recording failure, not a lost acknowledgement. Preserve
+        # the response for Gate-owned recovery, but never accept the collection.
+        try:
+            save(path, entry)
+        except Exception as error:
+            failure = {
+                "phase": phase, "index": index, "stage": "recording",
+                "file": path.name, "failure": type(error).__name__,
+            }
+            entry["recordingFailure"] = type(error).__name__
+            recording_failures.append(failure)
+            failures.append(failure)
 
     def dispatch(operation, recovery, index, request_index):
         # A large body travels in the Gate plan by reference; the request row
@@ -47,7 +63,7 @@ def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
         def send():
             result = wire(operation, recovery, index, request_index)
             entry.update(result)
-            save(output / f"{phase}-{index:02d}-wire.json", entry)
+            record(output / f"{phase}-{index:02d}-wire.json", entry, phase, index)
             if result.get("complete") is not True or result.get("failure") is not None:
                 raise ValueError("incomplete bounded transport")
             return result["status"], result["body"]
@@ -63,7 +79,7 @@ def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
             failures.append(
                 {"phase": phase, "index": index, "failure": type(error).__name__}
             )
-        save(output / f"{phase}-{index:02d}.json", entry)
+        record(output / f"{phase}-{index:02d}.json", entry, phase, index)
         return entry
 
     abandoned = None
@@ -76,8 +92,8 @@ def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
                 break
             entry = dispatch(operation, False, index, index)
             rows.append(entry)
-            if entry.get("dispatchFailure"):
-                abandoned = "a dispatch failed"
+            if entry.get("dispatchFailure") or entry.get("recordingFailure"):
+                abandoned = "a dispatch or recording failed"
                 break
             if index < preflights and not typed_absence(
                 entry.get("status"), entry.get("body")
@@ -92,15 +108,22 @@ def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
         # frozen order, so an observation that ends early has to say so before
         # its cleanup slots become reachable. Without one, stopping is enough.
         scheduled = "schedule" in plan["localGatePlan"]["jobs"]["limits"]
-        if abandoned is not None and scheduled:
-            try:
+        stopped = False
+        try:
+            if abandoned is not None and scheduled:
                 gate.abandon_observation(abandoned)
-            except Exception as error:
-                failures.append({"phase": "abandon", "failure": type(error).__name__})
-        else:
-            gate.stop()
-        recovery_ready = True
-        if before_recovery is not None:
+            else:
+                gate.stop()
+            stopped = True
+        except Exception as error:
+            failures.append({
+                "phase": "abandon" if abandoned is not None and scheduled else "stop",
+                "failure": type(error).__name__,
+            })
+        # Never acquire recovery credentials after an unconfirmed transition.
+        # With no callback, the Gate still decides every recovery dispatch.
+        recovery_ready = stopped or before_recovery is None
+        if before_recovery is not None and stopped:
             try:
                 before_recovery()
             except Exception as error:
@@ -129,7 +152,7 @@ def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
             )
         except Exception as error:
             failures.append({"phase": "finish", "failure": type(error).__name__})
-    recording = len(rows) == len(observation) and all(
+    recording = not recording_failures and len(rows) == len(observation) and all(
         row.get("complete") is True and row.get("failure") is None for row in rows
     )
     problems = evaluate_rows(rows, plan, excused=excused)
@@ -142,6 +165,7 @@ def collect(gate, plan, output, wire, *, before_recovery=None, excused=()):
         "expectationMismatches": mismatches,
         "pendingDifferences": pending,
         "infrastructureFailures": failures,
+        "recordingFailures": recording_failures,
         "rows": rows,
         "cleanup": cleanup,
         "resourceAbsence": absence,

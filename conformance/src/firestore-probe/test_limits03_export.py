@@ -50,6 +50,7 @@ def test_exact_identifier_and_name_boundaries_are_retained() -> None:
 
 def test_sandbox_limits_omit_legacy_shared_owner_reference() -> None:
     programs = _build_programs()
+    assert all("_sharedOwner" not in json.dumps(program) for program in programs)
     affected = 0
     for program in programs:
         for step in program["steps"]:

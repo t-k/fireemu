@@ -69,6 +69,50 @@ def test_non_commit_batchwrite_request_boundary_is_exact_and_keeps_readback() ->
         assert all("expected" not in item for item in program["steps"])
 
 
+def test_non_commit_read_request_boundaries_seed_one_document() -> None:
+    programs = {program["id"]: program for program in _module().build_programs()}
+    for family, suffix in (("batch-get", ":batchGet"), ("run-query", ":runQuery")):
+        for size in (10_485_760, 10_485_761):
+            program = programs[f"writes/limits/non-commit-rest-request-bytes/{family}/{size}"]
+            assert len(program["steps"]) == 2
+            seed, probe = program["steps"]
+            assert seed["id"] == "seed"
+            assert seed["path"].endswith("/documents:commit")
+            seeded_name = seed["body"]["writes"][0]["update"]["name"]
+            assert probe["method"] == "POST"
+            assert probe["path"].endswith(f"/documents{suffix}")
+            assert len(probe["body"].encode()) == size
+            body = json.loads(probe["body"])
+            if family == "batch-get":
+                assert body["documents"] == [seeded_name]
+            else:
+                assert body["structuredQuery"]["from"] == [
+                    {"collectionId": seeded_name.split("/documents/")[1].split("/")[0]}
+                ]
+            assert all("expected" not in item for item in program["steps"])
+
+
+def test_non_commit_document_write_boundaries_keep_state_readback() -> None:
+    programs = {program["id"]: program for program in _module().build_programs()}
+    for family, method in (("create", "POST"), ("patch", "PATCH")):
+        for size in (10_485_760, 10_485_761):
+            program = programs[f"writes/limits/non-commit-rest-request-bytes/{family}/{size}"]
+            steps = program["steps"]
+            assert len(steps) == (3 if family == "patch" else 2)
+            probe = steps[-2]
+            assert probe["method"] == method
+            assert len(probe["body"].encode()) == size
+            body = json.loads(probe["body"])
+            assert body["fields"]["v"]["integerValue"] == "2"
+            assert steps[-1]["id"] == "readback"
+            if family == "patch":
+                assert steps[0]["id"] == "seed"
+                assert steps[0]["body"]["writes"][0]["update"]["name"] in probe["path"]
+            else:
+                assert "documentId=" in probe["path"]
+            assert all("expected" not in item for item in steps)
+
+
 def test_map_aggregate_probe_exceeds_strict_value_limit_but_fits_document() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     program = programs["writes/limits/aggregate-map/strict-only"]

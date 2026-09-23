@@ -111,6 +111,75 @@ def _non_commit_batchwrite_request_program(size: int) -> dict[str, Any]:
     }
 
 
+def _non_commit_read_request_program(family: str, size: int) -> dict[str, Any]:
+    collection = "rawBatchGet" if family == "batch-get" else "rawQuery"
+    name = f"{DOCS}/{collection}/{size}"
+    if family == "batch-get":
+        path = BATCH_GET
+        body = {"documents": [name]}
+    elif family == "run-query":
+        path = f"/v1/{DOCS}:runQuery"
+        body = {"structuredQuery": {"from": [{"collectionId": collection}]}}
+    else:
+        raise ValueError(f"unsupported non-Commit REST family: {family}")
+    payload = json.dumps(body, separators=(",", ":"))
+    if len(payload) > size:
+        raise ValueError("raw read target smaller than JSON body")
+    payload = payload[:-1] + " " * (size - len(payload)) + "}"
+    return {
+        "id": f"writes/limits/non-commit-rest-request-bytes/{family}/{size}",
+        "area": "writes",
+        "steps": [
+            {
+                "id": "seed",
+                "method": "POST",
+                "path": COMMIT,
+                "body": {"writes": [_update(name)]},
+            },
+            {"id": "probe", "method": "POST", "path": path, "body": payload},
+        ],
+    }
+
+
+def _non_commit_document_write_program(family: str, size: int) -> dict[str, Any]:
+    collection = "rawCreate" if family == "create" else "rawPatch"
+    name = f"{DOCS}/{collection}/{size}"
+    if family == "create":
+        method = "POST"
+        path = f"/v1/{DOCS}/{collection}?documentId={size}"
+        steps: list[dict[str, Any]] = []
+    elif family == "patch":
+        method = "PATCH"
+        path = f"/v1/{name}"
+        steps = [
+            {
+                "id": "seed",
+                "method": "POST",
+                "path": COMMIT,
+                "body": {"writes": [_update(name, "1")]},
+            }
+        ]
+    else:
+        raise ValueError(f"unsupported non-Commit REST document write: {family}")
+    payload = json.dumps(
+        {"fields": {"v": {"integerValue": "2"}}}, separators=(",", ":")
+    )
+    if len(payload) > size:
+        raise ValueError("raw document write target smaller than JSON body")
+    payload = payload[:-1] + " " * (size - len(payload)) + "}"
+    steps.extend(
+        [
+            {"id": "probe", "method": method, "path": path, "body": payload},
+            {"id": "readback", "method": "GET", "path": f"/v1/{name}"},
+        ]
+    )
+    return {
+        "id": f"writes/limits/non-commit-rest-request-bytes/{family}/{size}",
+        "area": "writes",
+        "steps": steps,
+    }
+
+
 def _batch_variant(variant: str) -> dict[str, Any]:
     prefix = f"{DOCS}/batchInvalid"
     names = [f"{prefix}/{variant}-{suffix}" for suffix in ("first", "middle", "last")]
@@ -221,6 +290,16 @@ def build_programs() -> list[dict[str, Any]]:
     programs = [_raw_request_program(size) for size in (11_534_336, 11_534_337)]
     programs.extend(
         _non_commit_batchwrite_request_program(size)
+        for size in (10_485_760, 10_485_761)
+    )
+    programs.extend(
+        _non_commit_read_request_program(family, size)
+        for family in ("batch-get", "run-query")
+        for size in (10_485_760, 10_485_761)
+    )
+    programs.extend(
+        _non_commit_document_write_program(family, size)
+        for family in ("create", "patch")
         for size in (10_485_760, 10_485_761)
     )
     programs.extend(

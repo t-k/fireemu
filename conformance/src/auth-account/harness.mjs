@@ -32,17 +32,26 @@ const LOCAL_PREFIX = {
 };
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
-/** Binds a run id, the project and one target (production sandbox or local fireemu). */
-export function createContext({ run, project, target }) {
+/**
+ * Binds a run id, the run start time, the project and one target (production sandbox or local
+ * fireemu). Times inside the run window are the only times normalization masks.
+ */
+export function createContext({ run, project, target, startedMs = Date.now() }) {
   if (!/^\d+$/.test(String(run))) throw new Error("run id must be numeric");
+  if (!Number.isFinite(startedMs)) throw new Error("run start must be a time");
+  if (target.projectNumber !== undefined && !/^[1-9]\d+$/.test(String(target.projectNumber))) {
+    throw new Error("project number must be numeric");
+  }
   if (target.kind === "production") {
     if (project !== SANDBOX_PROJECT) {
       throw new Error(`production target must be the sandbox project ${SANDBOX_PROJECT}`);
     }
-    if (!target.apiKey || !target.adminToken)
-      throw new Error("production needs an API key and an admin token");
-    if (target.quotaProject !== SANDBOX_PROJECT)
+    if (!target.apiKey || !target.adminToken || !target.projectNumber) {
+      throw new Error("production needs an API key, an admin token and the project number");
+    }
+    if (target.quotaProject !== SANDBOX_PROJECT) {
       throw new Error("quota project must be the sandbox project");
+    }
   } else if (target.kind === "local") {
     const url = new URL(target.origin);
     if (url.protocol !== "http:" || !LOOPBACK.has(url.hostname)) {
@@ -51,7 +60,12 @@ export function createContext({ run, project, target }) {
   } else {
     throw new Error(`unknown target kind ${target.kind}`);
   }
-  return { run: String(run), project, target };
+  return {
+    run: String(run),
+    project,
+    target,
+    window: { from: startedMs - 10 * 60_000, to: startedMs + 12 * 3_600_000 },
+  };
 }
 
 const email = (ctx, name) => `fireemu-aa-${ctx.run}-${name}@example.com`;
@@ -156,6 +170,10 @@ export function validateCorpus(programs) {
   for (const program of programs) {
     if (programIds.has(program.id)) throw new Error(`duplicate program ${program.id}`);
     programIds.add(program.id);
+    for (const path of Object.keys(program.config ?? {})) {
+      if (!CONFIG_PATHS.has(path))
+        throw new Error(`${program.id}: config path ${path} is not allowed`);
+    }
     const stepIds = new Set();
     for (const step of program.steps) {
       requests += 1;
@@ -187,19 +205,134 @@ export function validateCorpus(programs) {
           `${step.id}: sendVerificationCode only to a configured test phone PHONE(n)`,
         );
       }
-      for (const text of walkStrings(payload)) {
-        if (
-          /@(?!example\.com\b|Example\.COM\b)[A-Za-z0-9.-]+\.[a-z]{2,}/.test(text) &&
-          !step.allowForeignEmail
-        ) {
-          throw new Error(`${step.id}: email outside example.com`);
-        }
-      }
+      for (const text of walkStrings(payload)) assertOnlyExampleEmail(text, step.id);
     }
   }
   if (requests > REQUEST_CAP)
     throw new Error(`corpus exceeds the request cap (${requests} > ${REQUEST_CAP})`);
   return requests;
+}
+
+/**
+ * The Admin config paths a program may change. They only affect account operations and carry
+ * no key material (unlike signIn.hashConfig or client.apiKey), so their values may be
+ * recorded.
+ */
+export const CONFIG_PATHS = new Set([
+  "signIn.allowDuplicateEmails",
+  "emailPrivacyConfig.enableImprovedEmailPrivacy",
+  "passwordPolicyConfig",
+  "client.permissions.disabledUserSignup",
+  "client.permissions.disabledUserDeletion",
+]);
+
+function assertOnlyExampleEmail(text, where) {
+  for (const [, domain] of String(text).matchAll(/@([^\s@"'<>/?#&]+)/g)) {
+    if (domain.toLowerCase() !== "example.com") {
+      throw new Error(`${where}: email outside example.com (${domain})`);
+    }
+  }
+}
+
+function walkEntries(value, visit, key = "") {
+  if (Array.isArray(value)) for (const v of value) walkEntries(v, visit, key);
+  else if (value && typeof value === "object") {
+    for (const [k, v] of Object.entries(value)) walkEntries(v, visit, k);
+  } else visit(key, value);
+}
+
+const PROJECT_KEYS = new Set(["targetProjectId", "projectId", "tenantProjectId", "project"]);
+
+/**
+ * The last check before a request leaves the process: the resolved URL must be a reviewed path
+ * family of this project on the target's host, and the resolved body and query may only name
+ * this project, example.com addresses and configured test phones. sendOobCode is only a
+ * PASSWORD_RESET for an address that has no account. Only the harness itself (wipe and config
+ * restore) may reach the project config.
+ */
+export function guardRequest({ url, init }, ctx, { harness = false } = {}) {
+  const parsed = new URL(url);
+  const raw = url.slice(parsed.origin.length).split("?")[0];
+  if (/%2e|%2f|\/\.\.?(\/|$)/i.test(raw)) throw new Error(`request path is not canonical: ${raw}`);
+  let api;
+  let path;
+  if (ctx.target.kind === "production") {
+    api = Object.entries(PRODUCTION_ORIGINS).find(([, origin]) => origin === parsed.origin)?.[0];
+    path = parsed.pathname;
+  } else {
+    if (parsed.origin !== new URL(ctx.target.origin).origin)
+      throw new Error("request left the local target");
+    api = Object.entries(LOCAL_PREFIX).find(([, prefix]) =>
+      parsed.pathname.startsWith(`/${prefix}/`),
+    )?.[0];
+    path = api ? parsed.pathname.slice(LOCAL_PREFIX[api].length + 1) : parsed.pathname;
+  }
+  const project = ctx.project.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const families =
+    api === "securetoken"
+      ? [/^\/v1\/token$/]
+      : [
+          /^\/v1\/accounts:[A-Za-z]+$/,
+          new RegExp(`^/v1/projects/${project}/accounts(:[A-Za-z]+)?$`),
+          new RegExp(`^/v1/projects/${project}:queryAccounts$`),
+          ...(harness ? [new RegExp(`^/admin/v2/projects/${project}/config$`)] : []),
+        ];
+  if (!api || !families.some((family) => family.test(path))) {
+    throw new Error(`request path is not a reviewed family: ${path}`);
+  }
+  const inputs = [Object.fromEntries(parsed.searchParams)];
+  if (typeof init.body === "string") {
+    inputs.push(
+      init.headers["content-type"] === "application/json"
+        ? JSON.parse(init.body)
+        : Object.fromEntries(new URLSearchParams(init.body)),
+    );
+  }
+  for (const input of inputs) {
+    walkEntries(input, (key, value) => {
+      if (PROJECT_KEYS.has(key) && value !== ctx.project)
+        throw new Error(`request names another project: ${value}`);
+      if (typeof value !== "string") return;
+      assertOnlyExampleEmail(value, key);
+      for (const [phone] of value.matchAll(/\+\d{8,15}/g)) {
+        if (!TEST_PHONES.includes(phone))
+          throw new Error(`${phone} is not a configured test phone`);
+      }
+    });
+  }
+  if (path.endsWith(":sendOobCode")) {
+    const body = inputs[1] ?? {};
+    if (
+      body.requestType !== "PASSWORD_RESET" ||
+      !/-unknown[a-z0-9-]*@example\.com$/i.test(body.email ?? "")
+    ) {
+      throw new Error("sendOobCode is only a PASSWORD_RESET for an unknown address");
+    }
+  }
+}
+
+const TRANSIENT_CODES = /^(TOO_MANY_ATTEMPTS_TRY_LATER|QUOTA_EXCEEDED|RESOURCE_EXHAUSTED)\b/;
+
+/** A recorded answer that says nothing about behaviour: transport failure, 5xx, rate limit. */
+export function isTransient(recorded) {
+  if (!recorded) return false;
+  if (recorded.status === 0 || recorded.status === 429 || recorded.status >= 500) return true;
+  return TRANSIENT_CODES.test(String(recorded.body?.error?.message ?? ""));
+}
+
+/** Refuses to let a committed fixture carry a secret or an identifier of a real project. */
+export function scanFixture(text, secrets) {
+  for (const secret of secrets.filter(Boolean)) {
+    if (text.includes(secret)) throw new Error("fixture contains a secret or a sandbox identifier");
+  }
+  const patterns = [/ya29\./, /eyJ[A-Za-z0-9_-]{5,}/, /AMf-/];
+  if (patterns.some((pattern) => pattern.test(text))) throw new Error("fixture contains a token");
+  for (const [, key, value] of text.matchAll(/"(passwordHash|salt)":\s*"([^"]*)"/g)) {
+    if (value !== "<bytes>" && !(key === "passwordHash" && value === REDACTED_HASH)) {
+      throw new Error("fixture contains password hash material");
+    }
+  }
+  assertOnlyExampleEmail(text, "fixture");
 }
 
 const TOKEN_KEYS = new Set([
@@ -222,29 +355,49 @@ const TIME_KEYS = new Set([
   "validSince",
   "phoneVerifiedAt",
 ]);
-const BYTE_KEYS = new Set(["passwordHash", "salt"]);
 const ID_KEYS = new Set(["localId", "user_id", "uid"]);
+/** The fixed marker production returns instead of a hash to callers that may not see it. */
+const REDACTED_HASH = "UkVEQUNURUQ=";
+const GENERATED_ID = /^[A-Za-z0-9]{28}$/;
 const INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
 
 function normalizeString(text, ctx) {
   let out = text.replaceAll(ctx.run, "<run>").replaceAll(ctx.project, RECORDED_PROJECT);
-  if (ctx.target.kind === "production") {
-    out = out.replaceAll(ctx.target.apiKey, "<api-key>");
-    if (ctx.projectNumber) out = out.replaceAll(ctx.projectNumber, "<project-number>");
-  }
+  if (ctx.target.projectNumber) out = out.replaceAll(ctx.target.projectNumber, "<project-number>");
+  if (ctx.target.kind === "production") out = out.replaceAll(ctx.target.apiKey, "<api-key>");
   return out;
+}
+
+/** `<run-time:type:unit>` for a time inside the run window; any other time is kept. */
+function runTime(value, ctx) {
+  let millis;
+  let unit;
+  if (typeof value === "string" && INSTANT.test(value)) {
+    millis = Date.parse(value);
+    unit = "instant";
+  } else if (/^\d{10}$|^\d{13}$/.test(String(value))) {
+    unit = String(value).length === 13 ? "ms" : "s";
+    millis = Number(value) * (unit === "ms" ? 1 : 1000);
+  } else {
+    return undefined;
+  }
+  if (millis < ctx.window.from || millis > ctx.window.to) return undefined;
+  return unit === "instant" ? "<run-time:instant>" : `<run-time:${typeof value}:${unit}>`;
 }
 
 function normalizeValue(value, key, ctx) {
   if (TOKEN_KEYS.has(key) && typeof value === "string") return `<${key}>`;
-  if (BYTE_KEYS.has(key) && typeof value === "string") return "<bytes>";
-  if (TIME_KEYS.has(key) && (typeof value === "string" || typeof value === "number"))
-    return "<time>";
-  if ((key === "expiresIn" || key === "expires_in") && value !== null) return "<seconds>";
+  if (key === "passwordHash" && typeof value === "string") {
+    return value === REDACTED_HASH ? value : "<bytes>";
+  }
+  if (key === "salt" && typeof value === "string") return "<bytes>";
+  if (TIME_KEYS.has(key) || typeof value === "string") {
+    const masked = runTime(value, ctx);
+    if (masked) return masked;
+  }
   if (typeof value === "string") {
     const text = normalizeString(value, ctx);
-    if (ID_KEYS.has(key) && !text.includes("<run>")) return "<generated-localId>";
-    if (INSTANT.test(text)) return "<instant>";
+    if (ID_KEYS.has(key) && GENERATED_ID.test(text)) return "<generated-localId>";
     return text;
   }
   if (Array.isArray(value)) return value.map((v) => normalizeValue(v, key, ctx));
@@ -266,6 +419,9 @@ export function normalizeResponse(status, text, ctx) {
   }
   return { status, body: normalizeValue(body, "", ctx) };
 }
+
+/** Config projections are recorded through the same normalization. */
+export const normalizeConfig = (values, ctx) => normalizeValue(values, "", ctx);
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);

@@ -6,7 +6,17 @@
 // re-reads the original values, even when a step fails. Harness calls (wipe, config) are not
 // recorded as rows but are counted.
 
-import { buildRequest, normalizeResponse, resolveValue, sameRecording } from "./harness.mjs";
+import {
+  buildRequest,
+  guardRequest,
+  normalizeConfig,
+  normalizeResponse,
+  resolveValue,
+  sameRecording,
+} from "./harness.mjs";
+
+/** An error that must stop the whole run: the sandbox may no longer be in a known state. */
+const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -22,12 +32,19 @@ function assign(object, path, value) {
   return object;
 }
 
-export function createSession(ctx, { timeoutMs = 60_000, settleMs = 0, log = () => {} } = {}) {
+export function createSession(
+  ctx,
+  { timeoutMs = 60_000, settleMs = 0, maxRequests = Infinity, log = () => {} } = {},
+) {
   let requests = 0;
   let harnessRequests = 0;
 
   async function send(step, raw, { harness = false } = {}) {
-    const { url, init } = buildRequest(step, ctx, raw);
+    const request = buildRequest(step, ctx, raw);
+    guardRequest(request, ctx, { harness });
+    const { url, init } = request;
+    if (requests + harnessRequests >= maxRequests)
+      throw fatal(`request ceiling ${maxRequests} reached`);
     if (harness) harnessRequests += 1;
     else requests += 1;
     let response;
@@ -56,7 +73,7 @@ export function createSession(ctx, { timeoutMs = 60_000, settleMs = 0, log = () 
       { harness: true },
     );
     if (recorded.status !== 200) {
-      throw new Error(
+      throw fatal(
         `harness ${method} ${path}: HTTP ${recorded.status} ${JSON.stringify(recorded.body ?? recorded)}`,
       );
     }
@@ -75,7 +92,7 @@ export function createSession(ctx, { timeoutMs = 60_000, settleMs = 0, log = () 
         body: { localIds: ids, force: true },
       });
     }
-    throw new Error("wipe: accounts remain after 20 rounds");
+    throw fatal("wipe: accounts remain after 20 rounds");
   }
 
   async function readConfig(mask) {
@@ -98,7 +115,7 @@ export function createSession(ctx, { timeoutMs = 60_000, settleMs = 0, log = () 
       }
       await sleep(2000);
     }
-    throw new Error(`config ${mask.join(",")} did not read back`);
+    throw fatal(`config ${mask.join(",")} did not read back`);
   }
 
   async function runProgram(program) {
@@ -111,7 +128,10 @@ export function createSession(ctx, { timeoutMs = 60_000, settleMs = 0, log = () 
     try {
       if (mask.length) {
         const applied = await writeConfig(mask, resolveValue(program.config, ctx, raw));
-        projection = { baseline, applied };
+        projection = {
+          baseline: normalizeConfig(baseline, ctx),
+          applied: normalizeConfig(applied, ctx),
+        };
       }
       for (const step of program.steps) {
         if (step.delayMs) await sleep(step.delayMs);
@@ -123,7 +143,7 @@ export function createSession(ctx, { timeoutMs = 60_000, settleMs = 0, log = () 
     } finally {
       if (mask.length) {
         const restored = await writeConfig(mask, baseline);
-        projection = { ...projection, restored };
+        projection = { ...projection, restored: normalizeConfig(restored, ctx) };
       }
       await wipe();
     }
@@ -145,12 +165,24 @@ export async function runCorpus(programs, ctx, options = {}) {
   const results = {};
   const failures = [];
   if (options.baselineConfig) {
-    await session.writeConfig(Object.keys(options.baselineConfig), options.baselineConfig);
+    const mask = Object.keys(options.baselineConfig);
+    if (options.applyBaseline) {
+      await session.writeConfig(mask, options.baselineConfig);
+    } else {
+      const current = await session.readConfig(mask);
+      const drift = mask.filter(
+        (path) => !sameRecording(current[path] ?? null, options.baselineConfig[path]),
+      );
+      if (drift.length)
+        throw fatal(`sandbox baseline differs at ${drift.join(", ")}; fix the sandbox first`);
+    }
   }
   for (const program of programs) {
     try {
       results[program.id] = await session.runProgram(program);
     } catch (error) {
+      if (error.fatal)
+        throw Object.assign(error, { partial: { results, failures, ...session.counts() } });
       failures.push({ program: program.id, error: String(error.message ?? error) });
     }
   }

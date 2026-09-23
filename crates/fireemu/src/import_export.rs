@@ -3421,11 +3421,15 @@ fn imported_password_of(
     if members.len() != 3 {
         return None;
     }
-    Some(fireemu_core_auth::store::ImportedPasswordHash {
+    let hash = fireemu_core_auth::store::ImportedPasswordHash {
         spec: text("spec")?.to_owned(),
         hash: decode_base64(text("hash")?)?,
         salt: decode_base64(text("salt")?)?,
-    })
+    };
+    // A restored spec keeps the parameter ranges an import enforces (closure re-review
+    // 2026-09-24): an out-of-range spec is refused rather than installed.
+    fireemu_adapter_http::identity_toolkit::restorable_imported_hash_spec(&hash.spec, &hash.hash)
+        .then_some(hash)
 }
 
 /// One account as the Identity Toolkit document an export carries.
@@ -5165,7 +5169,8 @@ mod tests {
         use fireemu_core_types::determinism::SplitMix64;
         let path = std::path::Path::new("offline.json");
         let hash = ImportedPasswordHash {
-            spec: "{\"algorithm\":\"SHA256\",\"rounds\":1}".to_owned(),
+            spec: r#"{"algorithm":"SHA","family":"SHA256","order":"SALT_AND_PASSWORD","rounds":1}"#
+                .to_owned(),
             hash: vec![1, 2, 3, 250],
             salt: vec![4, 5],
         };
@@ -5187,6 +5192,38 @@ mod tests {
         restored.import_user_trusted(restored_user).unwrap();
         let uid = restored.user_by_id("h").unwrap().local_id.clone();
         assert!(restored.password_digest(&uid).is_some());
+    }
+
+    /// A restored foreign hash keeps the import's parameter ranges: an out-of-range spec in
+    /// `fireemuImportedPassword` refuses the account instead of installing it (closure
+    /// re-review 2026-09-24).
+    #[test]
+    fn a_restored_foreign_hash_outside_the_import_ranges_is_refused() {
+        use fireemu_core_export::{auth::UserRecord, json::Json};
+        let member = |spec: &str| {
+            Json::Object(vec![
+                ("spec".to_owned(), Json::String(spec.to_owned())),
+                ("hash".to_owned(), Json::String("AQID".to_owned())),
+                ("salt".to_owned(), Json::String("BA==".to_owned())),
+            ])
+        };
+        let record = |spec: &str| UserRecord {
+            local_id: "r".to_owned(),
+            email: Some("restored@example.com".to_owned()),
+            created_at: Some("100000".to_owned()),
+            extra: vec![(super::IMPORTED_PASSWORD_MEMBER.to_owned(), member(spec))],
+            ..UserRecord::default()
+        };
+        let path = std::path::Path::new("offline.json");
+        let crashing =
+            r#"{"algorithm":"SCRYPT","key":"AQID","separator":"Bw==","rounds":8,"memoryCost":40}"#;
+        assert!(super::imported_user(&record(crashing), path).is_err());
+        let bounded =
+            r#"{"algorithm":"SCRYPT","key":"AQID","separator":"Bw==","rounds":8,"memoryCost":14}"#;
+        assert!(super::imported_user(&record(bounded), path)
+            .unwrap()
+            .imported_password
+            .is_some());
     }
 
     #[test]

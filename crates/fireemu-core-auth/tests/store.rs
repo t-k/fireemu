@@ -867,3 +867,21 @@ fn credential_notices_are_drained_once_in_issue_order() {
     assert_eq!(s.take_credential_notices(), vec![first, second]);
     assert!(s.take_credential_notices().is_empty());
 }
+
+/// A temporary proof is a credential of its namespace: restoring a snapshot into another
+/// project drops it, while a same-namespace restore keeps it (closure re-review 2026-09-24).
+#[test]
+fn temporary_proofs_do_not_cross_namespaces_on_restore() {
+    let mut source = store();
+    let proof = source.issue_temporary_proof("+16505550101", t(0)).unwrap();
+    let snapshot = fireemu_core_auth::store::AuthSnapshot::capture(&source);
+
+    let mut same = store();
+    snapshot.restore_into(&mut same);
+    assert!(same.check_temporary_proof(&proof, "+16505550101", t(1)));
+
+    let mut other = AuthStore::new("other-project", SplitMix64::new(9), TotpPolicy::default());
+    snapshot.restore_into(&mut other);
+    assert!(!other.check_temporary_proof(&proof, "+16505550101", t(1)));
+    assert!(source.check_temporary_proof(&proof, "+16505550101", t(1)));
+}

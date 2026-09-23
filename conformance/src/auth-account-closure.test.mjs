@@ -145,7 +145,11 @@ test("AUTH-ACCOUNT closure inventory cannot silently omit a declared condition",
       for (const divergence of divergences.filter(({ kind }) => kind === "message-text")) {
         const compared = comparison.rows.find(({ row }) => row === divergence.row);
         assert.ok(compared, `${label}: ${divergence.row} is compared`);
-        if (compared.status === "MATCH") continue;
+        assert.notEqual(
+          compared.status,
+          "MATCH",
+          `${label}: ${divergence.row} now matches; remove its stale divergence`,
+        );
         assert.equal(compared.sameErrorCode, true, `${label}: ${divergence.row} keeps the code`);
         assert.deepEqual(
           compared.differences.toSorted(),

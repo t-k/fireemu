@@ -456,17 +456,40 @@ pub(crate) fn spec_from_options(options: &Value) -> Result<HashSpec, &'static st
     })
 }
 
-/// Local work bounds for imported hashes. Production's own limits for these parameters are
-/// unobserved; these keep one sign-in from exhausting the process (closure security review
-/// 2026-09-24): standard scrypt memory `128 * r * N` and parallelism, and bcrypt cost.
-const MAX_STANDARD_SCRYPT_MEMORY_BYTES: u64 = 64 << 20;
-const MAX_STANDARD_SCRYPT_PARALLELIZATION: u32 = 16;
+/// Work bounds for imported hashes. Every algorithm keeps the parameter ranges production
+/// validates at import, re-checked at sign-in so a spec restored from an export cannot bypass
+/// them (closure re-review 2026-09-24). Standard scrypt, PBKDF output and bcrypt cost have no
+/// observed production bound; the local ones keep one sign-in from exhausting the process.
+const MAX_DIGEST_ROUNDS: u32 = 8192;
+const MAX_PBKDF_ROUNDS: u32 = 120_000;
+const MAX_PBKDF_OUTPUT_BYTES: usize = 128;
+const MAX_FIREBASE_SCRYPT_ROUNDS: u32 = 8;
+const MAX_FIREBASE_SCRYPT_MEMORY_COST: u8 = 14;
+const MAX_STANDARD_SCRYPT_MEMORY_BYTES: u64 = 32 << 20;
+const MAX_STANDARD_SCRYPT_PARALLELIZATION: u32 = 4;
 const MAX_STANDARD_SCRYPT_DK_LEN: usize = 1024;
+const MAX_ARGON2_MEMORY_KIB: u32 = 32_768;
+const MAX_ARGON2_ITERATIONS: u32 = 16;
+const MAX_ARGON2_PARALLELISM: u32 = 16;
+const MAX_ARGON2_HASH_LEN: usize = 1024;
 const MAX_BCRYPT_COST: u32 = 16;
 
-/// Whether deriving under `spec` stays within the local work bounds.
+/// Whether deriving under `spec` for a stored `hash` stays within the work bounds.
 pub(crate) fn within_work_bounds(spec: &HashSpec, hash: &[u8]) -> bool {
     match spec {
+        HashSpec::Md5 { rounds } | HashSpec::Sha { rounds, .. } => *rounds <= MAX_DIGEST_ROUNDS,
+        HashSpec::Hmac { .. } => true,
+        HashSpec::Pbkdf { rounds, .. } => {
+            (1..=MAX_PBKDF_ROUNDS).contains(rounds) && hash.len() <= MAX_PBKDF_OUTPUT_BYTES
+        }
+        HashSpec::FirebaseScrypt {
+            rounds,
+            memory_cost,
+            ..
+        } => {
+            (1..=MAX_FIREBASE_SCRYPT_ROUNDS).contains(rounds)
+                && (1..=MAX_FIREBASE_SCRYPT_MEMORY_COST).contains(memory_cost)
+        }
         HashSpec::StandardScrypt {
             log_n,
             block_size,
@@ -478,17 +501,39 @@ pub(crate) fn within_work_bounds(spec: &HashSpec, hash: &[u8]) -> bool {
                 .and_then(|n| n.checked_mul(u64::from(*block_size)))
                 .and_then(|n| n.checked_mul(128));
             memory.is_some_and(|m| m <= MAX_STANDARD_SCRYPT_MEMORY_BYTES)
-                && *parallelization <= MAX_STANDARD_SCRYPT_PARALLELIZATION
-                && *dk_len <= MAX_STANDARD_SCRYPT_DK_LEN
+                && (1..=MAX_STANDARD_SCRYPT_PARALLELIZATION).contains(parallelization)
+                && (1..=MAX_STANDARD_SCRYPT_DK_LEN).contains(dk_len)
         }
         HashSpec::Bcrypt => std::str::from_utf8(hash)
             .ok()
             .and_then(|text| text.split('$').nth(2))
             .and_then(|cost| cost.parse::<u32>().ok())
             .is_some_and(|cost| cost <= MAX_BCRYPT_COST),
-        _ => true,
+        HashSpec::Argon2 {
+            iterations,
+            memory_kib,
+            parallelism,
+            hash_len,
+            ..
+        } => {
+            (1..=MAX_ARGON2_MEMORY_KIB).contains(memory_kib)
+                && (1..=MAX_ARGON2_ITERATIONS).contains(iterations)
+                && (1..=MAX_ARGON2_PARALLELISM).contains(parallelism)
+                && (1..=MAX_ARGON2_HASH_LEN).contains(hash_len)
+        }
     }
 }
+
+/// Whether a stored spec text (an export's `fireemuImportedPassword`) decodes to parameters
+/// within the work bounds; a restore refuses anything else.
+#[must_use]
+pub fn restorable_spec(spec: &str, hash: &[u8]) -> bool {
+    spec == UNSPECIFIED_SPEC || decode(spec).is_some_and(|spec| within_work_bounds(&spec, hash))
+}
+
+/// The spec of a hash imported without `hashAlgorithm`: production keeps it as the credential
+/// and no password matches it.
+pub(crate) const UNSPECIFIED_SPEC: &str = "{\"algorithm\":\"UNSPECIFIED\"}";
 
 fn standard_scrypt_spec(options: &Value) -> Result<HashSpec, &'static str> {
     let int = |key: &str| options.get(key).and_then(Value::as_u64);
@@ -599,6 +644,61 @@ mod tests {
             .as_object()
             .expect("object")
             .clone()
+    }
+
+    /// A spec outside the import ranges fails the sign-in instead of running, whichever way
+    /// it reached the store (closure re-review 2026-09-24).
+    #[test]
+    fn out_of_range_specs_are_unevaluable() {
+        use fireemu_core_auth::store::{ImportedHashVerifier, ImportedPasswordHash};
+        let out_of_range = [
+            HashSpec::FirebaseScrypt {
+                key: vec![1; 32],
+                separator: vec![2],
+                rounds: 8,
+                memory_cost: 40,
+            },
+            HashSpec::Argon2 {
+                variant: argon2::Algorithm::Argon2id,
+                version: argon2::Version::V0x13,
+                iterations: 1,
+                memory_kib: 1 << 30,
+                parallelism: 1,
+                hash_len: 32,
+                associated_data: Vec::new(),
+            },
+            HashSpec::Pbkdf {
+                family: Family::Sha256,
+                rounds: 1 << 30,
+            },
+            HashSpec::Md5 { rounds: 1 << 30 },
+            HashSpec::StandardScrypt {
+                log_n: 20,
+                block_size: 8,
+                parallelization: 1,
+                dk_len: 64,
+            },
+        ];
+        for spec in out_of_range {
+            let imported = ImportedPasswordHash {
+                spec: encode(&spec),
+                hash: vec![7; 32],
+                salt: vec![1],
+            };
+            assert!(!restorable_spec(&imported.spec, &imported.hash), "{spec:?}");
+            assert!(
+                ImportedHashes.verify(&imported, "password123").is_err(),
+                "{spec:?}"
+            );
+        }
+        // A PBKDF output far longer than any digest is refused as well.
+        let pbkdf = HashSpec::Pbkdf {
+            family: Family::Sha1,
+            rounds: 1000,
+        };
+        assert!(!within_work_bounds(&pbkdf, &[0; 4096]));
+        assert!(within_work_bounds(&pbkdf, &[0; 20]));
+        assert!(restorable_spec(UNSPECIFIED_SPEC, &[1, 2, 3]));
     }
 
     #[test]

@@ -9870,6 +9870,48 @@ fn duplicate_email_mode_keeps_one_password_account_per_address_on_change() {
         (400, Some("EMAIL_EXISTS")),
         "{refused}"
     );
+    // An account without a password cannot reach the same state by taking the address and a
+    // password in one update or in two (closure re-review 2026-09-24).
+    for two_steps in [false, true] {
+        let (_, anonymous) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"returnSecureToken": true}),
+        );
+        let update = |body: Value| post(&s, &format!("{V1}/accounts:update"), &body);
+        let refused = if two_steps {
+            let (status, relocated) = update(
+                json!({"idToken": anonymous["idToken"], "email": "owner@example.com", "returnSecureToken": true}),
+            );
+            assert_eq!(status, 200, "{relocated}");
+            update(json!({"idToken": relocated["idToken"], "password": "password456"}))
+        } else {
+            update(
+                json!({"idToken": anonymous["idToken"], "email": "owner@example.com", "password": "password456"}),
+            )
+        };
+        assert_eq!(
+            (refused.0, refused.1["error"]["message"].as_str()),
+            (400, Some("EMAIL_EXISTS")),
+            "two_steps={two_steps}: {}",
+            refused.1
+        );
+    }
+    let (_, anonymous) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"returnSecureToken": true}),
+    );
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"idToken": anonymous["idToken"], "email": "owner@example.com", "password": "password456"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS")),
+        "upgrade: {refused}"
+    );
     let (status, signed) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),

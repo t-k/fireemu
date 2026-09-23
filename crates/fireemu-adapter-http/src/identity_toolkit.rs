@@ -65,6 +65,7 @@ const QUOTA_SIMULATION_FIELDS: [&str; 4] = [
 const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
 mod password_hash;
+pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
 pub mod widget;
 mod widget_templates;
@@ -6580,11 +6581,12 @@ fn sign_up(
         let Some(email) = new_user.email.as_deref() else {
             return error(400, "MISSING_EMAIL");
         };
-        if !store.config().allow_duplicate_emails
-            && store
-                .user_by_email(email)
-                .is_some_and(|u| u.local_id != uid)
-        {
+        // The upgrade always gives the account a password, so another password account on
+        // the address refuses it even in duplicate-email mode (closure re-review 2026-09-24).
+        if store.users_by_email(email).iter().any(|u| {
+            u.local_id != uid
+                && (!store.config().allow_duplicate_emails || store.has_password(&u.local_id))
+        }) {
             return error(400, "EMAIL_EXISTS");
         }
         if let Err(e) = store.set_email(&uid, email) {
@@ -7773,6 +7775,29 @@ fn update(
             return error(400, "EMAIL_EXISTS");
         }
     }
+    // Duplicate-email mode never gives an address two password accounts, judged on the state
+    // this update produces, so neither the address nor the password can arrive second
+    // (closure re-review 2026-09-24).
+    let final_email = if plan.clear_email {
+        None
+    } else {
+        plan.email
+            .clone()
+            .or_else(|| store.user(&uid).and_then(|u| u.email.clone()))
+    };
+    let final_password =
+        plan.password.is_some() || (store.has_password(&uid) && !plan.clear_password);
+    if final_password
+        && (plan.email.is_some() || plan.password.is_some())
+        && final_email.as_deref().is_some_and(|email| {
+            store
+                .users_by_email(email)
+                .iter()
+                .any(|other| other.local_id != uid && store.has_password(&other.local_id))
+        })
+    {
+        return error(400, "EMAIL_EXISTS");
+    }
     if let Change::Set(phone) = &plan.phone_number {
         if store
             .user_by_phone(phone)
@@ -8703,7 +8728,7 @@ fn batch_row_imported_hash(
     // no password ever matches it.
     Ok(Some(fireemu_core_auth::store::ImportedPasswordHash {
         spec: spec.map_or_else(
-            || "{\"algorithm\":\"UNSPECIFIED\"}".to_owned(),
+            || password_hash::UNSPECIFIED_SPEC.to_owned(),
             password_hash::encode,
         ),
         hash,

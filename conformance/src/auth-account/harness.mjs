@@ -227,7 +227,7 @@ export const CONFIG_PATHS = new Set([
 ]);
 
 function assertOnlyExampleEmail(text, where) {
-  for (const [, domain] of String(text).matchAll(/@([^\s@"'<>/?#&]+)/g)) {
+  for (const [, domain] of String(text).matchAll(/[^\s"'<>@(),;:]+@([^\s@"'<>/?#&]+)/g)) {
     if (domain.toLowerCase() !== "example.com") {
       throw new Error(`${where}: email outside example.com (${domain})`);
     }

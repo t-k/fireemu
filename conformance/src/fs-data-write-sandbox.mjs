@@ -4,6 +4,7 @@ const SANDBOX_DOCUMENTS = "/v1/projects/fireemu-oracle-sbx/databases/(default)/d
 const RECORDED_PROJECT = "demo-firestore-probe";
 const MAX_REST_REQUESTS = 400;
 const MAX_BODY_BYTES = 16_777_217;
+const RESOURCE_NAME = /projects\/([^/]+)\/databases\/([^/?]+)/g;
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -17,6 +18,20 @@ function canonical(value) {
     );
   }
   return value;
+}
+
+function assertSandboxReferences(value) {
+  if (typeof value === "string") {
+    for (const match of value.matchAll(RESOURCE_NAME)) {
+      if (match[1] !== "fireemu-oracle-sbx" || match[2] !== "(default)") {
+        throw new Error("request body escaped the sandbox project");
+      }
+    }
+  } else if (Array.isArray(value)) {
+    for (const item of value) assertSandboxReferences(item);
+  } else if (value && typeof value === "object") {
+    for (const item of Object.values(value)) assertSandboxReferences(item);
+  }
 }
 
 /** Refuse any corpus that could address another Firestore project or escape its budget. */
@@ -47,6 +62,11 @@ export function validateSandboxCorpus(corpus) {
       if (typeof step.path !== "string" || !step.path.startsWith(SANDBOX_DOCUMENTS)) {
         throw new Error("request escaped the sandbox project");
       }
+      const pathname = step.path.split("?", 1)[0];
+      if (new URL(step.path, "https://firestore.googleapis.com").pathname !== pathname) {
+        throw new Error("request path traversal is not allowed");
+      }
+      assertSandboxReferences(step.path);
       if (step.headers && Object.keys(step.headers).length > 0) {
         throw new Error("sandbox corpus must not include credential headers");
       }
@@ -56,6 +76,7 @@ export function validateSandboxCorpus(corpus) {
       ) {
         throw new Error("sandbox request exceeds the declared raw sentinel");
       }
+      assertSandboxReferences(step.body);
     }
   }
   if (requestCount !== corpus.restRequestCount || requestCount > MAX_REST_REQUESTS) {
@@ -96,6 +117,20 @@ export function freezeSandboxFixture({
     const recordedSteps = first[program.id]?.steps;
     if (!recordedSteps || program.steps.some((step) => !recordedSteps[step.id])) {
       throw new Error(`incomplete sandbox recording: ${program.id}`);
+    }
+    for (const step of program.steps) {
+      const result = recordedSteps[step.id];
+      if (
+        !Number.isInteger(result.status) ||
+        result.status < 200 ||
+        result.status > 599 ||
+        typeof result.code !== "string" ||
+        !result.code ||
+        ["no-response", "probe-error", "non-json"].includes(result.code) ||
+        (result.status < 300 && (result.code !== "OK" || !Object.hasOwn(result, "body")))
+      ) {
+        throw new Error(`failed observation: ${program.id}#${step.id}`);
+      }
     }
   }
   if (

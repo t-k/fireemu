@@ -124,7 +124,11 @@ def test_actual_false_measurements_are_not_missing_and_can_agree():
     for receipt in pair:
         for row in receipt["rows"]:
             row["assertions"] = dict.fromkeys(row["assertions"], False)
-    assert set(classes(pair).values()) == {"MATCH"}
+    got = classes(pair)
+    # Equal false measurements remain comparable data, but a failed account
+    # lookup is not a positive control that can place the same-second boundary.
+    assert got[SAME_SECOND_CASE_ID] == "INDETERMINATE"
+    assert all(value == "MATCH" for key, value in got.items() if key != SAME_SECOND_CASE_ID)
 
 
 def test_actual_false_measurement_on_one_side_is_a_difference():

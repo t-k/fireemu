@@ -220,6 +220,7 @@ def test_the_boundary_row_asserts_pinning_rather_than_a_timestamp_comparison() -
     assert boundary["expectedLocal"]["assertions"] == [
         "acceptedResponse",
         "boundaryPinnedFromServerValues",
+        "lookupMatchesAccount",
     ]
     assert "authTimePreserved" not in boundary["expectedLocal"]["assertions"]
     assert "boundaryPinnedFromServerValues" in ASSERTION_NAMES

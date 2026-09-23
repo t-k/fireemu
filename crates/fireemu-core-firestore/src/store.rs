@@ -5076,7 +5076,7 @@ fn validate_value(
             total
         }
         Value::Map(fields) => {
-            let mut total = 32u64;
+            let mut total = 0u64;
             for (name, value) in fields {
                 validate_stored_field_name(name)?;
                 // Production accepts a direct field of an array-held map at 1,494 UTF-8
@@ -5105,8 +5105,9 @@ fn validate_value(
     };
     // `FS-LIMIT-FIELD-VALUE-BYTES` on an aggregate. The catalog's unit is logical bytes, so
     // a map or an array is measured with the official storage-size formula; a string or a
-    // bytes payload keeps the raw-payload metric observed above. Production has not been
-    // observed on an aggregate value, so only the strict profile refuses one: the
+    // bytes payload keeps the raw-payload metric observed above. The saved aggregate-map
+    // observations establish that map accounting does not add 32 bytes. The aggregate
+    // threshold itself is not bracketed, so only the strict profile refuses one: the
     // compatibility contract forbids adding a refusal to the `emulator` profile. The check
     // runs after the recursion so that the innermost violation is the one reported.
     if scope == LimitScope::Production

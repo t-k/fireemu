@@ -8,8 +8,8 @@
 //! bytes under either scope, as a side effect of automatic index accounting; the checks
 //! here pin that boundary so it cannot be lost.
 //!
-//! The one rule with no production receipt and no prior refusal is the aggregate size of a
-//! map or array value. It is therefore refused only under [`LimitScope::Production`] (the
+//! The aggregate-map recording fixes map accounting but does not bracket the aggregate size
+//! limit for a map or array value. It is therefore refused only under [`LimitScope::Production`] (the
 //! `strict` profile), because the compatibility contract forbids adding a refusal to the
 //! `emulator` profile.
 //!
@@ -68,11 +68,11 @@ fn outcome<T>(result: &Result<T, FirestoreError>) -> String {
 /// A map value whose aggregate `field_value_size` is exactly `total`, built from one string
 /// payload that stays below the production-observed single-payload boundary.
 ///
-/// `map_size = 32 + string_size("s") + string_size(payload) = 32 + 2 + len + 1`.
+/// `map_size = string_size("s") + string_size(payload) = 2 + len + 1`.
 fn aggregate_map(total: usize) -> Value {
     let payload = total
-        .checked_sub(35)
-        .expect("an aggregate map is at least 35 bytes");
+        .checked_sub(3)
+        .expect("an aggregate map is at least 3 bytes");
     Value::Map(BTreeMap::from([(
         "s".to_owned(),
         Value::String("x".repeat(payload)),
@@ -142,6 +142,18 @@ fn an_aggregate_field_value_at_the_production_boundary_is_accepted_and_one_more_
         before,
         "the sibling write in the same commit must not publish"
     );
+}
+
+#[test]
+fn a_map_accepted_by_the_saved_production_recording_has_no_extra_map_overhead() {
+    let value = Value::Map(BTreeMap::from([(
+        "s".to_owned(),
+        Value::String("x".repeat(1_048_460)),
+    )]));
+    let mut store = state(LimitScope::Production);
+    let result = store.commit(&[set("a/b", "v", value)], None, t(0));
+    assert!(result.is_ok(), "{}", outcome(&result));
+    assert!(store.get(&path("a/b")).is_some());
 }
 
 #[test]

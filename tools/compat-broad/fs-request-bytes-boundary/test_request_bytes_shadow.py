@@ -15,6 +15,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import request_bytes_shadow as shadow_module
 from request_bytes_campaign import BASELINE_COMPARISON_FIELDS, LOCAL_EXPECTATION
 from request_bytes_run_fixture import (
     EXPECTED_MESSAGE,
@@ -25,7 +26,6 @@ from request_bytes_run_fixture import (
     UNTYPED_413,
     run_collector,
 )
-import request_bytes_shadow as shadow_module
 from request_bytes_shadow import classify_local_result, shadow_gates
 
 REFUSAL_400 = {
@@ -159,7 +159,9 @@ def test_sentinel_shadow_selector_is_separate_from_the_legacy_cli(
     assert '"status": "incomplete"' in capsys.readouterr().out
 
 
-def test_sentinel_shadow_cannot_publish_a_legacy_comparison(monkeypatch, tmp_path) -> None:
+def test_sentinel_shadow_cannot_publish_a_legacy_comparison(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.setattr(
         shadow_module,
         "run",
@@ -170,6 +172,151 @@ def test_sentinel_shadow_cannot_publish_a_legacy_comparison(monkeypatch, tmp_pat
             ["--sentinel-raw-16mib-over", str(tmp_path / "sentinel"), "--publish"]
         )
     assert error.value.code == 2
+
+
+def _sentinel_parent_case(result, *, semantic_outcome="sentinel-typed-refusal"):
+    plan = {
+        "caseId": "FS-LIMIT-API-REQUEST-BYTES-RAW-16MIB-OVER",
+        "project": "demo-firestore-probe",
+        "executionSchedule": [{"phase": "observation", "index": 0}],
+    }
+    result = {
+        "productionExecuted": False,
+        "localOnly": True,
+        "formalCompatibilityClaim": False,
+        "completed": True,
+        "cleanupComplete": True,
+        "resourceAbsence": True,
+        "semanticOutcome": semantic_outcome,
+        **result,
+    }
+    result["localJournal"] = {"captureComplete": True}
+    return plan, result
+
+
+def test_sentinel_parent_handoff_records_a_bounded_local_only_case() -> None:
+    plan, result = _sentinel_parent_case({})
+
+    handoff = shadow_module.sentinel_parent_handoff(result, plan, source_bound=True)
+
+    assert handoff["recordingComplete"] is True
+    assert handoff["stateValidation"] is True
+    assert handoff["productionExecuted"] is False
+    assert handoff["formalCompatibilityClaim"] is False
+    assert handoff["cases"] == [
+        {
+            "id": plan["caseId"],
+            "family": "firestore",
+            "status": "local-only",
+            "basis": "Sentinel outcome recorded locally; production behavior remains unobserved.",
+        }
+    ]
+
+
+def test_sentinel_child_writes_the_parent_consumed_cases_contract(tmp_path) -> None:
+    import json
+
+    plan, result = _sentinel_parent_case({})
+
+    handoff = shadow_module.write_sentinel_parent_handoff(
+        tmp_path, result, plan, source_bound=True
+    )
+
+    saved = json.loads((tmp_path / "cases.json").read_bytes())
+    assert saved == handoff
+    assert saved["recordingComplete"] is True
+    assert saved["stateValidation"] is True
+    assert len(saved["cases"]) == 1
+    assert saved["cases"][0]["status"] == "local-only"
+
+
+@pytest.mark.parametrize(
+    ("change", "recording_complete"),
+    [
+        pytest.param(
+            lambda result: result.update(semanticOutcome="other"),
+            True,
+            id="unknown-outcome",
+        ),
+        pytest.param(
+            lambda result: result.update(cleanupComplete=False),
+            False,
+            id="cleanup-incomplete",
+        ),
+        pytest.param(
+            lambda result: result.update(resourceAbsence=False),
+            False,
+            id="absence-unproven",
+        ),
+        pytest.param(
+            lambda result: result["localJournal"].update(captureComplete=False),
+            False,
+            id="partial-journal",
+        ),
+        pytest.param(
+            lambda result: result.update(productionExecuted=True),
+            False,
+            id="production-claim",
+        ),
+    ],
+)
+def test_sentinel_parent_handoff_fails_closed(change, recording_complete) -> None:
+    plan, result = _sentinel_parent_case({})
+    change(result)
+
+    handoff = shadow_module.sentinel_parent_handoff(result, plan, source_bound=True)
+
+    assert handoff["recordingComplete"] is recording_complete
+    assert handoff["stateValidation"] is False
+    assert handoff["cases"][0]["status"] == "indeterminate"
+
+
+def test_sentinel_parent_handoff_requires_unchanged_source_binding() -> None:
+    plan, result = _sentinel_parent_case({})
+
+    handoff = shadow_module.sentinel_parent_handoff(result, plan, source_bound=False)
+
+    assert handoff["recordingComplete"] is True
+    assert handoff["stateValidation"] is False
+    assert handoff["cases"][0]["status"] == "indeterminate"
+
+
+def test_accepted_sentinel_parent_handoff_stays_local_only() -> None:
+    plan, result = _sentinel_parent_case({}, semantic_outcome="sentinel-accepted")
+
+    handoff = shadow_module.sentinel_parent_handoff(result, plan, source_bound=True)
+
+    assert handoff["recordingComplete"] is True
+    assert handoff["stateValidation"] is True
+    assert handoff["productionExecuted"] is False
+    assert handoff["formalCompatibilityClaim"] is False
+    assert handoff["cases"][0]["status"] == "local-only"
+
+
+def test_accepted_collector_result_enters_parent_handoff_without_parity_claim(
+    tmp_path,
+) -> None:
+    import tempfile
+
+    from request_bytes_compiler import compile_request_bytes_sentinel_plan
+    from test_request_bytes_sentinel import NONCE, _run_sentinel_collector
+
+    plan = compile_request_bytes_sentinel_plan("demo", "(default)", NONCE)
+    with tempfile.TemporaryDirectory(
+        prefix=".sentinel-parent-handoff-", dir=HERE
+    ) as root:
+        result = _run_sentinel_collector(Path(root), "accepted")
+
+    handoff = shadow_module.sentinel_parent_handoff(result, plan, source_bound=True)
+
+    assert result["localJournal"]["captureComplete"] is True
+    assert result["cleanupComplete"] is True
+    assert result["resourceAbsence"] is True
+    assert handoff["recordingComplete"] is True
+    assert handoff["stateValidation"] is True
+    assert handoff["productionExecuted"] is False
+    assert handoff["formalCompatibilityClaim"] is False
+    assert handoff["cases"][0]["status"] == "local-only"
 
 
 def test_sentinel_runner_holds_selector_for_owned_driver_and_cleans_it_up(
@@ -201,7 +348,9 @@ def test_sentinel_runner_holds_selector_for_owned_driver_and_cleans_it_up(
     assert binding["bound"] is True
 
 
-def test_legacy_runner_does_not_select_sentinel_from_environment(monkeypatch, tmp_path) -> None:
+def test_legacy_runner_does_not_select_sentinel_from_environment(
+    monkeypatch, tmp_path
+) -> None:
     import types
 
     output = tmp_path / "legacy-run"

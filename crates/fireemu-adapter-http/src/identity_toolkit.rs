@@ -877,6 +877,9 @@ fn auth_error(e: &AuthError) -> JsonResponse {
             400,
             "QUOTA_EXCEEDED : too many outstanding codes; consume or expire some first",
         ),
+        AuthError::LimitExceeded(v) if v.limit_id == "AUTH-LIMIT-CUSTOM-CLAIMS-BYTES" => {
+            error(400, "CLAIMS_TOO_LARGE")
+        }
         AuthError::LimitExceeded(v) => error(400, &format!("INVALID_CLAIMS : {}", v.limit_id)),
     }
 }
@@ -6760,10 +6763,8 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         );
     }
     if total == 0 {
-        return error(
-            400,
-            "MISSING_IDENTIFIER : localId, email, phoneNumber or federatedUserId",
-        );
+        // Production answers an Admin lookup without identifiers as if it lacked a token.
+        return error(400, "MISSING_ID_TOKEN");
     }
     // Authenticated Admin lookup resolves identifiers in request order without duplicates.
     let mut found: Vec<LocalId> = Vec::new();
@@ -6946,18 +6947,25 @@ fn parse_phone_factors(entries: &Value) -> Result<Vec<(String, Option<String>)>,
 
 fn parse_custom_claims(attrs: &str) -> Result<CustomClaims, JsonResponse> {
     let Ok(JsonValue::Object(parsed)) = fireemu_core_types::json::parse(attrs) else {
-        return Err(error(
-            400,
-            "INVALID_CLAIMS : customAttributes must be a JSON object",
-        ));
+        // Production echoes a well-formed non-object value compactly ("Not a JSON Object:
+        // [1,2]"); for malformed JSON it returns its parser's exception text, which is not
+        // reproduced.
+        return Err(match serde_json::from_str::<Value>(attrs) {
+            Ok(value) => error(400, &format!("INVALID_CLAIMS : Not a JSON Object: {value}")),
+            Err(_) => error(
+                400,
+                "INVALID_CLAIMS : customAttributes must be a JSON object",
+            ),
+        });
     };
     let mut claims = CustomClaims::default();
     for (k, v) in &parsed {
         let Some(cv) = claims_from_json(v) else {
             return Err(error(400, "INVALID_CLAIMS"));
         };
-        if let Err(e) = claims.insert(k, cv) {
-            return Err(error(400, &format!("FORBIDDEN_CLAIM : {e}")));
+        if claims.insert(k, cv).is_err() {
+            // Production names only the claim: "FORBIDDEN_CLAIM : sub".
+            return Err(error(400, &format!("FORBIDDEN_CLAIM : {k}")));
         }
     }
     Ok(claims)
@@ -7059,7 +7067,7 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     let mut clear_password = false;
     let mut clear_email = false;
     if let Some(attrs) = body.get("deleteAttribute") {
-        for a in string_list(attrs, "deleteAttribute")? {
+        for (index, a) in string_list(attrs, "deleteAttribute")?.iter().enumerate() {
             match a.as_str() {
                 "USER_ATTRIBUTE_NAME_UNSPECIFIED" => {}
                 "DISPLAY_NAME" => display_name = Change::Clear,
@@ -7067,10 +7075,11 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
                 "PASSWORD" => clear_password = true,
                 "EMAIL" => clear_email = true,
                 other => {
+                    // The proto3 JSON enum decoder's refusal, index and all.
                     return Err(error(
                         400,
-                        &format!("INVALID_ARGUMENT : unknown deleteAttribute {other:?}"),
-                    ))
+                        &format!("Invalid value at 'delete_attribute[{index}]' (type.googleapis.com/google.cloud.identitytoolkit.v1.SetAccountInfoRequest.UserAttributeName), {other:?}"),
+                    ));
                 }
             }
         }
@@ -7233,6 +7242,9 @@ fn update(
     // The provider the request's session signed in with, when it carries one: the official
     // emulator re-issues tokens for a session whose credentials it just changed.
     let mut session_provider: Option<fireemu_core_auth::store::Provider> = None;
+    if privileged && local_id.is_none() && body.get("idToken").is_none_or(Value::is_null) {
+        return error(400, "MISSING_LOCAL_ID");
+    }
     let uid = if let Some(local_id) = local_id {
         match store.user_by_id(local_id) {
             Some(u) => u.local_id.clone(),
@@ -7293,7 +7305,17 @@ fn update(
         && store.config().enable_improved_email_privacy
         && (plan.email.is_some() || plan.clear_email)
     {
-        return error(400, "OPERATION_NOT_ALLOWED");
+        if plan
+            .email
+            .as_deref()
+            .is_some_and(|email| !email.contains('@'))
+        {
+            return error(400, "INVALID_EMAIL");
+        }
+        return error(
+            400,
+            "OPERATION_NOT_ALLOWED : Please verify the new email before changing email.",
+        );
     }
     if let Some(email) = &plan.email {
         if !store.config().allow_duplicate_emails
@@ -7549,7 +7571,9 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         }
         let phone = opt_str(body, "phoneNumber")?.map(str::to_owned);
         if let Some(p) = &phone {
-            AuthStore::validate_phone_number(p).map_err(|e| auth_error(&e))?;
+            // Production's Admin create names the format problem (sandbox recording 2026-09-23).
+            AuthStore::validate_phone_number(p)
+                .map_err(|_| error(400, "INVALID_PHONE_NUMBER : Invalid format."))?;
             if store.user_by_phone(p).is_some() {
                 return Err(error(400, "PHONE_NUMBER_EXISTS"));
             }

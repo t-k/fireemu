@@ -4243,7 +4243,10 @@ fn email_enumeration_protection_requires_verified_email_changes_but_keeps_signup
         &json!({"idToken": id_token, "email": "direct@example.com"}),
     );
     assert_eq!(status, 400, "{rejected}");
-    assert_eq!(rejected["error"]["message"], "OPERATION_NOT_ALLOWED");
+    assert_eq!(
+        rejected["error"]["message"],
+        "OPERATION_NOT_ALLOWED : Please verify the new email before changing email."
+    );
     assert_eq!(
         s.store
             .lock()

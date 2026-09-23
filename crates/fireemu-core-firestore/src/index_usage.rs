@@ -43,6 +43,11 @@ impl IndexUsage {
             ),
         ] {
             if current > maximum {
+                if id == crate::limits::INDEX_ENTRY_SUM_PER_DOCUMENT {
+                    return Err(FirestoreError::InvalidArgument(
+                        "Transaction too big. Decrease transaction size.".into(),
+                    ));
+                }
                 return Err(FirestoreError::InvalidArgument(format!(
                     "{id}: {current} exceeds {maximum}"
                 )));
@@ -200,6 +205,10 @@ mod tests {
         assert!(IndexUsage::default().add(7_681, 1).is_err());
         let mut sum = IndexUsage::default();
         assert!(sum.add(4_096, 2_048).is_ok());
-        assert!(sum.add(1, 1).is_err());
+        assert!(matches!(
+            sum.add(1, 1),
+            Err(crate::store::FirestoreError::InvalidArgument(message))
+                if message == "Transaction too big. Decrease transaction size."
+        ));
     }
 }

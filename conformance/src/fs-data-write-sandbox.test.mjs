@@ -55,6 +55,34 @@ test("sandbox corpus refuses a route, method, or header outside its bounded proj
       }),
     /headers/,
   );
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...corpus,
+        restPrograms: [
+          { ...corpus.restPrograms[0], steps: [{ ...step, path: `${step.path}/../../other` }] },
+        ],
+      }),
+    /path traversal/,
+  );
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...corpus,
+        restPrograms: [
+          {
+            ...corpus.restPrograms[0],
+            steps: [
+              {
+                ...step,
+                body: { documents: ["projects/fireemu-35fe6/databases/(default)/documents/c/x"] },
+              },
+            ],
+          },
+        ],
+      }),
+    /request body escaped/,
+  );
 });
 
 test("two recordings must agree row by row before a fixture can be frozen", () => {
@@ -74,6 +102,19 @@ test("two recordings must agree row by row before a fixture can be frozen", () =
         sdkVersions: { firebaseAdmin: "14.3.2" },
       }),
     /nondeterministic/,
+  );
+  const unavailable = { "writes/control": { steps: { read: { status: 0, code: "no-response" } } } };
+  assert.throws(
+    () =>
+      freezeSandboxFixture({
+        corpus,
+        first: unavailable,
+        second: unavailable,
+        recordedAt: ["2026-09-23T00:00:00Z", "2026-09-23T00:01:00Z"],
+        harnessRevision: "a".repeat(40),
+        sdkVersions: { firebaseAdmin: "14.3.2" },
+      }),
+    /failed observation/,
   );
 });
 

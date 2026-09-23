@@ -46,7 +46,11 @@ const requiredRecipes = new Map([
   ],
   [
     "FS-LIMIT-FIELD-PATH-BYTES",
-    new Set(["writes/limits/field-path-bytes", "writes/limits/field-path-direct-mask"]),
+    new Set([
+      "writes/limits/implied-map",
+      "writes/limits/implied-array",
+      "writes/limits/field-path-direct-mask",
+    ]),
   ],
   [
     "FS-DATA-WRITE/final-artifact-regression",

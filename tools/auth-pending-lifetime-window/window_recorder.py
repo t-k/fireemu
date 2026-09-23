@@ -1086,6 +1086,7 @@ def _validate_clock_origin(control_origin):
         raise ValueError("local clock-control origin required") from error
     if (
         parsed.scheme != "http"
+        or address.version != 4
         or not address.is_loopback
         or parsed.username is not None
         or parsed.password is not None

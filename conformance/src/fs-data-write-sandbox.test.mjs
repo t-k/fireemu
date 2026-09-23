@@ -100,6 +100,7 @@ test("two recordings must agree row by row before a fixture can be frozen", () =
         recordedAt: ["2026-09-23T00:00:00Z", "2026-09-23T00:01:00Z"],
         harnessRevision: "a".repeat(40),
         sdkVersions: { firebaseAdmin: "14.3.2" },
+        credentialToken: "private-test-token",
       }),
     /nondeterministic/,
   );
@@ -113,6 +114,7 @@ test("two recordings must agree row by row before a fixture can be frozen", () =
         recordedAt: ["2026-09-23T00:00:00Z", "2026-09-23T00:01:00Z"],
         harnessRevision: "a".repeat(40),
         sdkVersions: { firebaseAdmin: "14.3.2" },
+        credentialToken: "private-test-token",
       }),
     /failed observation/,
   );
@@ -127,10 +129,73 @@ test("fixture binds recipe and time while omitting the real project and token", 
     recordedAt: ["2026-09-23T00:00:00Z", "2026-09-23T00:01:00Z"],
     harnessRevision: "a".repeat(40),
     sdkVersions: { firebaseAdmin: "14.3.2" },
+    credentialToken: "private-test-token",
   });
   assert.match(fixture.evidence.corpusSha256, /^[0-9a-f]{64}$/);
   assert.deepEqual(fixture.evidence.recordedAt, ["2026-09-23T00:00:00Z", "2026-09-23T00:01:00Z"]);
   assert.equal(fixture.evidence.project, "demo-firestore-probe");
   assert.deepEqual(fixture.programs, observed);
   assert.ok(!JSON.stringify(fixture).includes("fireemu-oracle-sbx"));
+});
+
+test("fixture refuses an OAuth bearer echoed into a REST error body", () => {
+  const token = "private-test-token";
+  const observed = {
+    "writes/control": {
+      steps: {
+        read: { status: 400, code: "INVALID_ARGUMENT", body: { error: { message: token } } },
+      },
+    },
+  };
+  assert.throws(
+    () => freezeSandboxFixture({
+      corpus,
+      first: observed,
+      second: observed,
+      recordedAt: ["2026-09-23T00:00:00Z", "2026-09-23T00:01:00Z"],
+      harnessRevision: "a".repeat(40),
+      sdkVersions: { firebaseAdmin: "14.3.2" },
+      credentialToken: token,
+    }),
+    /credential/,
+  );
+});
+
+test("fixture cannot omit or hide drift in live gRPC stream observations", () => {
+  const withStream = {
+    ...corpus,
+    streamRecipes: [
+      {
+        id: "writes/write-stream-terminal/half-close",
+        transport: "grpc",
+        action: "half-close-after-handshake",
+        maxFrames: 1,
+      },
+    ],
+  };
+  const rest = { "writes/control": { steps: { read: { status: 404, code: "NOT_FOUND" } } } };
+  const options = {
+    corpus: withStream,
+    first: rest,
+    second: rest,
+    recordedAt: ["2026-09-23T00:00:00Z", "2026-09-23T00:01:00Z"],
+    harnessRevision: "a".repeat(40),
+    sdkVersions: { firebaseAdmin: "14.3.0" },
+    credentialToken: "private-test-token",
+  };
+  assert.throws(() => freezeSandboxFixture(options), /stream recording/);
+  const firstStream = {
+    "writes/write-stream-terminal/half-close": { status: { code: 0 }, events: [{ type: "end" }] },
+  };
+  const secondStream = {
+    "writes/write-stream-terminal/half-close": { status: { code: 3 }, events: [{ type: "end" }] },
+  };
+  assert.throws(
+    () => freezeSandboxFixture({ ...options, firstStream, secondStream }),
+    /nondeterministic stream/,
+  );
+  assert.ok(
+    freezeSandboxFixture({ ...options, firstStream, secondStream: firstStream }).evidence
+      .streamRecordingDigests.length === 2,
+  );
 });

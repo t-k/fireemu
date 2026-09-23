@@ -12,6 +12,7 @@ sys.path.insert(0, str(HERE))
 
 from limits03_export import build_programs as limits03_programs
 from request_bytes_export import build_programs as request_byte_programs
+from sandbox_expansion import build_programs as sandbox_expansion_programs
 
 PROJECT = "fireemu-oracle-sbx"
 DOCS = f"projects/{PROJECT}/databases/(default)/documents"
@@ -66,15 +67,30 @@ def build_corpus() -> dict[str, Any]:
     programs = [
         *limits03_programs(),
         *request_byte_programs(),
+        *sandbox_expansion_programs(),
         _invalid_collection_program("slash", "bad/inside"),
         _invalid_collection_program("dot", "."),
         _invalid_collection_program("dot-dot", ".."),
         _invalid_collection_program("reserved", "__reserved__"),
     ]
     stream_recipes = [
-        {"id": "writes/write-stream-transaction", "transport": "grpc"},
-        {"id": "writes/write-stream-terminal/trailing-metadata", "transport": "grpc"},
-        {"id": "writes/write-stream-terminal/half-close", "transport": "grpc"},
+        {
+            "id": "writes/write-stream-transaction",
+            "transport": "saved-reference",
+            "source": "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json",
+        },
+        {
+            "id": "writes/write-stream-terminal/trailing-metadata",
+            "transport": "grpc",
+            "action": "invalid-empty-write-after-handshake",
+            "maxFrames": 2,
+        },
+        {
+            "id": "writes/write-stream-terminal/half-close",
+            "transport": "grpc",
+            "action": "half-close-after-handshake",
+            "maxFrames": 1,
+        },
     ]
     ids = [program["id"] for program in programs]
     if len(ids) != len(set(ids)):

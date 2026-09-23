@@ -121,7 +121,7 @@ export async function prepareSandboxCorpus() {
   const { stdout } = await execFileAsync(
     "uv",
     ["run", "python", join(CONFORMANCE_DIR, "src/firestore-probe/closure_export.py")],
-    { cwd: ROOT, maxBuffer: 100 * 1024 * 1024 },
+    { cwd: ROOT, maxBuffer: 160 * 1024 * 1024 },
   );
   const corpus = JSON.parse(stdout);
   const { requestCount } = validateSandboxCorpus(corpus);

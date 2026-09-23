@@ -932,6 +932,7 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::ExpiredRefreshToken => error(400, "TOKEN_EXPIRED"),
         AuthError::UserNotFound => error(400, "USER_NOT_FOUND"),
         AuthError::InvalidLocalId => error(400, "INVALID_LOCAL_ID"),
+        AuthError::ImportedHashFailure => backend_internal_error(),
         AuthError::LocalIdExists => error(400, "DUPLICATE_LOCAL_ID"),
         AuthError::PhoneNumberExists => error(400, "PHONE_NUMBER_EXISTS"),
         AuthError::InvalidPhoneNumber => error(400, "INVALID_PHONE_NUMBER"),

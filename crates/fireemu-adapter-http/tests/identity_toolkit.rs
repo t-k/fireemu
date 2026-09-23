@@ -9719,6 +9719,33 @@ fn admin_create_local_id_lengths_follow_production() {
     assert!(s.store.lock().unwrap().user_by_id(&long).is_none());
 }
 
+/// `HMAC_SHA512` imports without a key, and a sign-in against it is production's internal
+/// error rather than a credential refusal (sandbox recording 2026-09-23,
+/// `import-hash/errors#sign-in-hmac-sha512-without-key`).
+#[test]
+fn keyless_hmac_sha512_sign_in_is_a_backend_failure() {
+    let s = state();
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"hashAlgorithm": "HMAC_SHA512", "users": [{
+            "localId": "hmac", "email": "hmac@example.com",
+            "passwordHash": "AAAAAAAAAAAAAAAAAAAAAA==", "salt": "c2FsdA=="
+        }]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert!(imported.get("error").is_none(), "{imported}");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "hmac@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 500, "{refused}");
+    assert_eq!(refused["error"]["status"], "INTERNAL");
+    assert_eq!(refused["error"]["message"], "Internal error encountered.");
+}
+
 /// Disabled project providers refuse their client flows with `OPERATION_NOT_ALLOWED`, and
 /// `passwordRequired` turns email-link sign-in off.
 #[test]

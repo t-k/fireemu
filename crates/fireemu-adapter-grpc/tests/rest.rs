@@ -201,6 +201,36 @@ fn encoded_slash_in_a_create_collection_id_uses_the_observed_production_error() 
 }
 
 #[test]
+fn update_mask_path_errors_use_the_observed_production_messages() {
+    let s = state(None);
+    let cases = [
+        (
+            "a..b".to_owned(),
+            r#"Invalid property path "a..b". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#.to_owned(),
+        ),
+        (
+            "f".repeat(1500),
+            "property path is longer than 1500 bytes.".to_owned(),
+        ),
+        (
+            format!("{}.{}", "a".repeat(750), "b".repeat(750)),
+            "property path is longer than 1500 bytes.".to_owned(),
+        ),
+    ];
+    for (mask, expected) in cases {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:commit"),
+            json!({"writes": [{"update": {"name": "projects/demo-app/databases/(default)/documents/masks/x", "fields": {"v": {"integerValue": "1"}}}, "updateMask": {"fieldPaths": [mask]}}]}),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+        assert_eq!(body["error"]["message"], expected);
+    }
+}
+
+#[test]
 fn document_crud_over_rest() {
     let s = state(None);
     let (status, created) = call(

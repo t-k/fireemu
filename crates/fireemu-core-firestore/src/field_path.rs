@@ -15,6 +15,18 @@ pub const MAX_FIELD_NAME_BYTES: usize = MAX_ID_UTF8_BYTES;
 /// Maximum UTF-8 bytes of the canonical field path (`FS-LIMIT-FIELD-PATH-BYTES`).
 pub const MAX_FIELD_PATH_BYTES: usize = 1_500;
 
+/// Production truncates an implied property-path error to 400 UTF-8 bytes.
+pub(crate) fn implied_path_too_long_message(path: &str) -> String {
+    let mut message = String::from("Property ");
+    for character in path.chars() {
+        if message.len() + character.len_utf8() > 400 {
+            break;
+        }
+        message.push(character);
+    }
+    message
+}
+
 const DOCUMENT_NAME: &str = "__name__";
 
 /// Field path parse / validation errors.

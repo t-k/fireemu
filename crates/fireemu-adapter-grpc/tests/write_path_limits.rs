@@ -35,7 +35,6 @@ const fn map_payload(total: usize) -> usize {
 }
 
 const OVER_VALUE: &str = "The value of property \"v\" is longer than 1048487 bytes.";
-const OVER_PATH: &str = "field path is 1501 bytes, maximum is 1500";
 
 fn gateway(enforce_limits: bool) -> Gateway {
     Gateway {
@@ -271,7 +270,11 @@ fn a_rest_commit_accepts_the_field_path_boundary_and_refuses_one_more_byte_in_bo
         );
         assert_eq!(status, 400, "{enforce_limits}: {}", body["error"]);
         assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
-        assert_eq!(body["error"]["message"], OVER_PATH, "{enforce_limits}");
+        let message = body["error"]["message"].as_str().expect("error message");
+        assert!(
+            message.starts_with("Property ") && message.len() == 400,
+            "{enforce_limits}: {message}"
+        );
 
         let (status, _) = call(&s, "GET", &format!("{DOCS}/paths/over"), Value::Null);
         assert_eq!(status, 404, "{enforce_limits}");

@@ -19,7 +19,7 @@ def _module():
 
 def test_generated_names_hit_exact_relative_boundaries_without_empty_segments() -> None:
     module = _module()
-    for length in (2642, 2643, 4621, 4622, 6127, 6128):
+    for length in (2600, 2642, 2643, 4621, 4622, 5000, 6127, 6128):
         name = module.name_of_length(length, f"n{length}")
         segments = name.split("/")
         assert len(name.encode()) == length
@@ -60,11 +60,11 @@ def test_batchwrite_validation_variants_are_three_writes_plus_state_readback() -
 
 def test_index_and_decoded_request_boundaries_have_exact_input_shapes() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
-    for length in (2642, 2643):
+    for length in (2600, 2642, 2643):
         write = programs[f"writes/limits/index-entry-string-name/{length}"]["steps"][0]["body"]["writes"][0]
         assert len(write["update"]["name"].split("/documents/")[1].encode()) == length
         assert len(write["update"]["fields"]["s"]["stringValue"].encode()) == 1500
-    for length in (4621, 4622, 6127, 6128):
+    for length in (4621, 4622, 5000, 6127, 6128):
         write = programs[f"writes/limits/empty-document-name/{length}"]["steps"][0]["body"]["writes"][0]
         assert write["update"]["fields"] == {}
     for length, count in ((500, 19999), (2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):

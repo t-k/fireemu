@@ -717,6 +717,22 @@ pub struct JsonResponse {
     pub body: Value,
 }
 
+/// Secure Token refusals carry a gRPC status name and no `errors` list, unlike Identity
+/// Toolkit's (sandbox recording 2026-09-23).
+fn secure_token_error_shape(mut response: JsonResponse) -> JsonResponse {
+    if let Some(error) = response
+        .body
+        .get_mut("error")
+        .and_then(Value::as_object_mut)
+    {
+        error.remove("errors");
+        if response.status == 400 {
+            error.insert("status".to_owned(), json!("INVALID_ARGUMENT"));
+        }
+    }
+    response
+}
+
 fn error(status: u16, message: &str) -> JsonResponse {
     JsonResponse {
         status,
@@ -910,8 +926,8 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
 
 fn jwt_error(e: &JwtError) -> JsonResponse {
     match e {
-        JwtError::Expired => error(400, "TOKEN_EXPIRED"),
-        JwtError::Revoked => error(400, "TOKEN_EXPIRED : credentials revoked"),
+        // Production has no detail for a revoked token either (sandbox recording 2026-09-23).
+        JwtError::Expired | JwtError::Revoked => error(400, "TOKEN_EXPIRED"),
         JwtError::UserDisabled => error(400, "USER_DISABLED"),
         _ => error(400, "INVALID_ID_TOKEN"),
     }
@@ -3080,7 +3096,9 @@ fn dispatch(
         Handler::MfaEnrollmentWithdraw => mfa_enrollment_withdraw(store, body, at),
         Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
         Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
-        Handler::Token => refresh(store, body, at, options.stateless_refresh_tokens),
+        Handler::Token => {
+            secure_token_error_shape(refresh(store, body, at, options.stateless_refresh_tokens))
+        }
         Handler::AdminCreate => admin_create(store, body, at),
         Handler::AdminLookup => lookup(store, body, at, true),
         Handler::AdminDelete => delete_account(store, body, at, true),
@@ -7535,8 +7553,15 @@ fn delete_account(
             Err(r) => return r,
         }
     } else {
-        match verify(store, body, at) {
-            Ok(uid) => uid,
+        // As for lookup, a token whose account is gone is USER_NOT_FOUND.
+        match verify_session_with_error(store, body, at, |e| {
+            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                error(400, "USER_NOT_FOUND")
+            } else {
+                jwt_error(e)
+            }
+        }) {
+            Ok(session) => session.uid,
             Err(r) => return r,
         }
     };

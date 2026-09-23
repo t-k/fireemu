@@ -111,6 +111,11 @@ def _batch_variant(variant: str) -> dict[str, Any]:
         middle["updateMask"] = {"fieldPaths": ["a..b"]}
     elif variant == "bad-integer":
         middle["update"]["fields"] = {"v": {"integerValue": "not-a-number"}}
+    elif variant == "two-fields-bad-integer":
+        middle["update"]["fields"] = {
+            "z": {"integerValue": "1"},
+            "a": {"integerValue": "not-a-number"},
+        }
     elif variant == "unknown-value-kind":
         middle["update"]["fields"] = {"v": {"fooValue": 1}}
     elif variant == "bad-timestamp":
@@ -207,6 +212,7 @@ def build_programs() -> list[dict[str, Any]]:
             "reserved-field-name",
             "bad-mask-path",
             "bad-integer",
+            "two-fields-bad-integer",
             "unknown-value-kind",
             "bad-timestamp",
             "exists-precondition-fails",

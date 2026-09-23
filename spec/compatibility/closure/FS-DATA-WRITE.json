@@ -17,9 +17,9 @@
     {
       "conditionId": "FS-WRITE-LIMITS-03/batch-undecodable-value",
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#batch-undecodable-value",
-      "recipeIds": ["writes/batch-write-malformed/undecodable-value", "writes/batch-write-malformed/bad-integer", "writes/batch-write-malformed/unknown-value-kind", "writes/batch-write-malformed/bad-timestamp"],
+      "recipeIds": ["writes/batch-write-malformed/undecodable-value", "writes/batch-write-malformed/bad-integer", "writes/batch-write-malformed/two-fields-bad-integer", "writes/batch-write-malformed/unknown-value-kind", "writes/batch-write-malformed/bad-timestamp"],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PRODUCTION_RECORDED"
+      "status": "PENDING_RECORDING"
     },
     {
       "conditionId": "FS-DATA-WRITE/map-value-key-validation",

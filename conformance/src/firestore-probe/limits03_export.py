@@ -63,6 +63,19 @@ def _sandbox_index_exemption(value: Any) -> Any:
     return value
 
 
+def _remove_shared_owner(value: Any) -> None:
+    if isinstance(value, dict):
+        value.pop("_sharedOwner", None)
+        for key, child in value.items():
+            if key == "fieldPaths" and isinstance(child, list):
+                child[:] = [path for path in child if path != "_sharedOwner"]
+            else:
+                _remove_shared_owner(child)
+    elif isinstance(value, list):
+        for child in value:
+            _remove_shared_owner(child)
+
+
 def build_programs() -> list[dict[str, Any]]:
     descriptor = json.loads(DESCRIPTOR.read_text())
     compiled = _compiler_module().compile_limits_plan(
@@ -106,9 +119,7 @@ def build_programs() -> list[dict[str, Any]]:
             }
             if request.get("body") is not None:
                 step["body"] = _sandbox_index_exemption(request["body"])
-                body = step["body"]
-                if isinstance(body, dict) and isinstance(body.get("fields"), dict):
-                    body["fields"].pop("_sharedOwner", None)
+                _remove_shared_owner(step["body"])
             steps.append(step)
         programs.append({"id": recipe_id, "area": "writes", "steps": steps})
     return programs

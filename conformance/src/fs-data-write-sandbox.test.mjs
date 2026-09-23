@@ -45,6 +45,61 @@ test("artifact comparison distinguishes production error reasons as well as stat
   );
 });
 
+test("stream comparison excludes only approved volatile transport trailers", () => {
+  const volatile = [
+    { key: "content-disposition", kind: "ascii", value: "attachment" },
+    { key: "x-debug-tracking-id", kind: "ascii", value: "production-id" },
+  ];
+  const terminal = (code, trailers, eventType = "status") => ({
+    status: { code, details: "", trailers },
+    events: [
+      { type: "data", value: { streamId: "handshake", streamToken: "token", writeResults: [] } },
+      { type: eventType, value: { code, details: "", trailers } },
+      { type: "end" },
+    ],
+    sentFrames: 1,
+  });
+  const production = { streams: { "writes/stream": terminal(0, volatile) } };
+  const local = { "writes/stream": terminal(0, []) };
+
+  assert.deepEqual(compareSandboxArtifact(production, {}, local), []);
+  assert.deepEqual(production.streams["writes/stream"].status.trailers, volatile);
+  assert.deepEqual(compareSandboxArtifact(production, {}, { "writes/stream": terminal(3, []) }), [
+    "writes/stream#grpc",
+  ]);
+  assert.deepEqual(
+    compareSandboxArtifact(production, {}, { "writes/stream": terminal(0, [], "error") }),
+    ["writes/stream#grpc"],
+  );
+  const changedData = terminal(0, []);
+  changedData.events[0].value.streamToken = "different-token";
+  assert.deepEqual(compareSandboxArtifact(production, {}, { "writes/stream": changedData }), [
+    "writes/stream#grpc",
+  ]);
+  const changedDetails = terminal(0, []);
+  changedDetails.status.details = "different detail";
+  assert.deepEqual(compareSandboxArtifact(production, {}, { "writes/stream": changedDetails }), [
+    "writes/stream#grpc",
+  ]);
+  const missingEnd = terminal(0, []);
+  missingEnd.events.pop();
+  assert.deepEqual(compareSandboxArtifact(production, {}, { "writes/stream": missingEnd }), [
+    "writes/stream#grpc",
+  ]);
+  assert.deepEqual(
+    compareSandboxArtifact(
+      production,
+      {},
+      {
+        "writes/stream": terminal(0, [
+          { key: "grpc-status-details-bin", kind: "binary", value: "x" },
+        ]),
+      },
+    ),
+    ["writes/stream#grpc"],
+  );
+});
+
 test("artifact comparison ignores only BatchGet response ordering", () => {
   const response = (name) => ({
     missing: `projects/demo-firestore-probe/databases/(default)/documents/c/${name}`,

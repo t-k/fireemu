@@ -297,7 +297,7 @@
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": ["writes/write-stream-terminal/half-close"],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "MISMATCH"
+      "status": "PENDING_REVIEW"
     },
     {
       "conditionId": "FS-DATA-WRITE/write-stream-empty-write-response",

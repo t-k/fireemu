@@ -7,6 +7,7 @@ const RECORDED_PROJECT = "demo-firestore-probe";
 const MAX_REST_REQUESTS = 400;
 const MAX_BODY_BYTES = 16_777_217;
 const RESOURCE_NAME = /projects\/([^/]+)\/databases\/([^/?]+)/g;
+const VOLATILE_STREAM_TRAILERS = new Set(["content-disposition", "x-debug-tracking-id"]);
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -20,6 +21,28 @@ function canonical(value) {
     );
   }
   return value;
+}
+
+function comparableStream(result) {
+  if (!result || typeof result !== "object") return result;
+  const stripTransportTrailers = (value) =>
+    value && Array.isArray(value.trailers)
+      ? {
+          ...value,
+          trailers: value.trailers.filter((trailer) => !VOLATILE_STREAM_TRAILERS.has(trailer.key)),
+        }
+      : value;
+  return {
+    ...result,
+    status: stripTransportTrailers(result.status),
+    events: Array.isArray(result.events)
+      ? result.events.map((event) =>
+          ["status", "error"].includes(event?.type)
+            ? { ...event, value: stripTransportTrailers(event.value) }
+            : event,
+        )
+      : result.events,
+  };
 }
 
 function assertSandboxReferences(value) {
@@ -173,8 +196,8 @@ export function compareSandboxArtifact(production, localPrograms, localStreams, 
     ...Object.keys(localStreams ?? {}),
   ])) {
     if (
-      JSON.stringify(canonical(expectedStreams[recipeId])) !==
-      JSON.stringify(canonical(localStreams?.[recipeId]))
+      JSON.stringify(canonical(comparableStream(expectedStreams[recipeId]))) !==
+      JSON.stringify(canonical(comparableStream(localStreams?.[recipeId])))
     ) {
       differences.push(`${recipeId}#grpc`);
     }

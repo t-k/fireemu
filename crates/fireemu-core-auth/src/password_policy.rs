@@ -205,13 +205,17 @@ impl PasswordPolicy {
     }
 }
 
-/// Conservative default punctuation set.  It is intentionally explicit and limited to ASCII
-/// punctuation; Unicode letters, whitespace, emoji, and arbitrary non-ASCII symbols do not
-/// satisfy the requirement without an explicitly supplied server set.
+/// Production's default punctuation set: ASCII punctuation except `+` and `=`. Unicode
+/// letters, whitespace, emoji, and arbitrary non-ASCII symbols do not satisfy the requirement
+/// without an explicitly supplied server set.
 #[must_use]
 pub fn default_allowed_non_alphanumeric() -> BTreeSet<char> {
-    "~!@#$%^&*_-+=[]{}|\\:;'<>,.?/`\"()".chars().collect()
+    DEFAULT_NON_ALPHANUMERIC_ORDER.chars().collect()
 }
+
+/// Production's non-alphanumeric characters in the order `v2/passwordPolicy` lists them. `+`
+/// and `=` are not among them (sandbox recording 2026-09-23, `policy/enforce-custom`).
+pub const DEFAULT_NON_ALPHANUMERIC_ORDER: &str = r#"^$*.[]{}()?"!@#%&/\,><':;|_~`-"#;
 
 #[cfg(test)]
 mod tests {

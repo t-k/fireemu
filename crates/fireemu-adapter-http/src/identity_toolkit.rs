@@ -7444,6 +7444,17 @@ fn update(
         return error(400, "MISSING_LOCAL_ID");
     }
     let uid = if let Some(local_id) = local_id {
+        // An enforced custom policy refuses the password before the account is looked up;
+        // the default minimum length is checked after (sandbox recording 2026-09-23,
+        // `policy/enforce-custom#admin-update-weak`, `policy/default/routes#admin-update-weak`).
+        if let Some(password) = str_field(body, "password") {
+            if let Err(e @ AuthError::PasswordPolicyViolation(_)) = store.validate_password_for(
+                fireemu_core_auth::password_policy::Operation::Change,
+                password,
+            ) {
+                return auth_error(&e);
+            }
+        }
         match store.user_by_id(local_id) {
             Some(u) => u.local_id.clone(),
             None => return error(400, "USER_NOT_FOUND"),
@@ -8188,7 +8199,7 @@ fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
 /// a hash it cannot compare (a sign-in against it fails).
 fn batch_row_password(row: &Value) -> Result<Option<(String, String)>, JsonResponse> {
     if let Some(raw) = opt_str(row, "rawPassword")? {
-        AuthStore::validate_password(raw).map_err(|e| auth_error(&e))?;
+        AuthStore::validate_imported_password(raw).map_err(|e| auth_error(&e))?;
         let salt = opt_str(row, "salt")?
             .filter(|s| !s.is_empty())
             .map_or_else(|| "fakeSaltimport".to_owned(), str::to_owned);
@@ -10662,12 +10673,20 @@ fn project_config_json_with_auth_settings(
 }
 
 fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
-    let mut allowed: Vec<String> = policy
-        .allowed_non_alphanumeric
-        .iter()
-        .map(char::to_string)
+    // Production's order first, then any other configured character in code-point order.
+    let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
+    let allowed: Vec<String> = order
+        .chars()
+        .filter(|c| policy.allowed_non_alphanumeric.contains(c))
+        .chain(
+            policy
+                .allowed_non_alphanumeric
+                .iter()
+                .copied()
+                .filter(|c| !order.contains(*c)),
+        )
+        .map(String::from)
         .collect();
-    allowed.sort();
     let options = password_policy_config_json(policy)
         .get("passwordPolicyVersions")
         .and_then(Value::as_array)

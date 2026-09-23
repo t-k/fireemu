@@ -1,0 +1,73 @@
+name: assist-limits03-045
+
+on:
+  push:
+    branches: [assist/fs-limits03-recording-045-20260923]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: assist-limits03-045
+  cancel-in-progress: true
+
+jobs:
+  real-gate-recording-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Archive public tracked inputs for offline reproduction
+        run: |
+          mkdir -p verification-045
+          git rev-parse HEAD > verification-045/candidate-commit.txt
+          printf '%s\n' dbdbe3a389edf9fb263700be82a79baecb427682 > verification-045/base-commit.txt
+          git archive --format=tar.gz --output=verification-045/base-source.tar.gz dbdbe3a389edf9fb263700be82a79baecb427682
+          git archive --format=tar.gz --output=verification-045/candidate-source.tar.gz HEAD
+          git diff dbdbe3a389edf9fb263700be82a79baecb427682 HEAD -- tools/compat-broad/fs-write-limits > verification-045/changes.patch
+          sha256sum verification-045/* > verification-045/input-sha256.txt
+      - name: Install the same uv pin as repository CI
+        run: python3 -m pip install uv==0.11.28
+      - name: Reproduce against original collector without discarding failures
+        shell: bash
+        run: |
+          set -uo pipefail
+          target=tools/compat-broad/fs-write-limits/collector_03.py
+          cp "$target" verification-045/collector-candidate.py
+          trap 'cp verification-045/collector-candidate.py "$target"' EXIT
+          git show dbdbe3a389edf9fb263700be82a79baecb427682:"$target" > "$target"
+          timeout 240s uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad/fs-write-limits/test_limits_03_recording_gate.py -q --junitxml=verification-045/before.xml > verification-045/before.log 2>&1
+          rc=$?
+          printf '%s\n' "$rc" > verification-045/before-exit-code.txt
+          cat verification-045/before.log
+          exit 0
+      - name: Test candidate with real Gate and compiler
+        shell: bash
+        run: |
+          set +e
+          timeout 360s uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad/fs-write-limits/test_limits_03_recording_gate.py -q --junitxml=verification-045/after.xml > verification-045/after.log 2>&1
+          rc=$?
+          printf '%s\n' "$rc" > verification-045/after-exit-code.txt
+          cat verification-045/after.log
+          exit "$rc"
+      - name: Run existing Limits-03 campaign regressions
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          timeout 360s uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad/fs-write-limits/test_campaign_03.py -q --junitxml=verification-045/campaign.xml > verification-045/campaign.log 2>&1
+          rc=$?
+          printf '%s\n' "$rc" > verification-045/campaign-exit-code.txt
+          cat verification-045/campaign.log
+          exit "$rc"
+      - name: Retain exact source and unedited outcomes, including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: limits03-045-source-and-results
+          path: verification-045/
+          retention-days: 3
+          if-no-files-found: error

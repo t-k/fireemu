@@ -4329,7 +4329,7 @@ fn password_policy_admin_create_covers_maximum_and_invalid_password_inputs_atomi
         assert_eq!(status, expected_status, "{response}");
         if expected_status == 400 {
             assert_eq!(
-                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters",
                 "{response}"
             );
             assert!(s.store.lock().unwrap().user_by_id(&uid).is_none());
@@ -5248,7 +5248,7 @@ fn password_maximum_update_counts_utf16_units_and_preserves_rejected_state() {
         if !accepted {
             assert_eq!(
                 changed["error"]["message"],
-                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
             );
         }
         let (status, after) = post(
@@ -5338,7 +5338,7 @@ fn password_maximum_update_preserves_credentials_and_full_suffix() {
     assert_eq!(status, 400, "{refused}");
     assert_eq!(
         refused["error"]["message"],
-        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
     );
     let (status, looked) = post(
         &s,
@@ -5386,8 +5386,11 @@ fn password_policy_boundaries_apply_to_sign_up_without_creating_rejected_account
         );
         assert_eq!(status, expected_status, "{response}");
         if expected_status == 400 {
-            assert_eq!(
-                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+            // The detail after " : " is pinned in password_rules_answer_like_production.
+            assert!(
+                response["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
                 "{response}"
             );
         }
@@ -5457,8 +5460,11 @@ fn password_policy_boundaries_apply_to_admin_update_before_any_profile_mutation(
         );
         assert_eq!(status, expected_status, "{response}");
         if expected_status == 400 {
-            assert_eq!(
-                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+            // The detail after " : " is pinned in password_rules_answer_like_production.
+            assert!(
+                response["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
                 "{response}"
             );
         }
@@ -5579,7 +5585,7 @@ fn password_policy_client_update_rejects_invalid_values_before_profile_mutation(
         assert_eq!(
             response["error"]["message"],
             if password.encode_utf16().count() > AuthStore::MAX_PASSWORD_UTF16_UNITS {
-                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
             } else {
                 "WEAK_PASSWORD : Password should be at least 6 characters"
             },
@@ -5780,8 +5786,10 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
         if units == 4097 {
             assert_eq!(imported["error"].as_array().unwrap().len(), 1, "{imported}");
             assert_eq!(imported["error"][0]["index"], 0, "{imported}");
-            assert_eq!(
-                imported["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+            assert!(
+                imported["error"][0]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
                 "{imported}"
             );
             assert!(s.store.lock().unwrap().user_by_id(&local_id).is_none());
@@ -5816,8 +5824,10 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
     );
     assert_eq!(status, 200, "{refused}");
     assert_eq!(refused["error"].as_array().unwrap().len(), 1, "{refused}");
-    assert_eq!(
-        refused["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+    assert!(
+        refused["error"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
         "{refused}"
     );
     let (status, unchanged) = post(
@@ -5855,8 +5865,10 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
     assert_eq!(status, 200, "{response}");
     assert_eq!(response["error"].as_array().unwrap().len(), 1, "{response}");
     assert_eq!(response["error"][0]["index"], 0, "{response}");
-    assert_eq!(
-        response["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+    assert!(
+        response["error"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
         "{response}"
     );
     let (status, signed) = post(
@@ -10030,8 +10042,11 @@ fn sign_up_link_authenticates_before_password_policy_and_preserves_state() {
         }),
     );
     assert_eq!(status, 400, "{refused}");
-    assert_eq!(
-        refused["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+    // The detail after " : " is pinned in password_rules_answer_like_production.
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
         "a valid session reaches policy evaluation after authentication"
     );
     assert!(s.store.lock().unwrap().user_by_email(email).is_none());
@@ -12359,5 +12374,74 @@ fn a_client_update_stores_control_characters_in_the_display_name() {
         );
         assert_eq!(status, 200, "{updated}");
         assert_eq!(updated["displayName"], name);
+    }
+}
+
+/// Password rules as the Identity Platform sandbox answered them (recording 2026-09-23):
+/// lengths count UTF-16 units, an overlong password names the 4096 limit, a custom policy lists
+/// every missing requirement in a fixed order, and a client password change returns only the
+/// ID token unless `returnSecureToken` asks for the rest.
+#[test]
+fn password_rules_answer_like_production() {
+    let s = strict_state();
+    let (status, astral) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "astral@example.com", "password": "\u{1F600}\u{1F600}\u{1F600}", "returnSecureToken": true}),
+    );
+    assert_eq!(
+        status, 200,
+        "three astral characters are six UTF-16 units: {astral}"
+    );
+    let (status, long) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "long@example.com", "password": "a".repeat(4097)}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        long["error"]["message"],
+        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
+    );
+
+    let (_, fresh) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "astral@example.com", "password": "\u{1F600}\u{1F600}\u{1F600}", "returnSecureToken": true}),
+    );
+    let (status, changed) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": fresh["idToken"], "password": "password456", "returnSecureToken": false}),
+    );
+    assert_eq!(status, 200, "{changed}");
+    assert!(changed["idToken"].is_string(), "{changed}");
+    assert!(
+        changed.get("refreshToken").is_none() && changed.get("expiresIn").is_none(),
+        "{changed}"
+    );
+
+    {
+        let mut store = s.store.lock().unwrap();
+        store.set_password_policy(fireemu_core_auth::password_policy::PasswordPolicy {
+            enforcement_state: fireemu_core_auth::password_policy::EnforcementState::Enforce,
+            min_length: 8,
+            max_length: Some(20),
+            require_uppercase: true,
+            require_lowercase: true,
+            require_numeric: true,
+            require_non_alphanumeric: true,
+            ..Default::default()
+        });
+    }
+    for (password, missing) in [
+        ("password", "Password must contain an upper case character, Password must contain a numeric character, Password must contain a non-alphanumeric character"),
+        ("Passw0rd!Passw0rd!Pas", "Password may contain at most 20 characters"),
+        ("passw0rd!", "Password must contain an upper case character"),
+        ("Passw0rdx", "Password must contain a non-alphanumeric character"),
+    ] {
+        let (status, refused) = post(&s, &format!("{V1}/accounts:signUp"), &json!({"email": format!("{password}@example.com"), "password": password}));
+        assert_eq!(status, 400, "{password}");
+        assert_eq!(refused["error"]["message"], format!("PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [{missing}]"), "{password}");
     }
 }

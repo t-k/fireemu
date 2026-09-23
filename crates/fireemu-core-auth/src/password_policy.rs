@@ -63,6 +63,18 @@ impl ViolationCode {
     }
 }
 
+/// Why a password was refused under a custom policy: the unmet requirements and the bounds
+/// they refer to, enough for an adapter to word the refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRefusal {
+    /// Unmet requirements, in evaluation order.
+    pub violations: Vec<ViolationCode>,
+    /// The policy's inclusive minimum length in UTF-16 units.
+    pub min_length: usize,
+    /// The policy's inclusive custom maximum in UTF-16 units.
+    pub max_length: Option<usize>,
+}
+
 /// A validated password-policy definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]

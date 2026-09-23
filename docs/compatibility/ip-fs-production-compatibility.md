@@ -6,6 +6,12 @@ Goal ID: `IP-FS-PRODUCTION-COMPATIBILITY`
 
 Auth claim-source, MFA and Limits native updates remain local-only; executor `571d5a6bb63289893661d88470d47e8ffb4870a2` is source-only evidence. The Auth05 held attempt remains unresolved and does not change this condition or the `COMPAT_VERIFIED 0 / 14` parent count.
 
+## Accepted finite REST error condition: malformed bytes Base64 (2026-09-23)
+
+The bounded condition `firestore:errors/rest-shapes#write-bad-base64` is accepted against its retained production observation. The reference is program `errors/rest-shapes`, step `write-bad-base64`, with historical program digest `c4b201decb3adaf50ac1f9173b927bf6729bd7e2ee8785aacae2664adcbe69db` and step digest `a1154c823058e82acc258c1c0049dd9491dde96da2dbda16689ff5cebe8c8282`. The local HTTP replay used execution source `ff90876b9f6b3e468b1da9e25e95d6384cbecc6b` and artifact SHA-256 `4f266c152ecbf8bbf259ec5b61f0dfa4accb52ebc7344c499da00754c68ed408`. The strict comparison matched HTTP status 400, canonical code `INVALID_ARGUMENT`, and the complete message. Independent review [accepted this condition only](../../docs.local/reviews/2026-09-23-rest-base64-saved-exact-acceptance.md); the retained local manifest SHA-256 is `4cb964a900fd8492a27e151bd49a5f595386c5c7d06ca5e0b05343ca7c4f7164`.
+
+No fresh production request was made. This acceptance covers only the malformed bytes-value refusal in the named row; it does not establish valid Base64, transaction tokens, or the full REST error-shape family. The wider replay remains incomplete with two mismatches and two indeterminate rows. Parent status remains `COMPAT_VERIFIED 0 / 14`, and the finite-condition total remains unaggregated.
+
 ## Current saved REST replay revalidation (`648`)
 
 Four bounded saved-production REST conditions are independently approved against source `648aabe56cf6147128ffadf565d93ca7a92013c1`: `FS-EVID-TRANSFORMS-021` (18 MATCH), `FS-EVID-PRECONDITIONS-022` (34 MATCH), `FS-EVID-AGGREGATIONS-029` (23 MATCH) and `FS-EVID-PROJECTION-LISTING-027` (18 MATCH). Each has zero MISMATCH and zero INDETERMINATE rows. The aggregation and projection/listing replays use the verified 648 artifact SHA-256 `7737f6c389aff0a0f280757591af3b81f11edfbc8438cb69268da0f4c2237026` and runtime-input map digest `7e2b0bc7037e0caf9f979f052c69a3820a398c8df72de8dbd19f1aac2f524331`; independent reviews joined the artifact to the retained locked build receipt and runtime-input map.

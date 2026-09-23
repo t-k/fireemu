@@ -48,6 +48,10 @@ export function shouldHalfCloseAfterResponse(recipe, responseCount) {
   return recipe.id === RESPONSE_HALF_CLOSE_ID ? responseCount === 2 : responseCount === 1;
 }
 
+export function responseGatedDeadlineIsIndeterminate(recipe, status, responseCount) {
+  return recipe.id === RESPONSE_HALF_CLOSE_ID && status?.code === 4 && responseCount < 2;
+}
+
 function opaqueShape(value) {
   if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
     return value.length > 0 ? "nonempty-bytes" : "empty-bytes";
@@ -158,6 +162,9 @@ export async function runStreamRecipe(recipe, { target, projectId, host, port, t
         })
       ) {
         return reject(new Error("incomplete gRPC terminal observation"));
+      }
+      if (responseGatedDeadlineIsIndeterminate(recipe, status, responseCount)) {
+        return reject(new Error("indeterminate: client deadline before the gated stream response"));
       }
       const recorded = normalizeRecordedResponse(
         { status, sentFrames, events },

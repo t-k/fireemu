@@ -45,12 +45,14 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
         "writes/limits/non-commit-rest-request-bytes/patch/10485760",
         "writes/limits/non-commit-rest-request-bytes/patch/10485761",
     }.issubset(ids)
-    assert len(corpus["streamRecipes"]) == 4
+    assert len(corpus["streamRecipes"]) == 6
     assert {recipe["id"] for recipe in corpus["streamRecipes"]} == {
         "writes/write-stream-transaction",
         "writes/write-stream-terminal/trailing-metadata",
         "writes/write-stream-terminal/half-close",
         "writes/write-stream-terminal/response-before-half-close",
+        "writes/limits/grpc-unary-request-bytes/10485760",
+        "writes/limits/grpc-unary-request-bytes/10485761",
     }
     recipes = {recipe["id"]: recipe for recipe in corpus["streamRecipes"]}
     assert recipes["writes/write-stream-transaction"] == {

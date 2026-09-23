@@ -15,9 +15,12 @@ const HALF_CLOSE_ID = "writes/write-stream-terminal/half-close";
 const RESPONSE_HALF_CLOSE_ID = "writes/write-stream-terminal/response-before-half-close";
 const UNARY_EXACT_ID = "writes/limits/grpc-unary-request-bytes/10485760";
 const UNARY_OVER_ID = "writes/limits/grpc-unary-request-bytes/10485761";
+const STREAM_EXACT_ID = "writes/limits/grpc-stream-request-bytes/10485760";
+const STREAM_OVER_ID = "writes/limits/grpc-stream-request-bytes/10485761";
 const SAVED_SOURCE = "spec/compatibility/broad-runs/fs-write-txn-dee737c14-production-result.json";
 const SANDBOX_PROJECT = "fireemu-oracle-sbx";
 const UNARY_BYTE_TARGETS = new Set([10_485_760, 10_485_761]);
+const STREAM_BYTE_TARGETS = new Set([10_485_760, 10_485_761]);
 
 export async function makeUnaryRequestByWireBytes(targetBytes) {
   if (!UNARY_BYTE_TARGETS.has(targetBytes)) throw new Error("unsupported unary byte target");
@@ -34,14 +37,29 @@ export async function makeUnaryRequestByWireBytes(targetBytes) {
   }
 }
 
+export async function makeStreamRequestByWireBytes(targetBytes) {
+  if (!STREAM_BYTE_TARGETS.has(targetBytes)) throw new Error("unsupported stream byte target");
+  const client = new v1.FirestoreClient({ projectId: SANDBOX_PROJECT });
+  try {
+    const database = `projects/${SANDBOX_PROJECT}/databases/(default)`;
+    const serialize = client._protos.google.firestore.v1.WriteRequest.serialize;
+    const request = { database, streamToken: Buffer.alloc(targetBytes - 54) };
+    const wireBytes = serialize(request).length;
+    if (wireBytes !== targetBytes) throw new Error("stream request wire size differs");
+    return { request, wireBytes };
+  } finally {
+    await client.close();
+  }
+}
+
 /** Keep live gRPC sends limited to the fixed terminal and request-byte actions. */
 export function validateStreamRecipes(recipes) {
-  if (!Array.isArray(recipes) || recipes.length !== 6) {
+  if (!Array.isArray(recipes) || recipes.length !== 8) {
     throw new Error("unsupported stream recipe set");
   }
   const byId = new Map(recipes.map((recipe) => [recipe.id, recipe]));
   if (
-    byId.size !== 6 ||
+    byId.size !== 8 ||
     byId.get(SAVED_ID)?.transport !== "saved-reference" ||
     byId.get(SAVED_ID)?.source !== SAVED_SOURCE ||
     byId.get(TRAILERS_ID)?.transport !== "grpc" ||
@@ -60,12 +78,28 @@ export function validateStreamRecipes(recipes) {
     byId.get(UNARY_OVER_ID)?.transport !== "grpc" ||
     byId.get(UNARY_OVER_ID)?.action !== "get-document-transaction-bytes" ||
     byId.get(UNARY_OVER_ID)?.wireBytes !== 10_485_761 ||
-    byId.get(UNARY_OVER_ID)?.maxFrames !== 1
+    byId.get(UNARY_OVER_ID)?.maxFrames !== 1 ||
+    byId.get(STREAM_EXACT_ID)?.transport !== "grpc" ||
+    byId.get(STREAM_EXACT_ID)?.action !== "write-stream-token-bytes" ||
+    byId.get(STREAM_EXACT_ID)?.wireBytes !== 10_485_760 ||
+    byId.get(STREAM_EXACT_ID)?.maxFrames !== 1 ||
+    byId.get(STREAM_OVER_ID)?.transport !== "grpc" ||
+    byId.get(STREAM_OVER_ID)?.action !== "write-stream-token-bytes" ||
+    byId.get(STREAM_OVER_ID)?.wireBytes !== 10_485_761 ||
+    byId.get(STREAM_OVER_ID)?.maxFrames !== 1
   ) {
     throw new Error("unsupported stream recipe");
   }
   return {
-    live: [byId.get(TRAILERS_ID), byId.get(HALF_CLOSE_ID), byId.get(RESPONSE_HALF_CLOSE_ID), byId.get(UNARY_EXACT_ID), byId.get(UNARY_OVER_ID)],
+    live: [
+      byId.get(TRAILERS_ID),
+      byId.get(HALF_CLOSE_ID),
+      byId.get(RESPONSE_HALF_CLOSE_ID),
+      byId.get(UNARY_EXACT_ID),
+      byId.get(UNARY_OVER_ID),
+      byId.get(STREAM_EXACT_ID),
+      byId.get(STREAM_OVER_ID),
+    ],
     saved: byId.get(SAVED_ID),
   };
 }
@@ -167,7 +201,10 @@ async function runUnaryRequestByteRecipe(recipe, { connection, projectId, token 
       recordProject: "demo-firestore-probe",
       scope: "error",
     });
-    if (JSON.stringify(recorded).includes(token) || JSON.stringify(recorded).includes(SANDBOX_PROJECT)) {
+    if (
+      JSON.stringify(recorded).includes(token) ||
+      JSON.stringify(recorded).includes(SANDBOX_PROJECT)
+    ) {
       throw new Error("unary recording contains private identity or credential");
     }
     return recorded;
@@ -183,8 +220,15 @@ export async function runStreamRecipe(recipe, { target, projectId, host, port, t
   if ([UNARY_EXACT_ID, UNARY_OVER_ID].includes(recipe?.id)) {
     return runUnaryRequestByteRecipe(recipe, { connection, projectId, token });
   }
-  if (![TRAILERS_ID, HALF_CLOSE_ID, RESPONSE_HALF_CLOSE_ID].includes(recipe?.id))
+  const requestByteStream = [STREAM_EXACT_ID, STREAM_OVER_ID].includes(recipe?.id);
+  if (
+    ![TRAILERS_ID, HALF_CLOSE_ID, RESPONSE_HALF_CLOSE_ID].includes(recipe?.id) &&
+    !requestByteStream
+  )
     throw new Error("unsupported live stream recipe");
+  const byteRequest = requestByteStream
+    ? await makeStreamRequestByWireBytes(recipe.wireBytes)
+    : undefined;
   const client = new v1.FirestoreClient({
     servicePath: connection.host,
     port: connection.port,
@@ -237,8 +281,16 @@ export async function runStreamRecipe(recipe, { target, projectId, host, port, t
       if (responseGatedDeadlineIsIndeterminate(recipe, status, responseCount)) {
         return reject(new Error("indeterminate: client deadline before the gated stream response"));
       }
+      if (requestByteStream && status.code === 4) {
+        return reject(new Error("indeterminate: request-byte stream client deadline"));
+      }
       const recorded = normalizeRecordedResponse(
-        { status, sentFrames, events },
+        {
+          status,
+          sentFrames,
+          events,
+          ...(byteRequest ? { wireBytes: byteRequest.wireBytes } : {}),
+        },
         {
           project: SANDBOX_PROJECT,
           recordProject: "demo-firestore-probe",
@@ -271,7 +323,7 @@ export async function runStreamRecipe(recipe, { target, projectId, host, port, t
       call.on("data", (response) => {
         events.push({ type: "data", value: projectStreamResponse(response) });
         responseCount += 1;
-        if (responseCount === 1 && recipe.id !== HALF_CLOSE_ID) {
+        if (responseCount === 1 && recipe.id !== HALF_CLOSE_ID && !requestByteStream) {
           call.write({ streamToken: response.streamToken, writes: [{}] });
           sentFrames += 1;
         }
@@ -300,8 +352,9 @@ export async function runStreamRecipe(recipe, { target, projectId, host, port, t
         events.push({ type: "close" });
         maybeFinish();
       });
-      call.write({ database: `projects/${projectId}/databases/(default)` });
+      call.write(byteRequest?.request ?? { database: `projects/${projectId}/databases/(default)` });
       sentFrames += 1;
+      if (requestByteStream) call.end();
     } catch (error) {
       finish(error);
     }

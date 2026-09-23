@@ -107,6 +107,16 @@ def build_corpus() -> dict[str, Any]:
             }
             for size in (10_485_760, 10_485_761)
         ),
+        *(
+            {
+                "id": f"writes/limits/grpc-stream-request-bytes/{size}",
+                "transport": "grpc",
+                "action": "write-stream-token-bytes",
+                "wireBytes": size,
+                "maxFrames": 1,
+            }
+            for size in (10_485_760, 10_485_761)
+        ),
     ]
     ids = [program["id"] for program in programs]
     if len(ids) != len(set(ids)):

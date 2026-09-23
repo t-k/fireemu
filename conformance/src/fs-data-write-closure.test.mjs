@@ -289,21 +289,23 @@ test("final artifact closure names both saved production regression commands", (
   assert.notEqual(condition.status, "VERIFIED");
 });
 
-test("request-byte transports distinguish prepared REST input from missing corpora", () => {
+test("request-byte transports distinguish prepared REST and gRPC input from missing WebChannel corpus", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const nonCommitRest = closure.conditions.find(
     (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
   );
   assert.equal(nonCommitRest.status, "PENDING_RECORDING");
   assert.equal(nonCommitRest.boundaryStatus, "PENDING_RECORDING");
-  for (const conditionId of [
-    "FS-LIMIT-API-REQUEST-BYTES/webchannel",
-    "FS-LIMIT-API-REQUEST-BYTES/grpc",
-  ]) {
-    const condition = closure.conditions.find((row) => row.conditionId === conditionId);
-    assert.equal(condition.status, "PENDING_CORPUS");
-    assert.equal(condition.boundaryStatus, "PENDING_RECORDING");
-  }
+  const grpc = closure.conditions.find(
+    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/grpc",
+  );
+  assert.equal(grpc.status, "PENDING_RECORDING");
+  assert.equal(grpc.boundaryStatus, "PENDING_RECORDING");
+  const webchannel = closure.conditions.find(
+    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+  );
+  assert.equal(webchannel.status, "PENDING_CORPUS");
+  assert.equal(webchannel.boundaryStatus, "PENDING_RECORDING");
 });
 
 test("new strict-only map observation remains pending production recording", () => {

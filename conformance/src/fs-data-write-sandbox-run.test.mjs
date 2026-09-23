@@ -144,13 +144,13 @@ test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", 
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
   assert.equal(corpus.restPrograms.length, 69);
   assert.equal(restRequestCount, 231);
-  assert.equal(liveStreamCount, 5);
-  assert.equal(MAX_STREAM_FRAMES, 7);
+  assert.equal(liveStreamCount, 7);
+  assert.equal(MAX_STREAM_FRAMES, 9);
   assert.equal(
     corpus.streamRecipes
       .filter((recipe) => recipe.transport === "grpc")
       .reduce((total, recipe) => total + recipe.maxFrames, 0),
-    7,
+    9,
   );
 });
 

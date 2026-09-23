@@ -276,7 +276,7 @@
       "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_GRPC_MESSAGE_BYTES",
       "recipeIds": ["writes/limits/grpc-unary-request-bytes", "writes/limits/grpc-stream-request-bytes"],
       "boundaryStatus": "PENDING_RECORDING",
-      "status": "PENDING_CORPUS"
+      "status": "PENDING_RECORDING"
     },
     {
       "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",

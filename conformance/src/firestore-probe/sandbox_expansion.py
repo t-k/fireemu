@@ -129,7 +129,7 @@ def build_programs() -> list[dict[str, Any]]:
             "exists-precondition-fails",
         )
     )
-    programs.append(_field_path_mask_program(1499))
+    programs.extend(_field_path_mask_program(length) for length in (1499, 1500))
     programs.extend(_implied_array_key_program(length) for length in (1494, 1495))
     for length in (2600, 2642, 2643):
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
@@ -138,7 +138,7 @@ def build_programs() -> list[dict[str, Any]]:
     for length in (4621, 4622, 5000, 6127, 6128):
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
         programs.append(_commit_program(f"writes/limits/empty-document-name/{length}", [_field_update(name, {})], [name]))
-    for length, count in ((500, 19999), (2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):
+    for length, count in ((500, 19999), (500, 20000), (2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):
         name = f"{DOCS}/{index_sum_name_of_length(length, f'g{length}')}"
         values = [{"integerValue": str(index)} for index in range(count)]
         write = _field_update(name, {"a": {"arrayValue": {"values": values}}})

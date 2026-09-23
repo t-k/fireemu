@@ -67,7 +67,7 @@ def test_index_and_decoded_request_boundaries_have_exact_input_shapes() -> None:
     for length in (4621, 4622, 5000, 6127, 6128):
         write = programs[f"writes/limits/empty-document-name/{length}"]["steps"][0]["body"]["writes"][0]
         assert write["update"]["fields"] == {}
-    for length, count in ((500, 19999), (2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):
+    for length, count in ((500, 19999), (500, 20000), (2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):
         program = programs[f"writes/limits/index-entry-sum/{length}-{count}"]
         write = program["steps"][0]["body"]["writes"][0]
         assert len(write["update"]["name"].split("/documents/")[1].encode()) == length
@@ -83,16 +83,17 @@ def test_index_and_decoded_request_boundaries_have_exact_input_shapes() -> None:
 
 def test_additional_field_path_boundaries_are_unbiased_and_have_readbacks() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
-    mask = programs["writes/limits/field-path-mask/1499"]
-    assert len(mask["steps"]) == 2
-    assert len(mask["steps"][0]["body"]["writes"]) == 1
-    write = mask["steps"][0]["body"]["writes"][0]
-    assert len(write["updateMask"]["fieldPaths"]) == 1
-    field = write["updateMask"]["fieldPaths"][0]
-    assert len(field.encode()) == 1499
-    assert list(write["update"]["fields"]) == [field]
-    assert mask["steps"][1]["id"] == "readback"
-    assert mask["steps"][1]["body"]["documents"] == [write["update"]["name"]]
+    for length in (1499, 1500):
+        mask = programs[f"writes/limits/field-path-mask/{length}"]
+        assert len(mask["steps"]) == 2
+        assert len(mask["steps"][0]["body"]["writes"]) == 1
+        write = mask["steps"][0]["body"]["writes"][0]
+        assert len(write["updateMask"]["fieldPaths"]) == 1
+        field = write["updateMask"]["fieldPaths"][0]
+        assert len(field.encode()) == length
+        assert list(write["update"]["fields"]) == [field]
+        assert mask["steps"][1]["id"] == "readback"
+        assert mask["steps"][1]["body"]["documents"] == [write["update"]["name"]]
     for length in (1494, 1495):
         program = programs[f"writes/limits/implied-array-key/{length}"]
         assert len(program["steps"]) == 2

@@ -10,7 +10,7 @@
     {
       "conditionId": "FS-WRITE-LIMITS-03/batch-malformed-middle",
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#batch-malformed-middle",
-      "recipeIds": ["writes/batch-write-malformed/missing-operation"],
+      "recipeIds": ["writes/batch-write-malformed/missing-operation", "writes/batch-write-malformed/no-operation", "writes/batch-write-malformed/collection-name", "writes/batch-write-malformed/empty-field-name", "writes/batch-write-malformed/reserved-field-name", "writes/batch-write-malformed/bad-mask-path", "writes/batch-write-malformed/bad-integer", "writes/batch-write-malformed/unknown-value-kind", "writes/batch-write-malformed/bad-timestamp", "writes/batch-write-malformed/exists-precondition-fails"],
       "status": "PENDING_CORPUS"
     },
     {
@@ -46,25 +46,29 @@
     {
       "conditionId": "FS-LIMIT-DOCUMENT-NAME-BYTES",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-DOCUMENT-NAME-BYTES",
-      "recipeIds": ["writes/limits/document-name-bytes"],
+      "recipeIds": ["writes/limits/document-name-bytes", "writes/limits/empty-document-name/4621", "writes/limits/empty-document-name/4622", "writes/limits/empty-document-name/5000", "writes/limits/empty-document-name/6127", "writes/limits/empty-document-name/6128"],
+      "boundaryStatus": "UNBRACKETED_EXACT",
       "status": "PENDING_CORPUS"
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
       "recipeIds": ["writes/limits/index-entries-per-document"],
+      "boundaryStatus": "PENDING_RECORDING",
       "status": "PENDING_CORPUS"
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-BYTES",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-BYTES",
-      "recipeIds": ["writes/limits/index-entry-bytes"],
+      "recipeIds": ["writes/limits/index-entry-bytes", "writes/limits/index-entry-string-name/2600", "writes/limits/index-entry-string-name/2642", "writes/limits/index-entry-string-name/2643"],
+      "boundaryStatus": "UNBRACKETED_EXACT",
       "status": "PENDING_CORPUS"
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
-      "recipeIds": ["writes/limits/index-entry-sum-per-document"],
+      "recipeIds": ["writes/limits/index-entry-sum-per-document", "writes/limits/index-entry-sum/500-19999", "writes/limits/index-entry-sum/500-20000", "writes/limits/index-entry-sum/2000-9549", "writes/limits/index-entry-sum/2000-9550", "writes/limits/index-entry-sum/1000-19998", "writes/limits/index-entry-sum/1000-19999"],
+      "boundaryStatus": "PENDING_RECORDING",
       "status": "PENDING_CORPUS"
     },
     {
@@ -73,8 +77,13 @@
       "recipeIds": [
         "writes/limits/implied-map",
         "writes/limits/implied-array",
-        "writes/limits/field-path-direct-mask"
+        "writes/limits/field-path-direct-mask",
+        "writes/limits/field-path-mask/1499",
+        "writes/limits/field-path-mask/1500",
+        "writes/limits/implied-array-key/1494",
+        "writes/limits/implied-array-key/1495"
       ],
+      "boundaryStatus": "PENDING_RECORDING",
       "status": "PENDING_CORPUS"
     },
     {
@@ -110,19 +119,20 @@
     {
       "conditionId": "FS-WRITE-LIMITS-03/implied-array",
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#implied-array",
-      "recipeIds": ["writes/limits/implied-array"],
+      "recipeIds": ["writes/limits/implied-array", "writes/limits/implied-array-key/1494", "writes/limits/implied-array-key/1495"],
+      "boundaryStatus": "BRACKETED_IN_INTERMEDIATE_RECORDING",
       "status": "PENDING_CORPUS"
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/decoded-10mib",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-API-REQUEST-BYTES",
-      "recipeIds": ["writes/limits/decoded-request-bytes"],
+      "recipeIds": ["writes/limits/decoded-request-bytes", "writes/limits/decoded-11x1040000"],
       "status": "PENDING_CORPUS"
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["writes/limits/raw-request-bytes"],
+      "recipeIds": ["writes/limits/raw-request-bytes", "writes/limits/raw-11mib/11534336", "writes/limits/raw-11mib/11534337"],
       "status": "PENDING_CORPUS"
     },
     {

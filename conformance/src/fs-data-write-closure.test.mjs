@@ -50,6 +50,10 @@ const requiredRecipes = new Map([
       "writes/limits/implied-map",
       "writes/limits/implied-array",
       "writes/limits/field-path-direct-mask",
+      "writes/limits/field-path-mask/1499",
+      "writes/limits/field-path-mask/1500",
+      "writes/limits/implied-array-key/1494",
+      "writes/limits/implied-array-key/1495",
     ]),
   ],
   [
@@ -97,6 +101,22 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
       new Set(condition.recipeIds),
       recipes,
       `${conditionId}: incomplete recipe mapping`,
+    );
+  }
+  for (const conditionId of [
+    "FS-LIMIT-DOCUMENT-NAME-BYTES",
+    "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
+    "FS-LIMIT-INDEX-ENTRY-BYTES",
+    "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
+    "FS-LIMIT-FIELD-PATH-BYTES",
+    "FS-WRITE-LIMITS-03/implied-array",
+  ]) {
+    const condition = closure.conditions.find((row) => row.conditionId === conditionId);
+    assert.ok(
+      ["UNBRACKETED_EXACT", "PENDING_RECORDING", "BRACKETED_IN_INTERMEDIATE_RECORDING"].includes(
+        condition.boundaryStatus,
+      ),
+      `${conditionId}: boundary state must not be inferred from recipe presence`,
     );
   }
   const allVerified = closure.conditions.every(({ status }) => status === "VERIFIED");

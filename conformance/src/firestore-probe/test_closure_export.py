@@ -22,12 +22,14 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]
     ids = [program["id"] for program in programs]
-    assert len(ids) == len(set(ids)) == 52
+    assert len(ids) == len(set(ids)) == 54
     assert {
         "writes/limits/field-path-mask/1499",
+        "writes/limits/field-path-mask/1500",
         "writes/limits/implied-array-key/1494",
         "writes/limits/implied-array-key/1495",
         "writes/limits/index-entry-sum/500-19999",
+        "writes/limits/index-entry-sum/500-20000",
         "writes/limits/index-entry-string-name/2600",
         "writes/limits/empty-document-name/5000",
     }.issubset(ids)
@@ -70,6 +72,19 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
                 or any(candidate.startswith(recipe + "/") for candidate in ids)
                 or recipe in {item["id"] for item in corpus["streamRecipes"]}
             ), recipe
+    mapped = [
+        recipe
+        for condition in closure["conditions"]
+        if condition["conditionId"] not in {
+            "FS-DATA-WRITE/final-artifact-regression",
+            "FS-DATA-WRITE/closure-review",
+        }
+        for recipe in condition["recipeIds"]
+    ]
+    assert all(
+        any(program_id == recipe or program_id.startswith(recipe + "/") for recipe in mapped)
+        for program_id in ids
+    ), "every sandbox REST program needs a direct closure condition"
     assert corpus["restRequestCount"] == sum(len(p["steps"]) for p in programs)
     assert corpus["restRequestCount"] < 400
 

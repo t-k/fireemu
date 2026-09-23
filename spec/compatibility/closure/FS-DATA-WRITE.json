@@ -48,7 +48,7 @@
       "recipeIds": ["writes/limits/subcollection-depth"],
       "boundaryStatus": "BRACKETED",
       "boundaryEvidence": ["writes/limits/subcollection-depth#observation-0", "writes/limits/subcollection-depth#observation-1"],
-      "status": "MISMATCH"
+      "status": "PRODUCTION_RECORDED"
     },
     {
       "conditionId": "FS-LIMIT-DOCUMENT-NAME-BYTES",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -17,6 +18,11 @@ from credential_cases import CASE_COUNT, observation_cases
 from credential_collector import module_digests
 
 RECORD = ROOT / campaign.SHADOW_RECORD
+PREVIOUS = (
+    ROOT
+    / "spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260923.json"
+)
+PREVIOUS_SHA256 = "c6edc7f5c11dccb8855fbbae580ad2eff71f463e86d1665078263dda854914a2"
 SUPERSEDED = (
     ROOT
     / "spec/compatibility/broad-runs/auth-credential-tokens-local-shadow-20260918.json"
@@ -56,6 +62,22 @@ def test_the_record_binds_the_lane_modules_as_they_stand() -> None:
     assert binding["modules"] == module_digests()
     assert re.fullmatch(r"[0-9a-f]{40}", binding["commit"])
     assert campaign.artifact_profile() == "auth-credential-" + binding["commit"][:9]
+
+
+def test_the_record_contains_uid_matched_lookup_measurements() -> None:
+    rows = {row["caseId"]: row for row in _record()["receipt"]["rows"]}
+    assert (
+        rows["revocation-same-second-session"]["assertions"]["lookupMatchesAccount"]
+        is True
+    )
+    assert (
+        rows["revocation-newer-session-accepted"]["assertions"]["lookupMatchesAccount"]
+        is True
+    )
+
+
+def test_the_pre_lookup_20260923_record_is_kept_byte_identical() -> None:
+    assert hashlib.sha256(PREVIOUS.read_bytes()).hexdigest() == PREVIOUS_SHA256
 
 
 def test_the_record_carries_no_personal_path_or_credential() -> None:

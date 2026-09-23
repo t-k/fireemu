@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-ACCOUNT",
-  "parentStatus": "WAITING_ORACLE",
+  "parentStatus": "PENDING_CLOSURE_REVIEW",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
     "decision": "PENDING"
@@ -91,8 +91,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/client-profile-attributes",
@@ -103,8 +119,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 11
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/client-password-change",
@@ -115,8 +147,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/input-validation-basic",
@@ -127,8 +175,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 7
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/anonymous-basic",
@@ -139,8 +203,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 5
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/email-canonical-and-duplicate",
@@ -151,8 +231,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 6
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/disable-reenable",
@@ -163,8 +259,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/delete-effects",
@@ -176,8 +288,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 13
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/default-policy-client-update",
@@ -188,8 +316,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 31
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/tampered-token-privileged-update",
@@ -200,8 +344,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+      "status": "VERIFIED",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 4
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/anonymous-upgrade",
@@ -212,7 +372,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/client-email-change",
@@ -223,7 +399,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 9
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/admin-create",
@@ -234,7 +426,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/admin-lookup-selectors",
@@ -245,7 +453,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 14
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/admin-update-fields",
@@ -256,7 +480,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 19
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/custom-attributes",
@@ -267,7 +507,27 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "MISMATCH",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 30,
+          "MISMATCH": 1
+        },
+        "mismatchedRows": [
+          "auth-account/admin/custom-attributes#invalid-json"
+        ]
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/privilege-boundary",
@@ -279,7 +539,29 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 43
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/admin-delete-and-batch-delete",
@@ -291,7 +573,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 17
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/admin-list-export",
@@ -302,7 +600,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 11
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/admin-query",
@@ -313,7 +627,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 32
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/import-basic",
@@ -324,7 +654,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 15
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/import-hash-formats",
@@ -349,8 +695,24 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "All 14 algorithms of the Identity Toolkit v1 discovery document (read 2026-09-23) are in scope. fireemu must verify every one, including Firebase SCRYPT with a configurable project hashConfig."
+      "status": "VERIFIED",
+      "note": "All 14 algorithms of the Identity Toolkit v1 discovery document (read 2026-09-23) are in scope. fireemu must verify every one, including Firebase SCRYPT with a configurable project hashConfig.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 159
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/phone-accounts",
@@ -361,7 +723,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 22
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/provider-link-unlink",
@@ -372,7 +750,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 17
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/uid-reuse-after-delete",
@@ -383,7 +777,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 9
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/duplicate-email-mode",
@@ -395,7 +805,23 @@
         "dup-email",
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 9
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/email-privacy-off",
@@ -407,7 +833,23 @@
         "privacy-off",
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 10
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/password-policy-routes-and-custom",
@@ -422,7 +864,29 @@
         "policy-enforce-custom",
         "policy-not-enforce"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 35
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/client-permissions",
@@ -434,7 +898,23 @@
         "client-permissions",
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 7
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/value-classes",
@@ -445,7 +925,23 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "rows": {
+          "MATCH": 33
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACCOUNT/final-artifact-regression",
@@ -459,7 +955,50 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
+        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
+        "authAccount": {
+          "MATCH": 630,
+          "MISMATCH": 1
+        },
+        "historical23": {
+          "command": "node conformance/src/auth-probe/run.mjs check",
+          "result": "23 rows agree with conformance/auth-production-matrix.json"
+        },
+        "savedReference": {
+          "path": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-saved-replay.json",
+          "result": "48/48 MATCH across auth-basic-v2, auth-display-name, auth-password, auth-profile"
+        },
+        "native": {
+          "nextest": "cargo nextest run --workspace --profile pr: 3279 passed",
+          "federationCorpus": "tools/compat-broad/auth-account-federation/test_corpus.py: 63 passed",
+          "clippy": "cargo clippy --workspace --all-targets -- -D warnings: clean"
+        }
+      },
+      "note": "The one AUTH-ACCOUNT mismatch is the custom-attributes wording row, recorded under that condition."
     },
     {
       "conditionId": "AUTH-ACCOUNT/closure-review",

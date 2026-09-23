@@ -444,10 +444,30 @@ async function check() {
   }
 }
 
+/**
+ * Writes the committed closure evidence from the last `check`: the artifact, the fixture it
+ * was compared with, and every row's classification (no response bodies).
+ */
+async function exportComparison(out) {
+  if (!out) throw new Error("usage: export-comparison <output.json>");
+  const comparison = JSON.parse(await readFile(join(RUN_DIR, "comparison.json"), "utf8"));
+  const fixtureSha256 = sha256(await readFile(FIXTURE, "utf8"));
+  const evidence = {
+    kind: "auth-account-comparison-v1",
+    artifactSha256: comparison.artifactSha256,
+    fixtureSha256,
+    summary: comparison.summary,
+    rows: comparison.rows.map(({ row, status }) => ({ row, status })),
+  };
+  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
+}
+
 const mode = process.argv[2];
 if (mode === "record-production") await recordProduction();
 else if (mode === "rebuild-fixture") await rebuildFixture(process.argv[3]);
 else if (mode === "check") await check();
+else if (mode === "export-comparison") await exportComparison(process.argv[3]);
 else if (mode === "session-local") await sessionLocal();
 else if (mode === "local") {
   const local = await runLocal(selectedPrograms());

@@ -131,6 +131,56 @@ fn index_entry_size_and_total_size_budgets_are_independent() {
 }
 
 #[test]
+fn empty_document_with_long_name_has_an_oversized_name_index_entry() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let path = DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        &format!(
+            "c/{}/c/{}/c/{}/c/{}",
+            "d".repeat(1248),
+            "d".repeat(1247),
+            "d".repeat(1247),
+            "d".repeat(1247),
+        ),
+    )
+    .unwrap();
+    let error = IndexSet::default()
+        .document_index_usage(&path, &BTreeMap::new())
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "invalid argument: Index entry is too large."
+    );
+}
+
+#[test]
+fn empty_document_at_recorded_4622_byte_name_is_accepted() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let path = DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        &format!(
+            "c/{}/c/{}/c/{}/c/{}",
+            "d".repeat(1153),
+            "d".repeat(1153),
+            "d".repeat(1153),
+            "d".repeat(1152),
+        ),
+    )
+    .unwrap();
+    assert!(IndexSet::default()
+        .document_index_usage(&path, &BTreeMap::new())
+        .is_ok());
+}
+
+#[test]
 fn wildcard_exemption_allows_explicit_map_child_collection_group_index() {
     let mut indexes = IndexSet::default();
     let collection = CollectionId::try_new("tasks").unwrap();

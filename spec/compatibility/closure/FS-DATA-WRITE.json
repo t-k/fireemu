@@ -71,7 +71,7 @@
       "recipeIds": ["writes/limits/empty-document-name/6127", "writes/limits/empty-document-name/6128"],
       "boundaryStatus": "RULE_TRANSITION",
       "boundaryEvidence": ["writes/limits/empty-document-name/6127#write", "writes/limits/empty-document-name/6128#write"],
-      "status": "MISMATCH"
+      "status": "PRODUCTION_RECORDED"
     },
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",

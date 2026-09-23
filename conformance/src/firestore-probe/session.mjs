@@ -15,12 +15,14 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
+import { createRequestBudget } from "./request-budget.mjs";
 
 const HOST = process.env.FIRESTORE_PROBE_HOST;
 const PROJECT = process.env.FIRESTORE_PROBE_PROJECT ?? "demo-conformance";
 const IN = process.env.FIRESTORE_PROBE_IN;
 const OUT = process.env.FIRESTORE_PROBE_OUT;
 const META_OUT = process.env.FIRESTORE_PROBE_META_OUT;
+const MAX_REQUESTS = process.env.FIRESTORE_PROBE_MAX_REQUESTS;
 const REQUEST_TIMEOUT_MS = Number(process.env.FIRESTORE_PROBE_TIMEOUT_MS ?? 20_000);
 // Production target: `https`, an OAuth bearer token instead of the emulator's `owner`, no
 // emulator wipe route (documents are deleted through the public API instead), and the real
@@ -32,9 +34,10 @@ const USER_TOKEN = process.env.FIRESTORE_PROBE_USER_TOKEN;
 const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
 const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
 let requestCount = 0;
+const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
 
 function trackedFetch(input, init) {
-  requestCount += 1;
+  requestCount = requestBudget === null ? requestCount + 1 : requestBudget.claim();
   return fetch(input, init);
 }
 

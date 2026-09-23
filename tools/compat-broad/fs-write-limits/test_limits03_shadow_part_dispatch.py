@@ -76,7 +76,7 @@ def probe_child(entry, output, index_profile):
 
 
 def install_supervisor(
-    monkeypatch, *, status="completed", child_pins=None, launch=True
+    monkeypatch, *, status="completed", child_pins=None, child_result=None, launch=True
 ):
     observed = {}
     monkeypatch.setattr(shadow, "source_inputs", lambda: copy.deepcopy(PINS))
@@ -93,6 +93,19 @@ def install_supervisor(
             if launch
             else None
         )
+        if child_result is not None:
+            child_receipt = child_result
+        elif dispatch is not None:
+            child_part = dispatch["part"]
+            child_receipt = {
+                "part": child_part,
+                "campaignId": "FS-WRITE-LIMITS-03"
+                + ("" if child_part == "ALL" else child_part),
+            }
+        else:
+            child_receipt = None
+        if child_receipt is not None:
+            (output / "result.json").write_text(json.dumps(child_receipt))
         return {
             "status": status,
             "manifest": {
@@ -187,6 +200,42 @@ def test_failed_supervisor_result_is_not_promoted(monkeypatch, tmp_path):
 def test_source_binding_failure_is_not_promoted(monkeypatch, tmp_path):
     install_supervisor(monkeypatch, child_pins={"different": "b" * 64}, launch=False)
     result = shadow.run(tmp_path / "run", "A")
+    assert result["status"] == "incomplete"
+    assert result["shadowBindingFailure"] is True
+
+
+def test_missing_child_identity_breaks_binding(monkeypatch, tmp_path):
+    install_supervisor(monkeypatch, launch=False)
+    result = shadow.run(tmp_path / "run", "A")
+    binding = json.loads((tmp_path / "run" / "shadow-binding.json").read_text())
+    assert binding["childPart"] is None
+    assert binding["childCampaignId"] is None
+    assert binding["bound"] is False
+    assert result["status"] == "incomplete"
+    assert result["shadowBindingFailure"] is True
+
+
+@pytest.mark.parametrize(
+    ("child_part", "child_campaign_id"),
+    [
+        ("ALL", "FS-WRITE-LIMITS-03"),
+        ("A", "FS-WRITE-LIMITS-03"),
+        ("ALL", "FS-WRITE-LIMITS-03A"),
+    ],
+)
+def test_child_identity_mismatch_breaks_binding_even_when_source_pins_match(
+    monkeypatch, tmp_path, child_part, child_campaign_id
+):
+    install_supervisor(
+        monkeypatch,
+        child_result={"part": child_part, "campaignId": child_campaign_id},
+    )
+    result = shadow.run(tmp_path / "run", "A")
+    binding = json.loads((tmp_path / "run" / "shadow-binding.json").read_text())
+    assert binding["sourceInputsBefore"] == binding["sourceInputsAfter"]
+    assert binding["childPart"] == child_part
+    assert binding["childCampaignId"] == child_campaign_id
+    assert binding["bound"] is False
     assert result["status"] == "incomplete"
     assert result["shadowBindingFailure"] is True
 

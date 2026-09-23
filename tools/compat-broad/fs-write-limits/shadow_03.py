@@ -198,12 +198,27 @@ def run(output: Path, part: str = "ALL", index_profile: str = "historical") -> d
     )
     after = source_inputs()
     child_inputs = report.get("manifest", {}).get("sourceInputs")
-    bound = before == after == child_inputs
+    try:
+        child_result = json.loads((output / "result.json").read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        child_result = {}
+    child_part = child_result.get("part") if isinstance(child_result, dict) else None
+    child_campaign_id = (
+        child_result.get("campaignId") if isinstance(child_result, dict) else None
+    )
+    campaign_id = CAMPAIGN if part == "ALL" else f"{CAMPAIGN}{part}"
+    bound = (
+        before == after == child_inputs
+        and child_part == part
+        and child_campaign_id == campaign_id
+    )
     save(
         output / "shadow-binding.json",
         {
-            "campaignId": CAMPAIGN if part == "ALL" else f"{CAMPAIGN}{part}",
+            "campaignId": campaign_id,
             "part": part,
+            "childCampaignId": child_campaign_id,
+            "childPart": child_part,
             "sourceInputsBefore": before,
             "sourceInputsAfter": after,
             "childSourceInputs": child_inputs,

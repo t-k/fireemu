@@ -8473,10 +8473,7 @@ async fn batch_write_item_shapes_answer_identically_on_rest_and_grpc() {
             middle_grpc: |_, _| pb::Write::default(),
             middle_rest: |_, _| serde_json::json!({}),
             expected: |_| BatchWriteOutcome {
-                answer: BatchWriteAnswer::WholeRequest(
-                    3,
-                    "invalid query: write without operation".to_owned(),
-                ),
+                answer: BatchWriteAnswer::WholeRequest(3, "empty write operation".to_owned()),
                 present: vec![None, None, None],
             },
         },

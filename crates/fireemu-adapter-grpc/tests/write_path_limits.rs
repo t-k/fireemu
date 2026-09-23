@@ -29,9 +29,9 @@ const NAMES: &str = "projects/demo-app/databases/(default)/documents";
 /// The inclusive maximum of `FS-LIMIT-FIELD-VALUE-BYTES`.
 const FIELD_VALUE_MAXIMUM: usize = 1_048_487;
 /// The string payload of a one-entry map whose aggregate storage size is `total`:
-/// `32 + string_size("s") + string_size(payload)`.
+/// `string_size("s") + string_size(payload)`.
 const fn map_payload(total: usize) -> usize {
-    total - 35
+    total - 3
 }
 
 const OVER_VALUE: &str = "The value of property \"v\" is longer than 1048487 bytes.";

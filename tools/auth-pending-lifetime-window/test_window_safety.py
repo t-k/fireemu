@@ -70,6 +70,7 @@ def test_secret_scan_distinguishes_embedded_identifier_digits_from_a_code():
         "http://example.test:12345",
         "http://127.0.0.1.evil.test:12345",
         "http://user@127.0.0.1:12345",
+        "http://[::1]:12345",
     ],
 )
 def test_clock_control_refuses_unknown_or_nonlocal_origins_before_transport(

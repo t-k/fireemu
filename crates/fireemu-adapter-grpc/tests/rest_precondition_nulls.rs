@@ -257,7 +257,7 @@ fn empty_or_invalid_conditions_do_not_publish_commit_neighbours() {
 }
 
 #[test]
-fn batchwrite_null_sibling_preserves_item_local_failure_and_continuation() {
+fn batchwrite_null_sibling_refuses_request_before_precondition() {
     let s = state();
     let before = seed(&s, "null-precondition/protected");
     let condition = json!({"exists": false, "updateTime": null});
@@ -271,13 +271,9 @@ fn batchwrite_null_sibling_preserves_item_local_failure_and_continuation() {
             write("null-precondition/after", 1, &condition)
         ]}),
     );
-    assert_eq!(response.status, 200, "{:?}", response.body);
-    assert_eq!(response.body["status"][0]["code"], 6);
-    assert_eq!(response.body["status"][1]["code"], 3);
-    assert_eq!(response.body["status"][2], json!({}));
-    assert_eq!(response.body["writeResults"].as_array().unwrap().len(), 3);
+    assert_eq!(response.status, 400, "{:?}", response.body);
+    assert_eq!(response.body["error"]["status"], "INVALID_ARGUMENT");
     assert_eq!(read(&s, "null-precondition/protected").body, before);
     let after = read(&s, "null-precondition/after");
-    assert_eq!(after.status, 200, "{:?}", after.body);
-    assert_eq!(after.body["fields"]["v"]["integerValue"], "1");
+    assert_eq!(after.status, 404, "{:?}", after.body);
 }

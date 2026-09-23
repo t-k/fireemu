@@ -280,7 +280,7 @@ fn batchwrite_name_type_error_is_not_an_empty_name_row_error() {
 }
 
 #[test]
-fn batchwrite_empty_operation_remains_row_local_and_neighbors_succeed() {
+fn batchwrite_empty_operation_refuses_request_before_neighbors() {
     for strict in [true, false] {
         let s = state(strict);
         let response = call(
@@ -293,14 +293,11 @@ fn batchwrite_empty_operation_remains_row_local_and_neighbors_succeed() {
                 create_write("name-type/after", 2)
             ]}),
         );
-        assert_eq!(response.status, 200, "{:?}", response.body);
-        assert_eq!(response.body["status"][0], json!({}));
-        assert_eq!(response.body["status"][1]["code"], 3);
-        assert_eq!(response.body["status"][2], json!({}));
-        for (relative, expected) in [("name-type/before", "1"), ("name-type/after", "2")] {
+        assert_eq!(response.status, 400, "{:?}", response.body);
+        assert_eq!(response.body["error"]["status"], "INVALID_ARGUMENT");
+        for relative in ["name-type/before", "name-type/after"] {
             let got = call(&s, "GET", &format!("{DOCS}/{relative}"), Value::Null);
-            assert_eq!(got.status, 200, "{:?}", got.body);
-            assert_eq!(got.body["fields"]["v"]["integerValue"], expected);
+            assert_eq!(got.status, 404, "{:?}", got.body);
         }
     }
 }

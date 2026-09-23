@@ -229,9 +229,13 @@ fn decode_map(m: &pb::MapValue, parent_depth: u32) -> Result<Value, DecodeError>
     let depth = nested_depth(parent_depth)?;
     let mut out = BTreeMap::new();
     for (k, v) in &m.fields {
-        if k.is_empty() || k.chars().any(char::is_control) {
-            return Err(DecodeError::InvalidValue(format!("invalid map key {k:?}")));
+        if k == "__name__" {
+            return Err(DecodeError::InvalidFieldPath(
+                "field name __name__ is reserved".into(),
+            ));
         }
+        FieldPath::from_segments([k.as_str()])
+            .map_err(|error| DecodeError::InvalidFieldPath(error.to_string()))?;
         out.insert(k.clone(), decode_value_at(v, depth)?);
     }
     Ok(Value::Map(out))

@@ -339,6 +339,103 @@ def test_child_readback_transport_failure_fails_closed(tmp_path):
     }
 
 
+@pytest.mark.parametrize("code", ["no-response", "probe-error"])
+def test_child_marks_selected_unreceived_observation_incomplete(tmp_path, code):
+    from read_time_replay import run_child
+
+    server, thread, _requests = _poststate_server(
+        200,
+        {
+            "name": _expected_document(),
+            "fields": {"v": {"integerValue": "2"}},
+        },
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    origin = f"http://127.0.0.1:{server.server_port}"
+
+    def delegate(child_output, nonce, program):
+        _write_instance(output, origin, nonce)
+        (output / "cases.json").write_text(
+            json.dumps(
+                {
+                    "cases": [
+                        {
+                            "id": "firestore:reads/read-time#read-current",
+                            "status": "indeterminate",
+                            "family": "reads",
+                            "actual": {"status": 0, "code": code},
+                        },
+                        {
+                            "id": "firestore:other-program#unrelated",
+                            "status": "indeterminate",
+                            "family": "reads",
+                            "actual": {"status": 0, "code": code},
+                        },
+                    ]
+                }
+            )
+        )
+
+    try:
+        assert run_child(output, "n-1", "reads/read-time", delegate=delegate) == 2
+        report = json.loads((output / "cases.json").read_text())
+        assert report["stateValidation"] is True
+        assert report["recordingComplete"] is False
+        assert report["cases"][0]["status"] == "indeterminate"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_child_keeps_received_http_error_recording_complete(tmp_path):
+    from read_time_replay import run_child
+
+    server, thread, _requests = _poststate_server(
+        200,
+        {
+            "name": _expected_document(),
+            "fields": {"v": {"integerValue": "2"}},
+        },
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    origin = f"http://127.0.0.1:{server.server_port}"
+
+    def delegate(child_output, nonce, program):
+        _write_instance(output, origin, nonce)
+        (output / "cases.json").write_text(
+            json.dumps(
+                {
+                    "cases": [
+                        {
+                            "id": "firestore:reads/read-time#read-current",
+                            "status": "mismatch",
+                            "family": "reads",
+                            "actual": {
+                                "status": 400,
+                                "code": "INVALID_ARGUMENT",
+                                "body": {"error": "semantic mismatch"},
+                            },
+                        }
+                    ]
+                }
+            )
+        )
+
+    try:
+        assert run_child(output, "n-1", "reads/read-time", delegate=delegate) == 0
+        report = json.loads((output / "cases.json").read_text())
+        assert report["stateValidation"] is True
+        assert report["recordingComplete"] is True
+        assert report["cases"][0]["status"] == "mismatch"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_replay_passes_dedicated_child_and_keeps_bounded_program(tmp_path, monkeypatch):
     import read_time_replay
     from read_time_replay import PROGRAM_DIGEST, replay

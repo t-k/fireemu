@@ -139,6 +139,26 @@ def run_child(
     cases = json.loads(cases_path.read_bytes())
     if not isinstance(cases, dict):
         raise ValueError("bounded replay child report must be an object")  # noqa: TRY004 -- Keep malformed child reports as one refusal type.
+    selected_case_ids = {
+        f"firestore:reads/read-time#{step['id']}"
+        for step in bounded_firestore_program(firestore_program)[0]["steps"]
+    }
+    selected_observations = [
+        row
+        for row in cases.get("cases", [])
+        if isinstance(row, dict) and row.get("id") in selected_case_ids
+    ]
+    incomplete_observation = any(
+        isinstance(row.get("actual"), dict)
+        and (
+            row["actual"].get("status") == 0
+            or row["actual"].get("code") in {"no-response", "probe-error"}
+        )
+        for row in selected_observations
+    )
+    recording_complete = (
+        cases.get("recordingComplete", True) is True and not incomplete_observation
+    )
     try:
         instance = json.loads((output / "instance.json").read_bytes())
         if (
@@ -162,8 +182,9 @@ def run_child(
     )
     cases["postStateReadback"] = poststate
     cases["stateValidation"] = state_validation
+    cases["recordingComplete"] = recording_complete
     cases_path.write_text(json.dumps(cases, indent=2) + "\n")
-    return 0 if state_validation else 2
+    return 0 if state_validation and recording_complete else 2
 
 
 def main(argv=None, *, child_runner=run_child) -> int:

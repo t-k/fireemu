@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
+import { compareSandboxArtifact } from "./fs-data-write-sandbox.mjs";
 import {
   prepareSandboxCorpus,
   selectComparableSandboxRecipes,
@@ -139,14 +140,16 @@ test("VERIFIED requires a resolved production boundary classification", () => {
   }
 });
 
-test("verified conditions are bound to their saved comparisons", () => {
+test("verified conditions are bound to their saved comparisons", async () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const { corpus } = await prepareSandboxCorpus();
   const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
   for (const conditionId of [
     "FS-LIMIT-SUBCOLLECTION-DEPTH",
     "FS-LIMIT-DOCUMENT-NAME-BYTES",
     "FS-WRITE-LIMITS-03/batch-duplicate-document",
+    "FS-WRITE-LIMITS-03/batch-malformed-middle",
     "FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal",
     "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-string",
     "FS-WRITE-LIMITS-03/implied-map",
@@ -176,7 +179,25 @@ test("verified conditions are bound to their saved comparisons", () => {
     assert.deepEqual(new Set(Object.keys(comparison.localPrograms)), new Set(condition.recipeIds));
     for (const recipeId of condition.recipeIds) {
       assert.deepEqual(comparison.productionPrograms[recipeId], fixture.programs[recipeId]);
-      assert.deepEqual(comparison.localPrograms[recipeId], comparison.productionPrograms[recipeId]);
+      if (comparison.comparisonMode !== "sandbox-comparator") {
+        assert.deepEqual(
+          comparison.localPrograms[recipeId],
+          comparison.productionPrograms[recipeId],
+        );
+      }
+    }
+    if (comparison.comparisonMode === "sandbox-comparator") {
+      assert.deepEqual(
+        compareSandboxArtifact(
+          { programs: comparison.productionPrograms, streams: {} },
+          comparison.localPrograms,
+          {},
+          {
+            restPrograms: corpus.restPrograms.filter(({ id }) => condition.recipeIds.includes(id)),
+          },
+        ),
+        [],
+      );
     }
     if (comparison.crossRecipeBoundary) {
       assert.equal(comparison.crossRecipeBoundary.classification, condition.boundaryStatus);

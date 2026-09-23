@@ -12,7 +12,15 @@
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#batch-malformed-middle",
       "recipeIds": ["writes/batch-write-malformed/missing-operation", "writes/batch-write-malformed/no-operation", "writes/batch-write-malformed/collection-name", "writes/batch-write-malformed/empty-field-name", "writes/batch-write-malformed/reserved-field-name", "writes/batch-write-malformed/bad-mask-path", "writes/batch-write-malformed/exists-precondition-fails"],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PRODUCTION_RECORDED"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json"
+      }
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/batch-undecodable-value",

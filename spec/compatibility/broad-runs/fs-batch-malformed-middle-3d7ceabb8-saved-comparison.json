@@ -1,0 +1,476 @@
+{
+  "schemaVersion": 1,
+  "conditionId": "FS-WRITE-LIMITS-03/batch-malformed-middle",
+  "sourceCommit": "3d7ceabb866d0d03eecbb866a9b84aa8e8cc4f2e",
+  "artifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+  "configSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
+  "indexConfigSha256": "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+  "productionFixtureSha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+  "productionRecordingDigests": [
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+  ],
+  "localRun": "conformance/.runs/fs-data-write-local-S4xrlQ",
+  "localRestResultSha256": "46d36b0ab5d554e3b178283206859508c3dd651a1d69990c2c4690cdde300044",
+  "command": "pnpm -C conformance fs-data-write:check",
+  "comparisonCommand": "node conformance/src/fs-data-write-sandbox-run.mjs compare-local conformance/.runs/fs-data-write-local-S4xrlQ",
+  "recipeIds": [
+    "writes/batch-write-malformed/missing-operation",
+    "writes/batch-write-malformed/no-operation",
+    "writes/batch-write-malformed/collection-name",
+    "writes/batch-write-malformed/empty-field-name",
+    "writes/batch-write-malformed/reserved-field-name",
+    "writes/batch-write-malformed/bad-mask-path",
+    "writes/batch-write-malformed/exists-precondition-fails"
+  ],
+  "result": {
+    "comparableRecipes": 7,
+    "mismatchedRecipes": 0,
+    "wholeRunComparableRestPrograms": 49,
+    "wholeRunComparableStreams": 2,
+    "wholeRunKnownMismatchRows": 12,
+    "wholeRunPendingRestPrograms": 14,
+    "wholeRunPendingStreams": 1
+  },
+  "scopeNote": "The seven malformed-middle recipes are comparable after the existing BatchGet response-order normalization. Refusal statuses/messages and the complete readback sets agree. Raw response order is retained and not claimed identical. Other whole-run mismatches and unrecorded recipes remain open; this record does not promote FS-DATA-WRITE.",
+  "productionPrograms": {
+    "writes/batch-write-malformed/missing-operation": {
+      "steps": {
+        "observation-0": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "empty write operation"
+        },
+        "observation-1": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-0\" not found."
+        },
+        "observation-2": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-2\" not found."
+        }
+      }
+    },
+    "writes/batch-write-malformed/no-operation": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "empty write operation"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-last",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/collection-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/batchInvalid\" lacks \"/\" at index 72."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-first",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/empty-field-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "The property.name is the empty string."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-first",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/reserved-field-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "field name __bad__ is reserved"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-first",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/bad-mask-path": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-first",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/exists-precondition-fails": {
+      "steps": {
+        "batch-write": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "status": [
+              {},
+              {
+                "code": 5,
+                "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle"
+              },
+              {}
+            ],
+            "writeResults": [
+              {
+                "updateTime": "<now>"
+              },
+              {},
+              {
+                "updateTime": "<now>"
+              }
+            ]
+          }
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-first",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            },
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-last",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "localPrograms": {
+    "writes/batch-write-malformed/missing-operation": {
+      "steps": {
+        "observation-0": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "empty write operation"
+        },
+        "observation-1": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-0\" not found."
+        },
+        "observation-2": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-2\" not found."
+        }
+      }
+    },
+    "writes/batch-write-malformed/no-operation": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "empty write operation"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/collection-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/batchInvalid\" lacks \"/\" at index 72."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/empty-field-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "The property.name is the empty string."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/reserved-field-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "field name __bad__ is reserved"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/bad-mask-path": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/exists-precondition-fails": {
+      "steps": {
+        "batch-write": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "status": [
+              {},
+              {
+                "code": 5,
+                "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle"
+              },
+              {}
+            ],
+            "writeResults": [
+              {
+                "updateTime": "<now>"
+              },
+              {},
+              {
+                "updateTime": "<now>"
+              }
+            ]
+          }
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-first",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            },
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-last",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "comparisonMode": "sandbox-comparator",
+  "orderNormalization": "For BatchGet readback only, sort array elements by found.name or missing before comparison; this is the existing comparator behavior. Raw local and production outcomes are retained separately."
+}

@@ -604,10 +604,10 @@
       }
     },
     "auth-account/admin/custom-attributes": {
-      "corpusDigest": "588133075510a0acbe3624660b23c9438457ce03c26b9d4fef541eba54b5d924",
+      "corpusDigest": "48a462d3d37d6e40d73b1ece73d900affd90c1485126c325e280977dfa9f2ebb",
       "harnessDigest": "6f9b7cec5cb3d814b7a56b50d978feea9e8711bfaa1251c6fc86a8121acdf618",
-      "recordedAt": "2026-09-23T11:52:22.579Z",
-      "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+      "recordedAt": "2026-09-23T15:29:14.879Z",
+      "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
       "steps": {
         "create": {
           "status": 200,
@@ -1119,6 +1119,53 @@
               }
             ]
           }
+        },
+        "set-with-whitespace": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-ca",
+            "email": "fireemu-aa-<run>-ca@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-ca@example.com",
+                "email": "fireemu-aa-<run>-ca@example.com",
+                "rawId": "fireemu-aa-<run>-ca@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "readback-whitespace": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-ca",
+                "email": "fireemu-aa-<run>-ca@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-ca@example.com",
+                    "email": "fireemu-aa-<run>-ca@example.com",
+                    "rawId": "fireemu-aa-<run>-ca@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "customAttributes": "{ \"b\": 1,  \"a\" : [ 2 ] }",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
         }
       }
     },
@@ -1548,10 +1595,10 @@
       }
     },
     "auth-account/admin/import": {
-      "corpusDigest": "8753070a803a4a0cd9dcb660296d6a6292ddf08956daaa4ad257f9a151a5a2a1",
+      "corpusDigest": "32c8f5f487d47e3c03219d0bad1977c74c559af7eba38647784167af43c05cff",
       "harnessDigest": "6f9b7cec5cb3d814b7a56b50d978feea9e8711bfaa1251c6fc86a8121acdf618",
-      "recordedAt": "2026-09-23T11:52:22.579Z",
-      "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+      "recordedAt": "2026-09-23T15:29:14.879Z",
+      "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
       "steps": {
         "import-plain": {
           "status": 200,
@@ -1641,6 +1688,22 @@
           "status": 200,
           "body": {
             "kind": "identitytoolkit#UploadAccountResponse"
+          }
+        },
+        "lookup-after-without-overwrite": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-i1",
+                "email": "fireemu-aa-<run>-i1-new@example.com",
+                "emailVerified": false,
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
           }
         },
         "import-existing-with-overwrite": {
@@ -4688,10 +4751,10 @@
       }
     },
     "auth-account/admin/query": {
-      "corpusDigest": "5081e717c23a41aa2ef38e57530db8b1dd9371be66bd7d5db1f63e5053a5bd36",
+      "corpusDigest": "b258ede305e9d44e25f7f9603ec87c74229c99cf7c3e3d027d46923fe9cb65cb",
       "harnessDigest": "6f9b7cec5cb3d814b7a56b50d978feea9e8711bfaa1251c6fc86a8121acdf618",
-      "recordedAt": "2026-09-23T11:52:22.579Z",
-      "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+      "recordedAt": "2026-09-23T15:29:14.879Z",
+      "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
       "steps": {
         "create-q1": {
           "status": 200,
@@ -5150,6 +5213,20 @@
                 "createdAt": "<run-time:string:ms>"
               },
               {
+                "localId": "aa-<run>-q4",
+                "providerUserInfo": [
+                  {
+                    "providerId": "phone",
+                    "rawId": "+16505550102",
+                    "phoneNumber": "+16505550102"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>",
+                "phoneNumber": "+16505550102"
+              },
+              {
                 "localId": "aa-<run>-q3",
                 "email": "fireemu-aa-<run>-q-bob@example.com",
                 "displayName": "Bob",
@@ -5167,32 +5244,18 @@
                 "phoneNumber": "+16505550106"
               },
               {
-                "localId": "aa-<run>-q4",
-                "providerUserInfo": [
-                  {
-                    "providerId": "phone",
-                    "rawId": "+16505550102",
-                    "phoneNumber": "+16505550102"
-                  }
-                ],
-                "validSince": "<run-time:string:s>",
-                "disabled": false,
-                "createdAt": "<run-time:string:ms>",
-                "phoneNumber": "+16505550102"
-              },
-              {
-                "localId": "aa-<run>-q1",
-                "email": "fireemu-aa-<run>-q-carol@example.com",
-                "displayName": "Carol",
+                "localId": "aa-<run>-q2",
+                "email": "fireemu-aa-<run>-q-alice@example.com",
+                "displayName": "alice",
                 "emailVerified": false,
                 "validSince": "<run-time:string:s>",
                 "disabled": false,
                 "createdAt": "<run-time:string:ms>"
               },
               {
-                "localId": "aa-<run>-q2",
-                "email": "fireemu-aa-<run>-q-alice@example.com",
-                "displayName": "alice",
+                "localId": "aa-<run>-q1",
+                "email": "fireemu-aa-<run>-q-carol@example.com",
+                "displayName": "Carol",
                 "emailVerified": false,
                 "validSince": "<run-time:string:s>",
                 "disabled": false,
@@ -5932,74 +5995,6 @@
           "status": 200,
           "body": {
             "recordsCount": "5"
-          }
-        }
-      },
-      "second": {
-        "sort-created_at-desc": {
-          "status": 200,
-          "body": {
-            "recordsCount": "5",
-            "userInfo": [
-              {
-                "localId": "aa-<run>-q5",
-                "email": "fireemu-aa-<run>-q-dave@example.com",
-                "displayName": "Bob",
-                "emailVerified": false,
-                "validSince": "<run-time:string:s>",
-                "disabled": false,
-                "createdAt": "<run-time:string:ms>"
-              },
-              {
-                "localId": "aa-<run>-q4",
-                "providerUserInfo": [
-                  {
-                    "providerId": "phone",
-                    "rawId": "+16505550102",
-                    "phoneNumber": "+16505550102"
-                  }
-                ],
-                "validSince": "<run-time:string:s>",
-                "disabled": false,
-                "createdAt": "<run-time:string:ms>",
-                "phoneNumber": "+16505550102"
-              },
-              {
-                "localId": "aa-<run>-q2",
-                "email": "fireemu-aa-<run>-q-alice@example.com",
-                "displayName": "alice",
-                "emailVerified": false,
-                "validSince": "<run-time:string:s>",
-                "disabled": false,
-                "createdAt": "<run-time:string:ms>"
-              },
-              {
-                "localId": "aa-<run>-q3",
-                "email": "fireemu-aa-<run>-q-bob@example.com",
-                "displayName": "Bob",
-                "emailVerified": false,
-                "providerUserInfo": [
-                  {
-                    "providerId": "phone",
-                    "rawId": "+16505550106",
-                    "phoneNumber": "+16505550106"
-                  }
-                ],
-                "validSince": "<run-time:string:s>",
-                "disabled": false,
-                "createdAt": "<run-time:string:ms>",
-                "phoneNumber": "+16505550106"
-              },
-              {
-                "localId": "aa-<run>-q1",
-                "email": "fireemu-aa-<run>-q-carol@example.com",
-                "displayName": "Carol",
-                "emailVerified": false,
-                "validSince": "<run-time:string:s>",
-                "disabled": false,
-                "createdAt": "<run-time:string:ms>"
-              }
-            ]
           }
         }
       }
@@ -7194,10 +7189,10 @@
       }
     },
     "auth-account/client/password-change": {
-      "corpusDigest": "5db82c28b8e8cc8d38e1b581aad8e4e4b0e9d6763a796aeadd47112d75dcd119",
+      "corpusDigest": "43486f6bf7e401ce0d1a7fc0ad19472a0faa2d4c6eda78c249b77b108a2a9c77",
       "harnessDigest": "6f9b7cec5cb3d814b7a56b50d978feea9e8711bfaa1251c6fc86a8121acdf618",
-      "recordedAt": "2026-09-23T12:44:15.390Z",
-      "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+      "recordedAt": "2026-09-23T15:29:14.879Z",
+      "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
       "steps": {
         "sign-up": {
           "status": 200,
@@ -7261,42 +7256,29 @@
           }
         },
         "lookup-with-pre-change-token": {
-          "status": 200,
+          "status": 400,
           "body": {
-            "kind": "identitytoolkit#GetAccountInfoResponse",
-            "users": [
-              {
-                "localId": "<generated-localId>",
-                "email": "fireemu-aa-<run>-pwchange@example.com",
-                "passwordHash": "UkVEQUNURUQ=",
-                "emailVerified": false,
-                "passwordUpdatedAt": "<run-time:number:ms>",
-                "providerUserInfo": [
-                  {
-                    "providerId": "password",
-                    "federatedId": "fireemu-aa-<run>-pwchange@example.com",
-                    "email": "fireemu-aa-<run>-pwchange@example.com",
-                    "rawId": "fireemu-aa-<run>-pwchange@example.com"
-                  }
-                ],
-                "validSince": "<run-time:string:s>",
-                "lastLoginAt": "<run-time:string:ms>",
-                "createdAt": "<run-time:string:ms>",
-                "lastRefreshAt": "<run-time:instant>"
-              }
-            ]
+            "error": {
+              "code": 400,
+              "message": "TOKEN_EXPIRED",
+              "errors": [
+                {
+                  "message": "TOKEN_EXPIRED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
           }
         },
         "refresh-pre-change-token": {
-          "status": 200,
+          "status": 400,
           "body": {
-            "access_token": "<access_token>",
-            "expires_in": "3600",
-            "token_type": "Bearer",
-            "refresh_token": "<refresh_token>",
-            "id_token": "<id_token>",
-            "user_id": "<generated-localId>",
-            "project_id": "<project-number>"
+            "error": {
+              "code": 400,
+              "message": "TOKEN_EXPIRED",
+              "status": "INVALID_ARGUMENT"
+            }
           }
         },
         "lookup-with-post-change-token": {
@@ -7327,42 +7309,29 @@
           }
         },
         "lookup-with-pre-change-token-next-second": {
-          "status": 200,
+          "status": 400,
           "body": {
-            "kind": "identitytoolkit#GetAccountInfoResponse",
-            "users": [
-              {
-                "localId": "<generated-localId>",
-                "email": "fireemu-aa-<run>-pwchange@example.com",
-                "passwordHash": "UkVEQUNURUQ=",
-                "emailVerified": false,
-                "passwordUpdatedAt": "<run-time:number:ms>",
-                "providerUserInfo": [
-                  {
-                    "providerId": "password",
-                    "federatedId": "fireemu-aa-<run>-pwchange@example.com",
-                    "email": "fireemu-aa-<run>-pwchange@example.com",
-                    "rawId": "fireemu-aa-<run>-pwchange@example.com"
-                  }
-                ],
-                "validSince": "<run-time:string:s>",
-                "lastLoginAt": "<run-time:string:ms>",
-                "createdAt": "<run-time:string:ms>",
-                "lastRefreshAt": "<run-time:instant>"
-              }
-            ]
+            "error": {
+              "code": 400,
+              "message": "TOKEN_EXPIRED",
+              "errors": [
+                {
+                  "message": "TOKEN_EXPIRED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
           }
         },
         "refresh-pre-change-token-next-second": {
-          "status": 200,
+          "status": 400,
           "body": {
-            "access_token": "<access_token>",
-            "expires_in": "3600",
-            "token_type": "Bearer",
-            "refresh_token": "<refresh_token>",
-            "id_token": "<id_token>",
-            "user_id": "<generated-localId>",
-            "project_id": "<project-number>"
+            "error": {
+              "code": 400,
+              "message": "TOKEN_EXPIRED",
+              "status": "INVALID_ARGUMENT"
+            }
           }
         },
         "refresh-post-change-token-next-second": {
@@ -7375,60 +7344,6 @@
             "id_token": "<id_token>",
             "user_id": "<generated-localId>",
             "project_id": "<project-number>"
-          }
-        }
-      },
-      "second": {
-        "lookup-with-pre-change-token": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "TOKEN_EXPIRED",
-              "errors": [
-                {
-                  "message": "TOKEN_EXPIRED",
-                  "domain": "global",
-                  "reason": "invalid"
-                }
-              ]
-            }
-          }
-        },
-        "refresh-pre-change-token": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "TOKEN_EXPIRED",
-              "status": "INVALID_ARGUMENT"
-            }
-          }
-        },
-        "lookup-with-pre-change-token-next-second": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "TOKEN_EXPIRED",
-              "errors": [
-                {
-                  "message": "TOKEN_EXPIRED",
-                  "domain": "global",
-                  "reason": "invalid"
-                }
-              ]
-            }
-          }
-        },
-        "refresh-pre-change-token-next-second": {
-          "status": 400,
-          "body": {
-            "error": {
-              "code": 400,
-              "message": "TOKEN_EXPIRED",
-              "status": "INVALID_ARGUMENT"
-            }
           }
         }
       }
@@ -8256,10 +8171,10 @@
       }
     },
     "auth-account/phone": {
-      "corpusDigest": "ba6fd28a46e4059ca831574b7e431fb88681cb36df1367c7f1af5d0f45cb5213",
+      "corpusDigest": "ad6db4feb0d4fe8451826ecc143d5d9784b21224f9c9b14869f905abf63cc347",
       "harnessDigest": "6f9b7cec5cb3d814b7a56b50d978feea9e8711bfaa1251c6fc86a8121acdf618",
-      "recordedAt": "2026-09-23T11:52:22.579Z",
-      "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+      "recordedAt": "2026-09-23T15:29:14.879Z",
+      "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
       "steps": {
         "send-code-without-recaptcha": {
           "status": 200,
@@ -8480,6 +8395,28 @@
             "temporaryProof": "<temporaryProof>",
             "phoneNumber": "+16505550101",
             "temporaryProofExpiresIn": "3600"
+          }
+        },
+        "sign-in-with-temporary-proof": {
+          "status": 200,
+          "body": {
+            "idToken": "<idToken>",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": false,
+            "phoneNumber": "+16505550101"
+          }
+        },
+        "sign-in-with-temporary-proof-again": {
+          "status": 200,
+          "body": {
+            "idToken": "<idToken>",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": false,
+            "phoneNumber": "+16505550101"
           }
         },
         "unlink-phone": {
@@ -9097,10 +9034,10 @@
       }
     },
     "auth-account/policy/enforce-custom": {
-      "corpusDigest": "81ad974e5b048feec835ca8fb5997e7cb38a2347237320a16bf82c491a3fce34",
+      "corpusDigest": "272a7043538c87a55310d1f99a6c413ce8166dd948cd79469e8eb6176dc35f3b",
       "harnessDigest": "6f9b7cec5cb3d814b7a56b50d978feea9e8711bfaa1251c6fc86a8121acdf618",
-      "recordedAt": "2026-09-23T11:52:22.579Z",
-      "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+      "recordedAt": "2026-09-23T15:29:14.879Z",
+      "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
       "config": {
         "baseline": {},
         "applied": {
@@ -9269,6 +9206,38 @@
           }
         },
         "sign-up-missing-symbol": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [Password must contain a non-alphanumeric character]",
+              "errors": [
+                {
+                  "message": "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [Password must contain a non-alphanumeric character]",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-up-plus-symbol": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [Password must contain a non-alphanumeric character]",
+              "errors": [
+                {
+                  "message": "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [Password must contain a non-alphanumeric character]",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-up-equals-symbol": {
           "status": 400,
           "body": {
             "error": {
@@ -10626,10 +10595,10 @@
       }
     },
     "auth-account/values": {
-      "corpusDigest": "16bc2ffc8ee822f0f6cabfa54ac20fdb6d3aa0bdb451f74066952ce9a3dba99a",
+      "corpusDigest": "e66882bf041339cb5ca44a2742548fc712a53f17abce7a9ff436dbe950cf1840",
       "harnessDigest": "6f9b7cec5cb3d814b7a56b50d978feea9e8711bfaa1251c6fc86a8121acdf618",
-      "recordedAt": "2026-09-23T11:52:22.579Z",
-      "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+      "recordedAt": "2026-09-23T15:29:14.879Z",
+      "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
       "steps": {
         "sign-up": {
           "status": 200,
@@ -10683,6 +10652,42 @@
           }
         },
         "client-update-display-name-257": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_PROFILE_ATTRIBUTE : Display name too long.",
+              "errors": [
+                {
+                  "message": "INVALID_PROFILE_ATTRIBUTE : Display name too long.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "client-update-display-name-bmp-256": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-values@example.com",
+            "displayName": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "displayName": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+                "federatedId": "fireemu-aa-<run>-values@example.com",
+                "email": "fireemu-aa-<run>-values@example.com",
+                "rawId": "fireemu-aa-<run>-values@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "client-update-display-name-astral-129": {
           "status": 400,
           "body": {
             "error": {
@@ -10989,6 +10994,14 @@
             "localId": ""
           }
         },
+        "local-id-256": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "",
+            "localId": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+          }
+        },
         "import-created-at-number": {
           "status": 200,
           "body": {
@@ -11107,6 +11120,20 @@
                 "phoneNumber": "+16505550104"
               },
               {
+                "localId": "aa-<run>-phone-letters",
+                "providerUserInfo": [
+                  {
+                    "providerId": "phone",
+                    "rawId": "+16505552223",
+                    "phoneNumber": "+16505552223"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>",
+                "phoneNumber": "+16505552223"
+              },
+              {
                 "localId": "aa-<run>-ts-number",
                 "emailVerified": false,
                 "validSince": "<run-time:string:s>",
@@ -11115,6 +11142,12 @@
                 "createdAt": "1600000000000"
               }
             ]
+          }
+        },
+        "delete-local-id-256": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#DeleteAccountResponse"
           }
         }
       }

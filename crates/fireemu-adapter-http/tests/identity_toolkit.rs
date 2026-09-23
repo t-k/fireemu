@@ -12178,3 +12178,74 @@ fn a_reused_uids_old_refresh_token_is_expired() {
         );
     }
 }
+
+/// Proto3 JSON decoding refusals have their own body in production: a status name, an
+/// `errors` entry without a domain, and a `BadRequest` field violation (sandbox recording
+/// 2026-09-23).
+#[test]
+fn proto_decoding_refusals_carry_production_bad_request_details() {
+    let s = state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "p1"}),
+    );
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "p1", "deleteAttribute": ["NOT_A_FIELD"]}),
+    );
+    assert_eq!(status, 400);
+    let message = "Invalid value at 'delete_attribute[0]' (type.googleapis.com/google.cloud.identitytoolkit.v1.SetAccountInfoRequest.UserAttributeName), \"NOT_A_FIELD\"";
+    assert_eq!(
+        refused,
+        json!({"error": {
+            "code": 400,
+            "message": message,
+            "errors": [{"message": message, "reason": "invalid"}],
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": "delete_attribute[0]", "description": message}],
+            }],
+        }})
+    );
+}
+
+/// An Admin email change or email removal keeps `emailVerified` in production, and a read
+/// reports it while it is true even without an address (sandbox recording 2026-09-23,
+/// auth-account/admin/update).
+#[test]
+fn admin_email_changes_keep_email_verified() {
+    let s = state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "ev", "email": "ev@example.com", "emailVerified": true}),
+    );
+    let (_, changed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "ev", "email": "ev-new@example.com"}),
+    );
+    assert_eq!(changed["emailVerified"], true, "{changed}");
+    let (_, cleared) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "ev", "deleteAttribute": ["EMAIL"]}),
+    );
+    assert_eq!(cleared["emailVerified"], true, "{cleared}");
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["ev"]}),
+    );
+    assert_eq!(found["users"][0]["emailVerified"], true, "{found}");
+    assert!(found["users"][0].get("email").is_none(), "{found}");
+}

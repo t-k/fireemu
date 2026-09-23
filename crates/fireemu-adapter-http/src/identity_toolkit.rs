@@ -717,6 +717,25 @@ pub struct JsonResponse {
     pub body: Value,
 }
 
+/// A proto3 JSON decoding refusal as production sends it: the gRPC status name, an `errors`
+/// entry without a domain, and a `BadRequest` violation naming the proto field (sandbox
+/// recording 2026-09-23).
+fn proto_field_error(field: &str, description: &str) -> JsonResponse {
+    JsonResponse {
+        status: 400,
+        body: json!({"error": {
+            "code": 400,
+            "message": description,
+            "errors": [{"message": description, "reason": "invalid"}],
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": field, "description": description}],
+            }],
+        }}),
+    }
+}
+
 /// Secure Token refusals carry a gRPC status name and no `errors` list, unlike Identity
 /// Toolkit's (sandbox recording 2026-09-23).
 fn secure_token_error_shape(mut response: JsonResponse) -> JsonResponse {
@@ -6613,7 +6632,9 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "displayName": u.display_name,
         "photoUrl": u.photo_url,
         "phoneNumber": u.phone_number,
-        "emailVerified": u.email.as_ref().map(|_| u.email_verified),
+        // Reported with an address, and while true even without one (production keeps the
+        // flag through an Admin email removal).
+        "emailVerified": (u.email.is_some() || u.email_verified).then_some(u.email_verified),
         "disabled": (u.disabled || u.admin_created).then_some(u.disabled),
         // Absent, not "{}", when no claim is set: what the Admin SDK reads back as no claims.
         "customAttributes": (u.custom_claims.canonical_json() != "{}").then(|| u.custom_claims.canonical_json()),
@@ -7094,9 +7115,10 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
                 "EMAIL" => clear_email = true,
                 other => {
                     // The proto3 JSON enum decoder's refusal, index and all.
-                    return Err(error(
-                        400,
-                        &format!("Invalid value at 'delete_attribute[{index}]' (type.googleapis.com/google.cloud.identitytoolkit.v1.SetAccountInfoRequest.UserAttributeName), {other:?}"),
+                    let field = format!("delete_attribute[{index}]");
+                    return Err(proto_field_error(
+                        &field,
+                        &format!("Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.v1.SetAccountInfoRequest.UserAttributeName), {other:?}"),
                     ));
                 }
             }
@@ -7410,15 +7432,25 @@ fn update(
         if let Err(e) = store.set_email(&uid, email) {
             return auth_error(&e);
         }
-        if email_changed {
+        // Production keeps emailVerified through an Admin email change (sandbox recording
+        // 2026-09-23); an end-user change still starts unverified.
+        if email_changed && self_service {
             if let Some(u) = store.user_mut(&uid) {
                 u.email_verified = false;
             }
         }
     }
     if plan.clear_email {
+        let verified = store.user(&uid).is_some_and(|u| u.email_verified);
         if let Err(e) = store.clear_email(&uid) {
             return auth_error(&e);
+        }
+        // An Admin email removal keeps emailVerified in production (sandbox recording
+        // 2026-09-23, auth-account/admin/update#delete-email).
+        if !self_service && verified {
+            if let Some(u) = store.user_mut(&uid) {
+                u.email_verified = true;
+            }
         }
     }
     if plan.clear_password {
@@ -7877,7 +7909,13 @@ fn validate_production_admin_query_enums(body: &Value) -> Result<UserSortField, 
         Ok(Some("CREATED_AT")) => UserSortField::CreatedAt,
         Ok(Some("LAST_LOGIN_AT")) => UserSortField::LastLoginAt,
         Ok(Some("USER_EMAIL")) => UserSortField::Email,
-        Ok(Some(_)) | Err(_) => return Err(error(400, "INVALID_ARGUMENT : invalid sortBy")),
+        Ok(Some(other)) => {
+            return Err(proto_field_error(
+                "sort_by",
+                &format!("Invalid value at 'sort_by' (type.googleapis.com/google.cloud.identitytoolkit.v1.QueryUserInfoRequest.SortByField), {other:?}"),
+            ))
+        }
+        Err(_) => return Err(error(400, "INVALID_ARGUMENT : invalid sortBy")),
     };
     match opt_str(body, "order") {
         Ok(None | Some("ORDER_UNSPECIFIED" | "ASC" | "DESC")) => Ok(sort),
@@ -8270,9 +8308,10 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
         for (key, field) in [("passwordHash", "password"), ("salt", "salt")] {
             if let Some(text) = row.get(key).and_then(Value::as_str) {
                 if !text.starts_with("fakeHash:") && password_hash::base64_decode(text).is_none() {
-                    return error(
-                        400,
-                        &format!("Invalid value at 'users[{index}].{field}' (TYPE_BYTES), Base64 decoding failed for {text:?}"),
+                    let field = format!("users[{index}].{field}");
+                    return proto_field_error(
+                        &field,
+                        &format!("Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for {text:?}"),
                     );
                 }
             }

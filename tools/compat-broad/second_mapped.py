@@ -862,7 +862,10 @@ def child(output, nonce):
     }
     comparison = run_pair(local, output / "pair", runtime_identity)
     direct_receipt = json.loads((output / "pair/direct/result.json").read_bytes())
-    mapped_receipt = json.loads((output / "pair/mapped/result.json").read_bytes())
+    mapped_path = output / "pair/mapped/result.json"
+    mapped_receipt = (
+        json.loads(mapped_path.read_bytes()) if mapped_path.is_file() else None
+    )
     state_validation = validated_pair_state(direct_receipt, mapped_receipt)
     cases = [
         {

@@ -32,7 +32,7 @@ def name_of_length(target: int, tag: str) -> str:
 
 def index_sum_name_of_length(target: int, tag: str) -> str:
     """Reproduce the exact two-segment names used by the exploratory sum probe."""
-    layout = {1000: (998, 1), 2000: (1400, 599)}
+    layout = {500: (498, 1), 1000: (998, 1), 2000: (1400, 599)}
     if target not in layout:
         raise ValueError(f"unsupported index-sum name length: {target}")
     collection_bytes, document_bytes = layout[target]
@@ -105,6 +105,20 @@ def _batch_variant(variant: str) -> dict[str, Any]:
     }
 
 
+def _field_path_mask_program(length: int) -> dict[str, Any]:
+    name = f"{DOCS}/fieldPathMask/{length}"
+    field = "f" * length
+    write = _field_update(name, {field: {"integerValue": "1"}})
+    write["updateMask"] = {"fieldPaths": [field]}
+    return _commit_program(f"writes/limits/field-path-mask/{length}", [write], [name])
+
+
+def _implied_array_key_program(length: int) -> dict[str, Any]:
+    name = f"{DOCS}/impliedArrayKey/{length}"
+    value = {"arrayValue": {"values": [{"mapValue": {"fields": {"k" * length: {"integerValue": "1"}}}}]}}
+    return _commit_program(f"writes/limits/implied-array-key/{length}", [_field_update(name, {"a": value})], [name])
+
+
 def build_programs() -> list[dict[str, Any]]:
     programs = [_raw_request_program(size) for size in (11_534_336, 11_534_337)]
     programs.extend(
@@ -115,6 +129,8 @@ def build_programs() -> list[dict[str, Any]]:
             "exists-precondition-fails",
         )
     )
+    programs.append(_field_path_mask_program(1499))
+    programs.extend(_implied_array_key_program(length) for length in (1494, 1495))
     for length in (2642, 2643):
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
         write = _field_update(name, {"s": {"stringValue": "x" * 1500}})
@@ -122,7 +138,7 @@ def build_programs() -> list[dict[str, Any]]:
     for length in (4621, 4622, 6127, 6128):
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
         programs.append(_commit_program(f"writes/limits/empty-document-name/{length}", [_field_update(name, {})], [name]))
-    for length, count in ((2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):
+    for length, count in ((500, 19999), (2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):
         name = f"{DOCS}/{index_sum_name_of_length(length, f'g{length}')}"
         values = [{"integerValue": str(index)} for index in range(count)]
         write = _field_update(name, {"a": {"arrayValue": {"values": values}}})

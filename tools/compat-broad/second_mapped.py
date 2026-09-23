@@ -32,7 +32,22 @@ from second_admission import (
     require_operation,
 )
 from second_cases import auth_cases, auth_invariants, firestore_cases
-from second_mapping import compare_second
+from second_mapping import compare_second, validate_rows, validate_trace
+
+
+def validated_pair_state(direct, mapped):
+    """Require both complete observed receipts to pass the independent validators."""
+    try:
+        for result in (direct, mapped):
+            if not isinstance(result, dict) or result.get("safety") is not True:
+                return False
+            validate_rows(result, observed_outcomes=True)
+            if validate_trace(result, observed_outcomes=True) is not True:
+                return False
+    except Exception:
+        return False
+    return True
+
 
 ADMIN = f"identitytoolkit.googleapis.com/v1/projects/{PROJECT}/accounts:"
 CLIENT = "identitytoolkit.googleapis.com/v1/accounts:"
@@ -846,6 +861,9 @@ def child(output, nonce):
         for k in ("artifactSha256", "executionCommit", "configurationDigest")
     }
     comparison = run_pair(local, output / "pair", runtime_identity)
+    direct_receipt = json.loads((output / "pair/direct/result.json").read_bytes())
+    mapped_receipt = json.loads((output / "pair/mapped/result.json").read_bytes())
+    state_validation = validated_pair_state(direct_receipt, mapped_receipt)
     cases = [
         {
             "id": r["id"],
@@ -874,6 +892,7 @@ def child(output, nonce):
             "manifest": manifest(),
             "manifestDigest": digest(manifest()),
             "recordingComplete": comparison["recordingComplete"],
+            "stateValidation": state_validation,
             "localObservations": {"comparison": comparison},
             "productionExecuted": False,
         },
@@ -881,6 +900,7 @@ def child(output, nonce):
     if (
         not comparison["recordingComplete"]
         or not comparison["safety"]
+        or not state_validation
         or comparison["mapping"] != "match"
     ):
         raise ValueError(

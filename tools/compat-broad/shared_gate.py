@@ -32,6 +32,10 @@ MAX_JOB_SLOTS = 8
 # Gate that no longer existed.
 INTERVAL_FLOOR_SECONDS = 0.25
 WALL_CAP_SECONDS = 1200
+AUTH_REV3_WALL_SECONDS = 1500
+AUTH_REV3_MIN_RECOVERY_SECONDS = 300
+AUTH_REV3_CAMPAIGN_ID = "AUTH-MFA-AGE-TOTP-01"
+AUTH_REV3_SELECTOR = "pending-lifetime-rev3-v1"
 PHASES = ("observation", "recovery")
 MANAGEMENT_SKIP_REASON = "management-not-run"
 LIMITS_PREPARATION_TRANSPORT = "limits-03-baseline-preparation-v2"
@@ -1897,7 +1901,16 @@ def create(path, plan):
         > plan["wallSeconds"] - plan["recoverySeconds"]
         or len(resources) != len(set(resources))
         or (not resources and not preparation and not rules_management)
-        or not 0 < plan["recoverySeconds"] < plan["wallSeconds"] <= WALL_CAP_SECONDS
+        or not 0 < plan["recoverySeconds"] < plan["wallSeconds"]
+        or (
+            plan["wallSeconds"] > WALL_CAP_SECONDS
+            and not (
+                plan.get("campaignId") == AUTH_REV3_CAMPAIGN_ID
+                and plan.get("selector") == AUTH_REV3_SELECTOR
+                and plan["wallSeconds"] <= AUTH_REV3_WALL_SECONDS
+                and plan["recoverySeconds"] >= AUTH_REV3_MIN_RECOVERY_SECONDS
+            )
+        )
         or plan["recoverySeconds"] < recovery_time
         or not math.isfinite(plan["intervalSeconds"])
         or plan["intervalSeconds"] < INTERVAL_FLOOR_SECONDS

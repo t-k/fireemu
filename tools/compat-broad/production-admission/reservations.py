@@ -53,6 +53,9 @@ DIMENSIONS = {"requests", "accounts", "resources", "costMicrousd"}
 # allocation is never refunded.
 TASK_CAP_MICROUSD = 10_000_000
 TASK_BUDGET_REFUSAL = "task-budget-exceeded:"
+AUTH_REV3_WALL_SECONDS = 1500
+AUTH_REV3_CAMPAIGN_ID = "AUTH-MFA-AGE-TOTP-01"
+AUTH_REV3_SELECTOR = "pending-lifetime-rev3-v1"
 # The closed set of production observation tasks that budget is authorized
 # for: the stable campaign id each lane declares, without attempt or version
 # suffixes (the write-txn stream lane's v2..v9 records are re-checks of the
@@ -815,6 +818,10 @@ def _claim(value):
     if (
         type(value["durationSeconds"]) is not int
         or not 1 <= value["durationSeconds"] <= 1200
+        and not (
+            value["campaignId"] == AUTH_REV3_CAMPAIGN_ID
+            and 1200 < value["durationSeconds"] <= AUTH_REV3_WALL_SECONDS
+        )
     ):
         raise ValueError("bounded duration required")
     path = value["gatePath"]
@@ -2187,6 +2194,23 @@ class Ledger:
         _claim(claim)
         if claim["campaignId"] not in CATALOGUED_CAMPAIGN_IDS:
             raise ValueError(f"uncatalogued campaign id: {claim['campaignId']}")
+        if (
+            "campaignId" in gate_plan
+            and claim["campaignId"] != gate_plan["campaignId"]
+        ):
+            raise ValueError("claim campaign differs from Gate plan")
+        if (
+            (gate_plan.get("wallSeconds", 0) > 1200 or claim["durationSeconds"] > 1200)
+            and (
+                gate_plan.get("campaignId") != AUTH_REV3_CAMPAIGN_ID
+                or claim["campaignId"] != AUTH_REV3_CAMPAIGN_ID
+                or gate_plan.get("selector") != AUTH_REV3_SELECTOR
+                or gate_plan.get("wallSeconds", 0) > AUTH_REV3_WALL_SECONDS
+                or gate_plan.get("recoverySeconds", 0) < 300
+                or claim["durationSeconds"] != gate_plan.get("wallSeconds")
+            )
+        ):
+            raise ValueError("closed AUTH revision-3 wall reservation required")
         if generation is not None:
             _generation(generation)
         preparation = gate_plan.get("transport") == LIMITS_PREPARATION_TRANSPORT

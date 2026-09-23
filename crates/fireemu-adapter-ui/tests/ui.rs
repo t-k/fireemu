@@ -157,6 +157,8 @@ fn state_with(app_check: Option<Arc<AppCheckState>>) -> Arc<UiState> {
                 fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
             query_limits:
                 fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
+            client_api_key:
+                fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
             fake_custom_token_expiry:
                 fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
             app_check: None,

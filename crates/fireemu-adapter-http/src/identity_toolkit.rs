@@ -620,6 +620,15 @@ pub enum AuthQueryLimits {
     ProductionBounded,
 }
 
+/// Whether client routes admit a caller that presents neither an API key nor a credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientApiKeyPolicy {
+    /// Match the Firebase Auth Emulator, which serves keyless client requests.
+    Optional,
+    /// Refuse them as production's API front end does ("unregistered callers").
+    Required,
+}
+
 /// Whether this embedding exposes bounded local `pendingToken` continuation handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdpContinuationPolicy {
@@ -669,6 +678,8 @@ pub struct AuthState {
     pub fake_custom_token_expiry: FakeCustomTokenExpiry,
     /// Profile-specific Admin query behavior.
     pub query_limits: AuthQueryLimits,
+    /// Whether client routes refuse a request carrying neither an API key nor a credential.
+    pub client_api_key: ClientApiKeyPolicy,
     /// Explicit local `IdP` continuation policy, independent of query paging.
     pub idp_continuations: IdpContinuationPolicy,
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
@@ -1240,10 +1251,11 @@ pub const OWNER_CREDENTIAL: &str = "Bearer owner";
 fn admin_guard(
     headers: &RequestHeaders,
     method: &str,
+    api_key: bool,
     project: &str,
     store: &AuthStore,
 ) -> Result<(), JsonResponse> {
-    admin_request_guard(headers, method)?;
+    admin_request_guard(headers, method, api_key)?;
     if project.is_empty() || project != store.project_id() {
         return Err(error(
             400,
@@ -1256,7 +1268,40 @@ fn admin_guard(
     Ok(())
 }
 
-fn admin_request_guard(headers: &RequestHeaders, method: &str) -> Result<(), JsonResponse> {
+/// Production's API front end refuses a caller that presents no identity at all: neither a
+/// credential nor an API key (sandbox recording 2026-09-23).
+fn unregistered_caller() -> JsonResponse {
+    const MESSAGE: &str = "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";
+    JsonResponse {
+        status: 403,
+        body: json!({"error": {
+            "code": 403,
+            "message": MESSAGE,
+            "errors": [{"message": MESSAGE, "domain": "global", "reason": "forbidden"}],
+            "status": "PERMISSION_DENIED",
+        }}),
+    }
+}
+
+fn admin_request_guard(
+    headers: &RequestHeaders,
+    method: &str,
+    api_key: bool,
+) -> Result<(), JsonResponse> {
+    // Without an `Authorization` header production answers by what the request still
+    // carries: an API key identifies the caller but cannot address a project, and nothing at
+    // all is an unregistered caller (sandbox recording 2026-09-23). A present but foreign
+    // credential keeps the local owner-credential refusal; its production shape is unobserved.
+    if headers.authorization.is_none() {
+        return Err(if api_key {
+            error(
+                400,
+                "INSUFFICIENT_PERMISSION : Only authenticated requests can specify target_project_id.",
+            )
+        } else {
+            unregistered_caller()
+        });
+    }
     if headers.authorization.as_deref() != Some(OWNER_CREDENTIAL) {
         return Err(error(
             401,
@@ -2444,8 +2489,16 @@ fn handle_with_policy(
         Some((p, q)) => (p, Some(q)),
         None => (path, None),
     };
+    // Whether the caller identified itself with an API key; its validity is checked when the
+    // store is selected.
+    let api_key = query_selectors(query).is_ok_and(|(key, _)| key.is_some());
     let at = now(state);
     let resolution = routes::resolve(method, path);
+    // Production's API front end answers a caller without identity before the service reads
+    // any selector, tenant or body (sandbox recording 2026-09-23).
+    if let Err(response) = caller_identity_check(state, resolution, headers, api_key) {
+        return response;
+    }
     let emulator_clear = matches!(
         resolution,
         routes::Resolution::Matched {
@@ -2495,7 +2548,7 @@ fn handle_with_policy(
         if fireemu_core_types::ids::ProjectId::try_new(project.to_owned()).is_err() {
             return error(400, "INVALID_PROJECT_ID");
         }
-        if let Err(response) = admin_request_guard(headers, method) {
+        if let Err(response) = admin_request_guard(headers, method, api_key) {
             return response;
         }
     }
@@ -2669,7 +2722,8 @@ fn handle_with_policy(
             resource: _,
         } => (route, project, tenant),
         routes::Resolution::MethodNotAllowed { class, project, .. } => {
-            if let Err(r) = privilege_check(state, class, project, headers, method, &store) {
+            if let Err(r) = privilege_check(state, class, project, headers, method, api_key, &store)
+            {
                 return r;
             }
             // Production's front end answers a POST to accounts:batchGet with a plain 404
@@ -2681,7 +2735,15 @@ fn handle_with_policy(
         }
         routes::Resolution::NotFound => return not_found(),
     };
-    if let Err(r) = privilege_check(state, route.class, project, headers, method, &store) {
+    if let Err(r) = privilege_check(
+        state,
+        route.class,
+        project,
+        headers,
+        method,
+        api_key,
+        &store,
+    ) {
         return r;
     }
     if matches!(
@@ -3034,6 +3096,33 @@ fn handle_with_policy(
     response
 }
 
+/// Refuses a request that carries no `Authorization` header where production's front end does:
+/// every Admin route, and client routes when the profile requires an API key.
+fn caller_identity_check(
+    state: &AuthState,
+    resolution: routes::Resolution<'_>,
+    headers: &RequestHeaders,
+    api_key: bool,
+) -> Result<(), JsonResponse> {
+    if headers.authorization.is_some() {
+        return Ok(());
+    }
+    let class = match resolution {
+        routes::Resolution::Matched { route, .. } => route.class,
+        routes::Resolution::MethodNotAllowed { class, .. } => class,
+        routes::Resolution::NotFound => return Ok(()),
+    };
+    match class {
+        routes::RouteClass::Admin => admin_request_guard(headers, "", api_key),
+        routes::RouteClass::EndUser
+            if state.client_api_key == ClientApiKeyPolicy::Required && !api_key =>
+        {
+            Err(unregistered_caller())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The credential and project checks of a route class.
 fn privilege_check(
     state: &AuthState,
@@ -3041,6 +3130,7 @@ fn privilege_check(
     project: Option<&str>,
     headers: &RequestHeaders,
     method: &str,
+    api_key: bool,
     store: &AuthStore,
 ) -> Result<(), JsonResponse> {
     match class {
@@ -3054,7 +3144,9 @@ fn privilege_check(
             }
             Ok(())
         }
-        routes::RouteClass::Admin => admin_guard(headers, method, project.unwrap_or(""), store),
+        routes::RouteClass::Admin => {
+            admin_guard(headers, method, api_key, project.unwrap_or(""), store)
+        }
     }
 }
 

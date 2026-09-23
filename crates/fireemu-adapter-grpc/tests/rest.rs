@@ -782,6 +782,33 @@ fn batch_write_rest_rejects_reserved_nested_map_keys_before_any_write() {
 }
 
 #[test]
+fn batch_write_rest_reports_the_saved_production_integer_error_without_mutation() {
+    let s = state(None);
+    let names = ["first", "middle", "last"]
+        .map(|id| format!("projects/demo-app/databases/(default)/documents/batch-integer/{id}"));
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": [
+            {"update": {"name": names[0], "fields": {"v": {"integerValue": "1"}}}},
+            {"update": {"name": names[1], "fields": {"v": {"integerValue": "not-a-number"}}}},
+            {"update": {"name": names[2], "fields": {"v": {"integerValue": "3"}}}}
+        ]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        body["error"]["message"],
+        "Invalid value at 'writes[1].update.fields[0].value.integer_value' (TYPE_INT64), \"not-a-number\""
+    );
+    for name in names {
+        let (status, _) = call(&s, "GET", &format!("/v1/{name}"), Value::Null);
+        assert_eq!(status, 404, "invalid middle value must prevent every write");
+    }
+}
+
+#[test]
 fn batch_write_rest_rejects_malformed_nested_repeated_values_without_mutation() {
     let s = state(None);
     let target = "projects/demo-app/databases/(default)/documents/batch-shape/nested";

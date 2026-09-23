@@ -217,6 +217,27 @@ fn malformed_second_commit_write_does_not_publish_first_write() {
 }
 
 #[test]
+fn malformed_commit_bytes_match_saved_production_error_message() {
+    let s = state(true);
+    let response = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": [{"update": {
+            "name": format!("{RESOURCE}/base64/exact-error"),
+            "fields": {"value": {"bytesValue": "!!!"}}
+        }}]}),
+    );
+
+    assert_eq!(response.status, 400);
+    assert_eq!(response.body["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        response.body["error"]["message"],
+        "Invalid value at 'writes[0].update.fields[0].value.bytes_value' (TYPE_BYTES), Base64 decoding failed for \"!!!\""
+    );
+}
+
+#[test]
 fn valid_empty_and_absent_transaction_and_token_commit_remain_accepted() {
     for transaction in [None, Some("")] {
         let s = state(true);

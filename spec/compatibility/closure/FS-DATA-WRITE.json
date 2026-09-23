@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-DATA-WRITE",
+  "parentStatus": "WAITING_ORACLE",
+  "oracleTrack": "disposable-sandbox",
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "conditions": [
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/batch-malformed-middle",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#batch-malformed-middle",
+      "recipeIds": ["writes/batch-write-malformed/missing-operation"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/batch-undecodable-value",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#batch-undecodable-value",
+      "recipeIds": ["writes/batch-write-malformed/undecodable-value"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/batch-duplicate-document",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["writes/batch-write-malformed/duplicate-document"],
+      "status": "SAVED_REFERENCE_PENDING_FINAL"
+    },
+    {
+      "conditionId": "FS-LIMIT-COLLECTION-ID",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-COLLECTION-ID",
+      "recipeIds": [
+        "writes/limits/collection-id-boundary",
+        "writes/limits/collection-id-slash",
+        "writes/limits/collection-id-dot",
+        "writes/limits/collection-id-dot-dot",
+        "writes/limits/collection-id-reserved"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-SUBCOLLECTION-DEPTH",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-SUBCOLLECTION-DEPTH",
+      "recipeIds": ["writes/limits/subcollection-depth"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-DOCUMENT-NAME-BYTES",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-DOCUMENT-NAME-BYTES",
+      "recipeIds": ["writes/limits/document-name-bytes"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
+      "recipeIds": ["writes/limits/index-entries-per-document"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-INDEX-ENTRY-BYTES",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-BYTES",
+      "recipeIds": ["writes/limits/index-entry-bytes"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
+      "recipeIds": ["writes/limits/index-entry-sum-per-document"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-FIELD-PATH-BYTES",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["writes/limits/field-path-bytes", "writes/limits/field-path-direct-mask"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-string",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#agg-string",
+      "recipeIds": ["writes/limits/aggregate-string"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#agg-map",
+      "recipeIds": ["writes/limits/aggregate-map"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
+      "recipeIds": ["writes/limits/indexed-field-value-bytes"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/implied-map",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#implied-map",
+      "recipeIds": ["writes/limits/implied-map"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-WRITE-LIMITS-03/implied-array",
+      "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#implied-array",
+      "recipeIds": ["writes/limits/implied-array"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/decoded-10mib",
+      "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-API-REQUEST-BYTES",
+      "recipeIds": ["writes/limits/decoded-request-bytes"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["writes/limits/raw-request-bytes"],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",
+      "source": "docs/compatibility/feature-goals.md#evidence-and-limitations",
+      "recipeIds": ["writes/write-stream-transaction"],
+      "status": "SAVED_REFERENCE_PENDING_FINAL"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["writes/batch-write-malformed", "writes/limits", "writes/write-stream-transaction"],
+      "status": "PENDING_REVIEW"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["FS-DATA-WRITE"],
+      "status": "PENDING_REVIEW"
+    }
+  ]
+}

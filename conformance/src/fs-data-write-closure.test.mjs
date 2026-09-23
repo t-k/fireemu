@@ -289,10 +289,14 @@ test("final artifact closure names both saved production regression commands", (
   assert.notEqual(condition.status, "VERIFIED");
 });
 
-test("unobserved request-byte transports remain explicit coverage debt", () => {
+test("request-byte transports distinguish prepared REST input from missing corpora", () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const nonCommitRest = closure.conditions.find(
+    (row) => row.conditionId === "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+  );
+  assert.equal(nonCommitRest.status, "PENDING_RECORDING");
+  assert.equal(nonCommitRest.boundaryStatus, "PENDING_RECORDING");
   for (const conditionId of [
-    "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
     "FS-LIMIT-API-REQUEST-BYTES/webchannel",
     "FS-LIMIT-API-REQUEST-BYTES/grpc",
   ]) {

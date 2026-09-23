@@ -4138,6 +4138,7 @@ fn admin_create_is_atomic_and_typed() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
     let s = state();
     for (local_id, field, value) in [
@@ -4169,8 +4170,6 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
             "providerUserInfo",
             json!([["not-an-object"]]),
         ),
-        ("batch-bad-created", "createdAt", json!("not-a-timestamp")),
-        ("batch-bad-login", "lastLoginAt", json!(false)),
     ] {
         let (status, response) = admin(
             &s,
@@ -4182,6 +4181,25 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
         assert_eq!(
             response["error"].as_array().map(Vec::len),
             Some(1),
+            "{response}"
+        );
+        assert!(s.store.lock().unwrap().user_by_id(local_id).is_none());
+    }
+    // Timestamps are int64 fields of the request: a malformed one refuses the whole request
+    // (sandbox recording 2026-09-23, `values#import-created-at-invalid`).
+    for (local_id, field, value) in [
+        ("batch-bad-created", "createdAt", json!("not-a-timestamp")),
+        ("batch-bad-login", "lastLoginAt", json!(false)),
+    ] {
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{"localId": local_id, field: value}]}),
+        );
+        assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["status"], "INVALID_ARGUMENT",
             "{response}"
         );
         assert!(s.store.lock().unwrap().user_by_id(local_id).is_none());
@@ -9256,6 +9274,100 @@ fn admin_batch_get_pages_by_user_id() {
         page("maxResults=2&nextPageToken=not-a-token"),
         (vec!["x".to_owned()], None)
     );
+}
+
+/// Value classes production answers differently from the bare format rules (sandbox recording
+/// 2026-09-23, `auth-account/values`).
+#[test]
+fn value_classes_follow_production() {
+    let s = state();
+    // A formatted E.164 number is stored normalized; letters map through the phone keypad;
+    // a zero country code is refused.
+    for (uid, phone, stored) in [
+        ("formatted", "+1 650-555-0104", Some("+16505550104")),
+        ("letters", "+1650555ABCD", Some("+16505552223")),
+        ("zero", "+0 650 555 0104", None),
+    ] {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid, "phoneNumber": phone}),
+        );
+        if let Some(stored) = stored {
+            assert_eq!(status, 200, "{phone}: {body}");
+            let (_, found) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            );
+            assert_eq!(found["users"][0]["phoneNumber"], stored, "{found}");
+        } else {
+            assert_eq!(status, 400, "{phone}: {body}");
+            assert_eq!(
+                body["error"]["message"],
+                "INVALID_PHONE_NUMBER : Invalid format."
+            );
+        }
+    }
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "space", "email": " space@example.com"}),
+    );
+    assert_eq!(
+        (status, body["error"]["message"].as_str()),
+        (400, Some("INVALID_EMAIL")),
+        "{body}"
+    );
+
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "values@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    for (length, refused) in [(256, false), (257, true)] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": "n".repeat(length)}),
+        );
+        if refused {
+            assert_eq!(status, 400, "{body}");
+            assert_eq!(
+                body["error"]["message"],
+                "INVALID_PROFILE_ATTRIBUTE : Display name too long."
+            );
+        } else {
+            assert_eq!(status, 200, "{body}");
+        }
+    }
+
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{"localId": "ts", "createdAt": "yesterday"}]}),
+    );
+    let description = r#"Invalid value at 'users[0].created_at' (TYPE_INT64), "yesterday""#;
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], description);
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        body["error"]["details"][0]["fieldViolations"][0]["field"],
+        "users[0].created_at"
+    );
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{"localId": "ts", "createdAt": "1600000000000", "lastLoginAt": 1_600_000_100_000_i64}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body.get("error").is_none(), "{body}");
 }
 
 #[test]

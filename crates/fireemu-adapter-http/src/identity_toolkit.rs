@@ -7260,8 +7260,17 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     let mut display_name = change("displayName")?;
     let mut photo_url = change("photoUrl")?;
     let mut phone_number = change("phoneNumber")?;
-    if let Change::Set(p) = &phone_number {
-        AuthStore::validate_phone_number(p).map_err(|e| auth_error(&e))?;
+    if let Change::Set(p) = &mut phone_number {
+        *p = AuthStore::normalize_phone_number(p).map_err(|e| auth_error(&e))?;
+    }
+    // Java string length, so UTF-16 units (sandbox recording 2026-09-23, 257 is refused).
+    if let Change::Set(name) = &display_name {
+        if name.encode_utf16().count() > 256 {
+            return Err(error(
+                400,
+                "INVALID_PROFILE_ATTRIBUTE : Display name too long.",
+            ));
+        }
     }
     let mut clear_password = false;
     let mut clear_email = false;
@@ -7808,11 +7817,15 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         if password.is_some() && email.is_none() {
             return Err(error(400, "INVALID_ARGUMENT : password requires an email"));
         }
-        let phone = opt_str(body, "phoneNumber")?.map(str::to_owned);
+        // Production's Admin create stores the number normalized and names the format problem
+        // (sandbox recording 2026-09-23).
+        let phone = opt_str(body, "phoneNumber")?
+            .map(|p| {
+                AuthStore::normalize_phone_number(p)
+                    .map_err(|_| error(400, "INVALID_PHONE_NUMBER : Invalid format."))
+            })
+            .transpose()?;
         if let Some(p) = &phone {
-            // Production's Admin create names the format problem (sandbox recording 2026-09-23).
-            AuthStore::validate_phone_number(p)
-                .map_err(|_| error(400, "INVALID_PHONE_NUMBER : Invalid format."))?;
             if store.user_by_phone(p).is_some() {
                 return Err(error(400, "PHONE_NUMBER_EXISTS"));
             }
@@ -8466,6 +8479,44 @@ fn batch_row_imported_hash(
 /// is reported by index in `error` while the others are created, which is the official
 /// contract of the route. With `allowOverwrite` an existing account of the same `localId`
 /// is replaced; without it the row is refused.
+/// Bytes and int64 fields of `batchCreate` rows are decoded with the request, before anything
+/// else is validated; a malformed one refuses the whole request.
+fn decode_batch_rows(rows: &[Value]) -> Result<(), JsonResponse> {
+    for (index, row) in rows.iter().enumerate() {
+        for (key, field) in [
+            ("createdAt", "created_at"),
+            ("lastLoginAt", "last_login_at"),
+        ] {
+            let decodes = match row.get(key) {
+                None | Some(Value::Null) => true,
+                Some(Value::Number(n)) => n.is_i64(),
+                Some(Value::String(text)) => text.parse::<i64>().is_ok(),
+                Some(_) => false,
+            };
+            if !decodes {
+                let field = format!("users[{index}].{field}");
+                let value = row.get(key).map(Value::to_string).unwrap_or_default();
+                return Err(proto_field_error(
+                    &field,
+                    &format!("Invalid value at '{field}' (TYPE_INT64), {value}"),
+                ));
+            }
+        }
+        for (key, field) in [("passwordHash", "password"), ("salt", "salt")] {
+            if let Some(text) = row.get(key).and_then(Value::as_str) {
+                if !text.starts_with("fakeHash:") && password_hash::base64_decode(text).is_none() {
+                    let field = format!("users[{index}].{field}");
+                    return Err(proto_field_error(
+                        &field,
+                        &format!("Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for {text:?}"),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
     let Some(rows) = body
         .get("users")
@@ -8494,19 +8545,8 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
             }
         }
     }
-    // Bytes fields are decoded with the request, before anything else is validated.
-    for (index, row) in rows.iter().enumerate() {
-        for (key, field) in [("passwordHash", "password"), ("salt", "salt")] {
-            if let Some(text) = row.get(key).and_then(Value::as_str) {
-                if !text.starts_with("fakeHash:") && password_hash::base64_decode(text).is_none() {
-                    let field = format!("users[{index}].{field}");
-                    return proto_field_error(
-                        &field,
-                        &format!("Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for {text:?}"),
-                    );
-                }
-            }
-        }
+    if let Err(response) = decode_batch_rows(rows) {
+        return response;
     }
     // The hash algorithm and its parameters apply to every row of the request; production
     // refuses the whole request when they are invalid.

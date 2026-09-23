@@ -457,6 +457,26 @@ impl UserSortField {
     }
 }
 
+/// The digit an ASCII upper-case letter carries on a phone keypad.
+fn keypad_digit(letter: char) -> char {
+    match letter {
+        'A'..='C' => '2',
+        'D'..='F' => '3',
+        'G'..='I' => '4',
+        'J'..='L' => '5',
+        'M'..='O' => '6',
+        'P'..='S' => '7',
+        'T'..='V' => '8',
+        _ => '9',
+    }
+}
+
+/// Whether an address can be stored: it has an `@` and no control or whitespace character
+/// (a leading space is `INVALID_EMAIL`, sandbox recording 2026-09-23).
+fn storable_email(email: &str) -> bool {
+    email.contains('@') && !email.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
 /// A password hash imported in one of production's foreign formats (`accounts:batchCreate`
 /// with `hashAlgorithm`). The core has no cryptography of its own, so it keeps the hash
 /// opaquely: `spec` is the importing adapter's canonical description of the algorithm and its
@@ -2040,7 +2060,7 @@ impl AuthStore {
         // unique unless the project allows duplicates, and bounded custom claims.
         if let Some(email) = user.email.as_mut() {
             *email = Self::canonicalize_email(email);
-            if !email.contains('@') || email.chars().any(char::is_control) {
+            if !storable_email(email) {
                 return Err(ImportUserError::Account(AuthError::InvalidEmail));
             }
             if !self.config.allow_duplicate_emails
@@ -2186,7 +2206,7 @@ impl AuthStore {
     /// Validates an email update without changing the store.
     pub fn validate_email_update(&self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
         let email = Self::canonicalize_email(email);
-        if !email.contains('@') || email.chars().any(char::is_control) {
+        if !storable_email(&email) {
             return Err(AuthError::InvalidEmail);
         }
         if !self.config.allow_duplicate_emails && self.email_owned_by_other(&email, Some(uid)) {
@@ -2210,6 +2230,31 @@ impl AuthStore {
         }
         self.add_email_owner(&email, uid);
         Ok(())
+    }
+
+    /// Normalizes a phone number the way production stores it: formatting punctuation and
+    /// spaces are dropped and letters map through the phone keypad (`+1 650-555-0104` and
+    /// `+1650555ABCD` are accepted, sandbox recording 2026-09-23). A zero country code, a
+    /// missing `+` or any other character is refused, and the result must be valid E.164.
+    pub fn normalize_phone_number(phone: &str) -> Result<String, AuthError> {
+        let rest = phone
+            .strip_prefix('+')
+            .ok_or(AuthError::InvalidPhoneNumber)?;
+        let mut normalized = String::with_capacity(phone.len());
+        normalized.push('+');
+        for c in rest.chars() {
+            match c {
+                '0'..='9' => normalized.push(c),
+                ' ' | '-' | '(' | ')' | '.' | '/' => {}
+                'A'..='Z' | 'a'..='z' => normalized.push(keypad_digit(c.to_ascii_uppercase())),
+                _ => return Err(AuthError::InvalidPhoneNumber),
+            }
+        }
+        if normalized.as_bytes().get(1) == Some(&b'0') {
+            return Err(AuthError::InvalidPhoneNumber);
+        }
+        Self::validate_phone_number(&normalized)?;
+        Ok(normalized)
     }
 
     /// Validates an E.164 phone number (`+` followed by 7..=15 digits).
@@ -2712,7 +2757,7 @@ impl AuthStore {
             new.email = Some(Self::canonicalize_email(&email));
         }
         if let Some(email) = &new.email {
-            if !email.contains('@') || email.chars().any(char::is_control) {
+            if !storable_email(email) {
                 return Err(AuthError::InvalidEmail);
             }
             if enforce_unique_email

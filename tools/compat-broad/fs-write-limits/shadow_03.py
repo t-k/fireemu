@@ -185,7 +185,9 @@ def run(output: Path, part: str = "ALL", index_profile: str = "historical") -> d
         # The supervisor launches the child with a fixed argument list and a
         # sanitized environment, so the part is carried by the entrypoint.
         child_script=(
-            HERE / "shadow_03b.py" if part == "B" else Path(__file__).resolve()
+            HERE / f"shadow_03{part.lower()}.py"
+            if part in ("A", "B")
+            else Path(__file__).resolve()
         ),
         project="demo-firestore-probe",
         configuration={"daemon": {"authProjectNumbers": {}}},
@@ -196,12 +198,27 @@ def run(output: Path, part: str = "ALL", index_profile: str = "historical") -> d
     )
     after = source_inputs()
     child_inputs = report.get("manifest", {}).get("sourceInputs")
-    bound = before == after == child_inputs
+    try:
+        child_result = json.loads((output / "result.json").read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        child_result = {}
+    child_part = child_result.get("part") if isinstance(child_result, dict) else None
+    child_campaign_id = (
+        child_result.get("campaignId") if isinstance(child_result, dict) else None
+    )
+    campaign_id = CAMPAIGN if part == "ALL" else f"{CAMPAIGN}{part}"
+    bound = (
+        before == after == child_inputs
+        and child_part == part
+        and child_campaign_id == campaign_id
+    )
     save(
         output / "shadow-binding.json",
         {
-            "campaignId": CAMPAIGN if part == "ALL" else f"{CAMPAIGN}{part}",
+            "campaignId": campaign_id,
             "part": part,
+            "childCampaignId": child_campaign_id,
+            "childPart": child_part,
             "sourceInputsBefore": before,
             "sourceInputsAfter": after,
             "childSourceInputs": child_inputs,
@@ -225,7 +242,9 @@ def main(argv: list[str] | None = None) -> int:
     # The campaign is one allocation; the selections remain for a run that has
     # to be split for some other reason.
     parser.add_argument("--part", choices=("A", "B", "ALL"), default="ALL")
-    parser.add_argument("--index-profile", choices=("historical", "nx-local"), default="historical")
+    parser.add_argument(
+        "--index-profile", choices=("historical", "nx-local"), default="historical"
+    )
     args = parser.parse_args(argv)
     if args.child is not None:
         if not args.nonce:

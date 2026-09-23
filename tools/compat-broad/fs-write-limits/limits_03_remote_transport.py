@@ -198,10 +198,15 @@ def _diagnostic(raw: bytes) -> str:
     return raw[:_DIAGNOSTIC_LIMIT].decode("utf-8", errors="replace")
 
 
+# Reuse the lane's strict UTF-8/unique-key/finite-number response decoder by
+# exact path. Ambient modules named "transport" must not select the contract.
+_response_json = _load("_limits_03_response_json", HERE / "transport.py")
+
+
 def _parse_body(body: bytes) -> Any:
     try:
-        return json.loads(body)
-    except (UnicodeDecodeError, ValueError):
+        return _response_json._decode_json_response(body)
+    except (UnicodeDecodeError, ValueError, RecursionError):
         return _diagnostic(body)
 
 

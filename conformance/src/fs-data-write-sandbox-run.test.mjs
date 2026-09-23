@@ -6,6 +6,7 @@ import {
   prepareSandboxCorpus,
   productionRestEnvironment,
   remainingSandboxBudget,
+  sessionRequestCount,
   sandboxLedgerEntry,
   sandboxLedgerPath,
 } from "./fs-data-write-sandbox-run.mjs";
@@ -18,8 +19,14 @@ test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", 
 });
 
 test("all sandbox run directories share the canonical root ledger", () => {
-  assert.equal(sandboxLedgerPath("/workspace/.git"), "/workspace/docs.local/runs/sandbox-ledger.jsonl");
-  assert.equal(sandboxLedgerPath("/workspace/.git", "/one/run"), sandboxLedgerPath("/workspace/.git", "/other/run"));
+  assert.equal(
+    sandboxLedgerPath("/workspace/.git"),
+    "/workspace/docs.local/runs/sandbox-ledger.jsonl",
+  );
+  assert.equal(
+    sandboxLedgerPath("/workspace/.git", "/one/run"),
+    sandboxLedgerPath("/workspace/.git", "/other/run"),
+  );
 });
 
 test("production REST session fixes project, endpoint and all-attempt cap", () => {
@@ -31,9 +38,14 @@ test("production REST session fixes project, endpoint and all-attempt cap", () =
   });
   assert.equal(env.FIRESTORE_PROBE_PROJECT, "fireemu-oracle-sbx");
   assert.equal(env.FIRESTORE_PROBE_HOST, "firestore.googleapis.com");
-  assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "400");
+  assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "1000");
   assert.equal(env.FIRESTORE_PROBE_RECORD_PROJECT, "demo-firestore-probe");
   assert.equal(env.FIRESTORE_PROBE_TOKEN, "private");
+});
+
+test("a failed session still reports its bounded network attempts from metadata", () => {
+  assert.equal(sessionRequestCount({ requestCount: 400 }), 400);
+  assert.throws(() => sessionRequestCount({ requestCount: 1001 }), /bounded/);
 });
 
 test("the stable FS observation task carries retries into its ten-dollar budget", () => {

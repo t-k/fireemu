@@ -1,0 +1,370 @@
+diff --git a/tools/compat-broad/fs-write-limits/limits_03_preflight.py b/tools/compat-broad/fs-write-limits/limits_03_preflight.py
+index d109ea9..b13aa45 100644
+--- a/tools/compat-broad/fs-write-limits/limits_03_preflight.py
++++ b/tools/compat-broad/fs-write-limits/limits_03_preflight.py
+@@ -422,6 +422,7 @@ class ManagementSession:
+         self.lifecycle_failed = False
+         self.preflight_complete = False
+         self.postflight_complete = False
++        self.recovery_validation_failures = []
+         validate_principal(permission.get("credentialPrincipal"))
+         validate_frozen_baselines(permission)
+ 
+@@ -430,12 +431,15 @@ class ManagementSession:
+             raise ValueError("closed management phase required")
+         if phase == "recovery":
+             self.lifecycle_failed = False
++            self.postflight_complete = False
++            self.recovery_validation_failures = []
+         slots = (
+             MANAGEMENT_OBSERVATION_IDS
+             if phase == "observation"
+             else MANAGEMENT_RECOVERY_IDS
+         )
+         for slot in slots:
++            wire_state = {}
+ 
+             def send(deadline, slot=slot):
+                 self.ledger.validate(self.ticket, duration=13)
+@@ -455,6 +459,10 @@ class ManagementSession:
+                 response = self.capability._transmit(
+                     management_call(self.inputs, phase, slot, token, deadline=deadline, operation=operation)
+                 )
++                wire_state.update({
++                    key: response.get(key)
++                    for key in ("complete", "workerReaped", "status", "bodyKind")
++                })
+                 if self.credential is not None:
+                     observe_status(self.credential, response.get("status"))
+                 if slot == "oauth-tokeninfo":
+@@ -501,24 +509,83 @@ class ManagementSession:
+             }
+             self.evidence.append(row)
+             event = self.gate.snapshot()["managementEvents"][-1]
+-            if event.get("id") != row["id"] or event.get("completed") is not True:
+-                raise ValueError(
+-                    "management slot did not complete inside its reservation"
++            if event.get("id") != row["id"]:
++                raise ValueError("management response event identity differs")
++            try:
++                if event.get("completed") is not True:
++                    raise ValueError(
++                        "management slot did not complete inside its reservation"
++                    )
++                if slot == "oauth-tokeninfo":
++                    if self.credential is None or response.get("complete") is not True:
++                        raise ValueError("credential attestation failed")
++                elif slot in LIFECYCLE_SLOTS:
++                    self._accept_lifecycle_response(slot, response)
++                    if self.lifecycle_failed:
++                        raise ValueError("lifecycle semantic validation failed")
++                else:
++                    validate_attestation(slot, response, self.permission)
++            except ValueError as error:
++                if not self._can_finish_recovery_reads(phase, slot, response, event, wire_state):
++                    raise
++                # This is a failed check, never a successful attestation. Keep
++                # the Gate's original event/response unchanged, use only the
++                # already reserved suffix, and refuse postflight completion.
++                self.recovery_validation_failures.append(
++                    {"slot": slot, "failure": type(error).__name__}
+                 )
+-            if slot == "oauth-tokeninfo":
+-                if self.credential is None or response.get("complete") is not True:
+-                    raise ValueError("credential attestation failed")
+-            elif slot in LIFECYCLE_SLOTS:
+-                self._accept_lifecycle_response(slot, response)
+-                if self.lifecycle_failed:
+-                    raise ValueError("lifecycle semantic validation failed")
+-            else:
+-                validate_attestation(slot, response, self.permission)
++        if self.recovery_validation_failures:
++            self.lifecycle_failed = True
++            raise ValueError("recovery checks failed; restoration evidence retained")
+         if phase == "observation":
+             self.preflight_complete = True
+         else:
+             self.postflight_complete = True
+ 
++    def _can_finish_recovery_reads(self, phase, slot, response, event, wire_state):
++        """A failed read-only check must not suppress the reserved restoration.
++
++        A completed JSON read whose projection differs can be followed by the
++        existing restoration; a restore poll may be followed by its final GET.
++        Never continue observation, a rejected credential, an unreaped/late
++        worker, a failed dispatch, or an unvalidated original field identity.
++        The next operation still passes the unmodified Gate and Ledger checks.
++        """
++        state = self._lifecycle
++        before = state.get("before")
++        if (
++            phase != "recovery"
++            or slot not in ("project", "database", "index-exemption", "auth",
++                            "index-lifecycle-poll-restore")
++            or not isinstance(before, dict)
++            or before.get("name") != LIFECYCLE_FIELD
++            or not isinstance(state.get("applyResponse"), dict)
++            or event.get("id") != "recovery:" + slot
++            or wire_state.get("complete") is not True
++            or wire_state.get("workerReaped") is not True
++            or type(wire_state.get("status")) is not int
++            or wire_state["status"] != 200
++            or wire_state.get("bodyKind") != "json"
++            or response.get("workerReaped") is not True
++            or event.get("workerReaped") is not True
++            or type(response.get("status")) is not int
++            or response["status"] != 200
++            or type(event.get("status")) is not int
++            or event["status"] != 200
++            or response.get("bodyKind") != "json"
++            or event.get("responseDigest") != digest(response)
++            or event.get("bodyDigest") != digest(response.get("body"))
++        ):
++            return False
++        ended, deadline = event.get("ended"), event.get("deadline")
++        return (
++            type(ended) in (int, float)
++            and type(deadline) in (int, float)
++            and math.isfinite(ended)
++            and math.isfinite(deadline)
++            and ended <= deadline
++        )
++
+     def _lifecycle_operation(self, phase, slot):
+         state = getattr(self, "_lifecycle", {})
+         if slot == "index-lifecycle-before":
+@@ -564,7 +631,7 @@ class ManagementSession:
+                 and response.get("workerReaped") is True
+                 and response.get("status") == 200
+                 and isinstance(baseline, dict)
+-                and response.get("body") == baseline
++                and digest(response.get("body")) == digest(baseline)
+             )
+             apply_response = state.get("applyResponse", {})
+             if (
+@@ -592,7 +659,15 @@ class ManagementSession:
+         return attestation
+ 
+     def _accept_lifecycle_response(self, slot, response):
+-        if response.get("complete") is not True or response.get("workerReaped") is not True or response.get("status") != 200:
++        if (
++            response.get("complete") is not True
++            or response.get("workerReaped") is not True
++            or type(response.get("status")) is not int
++            or response["status"] != 200
++            or response.get("bodyKind") != "json"
++            or not isinstance(response.get("body"), dict)
++            or response["body"].get("error") is not None
++        ):
+             raise ValueError("lifecycle management response incomplete")
+         body = response.get("body")
+         state = getattr(self, "_lifecycle", {})
+@@ -650,7 +725,7 @@ class ManagementSession:
+                 or config.get("usesAncestorConfig", False) is not False
+                 or config.get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+                 or config.get("reverting", False) is not False
+-                or body.get("ttlConfig") != before.get("ttlConfig")
++                or digest(body.get("ttlConfig")) != digest(before.get("ttlConfig"))
+             ):
+                 raise ValueError("lifecycle after projection or unrelated configuration differs")
+             state["after"] = body
+@@ -668,7 +743,7 @@ class ManagementSession:
+             if not isinstance(body, dict) or body.get("name") != expected or body.get("done") is not True or body.get("error") is not None:
+                 raise ValueError("one-poll lifecycle restore identity or completion differs")
+         elif slot == "index-lifecycle-restored":
+-            if body != state.get("before"):
++            if digest(body) != digest(state.get("before")):
+                 self.lifecycle_failed = True
+             state["restored"] = body
+@@ -703,6 +778,7 @@ def validate_saved_management(receipt, snapshot, permission):
+         response = row.get("response")
+         if (
+             not isinstance(response, dict)
++            or type(response.get("status")) is not int
+             or row.get("responseDigest") != digest(response)
+             or event.get("responseDigest") != digest(response)
+             or event.get("bodyDigest") != digest(response.get("body"))
+@@ -768,16 +844,35 @@ def validate_saved_management(receipt, snapshot, permission):
+         for key, value in restored_attestation.items()
+         if key != "_lifecycleApplyDisposition"
+     }
+-    for key in ("observation:index-lifecycle-poll", "recovery:index-lifecycle-poll-restore"):
+-        poll = lifecycle.get(key)
+-        if not isinstance(poll, dict) or poll.get("done") is not True or poll.get("error") is not None:
+-            raise ValueError("saved lifecycle poll evidence differs")
++    prefix = "projects/fireemu-35fe6/databases/(default)/operations/"
++    for phase, operation_slot, poll_slot in (
++        ("observation", "index-lifecycle-apply", "index-lifecycle-poll"),
++        ("recovery", "index-lifecycle-restore", "index-lifecycle-poll-restore"),
++    ):
++        operation = lifecycle.get(phase + ":" + operation_slot)
++        poll = lifecycle.get(phase + ":" + poll_slot)
++        name = operation.get("name") if isinstance(operation, dict) else None
++        if (
++            not isinstance(name, str)
++            or not name.startswith(prefix)
++            or re.fullmatch(r"[A-Za-z0-9._~-]+", name.removeprefix(prefix)) is None
++            or operation.get("error") is not None
++            or not isinstance(poll, dict)
++            or poll.get("name") != name
++            or poll.get("done") is not True
++            or poll.get("error") is not None
++        ):
++            raise ValueError("saved lifecycle operation/poll identity differs")
+     if (
+         not isinstance(before, dict)
+         or not isinstance(after, dict)
+-        or restored != before
++        or digest(restored) != digest(before)
++        or before.get("error") is not None
++        or after.get("error") is not None
+         or before.get("name") != LIFECYCLE_FIELD
++        or after.get("name") != LIFECYCLE_FIELD
+         or not isinstance(before.get("indexConfig"), dict)
++        or not isinstance(before["indexConfig"].get("indexes", []), list)
+         or before["indexConfig"].get("usesAncestorConfig") is not True
+         or before["indexConfig"].get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+         or before["indexConfig"].get("reverting", False) is not False
+@@ -786,6 +881,6 @@ def validate_saved_management(receipt, snapshot, permission):
+         or after["indexConfig"].get("usesAncestorConfig", False) is not False
+         or after["indexConfig"].get("ancestorField") != DEFAULT_ANCESTOR_FIELD
+         or after["indexConfig"].get("reverting", False) is not False
+-        or after.get("ttlConfig") != before.get("ttlConfig")
++        or digest(after.get("ttlConfig")) != digest(before.get("ttlConfig"))
+     ):
+         raise ValueError("saved lifecycle projection evidence differs")
+diff --git a/tools/compat-broad/fs-write-limits/shadow_03.py b/tools/compat-broad/fs-write-limits/shadow_03.py
+index b534776..8fc067c 100644
+--- a/tools/compat-broad/fs-write-limits/shadow_03.py
++++ b/tools/compat-broad/fs-write-limits/shadow_03.py
+@@ -12,6 +12,7 @@ from __future__ import annotations
+ import argparse
+ import hashlib
+ import json
++import math
+ import os
+ import sys
+ from pathlib import Path
+@@ -23,7 +24,9 @@ sys.path.insert(0, str(HERE.parent))
+ sys.path.insert(0, str(ROOT / "tools/compat-inventory"))
+ 
+ from broad_contract import digest
+-from compiler_03 import _CATALOG, CAMPAIGN, compile_limits_plan
++from compiler_03 import (
++    _CATALOG, CAMPAIGN, GATE_WALL_SECONDS_MAX, compile_limits_plan, slot_seconds,
++)
+ from expectations_03 import (
+     pending_rows,
+     validate_cleanup,
+@@ -93,7 +96,7 @@ def _real_child(
+                 1, len(json.dumps(body).encode()) if body is not None else 0
+             ),
+             response_byte_limit=plan["requests"][request_index]["responseByteLimit"],
+-            timeout=12,
++            timeout=slot_seconds(plan["requests"][request_index]),
+         )
+ 
+     # The historical profile cannot apply the declared exemption and therefore
+@@ -176,6 +179,29 @@ def _real_child(
+     )
+ 
+ 
++# The daemon and child start before their Gate clock. This is supervisor-only
++# headroom: it does not add a request, enlarge a Gate budget, or authorize I/O.
++SHADOW_STARTUP_HEADROOM_SECONDS = 30
++
++
++def shadow_execution_timeout(part: str) -> int:
++    """Keep the supervisor alive through the compiler's reserved cleanup wall."""
++    if part not in ("A", "B", "ALL"):
++        raise ValueError("closed shadow part required")
++    plan = compile_limits_plan("demo-firestore-probe", "(default)", "0" * 32, part)
++    gate = plan["localGatePlan"]
++    wall, recovery = gate["wallSeconds"], gate["recoverySeconds"]
++    if (
++        type(wall) not in (int, float)
++        or type(recovery) not in (int, float)
++        or not math.isfinite(wall)
++        or not math.isfinite(recovery)
++        or not 0 < recovery < wall <= GATE_WALL_SECONDS_MAX
++    ):
++        raise ValueError("bounded compiled shadow wall/recovery required")
++    return math.ceil(wall) + SHADOW_STARTUP_HEADROOM_SECONDS
++
++
+ def run(output: Path, part: str = "ALL", index_profile: str = "historical") -> dict:
+     import broad
+ 
+@@ -185,11 +211,13 @@ def run(output: Path, part: str = "ALL", index_profile: str = "historical") -> d
+         # The supervisor launches the child with a fixed argument list and a
+         # sanitized environment, so the part is carried by the entrypoint.
+         child_script=(
+-            HERE / "shadow_03b.py" if part == "B" else Path(__file__).resolve()
++            HERE / "shadow_03a.py" if part == "A"
++            else HERE / "shadow_03b.py" if part == "B"
++            else Path(__file__).resolve()
+         ),
+         project="demo-firestore-probe",
+         configuration={"daemon": {"authProjectNumbers": {}}},
+-        execution_timeout=900,
++        execution_timeout=shadow_execution_timeout(part),
+         recovery_grace=1,
+         retain_executed_artifact=True,
+         index_profile=index_profile,
+diff --git a/tools/compat-broad/fs-write-limits/shadow_03a.py b/tools/compat-broad/fs-write-limits/shadow_03a.py
+new file mode 100644
+index 0000000..56730c0
+--- /dev/null
++++ b/tools/compat-broad/fs-write-limits/shadow_03a.py
+@@ -0,0 +1,20 @@
++"""Part A entrypoint for the FS-WRITE-LIMITS-03 artifact shadow.
++
++The owned-artifact supervisor launches its child with a fixed argument list and
++a sanitized environment, so the campaign part cannot travel as a flag or a
++variable. It travels as the entrypoint instead. This module adds no behaviour of
++its own and authorizes nothing.
++"""
++
++from __future__ import annotations
++
++import sys
++from pathlib import Path
++
++HERE = Path(__file__).resolve().parent
++sys.path.insert(0, str(HERE))
++
++from shadow_03 import main
++
++if __name__ == "__main__":
++    raise SystemExit(main([*sys.argv[1:], "--part", "A"]))
+diff --git a/tools/compat-broad/fs-write-limits/test_limits_03_failed_apply_recovery.py b/tools/compat-broad/fs-write-limits/test_limits_03_failed_apply_recovery.py
+index c7ff60a..b4522eb 100644
+--- a/tools/compat-broad/fs-write-limits/test_limits_03_failed_apply_recovery.py
++++ b/tools/compat-broad/fs-write-limits/test_limits_03_failed_apply_recovery.py
+@@ -93,7 +93,13 @@ def test_semantic_invalid_apply_runs_gate_bound_restore_and_stays_held(
+                     if method == "GET" and "/collectionGroups/nx/fields/" in path
+                 )
+                 if field_reads == 2:
+-                    self._respond(o8_fixture.EXEMPT_FIELD_BODY)
++                    # Read actual state, not the intended state of a rejected
++                    # apply. A false exemption here hid a recovery early exit.
++                    self._respond(
++                        o8_fixture.EXEMPT_FIELD_BODY
++                        if state["field"] == "after"
++                        else before
++                    )
+                 elif field_reads >= 3 and final_readback == "unavailable":
+                     self._respond({"error": {"status": "UNAVAILABLE"}}, status=503)
+                 elif field_reads >= 3 and final_readback == "malformed":
+@@ -264,6 +270,11 @@ def test_semantic_invalid_apply_runs_gate_bound_restore_and_stays_held(
+         assert evidence["observation:index-lifecycle-apply"]["body"] == {
+             "error": {"code": 400, "status": "INVALID_ARGUMENT"}
+         }
++    if apply_mode in ("rejected", "incomplete-response"):
++        exemption = evidence["recovery:index-exemption"]
++        assert exemption["body"]["baselineVerified"] is False
++        assert exemption["complete"] is False
++        assert events["recovery:index-exemption"]["completed"] is False
+     restored_evidence = evidence["recovery:index-lifecycle-restored"]["body"]
+     if final_readback == "exact":
+         assert {

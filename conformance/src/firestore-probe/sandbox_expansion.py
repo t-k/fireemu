@@ -20,10 +20,15 @@ def name_of_length(target: int, tag: str) -> str:
         document_bytes = target - slash_bytes - fixed_collection_bytes
         if not pairs <= document_bytes <= pairs * 1500:
             continue
-        lengths = [document_bytes // pairs + (index < document_bytes % pairs) for index in range(pairs)]
+        lengths = [
+            document_bytes // pairs + (index < document_bytes % pairs)
+            for index in range(pairs)
+        ]
         segments: list[str] = []
         for index, length in enumerate(lengths):
-            segments.extend(("c", (tag if index == 0 else "d")[:length].ljust(length, "d")))
+            segments.extend(
+                ("c", (tag if index == 0 else "d")[:length].ljust(length, "d"))
+            )
         name = "/".join(segments)
         if len(name.encode()) == target:
             return name
@@ -36,19 +41,36 @@ def index_sum_name_of_length(target: int, tag: str) -> str:
     if target not in layout:
         raise ValueError(f"unsupported index-sum name length: {target}")
     collection_bytes, document_bytes = layout[target]
-    return f"{tag[:collection_bytes].ljust(collection_bytes, 'c')}/{'d' * document_bytes}"
+    return (
+        f"{tag[:collection_bytes].ljust(collection_bytes, 'c')}/{'d' * document_bytes}"
+    )
 
 
 def _readback(names: list[str]) -> dict[str, Any]:
-    return {"id": "readback", "method": "POST", "path": BATCH_GET, "body": {"documents": names}}
+    return {
+        "id": "readback",
+        "method": "POST",
+        "path": BATCH_GET,
+        "body": {"documents": names},
+    }
 
 
-def _commit_program(program_id: str, writes: list[dict[str, Any]], names: list[str], body: str | None = None) -> dict[str, Any]:
+def _commit_program(
+    program_id: str,
+    writes: list[dict[str, Any]],
+    names: list[str],
+    body: str | None = None,
+) -> dict[str, Any]:
     return {
         "id": program_id,
         "area": "writes",
         "steps": [
-            {"id": "write", "method": "POST", "path": COMMIT, "body": body if body is not None else {"writes": writes}},
+            {
+                "id": "write",
+                "method": "POST",
+                "path": COMMIT,
+                "body": body if body is not None else {"writes": writes},
+            },
             _readback(names),
         ],
     }
@@ -68,7 +90,9 @@ def _raw_request_program(size: int) -> dict[str, Any]:
     if len(payload) > size:
         raise ValueError("raw request target smaller than JSON body")
     payload = payload[:-1] + " " * (size - len(payload)) + "}"
-    return _commit_program(f"writes/limits/raw-11mib/{size}", [_update(name)], [name], payload)
+    return _commit_program(
+        f"writes/limits/raw-11mib/{size}", [_update(name)], [name], payload
+    )
 
 
 def _batch_variant(variant: str) -> dict[str, Any]:
@@ -99,7 +123,12 @@ def _batch_variant(variant: str) -> dict[str, Any]:
         "id": f"writes/batch-write-malformed/{variant}",
         "area": "writes",
         "steps": [
-            {"id": "batch-write", "method": "POST", "path": BATCH_WRITE, "body": {"writes": [_update(names[0]), middle, _update(names[2])]}},
+            {
+                "id": "batch-write",
+                "method": "POST",
+                "path": BATCH_WRITE,
+                "body": {"writes": [_update(names[0]), middle, _update(names[2])]},
+            },
             _readback(names),
         ],
     }
@@ -115,8 +144,56 @@ def _field_path_mask_program(length: int) -> dict[str, Any]:
 
 def _implied_array_key_program(length: int) -> dict[str, Any]:
     name = f"{DOCS}/impliedArrayKey/{length}"
-    value = {"arrayValue": {"values": [{"mapValue": {"fields": {"k" * length: {"integerValue": "1"}}}}]}}
-    return _commit_program(f"writes/limits/implied-array-key/{length}", [_field_update(name, {"a": value})], [name])
+    value = {
+        "arrayValue": {
+            "values": [{"mapValue": {"fields": {"k" * length: {"integerValue": "1"}}}}]
+        }
+    }
+    return _commit_program(
+        f"writes/limits/implied-array-key/{length}",
+        [_field_update(name, {"a": value})],
+        [name],
+    )
+
+
+def _map_key_programs(
+    label: str, key: str, *, write: bool = True
+) -> list[dict[str, Any]]:
+    value = {"mapValue": {"fields": {key: {"integerValue": "1"}}}}
+    query = {
+        "id": f"writes/map-key-validation/{label}/query",
+        "area": "writes",
+        "steps": [
+            {
+                "id": "query",
+                "method": "POST",
+                "path": f"/v1/{DOCS}:runQuery",
+                "body": {
+                    "structuredQuery": {
+                        "from": [{"collectionId": "mapValidation"}],
+                        "where": {
+                            "fieldFilter": {
+                                "field": {"fieldPath": "m"},
+                                "op": "EQUAL",
+                                "value": value,
+                            }
+                        },
+                    }
+                },
+            }
+        ],
+    }
+    if not write:
+        return [query]
+    name = f"{DOCS}/mapValidation/{label}"
+    return [
+        _commit_program(
+            f"writes/map-key-validation/{label}/write",
+            [_field_update(name, {"m": value})],
+            [name],
+        ),
+        query,
+    ]
 
 
 def build_programs() -> list[dict[str, Any]]:
@@ -124,26 +201,62 @@ def build_programs() -> list[dict[str, Any]]:
     programs.extend(
         _batch_variant(variant)
         for variant in (
-            "no-operation", "collection-name", "empty-field-name", "reserved-field-name",
-            "bad-mask-path", "bad-integer", "unknown-value-kind", "bad-timestamp",
+            "no-operation",
+            "collection-name",
+            "empty-field-name",
+            "reserved-field-name",
+            "bad-mask-path",
+            "bad-integer",
+            "unknown-value-kind",
+            "bad-timestamp",
             "exists-precondition-fails",
         )
     )
     programs.extend(_field_path_mask_program(length) for length in (1499, 1500))
     programs.extend(_implied_array_key_program(length) for length in (1494, 1495))
+    for label, key in (
+        ("reserved", "__bad__"),
+        ("empty", ""),
+        ("overlong", "k" * 1_501),
+    ):
+        programs.extend(_map_key_programs(label, key))
+    programs.extend(_map_key_programs("type-tag", "__type__", write=False))
     for length in (2600, 2642, 2643):
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
         write = _field_update(name, {"s": {"stringValue": "x" * 1500}})
-        programs.append(_commit_program(f"writes/limits/index-entry-string-name/{length}", [write], [name]))
+        programs.append(
+            _commit_program(
+                f"writes/limits/index-entry-string-name/{length}", [write], [name]
+            )
+        )
     for length in (4621, 4622, 5000, 6127, 6128):
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
-        programs.append(_commit_program(f"writes/limits/empty-document-name/{length}", [_field_update(name, {})], [name]))
-    for length, count in ((500, 19999), (500, 20000), (2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):
+        programs.append(
+            _commit_program(
+                f"writes/limits/empty-document-name/{length}",
+                [_field_update(name, {})],
+                [name],
+            )
+        )
+    for length, count in (
+        (500, 19999),
+        (500, 20000),
+        (2000, 9549),
+        (2000, 9550),
+        (1000, 19998),
+        (1000, 19999),
+    ):
         name = f"{DOCS}/{index_sum_name_of_length(length, f'g{length}')}"
         values = [{"integerValue": str(index)} for index in range(count)]
         write = _field_update(name, {"a": {"arrayValue": {"values": values}}})
-        programs.append(_commit_program(f"writes/limits/index-entry-sum/{length}-{count}", [write], [name]))
+        programs.append(
+            _commit_program(
+                f"writes/limits/index-entry-sum/{length}-{count}", [write], [name]
+            )
+        )
     names = [f"{DOCS}/decoded11/item{index}" for index in range(11)]
-    writes = [_field_update(name, {"s": {"stringValue": "x" * 1_040_000}}) for name in names]
+    writes = [
+        _field_update(name, {"s": {"stringValue": "x" * 1_040_000}}) for name in names
+    ]
     programs.append(_commit_program("writes/limits/decoded-11x1040000", writes, names))
     return programs

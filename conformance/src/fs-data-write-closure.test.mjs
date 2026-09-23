@@ -13,6 +13,7 @@ const fixturePath = fileURLToPath(
 const requiredConditions = new Set([
   "FS-WRITE-LIMITS-03/batch-malformed-middle",
   "FS-WRITE-LIMITS-03/batch-undecodable-value",
+  "FS-DATA-WRITE/map-value-key-validation",
   "FS-WRITE-LIMITS-03/batch-duplicate-document",
   "FS-LIMIT-COLLECTION-ID",
   "FS-LIMIT-SUBCOLLECTION-DEPTH",
@@ -37,6 +38,18 @@ const requiredConditions = new Set([
 ]);
 
 const requiredRecipes = new Map([
+  [
+    "FS-DATA-WRITE/map-value-key-validation",
+    new Set([
+      "writes/map-key-validation/reserved/write",
+      "writes/map-key-validation/reserved/query",
+      "writes/map-key-validation/empty/write",
+      "writes/map-key-validation/empty/query",
+      "writes/map-key-validation/overlong/write",
+      "writes/map-key-validation/overlong/query",
+      "writes/map-key-validation/type-tag/query",
+    ]),
+  ],
   [
     "FS-LIMIT-COLLECTION-ID",
     new Set([
@@ -156,6 +169,7 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
     assert.ok(
       [
         "PENDING_CORPUS",
+        "PENDING_RECORDING",
         "SAVED_REFERENCE_PENDING_FINAL",
         "PRODUCTION_RECORDED",
         "MISMATCH",

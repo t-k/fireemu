@@ -161,6 +161,23 @@ test("new strict-only map observation remains pending production recording", () 
   assert.equal(condition.status, "PENDING_RECORDING");
 });
 
+test("changed field-path and indexed-value recipes remain pending recording", async () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const { corpus } = await prepareSandboxCorpus();
+  const selected = selectComparableSandboxRecipes(fixture, manifest, corpus, corpus);
+  for (const [conditionId, recipeId] of [
+    ["FS-LIMIT-FIELD-PATH-BYTES", "writes/limits/field-path-mask/1500"],
+    ["FS-LIMIT-INDEXED-FIELD-VALUE-BYTES", "writes/limits/indexed-field-value-bytes"],
+  ]) {
+    const condition = closure.conditions.find((row) => row.conditionId === conditionId);
+    assert.ok(condition.recipeIds.includes(recipeId));
+    assert.ok(selected.pendingRestIds.includes(recipeId));
+    assert.equal(condition.status, "PENDING_RECORDING", conditionId);
+  }
+});
+
 test("recorded conditions contain no changed or unrecorded runnable recipes", async () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));

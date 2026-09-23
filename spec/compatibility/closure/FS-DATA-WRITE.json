@@ -105,7 +105,7 @@
         "writes/limits/field-path-mask/1500"
       ],
       "boundaryStatus": "PENDING_RECORDING",
-      "status": "MISMATCH"
+      "status": "PENDING_RECORDING"
     },
     {
       "conditionId": "FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal",
@@ -135,7 +135,7 @@
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
       "recipeIds": ["writes/limits/indexed-field-value-bytes"],
       "boundaryStatus": "UNBRACKETED",
-      "status": "MISMATCH"
+      "status": "PENDING_RECORDING"
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/implied-map",

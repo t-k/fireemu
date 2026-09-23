@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   projectStreamResponse,
   projectStreamStatus,
+  responseGatedDeadlineIsIndeterminate,
   terminalComplete,
   shouldHalfCloseAfterResponse,
   validateStreamRecipes,
@@ -52,6 +53,13 @@ test("response-gated half-close waits for the empty-write response", () => {
   assert.equal(shouldHalfCloseAfterResponse(recipes[3], 1), false);
   assert.equal(shouldHalfCloseAfterResponse(recipes[3], 2), true);
   assert.equal(shouldHalfCloseAfterResponse(recipes[1], 1), true);
+});
+
+test("client deadline before the gated response is indeterminate", () => {
+  assert.equal(responseGatedDeadlineIsIndeterminate(recipes[3], { code: 4 }, 1), true);
+  assert.equal(responseGatedDeadlineIsIndeterminate(recipes[3], { code: 4 }, 2), false);
+  assert.equal(responseGatedDeadlineIsIndeterminate(recipes[3], { code: 3 }, 1), false);
+  assert.equal(responseGatedDeadlineIsIndeterminate(recipes[1], { code: 4 }, 1), false);
 });
 
 test("a clean half-close completes on status plus end without a close event", () => {

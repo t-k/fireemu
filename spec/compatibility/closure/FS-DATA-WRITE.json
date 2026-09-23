@@ -70,7 +70,11 @@
     {
       "conditionId": "FS-LIMIT-FIELD-PATH-BYTES",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["writes/limits/field-path-bytes", "writes/limits/field-path-direct-mask"],
+      "recipeIds": [
+        "writes/limits/implied-map",
+        "writes/limits/implied-array",
+        "writes/limits/field-path-direct-mask"
+      ],
       "status": "PENDING_CORPUS"
     },
     {

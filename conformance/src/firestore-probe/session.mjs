@@ -20,6 +20,7 @@ const HOST = process.env.FIRESTORE_PROBE_HOST;
 const PROJECT = process.env.FIRESTORE_PROBE_PROJECT ?? "demo-conformance";
 const IN = process.env.FIRESTORE_PROBE_IN;
 const OUT = process.env.FIRESTORE_PROBE_OUT;
+const META_OUT = process.env.FIRESTORE_PROBE_META_OUT;
 const REQUEST_TIMEOUT_MS = Number(process.env.FIRESTORE_PROBE_TIMEOUT_MS ?? 20_000);
 // Production target: `https`, an OAuth bearer token instead of the emulator's `owner`, no
 // emulator wipe route (documents are deleted through the public API instead), and the real
@@ -30,6 +31,12 @@ const TOKEN = process.env.FIRESTORE_PROBE_TOKEN ?? "owner";
 const USER_TOKEN = process.env.FIRESTORE_PROBE_USER_TOKEN;
 const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
 const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
+let requestCount = 0;
+
+function trackedFetch(input, init) {
+  requestCount += 1;
+  return fetch(input, init);
+}
 
 const url = (path) => `${SCHEME}://${HOST}${path.replaceAll("PROJECT", PROJECT)}`;
 const substituteProject = (value) =>
@@ -43,10 +50,13 @@ async function clear(database = "(default)") {
     await clearThroughPublicApi(database);
     return;
   }
-  await fetch(`http://${HOST}/emulator/v1/projects/${PROJECT}/databases/${database}/documents`, {
-    method: "DELETE",
-    signal: timeoutSignal(),
-  });
+  await trackedFetch(
+    `http://${HOST}/emulator/v1/projects/${PROJECT}/databases/${database}/documents`,
+    {
+      method: "DELETE",
+      signal: timeoutSignal(),
+    },
+  );
 }
 
 /**
@@ -73,7 +83,7 @@ async function listCollectionIds(base, parentPath) {
   const ids = [];
   let pageToken;
   do {
-    const listed = await fetch(`${parent}:listCollectionIds`, {
+    const listed = await trackedFetch(`${parent}:listCollectionIds`, {
       method: "POST",
       headers: authorized({ "content-type": "application/json" }),
       body: JSON.stringify(pageToken ? { pageToken } : {}),
@@ -104,7 +114,7 @@ async function deleteCollection(base, parentPath, collectionId) {
       pageSize: "300",
       ...(pageToken ? { pageToken } : {}),
     });
-    const listed = await fetch(`${parent}/${collectionId}?${query}`, {
+    const listed = await trackedFetch(`${parent}/${collectionId}?${query}`, {
       headers: authorized(),
       signal: timeoutSignal(),
     });
@@ -123,7 +133,7 @@ async function deleteCollection(base, parentPath, collectionId) {
   }
   for (let index = 0; index < names.length; index += 400) {
     const writes = names.slice(index, index + 400).map((name) => ({ delete: name }));
-    const commit = await fetch(`${base}:commit`, {
+    const commit = await trackedFetch(`${base}:commit`, {
       method: "POST",
       headers: authorized({ "content-type": "application/json" }),
       body: JSON.stringify({ writes }),
@@ -135,7 +145,7 @@ async function deleteCollection(base, parentPath, collectionId) {
 
 async function seed(documents) {
   for (const document of documents ?? []) {
-    const response = await fetch(url(document.path), {
+    const response = await trackedFetch(url(document.path), {
       method: "PATCH",
       headers: authorized({ "content-type": "application/json" }),
       body: JSON.stringify({ fields: substituteProject(document.fields) }),
@@ -207,7 +217,7 @@ async function step(spec, raw) {
   init.signal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
   let response;
   try {
-    response = await fetch(url(resolvePath(spec.path, raw)), init);
+    response = await trackedFetch(url(resolvePath(spec.path, raw)), init);
   } catch (error) {
     if (error?.name === "TimeoutError" || error?.name === "AbortError") {
       return {
@@ -305,7 +315,13 @@ async function main() {
       results[program.id] = { steps };
     }
   } finally {
-    for (const database of touchedDatabases) await clear(database);
+    try {
+      for (const database of touchedDatabases) await clear(database);
+    } finally {
+      if (META_OUT) {
+        await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`);
+      }
+    }
   }
   await writeFile(OUT, `${JSON.stringify(results, null, 2)}\n`);
 }

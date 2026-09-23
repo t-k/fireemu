@@ -1,0 +1,476 @@
+{
+  "schemaVersion": 1,
+  "parent": "AUTH-ACCOUNT",
+  "parentStatus": "WAITING_ORACLE",
+  "oracleTrack": "disposable-sandbox",
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "scopeDecisions": [
+    {
+      "id": "A1",
+      "decision": "Closure is defined by these behavioral acceptance conditions, as for FS-DATA-WRITE. Denominator surfaces with no account behavior are not enumerated here; surfaces that are account behavior are covered by the recipe of the condition that exercises them.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23"
+    },
+    {
+      "id": "A2",
+      "decision": "All 14 production import hash algorithms are in scope; none is a documented divergence. fireemu implements verification for each.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23"
+    },
+    {
+      "id": "A3",
+      "decision": "AUTH-ACCOUNT owns the effect of configured policies on account operations (duplicate emails, email privacy, password policy, client permissions). Config field parity, SDK policy projection and tenant inheritance belong to AUTH-CONFIG-SDK.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "A4",
+      "decision": "Client IdP sign-in and linking through signInWithIdp needs a real external IdP and belongs to AUTH-FEDERATION. AUTH-ACCOUNT covers Admin link/unlink and client deleteProvider.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-FEDERATION"
+    },
+    {
+      "id": "A5",
+      "decision": "AUTH-ACCOUNT is observed through the REST surface. Client and Admin SDK end-to-end paths belong to AUTH-CONFIG-SDK.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "A6",
+      "decision": "Token refusal codes after disable or delete are counted once, here, and referenced from AUTH-CREDENTIAL.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23"
+    },
+    {
+      "id": "A7",
+      "decision": "Sign-up quota and abuse limits are production behavior and are not excluded; they are observed with the other project-level limits in AUTH-CONFIG-SDK. Any HTTP 429 in this corpus is classified INDETERMINATE.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-CONFIG-SDK"
+    },
+    {
+      "id": "A8",
+      "decision": "Tenant-scoped account routes belong to AUTH-TENANT-BLOCKING.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-TENANT-BLOCKING"
+    },
+    {
+      "id": "A9",
+      "decision": "Custom-token account creation belongs to AUTH-CREDENTIAL; email-link accounts belong to AUTH-ACTION.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-CREDENTIAL"
+    },
+    {
+      "id": "A10",
+      "decision": "MFA factors in imported accounts belong to AUTH-MFA; AUTH-ACCOUNT imports without factors.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23",
+      "movedTo": "AUTH-MFA"
+    },
+    {
+      "id": "A11",
+      "decision": "Multi-expression query semantics are decided by production observation in auth-account/admin/query, not by documentation.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-23"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "AUTH-ACCOUNT/client-password-lifecycle",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/lifecycle"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/client-profile-attributes",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/profile"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/client-password-change",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/password-change"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/input-validation-basic",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/client/validation"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/anonymous-basic",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/anonymous"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/email-canonical-and-duplicate",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/client/email-case"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/disable-reenable",
+      "source": "spec/compatibility/gaps.json#AUTH-U01",
+      "recipeIds": [
+        "auth-account/admin/disable"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/delete-effects",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/delete-effects",
+        "auth-account/admin/delete-effects"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/default-policy-client-update",
+      "source": "spec/compatibility/gaps.json#AUTH-U12",
+      "recipeIds": [
+        "auth-account/policy/default/client-update"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/tampered-token-privileged-update",
+      "source": "spec/compatibility/gaps.json#GAP-AUTH-003",
+      "recipeIds": [
+        "auth-account/privilege/tampered-token"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Historical fireemu-35fe6 production receipts corroborate this row; the sandbox re-record is the closure evidence."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/anonymous-upgrade",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/anonymous-upgrade"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/client-email-change",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/client/email-change"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-create",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/create"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-lookup-selectors",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/lookup"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-update-fields",
+      "source": "spec/compatibility/gaps.json#GAP-AUTH-004",
+      "recipeIds": [
+        "auth-account/admin/update"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/custom-attributes",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/custom-attributes"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/privilege-boundary",
+      "source": "spec/compatibility/gaps.json#AUTH-U13",
+      "recipeIds": [
+        "auth-account/privilege/valid-token-admin-fields",
+        "auth-account/privilege/credentials"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-delete-and-batch-delete",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/delete",
+        "auth-account/admin/batch-delete"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-list-export",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/batch-get"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/admin-query",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/admin/query"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/import-basic",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/admin/import"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/import-hash-formats",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/admin/import-hash/HMAC_SHA512",
+        "auth-account/admin/import-hash/HMAC_SHA256",
+        "auth-account/admin/import-hash/HMAC_SHA1",
+        "auth-account/admin/import-hash/HMAC_MD5",
+        "auth-account/admin/import-hash/MD5",
+        "auth-account/admin/import-hash/SHA1",
+        "auth-account/admin/import-hash/SHA256",
+        "auth-account/admin/import-hash/SHA512",
+        "auth-account/admin/import-hash/PBKDF_SHA1",
+        "auth-account/admin/import-hash/PBKDF2_SHA256",
+        "auth-account/admin/import-hash/SCRYPT",
+        "auth-account/admin/import-hash/STANDARD_SCRYPT",
+        "auth-account/admin/import-hash/BCRYPT",
+        "auth-account/admin/import-hash/ARGON2",
+        "auth-account/admin/import-hash/errors"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "All 14 algorithms of the Identity Toolkit v1 discovery document (read 2026-09-23) are in scope. fireemu must verify every one, including Firebase SCRYPT with a configurable project hashConfig."
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/phone-accounts",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/phone"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/provider-link-unlink",
+      "source": "spec/compatibility/gaps.json#GAP-AUTH-008",
+      "recipeIds": [
+        "auth-account/provider"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/uid-reuse-after-delete",
+      "source": "spec/compatibility/gaps.json#AUTH-U11",
+      "recipeIds": [
+        "auth-account/admin/uid-reuse"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/duplicate-email-mode",
+      "source": "docs/compatibility/emulator-scope.md#in-scope-application-facing-contracts",
+      "recipeIds": [
+        "auth-account/config/duplicate-email"
+      ],
+      "configProjections": [
+        "dup-email",
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/email-privacy-off",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/config/email-privacy"
+      ],
+      "configProjections": [
+        "privacy-off",
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/password-policy-routes-and-custom",
+      "source": "spec/compatibility/gaps.json#AUTH-U12",
+      "recipeIds": [
+        "auth-account/policy/default/routes",
+        "auth-account/policy/enforce-custom",
+        "auth-account/policy/not-enforce"
+      ],
+      "configProjections": [
+        "default",
+        "policy-enforce-custom",
+        "policy-not-enforce"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/client-permissions",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account/config/client-permissions"
+      ],
+      "configProjections": [
+        "client-permissions",
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/value-classes",
+      "source": "spec/compatibility/gaps.json#AUTH-U13",
+      "recipeIds": [
+        "auth-account/values"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-account",
+        "auth/historical-23",
+        "auth-saved-reference/4-corpora",
+        "cargo:fireemu-core-auth+fireemu-adapter-http"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_REVIEW"
+    },
+    {
+      "conditionId": "AUTH-ACCOUNT/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "AUTH-ACCOUNT"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_REVIEW"
+    }
+  ]
+}

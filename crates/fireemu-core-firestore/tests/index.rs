@@ -127,7 +127,7 @@ fn index_entry_size_and_total_size_budgets_are_independent() {
         .document_index_usage(&long_path, &array(3000))
         .unwrap_err()
         .to_string()
-        .contains("FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT"));
+        .contains("Transaction too big. Decrease transaction size."));
 }
 
 #[test]

@@ -87,6 +87,21 @@ def _write_instance(output, origin, nonce="n-1"):
     )
 
 
+def _read_time_cases():
+    import broad
+
+    program = broad.bounded_firestore_program("reads/read-time")[0]
+    return [
+        {
+            "id": f"firestore:reads/read-time#{step['id']}",
+            "status": "match",
+            "family": "reads",
+            "actual": {"status": 200, "code": "OK"},
+        }
+        for step in program["steps"]
+    ]
+
+
 def _isolated_read_poststate(origin, proxy_origin):
     script = Path("tools/compat-broad/read_time_replay.py").resolve()
     import_statement = (
@@ -238,9 +253,7 @@ def test_child_readback_sets_validation_only_for_exact_document_and_integer_two(
         (output / "cases.json").write_text(
             json.dumps(
                 {
-                    "cases": [
-                        {"id": "read-time", "status": "observed", "family": "reads"}
-                    ],
+                    "cases": _read_time_cases(),
                     "recordingComplete": True,
                 }
             )
@@ -356,23 +369,25 @@ def test_child_marks_selected_unreceived_observation_incomplete(tmp_path, code):
 
     def delegate(child_output, nonce, program):
         _write_instance(output, origin, nonce)
+        cases = _read_time_cases()
+        selected = next(
+            row
+            for row in cases
+            if row["id"] == "firestore:reads/read-time#read-current"
+        )
+        selected.update(status="indeterminate", actual={"status": 0, "code": code})
+        cases.append(
+            {
+                "id": "firestore:other-program#unrelated",
+                "status": "indeterminate",
+                "family": "reads",
+                "actual": {"status": 0, "code": code},
+            }
+        )
         (output / "cases.json").write_text(
             json.dumps(
                 {
-                    "cases": [
-                        {
-                            "id": "firestore:reads/read-time#read-current",
-                            "status": "indeterminate",
-                            "family": "reads",
-                            "actual": {"status": 0, "code": code},
-                        },
-                        {
-                            "id": "firestore:other-program#unrelated",
-                            "status": "indeterminate",
-                            "family": "reads",
-                            "actual": {"status": 0, "code": code},
-                        },
-                    ]
+                    "cases": cases,
                 }
             )
         )
@@ -383,6 +398,55 @@ def test_child_marks_selected_unreceived_observation_incomplete(tmp_path, code):
         assert report["stateValidation"] is True
         assert report["recordingComplete"] is False
         assert report["cases"][0]["status"] == "indeterminate"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "variant", ["missing-one", "all-omitted", "duplicate", "upstream-false"]
+)
+def test_child_requires_exactly_once_complete_selected_observations(tmp_path, variant):
+    from read_time_replay import run_child
+
+    server, thread, _requests = _poststate_server(
+        200,
+        {
+            "name": _expected_document(),
+            "fields": {"v": {"integerValue": "2"}},
+        },
+    )
+    output = tmp_path / "output"
+    output.mkdir()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    cases = _read_time_cases()
+    recording_complete = True
+    if variant == "missing-one":
+        cases.pop()
+    elif variant == "all-omitted":
+        cases.clear()
+    elif variant == "duplicate":
+        cases.append(dict(cases[0]))
+    else:
+        recording_complete = False
+
+    def delegate(child_output, nonce, program):
+        _write_instance(output, origin, nonce)
+        (output / "cases.json").write_text(
+            json.dumps(
+                {
+                    "cases": cases,
+                    "recordingComplete": recording_complete,
+                }
+            )
+        )
+
+    try:
+        assert run_child(output, "n-1", "reads/read-time", delegate=delegate) == 2
+        report = json.loads((output / "cases.json").read_text())
+        assert report["stateValidation"] is True
+        assert report["recordingComplete"] is False
     finally:
         server.shutdown()
         server.server_close()
@@ -405,24 +469,21 @@ def test_child_keeps_received_http_error_recording_complete(tmp_path):
 
     def delegate(child_output, nonce, program):
         _write_instance(output, origin, nonce)
-        (output / "cases.json").write_text(
-            json.dumps(
-                {
-                    "cases": [
-                        {
-                            "id": "firestore:reads/read-time#read-current",
-                            "status": "mismatch",
-                            "family": "reads",
-                            "actual": {
-                                "status": 400,
-                                "code": "INVALID_ARGUMENT",
-                                "body": {"error": "semantic mismatch"},
-                            },
-                        }
-                    ]
-                }
-            )
+        cases = _read_time_cases()
+        selected = next(
+            row
+            for row in cases
+            if row["id"] == "firestore:reads/read-time#read-current"
         )
+        selected.update(
+            status="mismatch",
+            actual={
+                "status": 400,
+                "code": "INVALID_ARGUMENT",
+                "body": {"error": "semantic mismatch"},
+            },
+        )
+        (output / "cases.json").write_text(json.dumps({"cases": cases}))
 
     try:
         assert run_child(output, "n-1", "reads/read-time", delegate=delegate) == 0

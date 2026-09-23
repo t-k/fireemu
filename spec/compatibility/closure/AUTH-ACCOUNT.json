@@ -108,8 +108,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 10
@@ -136,8 +136,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 11
@@ -164,8 +164,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 10
@@ -192,8 +192,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 7
@@ -220,8 +220,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 5
@@ -248,8 +248,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 6
@@ -276,8 +276,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 16
@@ -305,8 +305,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 13
@@ -333,8 +333,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 31
@@ -361,8 +361,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 4
@@ -388,8 +388,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 10
@@ -415,8 +415,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 9
@@ -442,8 +442,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 16
@@ -469,8 +469,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 14
@@ -496,8 +496,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 19
@@ -523,8 +523,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 30,
@@ -570,8 +570,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 43
@@ -598,8 +598,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 17
@@ -625,8 +625,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 11
@@ -652,8 +652,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 32
@@ -679,8 +679,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 15
@@ -721,8 +721,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 159
@@ -748,8 +748,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 22
@@ -775,8 +775,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 17
@@ -802,8 +802,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 9
@@ -830,8 +830,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 9
@@ -858,8 +858,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 10
@@ -895,8 +895,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 35
@@ -923,8 +923,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 7
@@ -950,8 +950,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "rows": {
           "MATCH": 33
@@ -992,8 +992,8 @@
             "project": "fireemu-oracle-idp"
           }
         ],
-        "finalArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931",
+        "finalArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c",
         "comparisonPath": "spec/compatibility/closure/evidence/AUTH-ACCOUNT-comparison.json",
         "authAccount": {
           "MATCH": 630,
@@ -1008,10 +1008,11 @@
           "result": "48/48 MATCH across auth-basic-v2, auth-display-name, auth-password, auth-profile"
         },
         "native": {
-          "nextest": "cargo nextest run --workspace --profile pr: 3279 passed",
+          "nextest": "cargo nextest run --workspace --profile pr: 3287 passed",
           "federationCorpus": "tools/compat-broad/auth-account-federation/test_corpus.py: 63 passed",
           "clippy": "cargo clippy --workspace --all-targets -- -D warnings: clean"
-        }
+        },
+        "artifactCopy": "docs.local/runs/auth-account-final-20260924/fireemu (private; debug builds are not reproducible)"
       },
       "note": "The one AUTH-ACCOUNT row that differs is the documented message-text divergence of custom-attributes (scope decision A12)."
     },

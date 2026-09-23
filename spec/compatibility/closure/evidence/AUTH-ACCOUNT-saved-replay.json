@@ -1,6 +1,6 @@
 {
   "allCasesMatch": true,
-  "comparisonDigest": "cb1461ced5e7958a79d0b69814d8e9ec3b93bea30df48f45a18e8aef85b0e2ef",
+  "comparisonDigest": "af9bff5e57b9af5593e5e78830d7b47f398a52868d7f795e01584d2eae45b550",
   "corpora": {
     "auth-basic-v2": {
       "caseCount": 12,
@@ -13,8 +13,8 @@
       },
       "corpus": "auth-basic-v2",
       "currentLocal": {
-        "localArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "localBuildInputs": "c376ef07510f48a17463f6b2593254c74fb8bc24f66a663b7f665778ec9aeaab",
+        "localArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "localBuildInputs": "fdd9873d19b75e7a15cb4581c5189446861a0bd76d9debffe0e5dcb624dab228",
         "localCases": [
           {
             "checks": {
@@ -154,13 +154,13 @@
         "localConfigurationFileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
         "localConfigurationSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
         "localProbeInputs": "3b02c2a7968424a30bdc457f6463ff2744beb779d031fc0a241a1d8bff9ad075",
-        "localRecordedAt": "2026-09-23T15:44:17.292580+00:00",
+        "localRecordedAt": "2026-09-23T16:23:02.266558+00:00",
         "ownedProcess": {
           "exitCode": 0,
           "listenersClosed": true,
           "stopped": true
         },
-        "runtimeSourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931"
+        "runtimeSourceCommit": "2700398ea17233779374ff18278f97357fb5a75c"
       },
       "matchCount": 12,
       "mismatchCases": [],
@@ -368,8 +368,8 @@
       },
       "corpus": "auth-display-name",
       "currentLocal": {
-        "localArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "localBuildInputs": "c376ef07510f48a17463f6b2593254c74fb8bc24f66a663b7f665778ec9aeaab",
+        "localArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "localBuildInputs": "fdd9873d19b75e7a15cb4581c5189446861a0bd76d9debffe0e5dcb624dab228",
         "localCases": [
           {
             "checks": {
@@ -507,13 +507,13 @@
         "localConfigurationFileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
         "localConfigurationSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
         "localProbeInputs": "d937b7707cad84b4f009c2a9ef3c3c670a2ed19ad6a25926a7dff7423d0141c4",
-        "localRecordedAt": "2026-09-23T15:44:17.905605+00:00",
+        "localRecordedAt": "2026-09-23T16:23:03.129926+00:00",
         "ownedProcess": {
           "exitCode": 0,
           "listenersClosed": true,
           "stopped": true
         },
-        "runtimeSourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931"
+        "runtimeSourceCommit": "2700398ea17233779374ff18278f97357fb5a75c"
       },
       "matchCount": 12,
       "mismatchCases": [],
@@ -719,8 +719,8 @@
       },
       "corpus": "auth-password",
       "currentLocal": {
-        "localArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "localBuildInputs": "c376ef07510f48a17463f6b2593254c74fb8bc24f66a663b7f665778ec9aeaab",
+        "localArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "localBuildInputs": "fdd9873d19b75e7a15cb4581c5189446861a0bd76d9debffe0e5dcb624dab228",
         "localCases": [
           {
             "checks": {
@@ -872,13 +872,13 @@
         "localConfigurationFileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
         "localConfigurationSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
         "localProbeInputs": "812c57efcac0ad61ad9b8b9fd9bc52e4d0ec15c4b5af743f0fe75bfb0cc07ae0",
-        "localRecordedAt": "2026-09-23T15:44:18.215266+00:00",
+        "localRecordedAt": "2026-09-23T16:23:03.528216+00:00",
         "ownedProcess": {
           "exitCode": 0,
           "listenersClosed": true,
           "stopped": true
         },
-        "runtimeSourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931"
+        "runtimeSourceCommit": "2700398ea17233779374ff18278f97357fb5a75c"
       },
       "matchCount": 12,
       "mismatchCases": [],
@@ -1098,8 +1098,8 @@
       },
       "corpus": "auth-profile",
       "currentLocal": {
-        "localArtifactSha256": "2e1dfdff8fbb1b99023d5f7df992b418b8c6127138d86ea19a8397540c96ca82",
-        "localBuildInputs": "c376ef07510f48a17463f6b2593254c74fb8bc24f66a663b7f665778ec9aeaab",
+        "localArtifactSha256": "e5c207369b8ce7b30e1ef11c289fda84f5cb7a1422597f1e6129fa1140d75d36",
+        "localBuildInputs": "fdd9873d19b75e7a15cb4581c5189446861a0bd76d9debffe0e5dcb624dab228",
         "localCases": [
           {
             "checks": {
@@ -1237,13 +1237,13 @@
         "localConfigurationFileSha256": "57214114009a6bc113c3acfd10e2fe27613bde8aaa72a1807c38a275883fb230",
         "localConfigurationSha256": "dc4466f0080ac58a25e2df92b765d1d666052fef735e94f4fe697a2a2507ada4",
         "localProbeInputs": "356f77f6a16dc0f889a337e5479aa3c9abdb29753197cd3db655fd0926a53d04",
-        "localRecordedAt": "2026-09-23T15:44:17.596783+00:00",
+        "localRecordedAt": "2026-09-23T16:23:02.716755+00:00",
         "ownedProcess": {
           "exitCode": 0,
           "listenersClosed": true,
           "stopped": true
         },
-        "runtimeSourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931"
+        "runtimeSourceCommit": "2700398ea17233779374ff18278f97357fb5a75c"
       },
       "matchCount": 12,
       "mismatchCases": [],
@@ -1440,7 +1440,7 @@
     }
   },
   "kind": "auth-saved-reference-replay-v2",
-  "runManifestSha256": "2bd36ccfac3ed0bf04bc7ac2b63df5015b146f707392819bf327371ea83a3b8e",
+  "runManifestSha256": "d0344d9862b307fa83d07c7549cb4ad5728cd28aba6b7afa17b55a1654345a1d",
   "schemaVersion": 2,
-  "sourceCommit": "dae85301f5f7a8950818747bf4cab0650cdd4931"
+  "sourceCommit": "2700398ea17233779374ff18278f97357fb5a75c"
 }

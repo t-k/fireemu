@@ -141,12 +141,54 @@ test("AUTH-ACCOUNT closure inventory cannot silently omit a declared condition",
           `${label}: ${divergence.row} names a recorded scope decision`,
         );
       }
+      // A message-text divergence may differ only in the text after the error code.
+      for (const divergence of divergences.filter(({ kind }) => kind === "message-text")) {
+        const compared = comparison.rows.find(({ row }) => row === divergence.row);
+        assert.ok(compared, `${label}: ${divergence.row} is compared`);
+        if (compared.status === "MATCH") continue;
+        assert.equal(compared.sameErrorCode, true, `${label}: ${divergence.row} keeps the code`);
+        assert.deepEqual(
+          compared.differences.toSorted(),
+          ["body.error.errors.0.message", "body.error.message"],
+          `${label}: ${divergence.row} differs only in its message`,
+        );
+      }
       const documented = new Set(divergences.map(({ row }) => row));
       const off = rows
         .filter(({ status, row }) => status !== "MATCH" && !documented.has(row))
         .map(({ row }) => row);
       if (condition.conditionId !== "AUTH-ACCOUNT/final-artifact-regression") {
         assert.deepEqual(off, [], `${label}: every row matches production`);
+      } else {
+        // The regression's figures are read from the committed evidence, not typed by hand.
+        assert.deepEqual(condition.evidence.authAccount, comparison.summary, label);
+        const everyDocumented = new Set(
+          closure.conditions.flatMap(({ evidence }) =>
+            (evidence?.documentedDivergences ?? []).map(({ row }) => row),
+          ),
+        );
+        assert.deepEqual(
+          off.filter((row) => !everyDocumented.has(row)),
+          [],
+          `${label}: every differing row is a documented divergence`,
+        );
+        const replay = JSON.parse(
+          readFileSync(
+            fileURLToPath(
+              new URL(`../../${condition.evidence.savedReference.path}`, import.meta.url),
+            ),
+            "utf8",
+          ),
+        );
+        assert.equal(replay.allCasesMatch, true, label);
+        assert.equal(replay.sourceCommit, condition.evidence.sourceCommit, label);
+        for (const corpus of Object.values(replay.corpora)) {
+          assert.equal(
+            corpus.currentLocal.localArtifactSha256,
+            condition.evidence.finalArtifactSha256,
+            label,
+          );
+        }
       }
     }
   }

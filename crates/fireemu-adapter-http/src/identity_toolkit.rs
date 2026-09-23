@@ -8147,9 +8147,10 @@ fn batch_row_user(
     let (totp_factors, phone_factors) =
         batch_row_factors(row, local_id, email.is_some(), email_verified, at)?;
     let password = batch_row_password(row)?;
-    let imported_password = match (&password, hash_spec) {
-        (None, Some(spec)) => batch_row_imported_hash(row, spec)?,
-        _ => None,
+    let imported_password = if password.is_none() {
+        batch_row_imported_hash(row, hash_spec)?
+    } else {
+        None
     };
     let provider = if password.is_some() || imported_password.is_some() || email.is_some() {
         Provider::Password
@@ -8187,7 +8188,7 @@ fn batch_row_user(
 /// adapter's verifier. A row without a hash has no password credential.
 fn batch_row_imported_hash(
     row: &Value,
-    spec: &password_hash::HashSpec,
+    spec: Option<&password_hash::HashSpec>,
 ) -> Result<Option<fireemu_core_auth::store::ImportedPasswordHash>, JsonResponse> {
     let Some(hash) = opt_str(row, "passwordHash")? else {
         return Ok(None);
@@ -8200,8 +8201,13 @@ fn batch_row_imported_hash(
         }
         None => Vec::new(),
     };
+    // Without `hashAlgorithm` production still keeps the hash as the password credential;
+    // no password ever matches it.
     Ok(Some(fireemu_core_auth::store::ImportedPasswordHash {
-        spec: password_hash::encode(spec),
+        spec: spec.map_or_else(
+            || "{\"algorithm\":\"UNSPECIFIED\"}".to_owned(),
+            password_hash::encode,
+        ),
         hash,
         salt,
     }))
@@ -8234,6 +8240,19 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
             }
         }
     }
+    // Bytes fields are decoded with the request, before anything else is validated.
+    for (index, row) in rows.iter().enumerate() {
+        for (key, field) in [("passwordHash", "password"), ("salt", "salt")] {
+            if let Some(text) = row.get(key).and_then(Value::as_str) {
+                if !text.starts_with("fakeHash:") && password_hash::base64_decode(text).is_none() {
+                    return error(
+                        400,
+                        &format!("Invalid value at 'users[{index}].{field}' (TYPE_BYTES), Base64 decoding failed for {text:?}"),
+                    );
+                }
+            }
+        }
+    }
     // The hash algorithm and its parameters apply to every row of the request; production
     // refuses the whole request when they are invalid.
     let hash_spec = match body.get("hashAlgorithm") {
@@ -8257,6 +8276,7 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
                 continue;
             }
         };
+        let imported_hash = user.imported_password.is_some();
         let import_result = if store.user_by_id(&user.local_id).is_some() {
             if !allow_overwrite {
                 errors.push(refused(
@@ -8279,8 +8299,11 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
         } else {
             store.import_user(user)
         };
-        if let Err(e) = import_result {
-            errors.push(refused(e.to_string()));
+        match import_result {
+            // Production stamps an imported hash with the import time.
+            Ok(uid) if imported_hash => store.set_password_updated_at(&uid, at),
+            Ok(_) => {}
+            Err(e) => errors.push(refused(e.to_string())),
         }
     }
     JsonResponse {

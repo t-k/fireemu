@@ -5679,7 +5679,9 @@ fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semant
         &json!({"users": [{
             "localId": "unsupported-hash-user",
             "email": "unsupported-hash-user@example.com",
-            "passwordHash": "scrypt$unreadable"
+            // Well-formed bytes that no algorithm was named for: production keeps them as the
+            // credential and no password matches (a malformed base64 value is refused).
+            "passwordHash": "c2NyeXB0LXVucmVhZGFibGU="
         }]}),
     );
     assert_eq!(status, 200, "{unsupported}");
@@ -11825,25 +11827,44 @@ fn imported_production_hash_formats_sign_in_with_their_password_only() {
 #[test]
 fn invalid_hash_parameters_refuse_the_whole_import() {
     let s = state();
+    let argon = |overrides: Value| {
+        let mut params = json!({"hashType": "ARGON2_ID", "iterations": 2, "memoryCostKib": 1024, "parallelism": 1, "hashLengthBytes": 32});
+        for (k, v) in overrides.as_object().unwrap() {
+            params[k] = v.clone();
+        }
+        json!({"hashAlgorithm": "ARGON2", "argon2Parameters": params})
+    };
+    let scrypt = |rounds: u32, memory: u32| json!({"hashAlgorithm": "SCRYPT", "signerKey": "AAAA", "rounds": rounds, "memoryCost": memory});
+    // Every code the Identity Platform sandbox answered (recording 2026-09-23).
     for (options, code) in [
-        (
-            json!({"hashAlgorithm": "PBKDF_SHA1"}),
-            "INVALID_HASH_ROUNDS",
-        ),
+        (json!({"hashAlgorithm": "NOT_AN_ALGORITHM"}), "INVALID_HASH_ALGORITHM"),
+        (json!({"hashAlgorithm": "PBKDF_SHA1"}), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "PBKDF_SHA1", "rounds": 0}), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "PBKDF_SHA1", "rounds": 120_001}), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "SHA256", "rounds": 8193}), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "MD5", "rounds": 8193}), "INVALID_HASH_ROUNDS"),
         (json!({"hashAlgorithm": "HMAC_SHA256"}), "EMPTY_HASH_KEY"),
+        (scrypt(8, 15), "INVALID_HASH_MEMORY_COSTS"),
+        (scrypt(8, 0), "INVALID_HASH_MEMORY_COSTS"),
+        (scrypt(9, 14), "INVALID_HASH_ROUNDS"),
+        (scrypt(0, 14), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "STANDARD_SCRYPT", "blockSize": 8, "parallelization": 1, "dkLen": 64}), "INVALID_HASH_PARAMETER"),
+        (json!({"hashAlgorithm": "STANDARD_SCRYPT", "cpuMemCost": 1024, "blockSize": 8, "parallelization": 1, "dkLen": 0}), "INVALID_HASH_PARAMETER"),
+        (json!({"hashAlgorithm": "ARGON2"}), "INVALID_ARGON2_MEMORY_COST"),
+        (argon(json!({"memoryCostKib": 32769})), "INVALID_ARGON2_MEMORY_COST"),
+        (argon(json!({"iterations": 17})), "INVALID_ARGON2_ITERATIONS"),
+        (argon(json!({"parallelism": 0})), "INVALID_ARGON2_PARALLELISM"),
+        (argon(json!({"hashType": "HASH_TYPE_UNSPECIFIED"})), "INVALID_ARGON2_HASH_TYPE"),
         (
-            json!({"hashAlgorithm": "ARGON2"}),
-            "INVALID_ARGON2_MEMORY_COST",
+            json!({"hashAlgorithm": "SHA256", "users": [{"localId": "refused", "passwordHash": "not base64!"}]}),
+            "Invalid value at 'users[0].password' (TYPE_BYTES), Base64 decoding failed for \"not base64!\"",
         ),
     ] {
         let mut request = options.clone();
-        request["users"] = json!([{"localId": "refused", "passwordHash": "AAAA", "salt": "AAAA"}]);
-        let (status, response) = admin(
-            &s,
-            "POST",
-            &format!("{ADMIN}/accounts:batchCreate"),
-            &request,
-        );
+        if request.get("users").is_none() {
+            request["users"] = json!([{"localId": "refused", "passwordHash": "AAAA", "salt": "AAAA"}]);
+        }
+        let (status, response) = admin(&s, "POST", &format!("{ADMIN}/accounts:batchCreate"), &request);
         assert_eq!(status, 400, "{options}: {response}");
         assert_eq!(response["error"]["message"], code, "{options}");
         assert!(s.store.lock().unwrap().user_by_id("refused").is_none());
@@ -11963,4 +11984,43 @@ fn account_operation_errors_carry_production_messages() {
         client_update(json!({"idToken": signed["idToken"], "email": "not-an-email"})),
         "INVALID_EMAIL"
     );
+}
+
+/// Production keeps a hash imported without `hashAlgorithm`, or with a three-byte Argon2
+/// length, as a password credential with `passwordUpdatedAt` (it just never matches).
+#[test]
+fn imported_hashes_production_accepts_are_password_credentials() {
+    let s = state();
+    for (id, request) in [
+        (
+            "no-algorithm",
+            json!({"users": [{"localId": "no-algorithm", "email": "na@example.com", "passwordHash": "AAAA", "salt": "AAAA"}]}),
+        ),
+        (
+            "argon-short",
+            json!({"hashAlgorithm": "ARGON2", "argon2Parameters": {"hashType": "ARGON2_ID", "iterations": 2, "memoryCostKib": 1024, "parallelism": 1, "hashLengthBytes": 3}, "users": [{"localId": "argon-short", "email": "as@example.com", "passwordHash": "AAAA", "salt": "AAAA"}]}),
+        ),
+    ] {
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &request,
+        );
+        assert_eq!(status, 200, "{id}: {response}");
+        assert!(response.get("error").is_none(), "{id}: {response}");
+        let (_, found) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [id]}),
+        );
+        let user = &found["users"][0];
+        assert_eq!(user["passwordHash"], "UkVEQUNURUQ=", "{id}: {found}");
+        assert!(user["passwordUpdatedAt"].is_number(), "{id}: {found}");
+        assert_eq!(
+            user["providerUserInfo"][0]["providerId"], "password",
+            "{id}: {found}"
+        );
+    }
 }

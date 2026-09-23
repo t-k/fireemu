@@ -444,6 +444,32 @@ async function check() {
   }
 }
 
+/** The paths where two recordings differ, and whether their error messages share the code. */
+function differenceSummary(production, fireemu) {
+  const differences = [];
+  const walk = (a, b, path) => {
+    if (JSON.stringify(a) === JSON.stringify(b)) return;
+    if (
+      a &&
+      b &&
+      typeof a === "object" &&
+      typeof b === "object" &&
+      Array.isArray(a) === Array.isArray(b)
+    ) {
+      for (const key of new Set([...Object.keys(a), ...Object.keys(b)]))
+        walk(a[key], b[key], `${path}.${key}`);
+      return;
+    }
+    differences.push(path.slice(1));
+  };
+  walk(production, fireemu, "");
+  const code = (recorded) => String(recorded?.body?.error?.message ?? "").split(" : ")[0];
+  return {
+    differences,
+    sameErrorCode: code(production) !== "" && code(production) === code(fireemu),
+  };
+}
+
 /**
  * Writes the committed closure evidence from the last `check`: the artifact, the fixture it
  * was compared with, and every row's classification (no response bodies).
@@ -457,7 +483,11 @@ async function exportComparison(out) {
     artifactSha256: comparison.artifactSha256,
     fixtureSha256,
     summary: comparison.summary,
-    rows: comparison.rows.map(({ row, status }) => ({ row, status })),
+    rows: comparison.rows.map(({ row, status, production, fireemu }) =>
+      status === "MISMATCH"
+        ? Object.assign({ row, status }, differenceSummary(production, fireemu))
+        : { row, status },
+    ),
   };
   await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));

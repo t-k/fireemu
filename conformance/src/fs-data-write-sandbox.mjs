@@ -105,11 +105,20 @@ export function freezeSandboxFixture({
   corpus,
   first,
   second,
+  firstStream,
+  secondStream,
   recordedAt,
   harnessRevision,
   sdkVersions,
+  credentialToken,
 }) {
   validateSandboxCorpus(corpus);
+  if (typeof credentialToken !== "string" || credentialToken.length === 0) {
+    throw new Error("credential token is required for leak inspection");
+  }
+  if (JSON.stringify({ first, second, firstStream, secondStream }).includes(credentialToken)) {
+    throw new Error("recorded response contains a credential token");
+  }
   const differences = compareRecordings(first, second);
   if (differences.length > 0)
     throw new Error(`nondeterministic production rows: ${differences.join(", ")}`);
@@ -133,6 +142,21 @@ export function freezeSandboxFixture({
       }
     }
   }
+  const liveStreams = (corpus.streamRecipes ?? []).filter((recipe) => recipe.transport === "grpc");
+  if (liveStreams.length > 0) {
+    if (!firstStream || !secondStream) throw new Error("incomplete stream recording");
+    for (const recipe of liveStreams) {
+      for (const recording of [firstStream, secondStream]) {
+        const result = recording[recipe.id];
+        if (!result || !Number.isInteger(result.status?.code) || !Array.isArray(result.events)) {
+          throw new Error(`incomplete stream recording: ${recipe.id}`);
+        }
+      }
+    }
+    if (JSON.stringify(canonical(firstStream)) !== JSON.stringify(canonical(secondStream))) {
+      throw new Error("nondeterministic stream recording");
+    }
+  }
   if (
     !Array.isArray(recordedAt) ||
     recordedAt.length !== 2 ||
@@ -143,7 +167,7 @@ export function freezeSandboxFixture({
   if (!/^[0-9a-f]{40}$/.test(harnessRevision) || !sdkVersions || typeof sdkVersions !== "object") {
     throw new Error("harness revision and SDK versions are required");
   }
-  if (JSON.stringify(first).includes("fireemu-oracle-sbx")) {
+  if (JSON.stringify({ first, firstStream }).includes("fireemu-oracle-sbx")) {
     throw new Error("production project identity was not normalized");
   }
   return {
@@ -159,7 +183,15 @@ export function freezeSandboxFixture({
         sha256(JSON.stringify(canonical(first))),
         sha256(JSON.stringify(canonical(second))),
       ],
+      streamRecordingDigests:
+        liveStreams.length === 0
+          ? []
+          : [
+              sha256(JSON.stringify(canonical(firstStream))),
+              sha256(JSON.stringify(canonical(secondStream))),
+            ],
     },
     programs: first,
+    streams: firstStream ?? {},
   };
 }

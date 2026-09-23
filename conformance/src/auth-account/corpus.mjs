@@ -21,6 +21,18 @@ export const BASELINE_CONFIG = {
   ),
 };
 
+/**
+ * What the account-behaviour switches read as when no program has changed them (the Identity
+ * Platform defaults after initialization). Every recording checks them at start and end.
+ */
+export const CONFIG_DEFAULTS = {
+  "signIn.allowDuplicateEmails": undefined,
+  "emailPrivacyConfig.enableImprovedEmailPrivacy": true,
+  passwordPolicyConfig: undefined,
+  "client.permissions.disabledUserSignup": undefined,
+  "client.permissions.disabledUserDeletion": undefined,
+};
+
 // ---- step builders -------------------------------------------------------------------------
 
 const from = (step, path) => ({ $from: step, path });

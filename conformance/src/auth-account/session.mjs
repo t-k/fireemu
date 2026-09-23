@@ -22,7 +22,7 @@ import {
  */
 export function configMatches(actual, wanted) {
   if (wanted === undefined || wanted === null) {
-    if (actual === undefined || actual === null) return true;
+    if (actual === undefined || actual === null || actual === false) return true;
     if (typeof actual !== "object") return false;
     return (
       actual.passwordPolicyEnforcementState !== "ENFORCE" && !actual.passwordPolicyVersions?.length
@@ -168,6 +168,7 @@ export function createSession(
     await wipe();
     const mask = program.config ? Object.keys(program.config) : [];
     const baseline = mask.length ? await readConfig(mask) : undefined;
+    let failure;
     try {
       if (mask.length) {
         const applied = await writeConfig(mask, resolveValue(program.config, ctx, raw));
@@ -191,13 +192,24 @@ export function createSession(
         steps[step.id] = recorded;
         log(`${program.id}#${step.id} ${recorded.status}`);
       }
-    } finally {
-      if (mask.length) {
+    } catch (error) {
+      failure = error;
+    }
+    // Cleanup always runs. Accounts first: a setting such as duplicate emails may not switch
+    // back while duplicate accounts exist.
+    await wipe();
+    if (mask.length) {
+      try {
         const restored = await writeConfig(mask, baseline);
         projection = { ...projection, restored: normalizeConfig(restored, ctx) };
+      } catch (error) {
+        const now = await readConfig(mask).catch(() => "unreadable");
+        log(`SANDBOX CONFIG CHANGED by ${program.id}: ${JSON.stringify(now)}`);
+        throw error;
       }
       await wipe();
     }
+    if (failure) throw failure;
     return { steps, ...(projection ? { config: projection } : {}) };
   }
 
@@ -213,6 +225,7 @@ export function createSession(
 /** Runs every program; a program that throws is recorded as a harness failure, not a row. */
 export async function runCorpus(programs, ctx, options = {}) {
   const session = createSession(ctx, options);
+  const log = options.log ?? (() => {});
   const results = {};
   const failures = [];
   if (options.baselineConfig) {
@@ -228,6 +241,21 @@ export async function runCorpus(programs, ctx, options = {}) {
         throw fatal(`sandbox baseline differs at ${drift.join(", ")}; fix the sandbox first`);
     }
   }
+  const configDrift = async () => {
+    if (!options.configDefaults) return [];
+    const mask = Object.keys(options.configDefaults);
+    const current = await session.readConfig(mask);
+    return mask.filter((path) => !configMatches(current[path], options.configDefaults[path]));
+  };
+  const startDrift = await configDrift();
+  if (startDrift.length) {
+    // Production must start from its defaults; a local emulator that reports them in a
+    // different shape is a config-surface difference, not a reason to stop recording.
+    if (ctx.target.kind === "production") {
+      throw fatal(`sandbox config is not at its defaults: ${startDrift.join(", ")}`);
+    }
+    log(`local config differs from the production defaults at ${startDrift.join(", ")}`);
+  }
   for (const program of programs) {
     try {
       results[program.id] = await session.runProgram(program);
@@ -238,5 +266,12 @@ export async function runCorpus(programs, ctx, options = {}) {
     }
   }
   await session.wipe();
-  return { results, failures, ...session.counts() };
+  const endDrift = await configDrift();
+  if (endDrift.length) log(`SANDBOX CONFIG CHANGED at the end: ${endDrift.join(", ")}`);
+  return {
+    results,
+    failures,
+    configAtEnd: endDrift.length ? endDrift : "defaults",
+    ...session.counts(),
+  };
 }

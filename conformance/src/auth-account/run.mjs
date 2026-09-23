@@ -22,7 +22,7 @@ import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
-import { BASELINE_CONFIG, PROGRAMS } from "./corpus.mjs";
+import { BASELINE_CONFIG, CONFIG_DEFAULTS, PROGRAMS } from "./corpus.mjs";
 import {
   RECORDED_PROJECT,
   SANDBOX_PROJECT,
@@ -125,7 +125,9 @@ async function recordOnce(programs, run, web, token) {
     },
   });
   return runCorpus(programs, ctx, {
-    settleMs: 10_000,
+    // Production config changes were seen to take effect up to ~30 s after they read back.
+    settleMs: 30_000,
+    configDefaults: CONFIG_DEFAULTS,
     ...ceilings(programs),
     baselineConfig: BASELINE_CONFIG,
     log: (line) => console.log(line),
@@ -227,6 +229,7 @@ async function recordProduction() {
         outcome,
         taskId: TASK_ID,
         programs: programs.map((p) => p.id),
+        configAtEnd: recordings.map((r) => r.configAtEnd ?? "unknown"),
         ...(error ? { error } : {}),
       })}\n`,
     );
@@ -251,6 +254,7 @@ async function sessionLocal() {
   const out = await runCorpus(programs, ctx, {
     baselineConfig: process.env.AUTH_ACCOUNT_LOCAL_BASELINE === "1" ? BASELINE_CONFIG : undefined,
     applyBaseline: true,
+    configDefaults: CONFIG_DEFAULTS,
     ...ceilings(programs),
   });
   await writeFile(process.env.AUTH_ACCOUNT_OUT, JSON.stringify(out));

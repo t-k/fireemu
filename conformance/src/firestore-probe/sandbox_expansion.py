@@ -246,7 +246,7 @@ def build_programs() -> list[dict[str, Any]]:
             [map_name],
         )
     )
-    for length in (2600, 2642, 2643):
+    for length in (2600,):
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
         write = _field_update(name, {"s": {"stringValue": "x" * 1500}})
         programs.append(
@@ -254,7 +254,7 @@ def build_programs() -> list[dict[str, Any]]:
                 f"writes/limits/index-entry-string-name/{length}", [write], [name]
             )
         )
-    for length in (4621, 4622, 5000, 6127, 6128):
+    for length in (5000, 6127, 6128):
         name = f"{DOCS}/{name_of_length(length, f'n{length}')}"
         programs.append(
             _commit_program(

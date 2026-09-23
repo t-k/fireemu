@@ -30,7 +30,8 @@ use crate::webchannel::{ChannelRequest, ChannelResponse, Hub, StreamKind};
 /// The normal REST, `WebChannel`, and gRPC paths each apply it at their own decode boundary:
 /// [`MAX_REST_BODY_BYTES`] on a REST body, [`crate::webchannel::MAX_FORM_BYTES`] on a
 /// `WebChannel` form body, and [`MAX_GRPC_MESSAGE_BYTES`] on a gRPC message. The strict REST
-/// `:commit` route has a separate local raw allowance and then applies this decoded bound.
+/// `:commit` route has a separate production-observed raw allowance; it does not apply a
+/// second decoded-protobuf bound.
 pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 
 /// Maximum accepted REST request body (`FS-LIMIT-API-REQUEST-BYTES`). The body is read
@@ -38,8 +39,7 @@ pub const API_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 /// whole in memory.
 pub const MAX_REST_BODY_BYTES: usize = API_REQUEST_BYTES;
 
-/// Production accepts an 11 MiB raw REST Commit body and refuses one more byte; decoded
-/// protobuf size is checked separately by the REST adapter.
+/// Production accepts an 11 MiB raw REST Commit body and refuses one more byte.
 pub const MAX_STRICT_COMMIT_RAW_BYTES: usize = 11 * 1024 * 1024;
 const MAX_STRICT_COMMIT_REJECTION_DRAIN_BYTES: usize = 32 * 1024 * 1024;
 

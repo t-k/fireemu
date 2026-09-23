@@ -1,7 +1,7 @@
 //! `FS-LIMIT-API-REQUEST-BYTES`: transport payload boundaries at each Firestore protocol's
 //! decode boundary. The normal REST and `WebChannel` profiles retain the 10 MiB inclusive
-//! raw-body bound; the strict REST `:commit` route has a production-observed 11 MiB raw guard followed by a
-//! 10 MiB decoded-protobuf guard.
+//! raw-body bound; the strict REST `:commit` route has a production-observed 11 MiB raw guard.
+//! Production also accepts REST Commit requests whose decoded protobuf exceeds 10 MiB.
 //!
 //! The limit is measured on the message payload before protocol decode, so it is refused
 //! without an oversized raw request being parsed or held whole in memory: REST and
@@ -282,11 +282,9 @@ async fn rest_boundary(addr: std::net::SocketAddr, expected: &ExpectedRefusal) {
             &rest_commit_of(MAX_STRICT_COMMIT_RAW_BYTES, "decoded-over"),
         )
         .await;
-        assert!(decoded_over.starts_with("HTTP/1.1 400"), "{decoded_over}");
-        assert!(
-            decoded_over.contains("decoded Commit request exceeds the local 10 MiB protobuf guard")
-        );
-        assert_nothing_published(addr, "decoded-over").await;
+        assert!(decoded_over.starts_with("HTTP/1.1 200"), "{decoded_over}");
+        assert!(exists(addr, "decoded-over-0").await);
+        assert!(exists(addr, &format!("decoded-over-{}", DOCUMENTS - 1)).await);
         let refused_body = format!(
             "{}{}",
             compact,

@@ -575,7 +575,15 @@ fn value_from_json_at(
             },
             _ => return err("doubleValue must be a number"),
         }),
-        "timestampValue" => V::TimestampValue(timestamp_from_json(inner)?),
+        "timestampValue" => V::TimestampValue(timestamp_from_json(inner).map_err(|error| {
+            match (path, inner.as_str()) {
+                (Some(path), Some(_)) => JsonError(format!(
+                    "Invalid value at '{}' (type.googleapis.com/google.protobuf.Timestamp), Field 'timestampValue', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
+                    path.field("timestamp_value").to_proto_path()
+                )),
+                _ => error,
+            }
+        })?),
         "stringValue" => V::StringValue(
             inner
                 .as_str()
@@ -634,7 +642,16 @@ fn value_from_json_at(
                 })
             }
         }
-        other => return err(format!("unknown value key {other:?}")),
+        other => match path {
+            Some(path) => {
+                return err(format!(
+                    "Invalid JSON payload received. Unknown name {} at '{}': Cannot find field.",
+                    Value::String(other.to_owned()),
+                    path.to_proto_path()
+                ));
+            }
+            None => return err(format!("unknown value key {other:?}")),
+        },
     };
     Ok(pb::Value {
         value_type: Some(value_type),
@@ -661,6 +678,16 @@ fn array_from_json(
                 value_from_json_at(value, depth, element.as_ref())
             })
             .collect::<Result<_, _>>()?,
+        Some(Value::String(text)) => match path {
+            Some(path) => {
+                return err(format!(
+                    "Invalid value at '{}' (type.googleapis.com/google.firestore.v1.Value), {}",
+                    path.to_proto_path(),
+                    Value::String(text.clone())
+                ));
+            }
+            None => return err("arrayValue.values must be an array"),
+        },
         Some(_) => return err("arrayValue.values must be an array"),
     };
     Ok(pb::ArrayValue { values })

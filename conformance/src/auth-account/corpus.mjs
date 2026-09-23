@@ -120,11 +120,16 @@ const clientProfile = program("auth-account/client/profile", [
 
 const clientPasswordChange = program("auth-account/client/password-change", [
   signUp("sign-up", "pwchange"),
-  client("change-password", "update", {
-    idToken: from("sign-up", "idToken"),
-    password: "new-password-456",
-    returnSecureToken: true,
-  }),
+  // A second boundary before the change makes the pre-change session strictly older than
+  // validSince (v1 recorded both outcomes).
+  {
+    ...client("change-password", "update", {
+      idToken: from("sign-up", "idToken"),
+      password: "new-password-456",
+      returnSecureToken: true,
+    }),
+    delayMs: 1100,
+  },
   signIn("sign-in-old-password", "EMAIL(pwchange)"),
   signIn("sign-in-new-password", "EMAIL(pwchange)", "new-password-456"),
   lookupToken("lookup-with-pre-change-token", "sign-up"),
@@ -494,6 +499,12 @@ const customAttributes = program("auth-account/admin/custom-attributes", [
   adminCall("json-string", "update", { localId: "UID(ca)", customAttributes: '"text"' }),
   adminCall("json-null", "update", { localId: "UID(ca)", customAttributes: "null" }),
   adminLookup("readback-after-refusals", "UID(ca)"),
+  // Whether the stored text is kept as sent or re-serialized.
+  adminCall("set-with-whitespace", "update", {
+    localId: "UID(ca)",
+    customAttributes: '{ "b": 1,  "a" : [ 2 ] }',
+  }),
+  adminLookup("readback-whitespace", "UID(ca)"),
 ]);
 
 // Each admin-only field is tried with its own account and fresh token, so a field that
@@ -666,17 +677,26 @@ const adminBatchGet = program("auth-account/admin/batch-get", [
   },
 ]);
 
+// Creations are spaced past a millisecond tie so CREATED_AT orders are deterministic (v1
+// recorded two different descending orders).
+const spaced = (step) => ({ ...step, delayMs: 1100 });
 const queryFixture = [
   adminCreate("create-q1", { localId: "UID(q1)", email: "EMAIL(q-carol)", displayName: "Carol" }),
-  adminCreate("create-q2", { localId: "UID(q2)", email: "EMAIL(q-alice)", displayName: "alice" }),
-  adminCreate("create-q3", {
-    localId: "UID(q3)",
-    email: "EMAIL(q-bob)",
-    displayName: "Bob",
-    phoneNumber: "PHONE(5)",
-  }),
-  adminCreate("create-q4", { localId: "UID(q4)", phoneNumber: "PHONE(1)" }),
-  adminCreate("create-q5", { localId: "UID(q5)", email: "EMAIL(q-dave)", displayName: "Bob" }),
+  spaced(
+    adminCreate("create-q2", { localId: "UID(q2)", email: "EMAIL(q-alice)", displayName: "alice" }),
+  ),
+  spaced(
+    adminCreate("create-q3", {
+      localId: "UID(q3)",
+      email: "EMAIL(q-bob)",
+      displayName: "Bob",
+      phoneNumber: "PHONE(5)",
+    }),
+  ),
+  spaced(adminCreate("create-q4", { localId: "UID(q4)", phoneNumber: "PHONE(1)" })),
+  spaced(
+    adminCreate("create-q5", { localId: "UID(q5)", email: "EMAIL(q-dave)", displayName: "Bob" }),
+  ),
 ];
 const query = (id, body) => adminCall(id, "query", body);
 const adminQuery = program("auth-account/admin/query", [
@@ -751,6 +771,7 @@ const importBasic = program("auth-account/admin/import", [
   adminCall("import-existing-without-overwrite", "batchCreate", {
     users: [{ localId: "UID(i1)", email: "EMAIL(i1-new)" }],
   }),
+  adminLookup("lookup-after-without-overwrite", "UID(i1)"),
   adminCall("import-existing-with-overwrite", "batchCreate", {
     allowOverwrite: true,
     users: [{ localId: "UID(i1)", email: "EMAIL(i1-new)" }],
@@ -996,6 +1017,15 @@ const phoneAccounts = program("auth-account/phone", [
   phoneSignIn("link-taken-phone", "send-code-collision", {
     idToken: from("email-account", "idToken"),
   }),
+  // The proof signs in to the number's owner; the second use shows whether it is single-use.
+  client("sign-in-with-temporary-proof", "signInWithPhoneNumber", {
+    temporaryProof: from("link-taken-phone", "temporaryProof"),
+    phoneNumber: "PHONE(0)",
+  }),
+  client("sign-in-with-temporary-proof-again", "signInWithPhoneNumber", {
+    temporaryProof: from("link-taken-phone", "temporaryProof"),
+    phoneNumber: "PHONE(0)",
+  }),
   client("unlink-phone", "update", {
     idToken: from("email-account", "idToken"),
     deleteProvider: ["phone"],
@@ -1180,6 +1210,17 @@ const policyEnforce = program(
       password: "Passw0rdx",
       returnSecureToken: true,
     }),
+    // `+` and `=` are not in the advertised symbol list.
+    client("sign-up-plus-symbol", "signUp", {
+      email: "EMAIL(plus)",
+      password: "Passw0rd+",
+      returnSecureToken: true,
+    }),
+    client("sign-up-equals-symbol", "signUp", {
+      email: "EMAIL(equals)",
+      password: "Passw0rd=",
+      returnSecureToken: true,
+    }),
     { id: "password-policy", method: "GET", path: "v2/passwordPolicy", auth: "key" },
   ],
   { config: customPolicy("ENFORCE", { forceUpgradeOnSignin: true }) },
@@ -1225,6 +1266,10 @@ const valueClasses = program("auth-account/values", [
     ["display-name-empty", { displayName: "" }],
     ["display-name-256", { displayName: { $repeat: "n", count: 256 } }],
     ["display-name-257", { displayName: { $repeat: "n", count: 257 } }],
+    // Units of the 256 limit: 256 BMP characters are 768 UTF-8 bytes; 129 astral characters
+    // are 258 UTF-16 units.
+    ["display-name-bmp-256", { displayName: { $repeat: "あ", count: 256 } }],
+    ["display-name-astral-129", { displayName: { $repeat: "\u{1D49C}", count: 129 } }],
     ["display-name-control", { displayName: "a\u0007b" }],
     ["display-name-nul", { displayName: "a\u0000b" }],
     ["display-name-null", { displayName: null }],
@@ -1257,6 +1302,7 @@ const valueClasses = program("auth-account/values", [
   ),
   adminCreate("local-id-unicode", { localId: "ユーザー-UID(u)" }),
   adminCreate("local-id-empty", { localId: "" }),
+  adminCreate("local-id-256", { localId: { $repeat: "z", count: 256 } }),
   adminCall("import-created-at-number", "batchCreate", {
     users: [{ localId: "UID(ts-number)", createdAt: 1600000000000, lastLoginAt: 1600000100000 }],
   }),
@@ -1280,6 +1326,7 @@ const valueClasses = program("auth-account/values", [
       "UID(email-254)",
       "UID(phone-formatted)",
       "UID(phone-leading-zero)",
+      "UID(phone-letters)",
       "UID(ts-number)",
     ],
   }),

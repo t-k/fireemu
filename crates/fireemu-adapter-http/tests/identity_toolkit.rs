@@ -8133,11 +8133,12 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
         admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &json!({})).0,
         400
     );
-    // An unreadable page token is an empty page in production (sandbox recording 2026-09-23).
+    // A page token is the user id the next page starts after, so the last account's id is an
+    // empty page (sandbox recording 2026-09-23).
     let (status, page) = admin(
         &s,
         "GET",
-        &format!("{ADMIN}/accounts:batchGet?nextPageToken=u-a"),
+        &format!("{ADMIN}/accounts:batchGet?nextPageToken=u-m"),
         &json!({}),
     );
     assert_eq!((status, page.get("users").is_none()), (200, true), "{page}");
@@ -9108,6 +9109,55 @@ fn admin_email_change_answers_without_new_email() {
     assert_eq!(status, 200, "{updated}");
     assert_eq!(updated["email"], "after@example.com");
     assert!(updated.get("newEmail").is_none(), "{updated}");
+}
+
+/// `accounts:batchGet` lists in user-id order and its page token is the last user id of the
+/// page; any other string is read as a user id (sandbox recording 2026-09-23,
+/// `auth-account/admin/batch-get`).
+#[test]
+fn admin_batch_get_pages_by_user_id() {
+    let s = state();
+    for uid in ["m", "b", "x", "a"] {
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid}),
+        );
+        assert_eq!(status, 200, "{created}");
+    }
+    let page = |query: &str| {
+        let (status, body) = admin(
+            &s,
+            "GET",
+            &format!("{ADMIN}/accounts:batchGet?{query}"),
+            &json!({}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let ids: Vec<String> = body
+            .get("users")
+            .map_or(&[][..], |users| users.as_array().unwrap())
+            .iter()
+            .map(|user| user["localId"].as_str().unwrap().to_owned())
+            .collect();
+        (ids, body.get("nextPageToken").cloned())
+    };
+    assert_eq!(
+        page("maxResults=2"),
+        (vec!["a".to_owned(), "b".to_owned()], Some(json!("b")))
+    );
+    assert_eq!(
+        page("maxResults=2&nextPageToken=b"),
+        (vec!["m".to_owned(), "x".to_owned()], None)
+    );
+    assert_eq!(
+        page("maxResults=2&nextPageToken=c"),
+        (vec!["m".to_owned(), "x".to_owned()], None)
+    );
+    assert_eq!(
+        page("maxResults=2&nextPageToken=not-a-token"),
+        (vec!["x".to_owned()], None)
+    );
 }
 
 #[test]
@@ -12583,7 +12633,8 @@ fn admin_read_routes_are_as_lenient_as_production() {
     );
     assert!(user["salt"].is_string(), "{all}");
     assert_eq!(user["version"], 0, "{all}");
-    let (status, bad) = batch_get("maxResults=2&nextPageToken=not-a-token");
+    // A token is read as the user id to start after; nothing sorts after this one.
+    let (status, bad) = batch_get("maxResults=2&nextPageToken=zz-not-a-token");
     assert_eq!((status, bad.get("users").is_none()), (200, true), "{bad}");
     let (status, _) = admin(
         &s,

@@ -8556,7 +8556,7 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
 }
 
 /// Admin `accounts:batchGet` (`listUsers`): `GET ?maxResults=&nextPageToken=`, users in
-/// creation order; the page token is an opaque versioned cursor.
+/// user-id order; the page token is the last user id of the page.
 fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> JsonResponse {
     let params = query_params(query);
     let max_text = params.get("maxResults").cloned().or_else(|| {
@@ -8583,16 +8583,10 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
                 .map(str::to_owned)
         })
         .filter(|t| !t.is_empty());
-    let after: u64 = match token.as_deref() {
-        None => 0,
-        // An unreadable page token is an empty page in production.
-        Some(t) => t
-            .strip_prefix("v1:")
-            .and_then(|n| n.parse::<u64>().ok())
-            .unwrap_or(u64::MAX),
-    };
+    // The page token is the last user id of the previous page; production reads any other
+    // string the same way (sandbox recording 2026-09-23).
     let page: Vec<&fireemu_core_auth::store::UserRecord> =
-        store.users_after_sequence(after, max.saturating_add(1));
+        store.users_after_local_id(token.as_deref(), max.saturating_add(1));
     let has_more = page.len() > max;
     let page = &page[..page.len().min(max)];
     // The Admin download carries the stored hash material production returns to a caller that
@@ -8616,7 +8610,7 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
     }
     if has_more {
         if let Some(last) = page.last() {
-            response["nextPageToken"] = Value::String(format!("v1:{}", last.sequence));
+            response["nextPageToken"] = Value::String(last.local_id.as_str().to_owned());
         }
     }
     JsonResponse {

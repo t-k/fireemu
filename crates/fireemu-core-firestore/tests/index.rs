@@ -209,6 +209,14 @@ fn indexed_1500_byte_string_uses_recorded_long_name_refusal_points() {
             "invalid argument: Index entry is too large."
         );
     }
+
+    let mut exempt = IndexSet::default();
+    exempt.add_exemption(&SingleFieldExemption {
+        collection_group: CollectionId::try_new("c").unwrap(),
+        field: fp("s"),
+        query_scope: IndexQueryScope::Collection,
+    });
+    assert!(exempt.document_index_usage(&path(2642), &fields).is_ok());
 }
 
 #[test]

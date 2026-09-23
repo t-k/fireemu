@@ -12,14 +12,14 @@
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#batch-malformed-middle",
       "recipeIds": ["writes/batch-write-malformed/missing-operation", "writes/batch-write-malformed/no-operation", "writes/batch-write-malformed/collection-name", "writes/batch-write-malformed/empty-field-name", "writes/batch-write-malformed/reserved-field-name", "writes/batch-write-malformed/bad-mask-path", "writes/batch-write-malformed/exists-precondition-fails"],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "MISMATCH"
+      "status": "PRODUCTION_RECORDED"
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/batch-undecodable-value",
       "source": "spec/compatibility/broad-runs/fs-write-limits-03.json#batch-undecodable-value",
       "recipeIds": ["writes/batch-write-malformed/undecodable-value", "writes/batch-write-malformed/bad-integer", "writes/batch-write-malformed/unknown-value-kind", "writes/batch-write-malformed/bad-timestamp"],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "MISMATCH"
+      "status": "PRODUCTION_RECORDED"
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/batch-duplicate-document",
@@ -128,7 +128,7 @@
       "recipeIds": ["writes/limits/implied-map"],
       "boundaryStatus": "BRACKETED",
       "boundaryEvidence": ["writes/limits/implied-map#observation-0", "writes/limits/implied-map#observation-1"],
-      "status": "MISMATCH"
+      "status": "PRODUCTION_RECORDED"
     },
     {
       "conditionId": "FS-WRITE-LIMITS-03/implied-array",

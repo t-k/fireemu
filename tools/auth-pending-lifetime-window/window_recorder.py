@@ -217,8 +217,10 @@ def observe(
     at origin, aged through clock_control=(control_origin, token) via the control clock.
 
     Optional transports provide the narrow hosting seam for an admitted runner. Defaults
-    resolve the existing functions at call time. The request transport receives every
-    HTTP request; PATCH and subprocess calls have separate injectable transports.
+    resolve the existing functions at call time. The request transport receives
+    recorder-originated project, Auth, configuration, tokeninfo, and verification-code
+    HTTP calls. Local clock-control HTTP is issued by the local-only `_control` helper and
+    is outside this seam. PATCH and subprocess calls have separate injectable transports.
     """
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     request_transport = core.request if request_transport is None else request_transport

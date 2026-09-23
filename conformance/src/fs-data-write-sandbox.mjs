@@ -140,7 +140,7 @@ export function compareSandboxArtifact(production, localPrograms, localStreams, 
               code: step.code,
               body: comparableBody(step.body, programId, stepId),
             }
-          : { status: step?.status, code: step?.code };
+          : { status: step?.status, code: step?.code, message: step?.message };
       if (
         JSON.stringify(canonical(decision(expected))) !==
         JSON.stringify(canonical(decision(actual)))

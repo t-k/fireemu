@@ -8,7 +8,7 @@ import {
   validateSandboxCorpus,
 } from "./fs-data-write-sandbox.mjs";
 
-test("artifact comparison gates success bodies and error codes without gating error prose", () => {
+test("artifact comparison distinguishes production error reasons as well as status and code", () => {
   const production = {
     programs: {
       "writes/control": {
@@ -28,9 +28,12 @@ test("artifact comparison gates success bodies and error codes without gating er
       },
     },
   };
-  assert.deepEqual(compareSandboxArtifact(production, local, production.streams), []);
+  assert.deepEqual(compareSandboxArtifact(production, local, production.streams), [
+    "writes/control#read",
+  ]);
   local["writes/control"].steps.write.body.fields.a = 3;
   assert.deepEqual(compareSandboxArtifact(production, local, production.streams), [
+    "writes/control#read",
     "writes/control#write",
   ]);
   local["writes/control"].steps.write.body.fields.a = 1;
@@ -38,7 +41,7 @@ test("artifact comparison gates success bodies and error codes without gating er
     compareSandboxArtifact(production, local, {
       "writes/stream": { status: { code: 3 }, events: [{ type: "end" }] },
     }),
-    ["writes/stream#grpc"],
+    ["writes/control#read", "writes/stream#grpc"],
   );
 });
 

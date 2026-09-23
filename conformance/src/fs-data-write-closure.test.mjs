@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -37,8 +38,11 @@ const requiredConditions = new Set([
   "FS-LIMIT-INDEXED-FIELD-VALUE-BYTES",
   "FS-WRITE-LIMITS-03/implied-map",
   "FS-WRITE-LIMITS-03/implied-array",
-  "FS-LIMIT-API-REQUEST-BYTES/decoded-10mib",
+  "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
   "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
+  "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+  "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+  "FS-LIMIT-API-REQUEST-BYTES/grpc",
   "FS-DATA-WRITE/stream-transaction-precedence",
   "FS-DATA-WRITE/write-stream-trailing-metadata",
   "FS-DATA-WRITE/write-stream-half-close",
@@ -94,6 +98,24 @@ const requiredRecipes = new Map([
     "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-map",
     new Set(["writes/limits/aggregate-map", "writes/limits/aggregate-map/strict-only"]),
   ],
+  [
+    "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
+    new Set([
+      "writes/limits/decoded-request-bytes/under",
+      "writes/limits/decoded-request-bytes/exact",
+      "writes/limits/decoded-request-bytes/over",
+      "writes/limits/decoded-11x1040000",
+    ]),
+  ],
+  [
+    "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+    new Set(["writes/limits/non-commit-rest-request-bytes"]),
+  ],
+  ["FS-LIMIT-API-REQUEST-BYTES/webchannel", new Set(["writes/limits/webchannel-request-bytes"])],
+  [
+    "FS-LIMIT-API-REQUEST-BYTES/grpc",
+    new Set(["writes/limits/grpc-unary-request-bytes", "writes/limits/grpc-stream-request-bytes"]),
+  ],
   ["FS-DATA-WRITE/write-stream-half-close", new Set(["writes/write-stream-terminal/half-close"])],
   [
     "FS-DATA-WRITE/write-stream-empty-write-response",
@@ -144,6 +166,22 @@ test("verified conditions are bound to their saved comparisons", async () => {
   const closure = JSON.parse(readFileSync(closurePath, "utf8"));
   const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
   const { corpus } = await prepareSandboxCorpus();
+  const digestProgram = (program) => ({
+    steps: Object.fromEntries(
+      Object.entries(program.steps).map(([stepId, step]) => {
+        const body = JSON.stringify(step.body);
+        return [
+          stepId,
+          {
+            status: step.status,
+            code: step.code,
+            bodyBytes: Buffer.byteLength(body),
+            bodySha256: createHash("sha256").update(body).digest("hex"),
+          },
+        ];
+      }),
+    ),
+  });
   const verified = closure.conditions.filter(({ status }) => status === "VERIFIED");
   for (const conditionId of [
     "FS-LIMIT-SUBCOLLECTION-DEPTH",
@@ -155,6 +193,7 @@ test("verified conditions are bound to their saved comparisons", async () => {
     "FS-WRITE-LIMITS-03/implied-map",
     "FS-WRITE-LIMITS-03/implied-array",
     "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
+    "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
   ]) {
     assert.ok(verified.some((condition) => condition.conditionId === conditionId));
   }
@@ -179,11 +218,33 @@ test("verified conditions are bound to their saved comparisons", async () => {
     );
     assert.deepEqual(new Set(Object.keys(comparison.localPrograms)), new Set(condition.recipeIds));
     for (const recipeId of condition.recipeIds) {
-      assert.deepEqual(comparison.productionPrograms[recipeId], fixture.programs[recipeId]);
+      const expected =
+        comparison.comparisonMode === "digest-per-step"
+          ? digestProgram(fixture.programs[recipeId])
+          : fixture.programs[recipeId];
+      assert.deepEqual(comparison.productionPrograms[recipeId], expected);
       if (comparison.comparisonMode !== "sandbox-comparator") {
         assert.deepEqual(
           comparison.localPrograms[recipeId],
           comparison.productionPrograms[recipeId],
+        );
+      }
+    }
+    if (condition.conditionId === "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples") {
+      const programs = condition.recipeIds.map((recipeId) =>
+        corpus.restPrograms.find(({ id }) => id === recipeId),
+      );
+      assert.ok(programs.every(Boolean));
+      assert.deepEqual(
+        programs
+          .slice(0, 3)
+          .map((program) => Buffer.byteLength(JSON.stringify(program.steps[0].body))),
+        comparison.measurement.firstThreeRawBytes,
+      );
+      assert.equal(Buffer.byteLength(JSON.stringify(programs[3].steps[0].body)), 11_441_443);
+      for (const program of Object.values(comparison.localPrograms)) {
+        assert.ok(
+          Object.values(program.steps).every(({ status, code }) => status === 200 && code === "OK"),
         );
       }
     }
@@ -226,6 +287,19 @@ test("final artifact closure names both saved production regression commands", (
     "pnpm -C conformance fs-data-write:check",
   ]);
   assert.notEqual(condition.status, "VERIFIED");
+});
+
+test("unobserved request-byte transports remain explicit coverage debt", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  for (const conditionId of [
+    "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+    "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+    "FS-LIMIT-API-REQUEST-BYTES/grpc",
+  ]) {
+    const condition = closure.conditions.find((row) => row.conditionId === conditionId);
+    assert.equal(condition.status, "PENDING_CORPUS");
+    assert.equal(condition.boundaryStatus, "PENDING_RECORDING");
+  }
 });
 
 test("new strict-only map observation remains pending production recording", () => {

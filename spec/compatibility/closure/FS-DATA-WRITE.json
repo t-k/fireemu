@@ -226,11 +226,20 @@
       }
     },
     {
-      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/decoded-10mib",
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-API-REQUEST-BYTES",
-      "recipeIds": ["writes/limits/decoded-request-bytes", "writes/limits/decoded-11x1040000"],
+      "recipeIds": ["writes/limits/decoded-request-bytes/under", "writes/limits/decoded-request-bytes/exact", "writes/limits/decoded-request-bytes/over", "writes/limits/decoded-11x1040000"],
       "boundaryStatus": "NOT_APPLICABLE",
-      "status": "PRODUCTION_RECORDED"
+      "scopeNote": "Concrete REST documents:commit JSON acceptance samples only; the nominal 10 MiB decoded-protobuf threshold and other transport surfaces are not inferred.",
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+          "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+        ],
+        "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+        "comparisonPath": "spec/compatibility/broad-runs/fs-rest-commit-json-samples-3d7ceabb8-saved-comparison.json"
+      }
     },
     {
       "conditionId": "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
@@ -247,6 +256,27 @@
         "finalArtifactSha256": "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
         "comparisonPath": "spec/compatibility/broad-runs/fs-raw-request-bytes-3d7ceabb8-saved-comparison.json"
       }
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/non-commit-rest",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_REST_BODY_BYTES",
+      "recipeIds": ["writes/limits/non-commit-rest-request-bytes"],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/webchannel",
+      "source": "crates/fireemu-adapter-grpc/src/webchannel.rs#MAX_FORM_BYTES",
+      "recipeIds": ["writes/limits/webchannel-request-bytes"],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_CORPUS"
+    },
+    {
+      "conditionId": "FS-LIMIT-API-REQUEST-BYTES/grpc",
+      "source": "crates/fireemu-adapter-grpc/src/serve.rs#MAX_GRPC_MESSAGE_BYTES",
+      "recipeIds": ["writes/limits/grpc-unary-request-bytes", "writes/limits/grpc-stream-request-bytes"],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_CORPUS"
     },
     {
       "conditionId": "FS-DATA-WRITE/stream-transaction-precedence",

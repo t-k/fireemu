@@ -9,6 +9,7 @@ Secrets remain in memory; evidence stores only timing, operation names and count
 # ruff: noqa: BLE001 -- Never expose raw exceptions or credentials.
 import argparse
 import hashlib
+import ipaddress
 import json
 import math
 import secrets
@@ -212,20 +213,23 @@ def observe(
     request_transport=None,
     patch_transport=None,
     command_transport=None,
+    clock_transport=None,
 ):
     """Production when origin is None (real-time aging); otherwise an owned local fireemu
     at origin, aged through clock_control=(control_origin, token) via the control clock.
 
     Optional transports provide the narrow hosting seam for an admitted runner. Defaults
     resolve the existing functions at call time. The request transport receives
-    recorder-originated project, Auth, configuration, tokeninfo, and verification-code
-    HTTP calls. Local clock-control HTTP is issued by the local-only `_control` helper and
-    is outside this seam. PATCH and subprocess calls have separate injectable transports.
+    recorder-originated project, Auth, configuration, tokeninfo, verification-code, and
+    local clock-control HTTP calls. Clock-control origins are restricted to loopback
+    HTTP before the injected transport is called. PATCH and subprocess calls have
+    separate injectable transports.
     """
     output.mkdir(parents=True, exist_ok=False, mode=0o700)
     request_transport = core.request if request_transport is None else request_transport
     patch_transport = patch if patch_transport is None else patch_transport
     command_transport = core.command if command_transport is None else command_transport
+    clock_transport = _control_request if clock_transport is None else clock_transport
     identity = core.origins(origin)[0]
     production = origin is None
     before = inputs()
@@ -546,12 +550,16 @@ def observe(
 
         # --- Aging: measure age from each pending's own acquisition, not a fixed origin. ---
         origin_monotonic = time.monotonic()
-        origin_clock = clock_now(clock_control) if not production else None
+        origin_clock = (
+            clock_now(clock_control, transport=clock_transport)
+            if not production
+            else None
+        )
 
         def elapsed_now():
             if production:
                 return time.monotonic() - origin_monotonic
-            return clock_now(clock_control) - origin_clock
+            return clock_now(clock_control, transport=clock_transport) - origin_clock
 
         def age_to(target):
             # The wall-clock time_guard bounds real aging; a target beyond the budget stops
@@ -572,7 +580,7 @@ def observe(
                     remaining = target - elapsed_now()
                     if remaining <= 0:
                         break
-                    advance_clock(clock_control, remaining)
+                    advance_clock(clock_control, remaining, transport=clock_transport)
 
         def lookup(account):
             records = users(*admin("lookup", {"localId": [account["uid"]]}))
@@ -1070,11 +1078,31 @@ def observe(
     return report
 
 
-def _control(clock_control, path, body=None):
-    control_origin, token = clock_control
+def _validate_clock_origin(control_origin):
+    parsed = urllib.parse.urlsplit(control_origin)
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+    except ValueError as error:
+        raise ValueError("local clock-control origin required") from error
+    if (
+        parsed.scheme != "http"
+        or address.version != 4
+        or not address.is_loopback
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or parsed.port is None
+    ):
+        raise ValueError("local clock-control origin required")
+    return f"http://{address.compressed}:{parsed.port}"
+
+
+def _control_request(url, body=None, token=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
-        control_origin + path,
+        url,
         data=data,
         headers={
             "Origin": "http://127.0.0.1",
@@ -1089,8 +1117,31 @@ def _control(clock_control, path, body=None):
         return json.loads(resp.read())
 
 
-def clock_now(clock_control):
-    value = _control(clock_control, "/v1/sessions/default")
+def _control(clock_control, path, body=None, transport=None):
+    control_origin, token = clock_control
+    origin = _validate_clock_origin(control_origin)
+    url = origin + path
+    if transport is None:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Origin": "http://127.0.0.1",
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST" if body is not None else "GET",
+        )
+        with urllib.request.build_opener(
+            core.NoRedirect(), urllib.request.ProxyHandler({})
+        ).open(req, timeout=20) as resp:
+            return json.loads(resp.read())
+    return transport(url, body, token)
+
+
+def clock_now(clock_control, *, transport=None):
+    value = _control(clock_control, "/v1/sessions/default", transport=transport)
     instant = (
         value["clock"]["clock"]
         if isinstance(value.get("clock"), dict)
@@ -1099,13 +1150,14 @@ def clock_now(clock_control):
     return datetime.fromisoformat(instant.replace("Z", "+00:00")).timestamp()
 
 
-def advance_clock(clock_control, seconds):
+def advance_clock(clock_control, seconds, *, transport=None):
     # Round the advance UP to whole milliseconds so a pending lands at least at its sampled
     # age, never a rounding hair short; at least 1 ms so a top-up step always progresses.
     _control(
         clock_control,
         "/v1/sessions/default/clock:advance",
         {"millis": max(1, math.ceil(seconds * 1000))},
+        transport=transport,
     )
 
 

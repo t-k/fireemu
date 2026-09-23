@@ -12,6 +12,7 @@ import os
 import re
 import signal
 import urllib.parse
+from datetime import UTC, datetime
 
 import pytest
 import window_recorder as recorder
@@ -60,6 +61,54 @@ def test_secret_scan_distinguishes_embedded_identifier_digits_from_a_code():
     assert not artifact_contains_secret(identifier)
     assert artifact_contains_secret('{"oobCode":"' + TEST_CODE + '"}')
     assert artifact_contains_secret("oobCode=" + TEST_CODE + "&next=1")
+
+
+@pytest.mark.parametrize(
+    "control_origin",
+    [
+        "https://127.0.0.1:12345",
+        "http://example.test:12345",
+        "http://127.0.0.1.evil.test:12345",
+        "http://user@127.0.0.1:12345",
+        "http://[::1]:12345",
+    ],
+)
+def test_clock_control_refuses_unknown_or_nonlocal_origins_before_transport(
+    control_origin,
+):
+    calls = []
+
+    def transport(url, body=None, token=None):
+        calls.append((url, body, token))
+        return {"clock": "2030-01-01T00:00:00Z"}
+
+    with pytest.raises(ValueError, match="local clock-control origin"):
+        recorder.clock_now((control_origin, "synthetic-token"), transport=transport)
+    assert calls == []
+
+
+def test_clock_control_routes_loopback_read_and_advance_through_injected_transport():
+    calls = []
+
+    def transport(url, body=None, token=None):
+        calls.append((url, body, token))
+        return {"clock": "2030-01-01T00:00:00Z"}
+
+    control = ("http://127.0.0.1:12345", "synthetic-token")
+    assert recorder.clock_now(control, transport=transport) == 1_893_456_000
+    recorder.advance_clock(control, 1.0001, transport=transport)
+    assert calls == [
+        (
+            "http://127.0.0.1:12345/v1/sessions/default",
+            None,
+            "synthetic-token",
+        ),
+        (
+            "http://127.0.0.1:12345/v1/sessions/default/clock:advance",
+            {"millis": 1001},
+            "synthetic-token",
+        ),
+    ]
 
 
 def jwt(payload, marker):
@@ -323,10 +372,6 @@ def wire(world, monkeypatch, budget=None):
     )
     monkeypatch.setattr(recorder.time, "monotonic", world.wall.now)
     monkeypatch.setattr(recorder.time, "sleep", world.wall.advance)
-    monkeypatch.setattr(recorder, "clock_now", lambda cc: world.virtual.now())
-    monkeypatch.setattr(
-        recorder, "advance_clock", lambda cc, seconds: world.virtual.advance(seconds)
-    )
 
 
 def run(tmp_path, monkeypatch, budget=None, world_type=World, **options):
@@ -334,7 +379,7 @@ def run(tmp_path, monkeypatch, budget=None, world_type=World, **options):
     wire(world, monkeypatch, budget=budget)
     origin = None if world.production else LOCAL_ORIGIN
     control = None if world.production else (LOCAL_ORIGIN, "control-token")
-    calls = {"request": 0, "patch": 0, "command": 0}
+    calls = {"request": 0, "patch": 0, "command": 0, "clock": 0}
     request = recorder.core.request
     patch = recorder.patch
     command = recorder.core.command
@@ -351,6 +396,19 @@ def run(tmp_path, monkeypatch, budget=None, world_type=World, **options):
         calls["command"] += 1
         return command(*args, **kwargs)
 
+    def routed_clock(url, body=None, token=None):
+        calls["clock"] += 1
+        assert token == "control-token"
+        if url.endswith("/clock:advance"):
+            world.virtual.advance(body["millis"] / 1000)
+        else:
+            assert url.endswith("/v1/sessions/default")
+        return {
+            "clock": datetime.fromtimestamp(world.virtual.now(), UTC)
+            .isoformat()
+            .replace("+00:00", "Z")
+        }
+
     report = recorder.observe(
         world.output,
         origin=origin,
@@ -358,6 +416,7 @@ def run(tmp_path, monkeypatch, budget=None, world_type=World, **options):
         request_transport=routed_request,
         patch_transport=routed_patch,
         command_transport=routed_command,
+        clock_transport=routed_clock,
     )
     world.transport_calls = calls
     saved = json.loads((world.output / "observation.json").read_bytes())
@@ -376,6 +435,24 @@ def test_admitted_transport_seams_receive_recorder_requests(tmp_path, monkeypatc
     assert world.transport_calls["patch"] > 0
     assert world.transport_calls["command"] > 0
     assert report["requestCount"] == {"observation": 45, "recovery": 25, "config": 6}
+
+
+def test_local_rehearsal_routes_all_auth_and_clock_calls_through_injected_seams(
+    tmp_path, monkeypatch
+):
+    world, report, saved = run(tmp_path, monkeypatch, production=False)
+
+    assert complete(saved), report
+    assert saved["target"] == "local"
+    assert saved["accountsUsed"] == 5
+    assert world.transport_calls["request"] == 75  # 70 counted calls plus 5 code reads.
+    assert report["requestCount"] == {
+        "observation": 45,
+        "recovery": 25,
+        "config": 0,
+    }
+    assert world.transport_calls["clock"] > 0
+    assert world.transport_calls["patch"] == 0
 
 
 def rows_of(saved):

@@ -22,7 +22,7 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]
     ids = [program["id"] for program in programs]
-    assert len(ids) == len(set(ids)) == 54
+    assert len(ids) == len(set(ids)) == 61
     assert {
         "writes/limits/field-path-mask/1499",
         "writes/limits/field-path-mask/1500",

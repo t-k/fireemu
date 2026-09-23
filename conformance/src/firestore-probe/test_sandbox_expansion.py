@@ -31,7 +31,11 @@ def test_generated_names_hit_exact_relative_boundaries_without_empty_segments() 
 
 def test_index_sum_names_reproduce_the_exploration_layout() -> None:
     module = _module()
-    for target, collection_bytes, document_bytes in ((500, 498, 1), (1000, 998, 1), (2000, 1400, 599)):
+    for target, collection_bytes, document_bytes in (
+        (500, 498, 1),
+        (1000, 998, 1),
+        (2000, 1400, 599),
+    ):
         name = module.index_sum_name_of_length(target, "g2")
         collection, document = name.split("/")
         assert len(name.encode()) == target
@@ -51,7 +55,17 @@ def test_raw_request_boundary_is_exact_and_keeps_readback() -> None:
 
 def test_batchwrite_validation_variants_are_three_writes_plus_state_readback() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
-    for variant in ("no-operation", "collection-name", "empty-field-name", "reserved-field-name", "bad-mask-path", "bad-integer", "unknown-value-kind", "bad-timestamp", "exists-precondition-fails"):
+    for variant in (
+        "no-operation",
+        "collection-name",
+        "empty-field-name",
+        "reserved-field-name",
+        "bad-mask-path",
+        "bad-integer",
+        "unknown-value-kind",
+        "bad-timestamp",
+        "exists-precondition-fails",
+    ):
         program = programs[f"writes/batch-write-malformed/{variant}"]
         assert len(program["steps"][0]["body"]["writes"]) == 3
         assert len(program["steps"][1]["body"]["documents"]) == 3
@@ -61,13 +75,24 @@ def test_batchwrite_validation_variants_are_three_writes_plus_state_readback() -
 def test_index_and_decoded_request_boundaries_have_exact_input_shapes() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     for length in (2600, 2642, 2643):
-        write = programs[f"writes/limits/index-entry-string-name/{length}"]["steps"][0]["body"]["writes"][0]
+        write = programs[f"writes/limits/index-entry-string-name/{length}"]["steps"][0][
+            "body"
+        ]["writes"][0]
         assert len(write["update"]["name"].split("/documents/")[1].encode()) == length
         assert len(write["update"]["fields"]["s"]["stringValue"].encode()) == 1500
     for length in (4621, 4622, 5000, 6127, 6128):
-        write = programs[f"writes/limits/empty-document-name/{length}"]["steps"][0]["body"]["writes"][0]
+        write = programs[f"writes/limits/empty-document-name/{length}"]["steps"][0][
+            "body"
+        ]["writes"][0]
         assert write["update"]["fields"] == {}
-    for length, count in ((500, 19999), (500, 20000), (2000, 9549), (2000, 9550), (1000, 19998), (1000, 19999)):
+    for length, count in (
+        (500, 19999),
+        (500, 20000),
+        (2000, 9549),
+        (2000, 9550),
+        (1000, 19998),
+        (1000, 19999),
+    ):
         program = programs[f"writes/limits/index-entry-sum/{length}-{count}"]
         write = program["steps"][0]["body"]["writes"][0]
         assert len(write["update"]["name"].split("/documents/")[1].encode()) == length
@@ -77,7 +102,10 @@ def test_index_and_decoded_request_boundaries_have_exact_input_shapes() -> None:
     program = programs["writes/limits/decoded-11x1040000"]
     writes = program["steps"][0]["body"]["writes"]
     assert len(writes) == 11
-    assert all(len(write["update"]["fields"]["s"]["stringValue"]) == 1_040_000 for write in writes)
+    assert all(
+        len(write["update"]["fields"]["s"]["stringValue"]) == 1_040_000
+        for write in writes
+    )
     assert len(program["steps"][1]["body"]["documents"]) == 11
 
 
@@ -99,8 +127,45 @@ def test_additional_field_path_boundaries_are_unbiased_and_have_readbacks() -> N
         assert len(program["steps"]) == 2
         assert len(program["steps"][0]["body"]["writes"]) == 1
         write = program["steps"][0]["body"]["writes"][0]
-        fields = write["update"]["fields"]["a"]["arrayValue"]["values"][0]["mapValue"]["fields"]
+        fields = write["update"]["fields"]["a"]["arrayValue"]["values"][0]["mapValue"][
+            "fields"
+        ]
         assert [len(key.encode()) for key in fields] == [length]
         assert program["steps"][1]["id"] == "readback"
         assert program["steps"][1]["body"]["documents"] == [write["update"]["name"]]
-    assert all("expected" not in step for program in programs.values() for step in program["steps"])
+    assert all(
+        "expected" not in step
+        for program in programs.values()
+        for step in program["steps"]
+    )
+
+
+def test_nested_map_key_validation_covers_write_and_query_without_expected_outputs() -> (
+    None
+):
+    programs = {program["id"]: program for program in _module().build_programs()}
+    cases = {
+        "reserved": "__bad__",
+        "empty": "",
+        "overlong": "k" * 1_501,
+        "type-tag": "__type__",
+    }
+    for label, key in cases.items():
+        query = programs[f"writes/map-key-validation/{label}/query"]
+        assert len(query["steps"]) == 1
+        step = query["steps"][0]
+        assert step["method"] == "POST"
+        assert step["path"] == f"/v1/{_module().DOCS}:runQuery"
+        value = step["body"]["structuredQuery"]["where"]["fieldFilter"]["value"]
+        assert list(value["mapValue"]["fields"]) == [key]
+        assert "expected" not in step
+        if label == "type-tag":
+            continue
+        write = programs[f"writes/map-key-validation/{label}/write"]
+        assert [step["id"] for step in write["steps"]] == ["write", "readback"]
+        fields = write["steps"][0]["body"]["writes"][0]["update"]["fields"]
+        assert list(fields["m"]["mapValue"]["fields"]) == [key]
+        assert write["steps"][1]["body"]["documents"] == [
+            write["steps"][0]["body"]["writes"][0]["update"]["name"]
+        ]
+        assert all("expected" not in step for step in write["steps"])

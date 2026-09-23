@@ -22,6 +22,21 @@
       "status": "PRODUCTION_RECORDED"
     },
     {
+      "conditionId": "FS-DATA-WRITE/map-value-key-validation",
+      "source": "crates/fireemu-adapter-grpc/src/decode.rs",
+      "recipeIds": [
+        "writes/map-key-validation/reserved/write",
+        "writes/map-key-validation/reserved/query",
+        "writes/map-key-validation/empty/write",
+        "writes/map-key-validation/empty/query",
+        "writes/map-key-validation/overlong/write",
+        "writes/map-key-validation/overlong/query",
+        "writes/map-key-validation/type-tag/query"
+      ],
+      "boundaryStatus": "NOT_APPLICABLE",
+      "status": "PENDING_RECORDING"
+    },
+    {
       "conditionId": "FS-WRITE-LIMITS-03/batch-duplicate-document",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": ["writes/batch-write-malformed/duplicate-document"],

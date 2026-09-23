@@ -306,13 +306,13 @@ def _age_slots(age: int) -> list[dict[str, Any]]:
             f"age-{age}:post-refusal-fresh-pending",
             fresh_pending,
         )
-        | {"skipWhen": "state-readback-failed"},
+        | {"skipWhen": "aged-attempt-not-refused-or-state-readback-failed"},
         _start(
             role,
             f"age-{age}:post-refusal-fresh-start",
             fresh_pending,
             fresh_session,
-            skip_when="state-readback-failed",
+            skip_when="aged-attempt-not-refused-or-state-readback-failed",
         ),
         _finalize(
             role,
@@ -320,13 +320,20 @@ def _age_slots(age: int) -> list[dict[str, Any]]:
             fresh_pending,
             fresh_session,
             fresh_token,
-            skip_when="fresh-start-refused-or-session-missing",
+            skip_when=(
+                "aged-attempt-not-refused-or-state-readback-failed-or-"
+                "fresh-start-refused-or-session-missing"
+            ),
         ),
         _client_lookup(
             role,
             f"age-{age}:post-refusal-fresh-derived-lookup",
             fresh_token,
-            skip_when="fresh-finalize-not-accepted",
+            skip_when=(
+                "aged-attempt-not-refused-or-state-readback-failed-or-"
+                "fresh-start-refused-or-session-missing-or-"
+                "fresh-finalize-not-accepted"
+            ),
         ),
     ]
 

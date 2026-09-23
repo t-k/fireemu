@@ -96,17 +96,27 @@ def test_revision_three_gate_plan_freezes_rows_accounts_and_every_slot(tmp_path)
     assert observation["age-300:post-refusal-state"]["skipWhen"] == (
         "aged-attempt-not-refused"
     )
+    for slot_id in (
+        "age-300:post-refusal-state",
+        "age-300:post-refusal-fresh-pending",
+        "age-300:post-refusal-fresh-start",
+        "age-300:post-refusal-fresh-finalize",
+        "age-300:post-refusal-fresh-derived-lookup",
+    ):
+        assert "aged-attempt-not-refused" in observation[slot_id]["skipWhen"]
     assert observation["age-300:post-refusal-fresh-pending"]["skipWhen"] == (
-        "state-readback-failed"
+        "aged-attempt-not-refused-or-state-readback-failed"
     )
     assert observation["age-300:post-refusal-fresh-start"]["skipWhen"] == (
-        "state-readback-failed"
+        "aged-attempt-not-refused-or-state-readback-failed"
     )
     assert observation["age-300:post-refusal-fresh-finalize"]["skipWhen"] == (
+        "aged-attempt-not-refused-or-state-readback-failed-or-"
         "fresh-start-refused-or-session-missing"
     )
     assert observation["age-300:post-refusal-fresh-derived-lookup"]["skipWhen"] == (
-        "fresh-finalize-not-accepted"
+        "aged-attempt-not-refused-or-state-readback-failed-or-"
+        "fresh-start-refused-or-session-missing-or-fresh-finalize-not-accepted"
     )
     assert plan["observationRequests"] == 66
     assert plan["dataRequests"] == 85

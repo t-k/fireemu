@@ -100,6 +100,45 @@ export function compareRecordings(first, second) {
   return differences.toSorted();
 }
 
+export function compareSandboxArtifact(production, localPrograms, localStreams) {
+  const differences = [];
+  const expectedPrograms = production?.programs ?? {};
+  for (const programId of new Set([
+    ...Object.keys(expectedPrograms),
+    ...Object.keys(localPrograms ?? {}),
+  ])) {
+    const expectedSteps = expectedPrograms[programId]?.steps ?? {};
+    const actualSteps = localPrograms?.[programId]?.steps ?? {};
+    for (const stepId of new Set([...Object.keys(expectedSteps), ...Object.keys(actualSteps)])) {
+      const expected = expectedSteps[stepId];
+      const actual = actualSteps[stepId];
+      const decision = (step) =>
+        step?.code === "OK"
+          ? { status: step.status, code: step.code, body: step.body }
+          : { status: step?.status, code: step?.code };
+      if (
+        JSON.stringify(canonical(decision(expected))) !==
+        JSON.stringify(canonical(decision(actual)))
+      ) {
+        differences.push(`${programId}#${stepId}`);
+      }
+    }
+  }
+  const expectedStreams = production?.streams ?? {};
+  for (const recipeId of new Set([
+    ...Object.keys(expectedStreams),
+    ...Object.keys(localStreams ?? {}),
+  ])) {
+    if (
+      JSON.stringify(canonical(expectedStreams[recipeId])) !==
+      JSON.stringify(canonical(localStreams?.[recipeId]))
+    ) {
+      differences.push(`${recipeId}#grpc`);
+    }
+  }
+  return differences.toSorted();
+}
+
 /** Freeze only reproducible sandbox responses; no fireemu source digest is bound here. */
 export function freezeSandboxFixture({
   corpus,

@@ -54,7 +54,7 @@
     "verification/quint/tests/compatibility_selection_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "50d4edad3bc4122a6e76fbaf05b0e2e4fa2963951960e05d447b0a834d91a30e",
+    ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "crates/fireemu-adapter-functions/src/node_selection.rs": "b0d3581e3c8887e6d39fdb76f3dd56a1be420e37905c58e87e0f46791aac5a21",
     "crates/fireemu-adapter-http/src/identity_toolkit.rs": "4edbb6318f1eed0d67117e89b7311d212b1d8b5b63b6258b17233d12f7e022fd",
     "crates/fireemu-adapter-http/tests/auth_flows.rs": "28e142f2a52b58a9244496fe89bbd35cdb1c807cd460c0b19273664adacc9c9b",

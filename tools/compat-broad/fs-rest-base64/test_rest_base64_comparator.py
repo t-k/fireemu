@@ -56,6 +56,7 @@ def evidence():
         "recordingComplete": True,
         "productionExecuted": False,
         "cases": [row],
+        "selectedPrograms": [_comparator._historical_program()],
     }
     cases_bytes = json.dumps(cases, sort_keys=True, separators=(",", ":")).encode()
     manifest = {
@@ -156,5 +157,60 @@ def test_duplicate_target_receipts_fail_closed():
     cases["cases"].append(copy.deepcopy(cases["cases"][0]))
     cases_sha256 = rebind(manifest, cases)
 
+    result = compare(manifest, cases, historical, cases_sha256=cases_sha256)
+    assert result["status"] == "indeterminate"
+
+
+def test_complete_success_receipt_without_error_message_is_a_status_mismatch():
+    for message in (None, ""):
+        manifest, cases, historical, _ = evidence()
+        actual = cases["cases"][0]["actual"]
+        actual["status"] = 200
+        actual["code"] = "OK"
+        actual["http"]["status"] = 200
+        actual["message"] = message
+        cases_sha256 = rebind(manifest, cases)
+
+        result = compare(manifest, cases, historical, cases_sha256=cases_sha256)
+
+        assert result["status"] == "mismatch"
+        assert result["firstDifference"] == "$.status"
+
+    manifest, cases, historical, _ = evidence()
+    actual = cases["cases"][0]["actual"]
+    actual["status"] = 200
+    actual["code"] = "OK"
+    actual["http"]["status"] = 200
+    actual.pop("message")
+    cases_sha256 = rebind(manifest, cases)
+    result = compare(manifest, cases, historical, cases_sha256=cases_sha256)
+    assert result["status"] == "mismatch"
+    assert result["firstDifference"] == "$.status"
+
+
+def test_missing_duplicate_or_drifted_current_program_is_indeterminate():
+    for selected_programs in (
+        [],
+        [
+            _comparator._historical_program(),
+            _comparator._historical_program(),
+        ],
+    ):
+        manifest, cases, historical, _ = evidence()
+        cases["selectedPrograms"] = selected_programs
+        cases_sha256 = rebind(manifest, cases)
+        assert (
+            compare(manifest, cases, historical, cases_sha256=cases_sha256)["status"]
+            == "indeterminate"
+        )
+
+    manifest, cases, historical, _ = evidence()
+    changed_step = next(
+        step
+        for step in cases["selectedPrograms"][0]["steps"]
+        if step["id"] == "write-bad-base64"
+    )
+    changed_step["path"] = "/changed/path"
+    cases_sha256 = rebind(manifest, cases)
     result = compare(manifest, cases, historical, cases_sha256=cases_sha256)
     assert result["status"] == "indeterminate"

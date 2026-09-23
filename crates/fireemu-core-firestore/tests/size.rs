@@ -173,8 +173,13 @@ fn long_reference_index_value_rejects_the_saved_production_boundary() {
     // rejects as an oversized index entry.
     let parent_id = "p".repeat(1_490);
     let doc = path(&["c", &parent_id, "c", &parent_id, "c", "d"]);
-    let fields = BTreeMap::from([("_sharedOwner".to_owned(), Value::Reference(doc.resource_name()))]);
-    assert!(IndexSet::default().document_index_usage(&doc, &fields).is_err());
+    let fields = BTreeMap::from([(
+        "_sharedOwner".to_owned(),
+        Value::Reference(doc.resource_name()),
+    )]);
+    assert!(IndexSet::default()
+        .document_index_usage(&doc, &fields)
+        .is_err());
 }
 
 #[test]

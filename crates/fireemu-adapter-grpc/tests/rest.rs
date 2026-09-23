@@ -2906,6 +2906,53 @@ fn rest_accepts_an_empty_document_mask_object() {
 }
 
 #[test]
+fn production_update_mask_rejects_a_1500_byte_path_but_accepts_1499() {
+    let s = state_with_profile(true);
+    let a = "a".repeat(750);
+    for (label, field, fields, expected_status) in [
+        (
+            "nested1499",
+            format!("{a}.{}", "b".repeat(748)),
+            BTreeMap::from([(
+                a.clone(),
+                json!({"mapValue": {"fields": BTreeMap::from([("b".repeat(748), json!({"integerValue": "1"}))])}}),
+            )]),
+            200,
+        ),
+        (
+            "nested1500",
+            format!("{a}.{}", "b".repeat(749)),
+            BTreeMap::from([(
+                a.clone(),
+                json!({"mapValue": {"fields": BTreeMap::from([("b".repeat(749), json!({"integerValue": "1"}))])}}),
+            )]),
+            400,
+        ),
+        (
+            "simple1500",
+            "a".repeat(1_500),
+            BTreeMap::from([("a".repeat(1_500), json!({"integerValue": "1"}))]),
+            400,
+        ),
+    ] {
+        let name = format!("projects/demo-app/databases/(default)/documents/maskbytes/{label}");
+        let (status, response) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:batchWrite"),
+            json!({"writes": [{"update": {"name": name, "fields": fields}, "updateMask": {"fieldPaths": [field]}, "currentDocument": {"exists": false}}]}),
+        );
+        assert_eq!(status, expected_status, "{label}: {response}");
+        let (read_status, _) = call(&s, "GET", &format!("{DOCS}/maskbytes/{label}"), json!({}));
+        assert_eq!(
+            read_status,
+            if expected_status == 200 { 200 } else { 404 },
+            "{label}"
+        );
+    }
+}
+
+#[test]
 fn rest_rejects_non_object_and_unknown_document_masks() {
     let s = state(None);
     let name = "projects/demo-app/databases/(default)/documents/masked/strict";

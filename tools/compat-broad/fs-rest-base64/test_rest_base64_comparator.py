@@ -1,17 +1,22 @@
 import copy
 import hashlib
+import importlib.util
 import json
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from comparator import (
-    CASE_ID,
-    EXPECTED_PROGRAM_DIGEST,
-    _digest,
-    compare_evidence,
+# This directory is not a package. Importing the CLI as top-level `comparator`
+# would shadow fs-write-limits/comparator.py during whole-tree pytest collection.
+# Load the unchanged CLI by path, without modifying sys.path or sys.modules.
+_spec = importlib.util.spec_from_file_location(
+    "_fs_rest_base64_comparator", Path(__file__).with_name("comparator.py")
 )
+assert _spec is not None and _spec.loader is not None
+_comparator = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_comparator)
+CASE_ID = _comparator.CASE_ID
+EXPECTED_PROGRAM_DIGEST = _comparator.EXPECTED_PROGRAM_DIGEST
+_digest = _comparator._digest
+compare_evidence = _comparator.compare_evidence
 
 ROOT = Path(__file__).resolve().parents[3]
 MATRIX = ROOT / "conformance/firestore-production-matrix.json"

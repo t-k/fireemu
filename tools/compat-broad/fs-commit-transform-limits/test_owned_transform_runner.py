@@ -184,16 +184,23 @@ def test_current_648_g0_profile_rejects_profile_relabeling():
 
 
 PRIVATE_8245_ENABLED = os.environ.get("G0_8245_RUN_PRIVATE_TESTS") == "1"
+REPOSITORY = Path(__file__).resolve().parents[3]
 PRIVATE_8245_ARTIFACT = Path(
     os.environ.get(
         "G0_8245_RETAINED_ARTIFACT",
-        "/Users/tk/work/firebase-emulator/docs.local/runs/saved-runtime-20260922-approved/projection-e896/fireemu",
+        str(
+            REPOSITORY
+            / "docs.local/runs/saved-runtime-20260922-approved/projection-e896/fireemu"
+        ),
     )
 )
 PRIVATE_8245_MANIFEST = Path(
     os.environ.get(
         "G0_8245_BUILD_MANIFEST",
-        "/Users/tk/work/firebase-emulator/docs.local/runs/saved-runtime-20260922-approved/projection-e896/build-local.json",
+        str(
+            REPOSITORY
+            / "docs.local/runs/saved-runtime-20260922-approved/projection-e896/build-local.json"
+        ),
     )
 )
 

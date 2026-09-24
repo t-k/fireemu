@@ -5,7 +5,7 @@ This lane compares only `firestore:errors/rest-shapes#write-bad-base64`. It bind
 The available fresh local run is under `docs.local/runs/rest-base64-current-http` and records source commit `ff90876b9f6b3e468b1da9e25e95d6384cbecc6b`. Once this comparator is integrated into that checkout, compare that condition with:
 
 ```sh
-RUN=/Users/tk/work/firebase-emulator/docs.local/runs/rest-base64-current-http
+RUN=docs.local/runs/rest-base64-current-http
 uv run --project tools/compat-inventory --locked --python 3.12 python tools/compat-broad/fs-rest-base64/comparator.py \
   --manifest "$RUN/manifest.json" \
   --cases "$RUN/cases.json" \

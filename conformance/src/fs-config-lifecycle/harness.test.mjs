@@ -47,13 +47,22 @@ test("the guard admits only program databases, uncreated ids and a read of (defa
   const ctx = production();
   const own = databaseId(ctx, program, "a");
   const ok = (r) => guardRestRequest(r, ctx, program);
+  const refused = (r, pattern) => assert.throws(() => guardRestRequest(r, ctx, program), pattern);
   ok(request(`v1/projects/fireemu-oracle-query/databases/${own}/documents/c/d`));
   ok(request("v1/projects/fireemu-oracle-query/databases/(default)"));
-  ok(request("v1/projects/fireemu-oracle-query/databases/nonexist-cfg/documents/c/d"));
+  ok(request("v1/projects/fireemu-oracle-query/databases/Bad_Id/documents/c/d"));
+  refused(request("v1/projects/fireemu-oracle-query/databases/Bad_Id", "DELETE"), /only read/);
+  refused(
+    request(
+      `v1/projects/fireemu-oracle-query/databases/${own}?updateMask=pointInTimeRecoveryEnablement`,
+      "PATCH",
+      {},
+    ),
+    /point-in-time/,
+  );
   ok(request(`v1/projects/fireemu-oracle-query/databases?databaseId=${own}`, "POST", {}));
   ok(request("v1/projects/fireemu-no-such-project-0924/databases"));
   ok(request("v1/projects/fireemu-oracle-query/locations/us-central1"));
-  const refused = (r, pattern) => assert.throws(() => guardRestRequest(r, ctx, program), pattern);
   refused(
     request("v1/projects/fireemu-oracle-query/databases/(default)/documents/c/d"),
     /\(default\)/,
@@ -101,6 +110,31 @@ test("storage requests stay in the run bucket; only the harness creates it", () 
     init: { method, headers: {} },
   });
   guardRestRequest(storage(`storage/v1/b/${ctx.bucket}/o`), ctx, program);
+  const nested = encodeURIComponent("test-case/all/all_namespaces/all_kinds/output-0");
+  guardRestRequest(storage(`storage/v1/b/${ctx.bucket}/o/${nested}`, "DELETE"), ctx, program);
+  guardRestRequest(
+    storage(`storage/v1/b/${ctx.bucket}/o/${nested}`, "GET", "?alt=media"),
+    ctx,
+    program,
+  );
+  guardRestRequest(
+    storage(`upload/storage/v1/b/${ctx.bucket}/o`, "POST", "?uploadType=media&name=x"),
+    ctx,
+    program,
+  );
+  assert.throws(
+    () => guardRestRequest(storage(`storage/v1/b/${ctx.bucket}%2Fother/o`), ctx, program),
+    /outside the JSON API/,
+  );
+  assert.throws(
+    () =>
+      guardRestRequest(
+        storage(`storage/v1/b/${ctx.bucket}/o/${encodeURIComponent("a/../b")}`, "DELETE"),
+        ctx,
+        program,
+      ),
+    /not canonical/,
+  );
   assert.throws(
     () => guardRestRequest(storage("storage/v1/b/other/o"), ctx, program),
     /run bucket/,

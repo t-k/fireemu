@@ -70,12 +70,21 @@ function selectedPrograms() {
   return programs;
 }
 
-export const programDigest = (program) => sha256(JSON.stringify(program));
+/**
+ * What a saved row of the program depends on besides the harness: the program itself and the
+ * committed bytes of every capture it uploads (a changed capture makes its rows stale).
+ */
+export const programDigest = (program, captures = {}) => {
+  const used = program.steps
+    .filter((s) => s.upload)
+    .map((s) => sha256(JSON.stringify(captures[s.upload.from] ?? null)));
+  return sha256(JSON.stringify(program) + used.join(""));
+};
 
 /** Normalization and request semantics a saved row depends on; a change makes it stale. */
 export async function harnessDigest() {
   const sources = await Promise.all(
-    ["harness.mjs", "session.mjs", "grpc.mjs"].map((file) =>
+    ["harness.mjs", "session.mjs", "grpc.mjs", "exports.mjs"].map((file) =>
       readFile(join(CONFORMANCE_DIR, "src/fs-config-lifecycle", file), "utf8"),
     ),
   );
@@ -111,6 +120,8 @@ async function assertCleanTree() {
       "--",
       "src/fs-config-lifecycle",
       "fs-config-lifecycle-production.json",
+      "fs-config-lifecycle-exports.json",
+      "fs-config-lifecycle.fireemu.json",
     ],
     { cwd: CONFORMANCE_DIR },
   );
@@ -144,9 +155,24 @@ async function projectNumber(token, project) {
   return String(body.projectNumber);
 }
 
-async function recordOnce(programs, project, token, number, captures) {
+async function recordOnce(programs, project, token, number, captures, ledger, meta) {
   const startedMs = Date.now();
   const run = String(Math.floor(startedMs / 1000));
+  // Written before production is touched, so a crash still leaves the run's resource names.
+  await appendFile(
+    ledger,
+    `${JSON.stringify({
+      ts: new Date().toISOString(),
+      event: "started",
+      taskId: TASK_ID,
+      project,
+      run,
+      gitSha: meta.sha,
+      bucket: usesBucket(programs) ? `${project}-cfg-${run}` : null,
+      databasePrefix: `cfg${run}-`,
+      programs: programs.length,
+    })}\n`,
+  );
   const ctx = createContext({
     run,
     startedMs,
@@ -164,11 +190,12 @@ async function recordOnce(programs, project, token, number, captures) {
     concurrency: 4,
     bucket: usesBucket(programs),
     captures,
+    refreshToken: adminToken,
     log: (line) => console.log(line),
   });
 }
 
-async function writeFixture({ programs, recordings, meta, secrets }) {
+async function writeFixture({ programs, recordings, meta, secrets, captures }) {
   const [first, second] = recordings;
   const fixture = existsSync(FIXTURE)
     ? JSON.parse(await readFile(FIXTURE, "utf8"))
@@ -192,7 +219,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
       }),
     );
     fixture.programs[program.id] = {
-      corpusDigest: programDigest(program),
+      corpusDigest: programDigest(program, captures),
       harnessDigest: meta.harness,
       recordedAt: meta.startedAt,
       gitSha: meta.sha,
@@ -248,13 +275,17 @@ async function recordProduction() {
       p.steps.every((s) => !s.upload || s.onlyOn === "local" || captures[s.upload.from]),
   );
   if (programs.length === 0) throw new Error(`no production program runs against ${project}`);
+  const waiting = selectedPrograms().filter(
+    (p) => !p.local && projectOf(p) === project && !programs.includes(p),
+  );
+  if (waiting.length) console.log(`waiting for captures: ${waiting.map((p) => p.id).join(", ")}`);
   const corpusRequests = validateCorpus(programs);
   const meta = {
     sha: await gitSha(),
     harness: await harnessDigest(),
     startedAt: new Date().toISOString(),
     programs: programs.map((p) => p.id),
-    corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
+    corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p, captures)])),
   };
   await assertIgnored(privateRoot);
   const runDir = join(privateRoot, `fs-config-production-${meta.startedAt.replaceAll(":", "")}`);
@@ -269,7 +300,7 @@ async function recordProduction() {
       token = await adminToken();
       number ??= await projectNumber(token, project);
       if (n === 2) await new Promise((r) => setTimeout(r, 1_000));
-      const recording = await recordOnce(programs, project, token, number, captures);
+      const recording = await recordOnce(programs, project, token, number, captures, ledger, meta);
       recordings.push(recording);
       await writeFile(join(runDir, `recording-${n}.json`), JSON.stringify(recording), {
         mode: 0o600,
@@ -292,6 +323,7 @@ async function recordProduction() {
         recordings,
         meta,
         secrets: [token, project, number],
+        captures,
       });
       if (failures.length) outcome = "recorded-with-program-failures";
       console.log(
@@ -324,9 +356,7 @@ async function recordProduction() {
         outcome,
         taskId: TASK_ID,
         programs: meta.programs,
-        buckets: usesBucket(programs)
-          ? recordings.map((r) => `${project}-cfg-${r.context?.run ?? "?"}`)
-          : [],
+        runs: recordings.map((r) => r.context ?? null),
         ...(error ? { error } : {}),
       })}\n`,
     );
@@ -345,7 +375,8 @@ async function rebuildFixture(runDir) {
     ),
   );
   const programs = PROGRAMS.filter((p) => meta.programs.includes(p.id));
-  const changed = programs.filter((p) => meta.corpusDigests?.[p.id] !== programDigest(p));
+  const captures = await loadExports();
+  const changed = programs.filter((p) => meta.corpusDigests?.[p.id] !== programDigest(p, captures));
   if (changed.length || programs.length !== meta.programs.length)
     throw new Error(`corpus changed since the recording: ${changed.map((p) => p.id).join(", ")}`);
   const nondeterministic = await writeFixture({
@@ -353,6 +384,7 @@ async function rebuildFixture(runDir) {
     recordings,
     meta,
     secrets: [SANDBOX_PROJECT],
+    captures,
   });
   console.log(JSON.stringify({ programs: programs.length, nondeterministic }, null, 2));
 }
@@ -460,8 +492,11 @@ export function classify({ stale, production, alternative, fireemu }) {
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
   // A server error production returned identically in both recordings is behavior.
-  const repeatedServerError = production.status >= 500 && alternative === undefined;
-  const transient = (r) => isTransient(r) && !(repeatedServerError && r?.status >= 500);
+  // So is a quota refusal both recordings agree on (a customer-managed key production does not
+  // allow the project is a 429, not a rate limit).
+  const repeated =
+    (production.status >= 500 || production.status === 429) && alternative === undefined;
+  const transient = (r) => isTransient(r) && !(repeated && (r?.status >= 500 || r?.status === 429));
   if ([production, alternative, fireemu].some(transient)) return "INDETERMINATE";
   const agrees = (saved) =>
     saved?.trace ? traceAgrees(saved, fireemu) : sameRecording(saved, fireemu);
@@ -474,13 +509,14 @@ async function check() {
   const fixture = JSON.parse(await readFile(FIXTURE, "utf8"));
   const selected = selectedPrograms();
   const harness = await harnessDigest();
+  const captures = await loadExports();
   const local = await runLocal(selected);
   const rows = [];
   for (const program of selected) {
     const saved = fixture.programs[program.id];
     const stale =
       saved !== undefined &&
-      (saved.corpusDigest !== programDigest(program) || saved.harnessDigest !== harness);
+      (saved.corpusDigest !== programDigest(program, captures) || saved.harnessDigest !== harness);
     for (const step of program.steps) {
       if (step.onlyOn === "production" || step.capture || step.upload) continue;
       if (program.local || step.reproduce) {

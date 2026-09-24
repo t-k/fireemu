@@ -137,20 +137,6 @@ const items = (db) =>
     ["other/c", { a: integer(1) }],
   ]);
 
-// Poll predicates, by name, evaluated on the raw answer (see session.mjs).
-export const UNTIL = {
-  done: (json) => json?.done === true,
-  ready: (json) => json?.state === "READY",
-  notFound: (_json, status) => status === 404,
-  httpError: (_json, status) => status >= 400,
-  httpOk: (_json, status) => status === 200,
-  exempt: (json) => json?.indexConfig?.usesAncestorConfig === false,
-  inherits: (json) => json?.indexConfig?.usesAncestorConfig === true,
-  ttlActive: (json) => json?.ttlConfig?.state === "ACTIVE",
-  ttlGone: (json) => json?.ttlConfig === undefined,
-  never: () => false,
-};
-
 const PROGRAMS_RAW = [
   // ---- database projection, create, delete, patch ------------------------------------------
   {
@@ -165,7 +151,7 @@ const PROGRAMS_RAW = [
         query: { showDeleted: "false" },
         filterDatabases: true,
       }),
-      get("get-missing", "v1/{project}/databases/nonexist-cfg"),
+      get("get-missing", "v1/{project}/databases/{db:z}"),
     ],
   },
   {
@@ -213,8 +199,7 @@ const PROGRAMS_RAW = [
       create("customer-managed-key", "g", {
         ...NATIVE,
         cmekConfig: {
-          kmsKeyName:
-            "projects/fireemu-oracle-query/locations/us-central1/keyRings/none/cryptoKeys/none",
+          kmsKeyName: "{project}/locations/us-central1/keyRings/none/cryptoKeys/none",
         },
       }),
       create("tags", "h", { ...NATIVE, tags: { "tagKeys/000000": "tagValues/000000" } }),
@@ -247,7 +232,7 @@ const PROGRAMS_RAW = [
       get("list-after", "v1/{project}/databases", { filterDatabases: true }),
       get("document-after", `v1/${docs("a")}/items/a`),
       { id: "delete-again", method: "DELETE", path: dbPath("a") },
-      { id: "delete-missing", method: "DELETE", path: "v1/{project}/databases/nonexist-cfg" },
+      { id: "delete-missing", method: "DELETE", path: "v1/{project}/databases/{db:z}" },
     ],
   },
   {
@@ -338,7 +323,7 @@ const PROGRAMS_RAW = [
       {
         id: "missing",
         method: "PATCH",
-        path: "v1/{project}/databases/nonexist-cfg",
+        path: "v1/{project}/databases/{db:z}",
         query: { updateMask: "deleteProtectionState" },
         body: { deleteProtectionState: "DELETE_PROTECTION_DISABLED" },
       },
@@ -394,13 +379,13 @@ const PROGRAMS_RAW = [
       get("foreign-get-database", "v1/{foreign}/databases/(default)"),
       get("foreign-get-document", "v1/{foreign}/databases/(default)/documents/c/d"),
       get("foreign-list-locations", "v1/{foreign}/locations"),
-      get("missing-database-get-document", "v1/{project}/databases/nonexist-cfg/documents/c/d"),
+      get("missing-database-get-document", "v1/{project}/databases/{db:z}/documents/c/d"),
       get("invalid-database-get-document", "v1/{project}/databases/Bad_Id/documents/c/d"),
       get(
         "missing-database-list-indexes",
-        "v1/{project}/databases/nonexist-cfg/collectionGroups/-/indexes",
+        "v1/{project}/databases/{db:z}/collectionGroups/-/indexes",
       ),
-      get("missing-database-operations", "v1/{project}/databases/nonexist-cfg/operations"),
+      get("missing-database-operations", "v1/{project}/databases/{db:z}/operations"),
     ],
   },
   {
@@ -725,7 +710,7 @@ const PROGRAMS_RAW = [
       {
         id: "missing-database",
         method: "POST",
-        path: "v1/{project}/databases/nonexist-cfg:exportDocuments",
+        path: "v1/{project}/databases/{db:z}:exportDocuments",
         body: { outputUriPrefix: "{prefix}/none" },
       },
       pollFrom("all-operation", "all", "done", { max: 30, intervalMs: 10_000 }),
@@ -816,7 +801,7 @@ const PROGRAMS_RAW = [
       {
         id: "missing-database",
         method: "POST",
-        path: "v1/{project}/databases/nonexist-cfg:bulkDeleteDocuments",
+        path: "v1/{project}/databases/{db:z}:bulkDeleteDocuments",
         body: { collectionIds: ["other"] },
       },
     ],
@@ -997,7 +982,7 @@ const PROGRAMS_RAW = [
       },
       {
         id: "get-missing",
-        grpc: { rpc: "GetDatabase", request: { name: "{project}/databases/nonexist-cfg" } },
+        grpc: { rpc: "GetDatabase", request: { name: "{project}/databases/{db:z}" } },
       },
       {
         id: "get-operation",
@@ -1089,8 +1074,19 @@ const PROGRAMS_RAW = [
 ];
 
 /** The corpus, with each program's ordinal (its database ids) and object-prefix slug. */
+/**
+ * Letter `z` is the database a program names but never creates: the missing database of its
+ * refusal rows. It is still one of the program's own ids (unique to the run), so the guard
+ * admits it and cleanup would delete it if production unexpectedly created it.
+ */
+const withMissing = (program) =>
+  JSON.stringify(program.steps).includes("{db:z}") && !(program.databases ?? []).includes("z")
+    ? [...(program.databases ?? []), "z"]
+    : program.databases;
+
 export const PROGRAMS = PROGRAMS_RAW.map((program, ordinal) =>
   Object.assign(program, {
+    databases: withMissing(program),
     ordinal,
     slug: program.id.replace(/^fs-config\//, "").replaceAll("/", "-"),
   }),

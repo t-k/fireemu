@@ -20,8 +20,8 @@ import {
   programSymbols,
   collapseTrace,
   UNCREATED_DATABASES,
+  UNTIL,
 } from "./harness.mjs";
-import { UNTIL } from "./corpus.mjs";
 import { capturePairs, normalizeCapture, restoreCapture } from "./exports.mjs";
 
 const require = createRequire(import.meta.url);
@@ -39,9 +39,20 @@ export function createSession(
     maxHarnessRequests = Infinity,
     pollScale = 1,
     captures = {},
+    // Production only: returns a fresh access token. Called before a request once the current
+    // token is older than `tokenMaxAgeMs`, and before every cleanup.
+    refreshToken,
+    tokenMaxAgeMs = 40 * 60_000,
     log = () => {},
   } = {},
 ) {
+  let tokenAt = Date.now();
+  async function ensureToken(force = false) {
+    if (!refreshToken || ctx.target.kind !== "production") return;
+    if (!force && Date.now() - tokenAt < tokenMaxAgeMs) return;
+    ctx.target.token = await refreshToken();
+    tokenAt = Date.now();
+  }
   let requests = 0;
   let harnessRequests = 0;
   const grpcClient =
@@ -68,6 +79,7 @@ export function createSession(
 
   /** Sends one request; returns the parsed JSON (or null), the status and the raw text. */
   async function send(step, program, raw, { harness = false } = {}) {
+    await ensureToken();
     const request = buildRestRequest(step, ctx, program, raw);
     guardRestRequest(request, ctx, program, { harness });
     claim(harness);
@@ -90,7 +102,8 @@ export function createSession(
   }
 
   /** Sends one gRPC step; the answer is projected to proto3 JSON before it is recorded. */
-  function sendGrpc(step, program, raw) {
+  async function sendGrpc(step, program, raw) {
+    await ensureToken();
     const built = buildGrpcRequest(step, ctx, program, raw);
     guardGrpcRequest(built, ctx, program, UNCREATED_DATABASES);
     claim(false);
@@ -184,11 +197,14 @@ export function createSession(
   async function removeDatabase(program, id) {
     const step = (s) => ({ id: "harness", ...s });
     const path = `v1/{project}/databases/${id}`;
-    for (let attempt = 0; attempt < 6; attempt += 1) {
+    // Bounded backoff, about three minutes in all: unprotecting and deleting are themselves
+    // long-running operations that production may refuse while another change is in flight.
+    const backoff = [2, 3, 5, 8, 12, 15, 20, 25, 30, 30, 30].map((s) => s * 1_000 * pollScale);
+    for (const wait of backoff) {
       const current = await send(step({ path }), program, new Map(), { harness: true });
       if (current.status === 404) return;
       if (current.status !== 200) {
-        await sleep(3_000 * pollScale);
+        await sleep(wait);
         continue;
       }
       if (current.json?.deleteProtectionState === "DELETE_PROTECTION_ENABLED") {
@@ -203,19 +219,58 @@ export function createSession(
           new Map(),
           { harness: true },
         );
-        await sleep(3_000 * pollScale);
+        await sleep(wait);
         continue;
       }
       await send(step({ path, method: "DELETE" }), program, new Map(), { harness: true });
-      await sleep(2_000 * pollScale);
+      await sleep(wait);
     }
-    throw fatal(`${program.id}: database ${id} could not be proved absent`);
+    throw new Error(`database ${id} could not be proved absent`);
   }
 
-  /** Every database the program may have brought into being, own or unexpectedly accepted. */
-  function programCleanupIds(program) {
-    const own = (program.databases ?? []).map((letter) => databaseId(ctx, program, letter));
-    return [...own, ...[...UNCREATED_DATABASES].filter((id) => /^[a-z][a-z0-9-]{3,62}$/.test(id))];
+  /**
+   * Deletes every database the program owns. Every id is attempted; one fatal error names all
+   * that may remain. (Invalid ids cannot exist; the end-of-run sweep catches anything else
+   * created under the run's prefix.)
+   */
+  async function cleanupProgram(program) {
+    await ensureToken(true);
+    const remaining = [];
+    for (const letter of program.databases ?? []) {
+      const id = databaseId(ctx, program, letter);
+      try {
+        await removeDatabase(program, id);
+      } catch (error) {
+        remaining.push(`${id} (${error.message})`);
+      }
+    }
+    if (remaining.length)
+      throw fatal(`${program.id}: databases may remain: ${remaining.join(", ")}`);
+  }
+
+  /** Fails when any database of this run is still listed after every program's cleanup. */
+  async function sweepRun() {
+    await ensureToken(true);
+    const probe = {
+      id: "harness/sweep",
+      ordinal: 0,
+      slug: "harness",
+      databases: [],
+      project: ctx.project,
+    };
+    const listing = await send(
+      { id: "harness", path: "v1/{project}/databases" },
+      probe,
+      new Map(),
+      {
+        harness: true,
+      },
+    );
+    if (listing.status !== 200) throw fatal(`final sweep: HTTP ${listing.status}`);
+    const left = (listing.json?.databases ?? [])
+      .map((d) => String(d.name).split("/").at(-1))
+      .filter((id) => id.startsWith(`cfg${ctx.run}-`));
+    if (left.length) throw fatal(`databases of run ${ctx.run} remain: ${left.join(", ")}`);
   }
 
   const storageStep = (s) => ({ id: "harness", service: "storage", ...s });
@@ -353,7 +408,7 @@ export function createSession(
     } catch (error) {
       failure = error;
     }
-    for (const id of programCleanupIds(program)) await removeDatabase(program, id);
+    await cleanupProgram(program);
     if (failure) throw failure;
     return {
       steps,
@@ -370,7 +425,13 @@ export function createSession(
     };
   }
 
-  const bucketProgram = { id: "harness/bucket", ordinal: 0, slug: "harness", databases: [] };
+  const bucketProgram = {
+    id: "harness/bucket",
+    ordinal: 0,
+    slug: "harness",
+    databases: [],
+    project: ctx.project,
+  };
 
   async function createBucket() {
     const answer = await send(
@@ -387,6 +448,8 @@ export function createSession(
             uniformBucketLevelAccess: { enabled: true },
             publicAccessPrevention: "enforced",
           },
+          // No soft-deleted copies are kept after the run deletes its objects.
+          softDeletePolicy: { retentionDurationSeconds: "0" },
         },
       },
       bucketProgram,
@@ -401,6 +464,7 @@ export function createSession(
 
   /** Deletes every object in the run bucket, then the bucket, and reads it back as absent. */
   async function deleteBucket() {
+    await ensureToken(true);
     const step = (s) => ({ id: "harness", service: "storage", ...s });
     for (let round = 0; round < 20; round += 1) {
       const listing = await send(
@@ -443,6 +507,7 @@ export function createSession(
     runProgram,
     createBucket,
     deleteBucket,
+    sweepRun,
     counts: () => ({ requests, harnessRequests }),
     close: () => grpcClient.close(),
   };
@@ -461,8 +526,14 @@ export async function runCorpus(
   const results = {};
   const failures = [];
   let fatalError;
-  if (bucket) await session.createBucket();
+  const context = {
+    run: ctx.run,
+    startedMs: ctx.startedMs,
+    project: ctx.project,
+    bucket: bucket ? ctx.bucket : null,
+  };
   try {
+    if (bucket) await session.createBucket();
     const queue = [...programs];
     const worker = async () => {
       while (queue.length && !fatalError) {
@@ -476,17 +547,27 @@ export async function runCorpus(
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
+    if (!fatalError) await session.sweepRun();
+  } catch (error) {
+    fatalError ??= Object.assign(error, { fatal: true });
   } finally {
     try {
       if (bucket) await session.deleteBucket();
+    } catch (error) {
+      const message = `bucket ${ctx.bucket} may remain: ${error.message}`;
+      fatalError = fatalError
+        ? Object.assign(fatalError, { message: `${fatalError.message}; ${message}` })
+        : Object.assign(new Error(message), { fatal: true });
     } finally {
       session.close();
     }
   }
   if (fatalError)
-    throw Object.assign(fatalError, { partial: { results, failures, ...session.counts() } });
+    throw Object.assign(fatalError, {
+      partial: { context, results, failures, ...session.counts() },
+    });
   return {
-    context: { run: ctx.run, startedMs: ctx.startedMs },
+    context,
     results,
     failures,
     ...session.counts(),

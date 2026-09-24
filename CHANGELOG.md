@@ -8,11 +8,12 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
-Behavior below was measured against a real Identity Platform project on 2026-09-24 (AUTH-CREDENTIAL). Each item names the profiles it affects; "unlike the official emulator" marks where the emulator profile now differs from the Firebase Emulator Suite.
+Behavior below was measured against a real Identity Platform project on 2026-09-24 (AUTH-CREDENTIAL and AUTH-ACTION). Each item names the profiles it affects; "unlike the official emulator" marks where the emulator profile now differs from the Firebase Emulator Suite.
 
 ### Added
 
 - `auth.customTokenSigners` maps service accounts to their public JWK sets (RSA keys of at least 2048 bits). With it, `signInWithCustomToken` verifies RS256 signatures and applies production's custom-token rules in either profile; a verifying token of another project's service account is refused with `CREDENTIAL_MISMATCH`.
+- The Admin project config reads and replaces `authorizedDomains`, starting with `localhost` and the project's `firebaseapp.com` and `web.app` domains. The strict profile refuses an action-code `continueUrl` outside them with `UNAUTHORIZED_DOMAIN`, as production does; the emulator profile does not check the domain, as the official emulator does not.
 - `auth.apiKeys` declares the project's Web API keys. A client request with any other key is refused with production's `400 API_KEY_INVALID` envelope (unlike the official emulator, which validates no key). An unknown key under a registered session now gets the same envelope instead of `INVALID_API_KEY`.
 
 ### Changed
@@ -28,6 +29,9 @@ Behavior below was measured against a real Identity Platform project on 2026-09-
 - Both profiles: Secure Token reads an empty `grant_type` or `refresh_token` as missing (`MISSING_GRANT_TYPE`, `MISSING_REFRESH_TOKEN`). In the strict profile a Secure Token request with no API key gets its front end's 403 without an `errors` list; the emulator profile keeps accepting a keyless request.
 - Strict profile: MFA enrollment answers `OPERATION_NOT_ALLOWED : TOTP based MFA not enabled.` when TOTP is off, and its refusals carry the v2 API's shape (a status name and no `errors` list). The emulator profile keeps the official emulator's answers.
 - Both profiles: linking a phone number answers with a session whose `sign_in_provider` is `phone`, as production does and as the official emulator does.
+- Both profiles, as production and the official emulator: an Admin link request for a password reset of an unknown address is answered 200 without a code under improved email privacy; an Admin email-link request is refused with `OPERATION_NOT_ALLOWED` while email links are off; a verification or change link for an unknown address is `USER_NOT_FOUND` and one with neither address nor token `MISSING_EMAIL`; a client `returnOobLink` is `INSUFFICIENT_PERMISSION`; an email link used with another address is `INVALID_EMAIL : The email provided does not match the sign-in email address.` and one without an address `MISSING_EMAIL`; linking an address to a session by email link answers an `EmailLinkSigninResponse` whose token is a `password` session; lookups report `emailLinkSignin` and `initialEmail`; the emulator profile refuses a non-absolute `continueUrl` with the official `INVALID_CONTINUE_URI` and reads an empty `newPassword` as an inspection.
+- Both profiles: an account an email link created reports `validSince`, and an Admin-created account with only a phone number is a phone account whose sessions carry no anonymous `provider_id`, as in production.
+- Strict profile: action codes follow production. A newer password reset, email change or sign-in code of an address retires the older one; a deleted account's codes are refused; a reset finds the account by the code's address (`USER_NOT_FOUND` once it has another), refuses an empty password with a bare `WEAK_PASSWORD`, only inspects a sign-in code offered with a password, and leaves earlier sessions `TOKEN_EXPIRED` rather than forgetting their refresh tokens; a verification finds its account by address (`EMAIL_NOT_FOUND`) and a disabled account refuses both kinds of code; an applied email change answers like an account update, records `initialEmail` and revokes earlier sessions; an update with an ID token ignores `oobCode`; request types, continue URLs, addresses and new addresses are refused with production's codes, and a taken or unchanged new address is hidden behind a sent-mail answer under improved email privacy; an email link honours a legacy ID token and removes the password of an account whose address was never verified.
 
 ## [0.7.1] - 2026-09-10
 

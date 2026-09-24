@@ -10136,6 +10136,19 @@ fn reset_password(
     if entry.request_type != OobRequestType::PasswordReset {
         return error(400, "INVALID_OOB_CODE");
     }
+    // The official `resetPassword` checks the new password before it spends the code and
+    // looks the address up; strict keeps the order observed so far (the lookup first).
+    let validate = |store: &AuthStore| {
+        store.validate_password_for(
+            fireemu_core_auth::password_policy::Operation::Reset,
+            new_password,
+        )
+    };
+    if !strict {
+        if let Err(e) = validate(store) {
+            return auth_error(&e);
+        }
+    }
     // The code names an address, and the account that owns it now is reset: production does
     // so (sandbox recordings 2026-09-24, password-reset#reset-e-after-email-change and
     // auth-action/address-reuse), and so does the official emulator's `resetPassword`. Nobody
@@ -10149,11 +10162,10 @@ fn reset_password(
             return error(400, "INVALID_OOB_CODE");
         }
     };
-    if let Err(e) = store.validate_password_for(
-        fireemu_core_auth::password_policy::Operation::Reset,
-        new_password,
-    ) {
-        return auth_error(&e);
+    if strict {
+        if let Err(e) = validate(store) {
+            return auth_error(&e);
+        }
     }
     if store.user(&uid).is_none_or(|u| u.disabled) {
         // Strict: the refusal spends the code (sandbox recording 2026-09-24,

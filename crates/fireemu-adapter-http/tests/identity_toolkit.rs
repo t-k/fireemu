@@ -16924,3 +16924,45 @@ fn a_code_acts_on_the_account_that_owns_its_address_now() {
         );
     }
 }
+
+/// Emulator profile, as the official `resetPassword` and `setAccountInfo` do: a code whose
+/// address nobody owns is spent with `INVALID_OOB_CODE`, and a reset checks the new password's
+/// length before anything else, keeping the code (confirmation review 2026-09-25, S1 and S2).
+#[test]
+fn the_emulator_profile_spends_an_unowned_code_after_checking_the_password() {
+    let s = state();
+    let (_, _, reset_gone, verify_gone) = codes_whose_addresses_moved(&s);
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": reset_gone, "newPassword": "12345"}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(
+        message(&body).is_some_and(|m| m.starts_with("WEAK_PASSWORD")),
+        "{body}"
+    );
+    assert!(
+        s.store.lock().unwrap().oob_code(&reset_gone).is_some(),
+        "kept"
+    );
+    for (path, body) in [
+        (
+            "accounts:resetPassword",
+            json!({"oobCode": reset_gone, "newPassword": "password456"}),
+        ),
+        ("accounts:update", json!({"oobCode": verify_gone})),
+    ] {
+        let (status, answer) = post(&s, &format!("{V1}/{path}"), &body);
+        assert_eq!((status, message(&answer)), (400, Some("INVALID_OOB_CODE")));
+    }
+    let store = s.store.lock().unwrap();
+    assert!(
+        store.oob_code(&reset_gone).is_none(),
+        "the reset code is spent"
+    );
+    assert!(
+        store.oob_code(&verify_gone).is_none(),
+        "the verification code is spent"
+    );
+}

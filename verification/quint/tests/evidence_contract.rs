@@ -8,8 +8,7 @@ use fireemu_verification_quint::evidence::{validate_evidence_file, validate_evid
 use fireemu_verification_quint::model::{all_models, model, ModelDescriptor};
 
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const TAMPER_TARGETS: [&str; 11] = [
-    ".github/workflows/ci.yml",
+const TAMPER_TARGETS: [&str; 10] = [
     ".github/workflows/quint.yml",
     "rust-toolchain.toml",
     "crates/fireemu-core-events/src/state.rs",
@@ -49,7 +48,7 @@ fn checked_in_evidence_satisfies_the_generic_contract() {
 }
 
 #[test]
-fn ci_workflow_is_bound_but_unrelated_workspace_inputs_are_not() {
+fn unrelated_workspace_and_ci_inputs_are_not_bound() {
     let evidence: serde_json::Value = serde_json::from_str(EVIDENCE).expect("valid evidence JSON");
     let bound_inputs = evidence["boundInputs"]
         .as_array()
@@ -57,8 +56,7 @@ fn ci_workflow_is_bound_but_unrelated_workspace_inputs_are_not() {
         .iter()
         .map(|value| value.as_str().expect("bound input string"))
         .collect::<Vec<_>>();
-    assert!(bound_inputs.contains(&".github/workflows/ci.yml"));
-    for unrelated in ["Cargo.toml", "Cargo.lock"] {
+    for unrelated in ["Cargo.toml", "Cargo.lock", ".github/workflows/ci.yml"] {
         assert!(
             !bound_inputs.contains(&unrelated),
             "unrelated input remains bound: {unrelated}"

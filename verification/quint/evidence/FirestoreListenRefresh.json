@@ -23,7 +23,6 @@
     "Paths": "{items/a,items/b,other/a}"
   },
   "boundInputs": [
-    ".github/workflows/ci.yml",
     ".github/workflows/quint.yml",
     "crates/fireemu-adapter-grpc/src/local.rs",
     "crates/fireemu-adapter-grpc/src/streams.rs",
@@ -55,7 +54,6 @@
     "verification/quint/tests/firestore_listen_refresh_connect.rs"
   ],
   "digests": {
-    ".github/workflows/ci.yml": "b486c815eece3daf091c8881ce64e97ea2a85f64629d9562ede81ddb17f6a240",
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "crates/fireemu-adapter-grpc/src/local.rs": "8cfc6c626bcddc103122bd920f3e117d337eb6d33e2c387c3df8672b6981d111",
     "crates/fireemu-adapter-grpc/src/streams.rs": "23f378ee05b3ff5b729f9411057068b15ed1c543370e7e30f22be20ca2a676ef",
@@ -76,7 +74,7 @@
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
     "verification/quint/specs/FirestoreListenRefresh.qnt": "98e64e7ef46d8176131836d6a8853ee464f56e952f1a039e7fc2dda28673362f",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
-    "verification/quint/src/evidence.rs": "2a0504c6482d4d354e90fc131b98adf20ae003243b7ede22d41224f72c29f18f",
+    "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
     "verification/quint/src/firestore_listen_refresh.rs": "c497901878c875f50a279b80bb7d0000f72ad5b16a625084292a1c6675b1c687",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",

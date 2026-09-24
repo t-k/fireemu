@@ -122,6 +122,11 @@ test("storage requests stay in the run bucket; only the harness creates it", () 
     ctx,
     program,
   );
+  for (const sneaky of [
+    `storage/v1/b/${ctx.bucket}/o/..\\..\\other-bucket\\o`,
+    `storage/v1/b/${ctx.bucket}/o/..\\..\\..\\projects\\fireemu-oracle-query\\databases\\(default)`,
+  ])
+    assert.throws(() => guardRestRequest(storage(sneaky, "DELETE"), ctx, program), /not canonical/);
   assert.throws(
     () => guardRestRequest(storage(`storage/v1/b/${ctx.bucket}%2Fother/o`), ctx, program),
     /outside the JSON API/,

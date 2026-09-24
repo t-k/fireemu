@@ -173,6 +173,9 @@ export function guardRestRequest({ url, init }, ctx, program, { harness = false 
     throw new Error(`${program.id} runs only against ${program.project ?? SANDBOX_PROJECT}`);
   const parsed = new URL(url);
   const raw = url.slice(parsed.origin.length).split("?")[0];
+  // What is checked must be what fetch sends: a backslash or dot segment that URL parsing
+  // rewrites would otherwise slip past the raw-path checks below.
+  if (parsed.pathname !== raw) throw new Error(`request path is not canonical: ${raw}`);
   const own = programDatabases(ctx, program);
   const firestoreOrigin =
     ctx.target.kind === "production" ? PRODUCTION_ORIGIN : new URL(ctx.target.origin).origin;

@@ -47,14 +47,36 @@ export function createSession(
   } = {},
 ) {
   let tokenAt = Date.now();
+  /** An ADC access token lives about an hour; one older than this is not trusted. */
+  const TOKEN_LIFETIME_MS = 55 * 60_000;
+  /**
+   * Refreshes the access token when it is old (or when `force` is set). A refresh that fails
+   * is retried; if every retry fails, a token still within its lifetime is kept, and only
+   * then does the run stop.
+   */
   async function ensureToken(force = false) {
     if (!refreshToken || ctx.target.kind !== "production") return;
     if (!force && Date.now() - tokenAt < tokenMaxAgeMs) return;
-    ctx.target.token = await refreshToken();
-    tokenAt = Date.now();
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        ctx.target.token = await refreshToken();
+        tokenAt = Date.now();
+        return;
+      } catch (error) {
+        lastError = error;
+        await sleep(2_000 * pollScale);
+      }
+    }
+    if (Date.now() - tokenAt < TOKEN_LIFETIME_MS) return;
+    throw fatal(`access token refresh failed: ${lastError?.message ?? lastError}`);
   }
   let requests = 0;
   let harnessRequests = 0;
+  // Cleanup (database removal, the sweep, bucket deletion) has its own, larger budget, so a
+  // run that exhausted its step or harness budget can still clean up after itself.
+  let cleanupRequests = 0;
+  const maxCleanupRequests = 5_000;
   const grpcClient =
     ctx.target.kind === "production"
       ? new grpc.Client(
@@ -66,8 +88,12 @@ export function createSession(
           grpc.credentials.createInsecure(),
         );
 
-  function claim(harness) {
-    if (harness) {
+  function claim(harness, cleanup = false) {
+    if (cleanup) {
+      if (cleanupRequests >= maxCleanupRequests)
+        throw fatal(`cleanup request ceiling ${maxCleanupRequests} reached`);
+      cleanupRequests += 1;
+    } else if (harness) {
       if (harnessRequests >= maxHarnessRequests)
         throw fatal(`harness request ceiling ${maxHarnessRequests} reached`);
       harnessRequests += 1;
@@ -78,26 +104,39 @@ export function createSession(
   }
 
   /** Sends one request; returns the parsed JSON (or null), the status and the raw text. */
-  async function send(step, program, raw, { harness = false } = {}) {
+  async function send(step, program, raw, { harness = false, cleanup = false } = {}) {
     await ensureToken();
-    const request = buildRestRequest(step, ctx, program, raw);
-    guardRestRequest(request, ctx, program, { harness });
-    claim(harness);
-    try {
-      const response = await fetch(request.url, {
-        ...request.init,
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      const text = await response.text();
-      let json = null;
+    for (let attempt = 0; ; attempt += 1) {
+      const request = buildRestRequest(step, ctx, program, raw);
+      guardRestRequest(request, ctx, program, { harness: harness || cleanup });
+      claim(harness, cleanup);
+      let answer;
       try {
-        json = text === "" ? null : JSON.parse(text);
-      } catch {
-        /* recorded as non-JSON */
+        const response = await fetch(request.url, {
+          ...request.init,
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        const text = await response.text();
+        let json = null;
+        try {
+          json = text === "" ? null : JSON.parse(text);
+        } catch {
+          /* recorded as non-JSON */
+        }
+        answer = { status: response.status, text, json };
+      } catch (error) {
+        return {
+          status: 0,
+          text: "",
+          json: null,
+          transportError: error?.cause?.code ?? error?.name,
+        };
       }
-      return { status: response.status, text, json };
-    } catch (error) {
-      return { status: 0, text: "", json: null, transportError: error?.cause?.code ?? error?.name };
+      // An expired credential says nothing about the resource: refresh and retry once, and
+      // never record it as behavior.
+      if (answer.status !== 401 || ctx.target.kind !== "production") return answer;
+      if (attempt > 0) throw fatal(`HTTP 401 after a token refresh: ${step.id}`);
+      await ensureToken(true);
     }
   }
 
@@ -201,7 +240,7 @@ export function createSession(
     // long-running operations that production may refuse while another change is in flight.
     const backoff = [2, 3, 5, 8, 12, 15, 20, 25, 30, 30, 30].map((s) => s * 1_000 * pollScale);
     for (const wait of backoff) {
-      const current = await send(step({ path }), program, new Map(), { harness: true });
+      const current = await send(step({ path }), program, new Map(), { cleanup: true });
       if (current.status === 404) return;
       if (current.status !== 200) {
         await sleep(wait);
@@ -217,12 +256,12 @@ export function createSession(
           }),
           program,
           new Map(),
-          { harness: true },
+          { cleanup: true },
         );
         await sleep(wait);
         continue;
       }
-      await send(step({ path, method: "DELETE" }), program, new Map(), { harness: true });
+      await send(step({ path, method: "DELETE" }), program, new Map(), { cleanup: true });
       await sleep(wait);
     }
     throw new Error(`database ${id} could not be proved absent`);
@@ -248,8 +287,12 @@ export function createSession(
       throw fatal(`${program.id}: databases may remain: ${remaining.join(", ")}`);
   }
 
-  /** Fails when any database of this run is still listed after every program's cleanup. */
-  async function sweepRun() {
+  /**
+   * After every program (whatever happened), lists the project's databases and deletes any
+   * that belongs to this run, then fails if one could not be removed. It covers a cleanup
+   * that failed and a create production accepted unexpectedly.
+   */
+  async function sweepRun(programs) {
     await ensureToken(true);
     const probe = {
       id: "harness/sweep",
@@ -263,14 +306,27 @@ export function createSession(
       probe,
       new Map(),
       {
-        harness: true,
+        cleanup: true,
       },
     );
     if (listing.status !== 200) throw fatal(`final sweep: HTTP ${listing.status}`);
     const left = (listing.json?.databases ?? [])
       .map((d) => String(d.name).split("/").at(-1))
       .filter((id) => id.startsWith(`cfg${ctx.run}-`));
-    if (left.length) throw fatal(`databases of run ${ctx.run} remain: ${left.join(", ")}`);
+    const remaining = [];
+    for (const id of left) {
+      const owner = programs.find((p) =>
+        (p.databases ?? []).some((letter) => databaseId(ctx, p, letter) === id),
+      );
+      try {
+        if (!owner) throw new Error("no program owns it");
+        await removeDatabase(owner, id);
+      } catch (error) {
+        remaining.push(`${id} (${error.message})`);
+      }
+    }
+    if (remaining.length)
+      throw fatal(`databases of run ${ctx.run} remain: ${remaining.join(", ")}`);
   }
 
   const storageStep = (s) => ({ id: "harness", service: "storage", ...s });
@@ -472,7 +528,7 @@ export function createSession(
         bucketProgram,
         new Map(),
         {
-          harness: true,
+          cleanup: true,
         },
       );
       if (listing.status === 404) return;
@@ -483,7 +539,7 @@ export function createSession(
           step({ path: `storage/v1/b/{bucket}/o/${encodeURIComponent(name)}`, method: "DELETE" }),
           bucketProgram,
           new Map(),
-          { harness: true },
+          { cleanup: true },
         );
       }
     }
@@ -492,11 +548,11 @@ export function createSession(
       bucketProgram,
       new Map(),
       {
-        harness: true,
+        cleanup: true,
       },
     );
     const after = await send(step({ path: "storage/v1/b/{bucket}" }), bucketProgram, new Map(), {
-      harness: true,
+      cleanup: true,
     });
     if (ctx.target.kind === "local" && after.status === 501) return;
     if (after.status !== 404)
@@ -508,7 +564,7 @@ export function createSession(
     createBucket,
     deleteBucket,
     sweepRun,
-    counts: () => ({ requests, harnessRequests }),
+    counts: () => ({ requests, harnessRequests, cleanupRequests }),
     close: () => grpcClient.close(),
   };
 }
@@ -547,10 +603,16 @@ export async function runCorpus(
       }
     };
     await Promise.all(Array.from({ length: concurrency }, worker));
-    if (!fatalError) await session.sweepRun();
   } catch (error) {
     fatalError ??= Object.assign(error, { fatal: true });
   } finally {
+    try {
+      await session.sweepRun(programs);
+    } catch (error) {
+      fatalError = fatalError
+        ? Object.assign(fatalError, { message: `${fatalError.message}; ${error.message}` })
+        : Object.assign(error, { fatal: true });
+    }
     try {
       if (bucket) await session.deleteBucket();
     } catch (error) {

@@ -148,9 +148,10 @@ test("FS-QUERY-INDEX closure inventory cannot silently omit a declared condition
     const rows = comparison.rows.filter(({ row }) => covered(row));
     const counted = {};
     for (const { status } of rows) counted[status] = (counted[status] ?? 0) + 1;
+    // The review covers the whole lane, so its figures are the comparison's summary.
     assert.deepEqual(
       condition.evidence.rows,
-      counted,
+      label === "FS-QUERY-INDEX/closure-review" ? comparison.summary : counted,
       `${label}: its figures are the comparison's`,
     );
     const fixture = JSON.parse(fixtureText);

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "FS-QUERY-INDEX",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "oracle": {
     "project": "fireemu-oracle-query",
@@ -11,7 +11,12 @@
     "indexes": "conformance/fs-query-index.indexes.json"
   },
   "closureReview": {
-    "decision": "PENDING"
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-24",
+    "reviewer": "independent clean-context closure and security review (round 4 confirmation, after rounds 1-3)",
+    "reviewedCommit": "2fb7a8a69",
+    "finalArtifactSha256": "78fb7f7ad39a65c689550e0a339f45c32d0d4eab7128b9a961ab261510f65fe4",
+    "followUps": "Non-blocking items that need a production observation are tracked outside the closure: echo length and check order of property-path refusals, Explain entry counts for multi-range composites, the equality-ordered merge rule, root-collection routing of other methods, the JSON context window and legacy escapes, several transcoder violations and their key order, map and scalar type labels, and the array wrap of probe-only refusals."
   },
   "scopeDecisions": [
     {
@@ -907,8 +912,40 @@
       "recipeIds": [
         "FS-QUERY-INDEX"
       ],
-      "status": "PENDING_REVIEW",
-      "note": "Independent clean-context closure and safety review of the final evidence."
+      "status": "VERIFIED",
+      "note": "Independent clean-context closure and safety review of the final evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T00:54:33.874Z",
+            "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T01:46:37.110Z",
+            "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T02:59:40.983Z",
+            "gitSha": "665e5e63afb571eaf5ed973c73d8571881924ab0",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "78fb7f7ad39a65c689550e0a339f45c32d0d4eab7128b9a961ab261510f65fe4",
+        "sourceCommit": "63a1c5cc12941718002f27aabf7e70ede9c5826d",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-QUERY-INDEX-comparison.json",
+        "rows": {
+          "MATCH": 675,
+          "DIVERGENCE_APPROVED": 35
+        },
+        "reviews": [
+          "docs.local review rounds 1-4 (closure, safety, re-review 2, re-review 3 APPROVE, confirmation 4 APPROVE); reports kept privately"
+        ]
+      }
     }
   ]
 }

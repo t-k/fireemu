@@ -334,6 +334,8 @@ pub struct RefreshSession {
 }
 
 /// User record.
+// The flags mirror independent fields of the Identity Toolkit account record.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserRecord {
     /// Local ID.
@@ -371,6 +373,15 @@ pub struct UserRecord {
     pub tokens_revoked: bool,
     /// Linked federated identities.
     pub federated: Vec<FederatedIdentity>,
+    /// Whether the account was created through the Admin API (create or import). Production
+    /// then reports `disabled` and `validSince` in every read of it.
+    pub admin_created: bool,
+    /// `passwordUpdatedAt` of a password credential that was since removed: production keeps
+    /// reporting it (sandbox recording 2026-09-23, auth-account/provider).
+    pub removed_password_updated_at: Option<LogicalInstant>,
+    /// Whether an import recorded `emailVerified` explicitly: production then reports it
+    /// even for an account without an address (sandbox recording 2026-09-23).
+    pub email_verified_recorded: bool,
     /// Salted password digest (local test hashing, not Firebase's scrypt). `None` for users
     /// without a password credential.
     password: Option<PasswordDigest>,
@@ -446,6 +457,75 @@ impl UserSortField {
     }
 }
 
+/// The digit an ASCII upper-case letter carries on a phone keypad.
+fn keypad_digit(letter: char) -> char {
+    match letter {
+        'A'..='C' => '2',
+        'D'..='F' => '3',
+        'G'..='I' => '4',
+        'J'..='L' => '5',
+        'M'..='O' => '6',
+        'P'..='S' => '7',
+        'T'..='V' => '8',
+        _ => '9',
+    }
+}
+
+/// Whether an address can be stored: it has an `@` and no control or whitespace character
+/// (a leading space is `INVALID_EMAIL`, sandbox recording 2026-09-23).
+fn storable_email(email: &str) -> bool {
+    email.contains('@') && !email.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
+/// A password hash imported in one of production's foreign formats (`accounts:batchCreate`
+/// with `hashAlgorithm`). The core has no cryptography of its own, so it keeps the hash
+/// opaquely: `spec` is the importing adapter's canonical description of the algorithm and its
+/// parameters, and only an [`ImportedHashVerifier`] from that adapter can check a password
+/// against it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ImportedPasswordHash {
+    /// The adapter's canonical algorithm-and-parameters description.
+    pub spec: String,
+    /// The imported hash bytes.
+    pub hash: Vec<u8>,
+    /// The imported salt bytes (empty when the format carries none).
+    pub salt: Vec<u8>,
+}
+
+impl fmt::Debug for ImportedPasswordHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ImportedPasswordHash([redacted])")
+    }
+}
+
+/// Checks a password against an [`ImportedPasswordHash`].
+pub trait ImportedHashVerifier {
+    /// Whether `password` matches `imported`; `Err` when the imported parameters cannot be
+    /// evaluated at all (production fails the sign-in with an internal error then).
+    fn verify(
+        &self,
+        imported: &ImportedPasswordHash,
+        password: &str,
+    ) -> Result<bool, ImportedHashFailure>;
+}
+
+/// An imported hash whose parameters cannot be evaluated (for example an HMAC without a key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImportedHashFailure;
+
+/// The verifier of a caller that imports no foreign hashes: nothing matches.
+struct NoImportedHashes;
+
+impl ImportedHashVerifier for NoImportedHashes {
+    fn verify(
+        &self,
+        _imported: &ImportedPasswordHash,
+        _password: &str,
+    ) -> Result<bool, ImportedHashFailure> {
+        Ok(false)
+    }
+}
+
 /// Salted SHA-1 digest of a password. Test-only hashing: never claims scrypt compatibility.
 ///
 /// A credential also remembers the emulator salt and plaintext it was imported from, when
@@ -464,6 +544,9 @@ pub struct PasswordDigest {
     /// When the password was last set through the API (`passwordUpdatedAt`); `None` for an
     /// imported credential whose history the artifact did not carry.
     updated_at: Option<LogicalInstant>,
+    /// A foreign hash this credential was imported as, until the first successful sign-in
+    /// replaces it with fireemu's own digest.
+    imported: Option<ImportedPasswordHash>,
 }
 
 impl fmt::Debug for PasswordDigest {
@@ -482,27 +565,113 @@ impl PasswordDigest {
             digest: crate::sha1::sha1(&input),
             emulator: None,
             updated_at: None,
+            imported: None,
+        }
+    }
+
+    fn from_imported(imported: ImportedPasswordHash) -> Self {
+        Self {
+            salt: [0; 16],
+            digest: [0; 20],
+            emulator: None,
+            updated_at: None,
+            imported: Some(imported),
         }
     }
 
     fn verify(&self, password: &str) -> bool {
+        self.verify_with(password, &NoImportedHashes)
+            .unwrap_or(false)
+    }
+
+    fn verify_with(
+        &self,
+        password: &str,
+        verifier: &dyn ImportedHashVerifier,
+    ) -> Result<bool, ImportedHashFailure> {
+        if let Some(imported) = &self.imported {
+            return verifier.verify(imported, password);
+        }
         let candidate = Self::new(self.salt, password).digest;
-        candidate
+        Ok(candidate
             .iter()
             .zip(self.digest.iter())
             .fold(0_u8, |difference, (left, right)| {
                 difference | (left ^ right)
             })
-            == 0
+            == 0)
+    }
+
+    /// The stored hash and salt bytes (fireemu's own digest, or the imported foreign hash).
+    #[must_use]
+    pub fn stored_material(&self) -> (Vec<u8>, Vec<u8>) {
+        self.imported.as_ref().map_or_else(
+            || (self.digest.to_vec(), self.salt.to_vec()),
+            |imported| (imported.hash.clone(), imported.salt.clone()),
+        )
     }
 
     /// The emulator salt and plaintext an export has to write back, when the credential
+    /// The foreign hash an import installed, while no sign-in has replaced it.
+    #[must_use]
+    pub const fn imported_hash(&self) -> Option<&ImportedPasswordHash> {
+        self.imported.as_ref()
+    }
+
     /// came from one.
     #[must_use]
     pub fn emulator_form(&self) -> Option<(&str, &str)> {
         self.emulator
             .as_ref()
             .map(|(salt, password)| (salt.as_str(), password.as_str()))
+    }
+}
+
+/// The project's sign-in providers (Admin v2 `signIn.email`, `signIn.anonymous` and
+/// `signIn.phoneNumber`). fireemu starts with every provider enabled and email-link sign-in
+/// allowed, as the emulator does; production starts with none (sandbox recording 2026-09-23).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct SignInConfig {
+    /// `signIn.email.enabled`: password and email-link accounts.
+    pub email_enabled: bool,
+    /// `signIn.email.passwordRequired`: when set, email-link sign-in is off.
+    pub password_required: bool,
+    /// `signIn.anonymous.enabled`.
+    pub anonymous_enabled: bool,
+    /// `signIn.phoneNumber.enabled`.
+    pub phone_enabled: bool,
+    /// `signIn.phoneNumber.testPhoneNumbers`: E.164 number to its fixed six-digit code. No
+    /// message is sent for these numbers and the code never changes.
+    pub test_phone_numbers: BTreeMap<String, String>,
+}
+
+impl Default for SignInConfig {
+    fn default() -> Self {
+        Self {
+            email_enabled: true,
+            password_required: false,
+            anonymous_enabled: true,
+            phone_enabled: true,
+            test_phone_numbers: BTreeMap::new(),
+        }
+    }
+}
+
+impl SignInConfig {
+    /// Identity Platform documents at most ten test phone numbers per project.
+    pub const MAX_TEST_PHONE_NUMBERS: usize = 10;
+
+    /// Whether every test number is valid E.164 with a six-digit code, within the documented
+    /// count.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
+            && self.test_phone_numbers.iter().all(|(number, code)| {
+                AuthStore::validate_phone_number(number).is_ok()
+                    && code.len() == 6
+                    && code.bytes().all(|b| b.is_ascii_digit())
+            })
     }
 }
 
@@ -771,6 +940,12 @@ pub struct ImportedUser {
     /// The emulator salt and plaintext password, when the account has a password
     /// credential.
     pub password: Option<(String, String)>,
+    /// A password hash in one of production's foreign formats, when the account was imported
+    /// with one instead of a plaintext password.
+    pub imported_password: Option<ImportedPasswordHash>,
+    /// Whether the address may already belong to another account: production's batchCreate
+    /// does not check it (sandbox recording 2026-09-23); an artifact import still does.
+    pub allow_shared_email: bool,
     /// Enrolled TOTP second factors.
     pub totp_factors: Vec<crate::mfa::TotpFactor>,
     /// Enrolled phone second factors.
@@ -791,7 +966,7 @@ pub enum AuthError {
     /// Password exceeds the configured UTF-16 length limit.
     PasswordTooLong,
     /// Password meets the API hard limits but violates an enabled custom policy.
-    PasswordPolicyViolation,
+    PasswordPolicyViolation(crate::password_policy::PolicyRefusal),
     /// End-user account creation is disabled by the namespace client permissions.
     UserSignupDisabled,
     /// End-user self-deletion is disabled by the namespace client permissions.
@@ -813,6 +988,8 @@ pub enum AuthError {
     ExpiredRefreshToken,
     /// Caller-chosen user ID is malformed.
     InvalidLocalId,
+    /// An imported password hash whose parameters cannot be evaluated.
+    ImportedHashFailure,
     /// Caller-chosen user ID already exists.
     LocalIdExists,
     /// Phone number already used by another user.
@@ -847,7 +1024,7 @@ impl fmt::Display for AuthError {
             Self::InvalidEmail => f.write_str("invalid email"),
             Self::WeakPassword => f.write_str("password must be at least 6 characters"),
             Self::PasswordTooLong => f.write_str("password exceeds the maximum length"),
-            Self::PasswordPolicyViolation => f.write_str("password does not meet requirements"),
+            Self::PasswordPolicyViolation(_) => f.write_str("password does not meet requirements"),
             Self::UserSignupDisabled => f.write_str("user signup is disabled"),
             Self::UserDeletionDisabled => f.write_str("user deletion is disabled"),
             Self::SignupQuotaExceeded => f.write_str("sign-up quota exceeded"),
@@ -858,6 +1035,7 @@ impl fmt::Display for AuthError {
             Self::InvalidRefreshToken => f.write_str("invalid refresh token"),
             Self::ExpiredRefreshToken => f.write_str("expired refresh token"),
             Self::InvalidLocalId => f.write_str("invalid local id"),
+            Self::ImportedHashFailure => f.write_str("imported password hash cannot be verified"),
             Self::LocalIdExists => f.write_str("local id already exists"),
             Self::PhoneNumberExists => f.write_str("phone number already exists"),
             Self::InvalidPhoneNumber => f.write_str("invalid phone number"),
@@ -972,7 +1150,7 @@ pub struct AuthStore {
     /// Rejection-only identities of refresh credentials retired by user deletion. No raw
     /// tokens, user IDs or claims. Retained until reset (no TTL or silent eviction); memory
     /// grows with deleted issued credentials and is included in snapshot byte accounting.
-    deleted_refresh_digests: Arc<BTreeSet<[u8; 32]>>,
+    deleted_refresh_digests: Arc<BTreeMap<[u8; 32], [u8; 32]>>,
     /// Refresh-token values owned by each user. Revocation and deletion touch one user's
     /// sessions instead of scanning every live session.
     tokens_by_user: Arc<BTreeMap<LocalId, BTreeSet<String>>>,
@@ -990,6 +1168,8 @@ pub struct AuthStore {
     lifecycle_epoch: Option<AuthLifecycleEpoch>,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
+    /// Outstanding phone `temporaryProof`s: proof to the verified number and its issue time.
+    temporary_proofs: BTreeMap<String, (String, LogicalInstant)>,
     /// Which user owns each outstanding pending sign-in (`mfaPendingCredential`), so a
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
@@ -1017,6 +1197,8 @@ pub struct AuthStore {
     /// The project-level Auth configuration an import carried, kept so an export can write
     /// it back.
     config: ProjectAuthConfig,
+    /// The project's sign-in providers and test phone numbers.
+    sign_in: SignInConfig,
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
     /// their caller explicitly requests a reservation through the typed API.
     signup_quota: SignupQuota,
@@ -1127,6 +1309,14 @@ pub const PENDING_SIGN_IN_TTL_SECONDS: i64 = 3_600;
 /// this budget, and the refused request creates nothing (`AUTH-TRANSIENT-03`).
 pub const MAX_OUTSTANDING_CODES: usize = 1_000;
 
+/// The longest caller-chosen user id production stores, in UTF-16 units: 256 is accepted and
+/// 257 is an internal error (sandbox exploration 2026-09-24).
+pub const MAX_LOCAL_ID_UTF16_UNITS: usize = 256;
+
+/// Lifetime of a phone `temporaryProof` (`temporaryProofExpiresIn`, sandbox recording
+/// 2026-09-23).
+pub const TEMPORARY_PROOF_TTL_SECONDS: i64 = 3_600;
+
 /// A cheap, saturating estimate of the heap bytes one user record holds: the fixed record
 /// plus the lengths of its owned strings, claims, second factors and federated identities.
 /// It only has to be monotonic and un-overflowable -- it gates a byte budget, it is not a
@@ -1221,7 +1411,7 @@ impl AuthStore {
             by_sequence: BTreeMap::new(),
             counter: 0,
             refresh_tokens: Arc::new(BTreeMap::new()),
-            deleted_refresh_digests: Arc::new(BTreeSet::new()),
+            deleted_refresh_digests: Arc::new(BTreeMap::new()),
             tokens_by_user: Arc::new(BTreeMap::new()),
             next_id_override: None,
             next_sequence: 0,
@@ -1231,6 +1421,7 @@ impl AuthStore {
             lifecycle_epoch: None,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
+            temporary_proofs: BTreeMap::new(),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
             pending_idp: PendingIdpCache::default(),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1241,6 +1432,7 @@ impl AuthStore {
             deleted_users: Vec::new(),
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
+            sign_in: SignInConfig::default(),
             signup_quota: SignupQuota::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
@@ -1447,7 +1639,11 @@ impl AuthStore {
         match id {
             None => self.create_user(new, now),
             Some(id) => {
-                if id.is_empty() || id.chars().count() > 128 || id.chars().any(char::is_control) {
+                // Production stores an empty id and ids up to 256 characters (sandbox
+                // exploration 2026-09-24).
+                if id.encode_utf16().count() > MAX_LOCAL_ID_UTF16_UNITS
+                    || id.chars().any(char::is_control)
+                {
                     return Err(AuthError::InvalidLocalId);
                 }
                 if self.users.contains_key(&LocalId(id.to_owned())) {
@@ -1477,9 +1673,12 @@ impl AuthStore {
         }
         self.by_sequence.remove(&user.sequence);
         if let Some(tokens) = self.tokens_by_user.get(&key) {
+            // The owner is kept only as a digest, so a reused UID can be recognised without
+            // retaining the identifier itself.
+            let owner = sha256(key.as_str().as_bytes());
             let deleted = Arc::make_mut(&mut self.deleted_refresh_digests);
             for token in tokens {
-                deleted.insert(sha256(token.as_bytes()));
+                deleted.insert(sha256(token.as_bytes()), owner);
             }
         }
         self.remove_refresh_tokens_for(&key);
@@ -1504,10 +1703,11 @@ impl AuthStore {
         self.local_ids_for_federated.clear();
         self.by_sequence.clear();
         self.refresh_tokens = Arc::new(BTreeMap::new());
-        self.deleted_refresh_digests = Arc::new(BTreeSet::new());
+        self.deleted_refresh_digests = Arc::new(BTreeMap::new());
         self.tokens_by_user = Arc::new(BTreeMap::new());
         self.oob_codes = Arc::new(BTreeMap::new());
         self.verification_codes = Arc::new(BTreeMap::new());
+        self.temporary_proofs.clear();
         self.pending_sign_in_owners = Arc::new(BTreeMap::new());
         self.pending_idp = PendingIdpCache::default();
         self.reset_generation.fetch_add(1, Ordering::AcqRel);
@@ -1548,6 +1748,8 @@ impl AuthStore {
             Arc::make_mut(&mut self.verification_codes)
                 .retain(|_, code| !Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now));
         }
+        self.temporary_proofs
+            .retain(|_, (_, issued)| !Self::expired(*issued, TEMPORARY_PROOF_TTL_SECONDS, now));
         let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
         let enrollment_grace = self.policy.enrollment_session_ttl;
         let candidates: Vec<LocalId> = self.pending_user_ids.iter().cloned().collect();
@@ -1681,6 +1883,22 @@ impl AuthStore {
     /// Records the project-level Auth configuration an import carried.
     pub fn set_config(&mut self, config: ProjectAuthConfig) {
         self.config = config;
+    }
+
+    /// The project's sign-in providers and test phone numbers.
+    #[must_use]
+    pub const fn sign_in_config(&self) -> &SignInConfig {
+        &self.sign_in
+    }
+
+    /// Replaces the sign-in providers and test phone numbers; an invalid configuration is
+    /// refused and changes nothing.
+    pub fn set_sign_in_config(&mut self, config: SignInConfig) -> Result<(), AuthError> {
+        if !config.is_valid() {
+            return Err(AuthError::InvalidPhoneNumber);
+        }
+        self.sign_in = config;
+        Ok(())
     }
 
     /// Whether a principal may create an end-user account in this namespace.
@@ -1907,9 +2125,14 @@ impl AuthStore {
         self.users.get(uid).and_then(|u| u.password.as_ref())
     }
 
-    /// Installs a user from an import request, validating any supplied password.
+    /// Installs a user from an import request. The password is stored as given: production
+    /// applies neither the minimum length nor the project's password policy to
+    /// `accounts:batchCreate` (sandbox recording 2026-09-23); callers bound its size.
     pub fn import_user(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
-        self.import_user_with_password_policy(user, true)
+        if let Some((_, plaintext)) = &user.password {
+            Self::validate_imported_password(plaintext).map_err(ImportUserError::Account)?;
+        }
+        self.import_user_record(user)
     }
 
     /// Restores a user from a previously exported artifact, exactly as it was recorded.
@@ -1927,17 +2150,13 @@ impl AuthStore {
     /// credential accepted by an earlier runtime, and restoring it must not rewrite or reject
     /// that credential as if it were a new password.
     pub fn import_user_trusted(&mut self, user: ImportedUser) -> Result<LocalId, ImportUserError> {
-        self.import_user_with_password_policy(user, false)
+        self.import_user_record(user)
     }
 
     #[allow(clippy::too_many_lines)]
-    fn import_user_with_password_policy(
-        &mut self,
-        mut user: ImportedUser,
-        enforce_password_policy: bool,
-    ) -> Result<LocalId, ImportUserError> {
+    fn import_user_record(&mut self, mut user: ImportedUser) -> Result<LocalId, ImportUserError> {
         if user.local_id.is_empty()
-            || user.local_id.chars().count() > 128
+            || user.local_id.encode_utf16().count() > MAX_LOCAL_ID_UTF16_UNITS
             || user.local_id.chars().any(char::is_control)
         {
             return Err(ImportUserError::Account(AuthError::InvalidLocalId));
@@ -1953,10 +2172,13 @@ impl AuthStore {
         // unique unless the project allows duplicates, and bounded custom claims.
         if let Some(email) = user.email.as_mut() {
             *email = Self::canonicalize_email(email);
-            if !email.contains('@') || email.chars().any(char::is_control) {
+            if !storable_email(email) {
                 return Err(ImportUserError::Account(AuthError::InvalidEmail));
             }
-            if !self.config.allow_duplicate_emails && self.email_owned_by_other(email, None) {
+            if !self.config.allow_duplicate_emails
+                && !user.allow_shared_email
+                && self.email_owned_by_other(email, None)
+            {
                 return Err(ImportUserError::Account(AuthError::EmailExists));
             }
         }
@@ -1976,11 +2198,6 @@ impl AuthStore {
             .map_err(|e| ImportUserError::Account(AuthError::LimitExceeded(e)))?;
         let password = match user.password {
             Some((salt, plaintext)) => {
-                if enforce_password_policy {
-                    self.validate_password_for(PasswordPolicyOperation::Registration, &plaintext)
-                        .map(|_| ())
-                        .map_err(ImportUserError::Account)?;
-                }
                 // The digest is fireemu's own; the emulator form is kept beside it so an
                 // export can write back exactly what it read.
                 let mut bytes = [0u8; 16];
@@ -1991,7 +2208,7 @@ impl AuthStore {
                 digest.emulator = Some((salt, plaintext));
                 Some(digest)
             }
-            None => None,
+            None => user.imported_password.map(PasswordDigest::from_imported),
         };
         // Sequences start at one, exactly as `create_user` assigns them: the listing cursor
         // is "everything after this sequence", so a zero would make the first account
@@ -2028,6 +2245,9 @@ impl AuthStore {
                 tokens_valid_after: user.tokens_valid_after,
                 tokens_revoked: user.tokens_valid_after > Self::whole_second(user.created_at),
                 federated: user.federated,
+                admin_created: true,
+                removed_password_updated_at: None,
+                email_verified_recorded: true,
                 password,
             }),
         );
@@ -2071,6 +2291,20 @@ impl AuthStore {
             .collect()
     }
 
+    /// At most `limit` users whose id sorts after `after` (all users when `None`), in user-id
+    /// order: the `accounts:batchGet` listing, whose page token is the last id of a page.
+    #[must_use]
+    pub fn users_after_local_id(&self, after: Option<&str>, limit: usize) -> Vec<&UserRecord> {
+        use std::ops::Bound::{Excluded, Unbounded};
+
+        let lower = after.map_or(Unbounded, Excluded);
+        self.users
+            .range::<str, _>((lower, Unbounded))
+            .take(limit)
+            .map(|(_, user)| user.as_ref())
+            .collect()
+    }
+
     /// User by phone number.
     #[must_use]
     pub fn user_by_phone(&self, phone: &str) -> Option<&UserRecord> {
@@ -2084,10 +2318,23 @@ impl AuthStore {
     /// Validates an email update without changing the store.
     pub fn validate_email_update(&self, uid: &LocalId, email: &str) -> Result<(), AuthError> {
         let email = Self::canonicalize_email(email);
-        if !email.contains('@') || email.chars().any(char::is_control) {
+        if !storable_email(&email) {
             return Err(AuthError::InvalidEmail);
         }
         if !self.config.allow_duplicate_emails && self.email_owned_by_other(&email, Some(uid)) {
+            return Err(AuthError::EmailExists);
+        }
+        // Duplicate-email mode never gives an address two password accounts: production
+        // refuses a second one at creation (sandbox recording 2026-09-23), and a move onto the
+        // address would take its holder's password sign-in (closure security review
+        // 2026-09-24).
+        let moves_a_password = self.users.get(uid).is_some_and(|u| u.password.is_some());
+        if moves_a_password
+            && self
+                .users_by_email(&email)
+                .iter()
+                .any(|other| &other.local_id != uid && other.password.is_some())
+        {
             return Err(AuthError::EmailExists);
         }
         Ok(())
@@ -2108,6 +2355,31 @@ impl AuthStore {
         }
         self.add_email_owner(&email, uid);
         Ok(())
+    }
+
+    /// Normalizes a phone number the way production stores it: formatting punctuation and
+    /// spaces are dropped and letters map through the phone keypad (`+1 650-555-0104` and
+    /// `+1650555ABCD` are accepted, sandbox recording 2026-09-23). A zero country code, a
+    /// missing `+` or any other character is refused, and the result must be valid E.164.
+    pub fn normalize_phone_number(phone: &str) -> Result<String, AuthError> {
+        let rest = phone
+            .strip_prefix('+')
+            .ok_or(AuthError::InvalidPhoneNumber)?;
+        let mut normalized = String::with_capacity(phone.len());
+        normalized.push('+');
+        for c in rest.chars() {
+            match c {
+                '0'..='9' => normalized.push(c),
+                ' ' | '-' | '(' | ')' | '.' | '/' => {}
+                'A'..='Z' | 'a'..='z' => normalized.push(keypad_digit(c.to_ascii_uppercase())),
+                _ => return Err(AuthError::InvalidPhoneNumber),
+            }
+        }
+        if normalized.as_bytes().get(1) == Some(&b'0') {
+            return Err(AuthError::InvalidPhoneNumber);
+        }
+        Self::validate_phone_number(&normalized)?;
+        Ok(normalized)
     }
 
     /// Validates an E.164 phone number (`+` followed by 7..=15 digits).
@@ -2282,32 +2554,42 @@ impl AuthStore {
                 .collect();
         }
         let keep = offset.saturating_add(limit).min(self.users.len());
-        let mut candidates = BTreeMap::new();
-        for user in self
+        let matching = self
             .users
             .values()
             .map(Arc::as_ref)
-            .filter(|user| Self::matches_user_query(user, expressions))
-        {
-            candidates.insert((field.value(user), &user.local_id), user);
+            .filter(|user| Self::matches_user_query(user, expressions));
+        // Ties keep ascending user-id order in both directions: production reverses only the
+        // sort field (sandbox recording 2026-09-23, `auth-account/admin/query#sort-name-desc`).
+        if descending {
+            Self::first_sorted(
+                matching,
+                |user| (std::cmp::Reverse(field.value(user)), &user.local_id),
+                keep,
+            )
+        } else {
+            Self::first_sorted(matching, |user| (field.value(user), &user.local_id), keep)
+        }
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect()
+    }
+
+    /// The `keep` smallest users by `key`, in order, holding at most `keep + 1` at a time.
+    fn first_sorted<'a, K: Ord>(
+        users: impl Iterator<Item = &'a UserRecord>,
+        key: impl Fn(&'a UserRecord) -> K,
+        keep: usize,
+    ) -> Vec<&'a UserRecord> {
+        let mut candidates = BTreeMap::new();
+        for user in users {
+            candidates.insert(key(user), user);
             if candidates.len() > keep {
-                if descending {
-                    candidates.pop_first();
-                } else {
-                    candidates.pop_last();
-                }
+                candidates.pop_last();
             }
         }
-        if descending {
-            candidates
-                .into_values()
-                .rev()
-                .skip(offset)
-                .take(limit)
-                .collect()
-        } else {
-            candidates.into_values().skip(offset).take(limit).collect()
-        }
+        candidates.into_values().collect()
     }
 
     /// Number of users without allocating an ID list.
@@ -2600,13 +2882,12 @@ impl AuthStore {
             new.email = Some(Self::canonicalize_email(&email));
         }
         if let Some(email) = &new.email {
-            if !email.contains('@') || email.chars().any(char::is_control) {
+            if !storable_email(email) {
                 return Err(AuthError::InvalidEmail);
             }
-            if enforce_unique_email
-                && !self.config.allow_duplicate_emails
-                && self.email_owned_by_other(email, None)
-            {
+            // `allowDuplicateEmails` does not extend to password or Admin-created accounts:
+            // production refuses them with EMAIL_EXISTS (sandbox recording 2026-09-23).
+            if enforce_unique_email && self.email_owned_by_other(email, None) {
                 return Err(AuthError::EmailExists);
             }
         }
@@ -2660,6 +2941,9 @@ impl AuthStore {
             tokens_valid_after: Self::whole_second(now),
             tokens_revoked: false,
             federated: Vec::new(),
+            admin_created: false,
+            removed_password_updated_at: None,
+            email_verified_recorded: false,
             password: None,
         }));
         if let Some(email) = email {
@@ -2764,7 +3048,14 @@ impl AuthStore {
             return Err(AuthError::TooManyOutstandingCodes);
         }
         let session_info = self.next_id("sms-");
-        let code = format!("{:06}", self.rng.next_u64() % 1_000_000);
+        // A test number always takes its configured code (sandbox recording 2026-09-23).
+        let random = self.rng.next_u64() % 1_000_000;
+        let code = self
+            .sign_in
+            .test_phone_numbers
+            .get(phone)
+            .cloned()
+            .unwrap_or_else(|| format!("{random:06}"));
         let entry = VerificationCode {
             session_info: session_info.clone(),
             phone_number: phone.to_owned(),
@@ -2775,6 +3066,33 @@ impl AuthStore {
         };
         Arc::make_mut(&mut self.verification_codes).insert(session_info, entry.clone());
         Ok(entry)
+    }
+
+    /// Issues a `temporaryProof` for a verified number another account holds: production
+    /// answers a link to a taken number with one (sandbox recording 2026-09-23). The proof
+    /// signs in to the number's owner within [`TEMPORARY_PROOF_TTL_SECONDS`].
+    pub fn issue_temporary_proof(
+        &mut self,
+        phone: &str,
+        now: LogicalInstant,
+    ) -> Result<String, AuthError> {
+        self.sweep_transient_credentials(now);
+        if self.temporary_proofs.len() >= MAX_OUTSTANDING_CODES {
+            return Err(AuthError::TooManyOutstandingCodes);
+        }
+        let proof = format!("{}{:016x}", self.next_id("proof-"), self.rng.next_u64());
+        self.temporary_proofs
+            .insert(proof.clone(), (phone.to_owned(), now));
+        Ok(proof)
+    }
+
+    /// Whether `proof` is a live `temporaryProof` issued for `phone`. A proof stays usable
+    /// until it expires (corpus v2 recording 2026-09-24, a second sign-in with it succeeds).
+    pub fn check_temporary_proof(&mut self, proof: &str, phone: &str, now: LogicalInstant) -> bool {
+        self.sweep_transient_credentials(now);
+        self.temporary_proofs
+            .get(proof)
+            .is_some_and(|(number, _)| number == phone)
     }
 
     /// Outstanding phone verification codes, oldest first.
@@ -3309,14 +3627,28 @@ impl AuthStore {
         })
     }
 
-    /// Minimum password length enforced by Firebase.
+    /// Minimum password length enforced by Firebase, in UTF-16 units like the maximum
+    /// (three astral characters pass, sandbox recording 2026-09-23).
     pub const MIN_PASSWORD_CHARS: usize = 6;
     /// Maximum password length enforced by Firebase's default password policy.
     pub const MAX_PASSWORD_UTF16_UNITS: usize = 4096;
 
+    /// Validates an imported raw password: production stores one below the minimum length
+    /// (sandbox recording 2026-09-23); the maximum and the control-character refusal remain
+    /// local bounds.
+    pub fn validate_imported_password(password: &str) -> Result<(), AuthError> {
+        if password.encode_utf16().count() > Self::MAX_PASSWORD_UTF16_UNITS {
+            return Err(AuthError::PasswordTooLong);
+        }
+        if password.chars().any(char::is_control) {
+            return Err(AuthError::WeakPassword);
+        }
+        Ok(())
+    }
+
     /// Validates a password without storing it (lets callers fail before mutating).
     pub fn validate_password(password: &str) -> Result<(), AuthError> {
-        if password.chars().count() < Self::MIN_PASSWORD_CHARS {
+        if password.encode_utf16().count() < Self::MIN_PASSWORD_CHARS {
             return Err(AuthError::WeakPassword);
         }
         if password.encode_utf16().count() > Self::MAX_PASSWORD_UTF16_UNITS {
@@ -3349,9 +3681,22 @@ impl AuthStore {
             {
                 return Err(AuthError::WeakPassword);
             }
-            return Err(AuthError::PasswordPolicyViolation);
+            return Err(AuthError::PasswordPolicyViolation(
+                self.policy_refusal(violations),
+            ));
         }
         Ok(violations)
+    }
+
+    fn policy_refusal(
+        &self,
+        violations: Vec<ViolationCode>,
+    ) -> crate::password_policy::PolicyRefusal {
+        crate::password_policy::PolicyRefusal {
+            violations,
+            min_length: self.password_policy.min_length,
+            max_length: self.password_policy.max_length,
+        }
     }
 
     /// Evaluates only the configured policy for an already stored credential. Existing
@@ -3372,7 +3717,9 @@ impl AuthStore {
             .password_policy
             .rejects(PasswordPolicyOperation::SignIn, password)
         {
-            return Err(AuthError::PasswordPolicyViolation);
+            return Err(AuthError::PasswordPolicyViolation(
+                self.policy_refusal(violations),
+            ));
         }
         Ok(violations)
     }
@@ -3440,6 +3787,10 @@ impl AuthStore {
         let mut digest = PasswordDigest::new(salt, password);
         digest.updated_at = Some(now);
         user.password = Some(digest);
+        // A password change revokes every token issued in an earlier second, as production's
+        // validSince does (an Admin password update left a refresh token TOKEN_EXPIRED in the
+        // sandbox recording of 2026-09-23).
+        user.tokens_valid_after = user.tokens_valid_after.max(Self::whole_second(now));
         self.activate_email_owner(uid);
         Ok(())
     }
@@ -3461,10 +3812,12 @@ impl AuthStore {
     /// without a password or for an imported credential.
     #[must_use]
     pub fn password_updated_at(&self, uid: &LocalId) -> Option<LogicalInstant> {
-        self.users
-            .get(uid)
-            .and_then(|u| u.password.as_ref())
-            .and_then(|p| p.updated_at)
+        self.users.get(uid).and_then(|u| {
+            u.password
+                .as_ref()
+                .and_then(|p| p.updated_at)
+                .or(u.removed_password_updated_at)
+        })
     }
 
     /// Removes the password credential (`deleteProvider: password`, `deleteAttribute:
@@ -3475,7 +3828,11 @@ impl AuthStore {
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
-        let changed = user.password.take().is_some();
+        let removed = user.password.take();
+        let changed = removed.is_some();
+        if let Some(updated_at) = removed.and_then(|p| p.updated_at) {
+            user.removed_password_updated_at = Some(updated_at);
+        }
         if changed && matches!(&user.provider, Provider::Password) {
             user.provider = user
                 .federated
@@ -3527,29 +3884,48 @@ impl AuthStore {
         password: &str,
         now: LogicalInstant,
     ) -> Result<(LocalId, Vec<ViolationCode>), AuthError> {
+        self.verify_password_with_imports(email, password, now, &NoImportedHashes)
+    }
+
+    /// [`Self::verify_password_with_policy`] for a store whose accounts may carry imported
+    /// foreign hashes: `verifier` checks those. The first successful sign-in against an
+    /// imported hash replaces it with fireemu's own digest of the now-known password.
+    pub fn verify_password_with_imports(
+        &mut self,
+        email: &str,
+        password: &str,
+        now: LogicalInstant,
+        verifier: &dyn ImportedHashVerifier,
+    ) -> Result<(LocalId, Vec<ViolationCode>), AuthError> {
         let private = self.config.enable_improved_email_privacy;
-        let Some(user) = self.user_by_email(email) else {
+        let Some(user) = self.password_owner_by_email(email) else {
             if private {
                 let dummy = PasswordDigest {
                     salt: [0_u8; 16],
                     digest: [0_u8; 20],
                     emulator: None,
                     updated_at: None,
+                    imported: None,
                 };
                 let _ = dummy.verify(password);
                 return Err(AuthError::InvalidCredentials);
             }
             return Err(AuthError::EmailNotFound);
         };
-        let (uid, disabled, ok) = (
+        let (uid, disabled, checked) = (
             user.local_id.clone(),
             user.disabled,
-            user.password.as_ref().is_some_and(|p| p.verify(password)),
+            user.password
+                .as_ref()
+                .map_or(Ok(false), |p| p.verify_with(password, verifier)),
         );
         // The official emulator reports a disabled account before it checks the password.
         if disabled {
             return Err(AuthError::UserDisabled);
         }
+        // Production fails a sign-in against unevaluable imported parameters internally
+        // (sandbox recording 2026-09-23).
+        let ok = checked.map_err(|ImportedHashFailure| AuthError::ImportedHashFailure)?;
         if !ok {
             return Err(if private {
                 AuthError::InvalidCredentials
@@ -3560,8 +3936,26 @@ impl AuthStore {
         // Authenticate first, then apply the optional sign-in upgrade policy. A policy
         // refusal therefore cannot advance sign-in timestamps or issue/retire credentials.
         let violations = self.validate_existing_password_for_signin(password)?;
+        let rehash = self
+            .users
+            .get(&uid)
+            .and_then(|u| u.password.as_ref())
+            .is_some_and(|p| p.imported.is_some());
+        let salt = if rehash {
+            let mut salt = [0u8; 16];
+            salt[..8].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+            salt[8..].copy_from_slice(&self.rng.next_u64().to_be_bytes());
+            Some(salt)
+        } else {
+            None
+        };
         if let Some(u) = self.users.get_mut(&uid).map(Arc::make_mut) {
             u.last_sign_in_at = Some(now);
+            if let (Some(salt), Some(previous)) = (salt, u.password.as_ref()) {
+                let mut digest = PasswordDigest::new(salt, password);
+                digest.updated_at = previous.updated_at;
+                u.password = Some(digest);
+            }
         }
         self.activate_email_owner(&uid);
         Ok((uid, violations))
@@ -3581,7 +3975,38 @@ impl AuthStore {
             .map(|(uid, _violations)| uid)
     }
 
-    /// Looks up a user by email.
+    /// Every account holding `email`, in creation order.
+    #[must_use]
+    pub fn users_by_email(&self, email: &str) -> Vec<&UserRecord> {
+        let email = Self::canonicalize_email(email);
+        let mut owners: Vec<&UserRecord> = self
+            .local_ids_for_email
+            .get(&email)
+            .into_iter()
+            .flatten()
+            .filter_map(|uid| self.users.get(uid).map(Arc::as_ref))
+            .collect();
+        owners.sort_by_key(|user| user.sequence);
+        owners
+    }
+
+    /// The account a password sign-in with `email` reaches: the active owner when it holds a
+    /// password, else the earliest owner that does (an imported duplicate without a password
+    /// does not hide the password account, sandbox recording 2026-09-23).
+    fn password_owner_by_email(&self, email: &str) -> Option<&UserRecord> {
+        let active = self.user_by_email(email)?;
+        if active.password.is_some() {
+            return Some(active);
+        }
+        Some(
+            self.users_by_email(email)
+                .into_iter()
+                .find(|user| user.password.is_some())
+                .unwrap_or(active),
+        )
+    }
+
+    /// User by email: the active owner of the address.
     #[must_use]
     pub fn user_by_email(&self, email: &str) -> Option<&UserRecord> {
         let email = Self::canonicalize_email(email);
@@ -3690,7 +4115,7 @@ impl AuthStore {
         self.refresh_tokens.contains_key(token)
             || self
                 .deleted_refresh_digests
-                .contains(&sha256(token.as_bytes()))
+                .contains_key(&sha256(token.as_bytes()))
     }
 
     /// Records a completed issuance by its exact refresh session, without activating
@@ -3741,12 +4166,19 @@ impl AuthStore {
         token: &str,
         enforce_revocation: bool,
     ) -> Result<LocalId, AuthError> {
-        // A deletion record is terminal, even if an administrator reuses the same UID.
-        if self
-            .deleted_refresh_digests
-            .contains(&sha256(token.as_bytes()))
-        {
-            return Err(AuthError::UserNotFound);
+        // A deleted account's refresh token never becomes valid again. When an administrator
+        // has since reused the UID, production answers TOKEN_EXPIRED (the new account's
+        // validSince postdates the token); otherwise USER_NOT_FOUND.
+        if let Some(owner) = self.deleted_refresh_digests.get(&sha256(token.as_bytes())) {
+            let reused = self
+                .users
+                .keys()
+                .any(|uid| sha256(uid.as_str().as_bytes()) == *owner);
+            return Err(if reused {
+                AuthError::ExpiredRefreshToken
+            } else {
+                AuthError::UserNotFound
+            });
         }
         let session = self
             .refresh_tokens
@@ -4312,7 +4744,7 @@ impl AuthSnapshot {
             restored.project_id == live.project_id && restored.tenant_id == live.tenant_id;
         if !namespace_matches {
             restored.refresh_tokens = Arc::new(BTreeMap::new());
-            restored.deleted_refresh_digests = Arc::new(BTreeSet::new());
+            restored.deleted_refresh_digests = Arc::new(BTreeMap::new());
             restored.tokens_by_user = Arc::new(BTreeMap::new());
             // A cross-namespace restore must not transfer control-plane policy from the
             // captured namespace. The destination policy belongs to the destination namespace
@@ -4322,6 +4754,9 @@ impl AuthSnapshot {
             // the destination namespace as well. A cross-namespace data restore must not
             // silently transfer those settings.
             restored.config = live.config;
+            restored.sign_in = live.sign_in.clone();
+            // A temporary proof is a credential of the captured namespace.
+            restored.temporary_proofs.clear();
             // The local sign-up quota is namespace-owned control state as well. Preserve both
             // its configuration and already-counted destination usage instead of transferring
             // the source project's quota window into a different project or tenant.
@@ -6369,6 +6804,36 @@ impl AuthRegistry {
         })
         .ok()
         .flatten()
+    }
+
+    /// Replaces a project's sign-in configuration under the project's operation gate.
+    /// `update` computes the new configuration from the current one; an invalid result is
+    /// refused (`Ok(None)`) and changes nothing.
+    pub fn update_project_sign_in_config<F, E>(
+        &self,
+        project: &str,
+        update: F,
+    ) -> Result<Option<SignInConfig>, E>
+    where
+        F: FnOnce(&SignInConfig) -> Result<SignInConfig, E>,
+    {
+        let Some(gate) = self.operation_gate(project, None) else {
+            return Ok(None);
+        };
+        let Ok(_operation) = gate.lock() else {
+            return Ok(None);
+        };
+        let Some(parent) = self.project_store(project) else {
+            return Ok(None);
+        };
+        let Ok(mut parent) = parent.lock() else {
+            return Ok(None);
+        };
+        let next = update(parent.sign_in_config())?;
+        if parent.set_sign_in_config(next.clone()).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(next))
     }
 
     /// Applies a project settings update after taking the namespace gate and reading the
@@ -9033,8 +9498,9 @@ mod broad_project_number_tests {
         let token = store
             .issue_refresh_session(&a, at, None, CustomClaims::default(), None)
             .unwrap();
+        // Only a provider-scoped account may share the address in duplicate-email mode.
         let b = store
-            .create_user_with_id(NewUser::email("shared@example.com"), Some("b"), at)
+            .create_idp_user(NewUser::email("shared@example.com"), at)
             .unwrap();
         assert_eq!(
             store.user_by_email("shared@example.com").unwrap().local_id,

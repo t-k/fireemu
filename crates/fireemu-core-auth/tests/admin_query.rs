@@ -54,10 +54,18 @@ fn every_field_has_numeric_time_and_deterministic_missing_value_order() {
         ["a", "b", "c", "e", "d"],
         ["e", "a", "b", "d", "c"],
     ];
-    for (field, expected) in FIELDS.into_iter().zip(orders) {
+    // Descending reverses the field only; ties keep ascending user-id order (sandbox
+    // recording 2026-09-23, `auth-account/admin/query#sort-name-desc`).
+    let descending_orders = [
+        ["e", "d", "c", "b", "a"],
+        ["e", "c", "b", "d", "a"],
+        ["d", "c", "a", "b", "e"],
+        ["d", "c", "e", "b", "a"],
+        ["c", "d", "b", "a", "e"],
+    ];
+    for ((field, expected), descending) in FIELDS.into_iter().zip(orders).zip(descending_orders) {
         assert_eq!(ids(store.users_sorted_page(field, 0, 5, false)), expected);
-        let reverse: Vec<_> = expected.into_iter().rev().collect();
-        assert_eq!(ids(store.users_sorted_page(field, 0, 5, true)), reverse);
+        assert_eq!(ids(store.users_sorted_page(field, 0, 5, true)), descending);
     }
 }
 
@@ -71,12 +79,19 @@ fn bounded_pages_equal_slices_of_the_independently_expected_whole_order() {
         ["a", "b", "c", "e", "d"],
         ["e", "a", "b", "d", "c"],
     ];
-    for (field, order) in FIELDS.into_iter().zip(orders) {
+    // Descending reverses the field only; ties keep ascending user-id order (sandbox
+    // recording 2026-09-23, `auth-account/admin/query#sort-name-desc`).
+    let descending_orders = [
+        ["e", "d", "c", "b", "a"],
+        ["e", "c", "b", "d", "a"],
+        ["d", "c", "a", "b", "e"],
+        ["d", "c", "e", "b", "a"],
+        ["c", "d", "b", "a", "e"],
+    ];
+    for ((field, order), descending_order) in FIELDS.into_iter().zip(orders).zip(descending_orders)
+    {
         for descending in [false, true] {
-            let mut expected = order.to_vec();
-            if descending {
-                expected.reverse();
-            }
+            let expected = if descending { descending_order } else { order };
             for offset in 0..8 {
                 for limit in [0, 1, 2, 5, usize::MAX] {
                     let want: Vec<_> = expected.iter().copied().skip(offset).take(limit).collect();
@@ -169,7 +184,8 @@ fn timestamp_ties_use_exposed_milliseconds_not_hidden_submillisecond_values() {
     store.user_mut(&b).unwrap().last_sign_in_at = Some(LogicalInstant::from_nanos(2_000_000));
     for field in [UserSortField::CreatedAt, UserSortField::LastLoginAt] {
         assert_eq!(ids(store.users_sorted_page(field, 0, 2, false)), ["a", "b"]);
-        assert_eq!(ids(store.users_sorted_page(field, 0, 2, true)), ["b", "a"]);
+        // Equal exposed milliseconds tie, and ties stay in user-id order when descending.
+        assert_eq!(ids(store.users_sorted_page(field, 0, 2, true)), ["a", "b"]);
     }
 }
 

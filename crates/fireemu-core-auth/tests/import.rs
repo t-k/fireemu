@@ -6,8 +6,8 @@ use fireemu_core_auth::mfa::{
     ImportedFactorError, PhoneFactor, TotpFactor, TotpPolicy, TotpSecret,
 };
 use fireemu_core_auth::store::{
-    AuthError, AuthStore, FederatedIdentity, ImportUserError, ImportedUser, ProjectAuthConfig,
-    Provider,
+    AuthError, AuthStore, FederatedIdentity, ImportUserError, ImportedHashFailure,
+    ImportedHashVerifier, ImportedPasswordHash, ImportedUser, ProjectAuthConfig, Provider,
 };
 use fireemu_core_types::determinism::SplitMix64;
 use fireemu_core_types::time::LogicalInstant;
@@ -44,6 +44,8 @@ fn account(local_id: &str) -> ImportedUser {
         tokens_valid_after: t(-1_000),
         federated: Vec::new(),
         password: None,
+        imported_password: None,
+        allow_shared_email: false,
         totp_factors: Vec::new(),
         phone_factors: Vec::new(),
     }
@@ -316,8 +318,8 @@ fn imported_accounts_list_in_the_order_they_were_imported() {
     let users = store.users_by_creation();
     let ids: Vec<&str> = users.iter().map(|u| u.local_id.as_str()).collect();
     assert_eq!(ids, vec!["zeta", "alpha", "mu"]);
-    // The listing cursor of `accounts:batchGet` is "everything after this sequence", so a
-    // sequence of zero would hide the first imported account from `listUsers`.
+    // Creation-order cursors are "everything after this sequence", so a sequence of zero
+    // would hide the first imported account from them.
     assert!(
         users.iter().all(|u| u.sequence > 0),
         "imported accounts take listable sequences"
@@ -519,4 +521,109 @@ fn an_imported_second_factor_display_name_carrying_a_control_character_is_refuse
             ..account("factor-clean")
         })
         .is_ok());
+}
+
+/// A verifier standing in for the adapter's cryptography: it accepts exactly one password for
+/// any imported hash whose spec is `test-spec`.
+struct AcceptsOnly(&'static str);
+
+impl ImportedHashVerifier for AcceptsOnly {
+    fn verify(
+        &self,
+        imported: &ImportedPasswordHash,
+        password: &str,
+    ) -> Result<bool, ImportedHashFailure> {
+        if imported.spec == "unevaluable-spec" {
+            return Err(ImportedHashFailure);
+        }
+        Ok(imported.spec == "test-spec" && password == self.0)
+    }
+}
+
+fn hashed_account(id: &str, email: &str) -> ImportedUser {
+    ImportedUser {
+        email: Some(email.to_owned()),
+        provider: Provider::Password,
+        imported_password: Some(ImportedPasswordHash {
+            spec: "test-spec".to_owned(),
+            hash: vec![1, 2, 3],
+            salt: vec![4, 5],
+        }),
+        ..account(id)
+    }
+}
+
+#[test]
+fn an_imported_foreign_hash_signs_in_only_through_the_verifier_and_is_then_rehashed() {
+    let mut store = store();
+    let uid = store
+        .import_user(hashed_account("hashed", "hashed@example.com"))
+        .expect("the import succeeds");
+    assert!(
+        store.password_digest(&uid).is_some(),
+        "an imported hash is a password credential"
+    );
+    assert!(
+        store
+            .verify_password("hashed@example.com", "right", t(0))
+            .is_err(),
+        "without a verifier a foreign hash never matches"
+    );
+    assert!(store
+        .verify_password_with_imports("hashed@example.com", "wrong", t(0), &AcceptsOnly("right"))
+        .is_err());
+    let (signed_in, _) = store
+        .verify_password_with_imports("hashed@example.com", "right", t(1), &AcceptsOnly("right"))
+        .expect("the verifier accepts the right password");
+    assert_eq!(signed_in, uid);
+    assert_eq!(
+        store
+            .verify_password("hashed@example.com", "right", t(2))
+            .expect("after a successful sign-in the credential is fireemu's own"),
+        uid
+    );
+    assert!(store
+        .verify_password("hashed@example.com", "wrong", t(2))
+        .is_err());
+}
+
+#[test]
+fn an_unevaluable_imported_hash_fails_the_sign_in_without_changing_the_account() {
+    let mut store = store();
+    let mut account = hashed_account("unevaluable", "unevaluable@example.com");
+    if let Some(imported) = account.imported_password.as_mut() {
+        imported.spec = "unevaluable-spec".to_owned();
+    }
+    let uid = store.import_user(account).expect("the import succeeds");
+    assert_eq!(
+        store.verify_password_with_imports(
+            "unevaluable@example.com",
+            "right",
+            t(0),
+            &AcceptsOnly("right")
+        ),
+        Err(AuthError::ImportedHashFailure)
+    );
+    assert!(store
+        .password_digest(&uid)
+        .is_some_and(|digest| digest.emulator_form().is_none()));
+    assert_eq!(store.user(&uid).and_then(|u| u.last_sign_in_at), None);
+}
+
+#[test]
+fn an_imported_hash_is_never_exported_as_an_emulator_form_and_debug_redacts_it() {
+    let mut store = store();
+    let uid = store
+        .import_user(hashed_account("hashed-export", "export@example.com"))
+        .expect("the import succeeds");
+    assert_eq!(
+        store.password_digest(&uid).and_then(|d| d.emulator_form()),
+        None
+    );
+    let imported = ImportedPasswordHash {
+        spec: "test-spec".to_owned(),
+        hash: vec![9; 4],
+        salt: vec![8; 4],
+    };
+    assert_eq!(format!("{imported:?}"), "ImportedPasswordHash([redacted])");
 }

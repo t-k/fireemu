@@ -16,7 +16,10 @@ SPEC.loader.exec_module(corpus)
 
 
 def oracle(request, users):
-    """Independent full-sort evaluator for the explicitly LOCAL exact-union policy."""
+    """Independent full-sort evaluator of production's query semantics as the Identity
+    Platform sandbox answered them on 2026-09-23: only the first expression is evaluated, the
+    first non-empty selector in email > phoneNumber > userId order applies, and an empty
+    selector is no constraint. Every item is still type-checked."""
     expressions = request.get("expression")
     if expressions is None:
         expressions = []
@@ -24,16 +27,17 @@ def oracle(request, users):
         raise ValueError
     predicates = []
     for expression in expressions:
-        if not isinstance(expression, dict) or not expression or set(expression) - {"email", "phoneNumber", "userId"}:
+        if not isinstance(expression, dict) or set(expression) - {"email", "phoneNumber", "userId"}:
             raise ValueError
         for value in expression.values():
             if value is not None and (not isinstance(value, str) or len(value.encode()) > 4096 or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in value)):
                 raise ValueError
+        selected = None
         for name in ["email", "phoneNumber", "userId"]:
-            if isinstance(expression.get(name), str):
-                predicates.append((name, expression[name])); break
-        else:
-            raise ValueError
+            if isinstance(expression.get(name), str) and expression[name]:
+                selected = (name, expression[name]); break
+        predicates.append(selected)
+    predicates = [predicates[0]] if predicates and predicates[0] is not None else []
     def matches(user):
         if not predicates:
             return True

@@ -58,6 +58,8 @@ fn deleted_refresh_exhaustive_lifecycle_traces_match_rejection_model() {
             }
             let expected = match identity {
                 Identity::Live => Ok(uid.clone()),
+                // Never revived; production reports a reused UID as TOKEN_EXPIRED.
+                Identity::Deleted if exists => Err(AuthError::ExpiredRefreshToken),
                 Identity::Deleted => Err(AuthError::UserNotFound),
                 Identity::Unknown => Err(AuthError::InvalidRefreshToken),
             };
@@ -104,7 +106,8 @@ fn deleted_refresh_never_revives_on_uid_recreation_and_reset_forgets_it() {
         .unwrap();
     assert_eq!(
         live.redeem_refresh_token(&token),
-        Err(AuthError::UserNotFound)
+        Err(AuthError::ExpiredRefreshToken),
+        "a reused UID never revives the old token; production calls it TOKEN_EXPIRED"
     );
     let fresh = live.issue_refresh_token(&recreated, now).unwrap();
     assert_ne!(fresh, token);
@@ -119,7 +122,7 @@ fn deleted_refresh_never_revives_on_uid_recreation_and_reset_forgets_it() {
     snapshot.restore_into(&mut same);
     assert_eq!(
         same.redeem_refresh_token(&token),
-        Err(AuthError::UserNotFound)
+        Err(AuthError::ExpiredRefreshToken)
     );
     let mut other = store("other-project");
     snapshot.restore_into(&mut other);

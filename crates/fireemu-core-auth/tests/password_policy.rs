@@ -109,10 +109,10 @@ fn forced_signin_rejects_noncompliant_existing_password_before_signin_commit() {
     let before_refused = store.user(&uid).cloned().unwrap();
     let refresh = store.issue_refresh_token(&uid, NOW).unwrap();
     store.set_password_policy(strict(true));
-    assert_eq!(
+    assert!(matches!(
         store.verify_password("user@example.com", "OnlyLettersPassword", NOW),
-        Err(AuthError::PasswordPolicyViolation)
-    );
+        Err(AuthError::PasswordPolicyViolation(_))
+    ));
     assert_eq!(store.user(&uid), Some(&before_refused));
     assert_eq!(store.redeem_refresh_token(&refresh), Ok(uid));
     assert_eq!(before.last_sign_in_at, None);
@@ -204,10 +204,10 @@ fn forced_signin_rejection_preserves_existing_signin_timestamp() {
     let before = store.user(&uid).cloned().unwrap();
 
     let refused_at = LogicalInstant::from_unix_seconds(20);
-    assert_eq!(
+    assert!(matches!(
         store.verify_password_with_policy("user@example.com", "OnlyLettersPassword", refused_at),
-        Err(AuthError::PasswordPolicyViolation)
-    );
+        Err(AuthError::PasswordPolicyViolation(_))
+    ));
     assert_eq!(store.user(&uid), Some(&before));
 }
 

@@ -180,6 +180,7 @@ fn state() -> AuthState {
         stateless_refresh_tokens: true,
         idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -189,8 +190,24 @@ fn state() -> AuthState {
 }
 
 fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
-    let r = handle(state, "POST", path, body);
+    let path = with_client_key(state, path, "fake-api-key");
+    let r = handle(state, "POST", &path, body);
     (r.status, r.body)
+}
+
+/// Client SDKs always send their API key. Under a profile that refuses keyless client calls,
+/// the plain helper adds it to client routes that do not carry one, as an SDK would.
+fn with_client_key(state: &AuthState, path: &str, key: &str) -> String {
+    let project_scoped = path.contains("/projects/") || path.starts_with("/emulator");
+    let keyed = path.contains("key=") || path.contains("apiKey=");
+    if state.client_api_key != fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required
+        || project_scoped
+        || keyed
+    {
+        return path.to_owned();
+    }
+    let separator = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{separator}key={key}")
 }
 
 fn finalize_mfa(state: &AuthState, body: &Value) -> (u16, Value) {
@@ -533,10 +550,16 @@ fn profile_strings_reject_control_characters_on_every_route_that_stores_them() {
 
     let user = sign_up(&s, "control@example.com");
     let id_token = user["idToken"].as_str().unwrap().to_owned();
-    for (field, value) in [
-        ("displayName", "na\u{0007}me"),
-        ("photoUrl", "https://p.example/a.png\u{0000}"),
-    ] {
+    // Production stores a control character in displayName on update (sandbox recording
+    // 2026-09-23, auth-account/values); photoUrl on update stays refused until observed.
+    let (status, stored) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": id_token, "displayName": "na\u{0007}me"}),
+    );
+    assert_eq!(status, 200, "{stored}");
+    {
+        let (field, value) = ("photoUrl", "https://p.example/a.png\u{0000}");
         let (status, refused) = post(
             &s,
             &format!("{V1}/accounts:update"),
@@ -638,8 +661,10 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
         if expected_status == 400 {
             assert_eq!(
                 response["error"]["message"],
+                // The sign-up, update and Admin routes name the limit in production (sandbox
+                // recording 2026-09-23); the reset route shares that validation.
                 if new_password.encode_utf16().count() > AuthStore::MAX_PASSWORD_UTF16_UNITS {
-                    "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+                    "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
                 } else {
                     "WEAK_PASSWORD : Password should be at least 6 characters"
                 },
@@ -720,6 +745,7 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
             fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded,
         stateless_refresh_tokens: false,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
         ..state()
@@ -898,7 +924,16 @@ fn rejected_email_change_preserves_code_for_an_inactive_duplicate_owner() {
 
     let owner_user = sign_up(&s, "oob-inactive-owner@example.com");
     let target_a = sign_up(&s, "oob-inactive-target@example.com");
-    let target_b = sign_up(&s, "oob-inactive-target@example.com");
+    // A second owner of the address can only be imported: production refuses a second
+    // password account even in duplicate-email mode.
+    let (status, imported) = admin(
+        &s,
+        &format!("{V1}/projects/demo-app/accounts:batchCreate"),
+        &json!({"users": [{"localId": "oob-inactive-target-b", "email": "oob-inactive-target@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert!(imported.get("error").is_none(), "{imported}");
+    let target_b = json!({"localId": "oob-inactive-target-b"});
     let (status, verified) = admin(
         &s,
         &format!("{V1}/projects/demo-app/accounts:update"),
@@ -2524,34 +2559,28 @@ fn the_inspection_routes_are_project_scoped_and_can_wipe_accounts() {
 }
 
 #[test]
-fn allow_duplicate_emails_applies_to_password_accounts_and_active_lookup() {
+fn allow_duplicate_emails_still_refuses_a_second_password_account() {
     let s = state();
     let config_path = format!("{EMU}/config");
-    let (status, enabled) = {
-        let response = handle_with(
-            &s,
-            "PATCH",
-            &config_path,
-            &owner(),
-            &json!({"signIn": {"allowDuplicateEmails": true}}),
-        );
-        (response.status, response.body)
-    };
-    assert_eq!(status, 200, "{enabled}");
-    assert_eq!(enabled["signIn"]["allowDuplicateEmails"], true);
-
-    let first = sign_up(&s, "duplicate@example.com");
-    let second = sign_up(&s, "duplicate@example.com");
-    assert_ne!(first["localId"], second["localId"]);
-
-    let (status, lookup) = admin(
+    let enabled = handle_with(
         &s,
-        &format!("{V1}/projects/demo-app/accounts:lookup"),
-        &json!({"email": ["duplicate@example.com"]}),
+        "PATCH",
+        &config_path,
+        &owner(),
+        &json!({"signIn": {"allowDuplicateEmails": true}}),
     );
-    assert_eq!(status, 200);
-    assert_eq!(lookup["users"][0]["localId"], second["localId"]);
+    assert_eq!(enabled.status, 200, "{}", enabled.body);
+    assert_eq!(enabled.body["signIn"]["allowDuplicateEmails"], true);
 
+    // Sandbox recording 2026-09-23, `config/duplicate-email#sign-up-duplicate`.
+    let first = sign_up(&s, "duplicate@example.com");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "EMAIL_EXISTS");
     let (status, signed_in) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -2560,28 +2589,8 @@ fn allow_duplicate_emails_applies_to_password_accounts_and_active_lookup() {
     assert_eq!(status, 200, "{signed_in}");
     assert_eq!(
         claims(signed_in["idToken"].as_str().unwrap())["sub"],
-        second["localId"]
+        first["localId"]
     );
-
-    let (status, updated) = admin(
-        &s,
-        &format!("{V1}/projects/demo-app/accounts:update"),
-        &json!({"localId": first["localId"], "email": "duplicate@example.com"}),
-    );
-    assert_eq!(status, 200, "{updated}");
-
-    let (status, _) = post(
-        &s,
-        &format!("{V1}/accounts:delete"),
-        &json!({"idToken": second["idToken"]}),
-    );
-    assert_eq!(status, 200);
-    let (status, _) = post(
-        &s,
-        &format!("{V1}/accounts:signInWithPassword"),
-        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
-    );
-    assert_eq!(status, 400);
 }
 
 #[test]
@@ -4243,7 +4252,10 @@ fn email_enumeration_protection_requires_verified_email_changes_but_keeps_signup
         &json!({"idToken": id_token, "email": "direct@example.com"}),
     );
     assert_eq!(status, 400, "{rejected}");
-    assert_eq!(rejected["error"]["message"], "OPERATION_NOT_ALLOWED");
+    assert_eq!(
+        rejected["error"]["message"],
+        "OPERATION_NOT_ALLOWED : Please verify the new email before changing email."
+    );
     assert_eq!(
         s.store
             .lock()

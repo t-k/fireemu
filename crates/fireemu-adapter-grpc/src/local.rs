@@ -1397,6 +1397,47 @@ mod tests {
     }
 
     #[test]
+    fn a_configured_creation_time_bounds_read_times_instead_of_the_start() {
+        use fireemu_core_types::time::LogicalInstant;
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let at = |seconds_before: i64| prost_types::Timestamp {
+            seconds: 1_788_004_860 - seconds_before,
+            nanos: 0,
+        };
+        let started = admission_backend();
+        assert_eq!(started.created_at(), now);
+        assert_eq!(
+            started
+                .read_time_selector(&at(60), now, now)
+                .unwrap_err()
+                .message(),
+            "The requested 'read_time' cannot be before database creation time."
+        );
+        let created = LogicalInstant::from_unix_seconds(1_788_004_860 - 7200);
+        let backend = admission_backend().with_created_at(created);
+        assert_eq!(backend.created_at(), created);
+        assert_eq!(
+            backend.read_time_selector(&at(3540), now, now).unwrap(),
+            LogicalInstant::from_unix_seconds(1_788_004_860 - 3540)
+        );
+        let too_old = backend.read_time_selector(&at(3660), now, now).unwrap_err();
+        assert_eq!(
+            (too_old.code(), too_old.message()),
+            (
+                tonic::Code::FailedPrecondition,
+                "The requested 'read_time' is too old."
+            )
+        );
+        assert_eq!(
+            backend
+                .read_time_selector(&at(7201), now, now)
+                .unwrap_err()
+                .message(),
+            "The requested 'read_time' cannot be before database creation time."
+        );
+    }
+
+    #[test]
     fn a_database_nothing_created_is_refused_and_is_not_materialized_by_the_refusal() {
         let backend = admission_backend();
         let error = backend
@@ -1552,6 +1593,17 @@ impl LocalBackend {
             change_admission: Mutex::new(None),
             barrier: Arc::new(AdmissionBarrier::new()),
         }
+    }
+
+    /// When the databases came into being, instead of the clock at construction: the
+    /// `createTime` they report and the instant before which a `read_time` is refused.
+    #[must_use]
+    pub const fn with_created_at(
+        mut self,
+        created_at: fireemu_core_types::time::LogicalInstant,
+    ) -> Self {
+        self.created_at = created_at;
+        self
     }
 
     /// How long a commit outside a transaction waits for the locks an active read-write
@@ -2545,7 +2597,7 @@ impl LocalBackend {
             .unwrap_or(&empty);
         self.gateway
             .validate_query_with_indexes(&query, database_indexes)
-            .map_err(|rejection| rejection.to_status())
+            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
     }
 
     /// Decodes and validates a structured aggregation query through the strict gateway.
@@ -2569,7 +2621,7 @@ impl LocalBackend {
             .unwrap_or(&empty);
         self.gateway
             .validate_aggregation_query_with_indexes(&query, aggregations, database_indexes)
-            .map_err(|rejection| rejection.to_status())
+            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
     }
 
     /// Atomically replaces the index catalog used by subsequent query plans.
@@ -3262,9 +3314,10 @@ impl LocalBackend {
         })
     }
 
-    /// `PartitionQuery`: cursor points that split a collection-group query (ordered by
-    /// `__name__`, without filters, other orderings, limits or cursors) into up to
-    /// `partition_count + 1` ranges of similar size, paged by `page_size` / `page_token`.
+    /// `PartitionQuery`: up to `partition_count` cursor points that split a collection-group
+    /// query (ordered by `__name__`, without filters, other orderings, limits or cursors) at
+    /// sampled keys as production does (see [`crate::partition`]), paged by `page_size` /
+    /// `page_token`.
     /// The cuts are computed at one version (the `read_time` selector's, else the version
     /// current at the first page) that the page token carries, so later pages see the same
     /// partitioning whatever was written in between; the token is bound to the query.
@@ -3275,37 +3328,39 @@ impl LocalBackend {
     ) -> Result<pb::PartitionQueryResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         if parent.document.is_some() {
-            return Err(Status::invalid_argument(
-                "PartitionQuery parent must be the database (projects/{p}/databases/{d}/documents)",
-            ));
+            return Err(Status::invalid_argument(crate::partition::ANCESTOR_QUERY));
         }
         let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) = &req.query_type
         else {
             return Err(Status::invalid_argument(
-                "PartitionQuery requires a structured_query",
+                crate::query_messages::PARTITION_WITHOUT_QUERY,
             ));
         };
         self.fault(parent.project.as_str(), "firestore.read")?;
+        if req.partition_count <= 0 {
+            return Err(Status::invalid_argument(
+                crate::partition::COUNT_NOT_POSITIVE,
+            ));
+        }
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument(
+                crate::partition::PAGE_SIZE_NEGATIVE,
+            ));
+        }
         let query = self.accepted_query(&parent, sq)?.query;
         if query.find_nearest.is_some() {
             return Err(Status::unimplemented(
                 "PartitionQuery does not support findNearest",
             ));
         }
+        // Production answers a kindless query, or one without an explicit order, with no
+        // partition at all.
+        let split = crate::partition::check_query(&query).map_err(Status::invalid_argument)?;
         let name_ascending_only = query.order_by.iter().all(|o| {
             o.field.is_document_name()
                 && o.direction == fireemu_core_firestore::query::Direction::Ascending
         });
-        if !matches!(
-            query.scope,
-            fireemu_core_firestore::query::QueryScope::CollectionGroup { .. }
-        ) || query.filter.is_some()
-            || !name_ascending_only
-            || query.limit.is_some()
-            || query.offset != 0
-            || query.start_at.is_some()
-            || query.end_at.is_some()
-        {
+        if split && (query.filter.is_some() || !name_ascending_only) {
             return Err(Status::invalid_argument(
                 "PartitionQuery requires a collection group query ordered by __name__ only (no filters, order bys, limits, offsets or cursors)",
             ));
@@ -3313,16 +3368,11 @@ impl LocalBackend {
         let partition_count = usize::try_from(req.partition_count)
             .ok()
             .filter(|n| *n > 0)
-            .ok_or_else(|| Status::invalid_argument("partition_count must be positive"))?;
+            .ok_or_else(|| Status::invalid_argument(crate::partition::COUNT_NOT_POSITIVE))?;
         let collection_id = query
             .scope
             .collection_id()
-            .expect("collection-group checked above")
-            .as_str()
-            .to_owned();
-        if req.page_size < 0 {
-            return Err(Status::invalid_argument("page_size must not be negative"));
-        }
+            .map_or_else(String::new, |id| id.as_str().to_owned());
         let read_time = req.consistency_selector.as_ref().map(
             |pb::partition_query_request::ConsistencySelector::ReadTime(t)| {
                 crate::encode::decode_instant(t)
@@ -3355,16 +3405,16 @@ impl LocalBackend {
                     .parse::<u64>()
                     .ok()
                     .zip(f.parse::<u64>().ok())
-                    .zip(i.parse::<usize>().ok())
-                    .filter(|((_, f), _)| *f == fingerprint)
-                    .map(|((v, _), i)| (v, i)),
+                    .zip(i.parse::<usize>().ok()),
                 _ => None,
             };
-            let (v, i) = parsed.ok_or_else(|| {
-                Status::invalid_argument(
-                    "invalid page_token (not issued for this query, count and read time, or the session was reset)",
-                )
-            })?;
+            // Production: a token it cannot read, and one issued for another request (another
+            // query, count or read time, or before a reset), in its own words.
+            let ((v, f), i) = parsed
+                .ok_or_else(|| Status::invalid_argument(crate::partition::TOKEN_UNREADABLE))?;
+            if f != fingerprint {
+                return Err(Status::invalid_argument(crate::partition::TOKEN_FOREIGN));
+            }
             (Some(CommitVersion::from_value(v)), i)
         };
         let (paths, version): (Vec<DocumentPath>, CommitVersion) = self.read_db(&parent, |db| {
@@ -3376,13 +3426,14 @@ impl LocalBackend {
             if version > db.current_version() {
                 return Err(Status::invalid_argument("invalid page_token"));
             }
+            if !split {
+                return Ok((Vec::new(), version));
+            }
+            let (group, _) = db
+                .run_query_paths_with_stats(&query, Some(version))
+                .map_err(|error| status_from_error(&error))?;
             Ok((
-                db.collection_group_partition_paths_at(
-                    query.scope.parent(),
-                    &collection_id,
-                    version,
-                    partition_count,
-                ),
+                crate::partition::partition_cursors(&group, partition_count),
                 version,
             ))
         })?;
@@ -3392,7 +3443,7 @@ impl LocalBackend {
                 values: vec![pb::Value {
                     value_type: Some(pb::value::ValueType::ReferenceValue(path.resource_name())),
                 }],
-                before: true,
+                before: false,
             })
             .collect();
         if start > cursors.len() {
@@ -3640,6 +3691,24 @@ impl LocalBackend {
         outcome
     }
 
+    /// The index entries an Explain plan reads in `parent`'s database at the snapshot of
+    /// `read_time` (the latest state without one); the gRPC stream counts them once its pages
+    /// are done.
+    pub(crate) fn explain_index_entries(
+        &self,
+        parent: &Parent,
+        query: &Query,
+        aggregations: Option<&[Aggregation]>,
+        scans: &[fireemu_core_firestore::index::PlannedScan],
+        read_time: Option<&prost_types::Timestamp>,
+    ) -> Result<u64, Status> {
+        self.read_db(parent, |db| {
+            let version = read_time.map(|time| db.version_at(crate::encode::decode_instant(time)));
+            crate::service::index_entries(db, version, query, aggregations, scans)
+                .map_err(|error| status_from_error(&error))
+        })
+    }
+
     fn read_db<T>(
         &self,
         parent: &Parent,
@@ -3773,15 +3842,16 @@ impl LocalBackend {
         if !(0..1_000_000_000).contains(&ts.nanos) {
             return Err(Status::invalid_argument("read_time: nanos out of range"));
         }
+        // Production's texts (FS-QUERY-INDEX read-time, recorded 2026-09-24).
         if ts.nanos % 1000 != 0 {
             return Err(Status::invalid_argument(
-                "read_time must be a microsecond precision timestamp",
+                "timestamp cannot have more than microseconds precision",
             ));
         }
         let at = crate::encode::decode_instant(ts);
         if at.as_nanos() > horizon.max(now).as_nanos() {
             return Err(Status::invalid_argument(
-                "read_time must not be in the future",
+                "The requested 'read_time' cannot be in the future.",
             ));
         }
         // Production answers a read_time before the database existed with INVALID_ARGUMENT and
@@ -4879,14 +4949,16 @@ impl LocalBackend {
         execution: Option<QueryExecutionContext>,
         selection: Option<Arc<QuerySelection>>,
     ) -> Result<AuthorizedQueryPage, Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
-                "RunQuery requires a structured_query",
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
-        let accepted = self.accepted_query(&parent, sq)?;
+        let accepted = self
+            .accepted_query(&parent, sq)
+            .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
         let authorization_parent = parse_parent(&authorization_req.parent).map_err(status)?;
         if authorization_parent.project != parent.project
             || authorization_parent.database != parent.database
@@ -4900,10 +4972,12 @@ impl LocalBackend {
             &authorization_req.query_type
         else {
             return Err(Status::invalid_argument(
-                "RunQuery requires a structured_query",
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
-        let authorization = self.accepted_query(&authorization_parent, authorization_query)?;
+        let authorization = self
+            .accepted_query(&authorization_parent, authorization_query)
+            .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -4947,6 +5021,7 @@ impl LocalBackend {
                     response.explain_metrics = Some(crate::service::explain_metrics(
                         &authorization.query,
                         None,
+                        accepted.scans.as_deref(),
                         None,
                     ));
                 }
@@ -5035,14 +5110,30 @@ impl LocalBackend {
                 .as_ref()
                 .is_some_and(|options| options.analyze)
             {
+                let index_entries = accepted
+                    .scans
+                    .as_deref()
+                    .map(|scans| {
+                        crate::service::index_entries(
+                            access.db(),
+                            version,
+                            &accepted.query,
+                            None,
+                            scans,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| status_from_error(&error))?;
                 let metrics = crate::service::explain_metrics(
                     &authorization.query,
                     None,
+                    accepted.scans.as_deref(),
                     Some(crate::service::ExplainExecution {
                         results_returned: i64::try_from(docs.len()).unwrap_or(i64::MAX),
                         entries: u64::try_from(docs.len())
                             .unwrap_or(u64::MAX)
                             .saturating_add(u64::try_from(skipped).unwrap_or(0)),
+                        index_entries,
                         duration: explain_started.elapsed(),
                     }),
                 );
@@ -5064,29 +5155,27 @@ impl LocalBackend {
             .map(|(response, _)| response)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn run_aggregation_query_with_stats(
         &self,
         req: &pb::RunAggregationQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(pb::RunAggregationQueryResponse, QueryStats), Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(saq)) =
             &req.query_type
         else {
             return Err(Status::invalid_argument(
-                "RunAggregationQuery requires a structured_aggregation_query",
+                crate::query_messages::AGGREGATION_WITHOUT_QUERY,
             ));
         };
-        let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) =
-            &saq.query_type
-        else {
-            return Err(Status::invalid_argument(
-                "aggregation query requires a structured_query",
-            ));
-        };
+        let sq = crate::query_messages::aggregation_structured_query(saq);
+        let sq = sq.as_ref();
         let (aliases, aggregations) = decode_aggregations(saq)?;
-        let accepted = self.accepted_aggregation_query(&parent, sq, &aggregations)?;
+        let accepted = self
+            .accepted_aggregation_query(&parent, sq, &aggregations)
+            .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
         let plan_only = req
             .explain_options
             .as_ref()
@@ -5119,6 +5208,15 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
+            // Only once the database exists and the caller may read the query: a count
+            // capped at zero reads nothing and answers at the instant before the epoch.
+            if let Some(response) = crate::query_messages::zero_capped_count(
+                &aliases,
+                &aggregations,
+                req.explain_options.is_some() || req.consistency_selector.is_some(),
+            ) {
+                return Ok((response, QueryStats::default()));
+            }
             let explain_started = std::time::Instant::now();
             if plan_only {
                 return Ok((
@@ -5127,6 +5225,7 @@ impl LocalBackend {
                         explain_metrics: Some(crate::service::explain_metrics(
                             &accepted.query,
                             Some(&aggregations),
+                            accepted.scans.as_deref(),
                             None,
                         )),
                         ..Default::default()
@@ -5139,6 +5238,25 @@ impl LocalBackend {
             // to record the query.
             let (values, stats) = access.run_aggregation(&accepted.query, &aggregations)?;
             let read_time = access.read_time(now)?;
+            let analyze = req
+                .explain_options
+                .as_ref()
+                .is_some_and(|options| options.analyze);
+            let index_entries = accepted
+                .scans
+                .as_deref()
+                .filter(|_| analyze)
+                .map(|scans| {
+                    crate::service::index_entries(
+                        access.db(),
+                        version,
+                        &accepted.query,
+                        Some(&aggregations),
+                        scans,
+                    )
+                })
+                .transpose()
+                .map_err(|error| status_from_error(&error))?;
             let aggregate_fields: HashMap<String, pb::Value> = aliases
                 .into_iter()
                 .zip(values.iter().map(encode_value))
@@ -5153,6 +5271,7 @@ impl LocalBackend {
                             crate::service::explain_metrics(
                                 &accepted.query,
                                 Some(&aggregations),
+                                accepted.scans.as_deref(),
                                 Some(crate::service::ExplainExecution {
                                     results_returned: 1,
                                     entries: accepted.query.limit.map_or(stats.matched, |limit| {
@@ -5161,6 +5280,7 @@ impl LocalBackend {
                                                 .saturating_add(u64::from(accepted.query.offset)),
                                         )
                                     }),
+                                    index_entries,
                                     duration: explain_started.elapsed(),
                                 }),
                             )
@@ -5678,58 +5798,12 @@ pub fn encode_commit(result: &CommitResult) -> pb::CommitResponse {
     }
 }
 
-/// Firestore accepts at most this many aggregations in one query.
-const MAX_AGGREGATIONS_PER_QUERY: usize = 5;
-
-/// Decodes and validates the aggregation list: 1..=5 entries, positive `count.up_to`,
-/// unique aliases.
+/// Decodes and validates the aggregation list in production's terms
+/// (`crate::query_messages::decode_aggregations`).
 pub(crate) fn decode_aggregations(
     saq: &pb::StructuredAggregationQuery,
 ) -> Result<(Vec<String>, Vec<Aggregation>), Status> {
-    if saq.aggregations.is_empty() || saq.aggregations.len() > MAX_AGGREGATIONS_PER_QUERY {
-        return Err(Status::invalid_argument(format!(
-            "an aggregation query needs 1..={MAX_AGGREGATIONS_PER_QUERY} aggregations"
-        )));
-    }
-    let mut aliases: Vec<String> = Vec::with_capacity(saq.aggregations.len());
-    let mut aggregations = Vec::with_capacity(saq.aggregations.len());
-    for (i, a) in saq.aggregations.iter().enumerate() {
-        use pb::structured_aggregation_query::aggregation::Operator as O;
-        let field =
-            |f: &Option<pb::structured_query::FieldReference>| -> Result<FieldPath, Status> {
-                let r = f
-                    .as_ref()
-                    .ok_or_else(|| Status::invalid_argument("aggregation without field"))?;
-                FieldPath::parse(&r.field_path).map_err(|e| Status::invalid_argument(e.to_string()))
-            };
-        let agg = match &a.operator {
-            Some(O::Count(c)) => Aggregation::Count {
-                up_to: match c.up_to {
-                    None => None,
-                    Some(n) if n > 0 => Some(u64::try_from(n).unwrap_or(u64::MAX)),
-                    Some(_) => {
-                        return Err(Status::invalid_argument("count.up_to must be positive"))
-                    }
-                },
-            },
-            Some(O::Sum(s)) => Aggregation::Sum(field(&s.field)?),
-            Some(O::Avg(v)) => Aggregation::Avg(field(&v.field)?),
-            None => return Err(Status::invalid_argument("aggregation without operator")),
-        };
-        let alias = if a.alias.is_empty() {
-            format!("field_{}", i + 1)
-        } else {
-            a.alias.clone()
-        };
-        if aliases.contains(&alias) {
-            return Err(Status::invalid_argument(format!(
-                "duplicate aggregation alias {alias:?}"
-            )));
-        }
-        aliases.push(alias);
-        aggregations.push(agg);
-    }
-    Ok((aliases, aggregations))
+    crate::query_messages::decode_aggregations(saq)
 }
 
 /// Catalog key of a database.
@@ -5925,11 +5999,8 @@ fn query_responses(
             );
         }
     }
-    if let Some(last) = responses.last_mut() {
-        // The last response says so, so a client can tell the end of the results from a
-        // stream that stalled.
-        last.continuation_selector = Some(pb::run_query_response::ContinuationSelector::Done(true));
-    }
+    // Production marks no response `done` (FS-QUERY-INDEX gRPC recordings, 2026-09-24): the
+    // end of the stream is the end of the results.
     if !new_transaction.is_empty() {
         // A new transaction is announced in a dedicated first response that carries nothing
         // else (RunQueryResponse contract).

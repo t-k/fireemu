@@ -30,6 +30,14 @@ use serde_json::{json, Value};
 
 const DOCS: &str = "/v1/projects/demo-app/databases/(default)/documents";
 
+/// Production answers an error of a streaming REST method inside a one-element array; other
+/// methods answer the bare envelope.
+fn stream_error(body: &Value) -> &Value {
+    body.as_array()
+        .and_then(|elements| elements.first())
+        .unwrap_or(body)
+}
+
 fn state(rules: Option<&str>) -> RestState {
     state_with(rules, TokenAcceptance::Verified)
 }
@@ -1409,20 +1417,36 @@ fn batch_write_rest_refuses_a_repeated_document_as_a_whole_with_production_wordi
 fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() {
     let s = state(None);
     let mut read_time = String::new();
-    for index in 0..12 {
+    // Twelve documents, and four more the partition sampler picks so the group splits.
+    let project = fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap();
+    let database = fireemu_core_types::ids::DatabaseId::try_new("(default)").unwrap();
+    let name = |index: usize| format!("owners/{}/items/i{index:02}", ["a", "a-", "b"][index % 3]);
+    let sampled = (12..)
+        .map(name)
+        .filter(|relative| {
+            fireemu_adapter_grpc::partition::is_sample(
+                &fireemu_core_firestore::path::DocumentPath::parse(&project, &database, relative)
+                    .unwrap(),
+            )
+        })
+        .take(4);
+    let documents: Vec<String> = (0..12).map(name).chain(sampled).collect();
+    for (index, relative) in documents.iter().enumerate() {
         let (status, document) = call(
             &s,
             "PATCH",
-            &format!(
-                "{DOCS}/owners/{}/items/i{index:02}",
-                ["a", "a-", "b"][index % 3]
-            ),
+            &format!("{DOCS}/{relative}"),
             json!({"fields": {"value": {"integerValue": index.to_string()}}}),
         );
         assert_eq!(status, 200, "{document}");
         read_time = document["updateTime"].as_str().unwrap().to_owned();
     }
-    let query = json!({"from": [{"collectionId": "items", "allDescendants": true}]});
+    // The explicit `__name__` order the SDKs send: a partition cursor positions against the
+    // explicit order only.
+    let query = json!({
+        "from": [{"collectionId": "items", "allDescendants": true}],
+        "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": "ASCENDING"}],
+    });
     let mut token = String::new();
     let mut cuts = Vec::new();
     loop {
@@ -1433,7 +1457,7 @@ fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() 
             json!({"structuredQuery": query, "partitionCount": "4", "pageSize": 2, "pageToken": token, "readTime": read_time}),
         );
         assert_eq!(status, 200, "{page}");
-        let points = page["partitions"].as_array().unwrap();
+        let points = page["partitions"].as_array().cloned().unwrap_or_default();
         assert!(points.len() <= 2);
         cuts.extend(points.iter().cloned());
         token = page["nextPageToken"]
@@ -1473,7 +1497,7 @@ fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() 
     );
     assert_eq!(status, 200, "{all}");
     let expected = names(&all);
-    assert_eq!(expected.len(), 12);
+    assert_eq!(expected.len(), documents.len());
     let mut actual = Vec::new();
     for index in 0..=cuts.len() {
         let mut range = query.clone();
@@ -1797,7 +1821,7 @@ fn rest_find_nearest_without_a_source_is_rejected_before_kindless_scan() {
         }}),
     );
     assert_eq!(status, 501, "{body}");
-    assert!(body["error"]["message"]
+    assert!(stream_error(&body)["error"]["message"]
         .as_str()
         .unwrap()
         .contains("collection source"));
@@ -2451,7 +2475,8 @@ fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable(
         json!({"from": [null]}),
         json!({"orderBy": [1]}),
         json!({"from": [{"collectionId": 1}]}),
-        json!({"from": [{"allDescendants": "true"}]}),
+        // (`"true"` is a boolean to production's transcoder, so it is not refused here.)
+        json!({"from": [{"allDescendants": 1}]}),
         json!({"orderBy": [{"direction": 3}]}),
         json!({"select": "not an object"}),
         json!({"select": {"fields": "not an array"}}),
@@ -2468,7 +2493,11 @@ fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable(
             json!({"structuredQuery": query, "newTransaction": {"readWrite": {}}}),
         );
         assert_eq!(status, 400, "{body}");
-        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+        assert_eq!(
+            stream_error(&body)["error"]["status"],
+            "INVALID_ARGUMENT",
+            "{body}"
+        );
     }
     let active_after = s
         .local
@@ -2808,8 +2837,16 @@ fn malformed_transaction_token_is_refused_in_productions_wording() {
     ] {
         let (status, response) = call(&s, "POST", &path, body);
         assert_eq!(status, 400, "{path}: {response}");
-        assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
-        assert_eq!(response["error"]["message"], expected, "{path}");
+        assert_eq!(
+            stream_error(&response)["error"]["status"],
+            "INVALID_ARGUMENT",
+            "{path}"
+        );
+        assert_eq!(
+            stream_error(&response)["error"]["message"],
+            expected,
+            "{path}"
+        );
     }
 }
 
@@ -2890,10 +2927,11 @@ fn rest_protojson_null_fields_and_numeric_order_direction_follow_unset_rules() {
     let s = state(None);
     for query in [
         json!({"from": null, "orderBy": null}),
-        json!({"from": [{"collectionId": null, "allDescendants": null}], "orderBy": [{"field": {"fieldPath": "v"}, "direction": null}]}),
-        json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 1}]}),
-        json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 2}]}),
-        json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 0}], "where": null, "findNearest": null}),
+        // A kindless query may order by `__name__` ascending only.
+        json!({"from": [{"collectionId": null, "allDescendants": null}], "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": null}]}),
+        json!({"from": [{"collectionId": "c"}], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 1}]}),
+        json!({"from": [{"collectionId": "c"}], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 2}]}),
+        json!({"from": [{"collectionId": "c"}], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 0}], "where": null, "findNearest": null}),
     ] {
         let (status, body) = call(
             &s,
@@ -3551,9 +3589,13 @@ fn rest_validation_codes_follow_production() {
         json!({"structuredQuery": {"from": [{"collectionId": "q"}], "where": {"compositeFilter": {"op": "AND", "filters": [contains("a"), contains("b")]}}}}),
     );
     assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
     assert_eq!(
-        body["error"]["message"],
+        stream_error(&body)["error"]["status"],
+        "INVALID_ARGUMENT",
+        "{body}"
+    );
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
         "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction.",
         "{body}"
     );
@@ -3566,9 +3608,13 @@ fn rest_validation_codes_follow_production() {
         Value::Null,
     );
     assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
     assert_eq!(
-        body["error"]["message"],
+        stream_error(&body)["error"]["status"],
+        "INVALID_ARGUMENT",
+        "{body}"
+    );
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
         "The requested 'read_time' cannot be before database creation time.",
         "{body}"
     );
@@ -3581,9 +3627,13 @@ fn rest_validation_codes_follow_production() {
         Value::Null,
     );
     assert_eq!(status, 404, "{body}");
-    assert_eq!(body["error"]["status"], "NOT_FOUND", "{body}");
     assert_eq!(
-        body["error"]["message"],
+        stream_error(&body)["error"]["status"],
+        "NOT_FOUND",
+        "{body}"
+    );
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
         missing_database_message("Upper"),
         "{body}"
     );
@@ -3603,9 +3653,13 @@ fn rest_validation_codes_follow_production() {
         json!({"transaction": begun["transaction"], "writes": []}),
     );
     assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["status"],
+        "INVALID_ARGUMENT",
+        "{body}"
+    );
     assert!(
-        body["error"]["message"]
+        stream_error(&body)["error"]["message"]
             .as_str()
             .unwrap()
             .contains("no longer valid"),
@@ -4245,7 +4299,9 @@ fn explain_rest_authorization_denies_without_metrics_or_leaked_transactions() {
                 request["newTransaction"] = json!({"readOnly": {}});
                 let (status, body) = call_as(&s, "POST", &format!("{DOCS}:{}", explain_method(aggregation)), request, None);
                 assert_eq!(status, 403, "{body}");
-                assert_eq!(body["error"]["status"], "PERMISSION_DENIED");
+                // The array wraps every streaming-method error; for a Rules denial that comes
+                // from an exploratory probe only (not closure evidence).
+                assert_eq!(body[0]["error"]["status"], "PERMISSION_DENIED");
                 assert!(!body.to_string().contains("explainMetrics"));
                 assert!(s.local.latest_query_execution_stats().is_none());
             }
@@ -4446,6 +4502,14 @@ fn every_data_plane_surface_refuses_a_database_that_was_never_created() {
     ] {
         let (status, body) = call(&s, method, &path, body);
         assert_eq!(status, 404, "{method} {path}: {body}");
+        // Production answers the streaming methods' errors inside a one-element array (recorded
+        // for refusals in FS-QUERY-INDEX; a never-created database was seen so only in an
+        // exploratory probe, which is not closure evidence).
+        let body = if path.ends_with(":runQuery") || path.ends_with(":runAggregationQuery") {
+            body[0].clone()
+        } else {
+            body
+        };
         assert_eq!(
             body["error"]["status"], "NOT_FOUND",
             "{method} {path}: {body}"
@@ -4627,4 +4691,196 @@ fn the_emulator_clear_route_needs_the_control_token_from_a_browser() {
         assert_eq!(status, 200, "{label}: {body}");
         assert!(!present(&s), "{label}: the data must be gone");
     }
+}
+
+/// Production refuses every REST pipeline on a Standard-edition database inside the stream
+/// array, with its `ErrorInfo` and `Help` details (observed 2026-09-24).
+#[test]
+fn rest_execute_pipeline_on_standard_is_refused_like_production() {
+    let s = state(None);
+    for body in [
+        json!({}),
+        json!({"structuredPipeline": {"pipeline": {"stages": [{"name": "collection", "args": [{"referenceValue": "/c"}]}]}}}),
+    ] {
+        let (status, body) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            body,
+            json!([{"error": {
+                "code": 400,
+                "message": "Pipeline Operations are only available for Firestore databases in Enterprise edition.\n\nPlease switch to an Enterprise edition database to take advantage of such functionality.",
+                "status": "FAILED_PRECONDITION",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "PIPELINE_REQUIRES_ENTERPRISE_EDITION",
+                        "domain": "firestore.googleapis.com",
+                    },
+                    {
+                        "@type": "type.googleapis.com/google.rpc.Help",
+                        "links": [{
+                            "description": "Learn more about Firestore database editions",
+                            "url": "https://cloud.google.com/firestore/docs/editions",
+                        }],
+                    },
+                ],
+            }}])
+        );
+    }
+}
+
+/// Production's REST templates for the query methods need a document below `documents`
+/// (`documents/*/**`), so `documents/qn:runQuery` is a create in collection `qn:runQuery`, whose
+/// body is a `Document` (FS-QUERY-INDEX request-shape/rest#parent-is-collection).
+#[test]
+fn rest_query_method_on_a_root_collection_routes_as_a_create_document() {
+    let s = state(None);
+    let expected = |method: &str| {
+        json!({
+            "error": {
+                "code": 400,
+                "message": format!("Invalid JSON payload received. Unknown name \"{method}\" at 'document': Cannot find field."),
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{
+                        "field": "document",
+                        "description": format!("Invalid JSON payload received. Unknown name \"{method}\" at 'document': Cannot find field."),
+                    }],
+                }],
+            }
+        })
+    };
+    for (method, key) in [
+        ("runQuery", "structuredQuery"),
+        ("runAggregationQuery", "structuredAggregationQuery"),
+        ("partitionQuery", "structuredQuery"),
+    ] {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}/qn:{method}"),
+            json!({ key: {"from": [{"collectionId": "qn"}]} }),
+        );
+        assert_eq!((status, &body), (400, &expected(key)), "{method}");
+    }
+    // A create with only document keys goes through: the collection id carries the colon.
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/qn:runQuery?documentId=d"),
+        json!({"fields": {"v": {"integerValue": "1"}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["name"],
+        "projects/demo-app/databases/(default)/documents/qn:runQuery/d"
+    );
+    // Below a document the method is the query method itself.
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}/qn/d:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "sub"}]}}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+/// An enum given by an unknown number reaches the query decoder over REST as over gRPC, which
+/// refuses it in production's words (closure review F5).
+#[test]
+fn rest_unknown_enum_numbers_are_refused_as_the_decoder_refuses_them() {
+    let s = state(None);
+    let cases = [
+        (
+            json!({"from": [{"collectionId": "c"}], "where": {"unaryFilter": {"field": {"fieldPath": "a"}, "op": 99}}}),
+            "Unknown UnaryFilter operator.",
+        ),
+        (
+            json!({"from": [{"collectionId": "c"}], "where": {"compositeFilter": {"op": 9, "filters": [
+                {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "EQUAL", "value": {"integerValue": "1"}}},
+                {"fieldFilter": {"field": {"fieldPath": "b"}, "op": "EQUAL", "value": {"integerValue": "1"}}}
+            ]}}}),
+            "Unsupported CompositeFilter operator.",
+        ),
+        (
+            json!({"from": [{"collectionId": "c"}], "findNearest": {
+                "vectorField": {"fieldPath": "e"}, "queryVector": {"mapValue": {"fields": {
+                    "__type__": {"stringValue": "__vector__"},
+                    "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}}}},
+                "distanceMeasure": 9, "limit": 1}}),
+            "Unknown Distance Measure.",
+        ),
+    ];
+    for (query, expected) in cases {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": query}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body[0]["error"]["message"], expected, "{body}");
+    }
+}
+
+/// `:executePipeline` is routed only on the database's documents resource, and a caller who is
+/// not the owner is refused first, as over gRPC (closure review F6).
+#[test]
+fn rest_execute_pipeline_routes_one_resource_and_checks_the_owner_first() {
+    let s = state(None);
+    for path in [
+        "qn:executePipeline",
+        "qn/d:executePipeline",
+        "a/b/c:executePipeline",
+    ] {
+        let (status, body) = call(&s, "POST", &format!("{DOCS}/{path}"), json!({}));
+        assert_ne!(
+            body[0]["error"]["status"], "FAILED_PRECONDITION",
+            "{path}: {body}"
+        );
+        assert!(status == 404 || status == 400, "{path}: {status} {body}");
+    }
+    let s = state(Some(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }",
+    ));
+    let (status, body) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        json!({}),
+        None,
+    );
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(body[0]["error"]["status"], "PERMISSION_DENIED");
+}
+
+/// A `__name__` filter on a collection name is refused with production's "lacks /" text
+/// (filter-validation/paths-and-names#name-collection-reference); another malformed name gets
+/// the text that names its own fault, not that one (closure review 11).
+#[test]
+fn rest_name_filter_references_are_refused_for_their_own_fault() {
+    let s = state(None);
+    let refusal = |reference: &str| {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": {"from": [{"collectionId": "qn"}], "where": {"fieldFilter": {
+                "field": {"fieldPath": "__name__"}, "op": "EQUAL",
+                "value": {"referenceValue": reference}}}}}),
+        );
+        assert_eq!(status, 400, "{body}");
+        body[0]["error"]["message"].as_str().unwrap().to_owned()
+    };
+    let collection = "projects/demo-app/databases/(default)/documents/qn".to_owned();
+    assert_eq!(
+        refusal(&collection),
+        format!(
+            "Document parent name \"{collection}\" lacks \"/\" at index {}.",
+            collection.len()
+        )
+    );
+    let dotted = "projects/demo-app/databases/(default)/documents/qn/d/./x".to_owned();
+    assert!(!refusal(&dotted).contains("lacks"), "{}", refusal(&dotted));
 }

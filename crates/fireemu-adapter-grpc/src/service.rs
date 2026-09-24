@@ -33,7 +33,7 @@ const RUN_QUERY_BATCH_SIZE: i32 = 32;
 const RUN_QUERY_CHANNEL_CAPACITY: usize = 16;
 
 mod explain;
-pub(crate) use explain::{explain_metrics, ExplainExecution};
+pub(crate) use explain::{explain_metrics, index_entries, ExplainExecution};
 
 fn explain_page_duration(rows: &[pb::RunQueryResponse]) -> std::time::Duration {
     rows.iter()
@@ -304,10 +304,11 @@ impl GatewayService {
     }
 
     fn validate_run_query(&self, req: &pb::RunQueryRequest) -> Result<Vec<String>, Status> {
-        let parent = parse_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent)
+            .map_err(|e| Rejection::Decode(e).to_status())?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
-                "RunQuery requires a structured_query",
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
         let accepted = if let Some(local) = self.local_backend() {
@@ -330,22 +331,19 @@ impl GatewayService {
         &self,
         req: &pb::RunAggregationQueryRequest,
     ) -> Result<Vec<String>, Status> {
-        let parent = parse_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent)
+            .map_err(|e| Rejection::Decode(e).to_status())?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
             aggregation,
         )) = &req.query_type
         else {
             return Err(Status::invalid_argument(
-                "RunAggregationQuery requires a structured_aggregation_query",
+                crate::query_messages::AGGREGATION_WITHOUT_QUERY,
             ));
         };
-        let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) =
-            &aggregation.query_type
-        else {
-            return Err(Status::invalid_argument(
-                "structured_aggregation_query requires a structured_query",
-            ));
-        };
+        let sq = crate::query_messages::aggregation_structured_query(aggregation);
+        let sq = sq.as_ref();
+        crate::query_messages::check_find_nearest_request(sq)?;
         let (_, aggregations) = decode_aggregations(aggregation)?;
         let accepted = if let Some(local) = self.local_backend() {
             local.accepted_aggregation_query(&parent, sq, &aggregations)?
@@ -629,9 +627,7 @@ impl Firestore for GatewayService {
             rules.require_owner(&caller.principal, "ExecutePipeline")?;
         }
         if self.gateway.ctx.edition != fireemu_core_types::edition::FirestoreEdition::Enterprise {
-            let mut status = Status::failed_precondition(
-                "pipelines require firestore.edition = enterprise (Enterprise Native)",
-            );
+            let mut status = crate::production_status::pipeline_requires_enterprise();
             if let Ok(v) = "FS_PIPE_EDITION".parse() {
                 status.metadata_mut().insert("fireemu-code", v);
             }
@@ -1110,19 +1106,28 @@ impl GatewayService {
                 .explain_options
                 .as_ref()
                 .is_some_and(|options| !options.analyze);
+            if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+                req.query_type.as_ref()
+            {
+                crate::query_messages::check_find_nearest_request(query)?;
+            }
             let explain_query = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
-                    let parent = parse_parent(&req.parent)
+                    let parent = crate::query_messages::parse_query_parent(&req.parent)
                         .map_err(|error| Rejection::Decode(error).to_status())?;
-                    let accepted = local.accepted_query(&parent, query)?;
-                    Some(accepted.query)
+                    let accepted = local.accepted_query(&parent, query).map_err(|s| {
+                        crate::index_messages::for_explain(req.explain_options.as_ref(), s)
+                    })?;
+                    Some((accepted.query, accepted.scans, parent))
                 }
                 None => None,
             };
-            let name_order_continuation = explain_query.as_ref().is_some_and(is_name_ordered_query);
+            let name_order_continuation = explain_query
+                .as_ref()
+                .is_some_and(|(query, _, _)| is_name_ordered_query(query));
             let find_nearest_query = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
-                    let parent = parse_parent(&req.parent)
+                    let parent = crate::query_messages::parse_query_parent(&req.parent)
                         .map_err(|error| Rejection::Decode(error).to_status())?;
                     local
                         .accepted_query(&parent, query)?
@@ -1240,6 +1245,8 @@ impl GatewayService {
                 // Keep one response until exhaustion and execution finalization are known.
                 // Page-local completion must never terminate the public query stream.
                 let mut pending = None;
+                // The snapshot every page reads, which Explain counts its index entries at.
+                let snapshot_read_time = first.iter().find_map(|response| response.read_time);
                 for mut response in first {
                     response.continuation_selector = None;
                     response.explain_metrics = None;
@@ -1375,36 +1382,68 @@ impl GatewayService {
                 }
                 if plan_only {
                     if let Some(response) = pending.as_mut() {
-                        response.explain_metrics = explain_query
-                            .as_ref()
-                            .map(|query| explain_metrics(query, None, None));
+                        response.explain_metrics =
+                            explain_query.as_ref().map(|(query, scans, _)| {
+                                explain_metrics(query, None, scans.as_deref(), None)
+                            });
                     }
                 } else if req
                     .explain_options
                     .as_ref()
                     .is_some_and(|options| options.analyze)
                 {
+                    // The count scans the store, so it runs off the async workers, at the
+                    // query's snapshot.
+                    let index_entries = match explain_query.as_ref() {
+                        Some((query, Some(scans), parent)) => {
+                            let (local, query, scans, parent) =
+                                (local.clone(), query.clone(), scans.clone(), parent.clone());
+                            let counted = tokio::task::spawn_blocking(move || {
+                                local.explain_index_entries(
+                                    &parent,
+                                    &query,
+                                    None,
+                                    &scans,
+                                    snapshot_read_time.as_ref(),
+                                )
+                            })
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(Status::internal("Explain accounting did not complete"))
+                            });
+                            match counted {
+                                Ok(entries) => Some(entries),
+                                Err(error) => {
+                                    let _ = sender.send(Err(error)).await;
+                                    return;
+                                }
+                            }
+                        }
+                        _ => None,
+                    };
                     if let Some(response) = pending.as_mut() {
                         // Stream-owned count survives eviction from the bounded diagnostic cache.
-                        response.explain_metrics = explain_query.as_ref().map(|query| {
-                            explain_metrics(
-                                query,
-                                None,
-                                Some(ExplainExecution {
-                                    results_returned,
-                                    entries: u64::try_from(results_returned)
-                                        .unwrap_or(0)
-                                        .saturating_add(skipped_entries),
-                                    duration: execution_duration,
-                                }),
-                            )
-                        });
+                        response.explain_metrics =
+                            explain_query.as_ref().map(|(query, scans, _)| {
+                                explain_metrics(
+                                    query,
+                                    None,
+                                    scans.as_deref(),
+                                    Some(ExplainExecution {
+                                        results_returned,
+                                        entries: u64::try_from(results_returned)
+                                            .unwrap_or(0)
+                                            .saturating_add(skipped_entries),
+                                        index_entries,
+                                        duration: execution_duration,
+                                    }),
+                                )
+                            });
                     }
                 }
                 drop(rollback);
-                if let Some(mut response) = pending {
-                    response.continuation_selector =
-                        Some(pb::run_query_response::ContinuationSelector::Done(true));
+                // Production marks no response `done`; the stream's end completes it.
+                if let Some(response) = pending {
                     let _ = sender.send(Ok(response)).await;
                 }
             });

@@ -77,6 +77,11 @@
         "indexFile": { "type": "string" },
         "textIndexDefinitionFile": { "type": "string" },
         "enforceLimits": { "type": "boolean" },
+        "databaseCreateTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the daemon's databases were created: the createTime they report and the instant before which a read_time is refused with INVALID_ARGUMENT. Defaults to the daemon's start; a run compared with a production database names that database's createTime. It must not be after the clock start."
+        },
         "ttlSweepIntervalSeconds": {
           "type": "integer",
           "minimum": 1,

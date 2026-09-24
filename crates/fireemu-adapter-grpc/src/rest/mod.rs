@@ -8,6 +8,8 @@
 
 pub mod coverage;
 pub mod json;
+pub mod json_syntax;
+pub mod transcode;
 
 pub mod admin_fields;
 #[cfg(test)]
@@ -136,6 +138,9 @@ pub fn error_response(status: &Status) -> RestResponse {
         status.message(),
         status_name(code),
     );
+    if let Some(details) = crate::production_status::details_to_json(status.details()) {
+        body["error"]["details"] = Value::Array(details);
+    }
     if status
         .metadata()
         .contains_key(crate::local::DROP_CONNECTION_KEY)
@@ -154,6 +159,25 @@ pub fn error_response(status: &Status) -> RestResponse {
 #[must_use]
 pub fn drops_connection(response: &RestResponse) -> bool {
     response.body["error"]["ftdDropConnection"] == json!(true)
+}
+
+/// Production answers an error of a streaming REST method (`runQuery`, `runAggregationQuery`,
+/// `executePipeline`) inside the JSON array that would have carried its results. A fault that
+/// drops the connection keeps its own path.
+fn stream_errors(result: Result<RestResponse, Status>) -> Result<RestResponse, Status> {
+    result.or_else(|status| {
+        if status
+            .metadata()
+            .contains_key(crate::local::DROP_CONNECTION_KEY)
+        {
+            return Err(status);
+        }
+        let response = error_response(&status);
+        Ok(RestResponse {
+            status: response.status,
+            body: json!([response.body]),
+        })
+    })
 }
 
 fn ok(body: Value) -> RestResponse {
@@ -789,6 +813,12 @@ impl RestState {
             return Ok(response);
         }
         let (raw_resource, action) = match req.path.rsplit_once(':') {
+            // The query methods' templates need a document below `documents`; with one
+            // segment there, production's front end matches the create template instead, with
+            // the method in the collection id (FS-QUERY-INDEX parent-is-collection).
+            Some((r, a)) if QUERY_METHODS.contains(&a) && names_a_root_collection(r) => {
+                (req.path.as_str(), None)
+            }
             Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
             // A colon in the last segment is routing syntax (a document ID carries it
             // percent-encoded), so an unknown method is a route that does not exist -- never
@@ -1001,6 +1031,7 @@ impl RestState {
         let document_id = first(params, "documentId").unwrap_or("");
         let document_resource =
             (!document_id.is_empty()).then(|| format!("{parent}/{collection_id}/{document_id}"));
+        transcode::check_document_keys(body, "document")?;
         let req = pb::CreateDocumentRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
@@ -1119,9 +1150,29 @@ impl RestState {
                 })?;
                 Ok(ok(json!({})))
             }
-            "runQuery" => self.run_query(principal, resource, body),
-            "runAggregationQuery" => self.run_aggregation_query(principal, resource, body),
-            "partitionQuery" => self.partition_query(principal, resource, body),
+            // The streaming methods answer an error as a one-element array, like their results.
+            "runQuery" => stream_errors(
+                transcode::check_body(action, body)
+                    .and_then(|body| self.run_query(principal, resource, &body)),
+            ),
+            "runAggregationQuery" => stream_errors(
+                transcode::check_body(action, body)
+                    .and_then(|body| self.run_aggregation_query(principal, resource, &body)),
+            ),
+            // The template is `{database=projects/*/databases/*}/documents:executePipeline`;
+            // any other resource names no route.
+            "executePipeline" => {
+                if matches!(
+                    resource.split('/').collect::<Vec<_>>().as_slice(),
+                    ["projects", _, "databases", _, "documents"]
+                ) {
+                    stream_errors(self.execute_pipeline(principal))
+                } else {
+                    Ok(not_found_text())
+                }
+            }
+            "partitionQuery" => transcode::check_body(action, body)
+                .and_then(|body| self.partition_query(principal, resource, &body)),
             "listCollectionIds" => {
                 json::strict_keys(
                     body,
@@ -1171,6 +1222,19 @@ impl RestState {
         }
     }
 
+    /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does;
+    /// an Enterprise database has no REST pipeline route here.
+    fn execute_pipeline(&self, principal: &Caller) -> Result<RestResponse, Status> {
+        // Owner first, as over gRPC.
+        if let Some(rules) = &self.rules {
+            rules.require_owner(principal, "ExecutePipeline")?;
+        }
+        if self.gateway.ctx.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise {
+            return Ok(not_found_text());
+        }
+        Err(crate::production_status::pipeline_requires_enterprise())
+    }
+
     /// `:partitionQuery`, which the official emulator answers `UNIMPLEMENTED` (a documented
     /// divergence: fireemu serves it).
     fn partition_query(
@@ -1194,7 +1258,9 @@ impl RestState {
             rules.require_owner(principal, "partitionQuery")?;
         }
         let Some(sq) = body.get("structuredQuery") else {
-            return Err(Status::invalid_argument("structuredQuery is required"));
+            return Err(Status::invalid_argument(
+                crate::query_messages::PARTITION_WITHOUT_QUERY,
+            ));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
         let partition_count = match body.get("partitionCount") {
@@ -1236,12 +1302,22 @@ impl RestState {
                 .map(pb::partition_query_request::ConsistencySelector::ReadTime),
             request_options: None,
         })?;
-        let mut out = json!({
-            "partitions": response.partitions.iter().map(|c| json!({
-                "values": c.values.iter().map(value_to_json).collect::<Vec<_>>(),
-                "before": c.before,
-            })).collect::<Vec<_>>(),
-        });
+        // proto3 JSON: an empty list and a false `before` are left out, as production does.
+        let mut out = json!({});
+        if !response.partitions.is_empty() {
+            out["partitions"] = response
+                .partitions
+                .iter()
+                .map(|c| {
+                    let mut cursor =
+                        json!({"values": c.values.iter().map(value_to_json).collect::<Vec<_>>()});
+                    if c.before {
+                        cursor["before"] = json!(true);
+                    }
+                    cursor
+                })
+                .collect();
+        }
         if !response.next_page_token.is_empty() {
             out["nextPageToken"] = Value::String(response.next_page_token);
         }
@@ -1392,9 +1468,12 @@ impl RestState {
         )
         .map_err(|e| bad(&e))?;
         let Some(sq) = body.get("structuredQuery") else {
-            return Err(Status::invalid_argument("structuredQuery is required"));
+            return Err(Status::invalid_argument(
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
+            ));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
+        crate::query_messages::check_find_nearest_request(&structured)?;
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         exclusive_selectors(body)?;
@@ -1424,22 +1503,7 @@ impl RestState {
             consistency_selector,
         };
         let guard = self.read_guard(principal);
-        let (responses, _warnings) = match self.local.run_query(&req, &*guard) {
-            Ok(result) => result,
-            // Observed production negative-limit error is a stream element. Keep
-            // other validation/authentication errors on their existing paths.
-            Err(status)
-                if status.code() == Code::InvalidArgument
-                    && status.message() == "invalid query: negative limit" =>
-            {
-                let response = error_response(&status);
-                return Ok(RestResponse {
-                    status: response.status,
-                    body: json!([response.body]),
-                });
-            }
-            Err(status) => return Err(status),
-        };
+        let (responses, _warnings) = self.local.run_query(&req, &*guard)?;
         let out: Vec<Value> = responses
             .iter()
             .map(|r| {
@@ -1486,19 +1550,26 @@ impl RestState {
         .map_err(|e| bad(&e))?;
         let Some(saq) = body.get("structuredAggregationQuery") else {
             return Err(Status::invalid_argument(
-                "structuredAggregationQuery is required",
+                crate::query_messages::AGGREGATION_WITHOUT_QUERY,
             ));
         };
         let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;
+        if let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(query)) =
+            &aggregation.query_type
+        {
+            crate::query_messages::check_find_nearest_request(query)?;
+        }
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
-        if !matches!(
-            aggregation.query_type,
-            Some(pb::structured_aggregation_query::QueryType::StructuredQuery(_))
-        ) {
-            return Err(Status::invalid_argument(
-                "aggregation query requires a structuredQuery",
-            ));
+        // Production aggregates an absent query as the empty one: every document under the
+        // parent (FS-QUERY-INDEX request-shape#aggregation-without-structured-query).
+        let mut aggregation = aggregation;
+        if aggregation.query_type.is_none() {
+            aggregation.query_type = Some(
+                pb::structured_aggregation_query::QueryType::StructuredQuery(
+                    pb::StructuredQuery::default(),
+                ),
+            );
         }
         exclusive_selectors(body)?;
         let consistency_selector =
@@ -1635,6 +1706,18 @@ fn observed_create_collection_slash_error(
     ))
 }
 
+/// Custom methods whose REST templates are `{parent=projects/*/databases/*/documents}:method`
+/// and `{parent=projects/*/databases/*/documents/*/**}:method`.
+const QUERY_METHODS: &[&str] = &["runQuery", "runAggregationQuery", "partitionQuery"];
+
+/// Whether a raw REST resource is `/v1/projects/*/databases/*/documents/<one segment>`.
+fn names_a_root_collection(raw_resource: &str) -> bool {
+    matches!(
+        raw_resource.split('/').collect::<Vec<_>>().as_slice(),
+        ["", "v1", "projects", _, "databases", _, "documents", collection] if !collection.is_empty()
+    )
+}
+
 /// Custom methods of the REST surface (`resource:method`).
 const CUSTOM_METHODS: &[&str] = &[
     "commit",
@@ -1646,6 +1729,7 @@ const CUSTOM_METHODS: &[&str] = &[
     "runAggregationQuery",
     "listCollectionIds",
     "partitionQuery",
+    "executePipeline",
 ];
 
 fn database_of(resource: &str) -> Result<String, Status> {

@@ -39,6 +39,26 @@ const QUERY_RULES = [
   allow("/fsr-qlim/{d}", "list", "request.query.limit == null"),
 ];
 
+/** `[collection, predicate]`: the shape of `request.query`, each queried with and without an order. */
+const QUERY_SHAPE_CASES = [
+  ["fsr-qs-map", "request.query is map"],
+  ["fsr-qs-keys", "request.query.keys().hasOnly(['limit', 'offset', 'orderBy'])"],
+  ["fsr-qs-keys-all", "request.query.keys().hasAll(['limit', 'offset', 'orderBy'])"],
+  ["fsr-qs-order-in", "'orderBy' in request.query"],
+  ["fsr-qs-order-map", "request.query.orderBy is map"],
+  ["fsr-qs-order-list", "request.query.orderBy is list"],
+  ["fsr-qs-order-string", "request.query.orderBy is string"],
+  ["fsr-qs-order-empty", "request.query.orderBy.size() == 0"],
+  ["fsr-qs-order-n-asc", "request.query.orderBy.n == 'ASC'"],
+  ["fsr-qs-order-name", "request.query.orderBy.size() == 1"],
+  ["fsr-qs-limit-int", "request.query.limit is int"],
+  ["fsr-qs-offset-int", "request.query.offset is int"],
+  ["fsr-qs-offset-zero", "request.query.offset == 0"],
+];
+
+/** List rules making `count` distinct get() calls, on an empty and on a one-document collection. */
+const LIST_BUDGETS = [10, 11, 15, 20, 21];
+
 /** A rule making `count` get() calls on distinct seeded documents (`fsr-bd/<start..>`). */
 const gets = (count, start = 0, call = "get") =>
   Array.from({ length: count }, (_, i) => `${call}(${DB}/fsr-bd/d${start + i}).data.n == 1`).join(
@@ -99,6 +119,13 @@ export const FRAGMENTS = [
     ...BUDGET_CASES.map(([name, method, predicate]) => allow(`/fsr-b/${name}`, method, predicate)),
     allow("/fsr-bl/{d}", "list", gets(10)),
     allow("/fsr-bl11/{d}", "list", gets(11)),
+    ...QUERY_SHAPE_CASES.map(([collection, predicate]) =>
+      allow(`/${collection}/{d}`, "list", predicate),
+    ),
+    ...LIST_BUDGETS.flatMap((calls) => [
+      allow(`/fsr-lb${calls}/{d}`, "list", gets(calls)),
+      allow(`/fsr-lbd${calls}/{d}`, "list", gets(calls)),
+    ]),
   ].join("\n"),
 ];
 
@@ -127,6 +154,7 @@ const QUERY_SEED = seedDocs([
   ["fsr-cgx/p/fsr-cg/2", OWNED(2, "b")],
   ["fsr-cgx/p/fsr-cgn/1", { n: integer(1) }],
   ["fsr-qlim/1", { n: integer(1) }],
+  ...QUERY_SHAPE_CASES.map(([collection]) => [`${collection}/1`, { n: integer(1) }]),
 ]);
 
 const byName = (collection, id) => ({
@@ -157,9 +185,10 @@ const list = (id, as, collection, params = {}) => ({
   params,
 });
 
-const BUDGET_SEED = seedDocs(
-  Array.from({ length: 25 }, (_, i) => [`fsr-bd/d${i}`, { n: integer(1) }]),
-);
+const BUDGET_SEED = seedDocs([
+  ...Array.from({ length: 25 }, (_, i) => [`fsr-bd/d${i}`, { n: integer(1) }]),
+  ...LIST_BUDGETS.map((calls) => [`fsr-lbd${calls}/1`, { n: integer(1) }]),
+]);
 
 const createAt = (name) => ({
   update: { name: `{docs}/fsr-b/${name}`, fields: {} },
@@ -233,6 +262,13 @@ export const PROGRAMS = [
       runQuery("no-filter-grpc", "a", "fsr-q", { transport: "grpc" }),
       { ...count("count-no-filter-grpc", "a", "fsr-q"), transport: "grpc" },
       { ...list("list-documents-owned-rule-grpc", "a", "fsr-q"), transport: "grpc" },
+      ...QUERY_SHAPE_CASES.flatMap(([collection]) => [
+        runQuery(`shape-${collection.slice(7)}`, "a", collection),
+        runQuery(`shape-${collection.slice(7)}-ordered`, "a", collection, {
+          orderBy: [{ field: { fieldPath: "n" }, direction: "ASCENDING" }],
+        }),
+        runQuery(`shape-${collection.slice(7)}-limited`, "a", collection, { limit: 5, offset: 0 }),
+      ]),
     ],
   },
   {
@@ -249,6 +285,10 @@ export const PROGRAMS = [
       get("get-and-exists-same-path", "a", "fsr-b/get-and-exists-same-path"),
       runQuery("list-10", "a", "fsr-bl"),
       runQuery("list-11", "a", "fsr-bl11"),
+      ...LIST_BUDGETS.flatMap((calls) => [
+        runQuery(`list-empty-${calls}`, "a", `fsr-lb${calls}`),
+        runQuery(`list-one-document-${calls}`, "a", `fsr-lbd${calls}`),
+      ]),
       commit("write-10", "a", [createAt("write-10")]),
       commit("write-11", "a", [createAt("write-11")]),
       commit("write-get-and-get-after-same-path", "a", [

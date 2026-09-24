@@ -120,6 +120,26 @@ export const COMPILE_CASES = [
   ["list-nesting-98", wrap(matchGet(`${"[".repeat(98)}${"]".repeat(98)} != null`))],
   ["list-nesting-99", wrap(matchGet(`${"[".repeat(99)}${"]".repeat(99)} != null`))],
   ["balanced-1000", wrap(matchGet(balanced(1000)))],
+  // How the nesting depth is counted when constructs mix, and for the constructs not above.
+  ["not-parentheses-49", wrap(matchGet(`${"!(".repeat(49)}true${")".repeat(49)}`))],
+  ["not-parentheses-50", wrap(matchGet(`${"!(".repeat(50)}true${")".repeat(50)}`))],
+  ["map-nesting-98", wrap(matchGet(`${"{'a': ".repeat(98)}1${"}".repeat(98)} != null`))],
+  ["map-nesting-99", wrap(matchGet(`${"{'a': ".repeat(99)}1${"}".repeat(99)} != null`))],
+  [
+    "call-nesting-98",
+    wrap(
+      `    function id(x) { return x; }\n${matchGet(`${"id(".repeat(98)}true${")".repeat(98)}`)}`,
+    ),
+  ],
+  [
+    "call-nesting-99",
+    wrap(
+      `    function id(x) { return x; }\n${matchGet(`${"id(".repeat(99)}true${")".repeat(99)}`)}`,
+    ),
+  ],
+  ["and-chain-97", wrap(matchGet(chainOf(97)))],
+  ["let-20", wrap(lets(20))],
+  ["let-50", wrap(lets(50))],
 ];
 
 /** A shallow conjunction of `n` true leaves: many evaluated expressions, little depth. */
@@ -139,6 +159,8 @@ const RUNTIME_CASES = [
   ["terms-250", [terms(250)]],
   ["terms-333", [terms(333)]],
   ["terms-334", [terms(334)]],
+  ["terms-335", [terms(335)]],
+  ["terms-400", [terms(400)]],
   ["terms-500", [terms(500)]],
   ["terms-501", [terms(501)]],
   ["terms-999", [terms(999)]],
@@ -154,6 +176,14 @@ const RUNTIME_CASES = [
   ],
   ["true-then-bad-regex", ["true", "'a'.matches(resource.data.pattern)"]],
   ["true-then-get-after", ["true", `getAfter(${DB}/fsr-rt-src/present).data.n == 1`]],
+  [
+    "budget-then-true",
+    [Array.from({ length: 11 }, (_, i) => `exists(${DB}/fsr-rt-src/m${i})`).join(" || "), "true"],
+  ],
+  ["bad-regex-then-true", ["'a'.matches(resource.data.pattern)", "true"]],
+  ["terms-500-then-true", [terms(500), "true"]],
+  ["true-then-terms-500", ["true", terms(500)]],
+  ["terms-500-or-true", [`${terms(500)} || true`]],
   ["error-or-true", [`get(${DB}/fsr-rt-src/missing).data.n == 1 || true`]],
   ["true-or-error", [`true || get(${DB}/fsr-rt-src/missing).data.n == 1`]],
   ["error-and-false", [`!(get(${DB}/fsr-rt-src/missing).data.n == 1 && false)`]],

@@ -27,6 +27,7 @@ const TARGETS: &[Target] = &[
             "google/firestore/v1/firestore.proto",
             "google/firestore/v1/pipeline.proto",
             "google/firestore/v1/explain_stats.proto",
+            "google/firestore/admin/v1/firestore_admin.proto",
         ],
     },
     Target {

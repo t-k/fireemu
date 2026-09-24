@@ -9,6 +9,7 @@ import {
   validateManagedClearOperation,
   validateManagedClearReadback,
   validateShrinkBoundaryDocument,
+  validateShrinkBoundaryState,
 } from "./session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -35,14 +36,69 @@ const corpusV3 = frozenNames([
   ["g1000b", 998, 1],
 ]);
 
-test("shrink request counter stops before exceeding its finite cap", () => {
+test("shrink request counter cannot reset between cleanup phases", () => {
   const counter = createShrinkRequestCounter(160);
-  for (let request = 0; request < 160; request += 1) counter.claim();
+  for (let request = 0; request < 140; request += 1) counter.claim();
+  for (let request = 140; request < 160; request += 1) counter.claim();
   assert.equal(counter.current(), 160);
   assert.throws(() => counter.claim(), /cap reached before network send/);
   assert.equal(counter.current(), 160);
-  counter.reset();
-  assert.equal(counter.current(), 0);
+  assert.equal(counter.reset, undefined);
+  assert.throws(() => counter.claim(), /cap reached before network send/);
+});
+
+test("array shrink accepts only the untouched frozen sequence or an empty document", () => {
+  const document = {
+    name: corpusV3[0],
+    updateTime: "2026-09-24T00:00:00Z",
+    fields: {
+      a: {
+        arrayValue: {
+          values: Array.from({ length: 19_999 - 1_024 }, (_, index) => ({
+            integerValue: String(index + 1_024),
+          })),
+        },
+      },
+    },
+  };
+  assert.throws(
+    () => validateShrinkBoundaryState(document, corpusV3[0], 19_999),
+    /operator recovery/,
+  );
+  const untouched = {
+    ...document,
+    fields: {
+      a: {
+        arrayValue: {
+          values: Array.from({ length: 19_999 }, (_, index) => ({ integerValue: String(index) })),
+        },
+      },
+    },
+  };
+  assert.equal(validateShrinkBoundaryState(untouched, corpusV3[0], 19_999).length, 19_999);
+  assert.equal(
+    validateShrinkBoundaryState(
+      { ...untouched, fields: { a: { arrayValue: { values: [] } } } },
+      corpusV3[0],
+      19_999,
+    ).length,
+    0,
+  );
+  for (const invalid of [
+    { ...document, fields: { a: { arrayValue: { values: [{ integerValue: "1025" }] } } } },
+    {
+      ...document,
+      fields: {
+        a: {
+          arrayValue: {
+            values: document.fields.a.arrayValue.values.slice(0, -1),
+          },
+        },
+      },
+    },
+  ]) {
+    assert.throws(() => validateShrinkBoundaryState(invalid, corpusV3[0], 19_999));
+  }
 });
 
 test("managed clear is limited to distinct root collections in the fixed sandbox", () => {

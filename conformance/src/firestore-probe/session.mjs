@@ -94,9 +94,6 @@ export function createShrinkRequestCounter(limit) {
       requests += 1;
       return requests;
     },
-    reset() {
-      requests = 0;
-    },
     current() {
       return requests;
     },
@@ -162,6 +159,35 @@ export function validateShrinkBoundaryDocument(document, expectedName) {
     )
   ) {
     throw new Error("array shrink document is not the frozen generated integer sequence");
+  }
+  return values;
+}
+
+export function validateShrinkBoundaryState(document, expectedName, expectedLength) {
+  const values = document?.fields?.a?.arrayValue?.values;
+  if (
+    document?.name !== expectedName ||
+    typeof document.updateTime !== "string" ||
+    !document.updateTime ||
+    Object.keys(document.fields ?? {}).length !== 1 ||
+    Object.keys(document.fields?.a ?? {}).length !== 1 ||
+    !document.fields?.a?.arrayValue ||
+    !Array.isArray(values) ||
+    !Number.isSafeInteger(expectedLength) ||
+    expectedLength < 0
+  ) {
+    throw new Error("array shrink document is not a frozen boundary document");
+  }
+  if (values.length !== 0 && values.length !== expectedLength) {
+    throw new Error("array shrink partial debris requires operator recovery");
+  }
+  if (
+    values.some(
+      (value, index) =>
+        Object.keys(value ?? {}).length !== 1 || value?.integerValue !== String(index),
+    )
+  ) {
+    throw new Error("array shrink document changed; operator recovery is required");
   }
   return values;
 }
@@ -240,7 +266,10 @@ async function clear(database = "(default)", verifyManagedScope = false) {
 async function clearThroughPublicApi(database, verifyManagedScope) {
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/${database}/documents`;
   const shrinkScopeActive = managedClearState !== null && database === "(default)";
-  if (shrinkScopeActive) managedClearState.shrinkRequestCounter.reset();
+  if (shrinkScopeActive) {
+    managedClearBlocked = true;
+    await preflightManagedShrinkScope();
+  }
   // Listing is paged and only eventually reflects deletes: loop until a full listing is empty.
   for (let round = 0; round < 8; round += 1) {
     const collectionIds = await listCollectionIds(base, "");
@@ -342,7 +371,14 @@ async function deleteCollection(base, parentPath, collectionId) {
   }
   const deleteChunkSize = scopedName && names.includes(scopedName) ? 1 : 400;
   for (let index = 0; index < names.length; index += deleteChunkSize) {
-    const writes = names.slice(index, index + deleteChunkSize).map((name) => ({ delete: name }));
+    const writes = names.slice(index, index + deleteChunkSize).map((name) => {
+      if (scopedName && name === scopedName) {
+        const updateTime = managedClearState.preflightUpdateTimes.get(name);
+        if (!updateTime) throw new Error("array shrink target was not present in global preflight");
+        return { delete: name, currentDocument: { updateTime } };
+      }
+      return { delete: name };
+    });
     const candidate = writes.length === 1 ? writes[0].delete : null;
     const commitRequest = scopedName && candidate === scopedName ? managedShrinkRequest : null;
     const commitInit = {
@@ -369,11 +405,13 @@ async function deleteCollection(base, parentPath, collectionId) {
       ) {
         if (managedClearState?.names.includes(candidate)) {
           managedClearBlocked = true;
-          await shrinkBoundaryDocument(base, candidate);
+          const retryUpdateTime = await shrinkBoundaryDocument(candidate);
           const retry = await managedShrinkRequest("delete retry", `${base}:commit`, {
             method: "POST",
             headers: authorized({ "content-type": "application/json" }),
-            body: JSON.stringify({ writes }),
+            body: JSON.stringify({
+              writes: [{ delete: candidate, currentDocument: { updateTime: retryUpdateTime } }],
+            }),
             signal: timeoutSignal(),
           });
           if (!retry.ok) {
@@ -400,21 +438,56 @@ async function managedShrinkRequest(label, input, init) {
   return trackedFetch(input, init);
 }
 
-async function shrinkBoundaryDocument(base, name) {
+async function preflightManagedShrinkScope() {
+  if (!managedClearState) throw new Error("array shrink preflight has no frozen names");
+  managedClearState.preflightUpdateTimes = new Map();
+  const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
+  const expectedByCollection = new Map(
+    managedClearState.names.map((name) => [name.split("/documents/")[1].split("/")[0], name]),
+  );
+  const presentNames = [];
+  for (const [collectionId, expectedName] of expectedByCollection) {
+    const found = await managedGroupNames(api, collectionId, managedShrinkRequest);
+    if (found.length > 1 || (found.length === 1 && found[0] !== expectedName)) {
+      throw new Error(
+        "array shrink global preflight found an unexpected collection-group document",
+      );
+    }
+    if (found.length === 1) presentNames.push(expectedName);
+  }
+  for (const name of presentNames) {
+    const response = await managedShrinkRequest(
+      "global preflight document read",
+      urlForDocument(name),
+      {
+        headers: authorized(),
+        signal: timeoutSignal(),
+      },
+    );
+    if (!response.ok) throw new Error(`array shrink global preflight read ${response.status}`);
+    const collectionId = name.split("/documents/")[1].split("/")[0];
+    const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
+    const document = await response.json();
+    validateShrinkBoundaryState(document, name, expectedLength);
+    managedClearState.preflightUpdateTimes.set(name, document.updateTime);
+  }
+}
+
+async function shrinkBoundaryDocument(name) {
+  const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
   const read = await managedShrinkRequest("document read", urlForDocument(name), {
     headers: authorized(),
     signal: timeoutSignal(),
   });
   if (!read.ok) throw new Error(`array shrink read ${read.status}`);
   const document = await read.json();
-  let values = validateShrinkBoundaryDocument(document, name);
-  const collectionId = name.split("/documents/")[1].split("/")[0];
-  const expectedLength = [...FROZEN_ARRAY_LENGTHS].find(([prefix]) =>
-    prefix.startsWith("g") ? collectionId.startsWith(prefix) : collectionId === prefix,
-  )?.[1];
-  if (values.length !== expectedLength) {
-    throw new Error("array shrink document does not match its frozen boundary length");
+  const preflightUpdateTime = managedClearState?.preflightUpdateTimes.get(name);
+  if (!preflightUpdateTime || document.updateTime !== preflightUpdateTime) {
+    throw new Error("array shrink target changed after global preflight");
   }
+  const collectionId = name.split("/documents/")[1].split("/")[0];
+  const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
+  let values = validateShrinkBoundaryState(document, name, expectedLength);
   let updateTime = document.updateTime;
   while (values.length > 0) {
     const removed = values.slice(0, SHRINK_CHUNK_SIZE);
@@ -451,8 +524,13 @@ async function shrinkBoundaryDocument(base, name) {
     signal: timeoutSignal(),
   });
   if (!readback.ok) throw new Error(`array shrink verification ${readback.status}`);
-  const shrunk = validateShrinkBoundaryDocument(await readback.json(), name);
+  const shrunkDocument = await readback.json();
+  if (shrunkDocument.updateTime !== updateTime) {
+    throw new Error("array shrink target changed during post-shrink verification");
+  }
+  const shrunk = validateShrinkBoundaryState(shrunkDocument, name, expectedLength);
   if (shrunk.length !== 0) throw new Error("array shrink left indexed array values behind");
+  return shrunkDocument.updateTime;
 }
 
 function urlForDocument(name) {
@@ -752,6 +830,7 @@ async function main() {
     managedClearState = {
       names,
       shrinkScope: managedShrinkScope(names, PROJECT, "(default)"),
+      preflightUpdateTimes: new Map(),
       shrinkRequestCounter: createShrinkRequestCounter(
         SHRINK_REQUEST_CAPS[managedShrinkScope(names, PROJECT, "(default)")],
       ),

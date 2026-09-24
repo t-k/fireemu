@@ -383,4 +383,16 @@ test("id-ordered listings are compared regardless of the order the server listed
   const b = { name: "x/<index1>", state: "CREATING" };
   assert.deepEqual(sortListings({ indexes: [a, b] }), sortListings({ indexes: [b, a] }));
   assert.deepEqual(sortListings({ other: [a, b] }).other, [a, b], "other arrays keep their order");
+  // An index resource has `fields` too: its columns, whose order is the index definition.
+  const columns = [
+    { fieldPath: "a", order: "ASCENDING" },
+    { fieldPath: "__name__", order: "DESCENDING" },
+  ];
+  assert.deepEqual(sortListings({ name: "x/<index1>", fields: columns }).fields, columns);
+  const fieldA = { name: "x/fields/b", indexConfig: {} };
+  const fieldB = { name: "x/fields/a", indexConfig: {} };
+  assert.deepEqual(
+    sortListings({ fields: [fieldA, fieldB] }),
+    sortListings({ fields: [fieldB, fieldA] }),
+  );
 });

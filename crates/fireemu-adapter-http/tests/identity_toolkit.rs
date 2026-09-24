@@ -16361,3 +16361,104 @@ fn strict_email_link_keeps_the_password_of_a_verified_address() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(password_sign_in(&s, "v@example.com", "password123").0, 200);
 }
+
+/// Strict: a reset refused for a disabled account spends its code, while a refused
+/// verification keeps its own (sandbox recording 2026-09-24, password-reset and
+/// verify-email#check-*-after-refused-*).
+#[test]
+fn strict_a_refused_reset_spends_its_code_and_a_refused_verification_does_not() {
+    let s = strict_state();
+    create(
+        &s,
+        &json!({"localId": "f", "email": "f@example.com", "password": "password123"}),
+    );
+    let (_, reset) = oob(
+        &s,
+        &json!({"requestType": "PASSWORD_RESET", "email": "f@example.com"}),
+    );
+    let (_, verify) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_EMAIL", "email": "f@example.com"}),
+    );
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "f", "disableUser": true}),
+    );
+    let (status, body) = reset_with(&s, &reset["oobCode"], "password456");
+    assert_eq!((status, message(&body)), (400, Some("USER_DISABLED")));
+    let (status, body) = check_code(&s, &reset["oobCode"]);
+    assert_eq!((status, message(&body)), (400, Some("INVALID_OOB_CODE")));
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": verify["oobCode"]}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("USER_DISABLED")));
+    assert_eq!(check_code(&s, &verify["oobCode"]).0, 200);
+}
+
+/// Strict: an applied email change voids the old address's verification code (sandbox
+/// recording 2026-09-24, change-email#apply-old-verify-ch).
+#[test]
+fn strict_an_applied_change_voids_the_old_addresses_verification() {
+    let s = strict_state();
+    create(
+        &s,
+        &json!({"localId": "ch", "email": "ch@example.com", "password": "password123"}),
+    );
+    let (_, verify) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_EMAIL", "email": "ch@example.com"}),
+    );
+    let (_, change) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "email": "ch@example.com", "newEmail": "ch-new@example.com"}),
+    );
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": change["oobCode"]}),
+    );
+    assert_eq!(status, 200);
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"oobCode": verify["oobCode"]}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("INVALID_OOB_CODE")));
+}
+
+/// Strict: an account whose password an email link removed is an email-link account: its
+/// sessions carry no anonymous `provider_id` (sandbox recording 2026-09-24,
+/// email-link/session#sign-in-p).
+#[test]
+fn strict_an_email_link_account_without_a_password_is_not_anonymous() {
+    let s = strict_state();
+    email_links_on(&s);
+    create(
+        &s,
+        &json!({"email": "p@example.com", "password": "password123"}),
+    );
+    let (_, link) = oob(
+        &s,
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "p@example.com", "continueUrl": "https://demo-app.firebaseapp.com/finish"}),
+    );
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"oobCode": link["oobCode"], "email": "p@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let claims = token_parts(&body["idToken"]).1;
+    assert!(claims.get("provider_id").is_none(), "{claims}");
+    let (_, refreshed) = refresh_with(&s, &body["refreshToken"]);
+    assert!(
+        token_parts(&refreshed["id_token"])
+            .1
+            .get("provider_id")
+            .is_none(),
+        "{refreshed}"
+    );
+}

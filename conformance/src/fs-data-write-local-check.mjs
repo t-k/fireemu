@@ -38,7 +38,7 @@ async function commandVersion(runCommand, command, args) {
 export async function runLocalCheck({ root, run: runCommand = run }) {
   const runInRoot = (command, args, capture, allowedCodes) =>
     runCommand(command, args, capture, allowedCodes, root);
-  await runInRoot("cargo", ["build", "-p", "fireemu"]);
+  await runInRoot("cargo", ["build", "--locked", "-p", "fireemu"]);
   const sourceHead = await commandVersion(runInRoot, "git", ["rev-parse", "HEAD"]);
   const status = await commandVersion(runInRoot, "git", [
     "status",
@@ -100,6 +100,20 @@ export async function runLocalCheck({ root, run: runCommand = run }) {
     throw new Error("local runner returned a run directory outside the expected location");
   }
 
+  const sourceHeadAfter = await commandVersion(runInRoot, "git", ["rev-parse", "HEAD"]);
+  if (sourceHead !== sourceHeadAfter) {
+    throw new Error("source HEAD changed during local run; refusing to create local-run bindings");
+  }
+  const statusAfter = await commandVersion(runInRoot, "git", [
+    "status",
+    "--porcelain",
+    "--untracked-files=no",
+  ]);
+  if (statusAfter) {
+    throw new Error(
+      "tracked source worktree changed during local run; refusing to create local-run bindings",
+    );
+  }
   const executableSha256After = await sha256(binary);
   if (executableSha256 !== executableSha256After) {
     throw new Error("executable changed during local run; refusing to create a local-run binding");
@@ -120,6 +134,10 @@ export async function runLocalCheck({ root, run: runCommand = run }) {
       null,
       2,
     )}\n`,
+  );
+  await writeFile(
+    join(runDir, "local-config-sha256.json"),
+    `${JSON.stringify({ config, configSha256 }, null, 2)}\n`,
   );
   const compare = await runCommand(
     "node",

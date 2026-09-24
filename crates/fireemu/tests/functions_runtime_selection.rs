@@ -68,42 +68,19 @@ fn write_node_wrapper(
     std::fs::set_permissions(path, permissions).unwrap();
 }
 
-fn sibling_node(program: &Path, current_major: u32) -> Option<(PathBuf, u32, String)> {
-    let root = program.parent()?.parent()?.parent()?;
-    if root.file_name()?.to_str()? != "node" {
-        return None;
-    }
-    for entry in std::fs::read_dir(root).ok()? {
-        let candidate = entry.ok()?.path().join("bin/node");
-        if !candidate.is_file() {
-            continue;
-        }
-        let output = Command::new(&candidate).arg("--version").output().ok()?;
-        let version = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .trim_start_matches('v')
-            .to_owned();
-        let major = version.split('.').next()?.parse().ok()?;
-        if major != current_major {
-            return Some((candidate, major, version));
-        }
-    }
-    None
-}
-
 #[cfg(unix)]
 #[test]
 fn an_explicit_node_override_is_not_replaced_by_an_automatic_fallback() {
-    let Some((actual_node, _)) = current_node() else {
-        return;
-    };
+    let (actual_node, _) = current_node().expect("Node is required for runtime selection tests");
     let feature = Command::new(&actual_node)
         .args(["-p", "String(process.features.require_module)"])
         .output()
         .unwrap();
-    if String::from_utf8_lossy(&feature.stdout).trim() != "true" {
-        return;
-    }
+    assert_eq!(
+        String::from_utf8_lossy(&feature.stdout).trim(),
+        "true",
+        "Node must support require_module for runtime selection tests"
+    );
 
     let root = std::env::temp_dir().join(format!(
         "fireemu-runtime-explicit-override-{}",
@@ -169,39 +146,36 @@ fn an_explicit_node_override_is_not_replaced_by_an_automatic_fallback() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[cfg(unix)]
 #[test]
 fn a_compatible_absolute_path_candidate_is_selected() {
-    let Some((node, current_major)) = current_node() else {
-        return;
-    };
-    let Some((compatible_node, compatible_major, compatible_version)) =
-        sibling_node(&node, current_major)
-    else {
-        return;
-    };
-    let Some(volta_home) = compatible_node.ancestors().nth(6) else {
-        return;
-    };
+    let (actual_node, _) = current_node().expect("Node is required for runtime selection tests");
     let root =
         std::env::temp_dir().join(format!("fireemu-runtime-fallback-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    copy_tree(&fixture(), &root);
-    let package_path = root.join("package.json");
+    let source = root.join("functions");
+    copy_tree(&fixture(), &source);
+    let package_path = source.join("package.json");
     let mut package: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&package_path).unwrap()).unwrap();
-    package["engines"]["node"] = serde_json::json!(compatible_major.to_string());
+    package["engines"]["node"] = serde_json::json!("20");
     std::fs::write(&package_path, serde_json::to_vec_pretty(&package).unwrap()).unwrap();
-    let marker = root.join("loaded.marker");
+    let marker = source.join("loaded.marker");
     std::fs::write(
-        root.join("index.js"),
+        source.join("index.js"),
         "require('fs').writeFileSync(process.env.LOAD_MARKER, process.version); module.exports = {};\n",
     )
     .unwrap();
     std::fs::write(
-        root.join(".env"),
+        source.join(".env"),
         format!("LOAD_MARKER={}\n", marker.display()),
     )
     .unwrap();
+    let path_node = root.join("node-22/bin/node");
+    let volta_home = root.join("volta");
+    let compatible_node = volta_home.join("tools/image/node/20.19.5/bin/node");
+    write_node_wrapper(&path_node, &actual_node, "v22.11.0", false);
+    write_node_wrapper(&compatible_node, &actual_node, "v20.19.5", false);
 
     let out = Command::new(env!("CARGO_BIN_EXE_fireemu"))
         .args([
@@ -228,12 +202,9 @@ fn a_compatible_absolute_path_candidate_is_selected() {
             "0",
             "--functions",
         ])
-        .arg(&root)
+        .arg(&source)
         .args(["--", "node", "--version"])
-        .env(
-            "PATH",
-            std::env::join_paths([node.parent().unwrap()]).unwrap(),
-        )
+        .env("PATH", path_node.parent().unwrap())
         .env("VOLTA_HOME", volta_home)
         .stdin(Stdio::null())
         .output()
@@ -241,13 +212,11 @@ fn a_compatible_absolute_path_candidate_is_selected() {
 
     let error = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{error}");
-    assert!(
-        error.contains(&format!("selected Node v{compatible_version}")),
-        "{error}"
-    );
+    assert!(error.contains("selected Node v20.19.5"), "{error}");
+    let actual_version = Command::new(actual_node).arg("--version").output().unwrap();
     assert_eq!(
         std::fs::read_to_string(&marker).unwrap(),
-        format!("v{compatible_version}")
+        String::from_utf8_lossy(&actual_version.stdout).trim()
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -255,16 +224,16 @@ fn a_compatible_absolute_path_candidate_is_selected() {
 #[cfg(unix)]
 #[test]
 fn a_loader_capable_node_is_selected_before_user_code_is_loaded() {
-    let Some((actual_node, _)) = current_node() else {
-        return;
-    };
+    let (actual_node, _) = current_node().expect("Node is required for runtime selection tests");
     let feature = Command::new(&actual_node)
         .args(["-p", "String(process.features.require_module)"])
         .output()
         .unwrap();
-    if String::from_utf8_lossy(&feature.stdout).trim() != "true" {
-        return;
-    }
+    assert_eq!(
+        String::from_utf8_lossy(&feature.stdout).trim(),
+        "true",
+        "Node must support require_module for runtime selection tests"
+    );
 
     let root = std::env::temp_dir().join(format!(
         "fireemu-runtime-loader-capability-{}",

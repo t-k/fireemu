@@ -17549,3 +17549,103 @@ fn strict_an_sms_sign_in_to_a_test_number_can_be_repeated() {
         assert_eq!(status, 200, "attempt {attempt}: {body}");
     }
 }
+
+// ---- AUTH-MFA strict: withdrawal and what it revokes (auth-mfa/totp/withdraw, sms) ----
+
+fn second_factor_claims(token: &str) -> Value {
+    let decoded = fireemu_core_auth::jwt::decode_unsigned(token).unwrap();
+    serde_json::from_str::<Value>(&decoded.payload_json).unwrap()["firebase"].clone()
+}
+
+#[test]
+fn strict_a_withdrawal_revokes_earlier_sessions_and_keeps_the_other_factor() {
+    let s = strict_mfa_state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456", "+16505550102": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (started, first_factor_token, _) = totp_enrolled(&s, "withdraw@example.com");
+    let pending = pending_of(&s, "withdraw@example.com");
+    let totp_factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let (status, signed) = totp_sign_in(&s, &pending, &totp_factor, &totp_code_of(&s, &started, 1));
+    assert_eq!(status, 200, "{signed}");
+    let session = signed["idToken"].as_str().unwrap().to_owned();
+    let withdraw = |body: Value| post(&s, &format!("{V2}/accounts/mfaEnrollment:withdraw"), &body);
+    let (status, body) = withdraw(json!({"mfaEnrollmentId": totp_factor}));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_ID_TOKEN", true))
+    );
+    let (status, body) = withdraw(json!({"idToken": session}));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("MFA_ENROLLMENT_NOT_FOUND", true))
+    );
+    // A phone factor next to the TOTP one; the session signed in with TOTP withdraws the phone.
+    let (status, phone) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": session, "phoneEnrollmentInfo": {"phoneNumber": "+16505550102"}}),
+    );
+    assert_eq!(status, 200, "{phone}");
+    advance(&s, 2);
+    let (status, enrolled) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": session, "displayName": "Phone", "phoneVerificationInfo": {"sessionInfo": phone["phoneSessionInfo"]["sessionInfo"], "code": "123456"}}),
+    );
+    assert_eq!(status, 200, "{enrolled}");
+    // A phone enrollment ends the sessions before it (production: validSince later).
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": session}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("TOKEN_EXPIRED")));
+    let session = enrolled["idToken"].as_str().unwrap().to_owned();
+    let phone_factor = second_factor_claims(&session)["second_factor_identifier"].clone();
+    // The enrollment token names the phone; withdraw the TOTP factor with it.
+    advance(&s, 2);
+    let (status, body) = withdraw(json!({"idToken": session, "mfaEnrollmentId": totp_factor}));
+    assert_eq!(status, 200, "{body}");
+    let mut members: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    members.sort_unstable();
+    assert_eq!(members, ["idToken", "refreshToken"]);
+    let fresh = body["idToken"].as_str().unwrap();
+    assert_eq!(
+        second_factor_claims(fresh)["sign_in_second_factor"],
+        "phone"
+    );
+    assert_eq!(
+        second_factor_claims(fresh)["second_factor_identifier"],
+        phone_factor
+    );
+    for token in [&session, &first_factor_token] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": token}),
+        );
+        assert_eq!((status, message(&body)), (400, Some("TOKEN_EXPIRED")));
+    }
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": fresh}),
+    );
+    assert_eq!(status, 200, "{body}");
+    // Withdrawing the factor the session used leaves no second factor in the new token.
+    advance(&s, 2);
+    let (status, body) = withdraw(json!({"idToken": fresh, "mfaEnrollmentId": phone_factor}));
+    assert_eq!(status, 200, "{body}");
+    assert!(second_factor_claims(body["idToken"].as_str().unwrap())
+        .get("sign_in_second_factor")
+        .is_none());
+}

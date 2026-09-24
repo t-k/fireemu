@@ -3530,7 +3530,11 @@ fn dispatch(
             !options.stateless_refresh_tokens,
         ),
         Handler::MfaEnrollmentWithdraw => v2_error_shape(
-            mfa_enrollment_withdraw(store, body, at),
+            if store.second_factor_rules_are_production() {
+                mfa_enrollment_withdraw_production(store, body, at)
+            } else {
+                mfa_enrollment_withdraw(store, body, at)
+            },
             !options.stateless_refresh_tokens,
         ),
         Handler::MfaSignInStart => v2_error_shape(
@@ -11909,6 +11913,12 @@ fn finalize_phone_enrollment(
     let display_name = str_field(body, "displayName").map(str::to_owned);
     match store.enroll_phone_factor(uid, &verified.phone_number, display_name, at) {
         Ok(factor) => {
+            // Production ends the sessions before a phone enrollment (validSince moves;
+            // sandbox recording 2026-09-24, auth-mfa/sms#admin-lookup-s and
+            // lifetime#control-start-s450); a TOTP enrollment leaves them.
+            if store.second_factor_rules_are_production() {
+                let _ = store.revoke_tokens(uid, at);
+            }
             let assertion = SecondFactorAssertion {
                 sign_in_second_factor: "phone".to_owned(),
                 second_factor_identifier: factor.mfa_enrollment_id.clone(),
@@ -11941,6 +11951,52 @@ fn mfa_enrollment_withdraw(
             Ok(tokens) => token_only_response(&tokens, true),
             Err(r) => r,
         },
+        Ok(false) => error(400, "MFA_ENROLLMENT_NOT_FOUND"),
+        Err(e) => mfa_error(&e),
+    }
+}
+
+/// Strict `mfaEnrollment:withdraw` (sandbox recording 2026-09-24, auth-mfa/totp/withdraw and
+/// sms#withdraw-first-phone): a missing token is `INVALID_ID_TOKEN` and a missing factor id
+/// `MFA_ENROLLMENT_NOT_FOUND`; a withdrawal ends every session before it (`validSince`), and
+/// the new session keeps the second factor of the one that asked, unless that factor is the
+/// one withdrawn. The answer carries no `expiresIn`.
+fn mfa_enrollment_withdraw_production(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    if str_field(body, "idToken").is_none_or(str::is_empty) {
+        return error(400, "INVALID_ID_TOKEN");
+    }
+    let uid = match verify_honouring_legacy(store, body, at) {
+        Ok(uid) => uid,
+        Err(r) => return r,
+    };
+    let Some(id) = str_field(body, "mfaEnrollmentId").filter(|id| !id.is_empty()) else {
+        return error(400, "MFA_ENROLLMENT_NOT_FOUND");
+    };
+    let kept = str_field(body, "idToken")
+        .and_then(|token| fireemu_core_auth::jwt::decode_unsigned(token).ok())
+        .and_then(|decoded| serde_json::from_str::<Value>(&decoded.payload_json).ok())
+        .and_then(|claims| {
+            let firebase = claims.get("firebase")?;
+            let factor = firebase.get("sign_in_second_factor")?.as_str()?;
+            let identifier = firebase.get("second_factor_identifier")?.as_str()?;
+            (identifier != id).then(|| SecondFactorAssertion {
+                sign_in_second_factor: factor.to_owned(),
+                second_factor_identifier: identifier.to_owned(),
+                verified_at: at,
+            })
+        });
+    match store.unenroll_factor(&uid, id) {
+        Ok(true) => {
+            let _ = store.revoke_tokens(&uid, at);
+            match issue_tokens(store, &uid, kept.as_ref(), at) {
+                Ok(tokens) => token_only_response(&tokens, false),
+                Err(r) => r,
+            }
+        }
         Ok(false) => error(400, "MFA_ENROLLMENT_NOT_FOUND"),
         Err(e) => mfa_error(&e),
     }

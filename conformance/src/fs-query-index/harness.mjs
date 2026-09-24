@@ -52,6 +52,9 @@ export function createContext({ run, target, startedMs = Date.now() }) {
     if (target.quotaProject !== SANDBOX_PROJECT) {
       throw new Error("quota project must be the sandbox project");
     }
+    if (target.projectNumber !== undefined && !/^[1-9]\d{5,}$/.test(target.projectNumber)) {
+      throw new Error("project number must be numeric");
+    }
   } else if (target.kind === "local") {
     const url = new URL(target.origin);
     if (url.protocol !== "http:" || !LOOPBACK.has(url.hostname)) {
@@ -381,7 +384,7 @@ function withinDocuments(name, ctx) {
 }
 
 /** Keys whose values address a resource the request acts on (not a value it compares). */
-const SCOPE_KEYS = new Set(["delete", "parent", "database"]);
+const SCOPE_KEYS = new Set(["delete", "parent", "database", "document"]);
 /** Messages whose `name` is the document a write acts on. */
 const NAMED_TARGETS = new Set(["update", "document"]);
 
@@ -398,7 +401,8 @@ function assertScopedToDatabase(body, ctx) {
     if (Array.isArray(value)) value.forEach((v) => visit(v, key));
     else if (value && typeof value === "object") {
       for (const [k, v] of Object.entries(value)) {
-        if (k === "transaction") throw new Error("a request must not carry a transaction");
+        if (k === "transaction" || k === "newTransaction")
+          throw new Error("a request must not carry a transaction");
         if (k === "referenceValue") continue;
         if (k === "name" && NAMED_TARGETS.has(key) && typeof v === "string") check(k, v);
         else visit(v, k);
@@ -518,9 +522,31 @@ function instantSymbol(text, symbols) {
   return symbols.get(text);
 }
 
+const EMBEDDED_INSTANT = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g;
+
 function normalizeString(text, ctx, symbols) {
   if (inRunWindow(text, ctx)) return instantSymbol(text, symbols);
-  return normalizeIndexLink(text, ctx).replaceAll(ctx.project, RECORDED_PROJECT);
+  let out = normalizeIndexLink(text, ctx)
+    .replaceAll(EMBEDDED_INSTANT, (instant) =>
+      inRunWindow(instant, ctx) ? instantSymbol(instant, symbols) : instant,
+    )
+    .replaceAll(ctx.project, RECORDED_PROJECT);
+  if (ctx.target.projectNumber) out = out.replaceAll(ctx.target.projectNumber, "<project-number>");
+  return out;
+}
+
+/**
+ * Registers the run-window instants a request carries (chained or shifted read times) before
+ * its answer is normalized, so an answer that echoes one gets the same symbol.
+ */
+export function registerRequestInstants(value, ctx, symbols) {
+  if (typeof value === "string") {
+    if (inRunWindow(value, ctx)) instantSymbol(value, symbols);
+  } else if (Array.isArray(value)) value.forEach((v) => registerRequestInstants(v, ctx, symbols));
+  else if (value && typeof value === "object") {
+    for (const key of Object.keys(value).toSorted())
+      registerRequestInstants(value[key], ctx, symbols);
+  }
 }
 
 /**

@@ -22,7 +22,7 @@ import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
@@ -134,6 +134,14 @@ export async function privateValues() {
   const number = process.env.FIREEMU_SANDBOX_PROJECT_NUMBER ?? "";
   if (!/^[1-9]\d{5,}$/.test(number))
     throw new Error("FIREEMU_SANDBOX_PROJECT_NUMBER (the sandbox project number) is required");
+  const described = await execFileAsync("gcloud", [
+    "projects",
+    "describe",
+    SANDBOX_PROJECT,
+    "--format=value(projectNumber)",
+  ]);
+  if (described.stdout.trim() !== number)
+    throw new Error("FIREEMU_SANDBOX_PROJECT_NUMBER is not the sandbox project's number");
   const { stdout } = await execFileAsync("gcloud", [
     "auth",
     "list",
@@ -270,10 +278,10 @@ async function verifyIndexes() {
     throw new Error("sandbox indexes do not equal fs-query-index.indexes.json");
 }
 
-async function recordOnce(programs, run, token) {
+async function recordOnce(programs, run, token, projectNumber) {
   const ctx = createContext({
     run,
-    target: { kind: "production", token, quotaProject: SANDBOX_PROJECT },
+    target: { kind: "production", token, quotaProject: SANDBOX_PROJECT, projectNumber },
   });
   return runCorpus(programs, ctx, { ...ceilings(programs), log: (line) => console.log(line) });
 }
@@ -338,6 +346,7 @@ async function recordProduction() {
   };
   const secrets = await privateValues();
   await assertIgnored(privateRoot);
+  await assertIgnored(dirname(ledger));
   const runDir = join(
     privateRoot,
     `fs-query-index-production-${meta.startedAt.replaceAll(":", "")}`,
@@ -352,7 +361,12 @@ async function recordProduction() {
     for (const offset of [0, 1]) {
       const token = await accessToken();
       tokens.push(token);
-      const recording = await recordOnce(programs, String(Date.now() + offset), token);
+      const recording = await recordOnce(
+        programs,
+        String(Date.now() + offset),
+        token,
+        process.env.FIREEMU_SANDBOX_PROJECT_NUMBER,
+      );
       recordings.push(recording);
       await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
         mode: 0o600,

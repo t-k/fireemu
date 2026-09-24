@@ -233,6 +233,7 @@ export const FILTER_PROGRAMS = [
     steps: [
       onNumbers("operator-unspecified", f("n", "OPERATOR_UNSPECIFIED", int(1))),
       onNumbers("operator-unknown", f("n", "SIMILAR_TO", int(1))),
+      onNumbers("operator-unknown-number", f("n", 99, int(1))),
       onNumbers("unary-operator-unspecified", u("n", "OPERATOR_UNSPECIFIED")),
       onNumbers("field-filter-without-value", { fieldFilter: { field: field("n"), op: "EQUAL" } }),
       onNumbers("field-filter-without-field", { fieldFilter: { op: "EQUAL", value: int(1) } }),
@@ -336,6 +337,13 @@ export const FILTER_PROGRAMS = [
       onNumbers("field-path-nested-reserved", f("a.__x__", "EQUAL", int(1))),
       onNumbers("field-path-bracket", f("a[0]", "EQUAL", int(1))),
       onNumbers("field-path-quoted-empty", f("``", "EQUAL", int(1))),
+      onNumbers("field-path-hyphen", f("a-b", "EQUAL", int(1))),
+      onNumbers("field-path-leading-digit", f("1a", "EQUAL", int(1))),
+      onNumbers("field-path-space", f("a b", "EQUAL", int(1))),
+      onNumbers("field-path-tilde", f("a~b", "EQUAL", int(1))),
+      onNumbers("field-path-star", f("a*b", "EQUAL", int(1))),
+      onNumbers("field-path-slash", f("a/b", "EQUAL", int(1))),
+      onNumbers("field-path-quoted-with-backslash", f("`a\\`b`", "EQUAL", int(1))),
       onNumbers("name-with-string", f("__name__", "EQUAL", str("qn/d1"))),
       onNumbers("name-range-with-string", f("__name__", "GREATER_THAN", str("d1"))),
       onNumbers("name-in-with-string", f("__name__", "IN", arr(str("d1")))),
@@ -428,6 +436,14 @@ export const LIMIT_PROGRAMS = [
       onLimits("name-not-in-10", f("__name__", "NOT_IN", references(10))),
       onLimits("name-not-in-11", f("__name__", "NOT_IN", references(11))),
       onLimits("inequality-fields-10", inequalities(10)),
+      onLimits(
+        "inequality-fields-11-letters",
+        and(..."abcdefghijk".split("").map((name) => f(name, "GREATER_THAN", int(0)))),
+      ),
+      onLimits(
+        "inequality-fields-12-reversed",
+        and(...Array.from({ length: 12 }, (_, i) => f(`g${11 - i}`, "LESS_THAN", int(0)))),
+      ),
       onLimits("inequality-fields-11", inequalities(11)),
       onLimits(
         "inequality-fields-9-and-not-equal",

@@ -1498,3 +1498,46 @@ fn deleting_a_declared_index_withdraws_it_from_queries() {
     );
     assert_eq!(status, 400);
 }
+
+#[test]
+fn a_reloaded_index_file_is_what_the_admin_api_lists_and_the_planner_uses() {
+    // The index file can be reloaded at any time: its current indexes are the deployed ones,
+    // and a query (which may name any database) never records anything in the registry.
+    let state = configured_state();
+    let list = "/v1/projects/p/databases/(default)/collectionGroups/-/indexes";
+    let query = json!({"structuredQuery": {
+        "from": [{"collectionId": "items"}],
+        "where": {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "EQUAL", "value": {"integerValue": "1"}}},
+        "orderBy": [{"field": {"fieldPath": "b"}, "direction": "DESCENDING"}]
+    }});
+    let docs = "/v1/projects/p/databases/(default)/documents";
+    assert_eq!(
+        call(&state, "POST", &format!("{docs}:runQuery"), query.clone()).0,
+        200
+    );
+    assert_eq!(
+        call(&state, "GET", list, Value::Null).1["indexes"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    state.local.replace_indexes(IndexSet::default());
+    assert_eq!(call(&state, "GET", list, Value::Null), (200, json!({})));
+    assert_eq!(
+        call(&state, "POST", &format!("{docs}:runQuery"), query.clone()).0,
+        400
+    );
+    state
+        .local
+        .replace_indexes(configured_state().gateway.indexes.clone());
+    assert_eq!(
+        call(&state, "POST", &format!("{docs}:runQuery"), query).0,
+        200
+    );
+    assert_eq!(
+        call(&state, "GET", list, Value::Null).1["indexes"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+}

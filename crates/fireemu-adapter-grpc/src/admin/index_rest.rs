@@ -258,7 +258,7 @@ pub(crate) fn route(
     rest: &[&str],
     body: &Value,
 ) -> RestResponse {
-    state.local.seed_configured_indexes(project, database);
+    let configured = state.local.configured_composites(project, database);
     let registry = state.local.admin().indexes();
     let now = state.local.admin_now();
     match (method, rest) {
@@ -267,6 +267,18 @@ pub(crate) fn route(
                 Ok(definition) => definition,
                 Err(response) => return response,
             };
+            // An index the index file declares is an existing index like any other.
+            if let Some(existing) = registry
+                .view(project, database, &configured)
+                .into_iter()
+                .find(|i| i.definition == definition)
+            {
+                return error(
+                    tonic::Code::AlreadyExists,
+                    &format!("index already exists with index ID = {}", existing.id),
+                    None,
+                );
+            }
             let operation = super::operations::reserve_id(state, project, database);
             match registry.create(project, database, definition, now, operation.clone()) {
                 Err(existing) => error(
@@ -299,7 +311,7 @@ pub(crate) fn route(
         }
         ("GET", []) => {
             let indexes: Vec<Value> = registry
-                .list(project, database)
+                .view(project, database, &configured)
                 .iter()
                 .filter(|i| group == "-" || i.definition.collection_group.as_str() == group)
                 .map(|i| index_json(project, database, i, registry.state(i, now)))
@@ -315,7 +327,11 @@ pub(crate) fn route(
             &format!("Invalid index resource id \"{id}\"."),
             None,
         ),
-        ("GET", [id]) => match registry.get(project, database, id) {
+        ("GET", [id]) => match registry
+            .view(project, database, &configured)
+            .into_iter()
+            .find(|i| i.id == *id)
+        {
             Some(index) if group == "-" || index.definition.collection_group.as_str() == group => {
                 ok(index_json(
                     project,
@@ -328,7 +344,7 @@ pub(crate) fn route(
         },
         // Production answers an empty body whether or not the index still exists.
         ("DELETE", [id]) => {
-            registry.delete(project, database, id);
+            registry.remove(project, database, id, &configured);
             ok(json!({}))
         }
         _ => crate::rest::not_found_text(),

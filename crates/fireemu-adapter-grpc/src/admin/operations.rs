@@ -360,7 +360,7 @@ fn current_counted(
             .by_operation(&op.id)
             .map_or_else(
                 || op.current.clone(),
-                |patch| state.field_operation_json(&patch, &op.initial),
+                |patch| state.field_operation_json_counted(&patch, &op.initial, count),
             );
     }
     let Some(index_id) = &op.index else {

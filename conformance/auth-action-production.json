@@ -794,10 +794,10 @@
       }
     },
     "auth-action/email-link/session": {
-      "corpusDigest": "0f3b0f4b2d35602f908c8cde759c800634072887718f9570ee0c9d642fbb6de7",
+      "corpusDigest": "43806dbb1d3cae150ccdb7d2a9c874e143ba42f0fecca913ca5436dfb392f10f",
       "harnessDigest": "be129e91e724615688253362270ded28cee94e5354ea209cf1e71fc60b33aef2",
-      "recordedAt": "2026-09-24T12:13:38.654Z",
-      "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+      "recordedAt": "2026-09-24T14:23:20.843Z",
+      "gitSha": "268dd2569ad9aac0e62963c794609bce45f5e6d8",
       "steps": {
         "link-s": {
           "status": 200,
@@ -1144,7 +1144,7 @@
           },
           "relations": {
             "authTimeVsOrigin": "equal",
-            "iatVsOrigin": "equal",
+            "iatVsOrigin": "later",
             "userIdVsOrigin": "same"
           }
         },
@@ -1374,7 +1374,7 @@
           },
           "relations": {
             "authTimeVsOrigin": "equal",
-            "iatVsOrigin": "equal",
+            "iatVsOrigin": "later",
             "userIdVsOrigin": "same"
           }
         },
@@ -1411,87 +1411,6 @@
                 "subIsUserId": true
               }
             }
-          }
-        }
-      },
-      "second": {
-        "refresh-anon-link": {
-          "status": 200,
-          "body": {
-            "access_token": {
-              "<jwt>": {
-                "header": {
-                  "alg": "RS256",
-                  "kid": "<present>",
-                  "typ": "JWT"
-                },
-                "signature": "<present>",
-                "claims": {
-                  "iss": "https://securetoken.google.com/demo-auth-account",
-                  "aud": "demo-auth-account",
-                  "auth_time": "<auth_time>",
-                  "user_id": "<generated-localId>",
-                  "sub": "<generated-localId>",
-                  "iat": "<iat>",
-                  "exp": "iat+3600",
-                  "email": "fireemu-aa-<run>-anon@example.com",
-                  "email_verified": true,
-                  "firebase": {
-                    "identities": {
-                      "email": [
-                        "fireemu-aa-<run>-anon@example.com"
-                      ]
-                    },
-                    "sign_in_provider": "password"
-                  }
-                },
-                "subIsUserId": true,
-                "subIsLocalId": true,
-                "userIdIsLocalId": true
-              }
-            },
-            "expires_in": "3600",
-            "token_type": "Bearer",
-            "refresh_token": "<refresh_token>",
-            "id_token": {
-              "<jwt>": {
-                "header": {
-                  "alg": "RS256",
-                  "kid": "<present>",
-                  "typ": "JWT"
-                },
-                "signature": "<present>",
-                "claims": {
-                  "iss": "https://securetoken.google.com/demo-auth-account",
-                  "aud": "demo-auth-account",
-                  "auth_time": "<auth_time>",
-                  "user_id": "<generated-localId>",
-                  "sub": "<generated-localId>",
-                  "iat": "<iat>",
-                  "exp": "iat+3600",
-                  "email": "fireemu-aa-<run>-anon@example.com",
-                  "email_verified": true,
-                  "firebase": {
-                    "identities": {
-                      "email": [
-                        "fireemu-aa-<run>-anon@example.com"
-                      ]
-                    },
-                    "sign_in_provider": "password"
-                  }
-                },
-                "subIsUserId": true,
-                "subIsLocalId": true,
-                "userIdIsLocalId": true
-              }
-            },
-            "user_id": "<generated-localId>",
-            "project_id": "<project-number>"
-          },
-          "relations": {
-            "authTimeVsOrigin": "equal",
-            "iatVsOrigin": "later",
-            "userIdVsOrigin": "same"
           }
         }
       }

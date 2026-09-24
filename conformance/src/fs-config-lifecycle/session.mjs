@@ -393,6 +393,8 @@ export function createSession(
       new Map(),
       { harness: true },
     );
+    // Until fireemu serves buckets.insert, its Storage emulator treats every bucket as present.
+    if (ctx.target.kind === "local" && answer.status === 501) return;
     if (answer.status !== 200)
       throw fatal(`bucket create: HTTP ${answer.status} ${answer.text.slice(0, 300)}`);
   }
@@ -432,6 +434,7 @@ export function createSession(
     const after = await send(step({ path: "storage/v1/b/{bucket}" }), bucketProgram, new Map(), {
       harness: true,
     });
+    if (ctx.target.kind === "local" && after.status === 501) return;
     if (after.status !== 404)
       throw fatal(`bucket ${ctx.bucket} is still present (${after.status})`);
   }

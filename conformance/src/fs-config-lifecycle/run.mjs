@@ -238,7 +238,15 @@ async function recordProduction() {
   await assertCleanTree();
   // One project per run: the query sandbox, or the bisection project when FS_CONFIG_BISECT=1.
   const project = process.env.FS_CONFIG_BISECT === "1" ? BISECT_PROJECT : SANDBOX_PROJECT;
-  const programs = selectedPrograms().filter((p) => !p.local && projectOf(p) === project);
+  const captures = await loadExports();
+  // A program that uploads a capture not committed yet (fireemu's export before fireemu can
+  // export) waits for a later run.
+  const programs = selectedPrograms().filter(
+    (p) =>
+      !p.local &&
+      projectOf(p) === project &&
+      p.steps.every((s) => !s.upload || s.onlyOn === "local" || captures[s.upload.from]),
+  );
   if (programs.length === 0) throw new Error(`no production program runs against ${project}`);
   const corpusRequests = validateCorpus(programs);
   const meta = {
@@ -256,7 +264,6 @@ async function recordProduction() {
   let error;
   let token;
   let number;
-  const captures = await loadExports();
   try {
     for (const n of [1, 2]) {
       token = await adminToken();

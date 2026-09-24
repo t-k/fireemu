@@ -57,7 +57,7 @@ export function buildGrpcRequest(step, ctx, program, raw) {
       );
     request.name = found;
   }
-  const errors = types.requestType.verify(request);
+  const errors = types.requestType.verify(types.requestType.fromObject(request));
   if (errors) throw new Error(`${program.id}#${step.id}: ${errors}`);
   return {
     ...types,

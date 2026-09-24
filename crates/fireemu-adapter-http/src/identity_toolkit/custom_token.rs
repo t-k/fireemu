@@ -342,6 +342,15 @@ mod tests {
     }
 
     #[test]
+    fn debug_output_names_signers_and_never_key_material() {
+        let own = key(1);
+        let shown = format!("{:?}", trust(&[(OWN, &own)]));
+        assert!(shown.contains(OWN), "{shown}");
+        let modulus = base64url_encode(&own.n().to_bytes_be());
+        assert!(!shown.contains(&modulus[..16]), "{shown}");
+    }
+
+    #[test]
     fn service_account_projects() {
         assert_eq!(service_account_project(OWN), Some("demo-project"));
         assert_eq!(

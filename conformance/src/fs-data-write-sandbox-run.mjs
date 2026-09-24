@@ -1,6 +1,15 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, mkdtemp, readFile, rmdir, stat, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rmdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import { dirname, join, resolve } from "node:path";
@@ -214,10 +223,138 @@ export function legacyRecoveryEnvironment({
   };
 }
 
+export async function findLegacyRecoveryResume(
+  privateDir,
+  corpusDigest,
+  names = legacyManagedClearNames(),
+) {
+  const frozenNames = legacyManagedClearNames();
+  const expectedDigest = sha256(JSON.stringify({ mode: "recover-legacy", names: frozenNames }));
+  if (
+    typeof privateDir !== "string" ||
+    !privateDir.startsWith("/") ||
+    corpusDigest !== expectedDigest ||
+    JSON.stringify(names) !== JSON.stringify(frozenNames)
+  ) {
+    throw new Error("legacy recovery resume requires its exact private provenance");
+  }
+  managedClearScope(names, SANDBOX_PROJECT, "(default)");
+  const privateRoot = resolve(privateDir);
+  const recoveryPrefix = join(privateRoot, "fs-data-write-legacy-recovery-");
+  const rows = await readLedger(join(privateRoot, "sandbox-ledger.jsonl"));
+  const byRunDir = new Map();
+  for (const row of rows) {
+    if (row.taskId !== TASK_ID || row.corpusDigest !== corpusDigest) continue;
+    if (row.outcome !== "reserved" || !/^[a-f0-9]{40}$/.test(row.gitSha ?? "")) {
+      throw new Error("legacy recovery ledger provenance is invalid");
+    }
+    if (
+      typeof row.runDir !== "string" ||
+      resolve(row.runDir) !== row.runDir ||
+      dirname(row.runDir) !== privateRoot ||
+      !row.runDir.startsWith(recoveryPrefix)
+    ) {
+      throw new Error("legacy recovery ledger path escaped its private run directory");
+    }
+    const existing = byRunDir.get(row.runDir);
+    if (!existing || rows.indexOf(existing.row) < rows.indexOf(row)) {
+      byRunDir.set(row.runDir, { row });
+    }
+  }
+
+  const candidates = [];
+  for (const [runDir, { row }] of byRunDir) {
+    let directory;
+    try {
+      directory = await lstat(runDir);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o077) !== 0) {
+      throw new Error("legacy recovery ledger run path is not a private directory");
+    }
+    const journalPath = join(runDir, "journal.json");
+    let journalInfo;
+    try {
+      journalInfo = await lstat(journalPath);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!journalInfo.isFile() || journalInfo.isSymbolicLink() || (journalInfo.mode & 0o077) !== 0) {
+      throw new Error("legacy recovery journal is not a private regular file");
+    }
+    let source;
+    try {
+      source = await readFile(journalPath, "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw new Error("legacy recovery journal cannot be inspected", { cause: error });
+    }
+    let journal;
+    try {
+      journal = JSON.parse(source);
+    } catch (error) {
+      throw new Error("legacy recovery journal is malformed", { cause: error });
+    }
+    const deletedNames = journal?.deletedNames ?? [];
+    const intent = journal?.deleteIntent ?? null;
+    if (
+      journal?.schemaVersion !== 1 ||
+      journal.mode !== "recover-legacy" ||
+      journal.project !== SANDBOX_PROJECT ||
+      journal.database !== "(default)" ||
+      JSON.stringify(journal.names) !== JSON.stringify(frozenNames) ||
+      !Array.isArray(deletedNames) ||
+      deletedNames.some((name) => !frozenNames.includes(name)) ||
+      new Set(deletedNames).size !== deletedNames.length ||
+      !Array.isArray(journal?.verifiedAbsentNames ?? []) ||
+      (journal?.verifiedAbsentNames ?? []).some((name) => !frozenNames.includes(name)) ||
+      new Set(journal?.verifiedAbsentNames ?? []).size !==
+        (journal?.verifiedAbsentNames ?? []).length ||
+      (journal?.verifiedAbsentNames ?? []).some((name) => deletedNames.includes(name)) ||
+      (intent !== null &&
+        (intent.action !== "commit-delete" ||
+          !frozenNames.includes(intent.name) ||
+          typeof intent.updateTime !== "string" ||
+          !intent.updateTime ||
+          !Array.isArray(intent.priorDeletedNames) ||
+          JSON.stringify(intent.priorDeletedNames) !== JSON.stringify(deletedNames)))
+    ) {
+      throw new Error("legacy recovery journal does not match its frozen private scope");
+    }
+    if (journal.status === "complete") continue;
+    if (!["starting", "preflight-complete", "deleting"].includes(journal.status)) {
+      throw new Error("legacy recovery journal has an unknown status");
+    }
+    candidates.push({ runDir, sourceGitSha: row.gitSha });
+  }
+  if (candidates.length > 1) {
+    throw new Error("multiple incomplete legacy recovery journals require operator resolution");
+  }
+  return candidates[0] ?? null;
+}
+
+export async function prepareLegacyRecoveryRun(privateDir, corpusDigest, names) {
+  const resume = await findLegacyRecoveryResume(privateDir, corpusDigest, names);
+  const runDir =
+    resume?.runDir ?? (await mkdtemp(join(privateDir, "fs-data-write-legacy-recovery-")));
+  const attemptDir = await mkdtemp(join(runDir, "attempt-"));
+  return {
+    runDir,
+    meta: join(attemptDir, "meta.json"),
+    journal: join(runDir, "journal.json"),
+    resume,
+  };
+}
+
 export async function withLegacyRecoveryReservation(privateDir, reservation, work) {
   return withSandboxExclusiveLock(privateDir, async (lockedRows) => {
-    const { gitSha, corpusDigest, runDir } = reservation;
     remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD);
+    const selected =
+      typeof reservation === "function" ? await reservation(lockedRows) : reservation;
+    const { gitSha, corpusDigest, runDir } = selected;
     const reserve = sandboxLedgerEntry({
       gitSha,
       corpusDigest,
@@ -228,7 +365,7 @@ export async function withLegacyRecoveryReservation(privateDir, reservation, wor
     });
     await appendFile(join(privateDir, "sandbox-ledger.jsonl"), `${JSON.stringify(reserve)}\n`);
     lockedRows.push(reserve);
-    return work();
+    return work(selected);
   });
 }
 
@@ -530,47 +667,62 @@ async function recoverLegacy() {
   const ledgerPath = sandboxLedgerPath(gitCommonDir);
   const privateDir = dirname(ledgerPath);
   await mkdir(privateDir, { recursive: true, mode: 0o700 });
-  const runDir = await mkdtemp(join(privateDir, "fs-data-write-legacy-recovery-"));
-  const meta = join(runDir, "meta.json");
-  const journal = join(runDir, "journal.json");
   const names = legacyManagedClearNames();
   const corpusDigest = sha256(JSON.stringify({ mode: "recover-legacy", names }));
   const gitSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
-  const reservation = { gitSha, corpusDigest, runDir };
-  const result = await withLegacyRecoveryReservation(privateDir, reservation, async () => {
-    const token = (
-      process.env.FIREEMU_PRODUCTION_TOKEN ??
-      (
-        await execFileAsync("gcloud", ["auth", "application-default", "print-access-token"], {
-          maxBuffer: 4096,
-        })
-      ).stdout
-    ).trim();
-    if (!token) throw new Error("production OAuth bearer is missing");
-    let outcome = "recovery-failed";
-    let requestCount = null;
-    try {
-      await runNode(
-        "legacy array recovery",
-        "firestore-probe/session.mjs",
-        legacyRecoveryEnvironment({ token, meta, journal, names }),
-        1_200_000,
-      );
-      const state = JSON.parse(await readFile(journal, "utf8"));
-      if (state.status !== "complete" || state.mode !== "recover-legacy") {
-        throw new Error("legacy recovery did not verify exact typed absence");
-      }
-      outcome = "recovered";
-    } finally {
+  const result = await withLegacyRecoveryReservation(
+    privateDir,
+    async () => ({
+      gitSha,
+      corpusDigest,
+      ...(await prepareLegacyRecoveryRun(privateDir, corpusDigest, names)),
+    }),
+    async ({ meta, journal, resume }) => {
+      const token = (
+        process.env.FIREEMU_PRODUCTION_TOKEN ??
+        (
+          await execFileAsync("gcloud", ["auth", "application-default", "print-access-token"], {
+            maxBuffer: 4096,
+          })
+        ).stdout
+      ).trim();
+      if (!token) throw new Error("production OAuth bearer is missing");
+      let outcome = "recovery-failed";
+      let requestCount = null;
       try {
-        requestCount = sessionRequestCount(JSON.parse(await readFile(meta, "utf8")));
-      } catch {
-        // The reservation remains charged when a child fails before emitting metadata.
+        await runNode(
+          "legacy array recovery",
+          "firestore-probe/session.mjs",
+          legacyRecoveryEnvironment({ token, meta, journal, names }),
+          1_200_000,
+        );
+        const state = JSON.parse(await readFile(journal, "utf8"));
+        if (state.status !== "complete" || state.mode !== "recover-legacy") {
+          throw new Error("legacy recovery did not verify exact typed absence");
+        }
+        outcome = "recovered";
+      } finally {
+        try {
+          requestCount = sessionRequestCount(JSON.parse(await readFile(meta, "utf8")));
+        } catch {
+          // The reservation remains charged when a child fails before emitting metadata.
+        }
       }
-    }
-    return { outcome, requestCount, journal, meta };
-  });
-  process.stdout.write(`${JSON.stringify({ ...result, corpusDigest })}\n`);
+      return {
+        outcome,
+        requestCount,
+        journal,
+        meta,
+        resumedFrom: resume ? { runDir: resume.runDir, sourceGitSha: resume.sourceGitSha } : null,
+      };
+    },
+  );
+  process.stdout.write(
+    `${JSON.stringify({
+      ...result,
+      corpusDigest,
+    })}\n`,
+  );
 }
 
 async function localChild() {

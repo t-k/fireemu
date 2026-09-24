@@ -15450,29 +15450,36 @@ fn strict_link_generation_refuses_a_continue_url_outside_the_authorized_domains(
     }
 }
 
-/// An Admin email-link generator is refused while password sign-in is required, as the
-/// client route is (sandbox, 2026-09-24, `auth-action/generate/admin#sign-in-link-password-required`;
-/// the official emulator refuses it too).
+/// Strict: an Admin email-link generator is refused while password sign-in is required
+/// (sandbox, 2026-09-24, `auth-action/generate/admin#sign-in-link-password-required`). The
+/// official emulator always reports email links as enabled (firebase-tools `state.js`
+/// `enableEmailLinkSignin`), so the emulator profile generates the link, adding no rejection.
 #[test]
-fn admin_email_link_generation_needs_email_link_sign_in() {
-    for s in [strict_state(), state()] {
+fn admin_email_link_generation_needs_email_link_sign_in_in_strict() {
+    for (strict, s) in [(true, strict_state()), (false, state())] {
         let (status, body) = patch_sign_in(
             &s,
             "signIn.email.passwordRequired",
             &json!({"signIn": {"email": {"enabled": true, "passwordRequired": true}}}),
         );
         assert_eq!(status, 200, "{body}");
-        let (status, refused) = admin(
+        let (status, answer) = admin(
             &s,
             "POST",
             &format!("{ADMIN}/accounts:sendOobCode"),
             &json!({"requestType": "EMAIL_SIGNIN", "email": "link@example.com", "returnOobLink": true, "continueUrl": "https://demo-app.firebaseapp.com/finish", "canHandleCodeInApp": true}),
         );
-        assert_eq!(
-            (status, refused["error"]["message"].as_str()),
-            (400, Some("OPERATION_NOT_ALLOWED"))
-        );
-        assert!(s.store.lock().unwrap().oob_codes().is_empty());
+        if strict {
+            assert_eq!(
+                (status, answer["error"]["message"].as_str()),
+                (400, Some("OPERATION_NOT_ALLOWED"))
+            );
+            assert!(s.store.lock().unwrap().oob_codes().is_empty());
+        } else {
+            assert_eq!(status, 200, "{answer}");
+            assert!(answer["oobCode"].is_string(), "{answer}");
+            assert_eq!(s.store.lock().unwrap().oob_codes().len(), 1);
+        }
     }
 }
 

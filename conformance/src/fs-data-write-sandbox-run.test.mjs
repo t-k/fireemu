@@ -25,7 +25,6 @@ import {
   selectDeltaV3Recipes,
   deltaV3RequestBound,
   deltaV3ManagedClearNames,
-  assertDeltaV3ProductionAdmission,
   sessionRequestCount,
   withSandboxExclusiveLock,
   withLegacyRecoveryReservation,
@@ -277,17 +276,6 @@ test("delta-v3 production REST environment uses only the six names and strict HT
   assert.equal("FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL" in env, true);
   assert.equal(env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL, undefined);
   assert.equal(JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES).length, 6);
-});
-
-test("delta-v3 production admission stays closed until independent presend review", () => {
-  assert.throws(
-    () => assertDeltaV3ProductionAdmission({ host: "firestore.googleapis.com" }),
-    /presend review/,
-  );
-  assert.doesNotThrow(() =>
-    assertDeltaV3ProductionAdmission({ host: "firestore.googleapis.com", presendReviewed: true }),
-  );
-  assert.doesNotThrow(() => assertDeltaV3ProductionAdmission({ host: "127.0.0.1:8080" }));
 });
 
 test("delete pair classification is route-local and requires typed target and outcome proofs", async () => {

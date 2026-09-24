@@ -32,8 +32,7 @@ const admission = {
   planSha256,
   sourceCommit,
 };
-const packetRow = () =>
-  admissionPacketRow({ ...admission, ts: "2026-09-25T00:00:00.000Z" });
+const packetRow = () => admissionPacketRow({ ...admission, ts: "2026-09-25T00:00:00.000Z" });
 const attemptRow = (runId) => ({
   taskId: "FS-DATA-WRITE-SANDBOX",
   outcome: "reserved",
@@ -151,7 +150,11 @@ test("the plan digest is stable over key order and changes with any value", () =
   const plan = { mode: "partial", bounds: { maxHttpRequests: 302 }, recipeIds: ["a", "b"] };
   assert.equal(
     admissionPlanDigest(plan),
-    admissionPlanDigest({ recipeIds: ["a", "b"], bounds: { maxHttpRequests: 302 }, mode: "partial" }),
+    admissionPlanDigest({
+      recipeIds: ["a", "b"],
+      bounds: { maxHttpRequests: 302 },
+      mode: "partial",
+    }),
   );
   assert.notEqual(
     admissionPlanDigest(plan),
@@ -179,7 +182,8 @@ test("a directly launched production child without the runner's admission never 
   };
   assert.equal(requireChildProductionAdmission({ production: false, env: {}, verify }), null);
   assert.throws(
-    () => requireChildProductionAdmission({ production: true, env: {}, runId: "c".repeat(32), verify }),
+    () =>
+      requireChildProductionAdmission({ production: true, env: {}, runId: "c".repeat(32), verify }),
     /runner's admission/,
   );
   assert.equal(calls.length, 0);

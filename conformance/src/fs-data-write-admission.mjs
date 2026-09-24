@@ -13,7 +13,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const TASK_ID = "FS-DATA-WRITE-SANDBOX";
-const MODES = ["delta-v3", "partial"];
+const MODES = new Set(["delta-v3", "partial"]);
 const PACKET_OUTCOME = "reserved-presend-admission";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -42,7 +42,7 @@ export function admissionPacketId(mode, nonce) {
 function validateAdmission(admission) {
   if (
     !admission ||
-    !MODES.includes(admission.mode) ||
+    !MODES.has(admission.mode) ||
     !/^[0-9a-f]{16,32}$/.test(admission.nonce ?? "") ||
     !/^[0-9a-f]{64}$/.test(admission.reviewSha256 ?? "") ||
     !/^[0-9a-f]{64}$/.test(admission.planSha256 ?? "") ||
@@ -87,7 +87,12 @@ export function verifyProductionAdmission({
   if (!Buffer.isBuffer(reviewBytes) || sha256(reviewBytes) !== reviewSha256) {
     throw new Error("admission review SHA-256 mismatch");
   }
-  const lines = new Set(reviewBytes.toString("utf8").split("\n").map((line) => line.trim()));
+  const lines = new Set(
+    reviewBytes
+      .toString("utf8")
+      .split("\n")
+      .map((line) => line.trim()),
+  );
   for (const [label, line] of [
     ["mode", `mode: ${mode}`],
     ["nonce", `nonce: ${nonce}`],
@@ -190,7 +195,9 @@ export function requireChildProductionAdmission({
   if (!production) return null;
   const admission = parseAdmissionEnvironment(env);
   if (admission === null) {
-    throw new Error("a production child requires the runner's admission; launch through the runner");
+    throw new Error(
+      "a production child requires the runner's admission; launch through the runner",
+    );
   }
   if (!/^[a-f0-9]{32}$/.test(runId ?? "")) {
     throw new Error("a production child requires the runner's 32-hex run ID");

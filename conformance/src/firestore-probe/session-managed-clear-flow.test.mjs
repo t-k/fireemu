@@ -164,6 +164,7 @@ async function observeCollector({
   inputCorpus,
   deltaV3 = false,
   deltaLockHeld = true,
+  partial = false,
   corpusDigest = "c".repeat(64),
   hostOverride,
 } = {}) {
@@ -612,6 +613,9 @@ async function observeCollector({
                   : 430,
               ),
             }
+          : {}),
+        ...(partial
+          ? { FIRESTORE_PROBE_PARTIAL: "1", FIRESTORE_PROBE_PARTIAL_LOCK_HELD: "1" }
           : {}),
         FIRESTORE_PROBE_MANAGED_POLL_MS: "1",
         ...(recoveryMode || recoveryOnly
@@ -1139,6 +1143,47 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
     });
   } finally {
     await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("a partial recording refuses input that is not the reviewed partial corpus before any request", async () => {
+  const boundary = {
+    id: "writes/limits/index-entry-sum/adjacent",
+    steps: names.map((name, index) => ({
+      id: `write-${index}`,
+      method: "POST",
+      path: "/v1/projects/PROJECT/databases/(default)/documents:commit",
+      body: { writes: [{ update: { name, fields: {} } }] },
+    })),
+  };
+  const deleteProgram = {
+    id: "writes/limits/near-limit-delete-refusal/rest/12112",
+    steps: [
+      { id: "seed", method: "GET", path: "/v1/projects/PROJECT/databases/(default)/documents/x/y" },
+    ],
+  };
+  const other = { id: "writes/map-key-validation/type-tag/query", steps: [] };
+  const corpus = (restPrograms, overrides = {}) => ({
+    schemaVersion: 1,
+    sourceCorpusSha256: "c".repeat(64),
+    restPrograms,
+    streamRecipes: [],
+    restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+    ...overrides,
+  });
+  for (const [label, inputCorpus] of [
+    ["delete recipe", corpus([deleteProgram, boundary])],
+    ["boundary not last", corpus([boundary, other])],
+    ["source digest", corpus([other, boundary], { sourceCorpusSha256: "d".repeat(64) })],
+    ["request count", corpus([other, boundary], { restRequestCount: 1 })],
+  ]) {
+    const result = await observeCollector({ partial: true, inputCorpus, scopeNames: names });
+    try {
+      assert.match(String(result.failure?.stderr), /reviewed partial corpus/, label);
+      assert.equal(result.requests.length, 0, label);
+    } finally {
+      await rm(result.directory, { recursive: true, force: true });
+    }
   }
 });
 

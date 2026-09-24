@@ -28,6 +28,13 @@ import {
   managedClearScope,
   managedShrinkScope,
 } from "./firestore-probe/sandbox-session.mjs";
+import {
+  admissionPacketId,
+  admissionPacketRow,
+  admissionPlanDigest,
+  verifyProductionAdmission,
+  verifyProductionAdmissionOnDisk,
+} from "./fs-data-write-admission.mjs";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -50,6 +57,12 @@ const DELTA_DELETE_ROUTES = ["rest", "commit", "batch-write"];
 const DELTA_DELETE_COUNTS = [12112, 12113];
 const DELTA_STREAM_ID = "writes/write-stream-terminal/response-before-half-close";
 export const MAX_STREAM_FRAMES = 9;
+const PARTIAL_BOUNDARY_ID = "writes/limits/index-entry-sum/adjacent";
+const DELTA_REST_IDS = new Set(
+  DELTA_DELETE_ROUTES.flatMap((route) =>
+    DELTA_DELETE_COUNTS.map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+  ),
+);
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
 export function assertMatchingSandboxCorpus(fixture, currentCorpus, localCorpus) {
@@ -251,6 +264,139 @@ export function classifyDeltaV3DeletePair(route, smaller, larger) {
   return { status: "route-specific-exploration-required", route };
 }
 
+/**
+ * Every recipe the saved fixture does not cover, except the delta-v3 deletes and stream.
+ * The adjacent boundary program stays last so its six large documents are cleared last.
+ */
+export function selectPartialRecipes(currentCorpus, fixture, manifest) {
+  validateSandboxCorpus(currentCorpus);
+  const comparable = selectComparableSandboxRecipes(
+    fixture,
+    manifest,
+    currentCorpus,
+    currentCorpus,
+  );
+  const currentIds = new Set(currentCorpus.restPrograms.map((program) => program.id));
+  const pending = new Set(comparable.pendingRestIds);
+  const programs = currentCorpus.restPrograms.filter(
+    (program) => pending.has(program.id) && !DELTA_REST_IDS.has(program.id),
+  );
+  const boundary = programs.filter((program) => program.id === PARTIAL_BOUNDARY_ID);
+  if (boundary.length !== 1) {
+    throw new Error("the partial corpus needs the unrecorded adjacent boundary program");
+  }
+  const restPrograms = [
+    ...programs.filter((program) => program.id !== PARTIAL_BOUNDARY_ID),
+    ...boundary,
+  ];
+  const streamRecipes = currentCorpus.streamRecipes.filter(
+    (recipe) =>
+      recipe.transport === "grpc" &&
+      recipe.id !== DELTA_STREAM_ID &&
+      comparable.pendingStreamIds.includes(recipe.id),
+  );
+  const sourceCorpusDigest = sha256(JSON.stringify(currentCorpus));
+  return {
+    sourceCorpusDigest,
+    retainedRestIds: comparable.matchedRestIds,
+    retiredRestIds: comparable.pendingRestIds.filter((id) => !currentIds.has(id)),
+    recordingCorpus: {
+      schemaVersion: 1,
+      sourceCorpusSha256: sourceCorpusDigest,
+      restPrograms,
+      streamRecipes,
+      restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+    },
+  };
+}
+
+export function partialManagedClearNames(recordingCorpus) {
+  const programs = recordingCorpus?.restPrograms ?? [];
+  if (programs.some((program) => DELTA_REST_IDS.has(program.id))) {
+    throw new Error("the partial corpus must not carry the delta-v3 delete recipes");
+  }
+  const program = programs.at(-1);
+  if (program?.id !== PARTIAL_BOUNDARY_ID) {
+    throw new Error("the partial managed-clear boundary program must be last");
+  }
+  const writes = program.steps.filter((step) => step.id.startsWith("write-"));
+  const names = writes.map((step) => step.body?.writes?.[0]?.update?.name);
+  if (
+    writes.length !== 6 ||
+    names.some((name) => typeof name !== "string") ||
+    new Set(names).size !== 6
+  ) {
+    throw new Error("the partial boundary program must own six distinct documents");
+  }
+  managedClearScope(names, SANDBOX_PROJECT, "(default)");
+  if (managedShrinkScope(names, SANDBOX_PROJECT, "(default)") !== "v3") {
+    throw new Error("the partial boundary documents differ from the frozen corpus-v3 names");
+  }
+  return names;
+}
+
+export function partialRequestBound(recordingCorpus) {
+  const names = partialManagedClearNames(recordingCorpus);
+  const cleanup = cleanupRequestBound(recordingCorpus, names);
+  const maxHttpRequests = cleanup.totalRequestBound + V3_MANAGED_CLEAR_CAP;
+  if (cleanup.managedRequestBound > V3_MANAGED_CLEAR_CAP || maxHttpRequests > REST_CAP) {
+    throw new Error(
+      `the partial corpus needs ${cleanup.managedRequestBound} managed and ${maxHttpRequests} HTTP requests; caps are ${V3_MANAGED_CLEAR_CAP} and ${REST_CAP}`,
+    );
+  }
+  return {
+    declaredHttp: recordingCorpus.restRequestCount,
+    ...cleanup,
+    managedHttpCap: V3_MANAGED_CLEAR_CAP,
+    maxHttpRequests,
+    maxStreamFrames: recordingCorpus.streamRecipes.reduce(
+      (total, recipe) => total + recipe.maxFrames,
+      0,
+    ),
+  };
+}
+
+export function deltaV3RecordingCorpus(selection) {
+  return {
+    schemaVersion: 1,
+    sourceCorpusSha256: selection.sourceCorpusDigest,
+    restPrograms: selection.recordingCorpus.restPrograms,
+    streamRecipes: selection.recordingCorpus.streamRecipes,
+    restRequestCount: selection.recordingCorpus.restRequestCount,
+  };
+}
+
+/** The deterministic plan the pre-send review pins by its digest. */
+export function productionAdmissionPlan(mode, selection) {
+  let recordingCorpus;
+  let bounds;
+  let managedNames;
+  if (mode === "partial") {
+    recordingCorpus = selection.recordingCorpus;
+    bounds = partialRequestBound(recordingCorpus);
+    managedNames = partialManagedClearNames(recordingCorpus);
+  } else if (mode === "delta-v3") {
+    recordingCorpus = deltaV3RecordingCorpus(selection);
+    bounds = deltaV3RequestBound(recordingCorpus);
+    managedNames = deltaV3ManagedClearNames(recordingCorpus);
+  } else {
+    throw new Error("unknown production recording mode");
+  }
+  return {
+    mode,
+    project: SANDBOX_PROJECT,
+    database: "(default)",
+    sourceCorpusSha256: selection.sourceCorpusDigest,
+    recordingCorpusSha256: sha256(JSON.stringify(recordingCorpus)),
+    restIds: recordingCorpus.restPrograms.map((program) => program.id),
+    streamIds: recordingCorpus.streamRecipes.map((recipe) => recipe.id),
+    managedNames,
+    bounds,
+    attempts: 2,
+    attemptEstimateUsd: ATTEMPT_ESTIMATE_USD,
+  };
+}
+
 export function deltaV3RequestBound(recordingCorpus) {
   validateSandboxCorpus(recordingCorpus);
   const ids = (recordingCorpus.restPrograms ?? []).map((program) => program.id).toSorted();
@@ -356,9 +502,13 @@ export function sandboxLedgerEntry({
   estimatedUsd = ATTEMPT_ESTIMATE_USD,
   attemptId,
   streamFrames,
+  packetId,
+  runId,
+  requestCap: explicitRequestCap,
 }) {
   const requestCap =
-    streamFrames === undefined || streamFrames === null ? REST_CAP : DELTA_V3_HTTP_CAP;
+    explicitRequestCap ??
+    (streamFrames === undefined || streamFrames === null ? REST_CAP : DELTA_V3_HTTP_CAP);
   if (requests !== null && (!Number.isInteger(requests) || requests < 0 || requests > requestCap)) {
     throw new Error("invalid sandbox ledger request count");
   }
@@ -382,10 +532,20 @@ export function sandboxLedgerEntry({
     runDir,
     ...(attemptId === undefined ? {} : { attemptId }),
     ...(streamFrames === undefined ? {} : { streamFrames }),
+    ...(packetId === undefined ? {} : { packetId }),
+    ...(runId === undefined ? {} : { runId }),
   };
 }
 
-export async function reserveProductionAttempt({ ledgerPath, rows, gitSha, corpusDigest, runDir }) {
+export async function reserveProductionAttempt({
+  ledgerPath,
+  rows,
+  gitSha,
+  corpusDigest,
+  runDir,
+  packetId,
+  runId,
+}) {
   requireHistoricalUnknownHold(rows);
   remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD);
   const attemptId = randomUUID().replaceAll("-", "");
@@ -397,6 +557,8 @@ export async function reserveProductionAttempt({ ledgerPath, rows, gitSha, corpu
     runDir,
     estimatedUsd: ATTEMPT_ESTIMATE_USD,
     attemptId,
+    packetId,
+    runId,
   });
   const handle = await open(ledgerPath, "a", 0o600);
   try {
@@ -416,6 +578,8 @@ export async function reserveProductionAttemptWithToken({
   corpusDigest,
   runDir,
   acquireToken,
+  packetId,
+  runId,
 }) {
   if (typeof acquireToken !== "function") {
     throw new Error("production credential provider is required");
@@ -426,6 +590,8 @@ export async function reserveProductionAttemptWithToken({
     gitSha,
     corpusDigest,
     runDir,
+    packetId,
+    runId,
   });
   const token = await acquireToken();
   if (typeof token !== "string" || !token.trim()) {
@@ -1187,18 +1353,6 @@ export function deltaV3ManagedClearNames(recordingCorpus) {
   return names;
 }
 
-export function assertDeltaV3ProductionAdmission({ host, presendReviewed = false }) {
-  if (host === "firestore.googleapis.com" || host === "firestore.googleapis.com:443") {
-    if (!presendReviewed) {
-      throw new Error(
-        "delta-v3 production recording is blocked pending independent presend review",
-      );
-    }
-  } else {
-    localTarget(host);
-  }
-}
-
 function ownedMutationNamesForPrograms(programs) {
   const prefix = `projects/${SANDBOX_PROJECT}/databases/(default)/documents/`;
   const names = new Set();
@@ -1283,10 +1437,13 @@ function exactInventoryRequestBound(names) {
 }
 
 export function productionCleanupRequestBound(corpus) {
+  return cleanupRequestBound(corpus, sandboxManagedClearNames(corpus));
+}
+
+function cleanupRequestBound(corpus, boundaryNames) {
   const { requestCount } = validateSandboxCorpus(corpus);
   const programs = corpus.restPrograms;
   const names = ownedMutationNamesForPrograms(programs);
-  const boundaryNames = sandboxManagedClearNames(corpus);
   if (!boundaryNames.every((name) => names.includes(name))) {
     throw new Error("exact cleanup request bound omitted a frozen boundary target");
   }
@@ -1355,7 +1512,18 @@ export function productionRestEnvironment({
   corpusDigest,
   sourceGitSha,
   deltaV3 = false,
+  partial,
+  admission,
 }) {
+  if (
+    partial !== undefined &&
+    (deltaV3 ||
+      !Number.isSafeInteger(partial?.maxHttpRequests) ||
+      partial.maxHttpRequests < 1 ||
+      partial.maxHttpRequests > REST_CAP)
+  ) {
+    throw new Error("the partial HTTP cap must be a positive integer within the REST cap");
+  }
   if (
     ![input, output, meta, token, journal].every(
       (value) => typeof value === "string" && value.length > 0,
@@ -1375,7 +1543,10 @@ export function productionRestEnvironment({
     (deltaV3
       ? managedNames.length !== 6 ||
         managedShrinkScope(managedNames, SANDBOX_PROJECT, "(default)") !== "delta-v3"
-      : managedNames.length !== 12)
+      : partial
+        ? managedNames.length !== 6 ||
+          managedShrinkScope(managedNames, SANDBOX_PROJECT, "(default)") !== "v3"
+        : managedNames.length !== 12)
   ) {
     throw new Error("production managed-clear names do not match the selected exact scope");
   }
@@ -1390,7 +1561,9 @@ export function productionRestEnvironment({
     FIRESTORE_PROBE_IN: input,
     FIRESTORE_PROBE_OUT: output,
     FIRESTORE_PROBE_META_OUT: meta,
-    FIRESTORE_PROBE_MAX_REQUESTS: String(deltaV3 ? 430 : REST_CAP),
+    FIRESTORE_PROBE_MAX_REQUESTS: String(
+      partial ? partial.maxHttpRequests : deltaV3 ? DELTA_V3_HTTP_CAP : REST_CAP,
+    ),
     FIRESTORE_PROBE_TIMEOUT_MS: "180000",
     FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(managedNames),
     FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: deltaV3 ? undefined : journal,
@@ -1400,6 +1573,9 @@ export function productionRestEnvironment({
     FIRESTORE_PROBE_DELETE_RUN_ID: runId,
     FIRESTORE_PROBE_CORPUS_DIGEST: corpusDigest,
     FIRESTORE_PROBE_SOURCE_GIT_SHA: sourceGitSha,
+    FIRESTORE_PROBE_PARTIAL: partial ? "1" : undefined,
+    FIRESTORE_PROBE_PARTIAL_LOCK_HELD: partial ? "1" : undefined,
+    FIRESTORE_PROBE_ADMISSION: admission === undefined ? undefined : JSON.stringify(admission),
   };
 }
 
@@ -1446,12 +1622,16 @@ async function productionRecording({
   rows,
   managedNames,
   deltaV3 = false,
+  partial,
+  admission,
   streamFrameLimit = MAX_STREAM_FRAMES,
 }) {
   const runDir = await mkdtemp(join(privateDir, "fs-data-write-production-"));
   const runId = randomUUID().replaceAll("-", "");
   const journal = join(runDir, deltaV3 ? "delta-cleanup.json" : "managed-clear.json");
   const ledgerPath = join(privateDir, "sandbox-ledger.jsonl");
+  const packetId =
+    admission === undefined ? undefined : admissionPacketId(admission.mode, admission.nonce);
   const { reservation, token } = await reserveProductionAttemptWithToken({
     ledgerPath,
     rows,
@@ -1459,6 +1639,8 @@ async function productionRecording({
     corpusDigest,
     runDir,
     acquireToken: productionAccessToken,
+    packetId,
+    runId,
   });
   const restOut = join(runDir, "rest-results.json");
   const metaOut = join(runDir, "rest-meta.json");
@@ -1481,6 +1663,8 @@ async function productionRecording({
         corpusDigest,
         sourceGitSha: gitSha,
         deltaV3,
+        partial,
+        admission,
       }),
       25_200_000,
     );
@@ -1496,6 +1680,9 @@ async function productionRecording({
     ) {
       throw new Error("delta-v3 HTTP requests exceeded the 430-attempt recording bound");
     }
+    if (partial && requestCount > partial.maxHttpRequests) {
+      throw new Error("partial HTTP requests exceeded the reviewed recording bound");
+    }
     await runNode("production gRPC", "firestore-probe/stream-session.mjs", {
       FIRESTORE_STREAM_CORPUS: corpusIn,
       FIRESTORE_STREAM_OUT: streamOut,
@@ -1503,6 +1690,8 @@ async function productionRecording({
       FIRESTORE_STREAM_HOST: undefined,
       FIRESTORE_STREAM_PORT: undefined,
       FIRESTORE_STREAM_TOKEN: token,
+      FIRESTORE_STREAM_RUN_ID: runId,
+      FIRESTORE_PROBE_ADMISSION: admission === undefined ? undefined : JSON.stringify(admission),
     });
     const rest = JSON.parse(await readFile(restOut, "utf8"));
     const stream = JSON.parse(await readFile(streamOut, "utf8"));
@@ -1536,6 +1725,9 @@ async function productionRecording({
       runDir,
       estimatedUsd: ATTEMPT_ESTIMATE_USD,
       attemptId: reservation.attemptId,
+      packetId,
+      runId,
+      requestCap: partial?.maxHttpRequests,
     });
     const handle = await open(ledgerPath, "a", 0o600);
     try {
@@ -1638,8 +1830,8 @@ function classifyRecordingDeletePairs(rest) {
   );
 }
 
-export async function recordDeltaV3Production() {
-  assertDeltaV3ProductionAdmission({ host: "firestore.googleapis.com" });
+export async function recordDeltaV3Production(admissionArgs) {
+  const pins = requireAdmissionArguments("record-delta-v3", admissionArgs);
   const gitCommonDir = (
     await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
       cwd: ROOT,
@@ -1655,14 +1847,9 @@ export async function recordDeltaV3Production() {
     await readFile(join(CONFORMANCE_DIR, "fs-data-write-recipe-digests.json"), "utf8"),
   );
   const selection = selectDeltaV3Recipes(corpus, fixture, manifest);
-  const recordingCorpus = {
-    schemaVersion: 1,
-    sourceCorpusSha256: selection.sourceCorpusDigest,
-    restPrograms: selection.recordingCorpus.restPrograms,
-    streamRecipes: selection.recordingCorpus.streamRecipes,
-    restRequestCount: selection.recordingCorpus.restRequestCount,
-  };
+  const recordingCorpus = deltaV3RecordingCorpus(selection);
   const bound = deltaV3RequestBound(recordingCorpus);
+  const admission = await admitProductionRecording("delta-v3", selection, pins);
   const managedNames = deltaV3ManagedClearNames(recordingCorpus);
   const corpusDigest = selection.sourceCorpusDigest;
   const gitSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
@@ -1675,6 +1862,7 @@ export async function recordDeltaV3Production() {
   const corpusIn = join(generatedDir, "delta-corpus.json");
   await writeFile(corpusIn, JSON.stringify(recordingCorpus));
   await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+    verifyProductionAdmissionOnDisk({ admission });
     requireHistoricalUnknownHold(lockedRows);
     remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD * 2);
     const recordings = [];
@@ -1691,6 +1879,7 @@ export async function recordDeltaV3Production() {
           rows: lockedRows,
           managedNames,
           deltaV3: true,
+          admission,
           streamFrameLimit: bound.maxStreamFrames,
         }),
       );
@@ -1752,6 +1941,223 @@ export async function recordDeltaV3Production() {
     await writeFile(output, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
     process.stdout.write(
       `${JSON.stringify({ output, routeTasks, resultsIdentical: summary.resultsIdentical, bounds: bound })}\n`,
+    );
+  });
+}
+
+export function requireAdmissionArguments(command, args = []) {
+  const values = {};
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    if (
+      !["--nonce", "--review", "--review-sha256"].includes(flag) ||
+      args[index + 1] === undefined
+    ) {
+      throw new Error(`${command} requires --nonce, --review and --review-sha256`);
+    }
+    values[flag.slice(2)] = args[index + 1];
+  }
+  if (!values.nonce || !values.review || !values["review-sha256"]) {
+    throw new Error(`${command} requires --nonce, --review and --review-sha256`);
+  }
+  return { nonce: values.nonce, review: values.review, reviewSha256: values["review-sha256"] };
+}
+
+async function loadProductionSelection(mode) {
+  const { corpus } = await prepareSandboxCorpus();
+  const fixture = JSON.parse(
+    await readFile(join(CONFORMANCE_DIR, "fs-data-write-production-matrix.json"), "utf8"),
+  );
+  const manifest = JSON.parse(
+    await readFile(join(CONFORMANCE_DIR, "fs-data-write-recipe-digests.json"), "utf8"),
+  );
+  if (mode === "partial") return selectPartialRecipes(corpus, fixture, manifest);
+  if (mode === "delta-v3") return selectDeltaV3Recipes(corpus, fixture, manifest);
+  throw new Error("unknown production recording mode");
+}
+
+async function currentSourceCommit() {
+  return (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
+}
+
+/** Pin the plan and check the review, commit and ledger packet before any credential. */
+async function admitProductionRecording(mode, selection, pins) {
+  const admission = {
+    mode,
+    nonce: pins.nonce,
+    reviewSha256: pins.reviewSha256,
+    planSha256: admissionPlanDigest(productionAdmissionPlan(mode, selection)),
+    sourceCommit: await currentSourceCommit(),
+    reviewPath: resolve(pins.review),
+  };
+  verifyProductionAdmissionOnDisk({ admission });
+  return admission;
+}
+
+async function printProductionPlan(mode) {
+  const plan = productionAdmissionPlan(mode, await loadProductionSelection(mode));
+  process.stdout.write(
+    `${JSON.stringify({ sourceCommit: await currentSourceCommit(), planSha256: admissionPlanDigest(plan), plan }, null, 2)}\n`,
+  );
+}
+
+/** Append the operator's packet reservation after checking the review pins it. */
+async function reserveAdmission(mode, args) {
+  const pins = requireAdmissionArguments("reserve-admission", args);
+  const selection = await loadProductionSelection(mode);
+  const planSha256 = admissionPlanDigest(productionAdmissionPlan(mode, selection));
+  const sourceCommit = await currentSourceCommit();
+  const row = admissionPacketRow({
+    mode,
+    nonce: pins.nonce,
+    sourceCommit,
+    planSha256,
+    reviewSha256: pins.reviewSha256,
+  });
+  verifyProductionAdmission({
+    admission: {
+      mode,
+      nonce: pins.nonce,
+      reviewSha256: pins.reviewSha256,
+      planSha256,
+      sourceCommit,
+    },
+    reviewBytes: await readFile(resolve(pins.review)),
+    gitHead: sourceCommit,
+    gitStatus: (await execFileAsync("git", ["status", "--porcelain"], { cwd: ROOT })).stdout.trim(),
+    rows: [row],
+  });
+  const gitCommonDir = (
+    await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: ROOT,
+    })
+  ).stdout.trim();
+  const ledgerPath = sandboxLedgerPath(gitCommonDir);
+  await withSandboxExclusiveLock(dirname(ledgerPath), async (rows) => {
+    if (rows.some((existing) => existing.packetId === row.packetId)) {
+      throw new Error("this admission packet is already reserved");
+    }
+    requireHistoricalUnknownHold(rows);
+    remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD * 2);
+    await appendFile(ledgerPath, `${JSON.stringify(row)}\n`, { mode: 0o600 });
+  });
+  process.stdout.write(`${JSON.stringify({ packetId: row.packetId, planSha256 })}\n`);
+}
+
+function supplementRecipeDigests(recordingCorpus) {
+  return {
+    programs: Object.fromEntries(
+      recordingCorpus.restPrograms.map((program) => [program.id, sha256(JSON.stringify(program))]),
+    ),
+    streams: Object.fromEntries(
+      recordingCorpus.streamRecipes.map((recipe) => [recipe.id, sha256(JSON.stringify(recipe))]),
+    ),
+  };
+}
+
+export async function recordPartialProduction(admissionArgs) {
+  const pins = requireAdmissionArguments("record-partial", admissionArgs);
+  const gitCommonDir = (
+    await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: ROOT,
+    })
+  ).stdout.trim();
+  const ledgerPath = sandboxLedgerPath(gitCommonDir);
+  const privateDir = dirname(ledgerPath);
+  const selection = await loadProductionSelection("partial");
+  const { recordingCorpus } = selection;
+  const bound = partialRequestBound(recordingCorpus);
+  const managedNames = partialManagedClearNames(recordingCorpus);
+  const admission = await admitProductionRecording("partial", selection, pins);
+  const corpusDigest = selection.sourceCorpusDigest;
+  const gitSha = admission.sourceCommit;
+  const rows = await readLedger(ledgerPath);
+  requireHistoricalUnknownHold(rows);
+  remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD * 2);
+  await mkdir(RUNS_DIR, { recursive: true });
+  const generatedDir = await mkdtemp(join(RUNS_DIR, "fs-data-write-partial-"));
+  const corpusIn = join(generatedDir, "partial-corpus.json");
+  await writeFile(corpusIn, JSON.stringify(recordingCorpus));
+  await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+    verifyProductionAdmissionOnDisk({ admission });
+    requireHistoricalUnknownHold(lockedRows);
+    remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD * 2);
+    const recordings = [];
+    for (let index = 0; index < 2; index += 1) {
+      recordings.push(
+        await productionRecording({
+          corpusIn,
+          restIn: corpusIn,
+          privateDir,
+          gitSha,
+          corpusDigest,
+          restRequestCount: recordingCorpus.restRequestCount,
+          liveStreamCount: recordingCorpus.streamRecipes.length,
+          rows: lockedRows,
+          managedNames,
+          partial: bound,
+          admission,
+          streamFrameLimit: bound.maxStreamFrames,
+        }),
+      );
+    }
+    if (recordings[0].runId === recordings[1].runId) {
+      throw new Error("partial recordings reused a run ID");
+    }
+    for (const recording of recordings) {
+      const journal = JSON.parse(await readFile(recording.journal, "utf8"));
+      if (journal.status !== "complete" || journal.mode !== "cleanup-corpus-v3") {
+        throw new Error("partial cleanup is unresolved; preserve the lock and journal");
+      }
+    }
+    await writeFile(
+      join(generatedDir, "partial-recordings.json"),
+      `${JSON.stringify(
+        recordings.map(
+          ({ runId, runDir, startedAt, requestCount, streamFrames, rest, stream }) => ({
+            runId,
+            runDir,
+            startedAt,
+            httpRequests: requestCount,
+            streamFrames,
+            rest,
+            stream,
+          }),
+        ),
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    const fixture = freezeSandboxFixture({
+      corpus: recordingCorpus,
+      first: recordings[0].rest,
+      second: recordings[1].rest,
+      firstStream: recordings[0].stream,
+      secondStream: recordings[1].stream,
+      recordedAt: recordings.map((recording) => recording.startedAt),
+      harnessRevision: gitSha,
+      sdkVersions: {
+        firebase: require("firebase/package.json").version,
+        firebaseAdmin: require("firebase-admin").SDK_VERSION,
+        firestore: require("@google-cloud/firestore/package.json").version,
+        grpc: require("@grpc/grpc-js/package.json").version,
+      },
+      credentialToken: recordings[0].token,
+    });
+    if (JSON.stringify(fixture).includes(recordings[1].token)) {
+      throw new Error("recorded response contains a credential token");
+    }
+    const directory = join(CONFORMANCE_DIR, "fs-data-write-production-supplements");
+    await mkdir(directory, { recursive: true });
+    const output = join(directory, `partial-${admission.nonce}.json`);
+    await writeFile(
+      output,
+      `${JSON.stringify({ ...fixture, mode: "partial", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
+      { flag: "wx" },
+    );
+    process.stdout.write(
+      `${JSON.stringify({ output, generatedDir, httpRequests: recordings.map((recording) => recording.requestCount), bounds: bound })}\n`,
     );
   });
 }
@@ -1934,6 +2340,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     await compareLocal(process.argv[3]);
   } else if (process.argv[2] === "record-production") {
     await recordProduction();
+  } else if (process.argv[2] === "record-delta-v3") {
+    await recordDeltaV3Production(process.argv.slice(3));
+  } else if (process.argv[2] === "record-partial") {
+    await recordPartialProduction(process.argv.slice(3));
+  } else if (process.argv[2] === "plan") {
+    await printProductionPlan(process.argv[3]);
+  } else if (process.argv[2] === "reserve-admission") {
+    await reserveAdmission(process.argv[3], process.argv.slice(4));
   } else if (process.argv[2] === "recover-legacy") {
     await recoverLegacy();
   } else if (process.argv[2] === "recover-v3") {
@@ -1947,7 +2361,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     );
   } else {
     throw new Error(
-      "expected prepare, local-child, compare-local, record-production, recover-legacy, recover-v3 or recover-delta-v3",
+      "expected prepare, local-child, compare-local, record-production, record-delta-v3, record-partial, plan, reserve-admission, recover-legacy, recover-v3 or recover-delta-v3",
     );
   }
 }

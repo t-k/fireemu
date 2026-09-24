@@ -896,6 +896,28 @@ fn batch_write_rest_reports_saved_production_value_decode_errors() {
 }
 
 #[test]
+fn batch_write_rest_does_not_reuse_the_observed_timezone_error_for_an_invalid_date() {
+    let s = state(None);
+    let name = "projects/demo-app/databases/(default)/documents/batch-decode/invalid-date";
+    let (status, body) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:batchWrite"),
+        json!({"writes": [{"update": {"name": name, "fields": {
+            "v": {"timestampValue": "2020-13-45T00:00:00Z"}
+        }}}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    assert!(!body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("timestamps must end with 'Z' or have a valid timezone offset."));
+    let (read_status, _) = call(&s, "GET", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(read_status, 404);
+}
+
+#[test]
 fn batch_write_rest_rejects_malformed_nested_repeated_values_without_mutation() {
     let s = state(None);
     let target = "projects/demo-app/databases/(default)/documents/batch-shape/nested";

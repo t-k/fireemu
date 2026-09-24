@@ -669,6 +669,14 @@ fn write_value(w: &mut Writer, value: &Value, style: EntityStyle<'_>) {
             }
         }),
         Value::Map(fields) => w.write_bytes(VALUE_STRING, &write_nested_entity(fields, style)),
+        Value::Vector(values) if matches!(style, EntityStyle::Managed { .. }) => {
+            let mut fields = BTreeMap::new();
+            fields.insert(
+                "__vector__".to_owned(),
+                Value::Array(values.iter().map(|v| Value::Double(*v)).collect()),
+            );
+            w.write_bytes(VALUE_STRING, &write_nested_entity(&fields, style));
+        }
         Value::Vector(values) => {
             let mut fields = BTreeMap::new();
             fields.insert(
@@ -1077,12 +1085,20 @@ fn nested_value(bytes: &[u8], depth: usize) -> Result<Value, FirestoreExportErro
 
 /// Recognizes the wire form of a vector embedding.
 fn as_vector(fields: &BTreeMap<String, Value>) -> Option<Value> {
-    if fields.len() != 2 || fields.get("__type__") != Some(&Value::String("__vector__".to_owned()))
-    {
-        return None;
-    }
-    let Some(Value::Array(items)) = fields.get("value") else {
-        return None;
+    // Production's managed export writes a vector as one repeated `__vector__` property; the
+    // emulator writes the `{__type__: "__vector__", value: [...]}` map the data plane shows.
+    let items = if let (1, Some(Value::Array(items))) = (fields.len(), fields.get("__vector__")) {
+        items
+    } else {
+        if fields.len() != 2
+            || fields.get("__type__") != Some(&Value::String("__vector__".to_owned()))
+        {
+            return None;
+        }
+        let Some(Value::Array(items)) = fields.get("value") else {
+            return None;
+        };
+        items
     };
     let mut values = Vec::with_capacity(items.len());
     for item in items {

@@ -108,6 +108,79 @@ export function capturePairs(ctx, program) {
   ];
 }
 
+function readVarint(bytes, at) {
+  let value = 0n;
+  let shift = 0n;
+  for (;;) {
+    const byte = bytes[at++];
+    value |= BigInt(byte & 0x7f) << shift;
+    if (!(byte & 0x80)) return [value, at];
+    shift += 7n;
+  }
+}
+
+function writeVarint(value) {
+  const out = [];
+  let v = BigInt(value);
+  do {
+    let byte = Number(v & 0x7fn);
+    v >>= 7n;
+    if (v > 0n) byte |= 0x80;
+    out.push(byte);
+  } while (v > 0n);
+  return Buffer.from(out);
+}
+
+/** Rewrites the varint fields `zeroed` of one message to zero; other fields are kept. */
+function zeroVarints(body, zeroed) {
+  const out = [];
+  let at = 0;
+  while (at < body.length) {
+    const start = at;
+    const [tag, afterTag] = readVarint(body, at);
+    const field = Number(tag >> 3n);
+    const wire = Number(tag & 7n);
+    if (wire === 0) {
+      const [, afterValue] = readVarint(body, afterTag);
+      out.push(
+        zeroed.includes(field)
+          ? Buffer.concat([writeVarint(tag), writeVarint(0)])
+          : body.subarray(start, afterValue),
+      );
+      at = afterValue;
+    } else if (wire === 2) {
+      const [length, afterLength] = readVarint(body, afterTag);
+      at = afterLength + Number(length);
+      out.push(body.subarray(start, at));
+    } else {
+      throw new Error(`unexpected wire type ${wire} in export metadata`);
+    }
+  }
+  return Buffer.concat(out);
+}
+
+/**
+ * A partition `.export_metadata` with what legitimately differs between two exports of the
+ * same data set to zero: the export window (header fields 1.2 and 1.3) and the output digest
+ * (field 2.5), which covers the output file's run-specific database ids. The output file
+ * itself is compared separately.
+ */
+export function maskExportWindow(bytes) {
+  const out = [];
+  let at = 0;
+  while (at < bytes.length) {
+    const [tag, afterTag] = readVarint(bytes, at);
+    const field = Number(tag >> 3n);
+    if (Number(tag & 7n) !== 2) throw new Error("unexpected wire type in export metadata");
+    const [length, afterLength] = readVarint(bytes, afterTag);
+    const body = bytes.subarray(afterLength, afterLength + Number(length));
+    at = afterLength + Number(length);
+    const masked = zeroVarints(body, field === 1 ? [2, 3] : field === 2 ? [5] : []);
+    out.push(writeVarint(tag), writeVarint(masked.length), masked);
+  }
+  return Buffer.concat(out);
+}
+
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 /**

@@ -24,7 +24,7 @@ import {
   isDatabaseOperation,
   isRateLimited,
 } from "./harness.mjs";
-import { capturePairs, normalizeCapture, restoreCapture } from "./exports.mjs";
+import { capturePairs, maskExportWindow, normalizeCapture, restoreCapture } from "./exports.mjs";
 
 const require = createRequire(import.meta.url);
 const grpc = require("@grpc/grpc-js");
@@ -469,8 +469,18 @@ export function createSession(
     }
     // reproduce: fireemu's own export of the same data must equal the capture production accepted.
     const files = await downloadObjects(program, step.reproduce.prefix);
-    const mine = normalizeCapture(files, capturePairs(ctx, program)).files;
-    const theirs = captures[step.reproduce.capture]?.files ?? {};
+    // Only the export window (when it ran) may differ between two exports of the same data.
+    const windowless = (all) =>
+      Object.fromEntries(
+        Object.entries(all).map(([name, base64]) => [
+          name,
+          name.endsWith(".export_metadata") && !name.endsWith(".overall_export_metadata")
+            ? maskExportWindow(Buffer.from(base64, "base64")).toString("base64")
+            : base64,
+        ]),
+      );
+    const mine = windowless(normalizeCapture(files, capturePairs(ctx, program)).files);
+    const theirs = windowless(captures[step.reproduce.capture]?.files ?? {});
     const names = [...new Set([...Object.keys(mine), ...Object.keys(theirs)])].toSorted();
     const differing = names.filter((n) => mine[n] !== theirs[n]);
     return {

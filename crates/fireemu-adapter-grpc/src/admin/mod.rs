@@ -4,6 +4,7 @@
 //! for what is in scope (and the managed-infrastructure methods that are not).
 
 pub mod catalog;
+pub mod fields;
 pub mod grpc;
 pub mod index_rest;
 pub mod indexes;

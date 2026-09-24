@@ -514,6 +514,26 @@ mod tests {
     }
 
     #[test]
+    fn a_vector_is_written_as_production_writes_it_and_reads_back() {
+        let documents = vec![document(
+            &[("items", "a")],
+            &[("v", Value::Vector(vec![1.0, 2.0]))],
+        )];
+        let export = write_managed_export("all", "d", &[], &[], (1, 2), &documents).unwrap();
+        let output = &export.files[2].1;
+        let text = String::from_utf8_lossy(output);
+        assert!(
+            text.contains("__vector__") && !text.contains("__type__"),
+            "{text}"
+        );
+        let entities = read_managed_output(output).unwrap();
+        assert_eq!(
+            entities[0].document.fields["v"],
+            Value::Vector(vec![1.0, 2.0])
+        );
+    }
+
+    #[test]
     fn a_namespace_export_is_an_empty_partition() {
         let documents = vec![document(&[("items", "a")], &[])];
         let export =

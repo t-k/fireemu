@@ -56,6 +56,9 @@ impl IndexState {
 #[derive(Debug, Default)]
 struct RegistryState {
     live: BTreeMap<(String, String), Vec<RuntimeIndex>>,
+    /// Deleted indexes, oldest first: production's link to create a missing index again
+    /// names the index that was deleted.
+    deleted: BTreeMap<(String, String), Vec<RuntimeIndex>>,
     seed: u64,
 }
 
@@ -202,7 +205,32 @@ impl IndexRegistry {
             .live
             .get_mut(&(project.to_owned(), database.to_owned()))?;
         let at = all.iter().position(|i| i.id == id)?;
-        Some(all.remove(at))
+        let removed = all.remove(at);
+        state
+            .deleted
+            .entry((project.to_owned(), database.to_owned()))
+            .or_default()
+            .push(removed.clone());
+        Some(removed)
+    }
+
+    /// The most recently deleted index whose definition `requirement` names (implied
+    /// `__name__` aside), if the missing index a query needs is one that was deleted.
+    #[must_use]
+    pub fn deleted(
+        &self,
+        project: &str,
+        database: &str,
+        requirement: &IndexDefinition,
+    ) -> Option<RuntimeIndex> {
+        let wanted = with_implied_name(requirement);
+        self.lock()
+            .deleted
+            .get(&(project.to_owned(), database.to_owned()))?
+            .iter()
+            .rev()
+            .find(|index| with_implied_name(&index.definition) == wanted)
+            .cloned()
     }
 
     /// Adds every `READY` index of a database to the planner's catalog.
@@ -234,7 +262,9 @@ impl IndexRegistry {
 
     /// Forgets the indexes of the projects `owned` selects, or of one database.
     pub fn forget(&self, owned: impl Fn(&str, &str) -> bool) {
-        self.lock().live.retain(|(p, d), _| !owned(p, d));
+        let mut state = self.lock();
+        state.live.retain(|(p, d), _| !owned(p, d));
+        state.deleted.retain(|(p, d), _| !owned(p, d));
     }
 }
 

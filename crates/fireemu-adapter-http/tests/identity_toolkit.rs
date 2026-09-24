@@ -14805,6 +14805,103 @@ fn account_operation_errors_carry_production_messages() {
     );
 }
 
+/// Malformed Admin customAttributes JSON uses the production Gson diagnostic in both error fields.
+#[test]
+fn malformed_admin_custom_attributes_use_the_production_gson_diagnostic() {
+    let s = strict_state();
+    let (created_status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "malformed-claims"}),
+    );
+    assert_eq!(created_status, 200);
+
+    let (status, response) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "malformed-claims", "customAttributes": "{not json"}),
+    );
+    let expected = "INVALID_CLAIMS : com.google.gson.stream.MalformedJsonException: Expected ':' at line 1 column 7 path $.not\nSee https://github.com/google/gson/blob/main/Troubleshooting.md#malformed-json";
+
+    assert_eq!(status, 400);
+    assert_eq!(response["error"]["message"], expected);
+    assert_eq!(response["error"]["errors"][0]["message"], expected);
+
+    let (_, readback) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["malformed-claims"]}),
+    );
+    assert!(readback["users"][0].get("customAttributes").is_none());
+}
+
+#[test]
+fn malformed_admin_custom_attributes_diagnostics_are_bounded_and_do_not_echo_input() {
+    let s = strict_state();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "bounded-malformed-claims"}),
+    );
+    assert_eq!(status, 200);
+
+    let diagnostic = |attrs: &str| {
+        let (_, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "bounded-malformed-claims", "customAttributes": attrs}),
+        );
+        assert_eq!(response["error"]["code"], 400);
+        assert_eq!(
+            response["error"]["message"],
+            response["error"]["errors"][0]["message"]
+        );
+        response["error"]["message"].as_str().unwrap().to_owned()
+    };
+
+    let key_64 = "k".repeat(64);
+    let input_64 = format!("{{{key_64} value");
+    let message_64 = diagnostic(&input_64);
+    assert!(message_64.contains(&format!("path $.{key_64}")));
+    assert!(message_64.len() <= 512);
+    assert!(!message_64.contains(&input_64));
+
+    let key_65 = "k".repeat(65);
+    let input_65 = format!("{{{key_65} value");
+    let message_65 = diagnostic(&input_65);
+    assert_eq!(
+        message_65,
+        "INVALID_CLAIMS : customAttributes must be a JSON object"
+    );
+    assert!(!message_65.contains(&input_65));
+
+    let at_scan_limit = format!("{{not json{}", " ".repeat(1_024 - 9));
+    let message_at_limit = diagnostic(&at_scan_limit);
+    assert!(message_at_limit.contains("Expected ':' at line 1 column 7 path $.not"));
+    assert!(message_at_limit.len() <= 512);
+
+    let above_scan_limit = format!("{{not json{}", " ".repeat(1_025 - 9));
+    let message_above_limit = diagnostic(&above_scan_limit);
+    assert_eq!(
+        message_above_limit,
+        "INVALID_CLAIMS : customAttributes must be a JSON object"
+    );
+    assert!(!message_above_limit.contains(&above_scan_limit));
+
+    let control_character = "{not \0json";
+    let control_message = diagnostic(control_character);
+    assert_eq!(
+        control_message,
+        "INVALID_CLAIMS : customAttributes must be a JSON object"
+    );
+    assert!(!control_message.contains(control_character));
+}
+
 /// Production keeps a hash imported without `hashAlgorithm`, or with a three-byte Argon2
 /// length, as a password credential with `passwordUpdatedAt` (it just never matches).
 #[test]

@@ -7769,15 +7769,9 @@ fn parse_phone_factors(entries: &Value) -> Result<Vec<(String, Option<String>)>,
 
 fn parse_custom_claims(attrs: &str) -> Result<CustomClaims, JsonResponse> {
     let Ok(JsonValue::Object(parsed)) = fireemu_core_types::json::parse(attrs) else {
-        // Production echoes a well-formed non-object value compactly ("Not a JSON Object:
-        // [1,2]"); for malformed JSON it returns its parser's exception text, which is not
-        // reproduced.
         return Err(match serde_json::from_str::<Value>(attrs) {
             Ok(value) => error(400, &format!("INVALID_CLAIMS : Not a JSON Object: {value}")),
-            Err(_) => error(
-                400,
-                "INVALID_CLAIMS : customAttributes must be a JSON object",
-            ),
+            Err(_) => error(400, &malformed_custom_attributes_message(attrs)),
         });
     };
     let mut claims = CustomClaims::default();
@@ -7792,6 +7786,73 @@ fn parse_custom_claims(attrs: &str) -> Result<CustomClaims, JsonResponse> {
     }
     // Production reads the attributes back as they were set (sandbox recording 2026-09-23).
     Ok(claims.with_source(attrs))
+}
+
+fn malformed_custom_attributes_message(attrs: &str) -> String {
+    const MAX_DIAGNOSTIC_SCAN_BYTES: usize = 1_024;
+    const MAX_PATH_KEY_BYTES: usize = 64;
+    const TROUBLESHOOTING_URL: &str =
+        "https://github.com/google/gson/blob/main/Troubleshooting.md#malformed-json";
+
+    // The saved production case is a lenient, unquoted object name followed by a value
+    // without the required colon (for example, `{not json`). Recognize that syntax shape
+    // without echoing caller input or attempting to duplicate Gson's general JSON parser.
+    let bytes = attrs.as_bytes();
+    if bytes.len() > MAX_DIAGNOSTIC_SCAN_BYTES {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+
+    let mut cursor = 0;
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    if bytes.get(cursor) != Some(&b'{') {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+    cursor += 1;
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+
+    let key_start = cursor;
+    if !bytes.get(cursor).is_some_and(|byte| {
+        byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$')
+    }) {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+    cursor += 1;
+    while bytes.get(cursor).is_some_and(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$')
+    }) {
+        cursor += 1;
+    }
+    let key_end = cursor;
+    if key_end - key_start > MAX_PATH_KEY_BYTES
+        || !bytes.get(cursor).is_some_and(u8::is_ascii_whitespace)
+    {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    if !bytes
+        .get(cursor)
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$'))
+    {
+        return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
+    }
+
+    // Gson's lenient reader consumes the first byte of the unexpected value before it
+    // reports the expected delimiter. Keep its line and column positions for this ASCII
+    // syntax shape; all other malformed input retains the bounded generic refusal.
+    let consumed = &attrs[..=cursor];
+    let line = consumed.matches('\n').count() + 1;
+    let line_start = consumed.rfind('\n').map_or(0, |index| index + 1);
+    let column = cursor - line_start + 2;
+    let key = &attrs[key_start..key_end];
+    format!(
+        "INVALID_CLAIMS : com.google.gson.stream.MalformedJsonException: Expected ':' at line {line} column {column} path $.{key}\nSee {TROUBLESHOOTING_URL}"
+    )
 }
 
 fn reject_unsupported(body: &Value, fields: &[&str]) -> Result<(), JsonResponse> {

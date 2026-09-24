@@ -11,6 +11,7 @@ pub mod encode;
 pub mod gateway;
 pub mod local;
 pub mod pipeline;
+pub mod production_status;
 pub mod rest;
 pub mod rules;
 pub mod serve;

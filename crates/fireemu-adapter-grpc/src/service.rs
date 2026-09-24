@@ -629,9 +629,7 @@ impl Firestore for GatewayService {
             rules.require_owner(&caller.principal, "ExecutePipeline")?;
         }
         if self.gateway.ctx.edition != fireemu_core_types::edition::FirestoreEdition::Enterprise {
-            let mut status = Status::failed_precondition(
-                "pipelines require firestore.edition = enterprise (Enterprise Native)",
-            );
+            let mut status = crate::production_status::pipeline_requires_enterprise();
             if let Ok(v) = "FS_PIPE_EDITION".parse() {
                 status.metadata_mut().insert("fireemu-code", v);
             }

@@ -27,7 +27,12 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "requireDemoPrefix": { "type": "boolean", "default": true }
+        "requireDemoPrefix": { "type": "boolean", "default": true },
+        "unknownProjects": {
+          "description": "Under the strict profile, refuse a request naming a project other than the daemon's with production's 403 PERMISSION_DENIED (CONSUMER_INVALID) instead of serving it in its own session (scope decision C11 of FS-CONFIG-LIFECYCLE).",
+          "enum": ["serve", "refuse"],
+          "default": "serve"
+        }
       }
     },
     "limits": {

@@ -229,6 +229,40 @@ const PROTECTION: &[(&str, Option<bool>)] = &[
     ("DELETE_PROTECTION_ENABLED", Some(true)),
 ];
 
+/// Production's words for a project the credential cannot use.
+pub(crate) fn foreign_project_message(project: &str) -> String {
+    format!("Permission denied on resource project {project}.")
+}
+
+/// Production's refusal of a request naming a project other than the only one a bounded
+/// backend has (scope decision C11); `None` for every other request.
+pub(crate) fn foreign_project(state: &RestState, path: &str) -> Option<RestResponse> {
+    let decoded = crate::rest::decode_path(path).unwrap_or_else(|_| path.to_owned());
+    let rest = decoded
+        .strip_prefix("/v1/projects/")
+        .or_else(|| decoded.strip_prefix("/v1beta1/projects/"))?;
+    let project = rest.split(['/', ':']).next()?;
+    if project.is_empty() || !state.local.refuses_project(project) {
+        return None;
+    }
+    let message = foreign_project_message(project);
+    Some(error(
+        tonic::Code::PermissionDenied,
+        &message,
+        Some(json!([
+            {"@type": "type.googleapis.com/google.rpc.ErrorInfo", "domain": "googleapis.com",
+             "metadata": {"consumer": format!("projects/{project}"), "containerInfo": project,
+                          "service": "firestore.googleapis.com"},
+             "reason": "CONSUMER_INVALID"},
+            {"@type": "type.googleapis.com/google.rpc.LocalizedMessage", "locale": "en-US",
+             "message": message},
+            {"@type": "type.googleapis.com/google.rpc.Help",
+             "links": [{"description": "Google developers console",
+                        "url": "https://console.developers.google.com"}]}
+        ])),
+    ))
+}
+
 pub(crate) fn missing_database(project: &str, database: &str) -> RestResponse {
     error(
         tonic::Code::NotFound,

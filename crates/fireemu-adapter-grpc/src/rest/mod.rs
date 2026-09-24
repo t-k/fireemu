@@ -699,6 +699,9 @@ impl RestState {
 
     /// Handles one request.
     pub fn handle(&self, req: &RestRequest) -> RestResponse {
+        if let Some(refused) = crate::admin::rest::foreign_project(self, &req.path) {
+            return refused;
+        }
         match self.dispatch(req) {
             Ok(r) => r,
             Err(s) => {
@@ -1636,7 +1639,7 @@ impl RestState {
 /// an escape that would introduce a `/` changes the structure and is refused.
 const ENCODED_SLASH_PATH_ERROR: &str = "encoded '/' in a path segment";
 
-fn decode_path(path: &str) -> Result<String, Status> {
+pub(crate) fn decode_path(path: &str) -> Result<String, Status> {
     let mut out = String::with_capacity(path.len());
     for (i, segment) in path.split('/').enumerate() {
         if i > 0 {

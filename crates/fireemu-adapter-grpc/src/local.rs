@@ -307,6 +307,9 @@ pub struct LocalBackend {
     /// Unpinned compatibility runs sample wall time for each Firestore write while every
     /// other product and explicitly pinned run continues to use the virtual clock.
     wall_clock_write_time: bool,
+    /// The only project that exists (scope decision C11), when requests naming another are
+    /// refused as production refuses a project the credential cannot use.
+    project_boundary: Option<String>,
     /// Capacity retention root for databases created by this backend. Pinned-clock runs use
     /// the bounded default; wall-clock parity runs rely on the one-hour time root alone.
     history_version_limit: usize,
@@ -1558,6 +1561,7 @@ impl LocalBackend {
             field_operation_ordinals: std::sync::atomic::AtomicU64::new(0),
             clock,
             wall_clock_write_time: false,
+            project_boundary: None,
             history_version_limit:
                 fireemu_core_firestore::store::DEFAULT_MAX_RETAINED_VERSIONS_PER_PATH,
             history_budget: Arc::new(Mutex::new(HistoryBudgetLedger::new(
@@ -3510,6 +3514,22 @@ impl LocalBackend {
             .unwrap_or(fireemu_core_types::time::LogicalInstant::UNIX_EPOCH)
     }
 
+    /// Makes `project` the only project that exists: a request naming another is refused
+    /// with production's `PERMISSION_DENIED` (`projects.unknownProjects = "refuse"`).
+    #[must_use]
+    pub fn with_project_boundary(mut self, project: impl Into<String>) -> Self {
+        self.project_boundary = Some(project.into());
+        self
+    }
+
+    /// Whether a request naming `project` is refused because only another project exists.
+    #[must_use]
+    pub fn refuses_project(&self, project: &str) -> bool {
+        self.project_boundary
+            .as_deref()
+            .is_some_and(|only| only != project)
+    }
+
     /// The instant the Admin API stamps a change with, and measures its pending states against:
     /// the clock documents are written at, so an unpinned daemon follows the wall clock.
     pub fn admin_now(&self) -> fireemu_core_types::time::LogicalInstant {
@@ -3637,6 +3657,11 @@ impl LocalBackend {
     fn admin_refusal(&self, parent: &Parent) -> Result<(), Status> {
         use crate::admin::catalog::DataPlaneRefusal;
         let (project, database) = (parent.project.as_str(), parent.database.as_str());
+        if self.refuses_project(project) {
+            return Err(Status::permission_denied(
+                crate::admin::rest::foreign_project_message(project),
+            ));
+        }
         match self.admin.data_plane_refusal(
             project,
             database,

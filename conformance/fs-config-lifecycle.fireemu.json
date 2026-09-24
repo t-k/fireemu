@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "profile": "strict",
+  "projects": { "unknownProjects": "refuse" },
   "firestore": {
     "edition": "standard",
     "apiMode": "native",

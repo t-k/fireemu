@@ -1178,3 +1178,58 @@ fn an_empty_native_database_can_become_a_datastore_mode_database() {
     );
     assert_ne!(status, 200);
 }
+
+#[test]
+fn a_bounded_backend_refuses_other_projects_as_production_refuses_a_foreign_one() {
+    // Scope decision C11: with projects.unknownProjects = "refuse", only the daemon's project
+    // exists; production answers a project the credential cannot use like this (2026-09-24).
+    let (state, _clock) = state();
+    let (status, _) = call(
+        &state,
+        "GET",
+        "/v1/projects/elsewhere/databases",
+        Value::Null,
+    );
+    assert_eq!(status, 200, "unbounded by default");
+    let bounded = RestState {
+        local: Arc::new(
+            LocalBackend::new(
+                (*state.gateway).clone(),
+                Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(0)))),
+                7,
+            )
+            .with_project_boundary("p"),
+        ),
+        ..state
+    };
+    let refusal = json!({"error": {
+        "code": 403,
+        "message": "Permission denied on resource project elsewhere.",
+        "status": "PERMISSION_DENIED",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.ErrorInfo", "domain": "googleapis.com",
+             "metadata": {"consumer": "projects/elsewhere", "containerInfo": "elsewhere",
+                          "service": "firestore.googleapis.com"},
+             "reason": "CONSUMER_INVALID"},
+            {"@type": "type.googleapis.com/google.rpc.LocalizedMessage", "locale": "en-US",
+             "message": "Permission denied on resource project elsewhere."},
+            {"@type": "type.googleapis.com/google.rpc.Help",
+             "links": [{"description": "Google developers console",
+                        "url": "https://console.developers.google.com"}]}
+        ]
+    }});
+    for path in [
+        "/v1/projects/elsewhere/databases",
+        "/v1/projects/elsewhere/databases/(default)",
+        "/v1/projects/elsewhere/databases/(default)/documents/c/d",
+        "/v1/projects/elsewhere/locations",
+    ] {
+        assert_eq!(
+            call(&bounded, "GET", path, Value::Null),
+            (403, refusal.clone()),
+            "{path}"
+        );
+    }
+    let (status, _) = call(&bounded, "GET", "/v1/projects/p/databases", Value::Null);
+    assert_eq!(status, 200);
+}

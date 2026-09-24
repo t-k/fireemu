@@ -242,28 +242,28 @@
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order of the listed fields removed."
           },
           {
             "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-12-reversed",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order of the listed fields removed."
           },
           {
             "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-11",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order of the listed fields removed."
           },
           {
             "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-10-and-not-equal",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order of the listed fields removed."
           }
         ]
       }

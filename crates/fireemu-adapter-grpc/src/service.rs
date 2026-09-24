@@ -18,7 +18,7 @@ use tonic::codegen::tokio_stream;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::decode::{decode_structured_query, parse_parent};
+use crate::decode::{decode_structured_query_in, parse_parent};
 use crate::encode::decode_document_name;
 use crate::gateway::{Gateway, Rejection};
 use crate::local::{decode_aggregations, LocalBackend};
@@ -314,7 +314,7 @@ impl GatewayService {
         let accepted = if let Some(local) = self.local_backend() {
             local.accepted_query(&parent, sq)?
         } else {
-            let query = decode_structured_query(&parent, sq)
+            let query = decode_structured_query_in(&parent, sq, self.gateway.production_refusals())
                 .map_err(|e| Rejection::Decode(e).to_status())?;
             self.gateway
                 .validate_query(&query)
@@ -344,11 +344,12 @@ impl GatewayService {
         let sq = crate::query_messages::aggregation_structured_query(aggregation);
         let sq = sq.as_ref();
         crate::query_messages::check_find_nearest_request(sq, self.gateway.production_refusals())?;
-        let (_, aggregations) = decode_aggregations(aggregation)?;
+        let (_, aggregations) =
+            decode_aggregations(aggregation, self.gateway.production_refusals())?;
         let accepted = if let Some(local) = self.local_backend() {
             local.accepted_aggregation_query(&parent, sq, &aggregations)?
         } else {
-            let query = decode_structured_query(&parent, sq)
+            let query = decode_structured_query_in(&parent, sq, self.gateway.production_refusals())
                 .map_err(|e| Rejection::Decode(e).to_status())?;
             self.gateway
                 .validate_aggregation_query(&query, &aggregations)

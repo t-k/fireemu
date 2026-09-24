@@ -278,21 +278,9 @@ fn managed_infrastructure(segments: &[&str], action: Option<&str>) -> bool {
     }
 }
 
-/// Routes an Admin request, or returns `None` for a path this module does not serve.
-pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse> {
-    let path = req.path.strip_prefix("/v1/projects/")?;
-    let (resource, action) = match path.rsplit_once(':') {
-        Some((resource, action)) if !action.contains('/') => (resource, Some(action)),
-        _ => (path, None),
-    };
-    let segments: Vec<&str> = resource.split('/').collect();
-    let project = *segments.first()?;
-    if managed_infrastructure(&segments, action) {
-        return Some(crate::rest::error_response(&Status::unimplemented(
-            MANAGED_INFRASTRUCTURE,
-        )));
-    }
-    let admin = match (segments.get(1).copied(), segments.len(), action) {
+/// Whether a path under `projects/` is one of the Admin routes this module serves.
+fn is_admin_path(segments: &[&str], action: Option<&str>) -> bool {
+    match (segments.get(1).copied(), segments.len(), action) {
         (Some("locations" | "databases"), 2 | 3, None)
         | (
             Some("databases"),
@@ -307,7 +295,24 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
         }
         (Some("databases"), 5, Some("cancel")) => segments[3] == "operations",
         _ => false,
+    }
+}
+
+/// Routes an Admin request, or returns `None` for a path this module does not serve.
+pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse> {
+    let path = req.path.strip_prefix("/v1/projects/")?;
+    let (resource, action) = match path.rsplit_once(':') {
+        Some((resource, action)) if !action.contains('/') => (resource, Some(action)),
+        _ => (path, None),
     };
+    let segments: Vec<&str> = resource.split('/').collect();
+    let project = *segments.first()?;
+    if managed_infrastructure(&segments, action) {
+        return Some(crate::rest::error_response(&Status::unimplemented(
+            MANAGED_INFRASTRUCTURE,
+        )));
+    }
+    let admin = is_admin_path(&segments, action);
     if !admin {
         return None;
     }

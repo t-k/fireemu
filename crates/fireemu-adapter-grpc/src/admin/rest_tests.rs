@@ -806,3 +806,57 @@ fn managed_infrastructure_is_refused_as_unimplemented() {
     );
     assert_eq!(status, 501);
 }
+
+#[test]
+fn a_malformed_index_id_is_refused_and_a_finished_build_reports_its_documents() {
+    let (state, clock) = state();
+    state
+        .local
+        .admin()
+        .indexes()
+        .set_build_duration(std::time::Duration::from_secs(3600));
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=idxdb",
+        native(),
+    );
+    let docs = "/v1/projects/p/databases/idxdb/documents";
+    call(
+        &state,
+        "POST",
+        &format!("{docs}/items?documentId=x"),
+        json!({"fields": {}}),
+    );
+    call(
+        &state,
+        "POST",
+        &format!("{docs}/items?documentId=y"),
+        json!({"fields": {}}),
+    );
+    let group = "/v1/projects/p/databases/idxdb/collectionGroups/items/indexes";
+    let (status, body) = call(&state, "GET", &format!("{group}/not-an-index"), Value::Null);
+    assert_eq!(
+        (status, body["error"]["message"].as_str()),
+        (400, Some("Invalid index resource id \"not-an-index\"."))
+    );
+    let (_, operation) = call(
+        &state,
+        "POST",
+        group,
+        json!({"queryScope": "COLLECTION", "fields": [
+            {"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "DESCENDING"}]}),
+    );
+    advance(&clock, 3600);
+    let (_, done) = call(
+        &state,
+        "GET",
+        &format!("/v1/{}", operation["name"].as_str().unwrap()),
+        Value::Null,
+    );
+    assert_eq!(
+        done["metadata"]["progressDocuments"],
+        json!({"estimatedWork": "2", "completedWork": "2"})
+    );
+    assert_ne!(done["metadata"]["startTime"], done["metadata"]["endTime"]);
+}

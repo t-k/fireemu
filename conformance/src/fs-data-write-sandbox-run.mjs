@@ -2037,13 +2037,14 @@ export async function recordDeltaV3Production(admissionArgs) {
       if (JSON.stringify(frozen).includes(recordings[1].token)) {
         throw new Error("recorded response contains a credential token");
       }
-      await mkdir(SUPPLEMENTS_DIR, { recursive: true });
+      // Written beside the private summary (gitignored) so the checkout stays clean for the
+      // next reviewed recording; the operator commits it into SUPPLEMENTS_DIR afterwards.
       await writeFile(
-        join(SUPPLEMENTS_DIR, `delta-v3-${admission.nonce}.json`),
+        join(generatedDir, `delta-v3-${admission.nonce}.json`),
         `${JSON.stringify({ ...frozen, mode: "delta-v3", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
         { flag: "wx" },
       );
-      summary.supplement = `delta-v3-${admission.nonce}.json`;
+      summary.supplement = join(generatedDir, `delta-v3-${admission.nonce}.json`);
     } catch (error) {
       summary.supplementError = String(error.message ?? error).slice(0, 400);
     }
@@ -2261,8 +2262,9 @@ export async function recordPartialProduction(admissionArgs) {
     if (JSON.stringify(fixture).includes(recordings[1].token)) {
       throw new Error("recorded response contains a credential token");
     }
-    await mkdir(SUPPLEMENTS_DIR, { recursive: true });
-    const output = join(SUPPLEMENTS_DIR, `partial-${admission.nonce}.json`);
+    // Written under the gitignored run directory so the checkout stays clean for the next
+    // reviewed recording; the operator commits it into SUPPLEMENTS_DIR afterwards.
+    const output = join(generatedDir, `partial-${admission.nonce}.json`);
     await writeFile(
       output,
       `${JSON.stringify({ ...fixture, mode: "partial", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,

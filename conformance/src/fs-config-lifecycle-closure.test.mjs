@@ -37,6 +37,7 @@ const requiredConditions = new Set([
 // delegated calls).
 const requiredDecisions = [
   "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14",
+  "C15", "C16",
 ];
 
 // The managed-infrastructure methods C1 keeps out of scope. None of them may be a recipe.
@@ -223,3 +224,22 @@ test("closure recipes and corpus programs cover each other", async (t) => {
     );
   }
 });
+
+test("the contract lists the refusals the Admin API adds beyond production's", () => {
+  // C14/C15: fireemu-only behaviour is documented; a new Admin-only refusal must be listed.
+  const contract = readFileSync(fromRoot("spec/compatibility/contract.json"), "utf8");
+  const entry = JSON.parse(contract)
+    .claims?.flatMap?.((claim) => claim.fireemuOnly ?? [])
+    ?.find((item) => item.behaviour.startsWith("The Firestore Admin API"));
+  const text = entry?.behaviour ?? contract;
+  for (const refusal of [
+    "third concurrent managed import answers RESOURCE_EXHAUSTED",
+    "1,000,000 documents",
+    "a document id carrying a slash",
+    "a bucket belongs to the first project",
+    "import from it",
+    "resource name is not of the kind the method takes answers INVALID_ARGUMENT",
+  ])
+    assert.ok(text.includes(refusal), `contract names: ${refusal}`);
+});
+

@@ -45,16 +45,16 @@
     {
       "id": "C5",
       "decision": "The comparison runs against the strict profile. The emulator profile keeps the official emulator's behavior (any database materializes on first touch) and is not closure evidence.",
-      "decidedBy": "agent under the 2026-09-18 delegation",
-      "decidedOn": "2026-09-24",
-      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24, recorded as an agent decision under delegation"
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-25 (the owner confirmed on 2026-09-25 what the agent had decided under the 2026-09-18 delegation)"
     },
     {
       "id": "C6",
       "decision": "Production runs touch only named databases the run creates in fireemu-oracle-query (prefix cfg), plus a per-run Cloud Storage bucket; (default) belongs to FS-QUERY-INDEX and is only read. A request that production rejects before it reaches any resource (a foreign project, an invalid id) may name other resources.",
-      "decidedBy": "agent under the 2026-09-18 delegation",
-      "decidedOn": "2026-09-24",
-      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24, recorded as an agent decision under delegation"
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-25 (the owner confirmed on 2026-09-25 what the agent had decided under the 2026-09-18 delegation)"
     },
     {
       "id": "C7",
@@ -80,9 +80,9 @@
     {
       "id": "C10",
       "decision": "Production long-running operations progress on their own schedule (an index takes minutes to build, an index operation stays PROCESSING after the index is READY, a deleted index keeps serving queries for a while, an exemption takes minutes to apply). Recordings compare the first response, every state the recording polls through after normalizing how many polls saw it, and the settled end state. fireemu must answer the same shapes and pass through the same states; how long it stays in each is not compared.",
-      "decidedBy": "agent under the 2026-09-18 delegation",
-      "decidedOn": "2026-09-24",
-      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24, recorded as an agent decision under delegation"
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-25 (the owner confirmed on 2026-09-25 what the agent had decided under the 2026-09-18 delegation)"
     },
     {
       "id": "C11",
@@ -111,6 +111,20 @@
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24",
       "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
+    },
+    {
+      "id": "C15",
+      "decision": "A managed import from a bucket another project uses (or from another project's default bucket) is refused, in both profiles, as fireemu-only behaviour of the Admin API (C14): a bucket belongs to the first project whose managed export or import of it succeeded. Production allows it with IAM grants and refuses it by default, in wording that is not observed; fireemu answers as a missing bucket or file.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-25"
+    },
+    {
+      "id": "C16",
+      "decision": "The order of the index and field listings in production is not observed: the harness orders every listing by content before comparing (production lists indexes by server-drawn ids, and the corpus has no field listing of more than one entry), so fireemu's order is not evidence. The database listing's order is shown not to be defined: across the ten recordings of 2026-09-24 production listed a created database before (default) five times and after it three times (inferred from the order of instant symbols, independent review of 2026-09-25). Observing the index and field order when it is cheap to do remains open.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-25"
     }
   ],
   "conditions": [

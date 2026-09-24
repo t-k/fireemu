@@ -20,6 +20,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 ### Changed
 
 - After an Admin API call, as in production: deleting `(default)` or a declared database makes the data plane answer NOT_FOUND for it, its id cannot be reused for 300 seconds, a database created in Datastore mode or the Enterprise edition is refused by the Native data plane, and the managed-infrastructure routes answer 501 instead of 404. A managed export's partition checksum is written as 0, which production imports without verifying, and fireemu does not verify it either.
+- Admin API bounds and isolation, in both profiles, in fireemu's words (production's are unobserved): a third concurrent managed import answers RESOURCE_EXHAUSTED; an import decodes at most 1,000,000 documents and 1 GiB of output, and refuses an export naming a partition or output twice or outside its directory, or a document id carrying a slash (INVALID_ARGUMENT); a bucket belongs to the first project whose managed export or import of it succeeded, and another project's export into it or import from it answers as a missing bucket or file; a gRPC Admin request naming a resource of another kind answers INVALID_ARGUMENT.
 
 These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Unless marked strict, they apply under the `emulator` profile too, where they change results or shapes but add no rejection.
 

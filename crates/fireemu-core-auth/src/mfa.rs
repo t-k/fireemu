@@ -668,6 +668,14 @@ impl MfaState {
         self.pending_enrollments.contains_key(id)
     }
 
+    /// Every pending sign-in's id and start.
+    pub(crate) fn pending_sign_in_ids_and_starts(&self) -> Vec<(String, LogicalInstant)> {
+        self.pending_sign_ins
+            .iter()
+            .map(|(id, pending)| (id.clone(), pending.started_at))
+            .collect()
+    }
+
     pub(crate) fn has_pending_sign_in(&self, id: &str) -> bool {
         self.pending_sign_ins.contains_key(id)
     }

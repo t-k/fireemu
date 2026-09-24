@@ -3533,8 +3533,21 @@ fn dispatch(
             mfa_enrollment_withdraw(store, body, at),
             !options.stateless_refresh_tokens,
         ),
-        Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
-        Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
+        Handler::MfaSignInStart => v2_error_shape(
+            {
+                let production = store.second_factor_rules_are_production();
+                mfa_sign_in_start(store, body, at, production)
+            },
+            !options.stateless_refresh_tokens,
+        ),
+        Handler::MfaSignInFinalize => v2_error_shape(
+            if store.second_factor_rules_are_production() {
+                mfa_sign_in_finalize_production(store, body, at)
+            } else {
+                mfa_sign_in_finalize(store, body, at)
+            },
+            !options.stateless_refresh_tokens,
+        ),
         Handler::Token => {
             secure_token_error_shape(refresh(store, body, at, options.stateless_refresh_tokens))
         }
@@ -7894,13 +7907,22 @@ fn parse_phone_factors(entries: &Value) -> Result<Vec<(String, Option<String>)>,
     };
     let mut out = Vec::with_capacity(items.len());
     for item in items {
+        // Production's words (sandbox recording 2026-09-24, auth-mfa/admin-factors
+        // #admin-set-totp-factor-ia and #admin-set-invalid-phone-ia).
+        if item.get("totpInfo").is_some_and(|v| !v.is_null()) {
+            return Err(error(
+                400,
+                "UNSUPPORTED_SECOND_FACTOR : attempting to add a new TOTP enrollment",
+            ));
+        }
         let Some(phone) = str_field(item, "phoneInfo") else {
             return Err(error(
                 400,
                 "INVALID_ARGUMENT : only phone second factors (phoneInfo) can be enrolled by an admin",
             ));
         };
-        AuthStore::validate_phone_number(phone).map_err(|e| auth_error(&e))?;
+        AuthStore::validate_phone_number(phone)
+            .map_err(|_| error(400, "INVALID_PHONE_NUMBER : Invalid format."))?;
         out.push((
             phone.to_owned(),
             opt_str(item, "displayName")?.map(str::to_owned),
@@ -8081,9 +8103,14 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         None | Some(Value::Null) => None,
         Some(v) => Some(parse_identity(v)?),
     };
-    let phone_factors = match body.get("mfa").and_then(|m| m.get("enrollments")) {
+    // `mfa` replaces every factor; without `enrollments` it clears them, as production does
+    // (sandbox recording 2026-09-24, auth-mfa/admin-factors#admin-lookup-cleared).
+    let phone_factors = match body.get("mfa") {
         None | Some(Value::Null) => None,
-        Some(v) => Some(parse_phone_factors(v)?),
+        Some(mfa) => match mfa.get("enrollments") {
+            None | Some(Value::Null) => Some(Vec::new()),
+            Some(v) => Some(parse_phone_factors(v)?),
+        },
     };
     let revoke_at = parse_valid_since(body)?;
     Ok(UpdatePlan {
@@ -9873,6 +9900,80 @@ fn mfa_sign_in_finalize(store: &mut AuthStore, body: &Value, at: LogicalInstant)
             Ok(tokens) => token_only_response(&tokens, false),
             Err(r) => r,
         },
+        Err(e) => mfa_error(&e),
+    }
+}
+
+/// Strict `mfaSignIn:finalize`: production's refusals and their order (sandbox recording
+/// 2026-09-24, auth-mfa/totp/sign-in, interactions): the request's shape first (`Request
+/// contains an invalid argument.`), then the pending credential (`INVALID_PENDING_TOKEN`, or
+/// `USER_NOT_FOUND` once its account is gone), then the factor (`INVALID_MFA_ENROLLMENT_ID`),
+/// then the code. The store keeps the pending credential after success and completes the
+/// sign-in of an account disabled after its first factor, as production does.
+fn mfa_sign_in_finalize_production(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let invalid = || error(400, "Request contains an invalid argument.");
+    let Some(pending) = str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()) else {
+        return invalid();
+    };
+    if let Some(phone) = body.get("phoneVerificationInfo").filter(|v| !v.is_null()) {
+        return finalize_phone_sign_in(store, pending, phone, at);
+    }
+    let Some(enrollment_id) = str_field(body, "mfaEnrollmentId").filter(|id| !id.is_empty()) else {
+        return invalid();
+    };
+    let Some(code) = parse_code(
+        body.get("totpVerificationInfo")
+            .and_then(|i| i.get("verificationCode")),
+    ) else {
+        return invalid();
+    };
+    let Some(pending_id) = PendingSignInId::parse(pending) else {
+        return error(400, "INVALID_PENDING_TOKEN");
+    };
+    let Some(uid) = store.pending_sign_in_user(&pending_id) else {
+        return error(
+            400,
+            if store.pending_sign_in_orphaned(&pending_id) {
+                "USER_NOT_FOUND"
+            } else {
+                "INVALID_PENDING_TOKEN"
+            },
+        );
+    };
+    if !store.user(&uid).is_some_and(|u| {
+        u.mfa
+            .totp_factors()
+            .iter()
+            .any(|f| f.mfa_enrollment_id == enrollment_id)
+    }) {
+        return error(400, "INVALID_MFA_ENROLLMENT_ID");
+    }
+    let first_factor = store.pending_sign_in_context(&pending_id).cloned();
+    match store.finalize_mfa_sign_in_for_factor(&uid, &pending_id, enrollment_id, code, at) {
+        Ok(assertion) => match issue_tokens_with_sign_in_attributes(
+            store,
+            &uid,
+            Some(&assertion),
+            at,
+            None,
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_provider)
+                .map(provider_from_id),
+            first_factor
+                .as_ref()
+                .and_then(PendingSignInContext::sign_in_attributes),
+        ) {
+            Ok(tokens) => token_only_response(&tokens, false),
+            Err(r) => r,
+        },
+        // A code already used is a plain INVALID_CODE (auth-mfa/totp/sign-in
+        // #replayed-sign-in-code).
+        Err(MfaError::CodeAlreadyUsed) => error(400, "INVALID_CODE"),
         Err(e) => mfa_error(&e),
     }
 }
@@ -11796,7 +11897,15 @@ fn finalize_phone_enrollment(
     {
         return refusal;
     }
-    store.consume_phone_code(session_info);
+    // Production accepts a test number's enrollment session again, and then refuses it as the
+    // number now enrolled (sandbox recording 2026-09-24, auth-mfa/sms#finalize-again).
+    let test_number = store
+        .sign_in_config()
+        .test_phone_numbers
+        .contains_key(&verified.phone_number);
+    if !(store.second_factor_rules_are_production() && test_number) {
+        store.consume_phone_code(session_info);
+    }
     let display_name = str_field(body, "displayName").map(str::to_owned);
     match store.enroll_phone_factor(uid, &verified.phone_number, display_name, at) {
         Ok(factor) => {
@@ -11838,7 +11947,47 @@ fn mfa_enrollment_withdraw(
 }
 
 /// `mfaSignIn:start`: sends the code of the chosen phone factor (TOTP has no start step).
-fn mfa_sign_in_start(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn mfa_sign_in_start(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
+    // Strict: production's answers (sandbox recording 2026-09-24, auth-mfa/totp/sign-in
+    // #start-totp and #start-totp-as-phone, sms#sign-in-start-without-info).
+    if strict {
+        let invalid = || error(400, "Request contains an invalid argument.");
+        let (Some(pending), Some(enrollment_id)) = (
+            str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()),
+            str_field(body, "mfaEnrollmentId").filter(|e| !e.is_empty()),
+        ) else {
+            return invalid();
+        };
+        if body.get("phoneSignInInfo").is_none_or(Value::is_null) {
+            return invalid();
+        }
+        let Some(pending_id) = PendingSignInId::parse(pending) else {
+            return error(400, "INVALID_PENDING_TOKEN");
+        };
+        let Some(uid) = store.pending_sign_in_user(&pending_id) else {
+            return error(
+                400,
+                if store.pending_sign_in_orphaned(&pending_id) {
+                    "USER_NOT_FOUND"
+                } else {
+                    "INVALID_PENDING_TOKEN"
+                },
+            );
+        };
+        if store.user(&uid).is_some_and(|u| {
+            u.mfa
+                .totp_factors()
+                .iter()
+                .any(|f| f.mfa_enrollment_id == enrollment_id)
+        }) {
+            return error(400, "INVALID_PHONE_NUMBER : Invalid format.");
+        }
+    }
     // The official order: both request fields first, then the credential, then the factor.
     let Some(pending) = str_field(body, "mfaPendingCredential").filter(|p| !p.is_empty()) else {
         return error(
@@ -11924,9 +12073,17 @@ fn finalize_phone_sign_in(
         return error(400, "INVALID_MFA_PENDING_CREDENTIAL");
     }
     let first_factor = store.pending_sign_in_context(&pending_id).cloned();
+    let test_number = store
+        .sign_in_config()
+        .test_phone_numbers
+        .contains_key(&verified.phone_number);
     match store.finalize_phone_mfa_sign_in(&uid, &pending_id, &enrollment_id, at) {
         Ok(assertion) => {
-            store.consume_phone_code(session);
+            // Production accepts a test number's session again (sandbox recording
+            // 2026-09-24, auth-mfa/sms#sign-in-finalize-again).
+            if !(store.second_factor_rules_are_production() && test_number) {
+                store.consume_phone_code(session);
+            }
             match issue_tokens_with_sign_in_attributes(
                 store,
                 &uid,

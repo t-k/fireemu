@@ -473,14 +473,15 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                     );
                 }
                 Object::Pending => {
-                    assert_refused(
-                        &start_phone_step(&s, &objects.pending),
-                        "INVALID_MFA_PENDING_CREDENTIAL",
-                        &context,
-                    );
+                    let unknown = if strict {
+                        "INVALID_PENDING_TOKEN"
+                    } else {
+                        "INVALID_MFA_PENDING_CREDENTIAL"
+                    };
+                    assert_refused(&start_phone_step(&s, &objects.pending), unknown, &context);
                     assert_refused(
                         &finalize_totp_step(&s, &objects.pending, &json!("any"), 0),
-                        "INVALID_MFA_PENDING_CREDENTIAL",
+                        unknown,
                         &context,
                     );
                 }
@@ -580,7 +581,14 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                 "{context}"
             );
             assert_eq!(sms, 0, "{context}");
-            assert_eq!(pending, usize::from(crossed == Object::Sms), "{context}");
+            // Production's rules keep a pending credential after success: the SMS one always
+            // (refused or used), the other unless it expired.
+            let expected_pending = if strict {
+                1 + usize::from(crossed != Object::Pending)
+            } else {
+                usize::from(crossed == Object::Sms)
+            };
+            assert_eq!(pending, expected_pending, "{context}");
             assert_eq!(
                 idp,
                 usize::from(crossed != Object::PendingToken),
@@ -625,14 +633,21 @@ fn crossing_each_lifetime_alone_leaves_the_other_objects_usable() {
                     let code = start_phone_code(&s, &objects.sms_pending);
                     let (status, signed) = finalize_phone_step(&s, &objects.sms_pending, &code);
                     assert_eq!(status, 200, "{context}: {signed}");
-                    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+                    // Production's rules keep both pending credentials after success.
+                    assert_eq!(
+                        s.store.lock().unwrap().pending_sign_in_count(),
+                        2 * usize::from(strict)
+                    );
                 }
                 Object::Pending => {
                     let pending = pending_login(&s);
                     let code = start_phone_code(&s, &pending);
                     let (status, signed) = finalize_phone_step(&s, &pending, &code);
                     assert_eq!(status, 200, "{context}: {signed}");
-                    assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+                    assert_eq!(
+                        s.store.lock().unwrap().pending_sign_in_count(),
+                        2 * usize::from(strict)
+                    );
                 }
                 Object::TotpEnrollment => {
                     let (session, secret) = start_totp_enrollment(&s, &fresh_token);
@@ -739,7 +754,10 @@ fn a_wrong_totp_code_keeps_the_pending_credential_and_the_correct_code_then_sign
         let c = claims(signed["idToken"].as_str().unwrap());
         assert_eq!(c["firebase"]["sign_in_second_factor"], "totp");
         assert_eq!(c["firebase"]["second_factor_identifier"], factor);
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
     }
 }
 
@@ -751,22 +769,36 @@ fn replaying_a_consumed_step_after_success_is_refused() {
         advance_to(&s, 30);
         let code = totp_at(&secret, &TotpPolicy::default().params(), now(&s));
 
-        // TOTP: the consumed pending credential is unknown; a new pending credential with the
-        // same code is a replay.
+        // TOTP: the consumed pending credential is unknown under the official emulator's rules
+        // and kept under production's (auth-mfa/totp/sign-in#pending-1-again), where the same
+        // code is then a plain INVALID_CODE; a new pending credential with the same code is a
+        // replay.
+        let replayed = if strict {
+            "INVALID_CODE"
+        } else {
+            "INVALID_CODE : verification code already used"
+        };
         let pending = pending_login(&s);
         assert_eq!(finalize_totp_step(&s, &pending, &factor, code).0, 200);
         assert_refused(
             &finalize_totp_step(&s, &pending, &factor, code),
-            "INVALID_MFA_PENDING_CREDENTIAL",
+            if strict {
+                "INVALID_CODE"
+            } else {
+                "INVALID_MFA_PENDING_CREDENTIAL"
+            },
             "consumed pending",
         );
         let next = pending_login(&s);
         assert_refused(
             &finalize_totp_step(&s, &next, &factor, code),
-            "INVALID_CODE : verification code already used",
+            replayed,
             "replayed step",
         );
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 1);
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            1 + usize::from(strict)
+        );
 
         // Phone: the consumed code is unknown, and so is the consumed pending credential.
         let sms = start_phone_code(&s, &next);
@@ -776,13 +808,19 @@ fn replaying_a_consumed_step_after_success_is_refused() {
             "INVALID_SESSION_INFO",
             "consumed code",
         );
-        assert_refused(
-            &start_phone_step(&s, &next),
-            "INVALID_MFA_PENDING_CREDENTIAL",
-            "consumed pending after phone",
-        );
+        if strict {
+            // Kept: the pending credential starts another code.
+            assert_eq!(start_phone_step(&s, &next).0, 200);
+        } else {
+            assert_refused(
+                &start_phone_step(&s, &next),
+                "INVALID_MFA_PENDING_CREDENTIAL",
+                "consumed pending after phone",
+            );
+        }
         let (oob, codes, pending, _, _) = counts(&s);
-        assert_eq!((oob, codes, pending), (0, 0, 0));
+        let kept = usize::from(strict);
+        assert_eq!((oob, codes, pending), (0, kept, 2 * kept));
         let after = snapshot(&s, &local_id);
         assert_eq!(after["mfaInfo"].as_array().unwrap().len(), 2);
     }
@@ -822,12 +860,25 @@ fn two_threads_finalizing_one_pending_credential_succeed_exactly_once() {
             .collect();
         assert_eq!(winners.len(), 1, "{results:?}");
         let loser = results.iter().find(|(status, _)| *status != 200).unwrap();
-        assert_refused(loser, "INVALID_MFA_PENDING_CREDENTIAL", "totp loser");
+        // The loser finds the pending credential consumed, or (production's rules, which keep
+        // it) the code consumed.
+        assert_refused(
+            loser,
+            if strict {
+                "INVALID_CODE"
+            } else {
+                "INVALID_MFA_PENDING_CREDENTIAL"
+            },
+            "totp loser",
+        );
         assert_eq!(
             claims(winners[0]["idToken"].as_str().unwrap())["user_id"],
             local_id
         );
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
 
         // Phone finalize: the loser sees the consumed code.
         let pending = pending_login(&s);
@@ -854,7 +905,8 @@ fn two_threads_finalizing_one_pending_credential_succeed_exactly_once() {
         let loser = results.iter().find(|(status, _)| *status != 200).unwrap();
         assert_refused(loser, "INVALID_SESSION_INFO", "phone loser");
         let (oob, codes, pending_count, _, users) = counts(&s);
-        assert_eq!((oob, codes, pending_count, users), (0, 0, 0, 1));
+        let kept = 2 * usize::from(strict);
+        assert_eq!((oob, codes, pending_count, users), (0, 0, kept, 1));
         let after = snapshot(&s, &local_id);
         assert_eq!(after["mfaInfo"].as_array().unwrap().len(), 2);
     }

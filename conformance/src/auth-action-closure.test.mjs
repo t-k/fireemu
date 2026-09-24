@@ -86,14 +86,11 @@ function recordedRuns(recipes) {
 }
 
 test("the fixture binding refuses a stale digest and a dropped row", () => {
-  // Proven on the committed AUTH-CREDENTIAL comparison until this parent has its own.
-  const comparison = readJson(
-    "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-comparison.json",
-  );
+  const comparison = readJson("spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json");
   assert.doesNotThrow(() => assertBoundToFixture(comparison, "committed"));
   assert.throws(
     () => assertBoundToFixture({ ...comparison, fixtureSha256: "0".repeat(64) }, "stale"),
-    /committed conformance\/auth-credential-production.json/,
+    /committed conformance\/auth-action-production.json/,
   );
   assert.throws(
     () => assertBoundToFixture({ ...comparison, rows: comparison.rows.slice(1) }, "dropped"),

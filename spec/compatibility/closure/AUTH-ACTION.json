@@ -73,8 +73,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Admin sendOobCode with returnOobLink for every request type: answer members, link parameters, continueUrl on authorized, unauthorized, malformed and empty values, canHandleCodeInApp, unknown, disabled and mixed-case addresses, missing and unknown request types, missing and invalid addresses, the new address of an email change (missing, taken, the same, invalid), email-link generation while password sign-in is required, and codes selected by an ID token instead of an address."
+      "status": "VERIFIED",
+      "note": "Admin sendOobCode with returnOobLink for every request type: answer members, link parameters, continueUrl on authorized, unauthorized, malformed and empty values, canHandleCodeInApp, unknown, disabled and mixed-case addresses, missing and unknown request types, missing and invalid addresses, the new address of an email change (missing, taken, the same, invalid), email-link generation while password sign-in is required, and codes selected by an ID token instead of an address.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 49
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/client-send-boundary",
@@ -85,8 +103,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The client sendOobCode for an address that has no account (improved email privacy on): the plain request, returnOobLink on the client route, continueUrl checks and a missing API key."
+      "status": "VERIFIED",
+      "note": "The client sendOobCode for an address that has no account (improved email privacy on): the plain request, returnOobLink on the client route, continueUrl checks and a missing API key.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 5
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/password-reset",
@@ -97,8 +133,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Password reset codes: inspection without use, weak and empty passwords, missing, unknown and truncated codes, use and reuse, a newer code retiring an older one, sign-in with the old and new password, tokens issued before the reset, the account after the reset, and codes issued before an Admin or client password change, an email change, a disable (and re-enable) and a deletion; a verification code offered as a reset code."
+      "status": "VERIFIED",
+      "note": "Password reset codes: inspection without use, weak and empty passwords, missing, unknown and truncated codes, use and reuse, a newer code retiring an older one, sign-in with the old and new password, tokens issued before the reset, the account after the reset, and codes issued before an Admin or client password change, an email change, a disable (and re-enable) and a deletion; a verification code offered as a reset code.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 57
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/verify-email",
@@ -109,8 +163,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Email verification codes: inspection, apply and reapply, a newer code and the older one, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable and a deletion, and a reset code applied as a verification."
+      "status": "VERIFIED",
+      "note": "Email verification codes: inspection, apply and reapply, a newer code and the older one, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable and a deletion, and a reset code applied as a verification.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 40
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/verify-and-change-email",
@@ -121,8 +193,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "VERIFY_AND_CHANGE_EMAIL codes: inspection, a newer code and the older one, apply and reapply, sign-in by the old and new addresses, tokens and refresh issued before the change, the new address taken before use, the account's address changed, disabled or deleted before use, a change code offered as a reset code, and a verification code of the old address applied after the change."
+      "status": "VERIFIED",
+      "note": "VERIFY_AND_CHANGE_EMAIL codes: inspection, a newer code and the older one, apply and reapply, sign-in by the old and new addresses, tokens and refresh issued before the change, the new address taken before use, the account's address changed, disabled or deleted before use, a change code offered as a reset code, and a verification code of the old address applied after the change.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 46
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/email-link-sign-in",
@@ -133,8 +223,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Email-link sign-in: generation (continueUrl and canHandleCodeInApp), inspection, a mismatched, missing or mixed-case address, missing and unknown codes, a new and an existing account, reuse, a newer link and the older one, disabled and deleted accounts, linking the address to an anonymous session, to a session whose address differs, and an address another account owns, codes of the other types on the email-link route and the email-link code on the other routes, and a password reset of an account that only ever signed in by link."
+      "status": "VERIFIED",
+      "note": "Email-link sign-in: generation (continueUrl and canHandleCodeInApp), inspection, a mismatched, missing or mixed-case address, missing and unknown codes, a new and an existing account, reuse, a newer link and the older one, disabled and deleted accounts, linking the address to an anonymous session, to a session whose address differs, and an address another account owns, codes of the other types on the email-link route and the email-link code on the other routes, and a password reset of an account that only ever signed in by link.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 58
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/email-link-session-claims",
@@ -145,8 +253,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The ID token of an email-link sign-in (new account, existing password account, anonymous session linked by link): header and claims including firebase.sign_in_provider and identities, the refresh of that session, a lookup, and a session cookie made from it (AUTH-CREDENTIAL scope decision C7)."
+      "status": "VERIFIED",
+      "note": "The ID token of an email-link sign-in (new account, existing password account, anonymous session linked by link): header and claims including firebase.sign_in_provider and identities, the refresh of that session, a lookup, and a session cookie made from it (AUTH-CREDENTIAL scope decision C7).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T14:23:20.843Z",
+            "gitSha": "268dd2569ad9aac0e62963c794609bce45f5e6d8",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 16
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/legacy-token-actions",
@@ -157,8 +283,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Legacy ID tokens (a password sign-in without returnSecureToken) selecting a VERIFY_EMAIL or VERIFY_AND_CHANGE_EMAIL code and linking an email-link address; AUTH-CREDENTIAL left these inferred."
+      "status": "VERIFIED",
+      "note": "Legacy ID tokens (a password sign-in without returnSecureToken) selecting a VERIFY_EMAIL or VERIFY_AND_CHANGE_EMAIL code and linking an email-link address; AUTH-CREDENTIAL left these inferred.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 17
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/code-ownership",
@@ -169,8 +313,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Whose code it is: a verification or change code of one account applied with another account's ID token or a garbage token, and a reset code checked and used while naming another account's address."
+      "status": "VERIFIED",
+      "note": "Whose code it is: a verification or change code of one account applied with another account's ID token or a garbage token, and a reset code checked and used while naming another account's address.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 17
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/code-expiry",
@@ -181,8 +343,26 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A PASSWORD_RESET code about ten seconds before and after its one-hour lifetime (inspection, use, a second account's code, and a new code afterwards); VERIFY_EMAIL, VERIFY_AND_CHANGE_EMAIL and EMAIL_SIGNIN codes inspected and used after the same hour, which records their lifetime's lower bound. Their full lifetime is longer than a bounded recording and stays unobserved (owner decision 2026-09-24). Exploration before the recording (not evidence): docs.local/runs/auth-action-explore-20260924/lifetime-*.jsonl."
+      "status": "VERIFIED",
+      "note": "A PASSWORD_RESET code about ten seconds before and after its one-hour lifetime (inspection, use, a second account's code, and a new code afterwards); VERIFY_EMAIL, VERIFY_AND_CHANGE_EMAIL and EMAIL_SIGNIN codes inspected and used after the same hour, which records their lifetime's lower bound. Their full lifetime is longer than a bounded recording and stays unobserved (owner decision 2026-09-24). Exploration before the recording (not evidence): docs.local/runs/auth-action-explore-20260924/lifetime-*.jsonl.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 20
+        }
+      }
     },
     {
       "conditionId": "AUTH-ACTION/final-artifact-regression",
@@ -196,8 +376,88 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row compared on one final artifact, with the Rust workspace tests of that source."
+      "status": "VERIFIED",
+      "note": "Every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row compared on one final artifact, with the Rust workspace tests of that source.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-23T11:52:22.579Z",
+            "gitSha": "2f9128f45f0d5aeb4aea9bdfaaa0f1e1c105e31f",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T12:44:15.390Z",
+            "gitSha": "3fdcb7f5350bfc24257fe448ea72be5417be26c7",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-23T15:29:14.879Z",
+            "gitSha": "81ba4d60f0faf5268a8b6b9eacb1ef34b03e5315",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:51:03.248Z",
+            "gitSha": "de2865c9a3ad3e3d6a8826b1291afd0e02223b75",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T05:53:09.841Z",
+            "gitSha": "4092354575c2d6a33179339b627c3e5db64c854a",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T08:04:46.724Z",
+            "gitSha": "092787b0e72597f66cd1fea368a6f3caa0d308be",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T14:23:20.843Z",
+            "gitSha": "268dd2569ad9aac0e62963c794609bce45f5e6d8",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json",
+          "spec/compatibility/closure/evidence/AUTH-ACTION-credential-regression.json",
+          "spec/compatibility/closure/evidence/AUTH-ACTION-account-regression.json"
+        ],
+        "rows": {
+          "MATCH": 1177,
+          "MISMATCH": 1
+        },
+        "documentedDivergences": [
+          {
+            "row": "auth-account/admin/custom-attributes#invalid-json",
+            "kind": "message-text",
+            "decidedBy": "owner",
+            "decidedOn": "2026-09-24",
+            "scopeDecision": "E9",
+            "reason": "AUTH-ACCOUNT scope decision A12: production returns gson's parser message for malformed customAttributes JSON; the INVALID_CLAIMS refusal itself matches."
+          }
+        ],
+        "workspaceTests": {
+          "command": "cargo nextest run --workspace --profile pr",
+          "passed": 3362,
+          "failed": 0
+        },
+        "mutation": "Every viable mutant of the branch diff in fireemu-adapter-http and fireemu-core-auth is caught; record docs.local/mutation/auth-action/head-37e8e0e46/RESULT.md (private).",
+        "buildTree": "clean: docs.local/runs/auth-action-final-20260924/git-status-porcelain-at-build.txt is empty (private)"
+      }
     },
     {
       "conditionId": "AUTH-ACTION/closure-review",
@@ -209,8 +469,32 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Independent clean-context closure and security review of the final artifact and evidence."
+      "status": "PENDING_REVIEW",
+      "note": "Independent clean-context closure and security review of the final artifact and evidence.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T12:13:38.654Z",
+            "gitSha": "37e8e0e461cc91319792748c94fa402afc8a60dd",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          },
+          {
+            "recordedAt": "2026-09-24T14:23:20.843Z",
+            "gitSha": "268dd2569ad9aac0e62963c794609bce45f5e6d8",
+            "recordings": 2,
+            "project": "fireemu-oracle-idp"
+          }
+        ],
+        "finalArtifactSha256": "bf3c6b129a8b3bfa0a8d2346897e0ebe141d49ba16fa11896680c958abd8b4b7",
+        "sourceCommit": "5e5cad1a9602bf7f81c71adfe1d41c0c92d0627a",
+        "comparisonPaths": [
+          "spec/compatibility/closure/evidence/AUTH-ACTION-comparison.json"
+        ],
+        "rows": {
+          "MATCH": 325
+        }
+      }
     }
   ]
 }

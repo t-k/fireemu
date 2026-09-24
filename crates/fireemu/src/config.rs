@@ -952,6 +952,11 @@ pub struct RuntimeConfig {
     pub database_create_time: Option<LogicalInstant>,
     /// Only `demo-` project IDs are accepted.
     pub require_demo_prefix: bool,
+    /// `projects.unknownProjects = "refuse"`: under the strict profile only the daemon's
+    /// project exists, and a request naming another is refused as production refuses a
+    /// project the credential cannot use (scope decision C11). Default: every project is
+    /// served in its own session.
+    pub refuse_unknown_projects: bool,
     /// Initial virtual clock instant.
     pub clock_start: LogicalInstant,
     /// Whether `daemon.clockStart` pinned it. Without it the daemon starts its virtual
@@ -1265,6 +1270,7 @@ impl Default for RuntimeConfig {
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
             database_create_time: None,
             require_demo_prefix: true,
+            refuse_unknown_projects: false,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
             clock_start_pinned: false,
             seed: 42,
@@ -3202,6 +3208,16 @@ impl RuntimeConfig {
             if let Some(b) = p.get("requireDemoPrefix").and_then(Value::as_bool) {
                 cfg.require_demo_prefix = b;
             }
+            match p.get("unknownProjects") {
+                None => {}
+                Some(Value::String(v)) if v == "serve" => cfg.refuse_unknown_projects = false,
+                Some(Value::String(v)) if v == "refuse" => cfg.refuse_unknown_projects = true,
+                Some(_) => {
+                    return Err(ConfigError(
+                        "projects.unknownProjects must be \"serve\" or \"refuse\"".into(),
+                    ))
+                }
+            }
         }
         if let Some(d) = obj.get("daemon").and_then(Value::as_object) {
             Self::parse_daemon(d, &mut cfg)?;
@@ -3506,6 +3522,28 @@ mod tests {
             base.insert(k, v);
         }
         RuntimeConfig::from_json(&json)
+    }
+
+    #[test]
+    fn unknown_projects_are_served_unless_the_config_refuses_them() {
+        let parse = |projects: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "projects": projects}))
+        };
+        assert!(!parse(json!({})).unwrap().refuse_unknown_projects);
+        assert!(
+            !parse(json!({"unknownProjects": "serve"}))
+                .unwrap()
+                .refuse_unknown_projects
+        );
+        assert!(
+            parse(json!({"unknownProjects": "refuse"}))
+                .unwrap()
+                .refuse_unknown_projects
+        );
+        for bad in [json!("deny"), json!(true)] {
+            let error = parse(json!({"unknownProjects": bad})).unwrap_err();
+            assert!(error.0.contains("projects.unknownProjects"), "{error}");
+        }
     }
 
     #[test]

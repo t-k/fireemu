@@ -1346,7 +1346,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
                 None => IndexSet::default(),
             },
         };
-        let backend = Arc::new(if cfg.clock_start_pinned {
+        let backend = if cfg.clock_start_pinned {
             LocalBackend::new(gateway.clone(), clock.clone(), cfg.seed)
                 .with_contention_wait(fireemu_adapter_grpc::local::DEFAULT_CONTENTION_WAIT)
         } else {
@@ -1360,7 +1360,18 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         .with_declared_databases(cfg.firestore_databases.keys().cloned())
         .with_ttl_sweep_interval(cfg.ttl_sweep_interval)
         .with_created_at(created_at)
-        .with_implicit_database_creation(cfg.implicit_database_creation));
+        .with_implicit_database_creation(cfg.implicit_database_creation);
+        // Scope decision C11: under the strict profile, projects.unknownProjects = "refuse"
+        // makes the daemon's project the only one that exists.
+        let backend = Arc::new(
+            if cfg.refuse_unknown_projects
+                && cfg.profile == crate::config::CompatibilityProfile::Strict
+            {
+                backend.with_project_boundary(cfg.auth_project.clone())
+            } else {
+                backend
+            },
+        );
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {
                 if let Some(path) = &files.indexes {

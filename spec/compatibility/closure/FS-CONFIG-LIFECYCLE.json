@@ -1,15 +1,12 @@
 {
   "schemaVersion": 1,
   "parent": "FS-CONFIG-LIFECYCLE",
-  "parentStatus": "COMPAT_VERIFIED",
+  "parentStatus": "PENDING_CLOSURE_REVIEW",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
-    "decision": "APPROVED",
-    "decidedOn": "2026-09-24",
-    "reviewer": "independent clean-context closure review and security review (round 3 each)",
-    "reviewedCommit": "e12f33583",
-    "finalArtifactSha256": "6869c8325226d16d1f467bfc565d5052c5ce218a0bd7444b8d6753cb0a9876b4",
-    "followUps": "Non-blocking notes are tracked outside the closure: an index-file index withdrawn through the Admin API, and the index-file indexes of a deleted and recreated database, stay gone until a session reset even if the index file declares them again; decoded import documents are bounded only by the 1 GiB raw output budget; the withdrawn and dropped registries grow per owner delete until reset; a test that refused queries leave the index registry unchanged."
+    "decision": "PENDING",
+    "reviewer": null,
+    "note": "The 2026-09-24 promotion (255274d76) was sent back by an independent promotion review: see the follow-up directive of 2026-09-24. Re-promotion follows the fixes, the re-recordings, the evidence rebinding and a confirmation review."
   },
   "scopeDecisions": [
     {
@@ -17,67 +14,99 @@
       "decision": "Managed-infrastructure surfaces stay out of scope: backups, backupSchedules, restore, clone and point-in-time recovery (enabling it, its seven-day version retention and the read_time window it widens). No emulator user drives them; they are operated with gcloud or Terraform against production. Only the values databases.get reports for them (pointInTimeRecoveryEnablement, versionRetentionPeriod, earliestVersionTime) are compared. fireemu refuses these methods, and a databases.patch that enables point-in-time recovery, with a documented refusal instead of pretending to serve them.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24",
-      "supersedes": "2026-09-18 FS-CONFIG-LIFECYCLE exclusion, except for the parts C2 brings back"
+      "supersedes": "2026-09-18 FS-CONFIG-LIFECYCLE exclusion, except for the parts C2 brings back",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
     },
     {
       "id": "C2",
       "decision": "Named Native database create, delete and patch, and managed exportDocuments and importDocuments over gs:// URIs, are in scope as REST long-running operations with production's request validation, operation shapes and post-state. fireemu writes and reads managed exports in the emulated Cloud Storage bucket, and a production export must import into fireemu and a fireemu export into production.",
       "decidedBy": "owner (t-k)",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
     },
     {
       "id": "C3",
       "decision": "Values only production can give meaning to follow what production answers: the locations catalog (locations.list and locations.get), freeTier (true only for the project's free-tier database), locationId as created, and the refusal of an unknown location, a customer-managed encryption key and resource tags.",
       "decidedBy": "owner (t-k)",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
     },
     {
       "id": "C4",
       "decision": "bulkDeleteDocuments, changeStreams and userCreds follow what a Standard edition production database answers: production serves bulkDeleteDocuments, so fireemu implements it; production refuses changeStreams and userCreds on Standard ('This operation requires an Enterprise database.'), so fireemu refuses them the same way.",
       "decidedBy": "owner (t-k)",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
     },
     {
       "id": "C5",
       "decision": "The comparison runs against the strict profile. The emulator profile keeps the official emulator's behavior (any database materializes on first touch) and is not closure evidence.",
       "decidedBy": "agent under the 2026-09-18 delegation",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24, recorded as an agent decision under delegation"
     },
     {
       "id": "C6",
       "decision": "Production runs touch only named databases the run creates in fireemu-oracle-query (prefix cfg), plus a per-run Cloud Storage bucket; (default) belongs to FS-QUERY-INDEX and is only read. A request that production rejects before it reaches any resource (a foreign project, an invalid id) may name other resources.",
       "decidedBy": "agent under the 2026-09-18 delegation",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24, recorded as an agent decision under delegation"
     },
     {
       "id": "C7",
       "decision": "The Admin API is observed over REST v1 in full; representative cases are also observed over gRPC google.firestore.admin.v1 (database create, get, list and delete; index create and get; export and import; operation get), because the Node FirestoreAdminClient, which the documented scheduled-export sample uses, speaks gRPC by default.",
       "decidedBy": "owner (t-k)",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
     },
     {
       "id": "C8",
       "decision": "Time-to-live is observed as configuration (the ttlConfig state transitions, removal, the list filter) and as the behavior before deletion (an expired document stays readable). Production deletes expired documents 'typically within 24 hours' with no guarantee, so the deletion instant is not a contract; fireemu keeps deleting on its virtual-clock sweep.",
       "decidedBy": "owner (t-k)",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
     },
     {
       "id": "C9",
       "decision": "Creating and deleting (default), and a project with no (default), cannot be observed in fireemu-oracle-query, whose (default) belongs to FS-QUERY-INDEX, and no new project can be created. They are observed in fireemu-fs-bisect-0924a when it is cleaned up, after the FS-DATA-WRITE bisection there has finished and before the project is deleted.",
       "decidedBy": "owner (t-k)",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
     },
     {
       "id": "C10",
       "decision": "Production long-running operations progress on their own schedule (an index takes minutes to build, an index operation stays PROCESSING after the index is READY, a deleted index keeps serving queries for a while, an exemption takes minutes to apply). Recordings compare the first response, every state the recording polls through after normalizing how many polls saw it, and the settled end state. fireemu must answer the same shapes and pass through the same states; how long it stays in each is not compared.",
       "decidedBy": "agent under the 2026-09-18 delegation",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24, recorded as an agent decision under delegation"
     },
     {
       "id": "C11",
       "decision": "A project the credential cannot use is answered with production's 403 PERMISSION_DENIED (ErrorInfo CONSUMER_INVALID) only when the configuration opts in: under the strict profile, projects.unknownProjects = \"refuse\" makes the daemon's project the only one that exists. The default keeps serving every project in its own session, because parallel test workers commonly use one project id each, and emulators.singleProjectMode is not reused because firebase init writes it as true. The project-boundary comparison runs against the opt-in configuration (conformance/fs-config-lifecycle.fireemu.json).",
       "decidedBy": "owner (t-k)",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
+    },
+    {
+      "id": "C12",
+      "decision": "fireemu-fs-bisect-0924a is a closure-evidence project for two purposes only: FS-CONFIG-LIFECYCLE's creation and deletion of (default) and a project without it (C9), and FS-DATA-WRITE's boundary exploration. Its configuration and use history are kept with the sandbox records, and a recording there first checks the sandbox ledger that no other lane is using it.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
+    },
+    {
+      "id": "C13",
+      "decision": "The managed-export partition checksum (export_metadata field 2.5) is a known divergence: production's value is a digest nobody can reproduce and production imports an export whose checksum is 0 without verifying it, so fireemu writes 0 and does not verify checksums on import.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
+    },
+    {
+      "id": "C14",
+      "decision": "The Admin API is served under both profiles. Its effects only follow a call the official emulator does not serve, so no existing request is newly refused; it is listed as fireemuOnly in spec/compatibility/contract.json and in the CHANGELOG with its configuration keys.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "recordedIn": "owner decision ledger (docs.local/instructions/owner-decisions.md, private), 2026-09-24"
     }
   ],
   "conditions": [
@@ -139,7 +168,7 @@
       "recipeIds": [
         "fs-config/database/delete"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_CORPUS",
       "note": "The delete operation shape, delete protection, etag, missing database, and what get, list, showDeleted and the data plane answer afterwards. In the first recording of database/delete/basic production refused the delete of the just-created database with 409 ABORTED ('There are concurrent database changes'), so that program's delete-path rows are matched against the second recording, where the delete went through; the refusal itself is a production race fireemu does not reproduce.",
       "evidence": {
         "productionRecordings": [
@@ -215,7 +244,7 @@
       "recipeIds": [
         "fs-config/default-database"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_CORPUS",
       "note": "C9: creating and deleting (default) and a project without it, observed in fireemu-fs-bisect-0924a at its cleanup. The two recordings start from different states: the first deletes the (default) the project was set up with (eleven deployed composite indexes, conformance/firestore.indexes.json), the second the empty (default) the first recreated. Every row where they differ is matched against the first recording, so fireemu's answers come from one consistent production run; the local run declares the same index file (conformance/fs-config-lifecycle-bisect.fireemu.json).",
       "evidence": {
         "productionRecordings": [
@@ -242,7 +271,7 @@
       "recipeIds": [
         "fs-config/project-boundary"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "Admin and data-plane requests naming a project the credential cannot use, and a database the project does not have.",
       "evidence": {
         "productionRecordings": [
@@ -418,7 +447,7 @@
       "recipeIds": [
         "fs-config/export"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "exportDocuments: the operation, collectionIds and namespaceIds, validation (missing prefix, scheme, missing bucket, missing database), the written object layout.",
       "evidence": {
         "productionRecordings": [
@@ -449,7 +478,7 @@
       "recipeIds": [
         "fs-config/import"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "importDocuments: the operation, collectionIds against filtered and unfiltered exports, validation (missing prefix, absent export), the imported documents.",
       "evidence": {
         "productionRecordings": [
@@ -474,7 +503,7 @@
       "recipeIds": [
         "fs-config/export/interop"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "A production export imports into fireemu, and a fireemu export imports into production, for an unfiltered and a collection-filtered export, with every value type.",
       "evidence": {
         "productionRecordings": [
@@ -524,7 +553,7 @@
       "recipeIds": [
         "fs-config/grpc"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "C7: representative Admin cases over gRPC google.firestore.admin.v1.",
       "evidence": {
         "productionRecordings": [
@@ -551,7 +580,7 @@
         "fs-config-lifecycle/local-evidence",
         "cargo:fireemu-adapter-grpc+fireemu"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "note": "The whole corpus against one retained artifact, plus the local multi-partition import, named-database export and projection evidence the parent row already cites.",
       "evidence": {
         "productionRecordings": [
@@ -612,7 +641,7 @@
         "FS-CONFIG-LIFECYCLE",
         "fs-config"
       ],
-      "status": "VERIFIED",
+      "status": "PENDING_REVIEW",
       "evidence": {
         "productionRecordings": [
           {

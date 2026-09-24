@@ -237,7 +237,10 @@ test("the guard admits reviewed families only and never another project", () => 
       /VERIFY_EMAIL/,
     );
   }
-  guardCredentialRequest(request("v2/accounts/mfaEnrollment:start", {}), local);
+  guardCredentialRequest(
+    request("v2/accounts/mfaEnrollment:start", { idToken: "t", totpEnrollmentInfo: {} }),
+    local,
+  );
   assert.throws(
     () => guardCredentialRequest(request("v2/accounts/mfaEnrollment:finalize", {}), local),
     /reviewed family/,
@@ -466,4 +469,201 @@ test("fireemu's clock moves to an absolute instant for a timed step", () => {
   assert.equal(url, "http://127.0.0.1:9/v1/sessions/default/clock:advanceTo");
   assert.deepEqual(JSON.parse(init.body), { instant: "2026-09-24T00:00:00.300Z" });
   assert.equal(init.headers.authorization, "Bearer c");
+});
+
+test("the corpus check refuses a mis-scoped wait, mail, enrollment or timed reference", () => {
+  const step = (extra) => ({ id: "s", path: "v1/accounts:lookup", auth: "key", ...extra });
+  const last = (steps, tokens) => [{ id: "only", steps, ...(tokens ? { tokens } : {}) }];
+  assert.throws(
+    () =>
+      validateCredentialCorpus([
+        {
+          id: "a",
+          steps: [step({ waitUntil: { of: "token:t:exp", plus: 1 } })],
+          tokens: { t: {} },
+        },
+        { id: "b", steps: [] },
+      ]),
+    /only the last program may wait/,
+  );
+  assert.throws(
+    () =>
+      validateCredentialCorpus(
+        last([
+          step({
+            path: "v1/accounts:sendOobCode",
+            body: { requestType: "PASSWORD_RESET", email: "EMAIL(x)" },
+          }),
+        ]),
+      ),
+    /VERIFY_EMAIL/,
+  );
+  assert.throws(
+    () =>
+      validateCredentialCorpus(
+        last([
+          step({
+            path: "v2/accounts/mfaEnrollment:start",
+            body: { idToken: "t", phoneEnrollmentInfo: { phoneNumber: "PHONE(0)" } },
+          }),
+        ]),
+      ),
+    /empty TOTP enrollment/,
+  );
+  assert.throws(
+    () =>
+      validateCredentialCorpus(
+        last([step({ waitUntil: { of: "token:missing:exp", plus: 1 } })], { t: {} }),
+      ),
+    /waitUntil must name/,
+  );
+  assert.throws(
+    () =>
+      validateCredentialCorpus(
+        last([step({ id: "late", waitUntil: { of: "never:idToken.exp", plus: 1 } })]),
+      ),
+    /waitUntil must name/,
+  );
+  assert.ok(
+    validateCredentialCorpus(
+      last([
+        step({ id: "sign-up" }),
+        step({ id: "timed", waitUntil: { of: "sign-up:idToken.exp", plus: 299 } }),
+      ]),
+    ),
+  );
+});
+
+test("the runtime guard refuses a phone enrollment and a spaced real number", () => {
+  const request = (path, body) => ({
+    url: `http://127.0.0.1:32297/identitytoolkit.googleapis.com/${path}`,
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  });
+  guardCredentialRequest(
+    request("v2/accounts/mfaEnrollment:start", { idToken: "t", totpEnrollmentInfo: {} }),
+    local,
+  );
+  assert.throws(
+    () =>
+      guardCredentialRequest(
+        request("v2/accounts/mfaEnrollment:start", { idToken: "t", phoneEnrollmentInfo: {} }),
+        local,
+      ),
+    /empty totpEnrollmentInfo/,
+  );
+  assert.throws(
+    () =>
+      guardCredentialRequest(
+        request("v1/accounts:update", { displayName: "+1 (555) 123-4567" }),
+        local,
+      ),
+    /test phone/,
+  );
+});
+
+test("an enrollment secret is masked and the fixture scan refuses one", async () => {
+  const { scanFixture } = await import("./auth-account/fixture-scan.mjs");
+  const recorded = normalizeCredentialResponse(
+    200,
+    JSON.stringify({ totpSessionInfo: { sharedSecretKey: "JBSWY3DPEHPK3PXP" } }),
+    local,
+  );
+  assert.equal(recorded.body.totpSessionInfo.sharedSecretKey, "<sharedSecretKey>");
+  scanFixture(JSON.stringify(recorded), []);
+  assert.throws(() => scanFixture('{"sharedSecretKey": "JBSWY3DPEHPK3PXP"}', []), /TOTP secret/);
+});
+
+test("a legacy token records whether its user_id is the account the answer names", () => {
+  const legacy = jwt({ alg: "RS256" }, { iat: 1, user_id: "u1" });
+  const recorded = normalizeCredentialResponse(
+    200,
+    JSON.stringify({ localId: "u1", idToken: legacy }),
+    local,
+  );
+  assert.equal(recorded.body.idToken["<jwt>"].userIdIsLocalId, true);
+  assert.equal(recorded.body.idToken["<jwt>"].subIsLocalId, undefined);
+});
+
+test("production records only with a second factor disabled", async () => {
+  const { mfaDisabled } = await import("./auth-credential/run.mjs");
+  assert.equal(mfaDisabled(undefined), true);
+  assert.equal(mfaDisabled({ state: "DISABLED" }), true);
+  assert.equal(mfaDisabled({ state: "ENABLED" }), false);
+  assert.equal(mfaDisabled({ state: "DISABLED", providerConfigs: [{ state: "ENABLED" }] }), false);
+  assert.equal(mfaDisabled({ providerConfigs: [{ state: "DISABLED" }] }), true);
+});
+
+test("a timed step moves fireemu's clock to the named instant plus 300 ms", async () => {
+  const ctx = {
+    ...local,
+    target: { ...local.target, control: { url: "http://127.0.0.1:9/v1/", token: "c" } },
+  };
+  const idToken = jwt({ alg: "RS256" }, { iat: 100, exp: 3700, sub: "u" });
+  const clock = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("clock:advanceTo")) {
+      clock.push(JSON.parse(init.body).instant);
+      return new Response("{}", { status: 200 });
+    }
+    if (String(url).includes("accounts:batchGet"))
+      return new Response('{"users":[]}', { status: 200 });
+    return new Response(JSON.stringify({ idToken }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const session = createSession(ctx, {});
+    await session.runProgram({
+      id: "p",
+      steps: [
+        { id: "sign-up", path: "v1/accounts:signUp", auth: "key", body: {} },
+        {
+          id: "edge",
+          path: "v1/accounts:lookup",
+          auth: "key",
+          body: {},
+          waitUntil: { of: "sign-up:idToken.exp", plus: 299 },
+        },
+      ],
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.deepEqual(clock, [new Date((3700 + 299) * 1000 + 300).toISOString()]);
+});
+
+test("a program fails before its wait when an earlier answer was indeterminate", async () => {
+  const ctx = {
+    ...local,
+    target: { ...local.target, control: { url: "http://127.0.0.1:9/v1/", token: "c" } },
+  };
+  let advanced = false;
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("clock:")) advanced = true;
+    if (String(url).includes("accounts:batchGet"))
+      return new Response('{"users":[]}', { status: 200 });
+    return new Response('{"error":{"message":"TOO_MANY_ATTEMPTS_TRY_LATER"}}', { status: 429 });
+  };
+  try {
+    await assert.rejects(
+      createSession(ctx, {}).runProgram({
+        id: "p",
+        steps: [
+          { id: "sign-up", path: "v1/accounts:signUp", auth: "key", body: {} },
+          { id: "late", path: "v1/accounts:lookup", auth: "key", body: {}, waitSeconds: 3610 },
+        ],
+      }),
+      /sign-up was indeterminate/,
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(advanced, false);
 });

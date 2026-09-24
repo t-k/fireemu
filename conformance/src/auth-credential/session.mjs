@@ -211,6 +211,9 @@ export function createSession(
     const target = seconds * 1000 + 300;
     if (ctx.target.kind === "production") {
       await sleep(Math.max(0, target - Date.now()));
+      // A timer that fired late (a sleeping machine) would record the wrong side of the edge.
+      const late = Date.now() - target;
+      if (late > 200) throw fatal(`a timed step fired ${late} ms late`);
       return;
     }
     charge(true);
@@ -243,17 +246,27 @@ export function createSession(
       }
       for (const step of program.steps) {
         if (step.delayMs) await sleep(step.delayMs);
+        if (step.waitSeconds || step.waitUntil) {
+          // Fail before a long wait, not after it, when an earlier answer says nothing.
+          const silent = Object.entries(steps).find(([, recorded]) => isTransient(recorded));
+          if (silent) throw new Error(`${silent[0]} was indeterminate; not waiting for ${step.id}`);
+        }
         if (step.waitSeconds) await wait(step.waitSeconds);
         if (step.waitUntil) {
           // `{of: "step:path" | "token:name:claim", plus}`: a time claim of an earlier answer
           // or of a minted custom token, plus whole seconds.
           const [kind, name, claim] = step.waitUntil.of.split(":");
-          const base =
-            kind === "token"
-              ? decodeJwt(tokens.get(name) ?? "")?.claims?.[claim]
-              : fromRaw(raw, step.waitUntil.of);
-          if (typeof base !== "number") throw fatal(`${step.id}: no time at ${step.waitUntil.of}`);
-          await waitUntil(base + step.waitUntil.plus);
+          let base;
+          try {
+            base =
+              kind === "token"
+                ? decodeJwt(tokens.get(name) ?? "")?.claims?.[claim]
+                : fromRaw(raw, step.waitUntil.of);
+          } catch {
+            base = undefined;
+          }
+          // An answer that carried no time leaves the step to record its missing dependency.
+          if (typeof base === "number") await waitUntil(base + step.waitUntil.plus);
         }
         let outcome;
         try {

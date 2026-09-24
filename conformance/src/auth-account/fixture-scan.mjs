@@ -16,6 +16,9 @@ export function scanFixture(text, secrets) {
   if ([/ya29\./, /eyJ[A-Za-z0-9_-]{5,}/, /AMf-/].some((pattern) => pattern.test(text))) {
     throw new Error("fixture contains a token");
   }
+  for (const [, value] of text.matchAll(/"sharedSecretKey":\s*"([^"]*)"/g)) {
+    if (value !== "<sharedSecretKey>") throw new Error("fixture contains a TOTP secret");
+  }
   for (const [, key, value] of text.matchAll(/"(passwordHash|salt)":\s*"([^"]*)"/g)) {
     if (value !== "<bytes>" && !(key === "passwordHash" && value === REDACTED_HASH)) {
       throw new Error("fixture contains password hash material");

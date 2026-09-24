@@ -102,13 +102,15 @@ export function guardCredentialRequest({ url, init }, ctx, { harness = false } =
     );
   }
   guardOobCode(path, inputs[1]);
+  guardMfaEnrollment(path, inputs[1]);
   for (const input of inputs) {
     walkEntries(input, (key, value) => {
       if (PROJECT_KEYS.has(key) && value !== ctx.project)
         throw new Error(`request names another project: ${value}`);
       if (typeof value !== "string") return;
       assertOnlyExampleEmail(value, key);
-      for (const [phone] of value.matchAll(/\+\d{8,15}/g)) {
+      // Separators inside a number do not hide it.
+      for (const [phone] of value.replaceAll(/[\s().-]/g, "").matchAll(/\+\d{8,15}/g)) {
         if (!TEST_PHONES.includes(phone))
           throw new Error(`${phone} is not a configured test phone`);
       }
@@ -121,6 +123,17 @@ function guardOobCode(path, input) {
   if (!path.endsWith(":sendOobCode")) return;
   if (input?.requestType !== "VERIFY_EMAIL" || !input?.idToken || input?.email !== undefined) {
     throw new Error("sendOobCode is only VERIFY_EMAIL for the account behind a token");
+  }
+}
+
+/** MFA enrollment may only be started for TOTP with no settings: never a phone factor. */
+function guardMfaEnrollment(path, input) {
+  if (!path.endsWith("mfaEnrollment:start")) return;
+  const keys = Object.keys(input ?? {}).toSorted();
+  const totp = input?.totpEnrollmentInfo;
+  const empty = totp !== null && typeof totp === "object" && Object.keys(totp).length === 0;
+  if (keys.join(",") !== "idToken,totpEnrollmentInfo" || !empty) {
+    throw new Error("mfaEnrollment:start only with an idToken and an empty totpEnrollmentInfo");
   }
 }
 
@@ -224,6 +237,22 @@ export function validateCredentialCorpus(programs) {
         (step.body?.requestType !== "VERIFY_EMAIL" || !step.body?.idToken || step.body?.email)
       )
         throw new Error(`${step.id}: sendOobCode only VERIFY_EMAIL for a token's own account`);
+      if (step.path.endsWith("mfaEnrollment:start")) {
+        const { idToken, totpEnrollmentInfo, ...rest } = step.body ?? {};
+        if (!idToken || Object.keys(rest).length || JSON.stringify(totpEnrollmentInfo) !== "{}")
+          throw new Error(`${step.id}: mfaEnrollment:start only as an empty TOTP enrollment`);
+      }
+      // A timed step names an earlier step or a minted token, so a typo fails here and not
+      // after an hour of waiting.
+      if (step.waitUntil) {
+        const [kind, name, claim] = String(step.waitUntil.of).split(":");
+        const known =
+          kind === "token"
+            ? Object.hasOwn(program.tokens ?? {}, name) && typeof claim === "string"
+            : stepIds.has(kind) && typeof name === "string" && claim === undefined;
+        if (!known || !Number.isInteger(step.waitUntil.plus))
+          throw new Error(`${step.id}: waitUntil must name an earlier step or a minted token`);
+      }
       for (const text of walkStrings({ body: step.body, form: step.form, query: step.query }))
         assertOnlyExampleEmail(text, step.id);
     }

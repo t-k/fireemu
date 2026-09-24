@@ -163,7 +163,35 @@ async function prepareProject(ctx, { apply }) {
   const drift = defaultsMask.filter((path) => !configMatches(now[path], CONFIG_DEFAULTS[path]));
   if (drift.length && ctx.target.kind === "production")
     throw new Error(`sandbox config is not at its defaults: ${drift.join(", ")}`);
+  // The legacy program offers a token to MFA enrollment: with a second factor enabled an
+  // honoured request would answer with an enrollment secret, so the sandbox must have none.
+  const { mfa } = await account.readConfig(["mfa"]);
+  if (ctx.target.kind === "production" && !mfaDisabled(mfa)) {
+    throw new Error(`sandbox MFA is not disabled: ${JSON.stringify(mfa)}`);
+  }
   return account.counts().harnessRequests;
+}
+
+/** Whether a project's `mfa` config enables no second factor. */
+export function mfaDisabled(mfa) {
+  if (mfa === undefined || mfa === null) return true;
+  const enabled = (state) => state === "ENABLED" || state === "MANDATORY";
+  return (
+    !enabled(mfa.state) && !(mfa.providerConfigs ?? []).some((provider) => enabled(provider?.state))
+  );
+}
+
+/**
+ * The boundary rows need this machine's clock within 100 ms of Google's: a run starts only
+ * after `sntp` against time.google.com reports such an offset.
+ */
+async function assertClockSynchronized() {
+  const { stdout } = await execFileAsync("sntp", ["-t", "2", "time.google.com"]);
+  const offset = Number(/^([+-]\d+\.\d+)/m.exec(stdout)?.[1]);
+  if (!Number.isFinite(offset) || Math.abs(offset) > 0.1) {
+    throw new Error(`clock offset to time.google.com is ${offset} s; synchronize before recording`);
+  }
+  return offset;
 }
 
 async function recordOnce(programs, run, web) {
@@ -274,6 +302,7 @@ async function recordProduction() {
     corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
   };
   const web = await sandboxWebConfig();
+  meta.clockOffsetSeconds = await assertClockSynchronized();
   await assertIgnored(privateRoot);
   const runDir = join(
     privateRoot,

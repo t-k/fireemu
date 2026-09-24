@@ -97,6 +97,11 @@ pub struct PasswordPolicy {
     pub require_non_alphanumeric: bool,
     /// The server-provided punctuation set used by the SDK projection.
     pub allowed_non_alphanumeric: BTreeSet<char>,
+    /// Whether the project was given this policy. A project starts without one: production
+    /// then reports no `passwordPolicyConfig` and answers clients with its default policy
+    /// (sandbox reads 2026-09-23 and 2026-09-25), while applying the same checks as an unset
+    /// policy here.
+    pub configured: bool,
 }
 
 impl Default for PasswordPolicy {
@@ -111,6 +116,7 @@ impl Default for PasswordPolicy {
             require_numeric: false,
             require_non_alphanumeric: false,
             allowed_non_alphanumeric: default_allowed_non_alphanumeric(),
+            configured: false,
         }
     }
 }
@@ -161,6 +167,7 @@ impl PasswordPolicy {
             require_numeric,
             require_non_alphanumeric,
             allowed_non_alphanumeric,
+            configured: true,
         })
     }
 
@@ -213,6 +220,10 @@ pub fn default_allowed_non_alphanumeric() -> BTreeSet<char> {
     DEFAULT_NON_ALPHANUMERIC_ORDER.chars().collect()
 }
 
+/// The longest password production accepts, in UTF-16 code units, whatever the policy
+/// (sandbox recording 2026-09-23, `policy/default/routes`).
+pub const MAX_PASSWORD_UTF16_UNITS: usize = 4096;
+
 /// Production's non-alphanumeric characters in the order `v2/passwordPolicy` lists them. `+`
 /// and `=` are not among them (sandbox recording 2026-09-23, `policy/enforce-custom`).
 pub const DEFAULT_NON_ALPHANUMERIC_ORDER: &str = r#"^$*.[]{}()?"!@#%&/\,><':;|_~`-"#;
@@ -223,6 +234,28 @@ mod tests {
         default_allowed_non_alphanumeric, ConfigError, EnforcementState, Operation, PasswordPolicy,
         ViolationCode,
     };
+
+    #[test]
+    fn a_project_starts_without_a_configured_policy_and_any_built_policy_is_configured() {
+        // Production reports no passwordPolicyConfig until one is written (sandbox read
+        // 2026-09-23); the default answers as the policy every project has.
+        assert!(!PasswordPolicy::default().configured);
+        assert!(strict().configured);
+        let same_as_default = PasswordPolicy::try_new(
+            EnforcementState::Off,
+            false,
+            6,
+            None,
+            false,
+            false,
+            false,
+            false,
+            default_allowed_non_alphanumeric(),
+        )
+        .unwrap();
+        assert!(same_as_default.configured);
+        assert_ne!(same_as_default, PasswordPolicy::default());
+    }
 
     fn strict() -> PasswordPolicy {
         PasswordPolicy::try_new(

@@ -210,7 +210,7 @@
         },
         "improvedEmailPrivacy": {
           "type": "boolean",
-          "description": "Email enumeration protection, as production enables it for every new project: wrong-password and unknown-address sign-ins answer INVALID_LOGIN_CREDENTIALS and a password reset for an unknown address is acknowledged. Defaults to true; false restores the official Auth emulator's EMAIL_NOT_FOUND and INVALID_PASSWORD answers."
+          "description": "Email enumeration protection, as production enables it for every new project: wrong-password and unknown-address sign-ins answer INVALID_LOGIN_CREDENTIALS and a password reset for an unknown address is acknowledged. Defaults to true under the strict profile and to false, the official Auth emulator's default, under the emulator profile; false gives the official Auth emulator's EMAIL_NOT_FOUND and INVALID_PASSWORD answers."
         },
         "signIn": {
           "type": "object",

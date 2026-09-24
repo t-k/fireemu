@@ -3331,7 +3331,8 @@ fn project_blocking_settings_get_patch_preserves_masked_values_and_rejects_atomi
     let (status, after) = admin(&s, "GET", path, &Value::Null);
     assert_eq!(status, 200, "{after}");
     assert_eq!(after["blockingFunctions"], updated["blockingFunctions"]);
-    assert_eq!(after["client"]["permissions"]["disabledUserSignup"], false);
+    // Nothing wrote the switches, so the emulator profile's document has no client member.
+    assert!(after.get("client").is_none(), "{after}");
 
     let cleared = admin(
         &s,
@@ -3431,7 +3432,8 @@ fn project_blocking_settings_are_isolated_to_the_bridge_project() {
 
     let (status, before) = admin(&s, "GET", path, &Value::Null);
     assert_eq!(status, 200, "{before}");
-    assert!(before.get("blockingFunctions").is_none());
+    // The official emulator's document always has the member; no trigger is bound here.
+    assert_eq!(before["blockingFunctions"], json!({}));
 
     let (status, rejected) = admin(
         &s,
@@ -10507,6 +10509,16 @@ fn password_policy_lists_production_symbols_in_production_order() {
 fn password_policy_projections_omit_unset_custom_maximum() {
     let s = state();
     let config_path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let set = admin(
+        &s,
+        "PATCH",
+        &format!("{config_path}?updateMask=passwordPolicyConfig"),
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 8}}],
+        }}),
+    );
+    assert_eq!(set.0, 200, "{}", set.1);
     let config = admin(&s, "GET", config_path, &Value::Null);
     assert_eq!(config.0, 200, "{}", config.1);
     assert!(
@@ -11595,14 +11607,8 @@ fn project_client_permissions_are_exposed_and_applied_atomically() {
     let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
     let before = admin(&s, "GET", path, &Value::Null);
     assert_eq!(before.0, 200, "{}", before.1);
-    assert_eq!(
-        before.1["client"]["permissions"]["disabledUserSignup"],
-        false
-    );
-    assert_eq!(
-        before.1["client"]["permissions"]["disabledUserDeletion"],
-        false
-    );
+    // Neither production nor the official emulator reports unset switches (owner decision K3).
+    assert!(before.1.get("client").is_none(), "{}", before.1);
 
     let updated = admin(
         &s,
@@ -12063,20 +12069,11 @@ fn project_config_patch_treats_protojson_null_messages_as_absent_or_clear() {
         cleared.1["emailPrivacyConfig"]["enableImprovedEmailPrivacy"],
         false
     );
-    assert_eq!(
-        cleared.1["client"]["permissions"]["disabledUserSignup"],
-        false
-    );
-    assert_eq!(
-        cleared.1["client"]["permissions"]["disabledUserDeletion"],
-        false
-    );
-    assert_eq!(
-        cleared.1["passwordPolicyConfig"]["passwordPolicyEnforcementState"],
-        "OFF"
-    );
-    assert!(cleared.1["quota"].get("signUpQuotaConfig").is_none());
-    assert_eq!(cleared.1["quota"]["quotaSimulation"]["mode"], "off");
+    // Cleared switches, policy and quota read as unset: the emulator profile's document then
+    // has no such member (owner decision K3).
+    for absent in ["client", "passwordPolicyConfig", "quota"] {
+        assert!(cleared.1.get(absent).is_none(), "{absent}: {}", cleared.1);
+    }
 }
 
 #[test]
@@ -15373,7 +15370,9 @@ fn batch_create_upserts_and_checks_duplicates_like_production() {
 /// answers with its two Firebase Hosting domains, AUTH-ACTION scope decision E6).
 #[test]
 fn authorized_domains_round_trip_through_the_admin_config() {
-    let s = state();
+    // The strict document reports the domains of a new project; the emulator profile's
+    // document reports them once written (owner decision K3).
+    let s = strict_state();
     let (status, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
     assert_eq!(status, 200, "{read}");
     assert_eq!(
@@ -16650,5 +16649,325 @@ fn strict_the_action_page_applies_an_email_change_like_the_api() {
             strict,
             "{label}: the replaced address's verification code is void"
         );
+    }
+}
+
+/// Production's client project config names the project by its number and lists the
+/// project's authorized domains (sandbox read 2026-09-25); the official emulator's answer names
+/// the number too but always lists only `localhost`, which the emulator profile keeps while no
+/// domain is configured.
+#[test]
+fn client_project_config_names_the_project_number_and_its_authorized_domains() {
+    let strict = strict_state();
+    strict
+        .store
+        .lock()
+        .unwrap()
+        .set_project_number(Some(123_456_789_012));
+    let domains = ["demo-app.firebaseapp.com", "demo-app.web.app"];
+    let (status, _) = admin(
+        &strict,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=authorizedDomains",
+        &json!({"authorizedDomains": domains}),
+    );
+    assert_eq!(status, 200);
+    let got = handle(
+        &strict,
+        "GET",
+        &with_client_key(&strict, &format!("{V1}/projects"), "fake-api-key"),
+        &Value::Null,
+    );
+    assert_eq!(got.status, 200);
+    assert_eq!(
+        got.body,
+        json!({"projectId": "123456789012", "authorizedDomains": domains})
+    );
+
+    let emulator = state();
+    emulator
+        .store
+        .lock()
+        .unwrap()
+        .set_project_number(Some(123_456_789_012));
+    let got = handle(&emulator, "GET", &format!("{V1}/projects"), &Value::Null);
+    assert_eq!(
+        got.body,
+        json!({"projectId": "123456789012", "authorizedDomains": ["localhost"]})
+    );
+    let (status, _) = admin(
+        &emulator,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=authorizedDomains",
+        &json!({"authorizedDomains": domains}),
+    );
+    assert_eq!(status, 200);
+    let got = handle(&emulator, "GET", &format!("{V1}/projects"), &Value::Null);
+    assert_eq!(got.body["authorizedDomains"], json!(domains));
+}
+
+/// A new project's Admin config: strict answers production's document for a project
+/// initialized with Identity Platform (sandbox reads 2026-09-23 and 2026-09-25), the emulator
+/// profile the official emulator's three members (owner decision K3, AUTH-CONFIG-SDK).
+#[test]
+fn a_new_project_config_reads_as_production_under_strict_and_as_the_official_emulator_otherwise() {
+    const CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let strict = strict_state();
+    strict
+        .store
+        .lock()
+        .unwrap()
+        .set_project_number(Some(123_456_789_012));
+    let (status, got) = admin(&strict, "GET", CONFIG, &Value::Null);
+    assert_eq!(status, 200);
+    assert_eq!(got["name"], json!("projects/123456789012/config"));
+    assert_eq!(got["subtype"], json!("IDENTITY_PLATFORM"));
+    assert_eq!(got["defaultHostingSite"], json!("demo-app"));
+    assert_eq!(
+        got["client"],
+        json!({"permissions": {}, "firebaseSubdomain": "demo-app"})
+    );
+    assert_eq!(got["quota"], json!({}));
+    assert_eq!(got["monitoring"], json!({"requestLogging": {}}));
+    assert_eq!(got["multiTenant"], json!({}));
+    assert_eq!(got["mfa"], json!({"state": "DISABLED"}));
+    assert_eq!(got["blockingFunctions"], json!({}));
+    assert_eq!(got["smsRegionConfig"], json!({"allowlistOnly": {}}));
+    assert_eq!(
+        got["mobileLinksConfig"],
+        json!({"domain": "HOSTING_DOMAIN"})
+    );
+    assert_eq!(
+        got["emailPrivacyConfig"],
+        json!({}),
+        "a false switch is left out"
+    );
+    assert_eq!(
+        got["notification"]["sendEmail"]["callbackUri"],
+        json!("https://demo-app.firebaseapp.com/__/auth/action")
+    );
+    assert_eq!(got["notification"]["defaultLocale"], json!("en"));
+    assert_eq!(got["signIn"]["hashConfig"]["algorithm"], json!("SCRYPT"));
+    assert_eq!(got["signIn"]["hashConfig"]["rounds"], json!(8));
+    assert_eq!(got["signIn"]["hashConfig"]["memoryCost"], json!(14));
+    for absent in [
+        "passwordPolicyConfig",
+        "recaptchaConfig",
+        "autodeleteAnonymousUsers",
+    ] {
+        assert!(got.get(absent).is_none(), "{absent}: {got}");
+    }
+    assert!(got["signIn"].get("allowDuplicateEmails").is_none());
+
+    let emulator = state();
+    let (status, got) = admin(&emulator, "GET", CONFIG, &Value::Null);
+    assert_eq!(status, 200);
+    assert_eq!(
+        got,
+        json!({
+            "signIn": {"allowDuplicateEmails": false},
+            "blockingFunctions": {},
+            "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false},
+        })
+    );
+}
+
+/// A client's password policy while the project has none configured is production's default
+/// policy (sandbox read 2026-09-25).
+#[test]
+fn the_client_password_policy_of_a_project_without_one_is_production_default() {
+    for s in [state(), strict_state()] {
+        let got = handle(
+            &s,
+            "GET",
+            &with_client_key(&s, &format!("{V2}/passwordPolicy"), "fake-api-key"),
+            &Value::Null,
+        );
+        assert_eq!(got.status, 200);
+        assert_eq!(
+            got.body,
+            json!({
+                "customStrengthOptions": {"minPasswordLength": 6, "maxPasswordLength": 4096},
+                "schemaVersion": 1,
+                "enforcementState": "ENFORCE",
+            })
+        );
+    }
+}
+
+/// The Admin SDK's project config manager reads and writes `v2/projects/{p}/config`, the same
+/// resource as `admin/v2/projects/{p}/config`.
+#[test]
+fn the_admin_sdk_config_path_is_the_same_resource() {
+    let s = strict_state();
+    let (status, written) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/config?updateMask=emailPrivacyConfig.enableImprovedEmailPrivacy",
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+    );
+    assert_eq!(status, 200, "{written}");
+    let (status, read) = admin(
+        &s,
+        "GET",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config",
+        &Value::Null,
+    );
+    assert_eq!(status, 200);
+    assert_eq!(
+        read["emailPrivacyConfig"],
+        json!({"enableImprovedEmailPrivacy": true})
+    );
+    let (status, same) = admin(
+        &s,
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/projects/demo-app/config",
+        &Value::Null,
+    );
+    assert_eq!(status, 200);
+    assert_eq!(same, read);
+}
+
+/// The config members fireemu stores for read-back (notification, mobile links, SMS regions,
+/// reCAPTCHA, monitoring, anonymous auto-deletion) are written through masks, read back, and
+/// cleared back to a new project's value (AUTH-CONFIG-SDK).
+#[test]
+fn stored_config_members_are_written_by_mask_and_clear_to_their_initial_value() {
+    const CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let s = strict_state();
+    let patch =
+        |mask: &str, body: Value| admin(&s, "PATCH", &format!("{CONFIG}?updateMask={mask}"), &body);
+    let (status, _) = patch(
+        "mobileLinksConfig.domain,autodeleteAnonymousUsers,monitoring.requestLogging.enabled",
+        json!({
+            "mobileLinksConfig": {"domain": "FIREBASE_DYNAMIC_LINK_DOMAIN"},
+            "autodeleteAnonymousUsers": true,
+            "monitoring": {"requestLogging": {"enabled": true}},
+        }),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = patch(
+        "notification.defaultLocale,notification.sendEmail.resetPasswordTemplate.subject",
+        json!({"notification": {
+            "defaultLocale": "ja",
+            "sendEmail": {"resetPasswordTemplate": {"subject": "Reset for %APP_NAME%"}},
+        }}),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = patch(
+        "smsRegionConfig",
+        json!({"smsRegionConfig": {"allowByDefault": {"disallowedRegions": ["US"]}}}),
+    );
+    assert_eq!(status, 200);
+    let (status, _) = patch(
+        "recaptchaConfig",
+        json!({"recaptchaConfig": {"emailPasswordEnforcementState": "AUDIT"}}),
+    );
+    assert_eq!(status, 200);
+    let (_, read) = admin(&s, "GET", CONFIG, &Value::Null);
+    assert_eq!(
+        read["mobileLinksConfig"],
+        json!({"domain": "FIREBASE_DYNAMIC_LINK_DOMAIN"})
+    );
+    assert_eq!(read["autodeleteAnonymousUsers"], json!(true));
+    assert_eq!(
+        read["monitoring"],
+        json!({"requestLogging": {"enabled": true}})
+    );
+    assert_eq!(read["notification"]["defaultLocale"], json!("ja"));
+    let reset = &read["notification"]["sendEmail"]["resetPasswordTemplate"];
+    assert_eq!(reset["subject"], json!("Reset for %APP_NAME%"));
+    assert_eq!(
+        reset["senderLocalPart"],
+        json!("noreply"),
+        "only the masked leaf changed"
+    );
+    assert_eq!(
+        read["smsRegionConfig"],
+        json!({"allowByDefault": {"disallowedRegions": ["US"]}})
+    );
+    assert_eq!(
+        read["recaptchaConfig"]["emailPasswordEnforcementState"],
+        json!("AUDIT")
+    );
+
+    // A masked path the body leaves out goes back to a new project's value.
+    let (status, _) = patch(
+        "mobileLinksConfig.domain,autodeleteAnonymousUsers,monitoring.requestLogging.enabled,notification.defaultLocale,recaptchaConfig,smsRegionConfig",
+        json!({}),
+    );
+    assert_eq!(status, 200);
+    let (_, read) = admin(&s, "GET", CONFIG, &Value::Null);
+    assert_eq!(
+        read["mobileLinksConfig"],
+        json!({"domain": "HOSTING_DOMAIN"})
+    );
+    assert!(read.get("autodeleteAnonymousUsers").is_none());
+    assert!(read.get("recaptchaConfig").is_none());
+    assert_eq!(read["monitoring"], json!({"requestLogging": {}}));
+    assert_eq!(read["notification"]["defaultLocale"], json!("en"));
+    assert_eq!(read["smsRegionConfig"], json!({"allowlistOnly": {}}));
+    let (status, allowed) = patch(
+        "smsRegionConfig,signIn.email.enabled",
+        json!({"smsRegionConfig": {"allowByDefault": {}}, "signIn": {"email": {"enabled": true}}}),
+    );
+    assert_eq!(status, 200, "{allowed}");
+    assert_eq!(allowed["smsRegionConfig"], json!({"allowByDefault": {}}));
+    assert_eq!(
+        read["notification"]["sendEmail"]["resetPasswordTemplate"]["subject"],
+        json!("Reset for %APP_NAME%"),
+        "an unmasked leaf keeps its written value"
+    );
+}
+
+/// A masked `passwordPolicyConfig` the body leaves out clears the policy, as production does
+/// (the AUTH-ACCOUNT sandbox harness restores the policy that way): the project then has none.
+#[test]
+fn a_masked_absent_password_policy_clears_it() {
+    const CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let s = strict_state();
+    let (status, set) = admin(
+        &s,
+        "PATCH",
+        &format!("{CONFIG}?updateMask=passwordPolicyConfig"),
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": [{"customStrengthOptions": {"minPasswordLength": 8}}],
+        }}),
+    );
+    assert_eq!(status, 200, "{set}");
+    assert!(set.get("passwordPolicyConfig").is_some());
+    let (status, cleared) = admin(
+        &s,
+        "PATCH",
+        &format!("{CONFIG}?updateMask=passwordPolicyConfig"),
+        &json!({}),
+    );
+    assert_eq!(status, 200, "{cleared}");
+    assert!(cleared.get("passwordPolicyConfig").is_none(), "{cleared}");
+}
+
+/// A masked `quota.signUpQuotaConfig` the body leaves out clears the temporary quota, whether
+/// the body has no `quota` or an empty one.
+#[test]
+fn a_masked_absent_sign_up_quota_clears_it() {
+    const CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=quota.signUpQuotaConfig";
+    let s = strict_state();
+    for cleared_by in [json!({}), json!({"quota": {}})] {
+        let (status, set) = admin(
+            &s,
+            "PATCH",
+            CONFIG,
+            &json!({"quota": {"signUpQuotaConfig": {
+                "quota": "200",
+                "startTime": "2026-09-01T00:00:00Z",
+                "quotaDuration": "3600s",
+            }}}),
+        );
+        assert_eq!(status, 200, "{set}");
+        assert!(set["quota"].get("signUpQuotaConfig").is_some(), "{set}");
+        let (status, cleared) = admin(&s, "PATCH", CONFIG, &cleared_by);
+        assert_eq!(status, 200, "{cleared}");
+        assert_eq!(cleared["quota"], json!({}), "{cleared_by}");
     }
 }

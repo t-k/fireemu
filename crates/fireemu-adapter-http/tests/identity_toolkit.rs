@@ -1945,6 +1945,154 @@ fn session_cookie_durations_follow_each_profile() {
     }
 }
 
+/// An email-link sign-in that links to a session refuses a legacy token (not yet observed with
+/// one in production), after its own action code has been verified.
+#[test]
+fn an_email_link_refuses_a_legacy_token() {
+    let s = strict_state_with_signer();
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "legacy-link@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200);
+    let (status, legacy) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "legacy-link@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{legacy}");
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "legacy-link@example.com", "continueUrl": "http://localhost/"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, codes) = admin(
+        &s,
+        "GET",
+        "/emulator/v1/projects/demo-app/oobCodes",
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{codes}");
+    let code = codes["oobCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["requestType"] == "EMAIL_SIGNIN")
+        .unwrap()["oobCode"]
+        .clone();
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "legacy-link@example.com", "oobCode": code, "idToken": legacy["idToken"]}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_ID_TOKEN"))
+    );
+}
+
+/// Configured signers bring production's custom-token rules to the emulator profile too.
+#[test]
+fn configured_signers_apply_production_rules_in_the_emulator_profile() {
+    let trusted = strict_state_with_signer();
+    let s = AuthState {
+        custom_token_trust: trusted.custom_token_trust.clone(),
+        ..state()
+    };
+    let now = 1_788_004_860;
+    let wrong_audience = signed_payload(
+        test_signer_key(),
+        &json!({"iss": TEST_SIGNER, "sub": TEST_SIGNER, "aud": "https://example.com", "iat": now, "exp": now + 3600, "uid": "u"}),
+    );
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": wrong_audience, "returnSecureToken": true}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_CUSTOM_TOKEN"))
+    );
+}
+
+/// A strict custom token is honoured through exp+299 and refused from exp+300, the edge
+/// production showed (exploration 2026-09-24, skew-1790210153.json).
+#[test]
+fn a_custom_token_is_refused_from_exactly_five_minutes_past_exp() {
+    let s = strict_state_with_signer();
+    let now = 1_788_004_860;
+    let token = trusted_custom_token("edge", &json!({}), now);
+    let sign_in = || {
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        )
+    };
+    advance(&s, 3600 + 299);
+    assert_eq!(sign_in().0, 200);
+    advance(&s, 1);
+    let (status, refused) = sign_in();
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_CUSTOM_TOKEN"))
+    );
+}
+
+/// The emulator profile keeps the official emulator's error shape on MFA enrollment.
+#[test]
+fn the_emulator_profile_keeps_the_official_mfa_error_shape() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "mfa-shape@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let (status, refused) = post(
+        &s,
+        "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:withdraw",
+        &json!({"idToken": account["idToken"], "mfaEnrollmentId": "unknown"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert!(refused["error"].get("errors").is_some(), "{refused}");
+    assert!(refused["error"].get("status").is_none(), "{refused}");
+}
+
+/// `Number(true)` is one second, below the minimum; `Number(false)` is zero, the maximum.
+#[test]
+fn the_emulator_profile_reads_a_boolean_duration_as_a_number() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "bool-duration@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let cookie = |duration: Value| {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:createSessionCookie"),
+            &json!({"idToken": account["idToken"], "validDuration": duration}),
+        )
+    };
+    let (status, refused) = cookie(json!(true));
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_DURATION"))
+    );
+    let (status, accepted) = cookie(json!(false));
+    assert_eq!(status, 200, "{accepted}");
+    let claims = token_parts(&accepted["sessionCookie"]).1;
+    assert_eq!(
+        claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+        1_209_600
+    );
+}
+
 #[test]
 fn anonymous_id_tokens_carry_a_top_level_provider_id() {
     let s = strict_state();

@@ -11,6 +11,7 @@ import {
   validateLegacyDebrisDocument,
   validateShrinkBoundaryDocument,
   validateShrinkBoundaryState,
+  assertV3ProductionCleanupAllowed,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -43,6 +44,16 @@ const corpusV3 = frozenNames([
     ]),
   ),
 ]);
+
+test("v3 production cleanup refuses the generic broad-clear path before network", () => {
+  let networkCalls = 0;
+  assert.throws(
+    () => assertV3ProductionCleanupAllowed({ host: "firestore.googleapis.com" }),
+    /v3 production cleanup is blocked.*generic broad clear is disabled/,
+  );
+  assert.equal(networkCalls, 0);
+  assert.doesNotThrow(() => assertV3ProductionCleanupAllowed({ host: "127.0.0.1:8080" }));
+});
 
 test("shrink request counter cannot reset between cleanup phases", () => {
   const counter = createShrinkRequestCounter(160);

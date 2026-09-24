@@ -25,9 +25,13 @@ import {
   withLegacyRecoveryReservation,
   sandboxLedgerEntry,
   reserveProductionAttempt,
+  reserveProductionAttemptWithToken,
   requireHistoricalUnknownHold,
   sandboxLedgerPath,
   sandboxManagedClearNames,
+  productionCleanupRequestBound,
+  requireBoundedProductionCleanup,
+  withBoundedProductionCleanup,
 } from "./fs-data-write-sandbox-run.mjs";
 
 const unknownHold = () => ({
@@ -219,6 +223,30 @@ test("production REST session fixes project, endpoint, managed scope and all-att
   assert.throws(() => sandboxManagedClearNames({ ...corpus, restPrograms: [] }), /last/);
 });
 
+test("production cleanup is blocked before send when exact ownership exceeds fixed caps", async () => {
+  const { corpus } = await prepareSandboxCorpus();
+  assert.deepEqual(productionCleanupRequestBound(corpus), {
+    mutationNameCount: 181,
+    rootCollectionCount: 27,
+    nestedTargetCount: 109,
+    managedRequestBound: 462,
+    perProgramCleanupRequestBound: 593,
+    totalRequestBound: 1322,
+  });
+  assert.throws(
+    () => requireBoundedProductionCleanup(corpus),
+    /462 initial managed requests and 1322 total requests.*caps are 400 and 1000.*generic broad clear is disabled/,
+  );
+  let networkCalls = 0;
+  await assert.rejects(
+    withBoundedProductionCleanup(corpus, async () => {
+      networkCalls += 1;
+    }),
+    /production v3 cleanup is blocked/,
+  );
+  assert.equal(networkCalls, 0);
+});
+
 test("corpus-v3 recovery locates only a private journal bound to its durable reservation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fireemu-v3-recovery-resume-"));
   const runDir = await mkdtemp(join(directory, "fs-data-write-production-"));
@@ -389,6 +417,40 @@ test("a production attempt durably reserves budget before child work and refuses
       () => remainingSandboxBudget([{ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 29.6 }], 0.5),
       /budget/,
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("production credentials are acquired under the lock only after the durable reservation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-token-reservation-order-"));
+  const ledger = join(directory, "sandbox-ledger.jsonl");
+  await writeFile(ledger, `${JSON.stringify(unknownHold())}\n`, { mode: 0o600 });
+  try {
+    const result = await withSandboxExclusiveLock(directory, async (rows) =>
+      reserveProductionAttemptWithToken({
+        ledgerPath: ledger,
+        rows,
+        gitSha: "a".repeat(40),
+        corpusDigest: "b".repeat(64),
+        runDir: join(directory, "attempt"),
+        acquireToken: async () => {
+          const lockExists = await stat(join(directory, "fs-data-write-exclusive.lock"))
+            .then(() => true)
+            .catch(() => false);
+          assert.equal(lockExists, true);
+          const saved = (await readFile(ledger, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          assert.equal(saved.at(-1).outcome, "reserved");
+          assert.equal(saved.at(-1).requests, null);
+          return "test-token";
+        },
+      }),
+    );
+    assert.equal(result.token, "test-token");
+    assert.equal(result.reservation.outcome, "reserved");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -12,6 +12,7 @@ Behavior below was measured against a real Identity Platform project on 2026-09-
 
 ### Added
 
+- Both profiles: the Admin config API holds the project's `mfa` member (`state`, `enabledProviders`, `providerConfigs`) and reads it back in production's shape, starting from `{"state": "DISABLED"}` as a new production project does. A value whose TOTP provider is enabled enables TOTP enrollment and sign-in without `auth.totp`, with its `adjacentIntervals` as the acceptance window (fireemu-only in the emulator profile, which has no project `mfa` config in the official emulator).
 - `auth.customTokenSigners` maps service accounts to their public JWK sets (RSA keys of at least 2048 bits). With it, `signInWithCustomToken` verifies RS256 signatures and applies production's custom-token rules in either profile; a verifying token of another project's service account is refused with `CREDENTIAL_MISMATCH`.
 - The Admin project config reads and replaces `authorizedDomains`, starting with `localhost` and the project's `firebaseapp.com` and `web.app` domains. The strict profile refuses an action-code `continueUrl` outside them with `UNAUTHORIZED_DOMAIN`, as production does; the emulator profile does not check the domain, as the official emulator does not.
 - `auth.apiKeys` declares the project's Web API keys. A client request with any other key is refused with production's `400 API_KEY_INVALID` envelope (unlike the official emulator, which validates no key). An unknown key under a registered session now gets the same envelope instead of `INVALID_API_KEY`.

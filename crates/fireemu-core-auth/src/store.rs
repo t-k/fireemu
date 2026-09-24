@@ -2016,6 +2016,15 @@ impl AuthStore {
         &self.mfa_config
     }
 
+    /// Accepted TOTP steps on either side of the current one: the project config's
+    /// `adjacentIntervals` while it enables TOTP with one, else the store's policy.
+    #[must_use]
+    pub fn totp_window(&self) -> u8 {
+        self.mfa_config
+            .totp_window()
+            .unwrap_or(self.policy.window_steps)
+    }
+
     /// Replaces the project's multi-factor configuration (the adapter validates it).
     pub fn set_mfa_config(&mut self, config: crate::mfa_config::MfaProjectConfig) {
         self.mfa_config = config;
@@ -4542,6 +4551,7 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<EnrolledFactor, MfaError> {
         let policy = self.policy;
+        let window = self.totp_window();
         let enrollment_id = self.random_id28();
         let user = self
             .users
@@ -4567,14 +4577,7 @@ impl AuthStore {
         if user.disabled {
             return Err(MfaError::UserDisabled);
         }
-        let step = match match_code(
-            &pending.secret,
-            &policy.params(),
-            policy.window_steps,
-            None,
-            code,
-            now,
-        ) {
+        let step = match match_code(&pending.secret, &policy.params(), window, None, code, now) {
             CodeMatch::Accepted { step } => step,
             CodeMatch::Replayed | CodeMatch::NoMatch => return Err(MfaError::InvalidCode),
         };
@@ -4694,6 +4697,7 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
         let policy = self.policy;
+        let window = self.totp_window();
         let (accepted_identifier, accepted_step) = {
             let user = self
                 .users
@@ -4720,7 +4724,7 @@ impl AuthStore {
             match match_code(
                 &factor.secret,
                 &policy.params(),
-                policy.window_steps,
+                window,
                 factor.last_accepted_step,
                 code,
                 now,

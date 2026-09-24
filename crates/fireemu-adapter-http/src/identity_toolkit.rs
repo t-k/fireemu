@@ -9594,7 +9594,9 @@ fn mfa_enrollment_start(
             "INVALID_ARGUMENT : totpEnrollmentInfo or phoneEnrollmentInfo is required",
         );
     }
-    if !totp_extension_enabled {
+    // TOTP is on when the project's `mfa` config enables it (production), or when the fireemu
+    // `auth.totp` extension is configured.
+    if !totp_extension_enabled && !store.mfa_config().totp_enabled() {
         return error(
             400,
             if strict {

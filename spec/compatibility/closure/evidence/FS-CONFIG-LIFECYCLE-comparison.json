@@ -1,11 +1,11 @@
 {
   "kind": "fs-config-lifecycle-comparison-v1",
-  "artifactSha256": "6869c8325226d16d1f467bfc565d5052c5ce218a0bd7444b8d6753cb0a9876b4",
-  "fixtureSha256": "7b11d27d6291d88cb4336e9b3aa4063992785823933c087d3b87b8a89da76941",
+  "artifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
+  "fixtureSha256": "15a592fdfb393c0d0985a9868d5abdf300e7e33d41cf8b23c06484e734434d65",
   "summary": {
-    "MATCH": 247,
-    "MATCH_NONDETERMINISTIC": 15,
-    "MATCH_RELABELED": 1
+    "MATCH": 264,
+    "MATCH_RELABELED": 3,
+    "MATCH_NONDETERMINISTIC": 3
   },
   "rows": [
     {
@@ -22,13 +22,11 @@
     },
     {
       "row": "fs-config/database/projection/default-and-named#list",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH_RELABELED"
     },
     {
       "row": "fs-config/database/projection/default-and-named#list-show-deleted-false",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH_RELABELED"
     },
     {
       "row": "fs-config/database/projection/default-and-named#get-missing",
@@ -157,38 +155,31 @@
     },
     {
       "row": "fs-config/database/delete/basic#delete",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/database/delete/basic#operation",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/database/delete/basic#get-after",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/database/delete/basic#list-show-deleted",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH_RELABELED"
     },
     {
       "row": "fs-config/database/delete/basic#list-after",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/database/delete/basic#document-after",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/database/delete/basic#delete-again",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/database/delete/basic#delete-missing",
@@ -496,8 +487,7 @@
     },
     {
       "row": "fs-config/index/query-effect/composite#query-building",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "second"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/index/query-effect/composite#ready",
@@ -785,7 +775,8 @@
     },
     {
       "row": "fs-config/import/documents#export-all-operation",
-      "status": "MATCH"
+      "status": "MATCH_NONDETERMINISTIC",
+      "matched": "first"
     },
     {
       "row": "fs-config/import/documents#export-other-operation",
@@ -1004,6 +995,14 @@
       "status": "MATCH"
     },
     {
+      "row": "fs-config/grpc/admin#list-indexes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#list-operations",
+      "status": "MATCH"
+    },
+    {
       "row": "fs-config/grpc/admin#export",
       "status": "MATCH"
     },
@@ -1033,13 +1032,27 @@
     },
     {
       "row": "fs-config/default-database/lifecycle#get-before",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "first"
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#indexes-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#create-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#index-ready",
+      "status": "MATCH"
     },
     {
       "row": "fs-config/default-database/lifecycle#delete",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "first"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/default-database/lifecycle#absent",
@@ -1047,13 +1060,11 @@
     },
     {
       "row": "fs-config/default-database/lifecycle#document-without-default",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "first"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/default-database/lifecycle#query-without-default",
-      "status": "MATCH_NONDETERMINISTIC",
-      "matched": "first"
+      "status": "MATCH"
     },
     {
       "row": "fs-config/default-database/lifecycle#list-without-default",
@@ -1061,7 +1072,7 @@
     },
     {
       "row": "fs-config/default-database/lifecycle#indexes-without-default",
-      "status": "MATCH_RELABELED",
+      "status": "MATCH_NONDETERMINISTIC",
       "matched": "first"
     },
     {
@@ -1070,6 +1081,10 @@
     },
     {
       "row": "fs-config/default-database/lifecycle#get-after",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#indexes-after",
       "status": "MATCH"
     },
     {

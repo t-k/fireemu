@@ -136,6 +136,9 @@ pub fn error_response(status: &Status) -> RestResponse {
         status.message(),
         status_name(code),
     );
+    if let Some(details) = crate::production_status::details_to_json(status.details()) {
+        body["error"]["details"] = Value::Array(details);
+    }
     if status
         .metadata()
         .contains_key(crate::local::DROP_CONNECTION_KEY)
@@ -154,6 +157,25 @@ pub fn error_response(status: &Status) -> RestResponse {
 #[must_use]
 pub fn drops_connection(response: &RestResponse) -> bool {
     response.body["error"]["ftdDropConnection"] == json!(true)
+}
+
+/// Production answers an error of a streaming REST method (`runQuery`, `runAggregationQuery`,
+/// `executePipeline`) inside the JSON array that would have carried its results. A fault that
+/// drops the connection keeps its own path.
+fn stream_errors(result: Result<RestResponse, Status>) -> Result<RestResponse, Status> {
+    result.or_else(|status| {
+        if status
+            .metadata()
+            .contains_key(crate::local::DROP_CONNECTION_KEY)
+        {
+            return Err(status);
+        }
+        let response = error_response(&status);
+        Ok(RestResponse {
+            status: response.status,
+            body: json!([response.body]),
+        })
+    })
 }
 
 fn ok(body: Value) -> RestResponse {
@@ -1115,8 +1137,12 @@ impl RestState {
                 })?;
                 Ok(ok(json!({})))
             }
-            "runQuery" => self.run_query(principal, resource, body),
-            "runAggregationQuery" => self.run_aggregation_query(principal, resource, body),
+            // The streaming methods answer an error as a one-element array, like their results.
+            "runQuery" => stream_errors(self.run_query(principal, resource, body)),
+            "runAggregationQuery" => {
+                stream_errors(self.run_aggregation_query(principal, resource, body))
+            }
+            "executePipeline" => stream_errors(self.execute_pipeline()),
             "partitionQuery" => self.partition_query(principal, resource, body),
             "listCollectionIds" => {
                 json::strict_keys(
@@ -1165,6 +1191,15 @@ impl RestState {
             }
             _ => Ok(not_found_text()),
         }
+    }
+
+    /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does;
+    /// an Enterprise database has no REST pipeline route here.
+    fn execute_pipeline(&self) -> Result<RestResponse, Status> {
+        if self.gateway.ctx.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise {
+            return Ok(not_found_text());
+        }
+        Err(crate::production_status::pipeline_requires_enterprise())
     }
 
     /// `:partitionQuery`, which the official emulator answers `UNIMPLEMENTED` (a documented
@@ -1420,22 +1455,7 @@ impl RestState {
             consistency_selector,
         };
         let guard = self.read_guard(principal);
-        let (responses, _warnings) = match self.local.run_query(&req, &*guard) {
-            Ok(result) => result,
-            // Observed production negative-limit error is a stream element. Keep
-            // other validation/authentication errors on their existing paths.
-            Err(status)
-                if status.code() == Code::InvalidArgument
-                    && status.message() == "invalid query: negative limit" =>
-            {
-                let response = error_response(&status);
-                return Ok(RestResponse {
-                    status: response.status,
-                    body: json!([response.body]),
-                });
-            }
-            Err(status) => return Err(status),
-        };
+        let (responses, _warnings) = self.local.run_query(&req, &*guard)?;
         let out: Vec<Value> = responses
             .iter()
             .map(|r| {
@@ -1642,6 +1662,7 @@ const CUSTOM_METHODS: &[&str] = &[
     "runAggregationQuery",
     "listCollectionIds",
     "partitionQuery",
+    "executePipeline",
 ];
 
 fn database_of(resource: &str) -> Result<String, Status> {

@@ -1,0 +1,175 @@
+//! Production-shaped error statuses that carry `google.rpc` error details, and their REST JSON
+//! rendering.
+//!
+//! Production Firestore attaches `google.rpc.ErrorInfo` and `google.rpc.Help` details to some
+//! refusals. Over gRPC they travel in the `grpc-status-details-bin` trailer as an encoded
+//! `google.rpc.Status`; over REST they appear as the `details` array of the error envelope.
+
+use fireemu_proto_firestore::google::rpc::Status as RpcStatus;
+use prost::Message;
+use serde_json::{json, Value};
+use tonic::{Code, Status};
+
+const ERROR_INFO: &str = "type.googleapis.com/google.rpc.ErrorInfo";
+const HELP: &str = "type.googleapis.com/google.rpc.Help";
+
+/// `google.rpc.ErrorInfo`.
+#[derive(Clone, PartialEq, Message)]
+struct ErrorInfo {
+    #[prost(string, tag = "1")]
+    reason: String,
+    #[prost(string, tag = "2")]
+    domain: String,
+    #[prost(btree_map = "string, string", tag = "3")]
+    metadata: std::collections::BTreeMap<String, String>,
+}
+
+/// `google.rpc.Help.Link`.
+#[derive(Clone, PartialEq, Message)]
+struct Link {
+    #[prost(string, tag = "1")]
+    description: String,
+    #[prost(string, tag = "2")]
+    url: String,
+}
+
+/// `google.rpc.Help`.
+#[derive(Clone, PartialEq, Message)]
+struct Help {
+    #[prost(message, repeated, tag = "1")]
+    links: Vec<Link>,
+}
+
+fn any(type_url: &str, message: &impl Message) -> prost_types::Any {
+    prost_types::Any {
+        type_url: type_url.to_owned(),
+        value: message.encode_to_vec(),
+    }
+}
+
+fn with_details(code: Code, message: &str, details: Vec<prost_types::Any>) -> Status {
+    let status = RpcStatus {
+        code: code as i32,
+        message: message.to_owned(),
+        details,
+    };
+    Status::with_details(code, message, status.encode_to_vec().into())
+}
+
+/// The message production returns for any pipeline operation on a Standard-edition database.
+pub const PIPELINE_REQUIRES_ENTERPRISE: &str = "Pipeline Operations are only available for \
+Firestore databases in Enterprise edition.\n\nPlease switch to an Enterprise edition database \
+to take advantage of such functionality.";
+
+/// Production's refusal of `ExecutePipeline` on a Standard-edition database (observed
+/// 2026-09-24 over REST and gRPC): `FAILED_PRECONDITION` with an `ErrorInfo` and a `Help` link.
+#[must_use]
+pub fn pipeline_requires_enterprise() -> Status {
+    with_details(
+        Code::FailedPrecondition,
+        PIPELINE_REQUIRES_ENTERPRISE,
+        vec![
+            any(
+                ERROR_INFO,
+                &ErrorInfo {
+                    reason: "PIPELINE_REQUIRES_ENTERPRISE_EDITION".to_owned(),
+                    domain: "firestore.googleapis.com".to_owned(),
+                    metadata: std::collections::BTreeMap::new(),
+                },
+            ),
+            any(
+                HELP,
+                &Help {
+                    links: vec![Link {
+                        description: "Learn more about Firestore database editions".to_owned(),
+                        url: "https://cloud.google.com/firestore/docs/editions".to_owned(),
+                    }],
+                },
+            ),
+        ],
+    )
+}
+
+/// The REST `details` array for a status's encoded `google.rpc.Status` details, or `None` when
+/// it carries none this module renders. Unknown detail types are left out, as they are not
+/// produced by fireemu.
+#[must_use]
+pub fn details_to_json(details: &[u8]) -> Option<Vec<Value>> {
+    if details.is_empty() {
+        return None;
+    }
+    let status = RpcStatus::decode(details).ok()?;
+    let rendered: Vec<Value> = status
+        .details
+        .iter()
+        .filter_map(|detail| match detail.type_url.as_str() {
+            ERROR_INFO => {
+                let info = ErrorInfo::decode(detail.value.as_slice()).ok()?;
+                let mut out = json!({
+                    "@type": ERROR_INFO,
+                    "reason": info.reason,
+                    "domain": info.domain,
+                });
+                if !info.metadata.is_empty() {
+                    out["metadata"] = json!(info.metadata);
+                }
+                Some(out)
+            }
+            HELP => {
+                let help = Help::decode(detail.value.as_slice()).ok()?;
+                let links: Vec<Value> = help
+                    .links
+                    .iter()
+                    .map(|l| json!({"description": l.description, "url": l.url}))
+                    .collect();
+                Some(json!({"@type": HELP, "links": links}))
+            }
+            _ => None,
+        })
+        .collect();
+    (!rendered.is_empty()).then_some(rendered)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pipeline_refusal_renders_production_details() {
+        let status = pipeline_requires_enterprise();
+        assert_eq!(status.code(), Code::FailedPrecondition);
+        assert_eq!(status.message(), PIPELINE_REQUIRES_ENTERPRISE);
+        assert_eq!(
+            details_to_json(status.details()),
+            Some(vec![
+                json!({
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "PIPELINE_REQUIRES_ENTERPRISE_EDITION",
+                    "domain": "firestore.googleapis.com",
+                }),
+                json!({
+                    "@type": "type.googleapis.com/google.rpc.Help",
+                    "links": [{
+                        "description": "Learn more about Firestore database editions",
+                        "url": "https://cloud.google.com/firestore/docs/editions",
+                    }],
+                }),
+            ])
+        );
+    }
+
+    #[test]
+    fn statuses_without_known_details_render_none() {
+        assert_eq!(details_to_json(b""), None);
+        assert_eq!(details_to_json(b"not a status"), None);
+        let other = RpcStatus {
+            code: 3,
+            message: "x".to_owned(),
+            details: vec![prost_types::Any {
+                type_url: "type.googleapis.com/other".to_owned(),
+                value: vec![1],
+            }],
+        };
+        assert_eq!(details_to_json(&other.encode_to_vec()), None);
+    }
+}

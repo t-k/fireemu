@@ -30,6 +30,14 @@ use serde_json::{json, Value};
 
 const DOCS: &str = "/v1/projects/demo-app/databases/(default)/documents";
 
+/// Production answers an error of a streaming REST method inside a one-element array; other
+/// methods answer the bare envelope.
+fn stream_error(body: &Value) -> &Value {
+    body.as_array()
+        .and_then(|elements| elements.first())
+        .unwrap_or(body)
+}
+
 fn state(rules: Option<&str>) -> RestState {
     state_with(rules, TokenAcceptance::Verified)
 }
@@ -1797,7 +1805,7 @@ fn rest_find_nearest_without_a_source_is_rejected_before_kindless_scan() {
         }}),
     );
     assert_eq!(status, 501, "{body}");
-    assert!(body["error"]["message"]
+    assert!(stream_error(&body)["error"]["message"]
         .as_str()
         .unwrap()
         .contains("collection source"));
@@ -2468,7 +2476,11 @@ fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable(
             json!({"structuredQuery": query, "newTransaction": {"readWrite": {}}}),
         );
         assert_eq!(status, 400, "{body}");
-        assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+        assert_eq!(
+            stream_error(&body)["error"]["status"],
+            "INVALID_ARGUMENT",
+            "{body}"
+        );
     }
     let active_after = s
         .local
@@ -2808,8 +2820,16 @@ fn malformed_transaction_token_is_refused_in_productions_wording() {
     ] {
         let (status, response) = call(&s, "POST", &path, body);
         assert_eq!(status, 400, "{path}: {response}");
-        assert_eq!(response["error"]["status"], "INVALID_ARGUMENT", "{path}");
-        assert_eq!(response["error"]["message"], expected, "{path}");
+        assert_eq!(
+            stream_error(&response)["error"]["status"],
+            "INVALID_ARGUMENT",
+            "{path}"
+        );
+        assert_eq!(
+            stream_error(&response)["error"]["message"],
+            expected,
+            "{path}"
+        );
     }
 }
 
@@ -3551,9 +3571,13 @@ fn rest_validation_codes_follow_production() {
         json!({"structuredQuery": {"from": [{"collectionId": "q"}], "where": {"compositeFilter": {"op": "AND", "filters": [contains("a"), contains("b")]}}}}),
     );
     assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
     assert_eq!(
-        body["error"]["message"],
+        stream_error(&body)["error"]["status"],
+        "INVALID_ARGUMENT",
+        "{body}"
+    );
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
         "A maximum of 1 'ARRAY_CONTAINS' filter is allowed per disjunction.",
         "{body}"
     );
@@ -3566,9 +3590,13 @@ fn rest_validation_codes_follow_production() {
         Value::Null,
     );
     assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
     assert_eq!(
-        body["error"]["message"],
+        stream_error(&body)["error"]["status"],
+        "INVALID_ARGUMENT",
+        "{body}"
+    );
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
         "The requested 'read_time' cannot be before database creation time.",
         "{body}"
     );
@@ -3581,9 +3609,13 @@ fn rest_validation_codes_follow_production() {
         Value::Null,
     );
     assert_eq!(status, 404, "{body}");
-    assert_eq!(body["error"]["status"], "NOT_FOUND", "{body}");
     assert_eq!(
-        body["error"]["message"],
+        stream_error(&body)["error"]["status"],
+        "NOT_FOUND",
+        "{body}"
+    );
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
         missing_database_message("Upper"),
         "{body}"
     );
@@ -3603,9 +3635,13 @@ fn rest_validation_codes_follow_production() {
         json!({"transaction": begun["transaction"], "writes": []}),
     );
     assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT", "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["status"],
+        "INVALID_ARGUMENT",
+        "{body}"
+    );
     assert!(
-        body["error"]["message"]
+        stream_error(&body)["error"]["message"]
             .as_str()
             .unwrap()
             .contains("no longer valid"),
@@ -4245,7 +4281,7 @@ fn explain_rest_authorization_denies_without_metrics_or_leaked_transactions() {
                 request["newTransaction"] = json!({"readOnly": {}});
                 let (status, body) = call_as(&s, "POST", &format!("{DOCS}:{}", explain_method(aggregation)), request, None);
                 assert_eq!(status, 403, "{body}");
-                assert_eq!(body["error"]["status"], "PERMISSION_DENIED");
+                assert_eq!(body[0]["error"]["status"], "PERMISSION_DENIED");
                 assert!(!body.to_string().contains("explainMetrics"));
                 assert!(s.local.latest_query_execution_stats().is_none());
             }
@@ -4446,6 +4482,13 @@ fn every_data_plane_surface_refuses_a_database_that_was_never_created() {
     ] {
         let (status, body) = call(&s, method, &path, body);
         assert_eq!(status, 404, "{method} {path}: {body}");
+        // Production answers the streaming methods' errors inside a one-element array
+        // (observed 2026-09-24 for a never-created database).
+        let body = if path.ends_with(":runQuery") || path.ends_with(":runAggregationQuery") {
+            body[0].clone()
+        } else {
+            body
+        };
         assert_eq!(
             body["error"]["status"], "NOT_FOUND",
             "{method} {path}: {body}"
@@ -4626,5 +4669,41 @@ fn the_emulator_clear_route_needs_the_control_token_from_a_browser() {
         let (status, body) = clear(&s, origin, browser, authorization);
         assert_eq!(status, 200, "{label}: {body}");
         assert!(!present(&s), "{label}: the data must be gone");
+    }
+}
+
+/// Production refuses every REST pipeline on a Standard-edition database inside the stream
+/// array, with its `ErrorInfo` and `Help` details (observed 2026-09-24).
+#[test]
+fn rest_execute_pipeline_on_standard_is_refused_like_production() {
+    let s = state(None);
+    for body in [
+        json!({}),
+        json!({"structuredPipeline": {"pipeline": {"stages": [{"name": "collection", "args": [{"referenceValue": "/c"}]}]}}}),
+    ] {
+        let (status, body) = call(&s, "POST", &format!("{DOCS}:executePipeline"), body);
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(
+            body,
+            json!([{"error": {
+                "code": 400,
+                "message": "Pipeline Operations are only available for Firestore databases in Enterprise edition.\n\nPlease switch to an Enterprise edition database to take advantage of such functionality.",
+                "status": "FAILED_PRECONDITION",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "PIPELINE_REQUIRES_ENTERPRISE_EDITION",
+                        "domain": "firestore.googleapis.com",
+                    },
+                    {
+                        "@type": "type.googleapis.com/google.rpc.Help",
+                        "links": [{
+                            "description": "Learn more about Firestore database editions",
+                            "url": "https://cloud.google.com/firestore/docs/editions",
+                        }],
+                    },
+                ],
+            }}])
+        );
     }
 }

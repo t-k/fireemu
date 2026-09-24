@@ -222,7 +222,7 @@ test("AUTH-CONFIG-SDK closure inventory cannot silently omit a declared conditio
 test("scope decisions are recorded, not implied", () => {
   const closure = load();
   const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
-  for (let n = 1; n <= 12; n += 1) assert.ok(decided.has(`K${n}`), `scope decision K${n}`);
+  for (let n = 1; n <= 13; n += 1) assert.ok(decided.has(`K${n}`), `scope decision K${n}`);
   for (const decision of closure.scopeDecisions) {
     assert.ok(decision.decision && decision.decidedBy && decision.decidedOn, decision.id);
     if (decision.movedTo) assert.match(decision.movedTo, /^(AUTH|FS)-[A-Z-]+$/, decision.id);

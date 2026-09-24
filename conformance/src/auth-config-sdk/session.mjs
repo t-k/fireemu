@@ -19,7 +19,7 @@ import {
 } from "../auth-account/harness.mjs";
 import { materialize } from "../auth-credential/session.mjs";
 import { guardHttp, leafPaths } from "./guard.mjs";
-import { normalizeHttp, normalizeSdk } from "./harness.mjs";
+import { normalizeHttp, normalizeSdk, withoutOtherLanes } from "./harness.mjs";
 import { harnessFetch, openSdk, runSdkStep } from "./sdk.mjs";
 
 /** An error that must stop the whole run: the sandbox may no longer be in a known state. */
@@ -40,7 +40,11 @@ function assign(object, path, value) {
 }
 
 /** Output-only members production adds to what was written. */
-const OUTPUT_ONLY = new Set(["lastUpdateTime", "schemaVersion"]);
+/**
+ * Output-only members production adds to what was written. reCAPTCHA keys are provisioned by
+ * production when a provider is audited and may outlive the setting that created them.
+ */
+const OUTPUT_ONLY = new Set(["lastUpdateTime", "schemaVersion", "recaptchaKeys"]);
 
 /**
  * The comparable form of a config value: output-only members dropped, and a false or null
@@ -71,6 +75,18 @@ export function withTimes(value, now = Date.now()) {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, withTimes(v, now)]));
   }
   return value;
+}
+
+/** The dotted paths at which two settled configurations differ. */
+export function configDrift(a, b, path = "") {
+  if (sameRecording(a, b)) return [];
+  const object = (v) => v && typeof v === "object" && !Array.isArray(v);
+  if (object(a) && object(b)) {
+    return [...new Set([...Object.keys(a), ...Object.keys(b)])].flatMap((key) =>
+      configDrift(a[key], b[key], path ? `${path}.${key}` : key),
+    );
+  }
+  return [path || "<root>"];
 }
 
 /**
@@ -215,6 +231,15 @@ export function createSession(
     throw fatal("wipe: accounts remain after 20 rounds");
   }
 
+  /** Whether any project-level account exists (0 or 1: one page of one). */
+  async function accountCount() {
+    const page = await admin("GET", "v1/projects/{project}/accounts:batchGet", {
+      query: { maxResults: 1 },
+      cleanup: true,
+    });
+    return (page.users ?? []).length;
+  }
+
   async function readConfig(paths, { cleanup = false } = {}) {
     const config = await admin("GET", "admin/v2/projects/{project}/config", { cleanup });
     return Object.fromEntries(paths.map((path) => [path, pick(config, path)]));
@@ -232,17 +257,49 @@ export function createSession(
     throw fatal(`config ${paths.join(",")} did not read back: ${JSON.stringify(now)}`);
   }
 
-  /** Writes the snapshot back and reads it back. */
-  async function restore(snapshot) {
-    const paths = Object.keys(snapshot);
+  /** One restoring PATCH, retried on a failure that may pass (transport, 429, 5xx). */
+  async function writeBack(paths, snapshot) {
     const body = {};
     for (const path of paths) assign(body, path, snapshot[path]);
-    await admin("PATCH", "admin/v2/projects/{project}/config", {
-      body,
-      query: { updateMask: paths.join(",") },
-      cleanup: true,
-    });
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await admin("PATCH", "admin/v2/projects/{project}/config", {
+          body,
+          query: { updateMask: paths.join(",") },
+          cleanup: true,
+        });
+        return;
+      } catch (error) {
+        const status = Number(/HTTP (\d+)/.exec(String(error.message))?.[1] ?? 0);
+        const passing = status === 0 || status === 429 || status >= 500;
+        if (!passing || attempt >= 2) throw error;
+        if (ctx.target.kind === "production") await sleep(2000 * (attempt + 1));
+      }
+    }
+  }
+
+  /**
+   * Writes the snapshot back and reads it back. A combined write production refuses is retried
+   * one path at a time, so one member it will not take back leaves no other member changed.
+   */
+  async function restore(snapshot) {
+    const paths = Object.keys(snapshot);
+    try {
+      await writeBack(paths, snapshot);
+    } catch (error) {
+      if (paths.length === 1) throw error;
+      for (const path of paths) await writeBack([path], snapshot);
+    }
     return awaitConfig(snapshot, { cleanup: true });
+  }
+
+  /**
+   * The whole configuration as this harness may compare it: other lanes' members left out,
+   * output-only members and false switches settled.
+   */
+  async function fullConfig({ cleanup = false } = {}) {
+    const config = await admin("GET", "admin/v2/projects/{project}/config", { cleanup });
+    return settledForm(withoutOtherLanes(config));
   }
 
   /** What a settling step waits for: its masked paths as its body sets them. */
@@ -298,6 +355,9 @@ export function createSession(
                   throw error;
                 }
               },
+              refuse(error) {
+                violation ??= error;
+              },
             });
           }
           const { outcome } = await runSdkStep(opened, step, ctx, raw, kept);
@@ -319,19 +379,30 @@ export function createSession(
     } finally {
       await opened?.close();
     }
+    // A request the SDKs make while closing is refused too; it must still stop the run.
+    if (violation)
+      throw fatal(`guard refused an SDK request in ${program.id}: ${violation.message}`);
   }
 
-  async function runProgram(program) {
+  /**
+   * Runs one program. `expected` is the whole configuration the program must leave behind (the
+   * run's baseline); after the restore, any difference from it stops the run.
+   */
+  async function runProgram(program, { expected } = {}) {
     const raw = new Map();
     const steps = {};
     await wipe();
     const touches = program.touches ?? [];
     const snapshot = touches.length ? await readConfig(touches) : undefined;
     let failure;
+    // The guard lets a program write only the paths it restores.
+    ctx.touches = touches;
     try {
       await runSteps(program, raw, steps);
     } catch (error) {
       failure = error;
+    } finally {
+      ctx.touches = undefined;
     }
     // Cleanup always runs: accounts first (a setting such as duplicate emails may not switch
     // back while duplicates exist), then every touched path back to what it was.
@@ -350,6 +421,15 @@ export function createSession(
         throw error.fatal ? error : fatal(String(error.message ?? error));
       }
     }
+    if (expected !== undefined) {
+      const now = await fullConfig({ cleanup: true });
+      if (!sameRecording(now, expected)) {
+        log(`SANDBOX CONFIG CHANGED by ${program.id} outside its restored paths`);
+        throw fatal(
+          `${program.id} left the configuration changed: ${JSON.stringify(configDrift(expected, now))}`,
+        );
+      }
+    }
     if (wipeFailure) throw wipeFailure;
     if (failure) throw failure;
     return { steps };
@@ -360,6 +440,8 @@ export function createSession(
     wipe,
     readConfig,
     restore,
+    fullConfig,
+    accountCount,
     counts: () => ({
       requests,
       sdkRequests,
@@ -373,9 +455,10 @@ export async function runCorpus(programs, ctx, options = {}) {
   const session = createSession(ctx, options);
   const results = {};
   const failures = [];
+  const expected = await session.fullConfig();
   for (const program of programs) {
     try {
-      results[program.id] = await session.runProgram(program);
+      results[program.id] = await session.runProgram(program, { expected });
     } catch (error) {
       if (error.fatal)
         throw Object.assign(error, { partial: { results, failures, ...session.counts() } });

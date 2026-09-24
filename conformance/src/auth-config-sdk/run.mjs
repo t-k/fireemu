@@ -23,7 +23,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -366,50 +366,141 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   return diffRecordings(first.results, second.results);
 }
 
+/**
+ * The ledger's lines. A line that does not parse is refused rather than skipped: a lane cannot
+ * be sure the sandbox is free when it cannot read what another lane wrote.
+ */
 function ledgerEntries(ledgerText) {
   return ledgerText
     .split("\n")
     .filter((line) => line.trim())
-    .map((line) => {
+    .map((line, index) => {
       try {
         return JSON.parse(line);
       } catch {
-        return undefined;
+        throw new Error(`ledger line ${index + 1} does not parse; read it before starting`);
       }
-    })
-    .filter(Boolean);
+    });
 }
 
+/** Older lines name their task as `task`. */
+const taskOf = (entry) => entry.taskId ?? entry.task ?? "<unnamed>";
+
+/** Outcomes after which this task left the sandbox at its baseline. */
+const cleanOutcome = (entry) =>
+  entry.sandboxAtBaseline === true ||
+  entry.outcome === "recorded" ||
+  String(entry.outcome).startsWith("exploration");
+
 /**
- * The per-IP account-creation limit is about 100 per hour, so a run is refused within an hour of
- * this task's last run that did not end as a clean recording.
+ * The per-IP account-creation limit is about 100 per hour, so a recording is refused within an
+ * hour of this task's last recording that did not end as a clean recording.
  */
 export function recentAbort(ledgerText, now = Date.now()) {
-  const entries = ledgerEntries(ledgerText).filter(
-    (entry) => entry.taskId === TASK_ID && entry.outcome !== undefined,
-  );
-  const last = entries.at(-1);
-  const clean = (outcome) => outcome === "recorded" || String(outcome).startsWith("exploration");
-  if (!last || clean(last.outcome)) return undefined;
-  return now - Date.parse(last.ts) < 3_600_000 ? last : undefined;
+  const last = ledgerEntries(ledgerText)
+    .filter((entry) => taskOf(entry) === TASK_ID && entry.outcome !== undefined && entry.programs)
+    .at(-1);
+  if (!last || last.outcome === "recorded" || String(last.outcome).startsWith("exploration"))
+    return undefined;
+  const age = now - Date.parse(last.ts);
+  return Number.isNaN(age) || age < 3_600_000 ? last : undefined;
 }
 
 /**
  * Another lane on the Identity Platform sandbox: a task whose last line there is `started`, or
  * any other task's line there within the last 30 minutes (the rule agreed with the FS-RULES and
- * AUTH-MFA lanes, 2026-09-25). Programs wipe every account and change the project config, so
- * two recordings must never overlap.
+ * AUTH-MFA lanes, 2026-09-25). A line whose time does not parse counts as recent. Programs wipe
+ * every account and change the project config, so two recordings must never overlap.
  */
 export function otherLaneOnSandbox(ledgerText, now = Date.now()) {
   const lines = ledgerEntries(ledgerText).filter(
-    (entry) => entry.project === SANDBOX_PROJECT && entry.taskId !== TASK_ID,
+    (entry) => entry.project === SANDBOX_PROJECT && taskOf(entry) !== TASK_ID,
   );
   const last = new Map();
-  for (const entry of lines) last.set(entry.taskId, entry);
+  for (const entry of lines) last.set(taskOf(entry), entry);
   const open = [...last.values()].find((entry) => entry.event === "started");
-  if (open) return `${open.taskId} started at ${open.ts} and has not finished`;
-  const recent = lines.find((entry) => now - Date.parse(entry.ts) < 30 * 60_000);
-  return recent ? `${recent.taskId} wrote a line at ${recent.ts}` : undefined;
+  if (open) return `${taskOf(open)} started at ${open.ts} and has not finished`;
+  const recent = lines.find((entry) => {
+    const age = now - Date.parse(entry.ts);
+    return Number.isNaN(age) || age < 30 * 60_000;
+  });
+  return recent ? `${taskOf(recent)} wrote a line at ${recent.ts}` : undefined;
+}
+
+/** Lines another task wrote on the sandbox at or after `since` (a race with our `started`). */
+export function linesSince(ledgerText, since) {
+  return ledgerEntries(ledgerText).filter(
+    (entry) =>
+      entry.project === SANDBOX_PROJECT &&
+      taskOf(entry) !== TASK_ID &&
+      !(Date.parse(entry.ts) < since),
+  );
+}
+
+const lockPath = (ledger) => `${ledger}.auth-config-sdk.lock`;
+
+/** Whether the process named in the lock still runs. */
+function lockHolderAlive(text) {
+  const pid = Number(/"pid":(\d+)/.exec(text)?.[1]);
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Takes the lane's lock (created exclusively), or refuses while its holder runs. */
+async function takeLock(ledger, what) {
+  const path = lockPath(ledger);
+  if (existsSync(path)) {
+    const text = await readFile(path, "utf8");
+    if (lockHolderAlive(text)) throw new Error(`${path} is held: ${text.trim()}`);
+    throw new Error(`${path} is stale (${text.trim()}); remove it after checking no run is live`);
+  }
+  await writeFile(path, JSON.stringify({ pid: process.pid, what, at: new Date().toISOString() }), {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return async () => rm(path, { force: true });
+}
+
+async function appendLedger(ledger, entry) {
+  await appendFile(ledger, `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`);
+}
+
+/**
+ * Whether the sandbox is back at its baseline after a run that did not end cleanly: every
+ * baseline path reads back, MFA is off and no account is left. Never throws.
+ */
+async function verifyBaseline(web) {
+  try {
+    const target = productionTarget(web);
+    await target.refresh();
+    const ctx = createContext({ run: String(Date.now()), project: SANDBOX_PROJECT, target });
+    await prepareProject(ctx, { apply: false });
+    const session = createSession(ctx, { maxCleanupRequests: 2 });
+    return { atBaseline: (await session.accountCount()) === 0 };
+  } catch (error) {
+    return { atBaseline: false, reason: String(error.message ?? error) };
+  }
+}
+
+/** Refuses a key that is not the sandbox's: `v1/projects` names the project by its number. */
+async function assertSandboxKey(web) {
+  const url = `https://identitytoolkit.googleapis.com/v1/projects?key=${encodeURIComponent(web.apiKey)}`;
+  const target = productionTarget(web);
+  const ctx = createContext({
+    run: String(Date.now()),
+    project: SANDBOX_PROJECT,
+    target: { ...target, adminToken: "unused" },
+  });
+  guardHttp({ url, method: "GET" }, ctx, { role: "harness" });
+  const response = await harnessFetch(url, { redirect: "error" });
+  const body = await response.json().catch(() => ({}));
+  if (response.status !== 200 || body.projectId !== web.projectNumber)
+    throw new Error("the web config's API key does not answer as the sandbox project");
 }
 
 async function recordProduction() {
@@ -418,15 +509,34 @@ async function recordProduction() {
   if (!ledger || !privateRoot) {
     throw new Error("FIREEMU_SANDBOX_LEDGER and FIREEMU_AUTH_CONFIG_SDK_PRIVATE_DIR are required");
   }
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS)
+    throw new Error(
+      "GOOGLE_APPLICATION_CREDENTIALS is set; the sandbox track uses the owner's ADC",
+    );
   await assertCleanTree();
+  const programs = selectedPrograms();
+  const corpusRequests = validateConfigSdkCorpus(programs, { sdkOperations: SDK_OPERATIONS });
+  const web = await sandboxWebConfig();
+  await assertIgnored(privateRoot);
+  const release = await takeLock(ledger, "record-production");
+  try {
+    await recordLocked({ ledger, privateRoot, programs, corpusRequests, web });
+  } finally {
+    await release();
+  }
+}
+
+async function recordLocked({ ledger, privateRoot, programs, corpusRequests, web }) {
   const ledgerText = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
+  if (restoreDue(ledgerText))
+    throw new Error(
+      "this task's last run did not leave the sandbox at its baseline; run restore-sandbox",
+    );
   const aborted = recentAbort(ledgerText);
   if (aborted)
     throw new Error(`the last run ended ${aborted.outcome} at ${aborted.ts}; wait an hour`);
   const busy = otherLaneOnSandbox(ledgerText);
   if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
-  const programs = selectedPrograms();
-  const corpusRequests = validateConfigSdkCorpus(programs, { sdkOperations: SDK_OPERATIONS });
   const meta = {
     sha: await gitSha(),
     harness: await harnessDigest(),
@@ -435,10 +545,17 @@ async function recordProduction() {
     programs: programs.map((p) => p.id),
     corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
   };
-  const web = await sandboxWebConfig();
+  await assertSandboxKey(web);
   if (programs.some((p) => p.steps.some((s) => s.sdk === "admin.createCustomToken")))
     await assertSignerReady(web);
-  await assertIgnored(privateRoot);
+  {
+    // Another lane's leftover accounts are its own to inspect; this run starts on none.
+    const target = productionTarget(web);
+    await target.refresh();
+    const ctx = createContext({ run: String(Date.now()), project: SANDBOX_PROJECT, target });
+    const count = await createSession(ctx, { maxCleanupRequests: 2 }).accountCount();
+    if (count !== 0) throw new Error(`the sandbox holds ${count}+ accounts; it must start empty`);
+  }
   const runDir = join(
     privateRoot,
     `auth-config-sdk-production-${meta.startedAt.replaceAll(":", "")}`,
@@ -459,86 +576,127 @@ async function recordProduction() {
   const ignoreWriteError = () => {};
   process.stdout.on("error", ignoreWriteError);
   process.stderr.on("error", ignoreWriteError);
-  await appendFile(
-    ledger,
-    `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: meta.programs })}\n`,
-  );
+  const checkedAt = Date.now();
+  await appendLedger(ledger, {
+    event: "started",
+    taskId: TASK_ID,
+    project: SANDBOX_PROJECT,
+    gitSha: meta.sha,
+    programs: meta.programs,
+  });
+  // Another lane may have checked the ledger at the same moment; the later one yields.
+  const raced = linesSince(await readFile(ledger, "utf8"), checkedAt - 1000);
+  if (raced.length) {
+    await appendLedger(ledger, {
+      event: "finished",
+      taskId: TASK_ID,
+      project: SANDBOX_PROJECT,
+      requests: 0,
+      estimatedUsd: 0,
+      outcome: "yielded",
+      sandboxAtBaseline: true,
+      note: `another lane wrote ${taskOf(raced[0])} at ${raced[0].ts}`,
+    });
+    throw new Error(
+      `another lane started at the same time (${taskOf(raced[0])}); nothing was sent`,
+    );
+  }
   const recordings = [];
   const secrets = [];
   let outcome = "recorded";
   let error;
+  let requests = 0;
+  let baseline = { atBaseline: true };
   try {
-    for (const offset of [0, 1]) {
-      const { secrets: seen, ...recording } = await recordOnce(
-        programs,
-        String(Date.now() + offset),
-        web,
-        { signal: controller.signal, log: (line) => console.log(line) },
-      );
-      secrets.push(...seen);
-      recordings.push(recording);
-      await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
-        mode: 0o600,
-      });
+    try {
+      for (const offset of [0, 1]) {
+        const { secrets: seen, ...recording } = await recordOnce(
+          programs,
+          String(Date.now() + offset),
+          web,
+          { signal: controller.signal, log: (line) => console.log(line) },
+        );
+        secrets.push(...seen);
+        recordings.push(recording);
+        await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
+          mode: 0o600,
+        });
+      }
+    } catch (caught) {
+      outcome = controller.signal.aborted
+        ? "aborted-signal"
+        : caught.fatal
+          ? "aborted-fatal"
+          : "aborted";
+      error = String(caught.message ?? caught);
+      if (caught.partial) recordings.push(caught.partial);
     }
-  } catch (caught) {
-    outcome = controller.signal.aborted
-      ? "aborted-signal"
-      : caught.fatal
-        ? "aborted-fatal"
-        : "aborted";
-    error = String(caught.message ?? caught);
-    if (caught.partial) recordings.push(caught.partial);
-  }
-  await writeFile(join(runDir, "meta.json"), JSON.stringify({ ...meta, outcome, error }, null, 2), {
-    mode: 0o600,
-  });
-  const requests = recordings.reduce(
-    (n, r) => n + r.requests + (r.sdkRequests ?? 0) + r.harnessRequests,
-    0,
-  );
-  const failures = recordings.flatMap((r) => r.failures);
-  try {
-    if (!error) {
-      const nondeterministic = await writeFixture({
-        programs,
-        recordings,
-        meta,
-        secrets: [web.apiKey, ...secrets, SANDBOX_PROJECT, web.projectNumber],
-      });
-      if (failures.length) outcome = "recorded-with-program-failures";
-      console.log(
-        JSON.stringify(
-          { programs: programs.length, corpusRequests, requests, nondeterministic, failures },
-          null,
-          2,
-        ),
-      );
-    }
-  } catch (caught) {
-    outcome = "not-written";
-    error = `${String(caught.message ?? caught)} (recordings kept in ${runDir})`;
-  } finally {
-    await appendFile(
-      ledger,
-      `${JSON.stringify({
-        ts: new Date().toISOString(),
-        event: "finished",
-        project: SANDBOX_PROJECT,
-        database: null,
-        gitSha: meta.sha,
-        corpusDigest: sha256(JSON.stringify(programs)),
-        requests,
-        estimatedUsd: 0,
-        outcome,
-        taskId: TASK_ID,
-        programs: meta.programs,
-        ...(error ? { error } : {}),
-      })}\n`,
+    requests = recordings.reduce(
+      (n, r) => n + r.requests + (r.sdkRequests ?? 0) + r.harnessRequests,
+      0,
     );
+    await writeFile(
+      join(runDir, "meta.json"),
+      JSON.stringify({ ...meta, outcome, error }, null, 2),
+      {
+        mode: 0o600,
+      },
+    );
+    const failures = recordings.flatMap((r) => r.failures);
+    if (!error) {
+      try {
+        const nondeterministic = await writeFixture({
+          programs,
+          recordings,
+          meta,
+          secrets: [web.apiKey, ...secrets, SANDBOX_PROJECT, web.projectNumber],
+        });
+        if (failures.length) outcome = "recorded-with-program-failures";
+        console.log(
+          JSON.stringify(
+            { programs: programs.length, corpusRequests, requests, nondeterministic, failures },
+            null,
+            2,
+          ),
+        );
+      } catch (caught) {
+        outcome = "not-written";
+        error = `${String(caught.message ?? caught)} (recordings kept in ${runDir})`;
+      }
+    }
+    if (failures.length) process.exitCode = 1;
+  } catch (caught) {
+    outcome = "aborted";
+    error = String(caught.message ?? caught);
+  } finally {
+    // After anything but a clean recording, read the sandbox back before handing it over.
+    if (outcome !== "recorded") baseline = await verifyBaseline(web);
+    await appendLedger(ledger, {
+      event: "finished",
+      project: SANDBOX_PROJECT,
+      database: null,
+      gitSha: meta.sha,
+      corpusDigest: sha256(JSON.stringify(programs)),
+      requests,
+      estimatedUsd: 0,
+      outcome,
+      sandboxAtBaseline: baseline.atBaseline,
+      taskId: TASK_ID,
+      programs: meta.programs,
+      ...(error ? { error } : {}),
+      ...(baseline.reason ? { baselineCheck: baseline.reason } : {}),
+    });
+    if (!baseline.atBaseline) {
+      // Keeps every lane off the sandbox until restore-sandbox reads the baseline back.
+      await appendLedger(ledger, {
+        event: "started",
+        taskId: TASK_ID,
+        project: SANDBOX_PROJECT,
+        note: "sandbox not at baseline after a failed run; run restore-sandbox",
+      });
+    }
   }
   if (error) throw new Error(error);
-  if (failures.length) process.exitCode = 1;
 }
 
 /** Retries the fixture from a saved run directory; sends nothing to production. */
@@ -784,23 +942,11 @@ async function exportComparison(out) {
  */
 export function restoreDue(ledgerText) {
   const last = ledgerEntries(ledgerText)
-    .filter((entry) => entry.taskId === TASK_ID && entry.project === SANDBOX_PROJECT)
+    .filter((entry) => taskOf(entry) === TASK_ID && entry.project === SANDBOX_PROJECT)
     .at(-1);
   if (!last) return false;
   if (last.event === "started") return true;
-  return last.outcome !== "recorded" && !String(last.outcome).startsWith("exploration");
-}
-
-async function recordingRunning() {
-  try {
-    const { stdout } = await execFileAsync("pgrep", [
-      "-f",
-      "auth-config-sdk/run.mjs record-production",
-    ]);
-    return stdout.trim().length > 0;
-  } catch {
-    return false;
-  }
+  return !cleanOutcome(last);
 }
 
 /**
@@ -814,10 +960,18 @@ async function restoreSandbox() {
   if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
   const text = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
   if (!restoreDue(text)) throw new Error("the ledger shows no run of this task to restore after");
-  if (await recordingRunning()) throw new Error("a recording of this harness is still running");
   const busy = otherLaneOnSandbox(text);
-  if (busy && !busy.startsWith("AUTH-CONFIG-SDK"))
-    throw new Error(`another lane is on the sandbox: ${busy}`);
+  if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
+  // The lock refuses while a recording of this harness runs.
+  const release = await takeLock(ledger, "restore-sandbox");
+  try {
+    await restoreLocked(ledger);
+  } finally {
+    await release();
+  }
+}
+
+async function restoreLocked(ledger) {
   const web = await sandboxWebConfig();
   const target = productionTarget(web);
   await target.refresh();
@@ -825,7 +979,7 @@ async function restoreSandbox() {
   let outcome = "restored-by-operator";
   let error;
   try {
-    const session = createSession(ctx, { maxHarnessRequests: 10, maxCleanupRequests: 40 });
+    const session = createSession(ctx, { maxHarnessRequests: 10, maxCleanupRequests: 80 });
     await session.restore(
       Object.fromEntries(
         Object.entries(SANDBOX_BASELINE).map(([p, v]) => [p, substituteProject(v, ctx.project)]),
@@ -836,10 +990,23 @@ async function restoreSandbox() {
     outcome = "restore-failed";
     error = String(caught.message ?? caught);
   } finally {
-    await appendFile(
-      ledger,
-      `${JSON.stringify({ ts: new Date().toISOString(), event: "finished", taskId: TASK_ID, project: SANDBOX_PROJECT, estimatedUsd: 0, outcome, ...(error ? { error } : {}) })}\n`,
-    );
+    await appendLedger(ledger, {
+      event: "finished",
+      taskId: TASK_ID,
+      project: SANDBOX_PROJECT,
+      estimatedUsd: 0,
+      outcome,
+      sandboxAtBaseline: !error,
+      ...(error ? { error } : {}),
+    });
+    if (error) {
+      await appendLedger(ledger, {
+        event: "started",
+        taskId: TASK_ID,
+        project: SANDBOX_PROJECT,
+        note: "restore-sandbox failed; the sandbox is not at its baseline",
+      });
+    }
   }
   if (error) throw new Error(error);
   console.log("sandbox baseline restored and read back");

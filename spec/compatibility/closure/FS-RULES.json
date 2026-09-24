@@ -1,0 +1,288 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-RULES",
+  "parentStatus": "WAITING_ORACLE",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-idp",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "location": "us-central1"
+  },
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "scopeDecisions": [
+    {
+      "id": "R1",
+      "decision": "Closure is defined by these behavioral acceptance conditions, observed with end-user credentials (no credential, or an ID token issued by the same project's Auth) through Firestore REST v1 and gRPC google.firestore.v1 against the disposable Identity Platform sandbox, whose Firestore and Rules this lane owns. Administrator credentials bypass Rules and are used only to prepare and clean up.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R2",
+      "decision": "gRPC Listen, WebChannel and client SDK paths belong to FS-LISTEN-SDK; Auth state changes observed by listeners and SDKs (sign-out, token refresh while listening, revocation during a listen) belong to AUTH-FS-CROSS.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-LISTEN-SDK"
+    },
+    {
+      "id": "R3",
+      "decision": "Token issuance, refresh and verification by Identity Toolkit and Secure Token belong to AUTH-CREDENTIAL; this parent observes only what Firestore and Rules do with the token they receive (AUTH-CREDENTIAL scope decision C3).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24",
+      "movedTo": "AUTH-CREDENTIAL"
+    },
+    {
+      "id": "R4",
+      "decision": "The Firebase Rules API resources (projects.rulesets, projects.releases, compile issue details, release readback) are a known difference outside this parent: fireemu does not implement them. This parent compares the effect of a publication: decisions after a release switch, compile acceptance or refusal, and refusal of every request without a release.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R5",
+      "decision": "Production propagates a release switch over tens of seconds, during which different frontends answer with the old and the new ruleset. fireemu switches atomically. The delay is an approved divergence that fireemu does not reproduce; conditions compare decisions after propagation.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R6",
+      "decision": "A Rules denial answers with production's status and text (PERMISSION_DENIED, \"Missing or insufficient permissions.\") in both profiles. The reason stays available in fireemu's request traces and log. The emulator-profile change is listed in CHANGELOG and contract.json fireemuOnly.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R7",
+      "decision": "Tenant principals are observed here: the sandbox enables multi-tenancy and creates one tenant for the run, deleted afterwards.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R8",
+      "decision": "Named databases are observed on a small scale: one named database per run, created and deleted by the run, with its own release.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R9",
+      "decision": "The strict profile is the comparison profile. The emulator profile may add no refusal: it keeps accepting unsigned emulator tokens and allows every request while no ruleset is loaded, as the official emulator does. Its differences from production are listed per condition, not compared.",
+      "decidedBy": "owner (t-k), handoff 2026-09-24",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "R10",
+      "decision": "Cloud Storage Security Rules and the Storage-to-Firestore functions are outside the Firebase Auth and Firestore production-compatibility program.",
+      "decidedBy": "owner (t-k), handoff 2026-09-24",
+      "decidedOn": "2026-09-24"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FS-RULES/principals",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/principals"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Unauthenticated, anonymous, email/password, test-phone and custom-token principals are told apart by ownership rules and by the explicit request.auth == null clause, on get, list and write."
+    },
+    {
+      "conditionId": "FS-RULES/auth-token-fields",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/auth-token"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "request.auth.uid and request.auth.token per provider: the key set, the type and value of each standard claim (iss, aud, sub, iat, exp, auth_time, email, email_verified, phone_number, name, picture, firebase.sign_in_provider, firebase.identities), account custom claims and custom-token developer claims, and a claim change that is only seen after a token refresh."
+    },
+    {
+      "conditionId": "FS-RULES/tenant",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/tenant"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A tenant principal carries request.auth.token.firebase.tenant; tenant and project-level principals with the same rule are separated."
+    },
+    {
+      "conditionId": "FS-RULES/request-resource",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/request-resource"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "request.resource and resource on create, update (full and masked), merge, delete and field transforms (serverTimestamp against request.time), map diff, request.method, request.path, resource on a missing document, and request.time."
+    },
+    {
+      "conditionId": "FS-RULES/document-access",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/document-access"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "get, exists, getAfter and existsAfter on present and missing documents, in reads, single writes, commits and transactions, including the pre- and post-commit state each one sees."
+    },
+    {
+      "conditionId": "FS-RULES/query-proofs",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/query"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "List authorization from query constraints for runQuery, runAggregationQuery and listDocuments: provable and unprovable filters, request.query limit, offset and orderBy, collection group queries against {path=**}, __name__ queries, and get rules that do not allow list."
+    },
+    {
+      "conditionId": "FS-RULES/access-budgets",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/budgets"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Document access call budgets: 10 per single-document request and 20 per multi-document request (batchGet, commit, transaction), at N and N+1, repeated paths, get together with getAfter of one path, and BatchWrite."
+    },
+    {
+      "conditionId": "FS-RULES/compile-limits",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/compile"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Ruleset acceptance and refusal at compile time (production rulesets.create against fireemu's ruleset load): syntax errors, unknown functions, recursion, call depth, function arguments, let bindings, match nesting, path captures and source size, compared as accepted or refused."
+    },
+    {
+      "conditionId": "FS-RULES/runtime-limits",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/runtime-limits"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Evaluation-time limits and errors: expressions per request, call depth at run time, and how an error in one allow expression (budget, invalid regex, missing member) combines with another allow that already holds."
+    },
+    {
+      "conditionId": "FS-RULES/atomic-writes",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/atomic"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A commit or transaction with one denied write is refused as a whole with the post-state unchanged; BatchWrite reports a status per write and applies the allowed ones."
+    },
+    {
+      "conditionId": "FS-RULES/refusal-shape",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/refusals"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The wire shape of refusals over REST and gRPC: permission denial, a malformed, empty or foreign bearer credential, and methods an end user may not call (listCollectionIds, partitionQuery)."
+    },
+    {
+      "conditionId": "FS-RULES/token-states",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/token-states"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "An unexpired ID token of an account whose refresh tokens were revoked, that was disabled, or that was deleted, presented to Firestore after the change."
+    },
+    {
+      "conditionId": "FS-RULES/token-expiry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/expiry"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "An ID token presented to Firestore at offsets around its exp, to find the accepted allowance after expiry."
+    },
+    {
+      "conditionId": "FS-RULES/publication",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/publication"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A project with no cloud.firestore release refuses every client request; after a release switch has propagated, the new ruleset governs every decision; a ruleset refused at compile time leaves the previous one in force."
+    },
+    {
+      "conditionId": "FS-RULES/named-database",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules/named-database"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A named database is governed by its own release cloud.firestore/<database>, not by the (default) release, and refuses every client request while it has none."
+    },
+    {
+      "conditionId": "FS-RULES/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-rules",
+        "auth-credential",
+        "auth-account"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The final artifact's FS-RULES comparison, with the AUTH-ACCOUNT and AUTH-CREDENTIAL comparisons re-run on the same artifact."
+    },
+    {
+      "conditionId": "FS-RULES/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-RULES",
+        "fs-rules"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Independent clean-context closure review and a separate safety review of every change that widens what a request may do."
+    }
+  ]
+}

@@ -1430,7 +1430,12 @@ fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() 
         assert_eq!(status, 200, "{document}");
         read_time = document["updateTime"].as_str().unwrap().to_owned();
     }
-    let query = json!({"from": [{"collectionId": "items", "allDescendants": true}]});
+    // The explicit `__name__` order the SDKs send: a partition cursor positions against the
+    // explicit order only.
+    let query = json!({
+        "from": [{"collectionId": "items", "allDescendants": true}],
+        "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": "ASCENDING"}],
+    });
     let mut token = String::new();
     let mut cuts = Vec::new();
     loop {
@@ -2910,10 +2915,11 @@ fn rest_protojson_null_fields_and_numeric_order_direction_follow_unset_rules() {
     let s = state(None);
     for query in [
         json!({"from": null, "orderBy": null}),
-        json!({"from": [{"collectionId": null, "allDescendants": null}], "orderBy": [{"field": {"fieldPath": "v"}, "direction": null}]}),
-        json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 1}]}),
-        json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 2}]}),
-        json!({"from": [], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 0}], "where": null, "findNearest": null}),
+        // A kindless query may order by `__name__` ascending only.
+        json!({"from": [{"collectionId": null, "allDescendants": null}], "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": null}]}),
+        json!({"from": [{"collectionId": "c"}], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 1}]}),
+        json!({"from": [{"collectionId": "c"}], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 2}]}),
+        json!({"from": [{"collectionId": "c"}], "orderBy": [{"field": {"fieldPath": "v"}, "direction": 0}], "where": null, "findNearest": null}),
     ] {
         let (status, body) = call(
             &s,

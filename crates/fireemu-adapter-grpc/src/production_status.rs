@@ -5,7 +5,9 @@
 //! refusals. Over gRPC they travel in the `grpc-status-details-bin` trailer as an encoded
 //! `google.rpc.Status`; over REST they appear as the `details` array of the error envelope.
 
+use core::fmt::Write as _;
 use fireemu_proto_firestore::google::rpc::Status as RpcStatus;
+
 use prost::Message;
 use serde_json::{json, Value};
 use tonic::{Code, Status};
@@ -130,6 +132,34 @@ pub fn details_to_json(details: &[u8]) -> Option<Vec<Value>> {
     (!rendered.is_empty()).then_some(rendered)
 }
 
+/// Re-encodes a `grpc-message` header the way the gRPC wire spec (and production) does: only
+/// `%` and bytes outside printable ASCII are percent-encoded. tonic also encodes `?`, `#`, space
+/// and other printable characters, which clients that decode with `decodeURI` (grpc-js, and so
+/// the Node SDKs) leave as `%3F` or `%23` in the message they report.
+pub fn respec_grpc_message(headers: &mut hyper::HeaderMap) {
+    let Some(value) = headers.get(Status::GRPC_MESSAGE) else {
+        return;
+    };
+    let Ok(text) = value.to_str() else {
+        return;
+    };
+    let decoded = fireemu_core_types::codec::percent_decode_bytes(
+        text,
+        fireemu_core_types::codec::PlusMode::Literal,
+    );
+    let mut encoded = String::with_capacity(decoded.len());
+    for byte in decoded {
+        if byte == b'%' || !(0x20..=0x7e).contains(&byte) {
+            let _ = write!(encoded, "%{byte:02X}");
+        } else {
+            encoded.push(char::from(byte));
+        }
+    }
+    if let Ok(value) = hyper::header::HeaderValue::from_str(&encoded) {
+        headers.insert(Status::GRPC_MESSAGE, value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +186,22 @@ mod tests {
                 }),
             ])
         );
+    }
+
+    #[test]
+    fn grpc_messages_are_percent_encoded_as_the_spec_says() {
+        let status = Status::failed_precondition(
+            "Create it here: https://x/indexes?create_composite=Ab_- #1 100% \u{e9}\n",
+        );
+        let mut headers = hyper::HeaderMap::new();
+        status.add_header(&mut headers).unwrap();
+        respec_grpc_message(&mut headers);
+        assert_eq!(
+            headers.get(Status::GRPC_MESSAGE).unwrap(),
+            "Create it here: https://x/indexes?create_composite=Ab_- #1 100%25 %C3%A9%0A"
+        );
+        let back = Status::from_header_map(&headers).unwrap();
+        assert_eq!(back.message(), status.message());
     }
 
     #[test]

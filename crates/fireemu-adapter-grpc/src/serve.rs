@@ -683,6 +683,7 @@ fn is_decoded_message_too_large(status: &Status) -> bool {
 }
 
 fn normalize_transport_status(headers: &mut HeaderMap, enforce_limits: bool) {
+    crate::production_status::respec_grpc_message(headers);
     let Some(status) = Status::from_header_map(headers) else {
         return;
     };

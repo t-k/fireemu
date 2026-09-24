@@ -2508,7 +2508,7 @@ impl LocalBackend {
             .unwrap_or(&empty);
         self.gateway
             .validate_query_with_indexes(&query, database_indexes)
-            .map_err(|rejection| rejection.to_status())
+            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
     }
 
     /// Decodes and validates a structured aggregation query through the strict gateway.
@@ -2532,7 +2532,7 @@ impl LocalBackend {
             .unwrap_or(&empty);
         self.gateway
             .validate_aggregation_query_with_indexes(&query, aggregations, database_indexes)
-            .map_err(|rejection| rejection.to_status())
+            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
     }
 
     /// Atomically replaces the index catalog used by subsequent query plans.
@@ -4817,7 +4817,9 @@ impl LocalBackend {
                 "RunQuery requires a structured_query",
             ));
         };
-        let accepted = self.accepted_query(&parent, sq)?;
+        let accepted = self
+            .accepted_query(&parent, sq)
+            .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
         let authorization_parent = parse_parent(&authorization_req.parent).map_err(status)?;
         if authorization_parent.project != parent.project
             || authorization_parent.database != parent.database
@@ -4834,7 +4836,9 @@ impl LocalBackend {
                 "RunQuery requires a structured_query",
             ));
         };
-        let authorization = self.accepted_query(&authorization_parent, authorization_query)?;
+        let authorization = self
+            .accepted_query(&authorization_parent, authorization_query)
+            .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -5017,7 +5021,9 @@ impl LocalBackend {
             ));
         };
         let (aliases, aggregations) = decode_aggregations(saq)?;
-        let accepted = self.accepted_aggregation_query(&parent, sq, &aggregations)?;
+        let accepted = self
+            .accepted_aggregation_query(&parent, sq, &aggregations)
+            .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
         let plan_only = req
             .explain_options
             .as_ref()

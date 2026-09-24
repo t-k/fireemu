@@ -1112,7 +1112,9 @@ impl GatewayService {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
                     let parent = parse_parent(&req.parent)
                         .map_err(|error| Rejection::Decode(error).to_status())?;
-                    let accepted = local.accepted_query(&parent, query)?;
+                    let accepted = local.accepted_query(&parent, query).map_err(|s| {
+                        crate::index_messages::for_explain(req.explain_options.as_ref(), s)
+                    })?;
                     Some(accepted.query)
                 }
                 None => None,

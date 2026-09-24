@@ -195,8 +195,8 @@ fn the_same_official_limitation_is_served_under_emulator_and_refused_under_stric
     assert_eq!(status, 400, "{body}");
     assert!(body.contains("FAILED_PRECONDITION"), "{body}");
     assert!(
-        body.contains("firestore.indexes.json"),
-        "the refusal carries the fragment production would need: {body}"
+        body.contains("The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/demo-profile/firestore/indexes?create_composite="),
+        "the refusal carries production's console link to the index it needs: {body}"
     );
     assert!(
         strict.banner().contains("profile: strict"),

@@ -12,7 +12,8 @@ use fireemu_verification_quint::process::{
 
 const MANIFEST: &str = include_str!("../mutations/EventDelivery.json");
 const EVIDENCE: &str = include_str!("../evidence/EventDelivery.json");
-const BOUND_INPUTS: [&str; 32] = [
+const BOUND_INPUTS: [&str; 33] = [
+    ".github/workflows/ci.yml",
     ".github/workflows/quint.yml",
     "rust-toolchain.toml",
     "crates/fireemu-core-events/Cargo.toml",

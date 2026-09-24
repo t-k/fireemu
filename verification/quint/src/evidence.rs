@@ -23,6 +23,7 @@ const TRACES_PER_SEED: usize = 100;
 const MAX_STEPS: usize = 20;
 const CARGO_AUTHORITY_INPUT: &str = "verification/quint/evidence/cargo-authority.json";
 const COMMON_DIGEST_PATHS: &[&str] = &[
+    ".github/workflows/ci.yml",
     ".github/workflows/quint.yml",
     "rust-toolchain.toml",
     "verification/quint/apalache.lock.json",

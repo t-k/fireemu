@@ -22,6 +22,7 @@
     "Window": "1"
   },
   "boundInputs": [
+    ".github/workflows/ci.yml",
     ".github/workflows/quint.yml",
     "crates/fireemu-core-auth/src/mfa.rs",
     "crates/fireemu-core-auth/src/store.rs",
@@ -51,6 +52,7 @@
     "verification/quint/tests/auth_totp_connect.rs"
   ],
   "digests": {
+    ".github/workflows/ci.yml": "b486c815eece3daf091c8881ce64e97ea2a85f64629d9562ede81ddb17f6a240",
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "crates/fireemu-core-auth/src/mfa.rs": "5b0272ef34645b525341bd861c351de03f87caf1d7cd66e2c69735e7e6838d08",
     "crates/fireemu-core-auth/src/store.rs": "e45c691fd59de780dc904b987f7e390ede12357d21de04bf944328acc6336465",
@@ -70,7 +72,7 @@
     "verification/quint/specs/AuthTotp.qnt": "6bcb671e488bb35568679bb3f564fdb4ea22ee13745eb3b5d28884f72838b3d3",
     "verification/quint/src/auth_totp.rs": "b55c33ff5868c925f53ed11970f49485234afba0cc7915abb73f37991ed2f4b9",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
-    "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
+    "verification/quint/src/evidence.rs": "2a0504c6482d4d354e90fc131b98adf20ae003243b7ede22d41224f72c29f18f",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",
     "verification/quint/src/model.rs": "74a5503f62e2b182c16e38d394d19bf8933b49beb69acc20542beeca89eef255",

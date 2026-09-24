@@ -22,6 +22,7 @@
     "MaxDepth": "1"
   },
   "boundInputs": [
+    ".github/workflows/ci.yml",
     ".github/workflows/quint.yml",
     "crates/fireemu-adapter-functions/src/runtime.rs",
     "crates/fireemu-adapter-http/src/control.rs",
@@ -51,6 +52,7 @@
     "verification/quint/tests/await_idle_connect.rs"
   ],
   "digests": {
+    ".github/workflows/ci.yml": "b486c815eece3daf091c8881ce64e97ea2a85f64629d9562ede81ddb17f6a240",
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "crates/fireemu-adapter-functions/src/runtime.rs": "db8501e042ebc6335a11c6d8e509bede17d1fb46aa2db62aa82257c38cf8fa28",
     "crates/fireemu-adapter-http/src/control.rs": "a23ea41646fa1781e7dfc110a6208a6fd11d6f205417d4440ad6cfd13a3a5f50",
@@ -70,7 +72,7 @@
     "verification/quint/specs/AwaitIdle.qnt": "8b666013445c405fcd8d15d5c82854218df24a48394df591586e866302019412",
     "verification/quint/src/await_idle.rs": "985dea3215cfb3d7c671c7afd3e78d916c85953b11deff2eaf927614cdcbc721",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
-    "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
+    "verification/quint/src/evidence.rs": "2a0504c6482d4d354e90fc131b98adf20ae003243b7ede22d41224f72c29f18f",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",
     "verification/quint/src/model.rs": "74a5503f62e2b182c16e38d394d19bf8933b49beb69acc20542beeca89eef255",

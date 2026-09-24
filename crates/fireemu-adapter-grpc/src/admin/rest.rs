@@ -431,7 +431,7 @@ fn list_databases(
             "pageSize and pageToken are not supported",
         ));
     }
-    let now = state.local.now();
+    let now = state.local.admin_now();
     let unprompted = unprompted_databases(state, project);
     let admin = state.local.admin();
     let mut databases: Vec<Value> = admin
@@ -457,7 +457,7 @@ fn get_database(state: &RestState, project: &str, database: &str) -> RestRespons
         database,
         exists_unprompted(state, project, database),
     ) {
-        Some(record) => ok(database_json(&record, state.local.now(), None)),
+        Some(record) => ok(database_json(&record, state.local.admin_now(), None)),
         None if admin
             .deleted(project)
             .iter()
@@ -606,7 +606,7 @@ fn create_database(
     };
     let database = request.database.clone();
     let database = database.as_str();
-    let now = state.local.now();
+    let now = state.local.admin_now();
     match state
         .local
         .admin()
@@ -709,7 +709,7 @@ fn patch_database(
     };
     let masked =
         |names: [&str; 2]| mask.is_empty() || mask.iter().any(|p| names.contains(&p.as_str()));
-    let now = state.local.now();
+    let now = state.local.admin_now();
     let result = state.local.admin().update(
         project,
         database,
@@ -769,7 +769,7 @@ fn delete_database(
             );
         }
     }
-    let now = state.local.now();
+    let now = state.local.admin_now();
     match admin.delete(project, database, unprompted, now) {
         Ok(tombstone) => {
             state.local.delete_database(project, database);

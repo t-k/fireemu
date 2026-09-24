@@ -368,7 +368,7 @@ impl RestState {
         self.local.admin().fields().overlay(
             &selector.project,
             &selector.database,
-            self.local.now(),
+            self.local.admin_now(),
             &mut indexes,
             true,
         );
@@ -388,7 +388,7 @@ impl RestState {
             )
             .into_iter()
             .last()
-            .filter(|patch| !registry.applied(patch, self.local.now()))
+            .filter(|patch| !registry.applied(patch, self.local.admin_now()))
     }
 
     fn field_json(&self, selector: &FieldSelector) -> Value {
@@ -563,7 +563,7 @@ impl RestState {
                  cannot carry a TTL policy or a single-field index override",
             ));
         };
-        let now = self.local.now();
+        let now = self.local.admin_now();
         let (change, delta) = if patches_index_config {
             self.index_config_change(selector, &field, body)?
         } else {
@@ -615,7 +615,12 @@ impl RestState {
         patch: &crate::admin::fields::FieldPatch,
         initial: &Value,
     ) -> Value {
-        if !self.local.admin().fields().applied(patch, self.local.now()) {
+        if !self
+            .local
+            .admin()
+            .fields()
+            .applied(patch, self.local.admin_now())
+        {
             return initial.clone();
         }
         let selector = FieldSelector {
@@ -732,7 +737,7 @@ impl RestState {
             self.local.admin().fields().overlay(
                 project,
                 database,
-                self.local.now(),
+                self.local.admin_now(),
                 &mut indexes,
                 true,
             );

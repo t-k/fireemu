@@ -285,7 +285,7 @@ pub(crate) fn export(
         Ok(documents) => documents,
         Err(response) => return response,
     };
-    let start = state.local.now();
+    let start = state.local.admin_now();
     let job = ExportJob {
         project: project.to_owned(),
         database: database.to_owned(),
@@ -414,7 +414,7 @@ pub(crate) fn import(
             return error(tonic::Code::InvalidArgument, &message, None)
         }
     };
-    let start = state.local.now();
+    let start = state.local.admin_now();
     if let Err(response) = apply_import(state, project, database, &outcome.documents) {
         return response;
     }
@@ -557,7 +557,7 @@ pub(crate) fn bulk_delete(
         Ok(documents) => documents,
         Err(response) => return response,
     };
-    let start = state.local.now();
+    let start = state.local.admin_now();
     // Production takes the snapshot the delete works from at the next whole minute.
     let minute = 60_000_000_000_i128;
     let snapshot = LogicalInstant::from_nanos((start.as_nanos() / minute + 1) * minute);

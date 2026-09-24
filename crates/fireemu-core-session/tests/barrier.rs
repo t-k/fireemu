@@ -26,3 +26,14 @@ fn a_request_that_started_before_a_reset_is_refused_after_it() {
         "the session was reset while the request was in flight"
     );
 }
+
+#[test]
+fn a_pause_waits_like_a_reset_but_refuses_no_request_in_flight() {
+    // Deleting one database holds admissions back while it detaches the database, but it
+    // resets no session: a request on another database that started before it still runs.
+    let barrier = AdmissionBarrier::new();
+    let seen = barrier.epoch();
+    drop(barrier.pause());
+    assert_eq!(barrier.epoch(), seen);
+    assert!(barrier.admit_since(seen).is_ok());
+}

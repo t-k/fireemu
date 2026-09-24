@@ -25,6 +25,7 @@ import { promisify } from "node:util";
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { PROGRAMS } from "./corpus.mjs";
+import { programDigest } from "./digest.mjs";
 import { scanFixture } from "./fixture-scan.mjs";
 import {
   BISECT_PROJECT,
@@ -69,17 +70,6 @@ function selectedPrograms() {
   if (programs.length === 0) throw new Error("no program matches FS_CONFIG_PROGRAMS");
   return programs;
 }
-
-/**
- * What a saved row of the program depends on besides the harness: the program itself and the
- * committed bytes of every capture it uploads (a changed capture makes its rows stale).
- */
-export const programDigest = (program, captures = {}) => {
-  const used = program.steps
-    .filter((s) => s.upload)
-    .map((s) => sha256(JSON.stringify(captures[s.upload.from] ?? null)));
-  return sha256(JSON.stringify(program) + used.join(""));
-};
 
 /** Normalization and request semantics a saved row depends on; a change makes it stale. */
 export async function harnessDigest() {

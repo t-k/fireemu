@@ -112,10 +112,13 @@ fn vector_message(database: &str, requirement: &IndexDefinition) -> String {
         IndexQueryScope::Collection => "COLLECTION",
         IndexQueryScope::CollectionGroup => "COLLECTION_GROUP",
     };
+    // The implied `__name__` tiebreak is not configured; a `__name__` vector field is.
     let configs: Vec<String> = requirement
         .fields
         .iter()
-        .filter(|field| !field.path.is_document_name())
+        .filter(|field| {
+            !field.path.is_document_name() || matches!(field.mode, IndexFieldMode::Vector { .. })
+        })
         .map(|field| match field.mode {
             IndexFieldMode::Ascending => format!("--field-config=order=ASCENDING,field-path={}", field.path.canonical()),
             IndexFieldMode::Descending => format!("--field-config=order=DESCENDING,field-path={}", field.path.canonical()),

@@ -462,20 +462,16 @@ impl fmt::Display for QueryError {
             Self::FindNearestVectorField => {
                 f.write_str("findNearest vector field must be a stored field")
             }
-            Self::FindNearestQueryVector => f.write_str(
-                "findNearest query vector must contain between 1 and 2048 finite dimensions",
+            Self::FindNearestQueryVector => f.write_str("Cannot have a zero length vector."),
+            Self::FindNearestLimit => f.write_str(
+                "FindNearest.limit must be a positive integer of no more than 1000",
             ),
-            Self::FindNearestLimit => {
-                f.write_str("findNearest limit must be a positive integer no greater than 1000")
-            }
-            Self::FindNearestDistanceMeasure => {
-                f.write_str("findNearest distance measure is required")
-            }
+            Self::FindNearestDistanceMeasure => f.write_str("Unknown Distance Measure."),
             Self::FindNearestDistanceThreshold => {
-                f.write_str("findNearest distance threshold must be finite")
+                f.write_str("distanceThreshold must be a finite number.")
             }
             Self::FindNearestDistanceResultField => {
-                f.write_str("findNearest distance result field must be a stored field")
+                f.write_str("The distanceResultField.property.name \"__name__\" is reserved.")
             }
         }
     }
@@ -1053,9 +1049,8 @@ fn check_name_filters(f: &FilterExpr) -> Result<(), QueryError> {
 }
 
 fn validate_find_nearest(find_nearest: &FindNearest) -> Result<(), QueryError> {
-    if find_nearest.vector_field.is_document_name() {
-        return Err(QueryError::FindNearestVectorField);
-    }
+    // A `__name__` vector field is not refused here: no vector index can serve it, so the
+    // index check answers production's missing-vector-index text.
     if find_nearest.query_vector.is_empty()
         || find_nearest.query_vector.len() > 2048
         || find_nearest

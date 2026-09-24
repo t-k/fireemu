@@ -3704,15 +3704,16 @@ impl LocalBackend {
         if !(0..1_000_000_000).contains(&ts.nanos) {
             return Err(Status::invalid_argument("read_time: nanos out of range"));
         }
+        // Production's texts (FS-QUERY-INDEX read-time, recorded 2026-09-24).
         if ts.nanos % 1000 != 0 {
             return Err(Status::invalid_argument(
-                "read_time must be a microsecond precision timestamp",
+                "timestamp cannot have more than microseconds precision",
             ));
         }
         let at = crate::encode::decode_instant(ts);
         if at.as_nanos() > horizon.max(now).as_nanos() {
             return Err(Status::invalid_argument(
-                "read_time must not be in the future",
+                "The requested 'read_time' cannot be in the future.",
             ));
         }
         // Production answers a read_time before the database existed with INVALID_ARGUMENT and
@@ -4999,6 +5000,7 @@ impl LocalBackend {
             .map(|(response, _)| response)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn run_aggregation_query_with_stats(
         &self,
         req: &pb::RunAggregationQueryRequest,
@@ -5028,6 +5030,13 @@ impl LocalBackend {
             .explain_options
             .as_ref()
             .is_some_and(|options| !options.analyze);
+        if let Some(response) = crate::query_messages::zero_capped_count(
+            &aliases,
+            &aggregations,
+            plan_only || req.consistency_selector.is_some(),
+        ) {
+            return Ok((response, QueryStats::default()));
+        }
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_aggregation_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -5615,58 +5624,12 @@ pub fn encode_commit(result: &CommitResult) -> pb::CommitResponse {
     }
 }
 
-/// Firestore accepts at most this many aggregations in one query.
-const MAX_AGGREGATIONS_PER_QUERY: usize = 5;
-
-/// Decodes and validates the aggregation list: 1..=5 entries, positive `count.up_to`,
-/// unique aliases.
+/// Decodes and validates the aggregation list in production's terms
+/// (`crate::query_messages::decode_aggregations`).
 pub(crate) fn decode_aggregations(
     saq: &pb::StructuredAggregationQuery,
 ) -> Result<(Vec<String>, Vec<Aggregation>), Status> {
-    if saq.aggregations.is_empty() || saq.aggregations.len() > MAX_AGGREGATIONS_PER_QUERY {
-        return Err(Status::invalid_argument(format!(
-            "an aggregation query needs 1..={MAX_AGGREGATIONS_PER_QUERY} aggregations"
-        )));
-    }
-    let mut aliases: Vec<String> = Vec::with_capacity(saq.aggregations.len());
-    let mut aggregations = Vec::with_capacity(saq.aggregations.len());
-    for (i, a) in saq.aggregations.iter().enumerate() {
-        use pb::structured_aggregation_query::aggregation::Operator as O;
-        let field =
-            |f: &Option<pb::structured_query::FieldReference>| -> Result<FieldPath, Status> {
-                let r = f
-                    .as_ref()
-                    .ok_or_else(|| Status::invalid_argument("aggregation without field"))?;
-                FieldPath::parse(&r.field_path).map_err(|e| Status::invalid_argument(e.to_string()))
-            };
-        let agg = match &a.operator {
-            Some(O::Count(c)) => Aggregation::Count {
-                up_to: match c.up_to {
-                    None => None,
-                    Some(n) if n > 0 => Some(u64::try_from(n).unwrap_or(u64::MAX)),
-                    Some(_) => {
-                        return Err(Status::invalid_argument("count.up_to must be positive"))
-                    }
-                },
-            },
-            Some(O::Sum(s)) => Aggregation::Sum(field(&s.field)?),
-            Some(O::Avg(v)) => Aggregation::Avg(field(&v.field)?),
-            None => return Err(Status::invalid_argument("aggregation without operator")),
-        };
-        let alias = if a.alias.is_empty() {
-            format!("field_{}", i + 1)
-        } else {
-            a.alias.clone()
-        };
-        if aliases.contains(&alias) {
-            return Err(Status::invalid_argument(format!(
-                "duplicate aggregation alias {alias:?}"
-            )));
-        }
-        aliases.push(alias);
-        aggregations.push(agg);
-    }
-    Ok((aliases, aggregations))
+    crate::query_messages::decode_aggregations(saq)
 }
 
 /// Catalog key of a database.
@@ -5862,11 +5825,8 @@ fn query_responses(
             );
         }
     }
-    if let Some(last) = responses.last_mut() {
-        // The last response says so, so a client can tell the end of the results from a
-        // stream that stalled.
-        last.continuation_selector = Some(pb::run_query_response::ContinuationSelector::Done(true));
-    }
+    // Production marks no response `done` (FS-QUERY-INDEX gRPC recordings, 2026-09-24): the
+    // end of the stream is the end of the results.
     if !new_transaction.is_empty() {
         // A new transaction is announced in a dedicated first response that carries nothing
         // else (RunQueryResponse contract).

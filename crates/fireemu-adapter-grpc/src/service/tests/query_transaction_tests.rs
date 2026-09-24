@@ -191,10 +191,10 @@ async fn run_query_multipage_read_write_commits_after_complete_delivery() {
                 .into_inner();
             let mut transaction = Vec::new();
             let mut names = Vec::new();
-            let mut completions = 0;
+            // Production marks no response `done`; the stream's end completes it.
             while let Some(response) = stream.next().await {
                 let response = response.unwrap();
-                assert_eq!(completions, 0, "Done must be the last response");
+                assert_eq!(response.continuation_selector, None);
                 if !response.transaction.is_empty() {
                     assert!(transaction.is_empty());
                     transaction = response.transaction;
@@ -202,12 +202,7 @@ async fn run_query_multipage_read_write_commits_after_complete_delivery() {
                 if let Some(document) = response.document {
                     names.push(document.name);
                 }
-                completions += usize::from(
-                    response.continuation_selector
-                        == Some(pb::run_query_response::ContinuationSelector::Done(true)),
-                );
             }
-            assert_eq!(completions, 1);
             let mut expected: Vec<_> = (0..count)
                 .map(|index| format!("{}/items/{index:03}", query_request().parent))
                 .collect();

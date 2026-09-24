@@ -1108,6 +1108,11 @@ impl GatewayService {
                 .explain_options
                 .as_ref()
                 .is_some_and(|options| !options.analyze);
+            if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
+                req.query_type.as_ref()
+            {
+                crate::query_messages::check_find_nearest_request(query)?;
+            }
             let explain_query = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
                     let parent = parse_parent(&req.parent)
@@ -1402,9 +1407,8 @@ impl GatewayService {
                     }
                 }
                 drop(rollback);
-                if let Some(mut response) = pending {
-                    response.continuation_selector =
-                        Some(pb::run_query_response::ContinuationSelector::Done(true));
+                // Production marks no response `done`; the stream's end completes it.
+                if let Some(response) = pending {
                     let _ = sender.send(Ok(response)).await;
                 }
             });

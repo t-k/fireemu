@@ -531,8 +531,6 @@ fn retarget(value: Value, from: (&str, &str), to: (&str, &str)) -> Value {
     }
 }
 
-/// Writes the imported documents into the target database (overwriting, as production does),
-/// in commits of at most 500 writes.
 /// The most managed imports that run at once.
 const MAX_CONCURRENT_IMPORTS: usize = 2;
 
@@ -575,6 +573,8 @@ fn is_segment(id: &str) -> bool {
     !id.is_empty() && !id.contains('/')
 }
 
+/// Writes the imported documents into the target database (overwriting, as production does),
+/// in commits of at most 500 writes.
 fn apply_import(
     state: &RestState,
     project: &str,

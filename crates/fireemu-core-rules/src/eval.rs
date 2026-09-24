@@ -509,8 +509,11 @@ pub fn evaluate_request_traced_owned(
 }
 
 /// Evaluates a request against a ruleset; `access` serves `get()` / `exists()` within the
-/// Maximum `eval` recursion depth (stack safety; parenthesised nesting is bounded by the
-/// parser, left-nested operator chains are bounded here).
+/// Maximum `eval` recursion depth: a stack-safety bound of fireemu's, not production's.
+/// Production evaluates every expression it compiles (99 levels, see
+/// `parse::MAX_COMPILED_EXPR_DEPTH`, and up to 20 nested calls); an evaluation deeper than
+/// this is an error here, which makes its condition false (fails closed). The daemon gives its
+/// request threads a stack that holds this depth in a debug build.
 pub const MAX_EVAL_NESTING: u32 = 64;
 
 /// `RULES-DOC-ACCESS-SINGLE` budget.

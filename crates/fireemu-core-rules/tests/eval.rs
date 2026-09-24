@@ -3258,7 +3258,10 @@ fn a_delete_carries_a_null_request_resource() {
         );
         evaluate_request(&parse_ruleset(&source).unwrap(), &request).decision
     };
-    assert!(matches!(decision("request.resource == null"), Decision::Allow));
+    assert!(matches!(
+        decision("request.resource == null"),
+        Decision::Allow
+    ));
     assert!(matches!(decision("'resource' in request"), Decision::Allow));
     assert!(matches!(
         decision("request.resource.data.n == 1"),

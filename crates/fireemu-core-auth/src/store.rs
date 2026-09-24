@@ -1393,7 +1393,6 @@ impl AuthStore {
         self.lifecycle_epoch = Some(epoch);
     }
 
-    /// The private control-session incarnation expected in locally issued ID tokens.
     /// Whether this store has issued a legacy Identity Toolkit token.
     #[must_use]
     pub const fn legacy_tokens_issued(&self) -> bool {
@@ -1433,6 +1432,7 @@ impl AuthStore {
         Ok(payload)
     }
 
+    /// The private control-session incarnation expected in locally issued ID tokens.
     #[must_use]
     pub(crate) fn lifecycle_epoch_claim(&self) -> Option<String> {
         self.lifecycle_epoch.map(AuthLifecycleEpoch::wire_value)

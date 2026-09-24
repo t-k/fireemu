@@ -1408,58 +1408,112 @@ fn a_client_update_cannot_move_valid_since() {
     assert_eq!(read(), before);
 }
 
-/// Identity Toolkit honours an ID token and a custom token for a while past `exp` and then
-/// refuses them as invalid, not as expired: ten seconds past was accepted and 330 seconds past
-/// refused (sandbox recording 2026-09-24, auth-credential/expiry/one-hour).
+/// The service account the strict test states trust for custom tokens.
+const TEST_SIGNER: &str = "firebase-adminsdk-x@demo-app.iam.gserviceaccount.com";
+
+fn test_signer_key() -> &'static rsa::RsaPrivateKey {
+    use rand_core::SeedableRng;
+    static KEY: std::sync::OnceLock<rsa::RsaPrivateKey> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        rsa::RsaPrivateKey::new(&mut rand_chacha::ChaCha20Rng::seed_from_u64(31), 2048).unwrap()
+    })
+}
+
+/// The strict profile with `auth.customTokenSigners` naming [`TEST_SIGNER`].
+fn strict_state_with_signer() -> AuthState {
+    use fireemu_adapter_http::identity_toolkit::CustomTokenTrust;
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rsa::traits::PublicKeyParts;
+    let key = test_signer_key();
+    let jwks = json!({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "k1",
+        "n": base64url_encode(&key.n().to_bytes_be()), "e": base64url_encode(&key.e().to_bytes_be())}]});
+    let trust =
+        CustomTokenTrust::from_jwks(json!({TEST_SIGNER: jwks}).as_object().unwrap()).unwrap();
+    AuthState {
+        custom_token_trust: Some(Arc::new(trust)),
+        ..strict_state()
+    }
+}
+
+/// A custom token [`TEST_SIGNER`] signed, issued at `iat` and valid for an hour.
+fn trusted_custom_token(uid: &str, claims: &Value, iat: i64) -> String {
+    signed_custom_token(test_signer_key(), TEST_SIGNER, uid, claims, iat)
+}
+
+/// Identity Toolkit honours an ID token for five minutes past `exp` and then refuses it as
+/// invalid, not as expired, in both profiles: production accepted it ten seconds past `exp` and
+/// refused it 330 seconds past (sandbox recording 2026-09-24, auth-credential/expiry/one-hour).
+/// A strict custom token follows the same allowance; the emulator profile keeps the official
+/// emulator's disregard of a fake custom token's `exp`.
 #[test]
 fn expired_tokens_have_a_skew_allowance_and_are_then_invalid() {
-    let s = strict_state();
-    let (status, signed_in) = post(
-        &s,
-        &format!("{V1}/accounts:signUp"),
-        &json!({"email": "expiry@example.com", "password": "hunter22", "returnSecureToken": true}),
-    );
-    assert_eq!(status, 200, "{signed_in}");
-    let now = 1_788_004_860;
-    let custom = custom_token("expiring-custom", &json!({}), now + 3600);
-    let attempt = || {
-        let code = |(status, body): (u16, Value)| {
+    for strict in [true, false] {
+        let s = if strict {
+            strict_state_with_signer()
+        } else {
+            state()
+        };
+        let (status, signed_in) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "expiry@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{signed_in}");
+        let now = 1_788_004_860;
+        let custom = if strict {
+            trusted_custom_token("expiring-custom", &json!({}), now)
+        } else {
+            custom_token("expiring-custom", &json!({}), now + 3600)
+        };
+        let attempt = || {
+            let code = |(status, body): (u16, Value)| {
+                (
+                    status,
+                    body["error"]["message"].as_str().unwrap_or("").to_owned(),
+                )
+            };
             (
-                status,
-                body["error"]["message"].as_str().unwrap_or("").to_owned(),
+                code(post(
+                    &s,
+                    &format!("{V1}/accounts:lookup"),
+                    &json!({"idToken": signed_in["idToken"]}),
+                )),
+                code(admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}:createSessionCookie"),
+                    &json!({"idToken": signed_in["idToken"], "validDuration": 3600}),
+                )),
+                code(post(
+                    &s,
+                    &format!("{V1}/accounts:signInWithCustomToken"),
+                    &json!({"token": custom, "returnSecureToken": true}),
+                )),
             )
         };
-        (
-            code(post(
-                &s,
-                &format!("{V1}/accounts:lookup"),
-                &json!({"idToken": signed_in["idToken"]}),
-            )),
-            code(admin(
-                &s,
-                "POST",
-                &format!("{ADMIN}:createSessionCookie"),
-                &json!({"idToken": signed_in["idToken"], "validDuration": 3600}),
-            )),
-            code(post(
-                &s,
-                &format!("{V1}/accounts:signInWithCustomToken"),
-                &json!({"token": custom, "returnSecureToken": true}),
-            )),
-        )
-    };
-    advance(&s, 3610);
-    let ok = (200, String::new());
-    assert_eq!(attempt(), (ok.clone(), ok.clone(), ok));
-    advance(&s, 320);
-    assert_eq!(
-        attempt(),
-        (
-            (400, "INVALID_ID_TOKEN".to_owned()),
-            (400, "INVALID_ID_TOKEN".to_owned()),
-            (400, "INVALID_CUSTOM_TOKEN".to_owned()),
-        )
-    );
+        advance(&s, 3610);
+        let ok = (200, String::new());
+        assert_eq!(
+            attempt(),
+            (ok.clone(), ok.clone(), ok.clone()),
+            "strict={strict}"
+        );
+        advance(&s, 320);
+        let custom_expected = if strict {
+            (400, "INVALID_CUSTOM_TOKEN".to_owned())
+        } else {
+            ok
+        };
+        assert_eq!(
+            attempt(),
+            (
+                (400, "INVALID_ID_TOKEN".to_owned()),
+                (400, "INVALID_ID_TOKEN".to_owned()),
+                custom_expected,
+            ),
+            "strict={strict}"
+        );
+    }
 }
 
 /// An administrator's email change revokes the account's sessions and retires its refresh
@@ -1586,16 +1640,31 @@ fn custom_token_empty_and_numeric_uid_answers() {
         (status, empty["error"]["message"].clone()),
         (400, json!("MISSING_CUSTOM_TOKEN"))
     );
-    for s in [state(), strict_state()] {
+    for strict in [false, true] {
+        let s = if strict {
+            strict_state_with_signer()
+        } else {
+            state()
+        };
         let now = 1_788_004_860;
-        let token = custom_token_from_payload(&json!({
+        let issuer = if strict {
+            TEST_SIGNER
+        } else {
+            "firebase-auth-emulator@example.com"
+        };
+        let payload = json!({
             "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
-            "iss": "firebase-auth-emulator@example.com",
-            "sub": "firebase-auth-emulator@example.com",
+            "iss": issuer,
+            "sub": issuer,
             "iat": now,
             "exp": now + 3600,
             "uid": 12345,
-        }));
+        });
+        let token = if strict {
+            signed_payload(test_signer_key(), &payload)
+        } else {
+            custom_token_from_payload(&payload)
+        };
         let (status, body) = post(
             &s,
             &format!("{V1}/accounts:signInWithCustomToken"),
@@ -1640,6 +1709,220 @@ fn the_emulator_profile_refuses_a_forged_legacy_token() {
         (status, refused["error"]["message"].clone()),
         (400, json!("INVALID_ID_TOKEN"))
     );
+}
+
+/// Without `returnSecureToken` the emulator profile keeps the official emulator's secure tokens,
+/// while strict answers with production's legacy token (sandbox recording 2026-09-24).
+#[test]
+fn only_the_strict_profile_answers_without_secure_tokens_with_a_legacy_token() {
+    for strict in [false, true] {
+        let s = if strict {
+            strict_state_with_signer()
+        } else {
+            state()
+        };
+        let (status, _) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "profile-legacy@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200);
+        let now = 1_788_004_860;
+        let custom = if strict {
+            trusted_custom_token("profile-custom", &json!({}), now)
+        } else {
+            custom_token("profile-custom", &json!({}), now + 3600)
+        };
+        for (path, body) in [
+            (
+                "accounts:signInWithPassword",
+                json!({"email": "profile-legacy@example.com", "password": "hunter22"}),
+            ),
+            ("accounts:signInWithCustomToken", json!({"token": custom})),
+        ] {
+            let (status, answer) = post(&s, &format!("{V1}/{path}"), &body);
+            assert_eq!(status, 200, "{answer}");
+            let issuer = token_parts(&answer["idToken"]).1["iss"].clone();
+            if strict {
+                assert_eq!(issuer, "https://identitytoolkit.google.com/", "{path}");
+                assert!(answer.get("refreshToken").is_none(), "{path}: {answer}");
+            } else {
+                assert_eq!(issuer, "https://securetoken.google.com/demo-app", "{path}");
+                assert!(answer.get("refreshToken").is_some(), "{path}: {answer}");
+            }
+        }
+    }
+}
+
+/// A strict project keeps legacy tokens unless a blocking trigger is selected for the sign-in:
+/// a beforeCreate-only function does not stop a password sign-in's legacy token, a
+/// beforeSignIn function does.
+#[test]
+fn legacy_tokens_stop_only_where_a_blocking_trigger_is_selected() {
+    for (label, hook, legacy) in [
+        (
+            "beforeCreate only",
+            Arc::new(BeforeCreateOnlySuccessfulHook(Arc::new(Mutex::new(
+                Vec::new(),
+            )))) as Arc<dyn AuthBlockingHook>,
+            true,
+        ),
+        (
+            "beforeSignIn",
+            Arc::new(RecordingBlockingHook {
+                events: Arc::new(Mutex::new(Vec::new())),
+                reject: None,
+            }) as Arc<dyn AuthBlockingHook>,
+            false,
+        ),
+    ] {
+        let mut s = strict_state();
+        let (status, _) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "blocking-legacy@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200);
+        s.blocking = Some(hook);
+        let (status, answer) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "blocking-legacy@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{label}: {answer}");
+        assert_eq!(
+            answer.get("refreshToken").is_none(),
+            legacy,
+            "{label}: {answer}"
+        );
+    }
+}
+
+/// Production accepts only signed custom tokens: without `auth.customTokenSigners` the strict
+/// profile refuses unsigned and JSON fake tokens as production refuses an unsigned one, and the
+/// emulator profile keeps accepting them as the official emulator does.
+#[test]
+fn strict_refuses_unsigned_custom_tokens_without_configured_signers() {
+    let now = 1_788_004_860;
+    for (strict, expected) in [(true, 400), (false, 200)] {
+        let s = if strict { strict_state() } else { state() };
+        for token in [
+            custom_token("unsigned-user", &json!({}), now + 3600),
+            r#"{"uid":"json-user"}"#.to_owned(),
+        ] {
+            let (status, body) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithCustomToken"),
+                &json!({"token": token, "returnSecureToken": true}),
+            );
+            assert_eq!(status, expected, "strict={strict}: {body}");
+            if strict {
+                assert_eq!(body["error"]["message"], "INVALID_CUSTOM_TOKEN");
+            }
+        }
+    }
+}
+
+/// A legacy token opens only the account routes production was observed to honour it on
+/// (lookup, update, delete); sending a verification mail, upgrading through sign-up or managing
+/// MFA enrollments refuses it.
+#[test]
+fn legacy_tokens_are_honoured_only_by_account_lookup_update_and_delete() {
+    let s = strict_state_with_signer();
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "legacy-routes@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200);
+    let (status, legacy) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "legacy-routes@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{legacy}");
+    let token = legacy["idToken"].clone();
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": token}),
+    );
+    assert_eq!(status, 200);
+    for (path, body) in [
+        (
+            "accounts:sendOobCode".to_owned(),
+            json!({"idToken": token, "requestType": "VERIFY_EMAIL"}),
+        ),
+        (
+            "accounts:signUp".to_owned(),
+            json!({"idToken": token, "email": "upgraded@example.com", "password": "hunter22"}),
+        ),
+        (
+            "accounts/mfaEnrollment:start".to_owned(),
+            json!({"idToken": token, "totpEnrollmentInfo": {}}),
+        ),
+        (
+            "accounts/mfaEnrollment:withdraw".to_owned(),
+            json!({"idToken": token, "mfaEnrollmentId": "unknown"}),
+        ),
+    ] {
+        let url = if path.starts_with("accounts/") {
+            format!("/identitytoolkit.googleapis.com/v2/{path}")
+        } else {
+            format!("{V1}/{path}")
+        };
+        let (status, refused) = post(&s, &url, &body);
+        assert_eq!(status, 400, "{path}: {refused}");
+        assert_eq!(
+            refused["error"]["message"], "INVALID_ID_TOKEN",
+            "{path}: {refused}"
+        );
+    }
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": token}),
+    );
+    assert_eq!(status, 200);
+}
+
+/// `validDuration` follows the official emulator's `Number(v) || two weeks` in the emulator
+/// profile and production's int64 decoding in strict (sandbox recording 2026-09-24).
+#[test]
+fn session_cookie_durations_follow_each_profile() {
+    for strict in [false, true] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, signed_up) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "duration-profile@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{signed_up}");
+        for (duration, lifetime) in [
+            (json!(0), 1_209_600),
+            (json!(3600.5), 3600),
+            (json!("an hour"), 1_209_600),
+            (json!("3600"), 3600),
+        ] {
+            let (status, answer) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}:createSessionCookie"),
+                &json!({"idToken": signed_up["idToken"], "validDuration": duration}),
+            );
+            if strict && duration != json!("3600") {
+                assert_eq!(status, 400, "{duration}: {answer}");
+            } else {
+                assert_eq!(status, 200, "strict={strict} {duration}: {answer}");
+                let claims = token_parts(&answer["sessionCookie"]).1;
+                assert_eq!(
+                    claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+                    lifetime,
+                    "strict={strict} {duration}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -8531,7 +8814,7 @@ fn keys(body: &Value) -> Vec<&str> {
 /// 2026-09-24, auth-credential/id-token/without-return-secure-token and methods).
 #[test]
 fn sign_in_without_secure_tokens_answers_with_the_legacy_identity_toolkit_token() {
-    let s = strict_state();
+    let s = strict_state_with_signer();
     let (status, created) = post(
         &s,
         &format!("{V1}/accounts:signUp"),
@@ -8590,7 +8873,7 @@ fn sign_in_without_secure_tokens_answers_with_the_legacy_identity_toolkit_token(
     let (status, legacy) = post(
         &s,
         &format!("{V1}/accounts:signInWithCustomToken"),
-        &json!({"token": custom_token("legacy-custom", &json!({"role": "r"}), now + 3600)}),
+        &json!({"token": trusted_custom_token("legacy-custom", &json!({"role": "r"}), now)}),
     );
     assert_eq!(status, 200, "{legacy}");
     assert_eq!(keys(&legacy), ["idToken", "isNewUser", "kind"]);
@@ -8615,7 +8898,7 @@ fn sign_in_without_secure_tokens_answers_with_the_legacy_identity_toolkit_token(
         &s,
         &format!("{V1}/accounts:signInWithCustomToken"),
         &json!({
-            "token": custom_token("legacy-custom", &json!({}), now + 3600),
+            "token": trusted_custom_token("legacy-custom", &json!({}), now),
             "returnSecureToken": true,
         }),
     );

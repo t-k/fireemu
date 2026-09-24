@@ -14,6 +14,7 @@ use fireemu_core_auth::jwt::base64url_decode;
 use fireemu_core_types::json::{self as ejson, JsonValue};
 use rsa::pkcs1v15::{Signature, VerifyingKey};
 use rsa::signature::Verifier;
+use rsa::traits::PublicKeyParts;
 use rsa::{BigUint, RsaPublicKey};
 use sha2::Sha256;
 
@@ -179,6 +180,10 @@ fn parse_jwk(key: &serde_json::Value) -> Result<TrustedKey, String> {
     };
     let public = RsaPublicKey::new(component("n")?, component("e")?)
         .map_err(|_| "an RSA public key is not valid".to_owned())?;
+    // Google signs custom tokens with 2048-bit keys; a shorter key is a configuration mistake.
+    if public.n().bits() < 2048 {
+        return Err("every RSA key must be at least 2048 bits".to_owned());
+    }
     Ok(TrustedKey {
         kid: field("kid").map(str::to_owned),
         key: VerifyingKey::<Sha256>::new(public),
@@ -192,7 +197,6 @@ mod tests {
     use rand_core::SeedableRng;
     use rsa::pkcs1v15::SigningKey;
     use rsa::signature::{SignatureEncoding, Signer};
-    use rsa::traits::PublicKeyParts;
     use rsa::RsaPrivateKey;
 
     const PROJECT: &str = "demo-project";
@@ -339,6 +343,9 @@ mod tests {
             bad(serde_json::json!({OWN: {"keys": [{"kty": "RSA", "n": "AQAB"}]}}))
                 .contains("base64url e")
         );
+        let mut rng = rand_chacha::ChaCha20Rng::seed_from_u64(5);
+        let short = RsaPrivateKey::new(&mut rng, 1024).expect("key");
+        assert!(bad(serde_json::json!({OWN: {"keys": [jwk(&short, "k")]}})).contains("2048"));
     }
 
     #[test]

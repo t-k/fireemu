@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-ACCOUNT",
-  "parentStatus": "COMPAT_VERIFIED",
+  "parentStatus": "IMPLEMENTING",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
     "decision": "APPROVED",
@@ -87,9 +87,10 @@
     },
     {
       "id": "A12",
-      "decision": "The gson parser message production returns for malformed customAttributes JSON is a documented message-text divergence; the INVALID_CLAIMS refusal itself must match.",
+      "decision": "Historical owner decision: the gson parser message production returns for malformed customAttributes JSON was accepted as a message-text divergence. This decision is superseded for closure: the mismatch affects two app-visible fields and remains unresolved until production compatibility is implemented and reverified.",
       "decidedBy": "owner",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "supersededForClosure": true
     }
   ],
   "conditions": [
@@ -518,7 +519,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
+      "status": "MISMATCH",
       "evidence": {
         "productionRecordings": [
           {
@@ -975,7 +976,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "VERIFIED",
+      "status": "MISMATCH",
       "evidence": {
         "productionRecordings": [
           {
@@ -1019,7 +1020,7 @@
         },
         "artifactCopy": "docs.local/runs/auth-account-final-20260924b/fireemu (private; debug builds are not reproducible)"
       },
-      "note": "The one AUTH-ACCOUNT row that differs is the documented message-text divergence of custom-attributes (scope decision A12)."
+      "note": "Historical result: 630/631 rows match. A12 remains unresolved: production and fireemu differ in body.error.message and body.error.errors.0.message for malformed customAttributes JSON. The previously approved divergence is retained as history and does not close this condition."
     },
     {
       "conditionId": "AUTH-ACCOUNT/closure-review",

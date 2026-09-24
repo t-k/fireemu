@@ -528,3 +528,65 @@ fn proto_name_parameters_bind_under_strict_only() {
     let (status, body) = list(&emulator, "read_time=yesterday");
     assert_eq!((status, ids(&body)), (200, all.map(String::from).to_vec()));
 }
+
+/// A read-write transaction that pages an ordered listing commits: its read set is the whole
+/// query, which a commit re-runs (FS-DATA-WRITE-LIST review, round 2).
+#[test]
+fn a_read_write_transaction_paging_an_ordered_listing_commits() {
+    let (s, _) = seeded(true);
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readWrite": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let transaction = begun["transaction"].as_str().unwrap().to_owned();
+    let encoded = transaction
+        .replace('+', "%2B")
+        .replace('/', "%2F")
+        .replace('=', "%3D");
+    let (status, first) = list(
+        &s,
+        &format!("orderBy=a%20desc&pageSize=2&transaction={encoded}"),
+    );
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(ids(&first), ["d5", "d4"]);
+    let token = first["nextPageToken"].as_str().unwrap().to_owned();
+    let (status, next) = list(
+        &s,
+        &format!("orderBy=a%20desc&pageSize=2&pageToken={token}&transaction={encoded}"),
+    );
+    assert_eq!(status, 200, "{next}");
+    assert_eq!(ids(&next), ["d3", "d2"]);
+    let (status, committed) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"transaction": transaction}),
+    );
+    assert_eq!(status, 200, "{committed}");
+}
+
+/// A token whose recorded order values do not decode is refused as not issued by the service.
+#[test]
+fn a_token_with_undecodable_order_values_is_refused() {
+    use fireemu_adapter_grpc::rest::json::{base64_decode, base64_encode};
+    let (s, _) = seeded(true);
+    let (_, first) = list(&s, "orderBy=a&pageSize=1");
+    let token = first["nextPageToken"].as_str().unwrap();
+    let decoded = String::from_utf8(base64_decode(token).unwrap()).unwrap();
+    let (head, _) = decoded.rsplit_once('\n').unwrap();
+    let forged = base64_encode(format!("{head}\nAAAA").as_bytes());
+    let (status, body) = list(
+        &s,
+        &format!(
+            "orderBy=a&pageSize=1&pageToken={}",
+            forged
+                .replace('+', "%2B")
+                .replace('/', "%2F")
+                .replace('=', "%3D")
+        ),
+    );
+    assert_eq!((status, message(&body)), (400, "invalid page token"));
+}

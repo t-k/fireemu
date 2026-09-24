@@ -36,7 +36,7 @@ These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Un
 
 - listDocuments and listCollectionIds follow production as recorded on 2026-09-24 (FS-DATA-WRITE-LIST), in both profiles unless marked strict:
   - a page holds at most 300 documents;
-  - an ordered listing continues after the order values its last document had when the page was issued (also inside a transaction); order values over 1.5 KiB are left out of the token, which then continues after the document's current values;
+  - an ordered listing continues after the order values its last document had when the page was issued (also inside a transaction); order values over 1.5 KiB are left out of the token, which then continues after the document's current values, as fireemu's tokens did before (if that document was deleted the listing starts again, and if it moved the page follows it to its new position);
   - a listDocuments page token is bound to its collection, order, mask and `showMissing` but not to its read time or transaction, and a listCollectionIds token is a cursor of collection ids that another parent or read time continues;
   - page-token and page-size refusals use production's texts;
   - an empty listCollectionIds answer leaves `collectionIds` out;

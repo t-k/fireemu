@@ -38,6 +38,8 @@ async function observeCollector({
   scopeNames = names,
   visibleNames = [scopeNames[0]],
   arrayLength = [19_999, 20_000, 7_184, 7_185, 12_123, 12_124],
+  suffixStarts = [],
+  initialState,
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "fireemu-array-shrink-"));
   const input = join(directory, "programs.json");
@@ -58,13 +60,18 @@ async function observeCollector({
         {
           collection,
           document,
-          values: Array.from({ length }, (_, value) => ({ integerValue: String(value) })),
-          updateTime: "t0",
+          values: Array.from({ length: length - (suffixStarts[index] ?? 0) }, (_, value) => ({
+            integerValue: String(value + (suffixStarts[index] ?? 0)),
+          })),
+          updateTime: initialState?.get(name)?.updateTime ?? "t0",
           deleted: false,
         },
       ];
     }),
   );
+  for (const [name, state] of initialState ?? []) {
+    if (records.has(name)) Object.assign(records.get(name), state);
+  }
   const visible = new Set(visibleNames);
   const server = createServer(async (request, response) => {
     const pathname = new URL(request.url, "http://127.0.0.1").pathname;
@@ -133,6 +140,8 @@ async function observeCollector({
         const record = records.get(name);
         if (failureMode === "cas") {
           send(409, { error: { status: "ABORTED", message: "stale updateTime" } });
+        } else if (failureMode === "partial" && record.transformCommits === 1) {
+          send(503, { error: { status: "UNAVAILABLE", message: "interrupted after one commit" } });
         } else {
           assert.equal(writes[0].currentDocument.updateTime, record.updateTime);
           const removed = new Set(
@@ -142,8 +151,34 @@ async function observeCollector({
           );
           record.values = record.values.filter((value) => !removed.has(value.integerValue));
           record.updateTime = `t${Number(record.updateTime.slice(1)) + 1}`;
+          record.transformCommits = (record.transformCommits ?? 0) + 1;
           send(200, { writeResults: [{ updateTime: record.updateTime }] });
         }
+      } else if (
+        failureMode === "race-before-retry" &&
+        records.get(writes[0].delete).values.length === 0
+      ) {
+        const record = records.get(writes[0].delete);
+        assert.equal(writes[0].currentDocument.updateTime, record.updateTime);
+        record.updateTime = "recreated-before-retry";
+        send(409, { error: { status: "ABORTED", message: "concurrent recreation" } });
+      } else if (failureMode === "race-before-delete") {
+        const record = records.get(writes[0].delete);
+        assert.equal(writes[0].currentDocument.updateTime, record.updateTime);
+        record.updateTime = "recreated-after-preflight";
+        send(409, { error: { status: "ABORTED", message: "concurrent recreation" } });
+      } else if (
+        failureMode === "race-before-shrink" &&
+        records.get(writes[0].delete).values.length > 0
+      ) {
+        const record = records.get(writes[0].delete);
+        record.updateTime = "recreated-before-shrink";
+        send(400, {
+          error: {
+            status: "INVALID_ARGUMENT",
+            message: "Transaction too big. Decrease transaction size.",
+          },
+        });
       } else if (failureMode === "delete" || records.get(writes[0].delete).values.length > 0) {
         send(400, {
           error: {
@@ -165,6 +200,12 @@ async function observeCollector({
         )
         .map(([name]) => name);
       if (failureMode === "prefight" && matching.length) matching.push(`${prefix}g500a/other`);
+      if (
+        failureMode === "preflight-second" &&
+        queriedCollection === records.get(scopeNames[1]).collection
+      ) {
+        matching.push(`${prefix}${queriedCollection}/unexpected`);
+      }
       if (
         failureMode === "group" &&
         records.get(scopeNames[0]).deleted &&
@@ -216,7 +257,10 @@ async function observeCollector({
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
-  return { directory, output, meta, requests, failure };
+  const snapshot = new Map(
+    [...records].map(([name, record]) => [name, { ...record, values: [...record.values] }]),
+  );
+  return { directory, output, meta, requests, failure, snapshot };
 }
 
 test("collector array-removes bounded chunks with updateTime CAS before exact deletion", async () => {
@@ -315,15 +359,124 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
     );
     assert.equal(
       result.requests.filter((request) => request.pathname.endsWith("/documents:runQuery")).length,
-      18,
+      30,
     );
     assert.equal(
       result.requests.filter((request) => request.pathname.endsWith("/documents:commit")).length,
       92,
     );
+    const deletes = result.requests
+      .filter((request) => request.pathname.endsWith("/documents:commit"))
+      .flatMap((request) => JSON.parse(request.body).writes)
+      .filter((write) => write.delete);
+    assert.equal(deletes.length, 12);
+    assert.ok(deletes.every((write) => write.currentDocument?.updateTime));
+    for (const [name, chunks] of perDocument) {
+      const pair = deletes.filter((write) => write.delete === name);
+      assert.deepEqual(
+        pair.map((write) => write.currentDocument.updateTime),
+        ["t0", `t${chunks}`],
+      );
+    }
     const meta = JSON.parse(await readFile(result.meta, "utf8"));
-    assert.equal(meta.requestCount, 144);
+    assert.equal(meta.requestCount, 162);
+    const scopedRequestCount = result.requests.filter(
+      (request) =>
+        request.pathname.endsWith("/documents:commit") ||
+        request.pathname.endsWith("/documents:batchGet") ||
+        request.pathname.endsWith("/documents:runQuery") ||
+        (request.method === "GET" &&
+          names.some((name) => request.pathname.endsWith(name.split("/documents/")[1]))),
+    ).length;
+    assert.equal(scopedRequestCount, 147);
+    assert.ok(scopedRequestCount <= 160);
     assert.deepEqual(JSON.parse(await readFile(result.output, "utf8")), { empty: { steps: {} } });
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("collector blocks explicit partial debris after an interrupted transform response", async () => {
+  const first = await observeCollector({ failureMode: "partial" });
+  try {
+    assert.ok(first.failure);
+    const firstTransforms = first.requests.filter((request) => {
+      if (!request.pathname.endsWith("/documents:commit")) return false;
+      return JSON.parse(request.body).writes[0].transform !== undefined;
+    });
+    assert.equal(firstTransforms.length, 2);
+    assert.equal(first.snapshot.get(names[0]).values.length, 19_999 - 1_024);
+    const resumed = await observeCollector({ initialState: first.snapshot });
+    try {
+      assert.ok(resumed.failure);
+      assert.match(String(resumed.failure.stderr), /partial debris requires operator recovery/);
+      const writes = resumed.requests.filter((request) => {
+        if (!request.pathname.endsWith("/documents:commit")) return false;
+        return JSON.parse(request.body).writes.some((write) => write.transform || write.delete);
+      });
+      assert.equal(writes.length, 0);
+      await assert.rejects(readFile(resumed.output), /ENOENT/);
+    } finally {
+      await rm(resumed.directory, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(first.directory, { recursive: true, force: true });
+  }
+});
+
+test("managed delete uses preflight updateTime and stops on a concurrent recreation", async () => {
+  const result = await observeCollector({ failureMode: "race-before-delete" });
+  try {
+    assert.ok(result.failure);
+    const deletes = result.requests
+      .filter((request) => request.pathname.endsWith("/documents:commit"))
+      .map((request) => JSON.parse(request.body).writes[0])
+      .filter((write) => write.delete);
+    assert.equal(deletes.length, 1);
+    assert.equal(deletes[0].currentDocument.updateTime, "t0");
+    assert.equal(
+      result.requests.some((request) => {
+        if (!request.pathname.endsWith("/documents:commit")) return false;
+        return JSON.parse(request.body).writes[0].transform !== undefined;
+      }),
+      false,
+    );
+    await assert.rejects(readFile(result.output), /ENOENT/);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("array shrink refuses a target recreated after preflight", async () => {
+  const result = await observeCollector({ failureMode: "race-before-shrink" });
+  try {
+    assert.ok(result.failure);
+    assert.match(String(result.failure.stderr), /changed after global preflight/);
+    const commits = result.requests
+      .filter((request) => request.pathname.endsWith("/documents:commit"))
+      .map((request) => JSON.parse(request.body).writes[0]);
+    assert.equal(commits.filter((write) => write.delete).length, 1);
+    assert.equal(commits.filter((write) => write.transform).length, 0);
+    await assert.rejects(readFile(result.output), /ENOENT/);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("shrunk retry delete uses the verified updateTime and stops on a concurrent recreation", async () => {
+  const result = await observeCollector({ failureMode: "race-before-retry" });
+  try {
+    assert.ok(result.failure);
+    const commits = result.requests
+      .filter((request) => request.pathname.endsWith("/documents:commit"))
+      .map((request) => JSON.parse(request.body).writes[0]);
+    const deletes = commits.filter((write) => write.delete);
+    assert.deepEqual(
+      deletes.map((write) => write.currentDocument.updateTime),
+      ["t0", "t20"],
+    );
+    assert.equal(commits.filter((write) => write.transform).length, 20);
+    await assert.rejects(readFile(result.output), /ENOENT/);
   } finally {
     await rm(result.directory, { recursive: true, force: true });
   }
@@ -371,6 +524,25 @@ test("unexpected collection-group document stops before array mutation", async (
         return JSON.parse(request.body).writes[0].transform !== undefined;
       }),
       false,
+    );
+    await assert.rejects(readFile(result.output), /ENOENT/);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("all six target groups are preflighted before any target mutation", async () => {
+  const result = await observeCollector({ failureMode: "preflight-second", visibleNames: names });
+  try {
+    assert.ok(result.failure);
+    const writes = result.requests.filter((request) => {
+      if (!request.pathname.endsWith("/documents:commit")) return false;
+      return JSON.parse(request.body).writes.some((write) => write.transform || write.delete);
+    });
+    assert.equal(writes.length, 0);
+    assert.equal(
+      result.requests.filter((request) => request.pathname.endsWith("/documents:runQuery")).length,
+      2,
     );
     await assert.rejects(readFile(result.output), /ENOENT/);
   } finally {

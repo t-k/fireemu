@@ -2011,6 +2011,17 @@ function resolvePath(path, raw) {
   });
 }
 
+/** The document a write names, for the write-ahead intent. Form bodies are never JSON. */
+export function mutationIntentTarget({ body, json, resolvedPath }) {
+  const write = json && body ? JSON.parse(body)?.writes?.[0] : null;
+  const named = write?.update?.name ?? write?.delete ?? write?.transform?.document;
+  if (named) return named;
+  if (resolvedPath.includes("/documents/")) {
+    return resolvedPath.replace(/^\/v1\//, "").split(/[?#]/, 1)[0];
+  }
+  return null;
+}
+
 async function step(spec, raw) {
   const init = { method: spec.method, headers: { ...spec.headers } };
   const credential = selectCredential(spec, { ownerToken: TOKEN, userToken: USER_TOKEN });
@@ -2041,12 +2052,11 @@ async function step(spec, raw) {
     const resolvedPath = resolvePath(spec.path, raw);
     const input = url(resolvedPath);
     if (new Set(["POST", "PATCH", "DELETE"]).has(spec.method.toUpperCase())) {
-      let target;
-      const write = init.body ? JSON.parse(init.body)?.writes?.[0] : null;
-      target = write?.update?.name ?? write?.delete ?? write?.transform?.document;
-      if (!target && resolvedPath.includes("/documents/")) {
-        target = resolvedPath.replace(/^\/v1\//, "").split(/[?#]/, 1)[0];
-      }
+      const target = mutationIntentTarget({
+        body: init.body,
+        json: spec.webchannelBodyBytes === undefined,
+        resolvedPath,
+      });
       if (target) {
         await writeDeltaMutationIntent(
           replaceRunMarker(target),

@@ -1017,6 +1017,13 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
         MfaError::InvalidCode => error(400, "INVALID_CODE"),
         MfaError::CodeAlreadyUsed => error(400, "INVALID_CODE : verification code already used"),
         MfaError::EnrollmentSessionExpired => error(400, "SESSION_EXPIRED"),
+        MfaError::TooManyEnrollmentAttempts => {
+            error(400, "TOO_MANY_ENROLLMENT_ATTEMPTS : restart enrollment")
+        }
+        MfaError::EnrollmentAlreadyComplete => error(
+            400,
+            "MFA_ENROLLMENT_ALREADY_COMPLETE : This MFA enrollment has already been completed.",
+        ),
         MfaError::EnrollmentSessionUnknown | MfaError::PendingSignInUnknown => {
             error(400, "INVALID_SESSION_INFO")
         }
@@ -3518,7 +3525,10 @@ fn dispatch(
             ),
             !options.stateless_refresh_tokens,
         ),
-        Handler::MfaEnrollmentFinalize => mfa_enrollment_finalize(store, body, at),
+        Handler::MfaEnrollmentFinalize => v2_error_shape(
+            mfa_enrollment_finalize(store, body, at, !options.stateless_refresh_tokens),
+            !options.stateless_refresh_tokens,
+        ),
         Handler::MfaEnrollmentWithdraw => v2_error_shape(
             mfa_enrollment_withdraw(store, body, at),
             !options.stateless_refresh_tokens,
@@ -9607,6 +9617,30 @@ fn mfa_enrollment_start(
         Err(r) => return r,
     };
     let uid = session.uid.clone();
+    // Strict: production's answers to the request's shape (sandbox recording 2026-09-24,
+    // auth-mfa/totp/enroll#start-without-info and interactions#start-both-kinds).
+    if strict {
+        let totp = body.get("totpEnrollmentInfo").is_some_and(|v| !v.is_null());
+        let phone = body
+            .get("phoneEnrollmentInfo")
+            .is_some_and(|v| !v.is_null());
+        if totp && phone {
+            return oneof_already_set("enrollment_info", "phoneEnrollmentInfo");
+        }
+        if !totp && !phone {
+            return error(400, "Request contains an invalid argument.");
+        }
+        if phone
+            && store.user(&uid).is_some_and(|u| {
+                u.mfa.factor_count() >= fireemu_core_auth::mfa::MAX_FACTORS_PER_USER
+            })
+        {
+            return error(
+                400,
+                "SECOND_FACTOR_LIMIT_EXCEEDED : Too many second factors enrolled for this account.",
+            );
+        }
+    }
     if let Some(phone) = body.get("phoneEnrollmentInfo") {
         // Strict: production refuses a phone factor while the project does not enable SMS
         // second factors (sandbox recording 2026-09-24, auth-mfa/disabled#phone-start); the
@@ -9659,19 +9693,47 @@ fn mfa_enrollment_start(
             let policy = *store.policy();
             JsonResponse {
                 status: 200,
+                // Production's members: `SHA1` and a deadline in microseconds (sandbox
+                // recording 2026-09-24, auth-mfa/totp/enroll#start).
                 body: json!({
                     "totpSessionInfo": {
                         "sharedSecretKey": base32::encode(material.secret_for_test()),
                         "verificationCodeLength": policy.digits,
-                        "hashingAlgorithm": "HMAC_SHA1",
+                        "hashingAlgorithm": "SHA1",
                         "periodSec": policy.period_seconds,
                         "sessionInfo": material.session_id,
-                        "finalizeEnrollmentTime": LogicalInstant::to_rfc3339(material.expires_at).unwrap_or_default(),
+                        "finalizeEnrollmentTime": proto_timestamp(LogicalInstant::from_nanos(
+                            material.expires_at.as_nanos().div_euclid(1_000) * 1_000,
+                        )),
                     }
                 }),
             }
         }
+        Err(e) if strict && matches!(e, MfaError::LimitExceeded(_)) => error(
+            400,
+            "SECOND_FACTOR_LIMIT_EXCEEDED : Too many TOTP based second factors enrolled for this account.",
+        ),
         Err(e) => mfa_error(&e),
+    }
+}
+
+/// Production's parse-time refusal of a second member of a oneof (sandbox recording
+/// 2026-09-24, auth-mfa/interactions#start-both-kinds).
+fn oneof_already_set(oneof: &str, member: &str) -> JsonResponse {
+    let message = format!(
+        "Invalid value (oneof), oneof field '{oneof}' is already set. Cannot set '{member}'"
+    );
+    JsonResponse {
+        status: 400,
+        body: json!({"error": {
+            "code": 400,
+            "message": message,
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"description": message}],
+            }],
+        }}),
     }
 }
 
@@ -9689,6 +9751,7 @@ fn mfa_enrollment_finalize(
     store: &mut AuthStore,
     body: &Value,
     at: LogicalInstant,
+    strict: bool,
 ) -> JsonResponse {
     let session = match verify_enrollment_session(store, body, at) {
         Ok(s) => s,
@@ -9708,6 +9771,20 @@ fn mfa_enrollment_finalize(
     let session = info
         .and_then(|i| i.get("sessionInfo"))
         .and_then(Value::as_str);
+    let display_name = str_field(body, "displayName")
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned);
+    // Strict: production checks the session, then the display name, then the code (sandbox
+    // recording 2026-09-24, auth-mfa/totp/enroll#finalize-missing-session and
+    // #finalize-missing-code).
+    if strict {
+        if session.is_none_or(|session| !store.has_enrollment_session(&uid, session)) {
+            return error(400, "INVALID_SESSION_INFO");
+        }
+        if display_name.is_none() {
+            return error(400, "MISSING_DISPLAY_NAME : display name cannot be empty");
+        }
+    }
     let code = parse_code(info.and_then(|i| i.get("verificationCode")));
     let (Some(session), Some(code)) = (session, code) else {
         return error(
@@ -9715,7 +9792,7 @@ fn mfa_enrollment_finalize(
             "INVALID_CODE : missing sessionInfo or verificationCode",
         );
     };
-    match store.finalize_totp_enrollment(&uid, session, code, at) {
+    match store.finalize_totp_enrollment_named(&uid, session, code, display_name, at) {
         Ok(factor) => {
             let assertion = SecondFactorAssertion {
                 sign_in_second_factor: "totp".to_owned(),
@@ -9723,7 +9800,15 @@ fn mfa_enrollment_finalize(
                 verified_at: at,
             };
             match issue_tokens(store, &uid, Some(&assertion), at) {
-                Ok(tokens) => token_only_response(&tokens, false),
+                Ok(tokens) => {
+                    let mut response = token_only_response(&tokens, false);
+                    // Production's TOTP answer names its factor kind (sandbox recording
+                    // 2026-09-24, auth-mfa/totp/enroll#finalize).
+                    if strict {
+                        response.body["totpAuthInfo"] = json!({});
+                    }
+                    response
+                }
                 Err(r) => r,
             }
         }
@@ -9844,21 +9929,56 @@ fn mfa_info(store: &AuthStore, uid: &LocalId, redacted: bool) -> Vec<Value> {
     let Some(u) = store.user(uid) else {
         return Vec::new();
     };
-    let mut out: Vec<Value> = u
+    // Production writes a factor's time as a protobuf Timestamp and lists factors in the order
+    // they were enrolled, whatever their kind (sandbox recording 2026-09-24,
+    // auth-mfa/admin-factors#admin-lookup-m).
+    let strict = store.second_factor_rules_are_production();
+    let time = |at: LogicalInstant| {
+        if strict {
+            proto_timestamp(at)
+        } else {
+            LogicalInstant::to_rfc3339(at).unwrap_or_default()
+        }
+    };
+    let mut entries: Vec<(LogicalInstant, Value)> = u
         .mfa
         .totp_factors()
         .iter()
-        .map(|f| json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "totpInfo": {}}))
+        .map(|f| (f.enrolled_at, json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": time(f.enrolled_at), "totpInfo": {}})))
         .collect();
-    out.extend(u.mfa.phone_factors().iter().map(|f| {
+    entries.extend(u.mfa.phone_factors().iter().map(|f| {
         let phone = if redacted {
             obfuscate_phone_number(&f.phone_number)
         } else {
             f.phone_number.clone()
         };
-        json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": LogicalInstant::to_rfc3339(f.enrolled_at).unwrap_or_default(), "phoneInfo": phone})
+        (f.enrolled_at, json!({"mfaEnrollmentId": f.mfa_enrollment_id, "displayName": f.display_name, "enrolledAt": time(f.enrolled_at), "phoneInfo": phone}))
     }));
-    out
+    entries.sort_by_key(|(at, _)| *at);
+    entries.into_iter().map(|(_, entry)| entry).collect()
+}
+
+/// An instant as protobuf's JSON Timestamp: RFC 3339 with 0, 3, 6 or 9 fraction digits, the
+/// fewest that keep its precision.
+fn proto_timestamp(at: LogicalInstant) -> String {
+    let full = LogicalInstant::to_rfc3339(at).unwrap_or_default();
+    let Some(body) = full.strip_suffix('Z') else {
+        return full;
+    };
+    let (seconds, fraction) = body.split_once('.').unwrap_or((body, ""));
+    let mut fraction: String = fraction
+        .chars()
+        .chain(std::iter::repeat('0'))
+        .take(9)
+        .collect();
+    while !fraction.is_empty() && fraction.ends_with("000") {
+        fraction.truncate(fraction.len() - 3);
+    }
+    if fraction.is_empty() {
+        format!("{seconds}Z")
+    } else {
+        format!("{seconds}.{fraction}Z")
+    }
 }
 
 /// The action link of an email action (what the Emulator's console prints).

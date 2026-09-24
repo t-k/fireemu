@@ -68,6 +68,8 @@ proptest! {
         let pending = PendingEnrollment {
             secret: wrapped.clone(),
             expires_at: LogicalInstant::UNIX_EPOCH,
+            attempts: 0,
+            completed: false,
         };
         for rendered in [
             format!("{wrapped:?}"),

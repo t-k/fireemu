@@ -431,8 +431,9 @@ fn wrong_code_and_expired_enrollment_session() {
         s.finalize_totp_enrollment(&uid, &m.session_id, wrong, t0()),
         Err(MfaError::InvalidCode)
     );
-    // Session TTL is 300 s: at exactly 300 s it is still valid, at 301 s it has expired.
-    let at_ttl = t0().checked_add(secs(300)).unwrap();
+    // Session TTL is 900 s (production's): at exactly 900 s it is still valid, at 901 s it
+    // has expired.
+    let at_ttl = t0().checked_add(secs(900)).unwrap();
     let m2 = s.start_totp_enrollment(&uid, t0()).unwrap();
     let secret2 = m2.secret_for_test().to_vec();
     assert!(s
@@ -448,7 +449,7 @@ fn wrong_code_and_expired_enrollment_session() {
         .unwrap();
     let m3 = s.start_totp_enrollment(&uid2, t0()).unwrap();
     let secret3 = m3.secret_for_test().to_vec();
-    let past = t0().checked_add(secs(301)).unwrap();
+    let past = t0().checked_add(secs(901)).unwrap();
     assert_eq!(
         s.finalize_totp_enrollment(
             &uid2,

@@ -58,7 +58,6 @@ shared = _load("_limits_03_request_bytes_preflight", ROOT / REQUEST_BYTES_PREFLI
 
 SCOPE = shared.SCOPE
 PROJECT = shared.PROJECT
-NUMBER = shared.NUMBER
 DATABASE = shared.DATABASE
 INDEX_EXEMPTION_SLOT = "index-exemption"
 LIFECYCLE_OBSERVATION_SLOTS = (

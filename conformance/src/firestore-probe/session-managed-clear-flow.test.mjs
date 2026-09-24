@@ -191,6 +191,7 @@ async function observeCollector({
     await writeFile(journal, JSON.stringify({ status: initialJournalStatus }));
   const requests = [];
   const journalAtDeleteRequests = [];
+  const journalAtSeedRequests = [];
   const probeSeededNames = new Set();
   const injectedPreDeleteFailures = new Set();
   const probeCandidateDeletedNames = new Set();
@@ -329,6 +330,18 @@ async function observeCollector({
           record.deleted = true;
           probeCandidateDeletedNames.add(name);
           send(200, {});
+        }
+      } else if (request.method === "PATCH") {
+        const patch = JSON.parse(body);
+        record.values = patch.fields.a.arrayValue.values;
+        record.deleted = false;
+        visible.add(name);
+        probeSeededNames.add(name);
+        journalAtSeedRequests.push(JSON.parse(await readFile(deltaJournal, "utf8")));
+        if (failureMode === "patch-after-apply-dropped") {
+          response.destroy();
+        } else {
+          send(200, { updateTime: record.updateTime });
         }
       } else if (
         ["pre-delete-malformed", "pre-delete-404", "pre-delete-wrong-length"].includes(
@@ -615,7 +628,18 @@ async function observeCollector({
   const snapshot = new Map(
     [...records].map(([name, record]) => [name, { ...record, values: [...record.values] }]),
   );
-  return { directory, output, meta, journal, requests, journalAtDeleteRequests, failure, snapshot };
+  return {
+    directory,
+    output,
+    meta,
+    journal,
+    deltaJournal,
+    requests,
+    journalAtDeleteRequests,
+    journalAtSeedRequests,
+    failure,
+    snapshot,
+  };
 }
 
 test("collector array-removes bounded chunks with updateTime CAS before exact deletion", async () => {
@@ -1563,6 +1587,94 @@ test("delta-v3 recovery resolves a real commit seed intent after either crash wi
     } finally {
       await rm(result.directory, { recursive: true, force: true });
     }
+  }
+});
+
+test("delta-v3 recovery resolves an actual PATCH seed helper intent after an uncertain response", async () => {
+  const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const runId = "f".repeat(32);
+  const deltaNames = allV3Names.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const programs = corpus.restPrograms
+    .filter((program) => program.id.startsWith("writes/limits/near-limit-delete-refusal/"))
+    .map((program) => structuredClone(program));
+  const name = deltaNames[0];
+  const recipe = programs.find((program) => program.id.endsWith("/rest/12112"));
+  recipe.seed = [
+    {
+      path: `/v1/${name.replaceAll(runId, "DELETE_RUN_ID")}`,
+      fields: recipe.steps[0].body.writes[0].update.fields,
+    },
+  ];
+  const failed = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+    deleteRunId: runId,
+    deltaV3: true,
+    failureMode: "patch-after-apply-dropped",
+    inputCorpus: {
+      schemaVersion: 1,
+      sourceCorpusSha256: "c".repeat(64),
+      restPrograms: programs,
+      streamRecipes: [
+        {
+          id: "writes/write-stream-terminal/response-before-half-close",
+          transport: "grpc",
+          maxFrames: 2,
+        },
+      ],
+      restRequestCount: 30,
+    },
+  });
+  try {
+    const patchRequest = failed.requests.find(
+      (request) => request.method === "PATCH" && request.pathname === `/v1/${name}`,
+    );
+    assert.ok(
+      patchRequest,
+      `the real seed() helper must issue its PATCH request: failure=${failed.failure}; requests=${JSON.stringify(failed.requests.slice(0, 5))}`,
+    );
+    assert.ok(failed.failure, "injected lost PATCH acknowledgement must stop the child");
+    const intent = failed.journalAtSeedRequests[0]?.pendingMutation;
+    assert.equal(intent.method, "PATCH");
+    assert.equal(intent.stepId, "seed");
+    assert.equal(intent.url.endsWith(`/v1/${name}`), true);
+    assert.equal(
+      intent.bodySha256,
+      createHash("sha256").update(patchRequest.body).digest("hex"),
+      "the durable intent must bind the exact transmitted PATCH body",
+    );
+    const initialDeltaJournal = JSON.parse(await readFile(failed.deltaJournal, "utf8"));
+    assert.equal(initialDeltaJournal.pendingMutation.bodySha256, intent.bodySha256);
+
+    const recovered = await observeCollector({
+      scopeNames: deltaNames,
+      visibleNames: deltaNames,
+      arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+      deleteRunId: runId,
+      deltaV3: true,
+      recoveryMode: "recover-delta-v3",
+      initialDeltaJournal,
+      corpusDigest: initialDeltaJournal.corpusDigest,
+    });
+    try {
+      assert.ifError(recovered.failure);
+      assert.equal(
+        recovered.requests.some(
+          (request) => request.method === "PATCH" && request.pathname === `/v1/${name}`,
+        ),
+        false,
+        "recovery must resolve the ambiguous PATCH without replay",
+      );
+      const finalJournal = JSON.parse(await readFile(recovered.deltaJournal, "utf8"));
+      assert.equal(finalJournal.status, "complete");
+      assert.equal(finalJournal.lastMutation.recoveredOutcome, "target-present");
+    } finally {
+      await rm(recovered.directory, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(failed.directory, { recursive: true, force: true });
   }
 });
 

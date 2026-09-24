@@ -192,14 +192,30 @@ test("AUTH-ACCOUNT closure inventory cannot silently omit a declared condition",
           ),
         );
         assert.equal(replay.allCasesMatch, true, label);
-        assert.equal(replay.sourceCommit, condition.evidence.sourceCommit, label);
+        assert.equal(replay.sourceCommit, condition.evidence.savedReference.sourceCommit, label);
         for (const corpus of Object.values(replay.corpora)) {
           assert.equal(
             corpus.currentLocal.localArtifactSha256,
-            condition.evidence.finalArtifactSha256,
+            condition.evidence.savedReference.artifactSha256,
             label,
           );
         }
+        assert.equal(
+          condition.evidence.execution.artifactSha256,
+          condition.evidence.finalArtifactSha256,
+        );
+        assert.equal(
+          condition.evidence.execution.receiptSha256,
+          comparison.execution.receiptSha256,
+        );
+        assert.equal(
+          condition.evidence.execution.buildReceiptSha256,
+          comparison.execution.buildReceiptSha256,
+        );
+        assert.equal(
+          condition.evidence.execution.runtimeInputMapSha256,
+          "dbe45128dc806dc439c70f1f09d7bd669868ce737e5272445bdc2df03c605e4",
+        );
       }
     }
   }
@@ -216,6 +232,32 @@ test("hash-format closure covers every production import algorithm", () => {
   );
   assert.deepEqual(covered, requiredHashAlgorithms);
   assert.ok(row.recipeIds.includes("auth-account/admin/import-hash/errors"));
+});
+
+test("AUTH-ACCOUNT A12 and final regression bind to the current attested artifact", () => {
+  const closure = load();
+  const a12 = closure.conditions.find(
+    ({ conditionId }) => conditionId === "AUTH-ACCOUNT/custom-attributes",
+  );
+  const regression = closure.conditions.find(
+    ({ conditionId }) => conditionId === "AUTH-ACCOUNT/final-artifact-regression",
+  );
+  assert.equal(a12.status, "VERIFIED");
+  assert.deepEqual(a12.evidence.rows, { MATCH: 31 });
+  assert.equal(a12.evidence.documentedDivergences, undefined);
+  assert.equal(regression.status, "VERIFIED");
+  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(
+    regression.evidence.finalArtifactSha256,
+    "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+  );
+  assert.equal(regression.evidence.sourceCommit, "c86b8490c1717bce2881eac051bef94388a84001");
+  assert.equal(
+    closure.conditions.find(
+      ({ conditionId }) => conditionId === "AUTH-ACCOUNT/closure-review",
+    ).status,
+    "PENDING_REVIEW",
+  );
 });
 
 test("scope decisions are recorded, not implied", () => {

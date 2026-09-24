@@ -192,14 +192,56 @@ test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared conditio
         `${label}: the approval names the artifact the evidence is bound to`,
       );
     } else if (label === "AUTH-CREDENTIAL/final-artifact-regression") {
-      // Every other condition of this parent is bound to the same artifact.
-      for (const other of closure.conditions) {
-        assert.equal(
-          other.evidence?.finalArtifactSha256,
-          condition.evidence.finalArtifactSha256,
-          `${other.conditionId}: bound to the final artifact`,
-        );
-      }
+      const currentComparison = readJson(
+        "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-account-regression.json",
+      );
+      const currentCredentialRun = currentComparison.execution.commands.find(
+        ({ argv }) => argv.join(" ") === "node src/auth-credential/run.mjs check",
+      );
+      assert.equal(currentComparison.artifactSha256, condition.evidence.finalArtifactSha256);
+      assert.equal(condition.evidence.execution.runId, currentComparison.execution.runId);
+      assert.equal(
+        condition.evidence.execution.receiptSha256,
+        currentComparison.execution.receiptSha256,
+      );
+      assert.equal(
+        condition.evidence.execution.buildReceiptSha256,
+        currentComparison.execution.buildReceiptSha256,
+      );
+      assert.equal(
+        condition.evidence.execution.runtimeInputMapSha256,
+        "dbe45128dc806dc439c70f1f09d7bd669868ce737e5272445bdc2df03c605e4",
+      );
+      assert.equal(
+        condition.evidence.execution.artifactSha256,
+        currentComparison.artifactSha256,
+      );
+      assert.equal(currentCredentialRun.rowCount, 222);
+      assert.equal(currentCredentialRun.selector.state, "unset");
+      assert.equal(
+        currentCredentialRun.fixtureSha256,
+        createHash("sha256")
+          .update(
+            readFileSync(
+              fileURLToPath(
+                new URL("../../conformance/auth-credential-production.json", import.meta.url),
+              ),
+              "utf8",
+            ),
+          )
+          .digest("hex"),
+      );
+      assert.equal(
+        condition.evidence.execution.credentialFixtureSha256,
+        currentCredentialRun.fixtureSha256,
+      );
+      assert.equal(
+        condition.evidence.execution.credentialSanitizedExportSha256,
+        currentCredentialRun.sanitizedExportSha256,
+      );
+      assert.deepEqual(condition.evidence.credentialRows, { MATCH: 222 });
+      assert.deepEqual(condition.evidence.inheritedAccountRows, { MATCH: 631 });
+      assert.deepEqual(condition.evidence.rows, { MATCH: 853 });
       const everyDocumented = new Set(
         closure.conditions.flatMap(({ evidence }) =>
           (evidence?.documentedDivergences ?? []).map(({ row }) => row),
@@ -226,6 +268,26 @@ test("scope decisions are recorded, not implied", () => {
     assert.ok(decision.decision && decision.decidedBy && decision.decidedOn, decision.id);
     if (decision.movedTo) assert.match(decision.movedTo, /^(AUTH|FS)-[A-Z-]+$/, decision.id);
   }
+});
+
+test("AUTH-CREDENTIAL inherited final regression binds to the current attested artifact", () => {
+  const closure = load();
+  const regression = closure.conditions.find(
+    ({ conditionId }) => conditionId === "AUTH-CREDENTIAL/final-artifact-regression",
+  );
+  assert.equal(regression.status, "VERIFIED");
+  assert.equal(closure.parentStatus, "IMPLEMENTING");
+  assert.equal(
+    regression.evidence.finalArtifactSha256,
+    "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+  );
+  assert.equal(regression.evidence.sourceCommit, "c86b8490c1717bce2881eac051bef94388a84001");
+  assert.equal(
+    closure.conditions.find(
+      ({ conditionId }) => conditionId === "AUTH-CREDENTIAL/closure-review",
+    ).status,
+    "PENDING_REVIEW",
+  );
 });
 
 test("parent promotion requires every condition and an approved closure review", () => {

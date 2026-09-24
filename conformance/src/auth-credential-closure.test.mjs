@@ -95,11 +95,7 @@ const readFixture = (path) =>
 
 /** `recordedAt gitSha` of every fixture program a condition's recipes cover, deduplicated. */
 function recordedRuns(recipes) {
-  const covers = (recipe, program) =>
-    program === recipe ||
-    program.startsWith(`${recipe}/`) ||
-    ((recipe === "auth-credential" || recipe === "auth-account") &&
-      program.startsWith(`${recipe}/`));
+  const covers = (recipe, program) => program === recipe || program.startsWith(`${recipe}/`);
   const runs = new Set();
   for (const path of Object.values(FIXTURES)) {
     for (const [program, { recordedAt, gitSha }] of Object.entries(readFixture(path).programs)) {

@@ -561,7 +561,7 @@ pub(crate) fn bulk_delete(
     // Production takes the snapshot the delete works from at the next whole minute.
     let minute = 60_000_000_000_i128;
     let snapshot = LogicalInstant::from_nanos((start.as_nanos() / minute + 1) * minute);
-    let doomed: Vec<String> = documents
+    let doomed_documents: Vec<&ManagedDocument> = documents
         .iter()
         .filter(|d| {
             namespace_ids.is_empty()
@@ -569,6 +569,10 @@ pub(crate) fn bulk_delete(
                     .last()
                     .is_some_and(|(collection, _)| collection_ids.contains(collection))
         })
+        .collect();
+    let bytes: u64 = doomed_documents.iter().map(|d| stored_size(d)).sum();
+    let doomed: Vec<String> = doomed_documents
+        .iter()
         .map(|d| {
             let mut name = format!("projects/{project}/databases/{database}/documents");
             for (collection, id) in &d.path {
@@ -613,7 +617,7 @@ pub(crate) fn bulk_delete(
             ("endTime", instant(finished(start))),
             ("operationState", json!("SUCCESSFUL")),
             ("progressDocuments", progress(doomed.len() as u64, false)),
-            ("progressBytes", json!({})),
+            ("progressBytes", progress(bytes, false)),
         ],
     );
     for (k, v) in &fields {
@@ -628,6 +632,27 @@ pub(crate) fn bulk_delete(
         database,
         &Json::Object(initial_metadata),
         &Json::Object(done_metadata),
-        &json!({"@type": "type.googleapis.com/google.protobuf.Empty"}),
+        &json!({"@type": "type.googleapis.com/google.firestore.admin.v1.BulkDeleteDocumentsResponse"}),
     )
+}
+
+/// The stored size of a document (name + fields + 32), which production's bulk delete reports
+/// as the bytes it removed.
+fn stored_size(document: &ManagedDocument) -> u64 {
+    let name: u64 = document
+        .path
+        .iter()
+        .map(|(collection, id)| collection.len() as u64 + 1 + id.len() as u64 + 1)
+        .sum::<u64>()
+        + 16;
+    let fields: u64 = document
+        .fields
+        .iter()
+        .map(|(key, value)| {
+            key.len() as u64
+                + 1
+                + fireemu_core_firestore::size::field_value_size(value).unwrap_or(0)
+        })
+        .sum();
+    name + fields + 32
 }

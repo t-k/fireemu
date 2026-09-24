@@ -40,6 +40,12 @@ const SCHEME = process.env.FIRESTORE_PROBE_SCHEME ?? "http";
 const TOKEN = process.env.FIRESTORE_PROBE_TOKEN ?? "owner";
 const USER_TOKEN = process.env.FIRESTORE_PROBE_USER_TOKEN;
 const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
+const MANAGED_POLL_MS = /^127\.0\.0\.1:\d+$/.test(HOST ?? "")
+  ? Number(process.env.FIRESTORE_PROBE_MANAGED_POLL_MS ?? 60_000)
+  : 60_000;
+if (!Number.isInteger(MANAGED_POLL_MS) || MANAGED_POLL_MS < 1 || MANAGED_POLL_MS > 60_000) {
+  throw new Error("invalid managed-clear polling interval");
+}
 const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
 let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
@@ -300,7 +306,7 @@ async function managedClear(database, names) {
   await writeFile(MANAGED_CLEAR_JOURNAL, `${JSON.stringify(journal)}\n`, { mode: 0o600 });
   let terminal = false;
   for (let attempt = 0; attempt < 360; attempt += 1) {
-    await new Promise((wake) => setTimeout(wake, 60_000));
+    await new Promise((wake) => setTimeout(wake, MANAGED_POLL_MS));
     const response = await trackedFetch(`${SCHEME}://${HOST}/v1/${operation}`, {
       headers: authorized(),
       signal: timeoutSignal(),

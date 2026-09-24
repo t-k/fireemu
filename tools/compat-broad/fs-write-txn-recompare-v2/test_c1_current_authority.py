@@ -216,6 +216,36 @@ def test_checkout_filter_inventory_refuses_before_smudge_execution(
     assert not (tmp_path / "checkout").exists()
 
 
+def test_checkout_filter_inventory_refuses_includeif_sourced_filter(
+    tmp_path: Path,
+) -> None:
+    authority = load_authority()
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    git_setup(repository, "init", "-q")
+    git_setup(repository, "config", "user.email", "test@example.invalid")
+    git_setup(repository, "config", "user.name", "Test")
+    (repository / ".gitattributes").write_text("*.txt filter=canary\n")
+    (repository / "tracked.txt").write_text("safe\n")
+    git_setup(repository, "add", ".gitattributes", "tracked.txt")
+    git_setup(repository, "commit", "-qm", "filtered")
+
+    marker = tmp_path / "included-smudge-executed"
+    included_config = tmp_path / "included-filter.conf"
+    included_config.write_text(
+        f'[filter "canary"]\n smudge = sh -c \'touch {marker}; cat\'\n'
+    )
+    with (repository / ".git/config").open("a") as config:
+        config.write(
+            f'\n[includeIf "gitdir:{repository}/.git"]\n'
+            f" path = {included_config}\n"
+        )
+    with pytest.raises(ValueError, match="checkout filter configuration refused"):
+        authority.refuse_checkout_filters(repository, ("HEAD",))
+    assert not marker.exists()
+    assert not (tmp_path / "checkout").exists()
+
+
 def test_missing_roots_refuse_without_output(tmp_path: Path) -> None:
     result = run_authority(tmp_path, tmp_path, tmp_path / "out.json")
     assert result.returncode == 2

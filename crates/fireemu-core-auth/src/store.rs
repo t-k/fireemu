@@ -379,6 +379,15 @@ pub struct UserRecord {
     /// Whether a custom-token sign-in created the account. Production then reports
     /// `customAuth` and `validSince` in every read of it (sandbox recording 2026-09-24).
     pub custom_auth: bool,
+    /// Whether the account ever signed in by email link. Production then reports
+    /// `emailLinkSignin` (sandbox recording 2026-09-24, auth-action/email-link).
+    pub email_link_signin: bool,
+    /// Whether an email-link sign-in created the account: production then reports
+    /// `validSince` in every read of it (sandbox recording 2026-09-24).
+    pub email_link_created: bool,
+    /// `initialEmail`: the address an applied email change replaced first (sandbox recording
+    /// 2026-09-24, auth-action/change-email). An Admin email change does not set it.
+    pub initial_email: Option<String>,
     /// `passwordUpdatedAt` of a password credential that was since removed: production keeps
     /// reporting it (sandbox recording 2026-09-23, auth-account/provider).
     pub removed_password_updated_at: Option<LogicalInstant>,
@@ -2313,6 +2322,9 @@ impl AuthStore {
                 federated: user.federated,
                 admin_created: true,
                 custom_auth: false,
+                email_link_signin: false,
+                email_link_created: false,
+                initial_email: None,
                 removed_password_updated_at: None,
                 email_verified_recorded: true,
                 password,
@@ -3010,6 +3022,9 @@ impl AuthStore {
             federated: Vec::new(),
             admin_created: false,
             custom_auth: false,
+            email_link_signin: false,
+            email_link_created: false,
+            initial_email: None,
             removed_password_updated_at: None,
             email_verified_recorded: false,
             password: None,
@@ -3054,6 +3069,31 @@ impl AuthStore {
             },
         );
         Ok(code)
+    }
+
+    /// Retires every outstanding code of `request_type` for `email`: production keeps only the
+    /// newest password reset, email change and sign-in link of an address (sandbox recording
+    /// 2026-09-24).
+    pub fn retire_oob_codes(&mut self, request_type: OobRequestType, email: &str) {
+        let email = Self::canonicalize_email(email);
+        if self
+            .oob_codes
+            .values()
+            .any(|c| c.request_type == request_type && c.email == email)
+        {
+            Arc::make_mut(&mut self.oob_codes)
+                .retain(|_, c| !(c.request_type == request_type && c.email == email));
+        }
+    }
+
+    /// Voids every outstanding code of a deleted account: those it owned and those for its
+    /// address (production refuses them all, sandbox recording 2026-09-24).
+    pub fn void_oob_codes_of(&mut self, uid: &LocalId, email: Option<&str>) {
+        let email = email.map(Self::canonicalize_email);
+        let voided = |c: &OobCode| c.uid.as_ref() == Some(uid) || email.as_ref() == Some(&c.email);
+        if self.oob_codes.values().any(voided) {
+            Arc::make_mut(&mut self.oob_codes).retain(|_, c| !voided(c));
+        }
     }
 
     /// Outstanding email action codes, oldest first.

@@ -739,6 +739,9 @@ fn password_reset_rejects_oversize_and_malformed_passwords_without_consuming_oob
     assert_eq!(status, 200, "{recovered}");
 }
 
+/// Strict: a password reset refuses the sessions before it as `TOKEN_EXPIRED`; the refresh
+/// record is kept and judged against the new `validSince` (sandbox recording 2026-09-24,
+/// auth-action/password-reset#refresh-token-before-reset).
 #[test]
 fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     let s = AuthState {
@@ -762,6 +765,11 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
     assert_eq!(status, 200, "{sent}");
     let (_, codes) = get(&s, &format!("{EMU}/oobCodes"));
     let code = codes["oobCodes"][0]["oobCode"].as_str().unwrap();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(fireemu_core_types::time::LogicalDuration::from_seconds(2))
+        .unwrap();
     let (status, reset) = post(
         &s,
         &format!("{V1}/accounts:resetPassword"),
@@ -775,7 +783,7 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
         &json!({"grant_type": "refresh_token", "refresh_token": refresh_token}),
     );
     assert_eq!(status, 400, "{refreshed}");
-    assert_eq!(refreshed["error"]["message"], "INVALID_REFRESH_TOKEN");
+    assert_eq!(refreshed["error"]["message"], "TOKEN_EXPIRED");
 }
 
 #[test]
@@ -7105,8 +7113,10 @@ fn oob_authorization_preserves_delivery_and_authenticated_admin_generation() {
             "VERIFY_EMAIL",
             "VERIFY_AND_CHANGE_EMAIL",
         ] {
+            // Strict needs a continue URL for a sign-in link (sandbox recording 2026-09-24).
             let mut body = json!({"requestType": request_type, "email": "oob-other@example.com",
-                "newEmail": "oob-new@example.com", "returnOobLink": false});
+                "newEmail": "oob-new@example.com", "returnOobLink": false,
+                "continueUrl": "http://localhost/"});
             let verification = matches!(request_type, "VERIFY_EMAIL" | "VERIFY_AND_CHANGE_EMAIL");
             if verification {
                 body["idToken"] = user["idToken"].clone();

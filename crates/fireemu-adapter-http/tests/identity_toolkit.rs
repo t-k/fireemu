@@ -1945,10 +1945,10 @@ fn session_cookie_durations_follow_each_profile() {
     }
 }
 
-/// An email-link sign-in that links to a session refuses a legacy token (not yet observed with
-/// one in production), after its own action code has been verified.
+/// Strict: an email-link sign-in that links to a session honours a legacy token, as
+/// production does (sandbox recording 2026-09-24, legacy-token#sign-in-link-legacy-token).
 #[test]
-fn an_email_link_refuses_a_legacy_token() {
+fn an_email_link_honours_a_legacy_token() {
     let s = strict_state_with_signer();
     let (status, _) = post(
         &s,
@@ -1982,15 +1982,14 @@ fn an_email_link_refuses_a_legacy_token() {
         .find(|c| c["requestType"] == "EMAIL_SIGNIN")
         .unwrap()["oobCode"]
         .clone();
-    let (status, refused) = post(
+    let (status, linked) = post(
         &s,
         &format!("{V1}/accounts:signInWithEmailLink"),
         &json!({"email": "legacy-link@example.com", "oobCode": code, "idToken": legacy["idToken"]}),
     );
-    assert_eq!(
-        (status, refused["error"]["message"].clone()),
-        (400, json!("INVALID_ID_TOKEN"))
-    );
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(linked["kind"], "identitytoolkit#EmailLinkSigninResponse");
+    assert_eq!(linked["isNewUser"], false);
 }
 
 /// Linking an identity provider refuses a legacy token (not yet observed with one in
@@ -15443,10 +15442,8 @@ fn strict_link_generation_refuses_a_continue_url_outside_the_authorized_domains(
                     Some("UNAUTHORIZED_DOMAIN : Domain not allowlisted by project")
                 ),
             );
-            assert!(
-                s.store.lock().unwrap().oob_codes().len() == 2,
-                "a refused request makes no code"
-            );
+            // A refused request makes no code; the second link retired the first.
+            assert_eq!(s.store.lock().unwrap().oob_codes().len(), 1);
         } else {
             assert_eq!(status, 200, "{body}");
         }
@@ -15509,4 +15506,599 @@ fn an_email_link_for_another_address_is_refused_as_a_mismatch() {
         &json!({"oobCode": sent["oobCode"], "email": "link@example.com"}),
     );
     assert_eq!(status, 200, "{signed}");
+}
+
+// ---- AUTH-ACTION (sandbox recording 2026-09-24, conformance/auth-action-production.json) ----
+
+fn with_email_privacy(s: &AuthState) {
+    let (status, body) = admin(
+        s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask=emailPrivacyConfig"),
+        &json!({"emailPrivacyConfig": {"enableImprovedEmailPrivacy": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+fn email_links_on(s: &AuthState) {
+    let (status, body) = patch_sign_in(
+        s,
+        "signIn.email.passwordRequired",
+        &json!({"signIn": {"email": {"passwordRequired": false}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+fn create(s: &AuthState, body: &Value) -> Value {
+    let (status, created) = admin(s, "POST", &format!("{ADMIN}/accounts"), body);
+    assert_eq!(status, 200, "{created}");
+    created
+}
+
+fn oob(s: &AuthState, body: &Value) -> (u16, Value) {
+    let mut body = body.clone();
+    body["returnOobLink"] = json!(true);
+    admin(s, "POST", &format!("{ADMIN}/accounts:sendOobCode"), &body)
+}
+
+fn message(body: &Value) -> Option<&str> {
+    body["error"]["message"].as_str()
+}
+
+fn password_sign_in(s: &AuthState, email: &str, password: &str) -> (u16, Value) {
+    post(
+        s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": password, "returnSecureToken": true}),
+    )
+}
+
+/// Strict: the generation answers production gave that the official emulator does not.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn strict_link_generation_follows_the_sandbox() {
+    let s = strict_state();
+    with_email_privacy(&s);
+    create(
+        &s,
+        &json!({"email": "a@example.com", "password": "password123"}),
+    );
+    create(
+        &s,
+        &json!({"email": "d@example.com", "password": "password123", "disabled": true}),
+    );
+    let reset = |extra: Value| {
+        let mut body = json!({"requestType": "PASSWORD_RESET", "email": "a@example.com"});
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        oob(&s, &body)
+    };
+    for url in ["not a url", ""] {
+        let (status, body) = reset(json!({"continueUrl": url}));
+        assert_eq!(
+            (status, message(&body)),
+            (
+                400,
+                Some("INVALID_CONTINUE_URI : Missing domain in continue url")
+            ),
+            "{url}"
+        );
+    }
+    let (status, body) = oob(
+        &s,
+        &json!({"requestType": "PASSWORD_RESET", "email": "not-an-email"}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("INVALID_EMAIL")));
+    let (status, body) = oob(
+        &s,
+        &json!({"requestType": "NOT_A_REQUEST_TYPE", "email": "a@example.com"}),
+    );
+    let text = "Invalid value at 'req_type' (type.googleapis.com/google.cloud.identitytoolkit.v1.OobReqType), \"NOT_A_REQUEST_TYPE\"";
+    assert_eq!((status, message(&body)), (400, Some(text)));
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        body["error"]["details"][0]["fieldViolations"][0]["field"],
+        "req_type"
+    );
+    let (status, body) = oob(
+        &s,
+        &json!({"requestType": "OOB_REQ_TYPE_UNSPECIFIED", "email": "a@example.com"}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("INVALID_REQ_TYPE")));
+    // Improved email privacy hides a taken or unchanged new address.
+    for new_email in ["d@example.com", "a@example.com"] {
+        let (status, body) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "email": "a@example.com", "newEmail": new_email}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body,
+            json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": "a@example.com"})
+        );
+    }
+    let (status, body) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "email": "a@example.com", "newEmail": "not-an-email"}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("INVALID_NEW_EMAIL")));
+    // The Admin generator of an address change reads the address, never an ID token.
+    let (_, signed) = password_sign_in(&s, "a@example.com", "password123");
+    let (status, body) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "idToken": signed["idToken"], "newEmail": "a-new@example.com"}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("MISSING_EMAIL")));
+    email_links_on(&s);
+    let (status, body) = oob(
+        &s,
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "n@example.com"}),
+    );
+    assert_eq!(
+        (status, message(&body)),
+        (400, Some("MISSING_CONTINUE_URI"))
+    );
+    let (status, body) = oob(
+        &s,
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "d@example.com", "continueUrl": "https://demo-app.firebaseapp.com/finish"}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("USER_DISABLED")));
+    // An unknown address is answered before its continue URL is looked at.
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com", "continueUrl": "https://unauthorized.example.com/x"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(s.store.lock().unwrap().oob_codes().is_empty());
+}
+
+/// Both profiles: generation answers production and the official emulator share.
+#[test]
+fn link_generation_errors_follow_the_sandbox_and_the_official_emulator() {
+    for (s, strict) in [(strict_state(), true), (state(), false)] {
+        with_email_privacy(&s);
+        for request_type in ["VERIFY_EMAIL", "VERIFY_AND_CHANGE_EMAIL"] {
+            let (status, body) = oob(
+                &s,
+                &json!({"requestType": request_type, "email": "nobody@example.com", "newEmail": "x@example.com"}),
+            );
+            assert_eq!(
+                (status, message(&body)),
+                (400, Some("USER_NOT_FOUND")),
+                "{request_type}"
+            );
+        }
+        let (status, body) = oob(&s, &json!({"requestType": "VERIFY_EMAIL"}));
+        assert_eq!((status, message(&body)), (400, Some("MISSING_EMAIL")));
+        create(
+            &s,
+            &json!({"localId": "phone-only", "phoneNumber": "+16505550101"}),
+        );
+        let code = s.store.lock().unwrap().send_verification_code(
+            "+16505550101",
+            fireemu_core_auth::store::VerificationPurpose::SignIn,
+            LogicalInstant::from_unix_seconds(1_788_004_860),
+        );
+        let session = code.unwrap();
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPhoneNumber"),
+            &json!({"sessionInfo": session.session_info, "code": session.code}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        assert!(
+            token_parts(&signed["idToken"])
+                .1
+                .get("provider_id")
+                .is_none(),
+            "{signed}"
+        );
+        let (status, body) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_EMAIL", "idToken": signed["idToken"]}),
+        );
+        assert_eq!((status, message(&body)), (400, Some("MISSING_EMAIL")));
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"requestType": "PASSWORD_RESET", "email": "nobody@example.com", "returnOobLink": true}),
+        );
+        assert_eq!(
+            (status, message(&body)),
+            (400, Some("INSUFFICIENT_PERMISSION"))
+        );
+        if !strict {
+            let (status, body) = oob(
+                &s,
+                &json!({"requestType": "EMAIL_SIGNIN", "email": "n@example.com", "continueUrl": "not a url"}),
+            );
+            assert_eq!(
+                (status, message(&body)),
+                (400, Some("INVALID_CONTINUE_URI : ((expected an absolute URI with valid scheme and host))"))
+            );
+        }
+    }
+}
+
+/// Strict: a newer code of the same type for the same address retires the older one. The
+/// emulator profile keeps every code, as the official emulator does.
+#[test]
+fn strict_newer_codes_retire_older_ones() {
+    for (s, strict) in [(strict_state(), true), (state(), false)] {
+        create(
+            &s,
+            &json!({"email": "a@example.com", "password": "password123"}),
+        );
+        email_links_on(&s);
+        for body in [
+            json!({"requestType": "PASSWORD_RESET", "email": "a@example.com"}),
+            json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "email": "a@example.com", "newEmail": "a-first@example.com"}),
+            json!({"requestType": "EMAIL_SIGNIN", "email": "q@example.com", "continueUrl": "https://demo-app.firebaseapp.com/finish"}),
+        ] {
+            let (_, first) = oob(&s, &body);
+            let mut second_body = body.clone();
+            if second_body.get("newEmail").is_some() {
+                second_body["newEmail"] = json!("a-second@example.com");
+            }
+            let (_, second) = oob(&s, &second_body);
+            let check = |code: &Value| {
+                post(
+                    &s,
+                    &format!("{V1}/accounts:resetPassword"),
+                    &json!({"oobCode": code}),
+                )
+            };
+            let (status, _) = check(&first["oobCode"]);
+            assert_eq!(status, if strict { 400 } else { 200 }, "{body}");
+            let (status, _) = check(&second["oobCode"]);
+            assert_eq!(status, 200, "{body}");
+        }
+    }
+}
+
+fn check_code(s: &AuthState, code: &Value) -> (u16, Value) {
+    post(
+        s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code}),
+    )
+}
+
+fn reset_with(s: &AuthState, code: &Value, password: &str) -> (u16, Value) {
+    post(
+        s,
+        &format!("{V1}/accounts:resetPassword"),
+        &json!({"oobCode": code, "newPassword": password}),
+    )
+}
+
+fn refresh_with(s: &AuthState, token: &Value) -> (u16, Value) {
+    post(
+        s,
+        "/securetoken.googleapis.com/v1/token",
+        &json!({"grant_type": "refresh_token", "refresh_token": token}),
+    )
+}
+
+/// Strict: password reset answers of the sandbox recording.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn strict_password_reset_follows_the_sandbox() {
+    let s = strict_state();
+    create(
+        &s,
+        &json!({"email": "a@example.com", "password": "password123"}),
+    );
+    let (_, before) = password_sign_in(&s, "a@example.com", "password123");
+    advance(&s, 2);
+    let (_, link) = oob(
+        &s,
+        &json!({"requestType": "PASSWORD_RESET", "email": "a@example.com"}),
+    );
+    let (status, body) = reset_with(&s, &link["oobCode"], "");
+    assert_eq!((status, message(&body)), (400, Some("WEAK_PASSWORD")));
+    let (status, body) = reset_with(&s, &link["oobCode"], "password456");
+    assert_eq!(status, 200, "{body}");
+    // The reset revokes the sessions before it; the refresh token is refused, not forgotten.
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": before["idToken"]}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("TOKEN_EXPIRED")));
+    let (status, body) = refresh_with(&s, &before["refreshToken"]);
+    assert_eq!((status, message(&body)), (400, Some("TOKEN_EXPIRED")));
+
+    // The code names an address: once the account has another, the reset finds nobody.
+    create(
+        &s,
+        &json!({"localId": "e", "email": "e@example.com", "password": "password123"}),
+    );
+    let (_, link) = oob(
+        &s,
+        &json!({"requestType": "PASSWORD_RESET", "email": "e@example.com"}),
+    );
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "e", "email": "e-moved@example.com"}),
+    );
+    assert_eq!(status, 200);
+    let (status, body) = check_code(&s, &link["oobCode"]);
+    assert_eq!(
+        (status, body["email"].as_str()),
+        (200, Some("e@example.com"))
+    );
+    let (status, body) = reset_with(&s, &link["oobCode"], "password456");
+    assert_eq!((status, message(&body)), (400, Some("USER_NOT_FOUND")));
+
+    // Deleting an account voids its codes.
+    create(
+        &s,
+        &json!({"localId": "g", "email": "g@example.com", "password": "password123"}),
+    );
+    let (_, link) = oob(
+        &s,
+        &json!({"requestType": "PASSWORD_RESET", "email": "g@example.com"}),
+    );
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:delete"),
+        &json!({"localId": "g"}),
+    );
+    assert_eq!(status, 200);
+    let (status, body) = check_code(&s, &link["oobCode"]);
+    assert_eq!((status, message(&body)), (400, Some("INVALID_OOB_CODE")));
+    let (status, body) = reset_with(&s, &link["oobCode"], "password456");
+    assert_eq!((status, message(&body)), (400, Some("INVALID_OOB_CODE")));
+
+    // A sign-in link offered with a new password is only inspected.
+    email_links_on(&s);
+    let (_, link) = oob(
+        &s,
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "z@example.com", "continueUrl": "https://demo-app.firebaseapp.com/finish"}),
+    );
+    let (status, body) = reset_with(&s, &link["oobCode"], "password456");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body,
+        json!({"kind": "identitytoolkit#ResetPasswordResponse", "requestType": "EMAIL_SIGNIN"})
+    );
+    assert_eq!(check_code(&s, &link["oobCode"]).0, 200);
+}
+
+/// The emulator profile inspects a code offered with an empty password, as the official
+/// emulator does.
+#[test]
+fn an_empty_new_password_only_inspects_the_code_in_the_emulator_profile() {
+    let s = state();
+    create(
+        &s,
+        &json!({"email": "a@example.com", "password": "password123"}),
+    );
+    let (_, link) = oob(
+        &s,
+        &json!({"requestType": "PASSWORD_RESET", "email": "a@example.com"}),
+    );
+    let (status, body) = reset_with(&s, &link["oobCode"], "");
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["requestType"], "PASSWORD_RESET");
+    assert_eq!(reset_with(&s, &link["oobCode"], "password456").0, 200);
+}
+
+/// Strict: applying verification and change codes as the sandbox answered.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn strict_action_code_application_follows_the_sandbox() {
+    let s = strict_state();
+    let apply = |body: Value| post(&s, &format!("{V1}/accounts:update"), &body);
+    // A verification code of an address that no longer has an account.
+    create(
+        &s,
+        &json!({"localId": "vb", "email": "vb@example.com", "password": "password123"}),
+    );
+    let (_, link) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_EMAIL", "email": "vb@example.com"}),
+    );
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "vb", "email": "vb-moved@example.com"}),
+    );
+    let (status, body) = apply(json!({"oobCode": link["oobCode"]}));
+    assert_eq!((status, message(&body)), (400, Some("EMAIL_NOT_FOUND")));
+    // Disabled accounts refuse both kinds of code.
+    create(
+        &s,
+        &json!({"localId": "vc", "email": "vc@example.com", "password": "password123"}),
+    );
+    let (_, verify) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_EMAIL", "email": "vc@example.com"}),
+    );
+    let (_, change) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "email": "vc@example.com", "newEmail": "vc-new@example.com"}),
+    );
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "vc", "disableUser": true}),
+    );
+    for code in [&verify["oobCode"], &change["oobCode"]] {
+        let (status, body) = apply(json!({"oobCode": code}));
+        assert_eq!((status, message(&body)), (400, Some("USER_DISABLED")));
+    }
+    // With an ID token the request is that account's own update: the code is not applied.
+    create(
+        &s,
+        &json!({"localId": "oa", "email": "oa@example.com", "password": "password123"}),
+    );
+    create(
+        &s,
+        &json!({"localId": "ob", "email": "ob@example.com", "password": "password123"}),
+    );
+    let (_, ob) = password_sign_in(&s, "ob@example.com", "password123");
+    let (_, change) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "email": "oa@example.com", "newEmail": "oa-new@example.com"}),
+    );
+    let (status, body) = apply(json!({"oobCode": change["oobCode"], "idToken": ob["idToken"]}));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        (body["localId"].as_str(), body["email"].as_str()),
+        (Some("ob"), Some("ob@example.com"))
+    );
+    assert_eq!(
+        s.store
+            .lock()
+            .unwrap()
+            .user_by_email("oa@example.com")
+            .map(|u| u.local_id.as_str().to_owned()),
+        Some("oa".to_owned())
+    );
+    let (status, body) = apply(json!({"oobCode": change["oobCode"], "idToken": "not-a-token"}));
+    assert_eq!((status, message(&body)), (400, Some("INVALID_ID_TOKEN")));
+    // An applied change answers with the new address, records the replaced one and revokes
+    // the sessions before it.
+    let (_, before) = password_sign_in(&s, "oa@example.com", "password123");
+    advance(&s, 2);
+    let (status, body) = apply(json!({"oobCode": change["oobCode"]}));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["newEmail"], "oa-new@example.com");
+    assert_eq!(body["email"], "oa-new@example.com");
+    assert_eq!(body["passwordHash"], "UkVEQUNURUQ=");
+    assert_eq!(
+        body["providerUserInfo"][0]["federatedId"],
+        "oa-new@example.com"
+    );
+    let (_, users) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["oa"]}),
+    );
+    assert_eq!(users["users"][0]["initialEmail"], "oa@example.com");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": before["idToken"]}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("TOKEN_EXPIRED")));
+    let (status, body) = refresh_with(&s, &before["refreshToken"]);
+    assert_eq!((status, message(&body)), (400, Some("TOKEN_EXPIRED")));
+    // An applied verification answers with the account's providers and redacted hash.
+    create(
+        &s,
+        &json!({"localId": "va", "email": "va@example.com", "password": "password123"}),
+    );
+    let (_, verify) = oob(
+        &s,
+        &json!({"requestType": "VERIFY_EMAIL", "email": "va@example.com"}),
+    );
+    let (status, body) = apply(json!({"oobCode": verify["oobCode"]}));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["passwordHash"], "UkVEQUNURUQ=");
+    assert_eq!(body["providerUserInfo"][0]["providerId"], "password");
+}
+
+/// Email-link sign-in answers of the sandbox recording.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn email_link_sign_in_follows_the_sandbox() {
+    for (s, strict) in [(strict_state(), true), (state(), false)] {
+        email_links_on(&s);
+        with_email_privacy(&s);
+        let link_for = |email: &str| {
+            let (status, link) = oob(
+                &s,
+                &json!({"requestType": "EMAIL_SIGNIN", "email": email, "continueUrl": "https://demo-app.firebaseapp.com/finish"}),
+            );
+            assert_eq!(status, 200, "{link}");
+            link
+        };
+        let sign_in = |body: Value| post(&s, &format!("{V1}/accounts:signInWithEmailLink"), &body);
+        let link = link_for("n@example.com");
+        let (status, body) = sign_in(json!({"oobCode": link["oobCode"]}));
+        assert_eq!((status, message(&body)), (400, Some("MISSING_EMAIL")));
+        let (status, body) = sign_in(json!({"oobCode": link["oobCode"], "email": "n@example.com"}));
+        assert_eq!(status, 200, "{body}");
+        let (_, users) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"email": ["n@example.com"]}),
+        );
+        assert_eq!(users["users"][0]["emailLinkSignin"], true, "{users}");
+        assert!(users["users"][0]["validSince"].is_string(), "{users}");
+        // Linking the address to an anonymous session makes it a password-provider session.
+        let (_, anonymous) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"returnSecureToken": true}),
+        );
+        let link = link_for("anon@example.com");
+        let (status, body) = sign_in(
+            json!({"oobCode": link["oobCode"], "email": "anon@example.com", "idToken": anonymous["idToken"]}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["kind"], "identitytoolkit#EmailLinkSigninResponse");
+        assert_eq!(body["localId"], anonymous["localId"]);
+        let claims = token_parts(&body["idToken"]).1;
+        assert_eq!(claims["firebase"]["sign_in_provider"], "password");
+        assert!(claims.get("provider_id").is_none(), "{claims}");
+        let (_, users) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [anonymous["localId"]]}),
+        );
+        assert_eq!(
+            users["users"][0]["providerUserInfo"][0]["providerId"], "password",
+            "{users}"
+        );
+        assert_eq!(users["users"][0]["emailLinkSignin"], true);
+        // An existing account whose address was never verified loses its password.
+        create(
+            &s,
+            &json!({"localId": "p", "email": "p@example.com", "password": "password123"}),
+        );
+        let link = link_for("p@example.com");
+        let (status, body) = sign_in(json!({"oobCode": link["oobCode"], "email": "p@example.com"}));
+        assert_eq!(status, 200, "{body}");
+        let (status, body) = password_sign_in(&s, "p@example.com", "password123");
+        if strict {
+            assert_eq!(
+                (status, message(&body)),
+                (400, Some("INVALID_LOGIN_CREDENTIALS"))
+            );
+        } else {
+            assert_eq!(status, 200, "{body}");
+        }
+        // Strict honours a legacy ID token for the link, as production does.
+        if strict {
+            create(
+                &s,
+                &json!({"localId": "lr", "email": "lr@example.com", "password": "password123"}),
+            );
+            let (_, legacy) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": "lr@example.com", "password": "password123"}),
+            );
+            let link = link_for("lr-legacy@example.com");
+            let (status, body) = sign_in(
+                json!({"oobCode": link["oobCode"], "email": "lr-legacy@example.com", "idToken": legacy["idToken"]}),
+            );
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(body["localId"], "lr");
+        }
+    }
 }

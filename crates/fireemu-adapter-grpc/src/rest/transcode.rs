@@ -9,6 +9,8 @@
 //! surface parses: enum names in upper case (production matches them without regard to case,
 //! and accepts their numbers), 64-bit integers as strings, booleans from `"true"`/`"false"`.
 
+use core::fmt::Write as _;
+
 use serde_json::{Map, Value};
 use tonic::Status;
 
@@ -46,6 +48,8 @@ struct Field {
 }
 
 struct Schema {
+    /// The message's type URL, which the transcoder names in a type error.
+    type_url: &'static str,
     fields: &'static [Field],
 }
 
@@ -137,18 +141,22 @@ static NULL_VALUE: EnumSchema = EnumSchema {
 };
 
 static LAT_LNG: Schema = Schema {
+    type_url: "type.googleapis.com/google.type.LatLng",
     fields: &[
         f("latitude", "latitude", Kind::Double),
         f("longitude", "longitude", Kind::Double),
     ],
 };
 static ARRAY_VALUE: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.ArrayValue",
     fields: &[repeated("values", "values", Kind::Message(&VALUE))],
 };
 static MAP_VALUE: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.MapValue",
     fields: &[f("fields", "fields", Kind::ValueMap)],
 };
 static FUNCTION: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.Function",
     fields: &[
         f("name", "name", Kind::Str),
         repeated("args", "args", Kind::Message(&VALUE)),
@@ -156,6 +164,7 @@ static FUNCTION: Schema = Schema {
     ],
 };
 static STAGE: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.Pipeline.Stage",
     fields: &[
         f("name", "name", Kind::Str),
         repeated("args", "args", Kind::Message(&VALUE)),
@@ -163,9 +172,11 @@ static STAGE: Schema = Schema {
     ],
 };
 static PIPELINE: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.Pipeline",
     fields: &[repeated("stages", "stages", Kind::Message(&STAGE))],
 };
 static VALUE: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.Value",
     fields: &[
         one(
             "nullValue",
@@ -230,9 +241,11 @@ static VALUE: Schema = Schema {
     ],
 };
 static FIELD_REFERENCE: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery.FieldReference",
     fields: &[f("fieldPath", "field_path", Kind::Str)],
 };
 static PROJECTION: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery.Projection",
     fields: &[repeated(
         "fields",
         "fields",
@@ -240,18 +253,21 @@ static PROJECTION: Schema = Schema {
     )],
 };
 static COLLECTION_SELECTOR: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery.CollectionSelector",
     fields: &[
         f("collectionId", "collection_id", Kind::Str),
         f("allDescendants", "all_descendants", Kind::Bool),
     ],
 };
 static COMPOSITE_FILTER: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery.CompositeFilter",
     fields: &[
         f("op", "op", Kind::Enum(&COMPOSITE_OPERATOR)),
         repeated("filters", "filters", Kind::Message(&FILTER)),
     ],
 };
 static FIELD_FILTER: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter",
     fields: &[
         f("field", "field", Kind::Message(&FIELD_REFERENCE)),
         f("op", "op", Kind::Enum(&FIELD_OPERATOR)),
@@ -259,6 +275,7 @@ static FIELD_FILTER: Schema = Schema {
     ],
 };
 static UNARY_FILTER: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery.UnaryFilter",
     fields: &[
         f("op", "op", Kind::Enum(&UNARY_OPERATOR)),
         one(
@@ -270,6 +287,7 @@ static UNARY_FILTER: Schema = Schema {
     ],
 };
 static FILTER: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery.Filter",
     fields: &[
         one(
             "compositeFilter",
@@ -292,18 +310,21 @@ static FILTER: Schema = Schema {
     ],
 };
 static ORDER: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery.Order",
     fields: &[
         f("field", "field", Kind::Message(&FIELD_REFERENCE)),
         f("direction", "direction", Kind::Enum(&DIRECTION)),
     ],
 };
 static CURSOR: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.Cursor",
     fields: &[
         repeated("values", "values", Kind::Message(&VALUE)),
         f("before", "before", Kind::Bool),
     ],
 };
 static FIND_NEAREST: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery.FindNearest",
     fields: &[
         f(
             "vectorField",
@@ -326,6 +347,7 @@ static FIND_NEAREST: Schema = Schema {
     ],
 };
 static STRUCTURED_QUERY: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredQuery",
     fields: &[
         f("select", "select", Kind::Message(&PROJECTION)),
         repeated("from", "from", Kind::Message(&COLLECTION_SELECTOR)),
@@ -339,20 +361,30 @@ static STRUCTURED_QUERY: Schema = Schema {
     ],
 };
 static COUNT: Schema = Schema {
+    type_url:
+        "type.googleapis.com/google.firestore.v1.StructuredAggregationQuery.Aggregation.Count",
     fields: &[f("upTo", "up_to", Kind::Wrapper(Scalar::Int64))],
 };
-static FIELD_AGGREGATION: Schema = Schema {
-    fields: &[f("field", "field", Kind::Message(&FIELD_REFERENCE))],
+const FIELD_AGGREGATION_FIELDS: &[Field] = &[f("field", "field", Kind::Message(&FIELD_REFERENCE))];
+static SUM: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredAggregationQuery.Aggregation.Sum",
+    fields: FIELD_AGGREGATION_FIELDS,
+};
+static AVG: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredAggregationQuery.Aggregation.Avg",
+    fields: FIELD_AGGREGATION_FIELDS,
 };
 static AGGREGATION: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredAggregationQuery.Aggregation",
     fields: &[
         one("count", "count", Kind::Message(&COUNT), "operator"),
-        one("sum", "sum", Kind::Message(&FIELD_AGGREGATION), "operator"),
-        one("avg", "avg", Kind::Message(&FIELD_AGGREGATION), "operator"),
+        one("sum", "sum", Kind::Message(&SUM), "operator"),
+        one("avg", "avg", Kind::Message(&AVG), "operator"),
         f("alias", "alias", Kind::Str),
     ],
 };
 static STRUCTURED_AGGREGATION_QUERY: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.StructuredAggregationQuery",
     fields: &[
         one(
             "structuredQuery",
@@ -364,9 +396,11 @@ static STRUCTURED_AGGREGATION_QUERY: Schema = Schema {
     ],
 };
 static EXPLAIN_OPTIONS: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.ExplainOptions",
     fields: &[f("analyze", "analyze", Kind::Bool)],
 };
 static READ_ONLY: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.TransactionOptions.ReadOnly",
     fields: &[one(
         "readTime",
         "read_time",
@@ -375,9 +409,11 @@ static READ_ONLY: Schema = Schema {
     )],
 };
 static READ_WRITE: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.TransactionOptions.ReadWrite",
     fields: &[f("retryTransaction", "retry_transaction", Kind::Bytes)],
 };
 static TRANSACTION_OPTIONS: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.TransactionOptions",
     fields: &[
         one("readOnly", "read_only", Kind::Message(&READ_ONLY), "mode"),
         one(
@@ -389,6 +425,7 @@ static TRANSACTION_OPTIONS: Schema = Schema {
     ],
 };
 static RUN_QUERY: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.RunQueryRequest",
     fields: &[
         f("parent", "parent", Kind::Str),
         one(
@@ -423,6 +460,7 @@ static RUN_QUERY: Schema = Schema {
     ],
 };
 static RUN_AGGREGATION_QUERY: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.RunAggregationQueryRequest",
     fields: &[
         f("parent", "parent", Kind::Str),
         one(
@@ -457,6 +495,7 @@ static RUN_AGGREGATION_QUERY: Schema = Schema {
     ],
 };
 static PARTITION_QUERY: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.PartitionQueryRequest",
     fields: &[
         f("parent", "parent", Kind::Str),
         one(
@@ -504,22 +543,18 @@ pub fn check_document_keys(body: &Value, at: &str) -> Result<(), Status> {
     let Value::Object(object) = body else {
         return Ok(());
     };
-    let errors: Vec<(String, String)> = object
+    // The first unknown key only, as for any transcoder refusal.
+    match object
         .keys()
-        .filter(|key| !DOCUMENT_KEYS.contains(&key.as_str()))
-        .map(|key| {
-            (
-                at.to_owned(),
-                format!(
-                    "Invalid JSON payload received. Unknown name \"{key}\" at '{at}': Cannot find field."
-                ),
-            )
-        })
-        .collect();
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(crate::production_status::bad_request(&errors))
+        .find(|key| !DOCUMENT_KEYS.contains(&key.as_str()))
+    {
+        None => Ok(()),
+        Some(key) => Err(crate::production_status::bad_request(&[(
+            at.to_owned(),
+            format!(
+                "Invalid JSON payload received. Unknown name \"{key}\" at '{at}': Cannot find field."
+            ),
+        )])),
     }
 }
 
@@ -536,20 +571,205 @@ pub fn check_body(method: &str, body: &Value) -> Result<Value, Status> {
                 .to_owned(),
         )]));
     };
-    let mut errors = Vec::new();
-    let normalized = check_message(schema, object, "", &mut errors);
-    if errors.is_empty() {
-        Ok(Value::Object(normalized))
-    } else {
-        Err(crate::production_status::bad_request(&errors))
+    let mut checker = Checker::default();
+    let normalized = checker.message(schema, object);
+    match checker.refusal {
+        None => Ok(Value::Object(normalized)),
+        Some(violation) => Err(crate::production_status::bad_request(&[violation])),
     }
 }
 
-fn join(path: &str, segment: &str) -> String {
-    if path.is_empty() {
-        segment.to_owned()
-    } else {
-        format!("{path}.{segment}")
+/// One step of the path the transcoder names in a refusal.
+#[derive(Clone, Copy)]
+enum Segment<'a> {
+    /// A field, by its proto name (`structured_query`).
+    Field(&'a str),
+    /// An element of a repeated field (`[3]`).
+    Index(usize),
+    /// An entry of a map field (`[key]`).
+    Key(&'a str),
+}
+
+/// Walks a body against its schema. The path is kept as segments and rendered only for the
+/// refusal, and the walk stops at the first violation: production's transcoder reports one
+/// (every recorded refusal carries a single field violation), and a body of many bad items
+/// must cost no more than one that has a single bad item.
+#[derive(Default)]
+struct Checker<'a> {
+    path: Vec<Segment<'a>>,
+    refusal: Option<(String, String)>,
+}
+
+impl<'a> Checker<'a> {
+    fn rendered_path(&self) -> String {
+        let mut out = String::new();
+        for segment in &self.path {
+            match segment {
+                Segment::Field(name) => {
+                    if !out.is_empty() {
+                        out.push('.');
+                    }
+                    out.push_str(name);
+                }
+                Segment::Index(index) => {
+                    let _ = write!(out, "[{index}]");
+                }
+                Segment::Key(key) => {
+                    let _ = write!(out, "[{key}]");
+                }
+            }
+        }
+        out
+    }
+
+    fn refuse(&mut self, description: String) {
+        if self.refusal.is_none() {
+            self.refusal = Some((self.rendered_path(), description));
+        }
+    }
+
+    /// `Invalid value at '<path>' (<type>), <value>`.
+    fn refuse_value(&mut self, kind: Kind, value: &Value) {
+        if self.refusal.is_none() {
+            let path = self.rendered_path();
+            let description = format!("Invalid value at '{path}' ({}), {value}", kind_name(kind));
+            self.refusal = Some((path, description));
+        }
+    }
+
+    fn message(&mut self, schema: &Schema, object: &'a Map<String, Value>) -> Map<String, Value> {
+        let mut out = Map::new();
+        let mut oneofs: Vec<&str> = Vec::new();
+        for (key, value) in object {
+            if self.refusal.is_some() {
+                break;
+            }
+            let Some(field) = schema
+                .fields
+                .iter()
+                .find(|field| field.json == key || field.proto == key)
+            else {
+                let path = self.rendered_path();
+                self.refuse(format!(
+                    "Invalid JSON payload received. Unknown name \"{key}\"{}: Cannot find field.",
+                    at(&path)
+                ));
+                break;
+            };
+            // proto3 JSON: null is the default value, whatever the type, except for
+            // `google.protobuf.NullValue`, whose only value it is.
+            let null_value =
+                matches!(field.kind, Kind::Enum(schema) if schema.type_url == NULL_VALUE.type_url);
+            if value.is_null() && !null_value {
+                continue;
+            }
+            if let Some(oneof) = field.oneof {
+                if oneofs.contains(&oneof) {
+                    let path = self.rendered_path();
+                    self.refuse(format!(
+                        "Invalid value{} (oneof), oneof field '{oneof}' is already set. Cannot set '{key}'",
+                        at(&path)
+                    ));
+                    break;
+                }
+                oneofs.push(oneof);
+            }
+            self.path.push(Segment::Field(field.proto));
+            let normalized = if field.repeated {
+                if let Value::Array(items) = value {
+                    let mut checked = Vec::with_capacity(items.len());
+                    for (index, item) in items.iter().enumerate() {
+                        if self.refusal.is_some() {
+                            break;
+                        }
+                        self.path.push(Segment::Index(index));
+                        checked.push(self.kind(field, item));
+                        self.path.pop();
+                    }
+                    Value::Array(checked)
+                } else {
+                    self.refuse_value(field.kind, value);
+                    Value::Null
+                }
+            } else {
+                self.kind(field, value)
+            };
+            self.path.pop();
+            out.insert(field.json.to_owned(), normalized);
+        }
+        out
+    }
+
+    fn kind(&mut self, field: &Field, value: &'a Value) -> Value {
+        match field.kind {
+            Kind::Message(schema) => {
+                if let Value::Object(object) = value {
+                    return Value::Object(self.message(schema, object));
+                }
+            }
+            Kind::ValueMap => {
+                if let Value::Object(entries) = value {
+                    let mut checked = Map::new();
+                    for (key, entry) in entries {
+                        if self.refusal.is_some() {
+                            break;
+                        }
+                        let normalized = match entry {
+                            Value::Object(object) => {
+                                self.path.push(Segment::Key(key));
+                                let normalized = Value::Object(self.message(&VALUE, object));
+                                self.path.pop();
+                                normalized
+                            }
+                            other => other.clone(),
+                        };
+                        checked.insert(key.clone(), normalized);
+                    }
+                    return Value::Object(checked);
+                }
+            }
+            // A wrapper may also be spelled as its message, `{"value": ...}`.
+            Kind::Wrapper(_)
+                if value
+                    .as_object()
+                    .is_some_and(|o| o.len() == 1 && o.contains_key("value")) =>
+            {
+                return self.kind(field, &value["value"]);
+            }
+            Kind::Wrapper(scalar) => {
+                let inner = Field {
+                    kind: match scalar {
+                        Scalar::Int32 => Kind::Int32,
+                        Scalar::Int64 => Kind::Int64,
+                        Scalar::Double => Kind::Double,
+                    },
+                    ..*field
+                };
+                self.path.push(Segment::Field("value"));
+                let normalized = self.kind(&inner, value);
+                self.path.pop();
+                return normalized;
+            }
+            Kind::Timestamp => {
+                if let Value::String(text) = value {
+                    if let Some(problem) = timestamp_problem(text) {
+                        let path = self.rendered_path();
+                        self.refuse(format!(
+                            "Invalid value at '{path}' (type.googleapis.com/google.protobuf.Timestamp), Field '{}', {problem}",
+                            field.json
+                        ));
+                    }
+                    return value.clone();
+                }
+            }
+            kind => {
+                if let Some(normalized) = check_scalar(kind, value) {
+                    return normalized;
+                }
+            }
+        }
+        self.refuse_value(field.kind, value);
+        Value::Null
     }
 }
 
@@ -561,82 +781,8 @@ fn at(path: &str) -> String {
     }
 }
 
-fn check_message(
-    schema: &Schema,
-    object: &Map<String, Value>,
-    path: &str,
-    errors: &mut Vec<(String, String)>,
-) -> Map<String, Value> {
-    let mut out = Map::new();
-    let mut oneofs: Vec<&str> = Vec::new();
-    for (key, value) in object {
-        let Some(field) = schema
-            .fields
-            .iter()
-            .find(|field| field.json == key || field.proto == key)
-        else {
-            errors.push((
-                path.to_owned(),
-                format!(
-                    "Invalid JSON payload received. Unknown name \"{key}\"{}: Cannot find field.",
-                    at(path)
-                ),
-            ));
-            continue;
-        };
-        // proto3 JSON: null is the default value, whatever the type, except for
-        // `google.protobuf.NullValue`, whose only value it is.
-        let null_value =
-            matches!(field.kind, Kind::Enum(schema) if schema.type_url == NULL_VALUE.type_url);
-        if value.is_null() && !null_value {
-            continue;
-        }
-        if let Some(oneof) = field.oneof {
-            if oneofs.contains(&oneof) {
-                let place = if path.is_empty() {
-                    String::new()
-                } else {
-                    format!(" at '{path}'")
-                };
-                errors.push((
-                    path.to_owned(),
-                    format!(
-                        "Invalid value{place} (oneof), oneof field '{oneof}' is already set. Cannot set '{key}'"
-                    ),
-                ));
-                continue;
-            }
-            oneofs.push(oneof);
-        }
-        let field_path = join(path, field.proto);
-        let normalized = if field.repeated {
-            let Value::Array(items) = value else {
-                errors.push((
-                    field_path.clone(),
-                    format!(
-                        "Invalid value at '{field_path}' ({}), {value}",
-                        kind_name(field.kind)
-                    ),
-                ));
-                continue;
-            };
-            Value::Array(
-                items
-                    .iter()
-                    .enumerate()
-                    .map(|(index, item)| {
-                        check_kind(field, item, &format!("{field_path}[{index}]"), errors)
-                    })
-                    .collect(),
-            )
-        } else {
-            check_kind(field, value, &field_path, errors)
-        };
-        out.insert(field.json.to_owned(), normalized);
-    }
-    out
-}
-
+/// The type the transcoder names for a value it cannot convert: the scalar's proto type, or
+/// the message's type URL (a repeated field names its element type).
 fn kind_name(kind: Kind) -> &'static str {
     match kind {
         Kind::Int32 | Kind::Wrapper(Scalar::Int32) => "TYPE_INT32",
@@ -647,91 +793,9 @@ fn kind_name(kind: Kind) -> &'static str {
         Kind::Bytes => "TYPE_BYTES",
         Kind::Enum(schema) => schema.type_url,
         Kind::Timestamp => "type.googleapis.com/google.protobuf.Timestamp",
-        Kind::Message(_) | Kind::ValueMap => "TYPE_MESSAGE",
+        Kind::Message(schema) => schema.type_url,
+        Kind::ValueMap => "type.googleapis.com/google.firestore.v1.MapValue.FieldsEntry",
     }
-}
-
-fn check_kind(
-    field: &Field,
-    value: &Value,
-    path: &str,
-    errors: &mut Vec<(String, String)>,
-) -> Value {
-    match field.kind {
-        Kind::Message(schema) => {
-            if let Value::Object(object) = value {
-                return Value::Object(check_message(schema, object, path, errors));
-            }
-        }
-        Kind::ValueMap => {
-            if let Value::Object(entries) = value {
-                return Value::Object(
-                    entries
-                        .iter()
-                        .map(|(key, entry)| {
-                            let entry_path = format!("{path}[{key}]");
-                            let normalized = match entry {
-                                Value::Object(object) => Value::Object(check_message(
-                                    &VALUE,
-                                    object,
-                                    &entry_path,
-                                    errors,
-                                )),
-                                other => other.clone(),
-                            };
-                            (key.clone(), normalized)
-                        })
-                        .collect(),
-                );
-            }
-        }
-        // A wrapper may also be spelled as its message, `{"value": ...}`.
-        Kind::Wrapper(_)
-            if value
-                .as_object()
-                .is_some_and(|o| o.len() == 1 && o.contains_key("value")) =>
-        {
-            return check_kind(field, &value["value"], path, errors);
-        }
-        Kind::Wrapper(scalar) => {
-            let inner = Field {
-                kind: match scalar {
-                    Scalar::Int32 => Kind::Int32,
-                    Scalar::Int64 => Kind::Int64,
-                    Scalar::Double => Kind::Double,
-                },
-                ..*field
-            };
-            return check_kind(&inner, value, &format!("{path}.value"), errors);
-        }
-        Kind::Timestamp => {
-            if let Value::String(text) = value {
-                if let Some(problem) = timestamp_problem(text) {
-                    errors.push((
-                        path.to_owned(),
-                        format!(
-                            "Invalid value at '{path}' (type.googleapis.com/google.protobuf.Timestamp), Field '{}', {problem}",
-                            field.json
-                        ),
-                    ));
-                }
-                return value.clone();
-            }
-        }
-        kind => {
-            if let Some(normalized) = check_scalar(kind, value) {
-                return normalized;
-            }
-        }
-    }
-    errors.push((
-        path.to_owned(),
-        format!(
-            "Invalid value at '{path}' ({}), {value}",
-            kind_name(field.kind)
-        ),
-    ));
-    value.clone()
 }
 
 /// The normalized form of a scalar or enum value, or `None` when the transcoder refuses it.
@@ -828,79 +892,15 @@ fn timestamp_problem(text: &str) -> Option<&'static str> {
     None
 }
 
-/// Parses a request body as production's transcoder does: a trailing comma before a closing
-/// bracket or brace is accepted (FS-QUERY-INDEX request-shape#body-trailing-comma).
-pub fn parse_body(body: &[u8]) -> Result<Value, serde_json::Error> {
-    serde_json::from_slice(body).or_else(|error| {
-        let text = String::from_utf8_lossy(body);
-        let lenient = without_trailing_commas(&text);
-        if lenient == text {
-            return Err(error);
-        }
-        serde_json::from_str(&lenient).map_err(|_| error)
-    })
+/// Parses a request body as production's front end does (see [`super::json_syntax`]).
+pub fn parse_body(body: &[u8]) -> Result<Value, super::json_syntax::SyntaxError> {
+    super::json_syntax::parse(body)
 }
 
-/// `text` with every comma that only whitespace separates from a closing `]` or `}` removed,
-/// outside string literals.
-fn without_trailing_commas(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut in_string = false;
-    let mut escaped = false;
-    for (i, &c) in chars.iter().enumerate() {
-        if in_string {
-            out.push(c);
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        if c == '"' {
-            in_string = true;
-        } else if c == ',' {
-            let next = chars[i + 1..].iter().find(|c| !c.is_whitespace());
-            if matches!(next, Some(']' | '}')) {
-                continue;
-            }
-        }
-        out.push(c);
-    }
-    out
-}
-
-/// The transcoder's refusal of a body that is not JSON: the token it stopped at, echoed with
-/// its line and a caret under the column, or the end of the body.
+/// The front end's refusal of a body that is not JSON.
 #[must_use]
-pub fn syntax_error_message(body: &[u8], error: &serde_json::Error) -> String {
-    if error.is_eof() {
-        return "Invalid JSON payload received. Unexpected end of string. Expected a value.\n\n^"
-            .to_owned();
-    }
-    let text = String::from_utf8_lossy(body);
-    let line = text
-        .lines()
-        .nth(error.line().saturating_sub(1))
-        .unwrap_or_default();
-    // The transcoder points at the start of the token it could not read; serde_json reports
-    // the character after the part of it that it read.
-    let mut column = error.column().saturating_sub(1).min(line.len());
-    while column > 0
-        && line
-            .as_bytes()
-            .get(column - 1)
-            .is_some_and(u8::is_ascii_alphanumeric)
-    {
-        column -= 1;
-    }
-    format!(
-        "Invalid JSON payload received. Unexpected token.\n{line}\n{}^",
-        " ".repeat(column.min(line.len()))
-    )
+pub fn syntax_error_message(body: &[u8], error: &super::json_syntax::SyntaxError) -> String {
+    error.render(body)
 }
 
 /// Whether a REST path names a method whose answers, errors included, are a JSON array.
@@ -1033,7 +1033,7 @@ mod tests {
 
     #[test]
     fn a_body_that_is_not_json_echoes_the_token() {
-        let error = serde_json::from_slice::<Value>(b"not json").unwrap_err();
+        let error = parse_body(b"not json").unwrap_err();
         assert_eq!(
             syntax_error_message(b"not json", &error),
             "Invalid JSON payload received. Unexpected token.\nnot json\n^"
@@ -1049,12 +1049,45 @@ mod tests {
             );
         }
         assert!(check_document_keys(&json!("not an object"), "document").is_ok());
+        // Only the first unknown key is reported, as for any transcoder refusal.
         let status =
             check_document_keys(&json!({"a": 1, "fields": {}, "b": 2}), "document").unwrap_err();
         assert_eq!(
             status.message(),
-            "Invalid JSON payload received. Unknown name \"a\" at 'document': Cannot find field.\n\
-             Invalid JSON payload received. Unknown name \"b\" at 'document': Cannot find field."
+            "Invalid JSON payload received. Unknown name \"a\" at 'document': Cannot find field."
         );
+    }
+
+    /// A body of many bad items costs what a body with one does: one violation, and no path
+    /// built for the items that are fine (safety review M1).
+    #[test]
+    fn a_body_of_many_bad_items_is_refused_once() {
+        let many = vec![json!(1); 1_000_000];
+        let status =
+            check_body("runQuery", &json!({"structuredQuery": {"from": many}})).unwrap_err();
+        assert_eq!(
+            status.message(),
+            "Invalid value at 'structured_query.from[0]' (type.googleapis.com/google.firestore.v1.StructuredQuery.CollectionSelector), 1"
+        );
+        let key = "k".repeat(1 << 20);
+        let values = vec![json!({}); 200_000];
+        let body = json!({"structuredQuery": {"where": {"fieldFilter": {
+            "field": {"fieldPath": "a"}, "op": "EQUAL",
+            "value": {"mapValue": {"fields": {key.clone(): {"arrayValue": {"values": values}}}}}
+        }}}});
+        let started = std::time::Instant::now();
+        assert!(check_body("runQuery", &body).is_ok());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        let mut bad = body;
+        bad["structuredQuery"]["where"]["fieldFilter"]["value"]["mapValue"]["fields"][&key]
+            ["arrayValue"]["values"][150_000] = json!(1);
+        let status = check_body("runQuery", &bad).unwrap_err();
+        assert!(status.message().ends_with(
+            ".array_value.values[150000]' (type.googleapis.com/google.firestore.v1.Value), 1"
+        ));
     }
 }

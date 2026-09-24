@@ -8,6 +8,7 @@
 
 pub mod coverage;
 pub mod json;
+pub mod json_syntax;
 pub mod transcode;
 
 pub mod admin_fields;

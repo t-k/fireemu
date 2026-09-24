@@ -65,10 +65,8 @@ class SavedAuthorityTests(unittest.TestCase):
 
             module = importlib.util.module_from_spec(SPEC)
             SPEC.loader.exec_module(module)
-            try:
+            with self.assertRaisesRegex(ValueError, "validator source differs"):
                 module.source_checkout(root, commit)
-            except ValueError:
-                pass
             self.assertFalse(external_marker.exists())
             self.assertFalse(textconv_marker.exists())
 

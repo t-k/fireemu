@@ -1057,8 +1057,11 @@ fn production_lifetimes_keep_long_codes_and_refuse_an_expired_reset() {
         assert!(expired(&s, &reset, t(3_601)));
         assert_eq!(expired(&s, &verify, t(3_601)), !production);
         if production {
-            assert!(!expired(&s, &verify, t(259_200)));
-            assert!(expired(&s, &verify, t(259_201)));
+            // No published lifetime and none observed: production answered after 3900 s, so
+            // a long-lived code is never refused as expired (owner decision 2026-09-25).
+            for later in [3_901, 259_201, 31_536_000] {
+                assert!(!expired(&s, &verify, t(later)), "{later}");
+            }
         }
         // An expired reset code is kept a day under production lifetimes, to be refused as
         // expired; the local policy sweeps it at once.
@@ -1069,6 +1072,11 @@ fn production_lifetimes_keep_long_codes_and_refuse_an_expired_reset() {
         s.sweep_transient_credentials(t(3_600 + 86_401));
         assert!(s.oob_code(&reset).is_none());
         assert_eq!(s.oob_code(&verify).is_some(), production);
+        s.sweep_transient_credentials(t(31_536_000));
+        assert_eq!(s.oob_code(&verify).is_some(), production);
+        if production {
+            assert!(s.consume_oob_code(&verify, None, t(31_536_000)).is_ok());
+        }
     }
     let mut s = store();
     s.set_production_oob_lifetimes(true);
@@ -1138,4 +1146,45 @@ fn codes_kept_past_their_lifetime_make_room_at_the_cap() {
         .unwrap();
     assert_eq!(s.oob_codes().len(), 1);
     assert!(s.oob_code(&fresh).is_some());
+}
+
+#[test]
+fn long_lived_codes_make_room_at_the_cap_only_past_the_observed_lower_bound() {
+    use fireemu_core_auth::store::{MAX_OUTSTANDING_CODES, OBSERVED_LONG_OOB_CODE_SECONDS};
+    let mut s = store();
+    s.set_production_oob_lifetimes(true);
+    let mut first = None;
+    for i in 0..MAX_OUTSTANDING_CODES {
+        let code = s
+            .create_oob_code(
+                OobRequestType::VerifyEmail,
+                &format!("u{i}@example.com"),
+                None,
+                None,
+                t(i64::try_from(i).unwrap()),
+            )
+            .unwrap();
+        first.get_or_insert(code);
+    }
+    let first = first.unwrap();
+    let late = |s: &mut AuthStore, at| {
+        s.create_oob_code(
+            OobRequestType::VerifyEmail,
+            "late@example.com",
+            None,
+            None,
+            at,
+        )
+    };
+    // Every code is still within what production was seen to answer: the cap refuses.
+    assert_eq!(
+        late(&mut s, t(OBSERVED_LONG_OOB_CODE_SECONDS)),
+        Err(AuthError::TooManyOutstandingCodes)
+    );
+    assert!(s.oob_code(&first).is_some());
+    // Past the observed lower bound the oldest code alone makes room; the rest stay usable.
+    let fresh = late(&mut s, t(OBSERVED_LONG_OOB_CODE_SECONDS + 1)).unwrap();
+    assert!(s.oob_code(&first).is_none());
+    assert!(s.oob_code(&fresh).is_some());
+    assert_eq!(s.oob_codes().len(), MAX_OUTSTANDING_CODES);
 }

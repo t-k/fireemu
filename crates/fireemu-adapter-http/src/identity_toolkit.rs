@@ -9913,10 +9913,12 @@ fn send_oob_code(
             }
         }
         OobRequestType::EmailSignIn => {
-            // The Admin generator is refused while email links are off, as the client route
-            // is (sandbox recording 2026-09-24; the official emulator refuses it too).
+            // Strict: the Admin generator is refused while email links are off, as the client
+            // route is (sandbox recording 2026-09-24). The official emulator always reports
+            // email links as enabled (firebase-tools `state.js` `enableEmailLinkSignin`), so the
+            // emulator profile adds no rejection here.
             let sign_in = store.sign_in_config();
-            if !sign_in.email_enabled || sign_in.password_required {
+            if strict && (!sign_in.email_enabled || sign_in.password_required) {
                 return error(400, "OPERATION_NOT_ALLOWED");
             }
             let Some(email) = str_field(body, "email").map(canonicalize_email) else {

@@ -6,11 +6,11 @@
   "closureReview": {
     "decision": "APPROVED",
     "decidedOn": "2026-09-24",
-    "reviewer": "independent clean-context confirmation review (round 2) of the promotion review's fixes, after pre-run reviews rounds 7-9 and the owner's follow-up directive",
-    "reviewedCommit": "998fee820",
+    "reviewer": "independent clean-context confirmation reviews: round 2 of the 2026-09-24 re-promotion (998fee820) and the 2026-09-25 follow-up directive 2 confirmation (bafd7ed91)",
+    "reviewedCommit": "bafd7ed91",
     "finalArtifactSha256": "f471d56912fd0f69bc806744173d51796651ac9f0688fbbf7a26a45cbcb8acf7",
     "history": "First promoted at 255274d76 and sent back by the 2026-09-24 promotion review (single valid observations in two programs, ten gRPC Admin methods unimplemented, owner decisions not in the ledger, bisection project not an evidence project); fixed per the owner's follow-up directive and re-recorded.",
-    "followUps": "Non-blocking notes are tracked outside the closure: gRPC ListIndexes/ListOperations beyond the representative observations rest on REST parity tests; the concurrent-change retry covers REST only; production's wording for a bucket of another project and for a malformed gRPC resource name is unobserved."
+    "followUps": "Non-blocking notes are tracked outside the closure: gRPC ListIndexes/ListOperations beyond the representative observations rest on REST parity tests; the concurrent-change retry covers REST only; production's wording for a bucket of another project and for a malformed gRPC resource name is unobserved. After follow-up directive 2 (2026-09-25): a managed import still claims its bucket before its documents are written, and a check and a claim of a bucket are not one step (tracked outside the closure)."
   },
   "scopeDecisions": [
     {

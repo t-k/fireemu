@@ -516,6 +516,11 @@ const customValidation = program(
     customSignIn("claims-array", token("claimsArray")),
     ...RESERVED.map((name) => customSignIn(`reserved-${name}`, token(`reserved-${name}`))),
     customSignIn("user-id-developer-claim", token("userIdClaim")),
+    {
+      ...customSignIn("invalid-api-key", token("valid")),
+      auth: "none",
+      query: { key: "AIzaSyD-fireemu-not-a-real-api-key-0000" },
+    },
     customSignIn("control-valid", token("valid")),
   ],
   {

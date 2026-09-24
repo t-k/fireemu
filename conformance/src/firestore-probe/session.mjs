@@ -47,6 +47,22 @@ if (!Number.isInteger(MANAGED_POLL_MS) || MANAGED_POLL_MS < 1 || MANAGED_POLL_MS
   throw new Error("invalid managed-clear polling interval");
 }
 const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
+const SHRINK_CHUNK_SIZE = 1024;
+const SHRINK_REQUEST_CAPS = { legacy: 180, v3: 100 };
+const FROZEN_ARRAY_LENGTHS = new Map([
+  ["barrayname100012116", 12_116],
+  ["barrayname100012121", 12_121],
+  ["barrayname100012123", 12_123],
+  ["barrayname20007179", 7_179],
+  ["barrayname20007183", 7_183],
+  ["barrayname20007184", 7_184],
+  ["g500a", 19_999],
+  ["g500b", 20_000],
+  ["g2000a", 7_184],
+  ["g2000b", 7_185],
+  ["g1000a", 12_123],
+  ["g1000b", 12_124],
+]);
 let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
 let managedClearBlocked = false;
@@ -72,6 +88,79 @@ export function managedClearScope(names, project, database) {
     throw new Error("managed clear collection groups must be unique");
   }
   return collections;
+}
+
+export function managedShrinkScope(names, project, database) {
+  if (project !== "fireemu-oracle-sbx" || database !== "(default)" || !Array.isArray(names)) {
+    throw new Error("array shrink requires the fixed sandbox database");
+  }
+  const prefix = `projects/${project}/databases/${database}/documents/`;
+  const documents = names.map((name) => {
+    if (typeof name !== "string" || !name.startsWith(prefix)) {
+      throw new Error("array shrink name is outside the sandbox");
+    }
+    const parts = name.slice(prefix.length).split("/");
+    if (parts.length !== 2 || parts.some((part) => !part || part === "." || part === "..")) {
+      throw new Error("array shrink requires root documents");
+    }
+    return parts;
+  });
+  if (documents.length !== 6 || new Set(documents.map(([collection]) => collection)).size !== 6) {
+    throw new Error("array shrink requires six distinct frozen documents");
+  }
+  const legacyCollections = new Set([
+    "barrayname100012116",
+    "barrayname100012121",
+    "barrayname100012123",
+    "barrayname20007179",
+    "barrayname20007183",
+    "barrayname20007184",
+  ]);
+  if (documents.every(([collection]) => legacyCollections.has(collection))) return "legacy";
+
+  const validV3 = documents.every(([collection, document]) => {
+    const length = collection.startsWith("g500")
+      ? 500
+      : collection.startsWith("g1000")
+        ? 1000
+        : collection.startsWith("g2000")
+          ? 2000
+          : 0;
+    const expectedCollectionBytes =
+      length === 2000 ? 1400 : length === 1000 ? 998 : length === 500 ? 498 : 0;
+    const expectedDocumentBytes = length === 2000 ? 599 : length > 0 ? 1 : 0;
+    return (
+      expectedCollectionBytes > 0 &&
+      Buffer.byteLength(collection) === expectedCollectionBytes &&
+      Buffer.byteLength(document) === expectedDocumentBytes &&
+      new RegExp(`^g${length}[ab]c*$`).test(collection) &&
+      /^d+$/.test(document)
+    );
+  });
+  if (!validV3)
+    throw new Error("array shrink names do not match the frozen legacy or corpus-v3 scope");
+  return "v3";
+}
+
+export function validateShrinkBoundaryDocument(document, expectedName) {
+  const values = document?.fields?.a?.arrayValue?.values;
+  if (
+    document?.name !== expectedName ||
+    typeof document.updateTime !== "string" ||
+    !document.updateTime ||
+    Object.keys(document.fields ?? {}).length !== 1 ||
+    Object.keys(document.fields?.a ?? {}).length !== 1 ||
+    !document.fields?.a?.arrayValue ||
+    !Array.isArray(values) ||
+    values.length > 20_000 ||
+    values.some(
+      (value, index) =>
+        Object.keys(value ?? {}).length !== 1 || value?.integerValue !== String(index),
+    )
+  ) {
+    throw new Error("array shrink document is not the frozen generated integer sequence");
+  }
+  return values;
 }
 
 export function validateManagedClearReadback(names, rows) {
@@ -125,10 +214,10 @@ const authorized = (headers = {}) => ({ ...headers, authorization: `Bearer ${TOK
 const timeoutSignal = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
 /** Wipes the emulator's documents so one program never sees another's writes. */
-async function clear(database = "(default)") {
+async function clear(database = "(default)", verifyManagedScope = false) {
   if (PRODUCTION) {
     if (managedClearBlocked) throw new Error("managed clear needs operator recovery");
-    await clearThroughPublicApi(database);
+    await clearThroughPublicApi(database, verifyManagedScope);
     return;
   }
   await trackedFetch(
@@ -145,12 +234,23 @@ async function clear(database = "(default)") {
  * through `:runQuery` (names only) and `:commit`, recursing into subcollections. Only the
  * probe project is ever addressed, and only documents the probes seeded can exist there.
  */
-async function clearThroughPublicApi(database) {
+async function clearThroughPublicApi(database, verifyManagedScope) {
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/${database}/documents`;
+  const shrinkScopeActive = managedClearState !== null && database === "(default)";
+  if (shrinkScopeActive) managedClearState.shrinkRequests = 0;
   // Listing is paged and only eventually reflects deletes: loop until a full listing is empty.
   for (let round = 0; round < 8; round += 1) {
     const collectionIds = await listCollectionIds(base, "");
-    if (collectionIds === null || collectionIds.length === 0) return;
+    if (collectionIds === null) {
+      if (shrinkScopeActive) throw new Error("array shrink database scope could not be listed");
+      managedClearBlocked = false;
+      return;
+    }
+    if (collectionIds.length === 0) {
+      if (shrinkScopeActive && verifyManagedScope) await verifyManagedShrinkScopeAbsent(base);
+      managedClearBlocked = false;
+      return;
+    }
     const managedFailures = [];
     for (const collectionId of collectionIds) {
       managedFailures.push(...(await deleteCollection(base, "", collectionId)));
@@ -209,23 +309,50 @@ async function deleteCollection(base, parentPath, collectionId) {
     }
     pageToken = page.nextPageToken;
   } while (pageToken);
+  const shrinkScopeActive =
+    managedClearState !== null && base.endsWith("/databases/(default)/documents");
+  const scopedName = shrinkScopeActive
+    ? managedClearState.names.find((name) => {
+        const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
+        return relative.split("/")[0] === collectionId;
+      })
+    : undefined;
+  if (scopedName) {
+    managedClearBlocked = true;
+    if (names.length !== 1 || names[0] !== scopedName || missing.length !== 0) {
+      throw new Error("array shrink scope contains an unexpected document");
+    }
+    const scopedGroupNames = await managedGroupNames(
+      `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`,
+      collectionId,
+      managedShrinkRequest,
+    );
+    if (scopedGroupNames.length !== 1 || scopedGroupNames[0] !== scopedName) {
+      throw new Error("array shrink scope contains an unexpected document");
+    }
+  }
   for (const name of [...names, ...missing]) {
     const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
     for (const child of (await listCollectionIds(base, relative)) ?? []) {
       managedFailures.push(...(await deleteCollection(base, relative, child)));
     }
   }
-  for (let index = 0; index < names.length; index += 400) {
-    const writes = names.slice(index, index + 400).map((name) => ({ delete: name }));
-    const commit = await trackedFetch(`${base}:commit`, {
+  const deleteChunkSize = scopedName && names.includes(scopedName) ? 1 : 400;
+  for (let index = 0; index < names.length; index += deleteChunkSize) {
+    const writes = names.slice(index, index + deleteChunkSize).map((name) => ({ delete: name }));
+    const candidate = writes.length === 1 ? writes[0].delete : null;
+    const commitRequest = scopedName && candidate === scopedName ? managedShrinkRequest : null;
+    const commitInit = {
       method: "POST",
       headers: authorized({ "content-type": "application/json" }),
       body: JSON.stringify({ writes }),
       signal: timeoutSignal(),
-    });
+    };
+    const commit = commitRequest
+      ? await commitRequest("delete attempt", `${base}:commit`, commitInit)
+      : await trackedFetch(`${base}:commit`, commitInit);
     if (!commit.ok) {
       const body = await commit.text();
-      const candidate = writes.length === 1 ? writes[0].delete : null;
       if (
         PRODUCTION &&
         writes.length === 1 &&
@@ -237,17 +364,147 @@ async function deleteCollection(base, parentPath, collectionId) {
           managedClearState?.names,
         )
       ) {
-        managedFailures.push(candidate);
+        if (managedClearState?.names.includes(candidate)) {
+          managedClearBlocked = true;
+          await shrinkBoundaryDocument(base, candidate);
+          const retry = await managedShrinkRequest("delete retry", `${base}:commit`, {
+            method: "POST",
+            headers: authorized({ "content-type": "application/json" }),
+            body: JSON.stringify({ writes }),
+            signal: timeoutSignal(),
+          });
+          if (!retry.ok) {
+            const retryBody = await retry.text();
+            throw new Error(`clear: shrunk document delete ${retry.status} ${retryBody}`);
+          }
+        } else {
+          managedFailures.push(candidate);
+        }
       } else {
         throw new Error(`clear: commit ${commit.status} ${body}`);
       }
+    }
+    if (scopedName && candidate === scopedName) {
+      await verifyShrunkDocumentAbsent(base, candidate);
     }
   }
   return managedFailures;
 }
 
-async function managedGroupNames(api, collectionId) {
-  const response = await trackedFetch(`${api}/documents:runQuery`, {
+async function managedShrinkRequest(label, input, init) {
+  if (!managedClearState) throw new Error("array shrink has no frozen names");
+  const used = managedClearState.shrinkRequests + 1;
+  const cap = SHRINK_REQUEST_CAPS[managedClearState.shrinkScope];
+  if (used > cap) {
+    throw new Error(`array shrink ${managedClearState.shrinkScope} request cap ${cap} exceeded`);
+  }
+  managedClearState.shrinkRequests = used;
+  return trackedFetch(input, init);
+}
+
+async function shrinkBoundaryDocument(base, name) {
+  const read = await managedShrinkRequest("document read", urlForDocument(name), {
+    headers: authorized(),
+    signal: timeoutSignal(),
+  });
+  if (!read.ok) throw new Error(`array shrink read ${read.status}`);
+  const document = await read.json();
+  let values = validateShrinkBoundaryDocument(document, name);
+  const collectionId = name.split("/documents/")[1].split("/")[0];
+  const expectedLength = [...FROZEN_ARRAY_LENGTHS].find(([prefix]) =>
+    prefix.startsWith("g") ? collectionId.startsWith(prefix) : collectionId === prefix,
+  )?.[1];
+  if (values.length !== expectedLength) {
+    throw new Error("array shrink document does not match its frozen boundary length");
+  }
+  let updateTime = document.updateTime;
+  while (values.length > 0) {
+    const removed = values.slice(0, SHRINK_CHUNK_SIZE);
+    const committed = await managedShrinkRequest("arrayRemove commit", `${base}:commit`, {
+      method: "POST",
+      headers: authorized({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        writes: [
+          {
+            transform: {
+              document: name,
+              fieldTransforms: [{ fieldPath: "a", removeAllFromArray: { values: removed } }],
+            },
+            currentDocument: { updateTime },
+          },
+        ],
+      }),
+      signal: timeoutSignal(),
+    });
+    if (!committed.ok) {
+      const body = await committed.text();
+      throw new Error(`array shrink transform ${committed.status} ${body}`);
+    }
+    const result = await committed.json();
+    const nextUpdateTime = result?.writeResults?.[0]?.updateTime;
+    if (typeof nextUpdateTime !== "string" || !nextUpdateTime) {
+      throw new Error("array shrink transform omitted its updateTime");
+    }
+    updateTime = nextUpdateTime;
+    values = values.slice(removed.length);
+  }
+  const readback = await managedShrinkRequest("post-shrink read", urlForDocument(name), {
+    headers: authorized(),
+    signal: timeoutSignal(),
+  });
+  if (!readback.ok) throw new Error(`array shrink verification ${readback.status}`);
+  const shrunk = validateShrinkBoundaryDocument(await readback.json(), name);
+  if (shrunk.length !== 0) throw new Error("array shrink left indexed array values behind");
+}
+
+function urlForDocument(name) {
+  const prefix = `projects/${PROJECT}/databases/(default)/documents/`;
+  if (!name.startsWith(prefix)) throw new Error("array shrink document escaped the sandbox");
+  return `${SCHEME}://${HOST}/v1/${name}`;
+}
+
+async function verifyShrunkDocumentAbsent(base, name) {
+  const readback = await managedShrinkRequest("typed absence read", `${base}:batchGet`, {
+    method: "POST",
+    headers: authorized({ "content-type": "application/json" }),
+    body: JSON.stringify({ documents: [name] }),
+    signal: timeoutSignal(),
+  });
+  if (!readback.ok || !validateManagedClearReadback([name], await readback.json())) {
+    throw new Error("array shrink cleanup did not prove exact typed absence");
+  }
+  const collectionId = name.split("/documents/")[1].split("/")[0];
+  const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
+  if ((await managedGroupNames(api, collectionId, managedShrinkRequest)).length !== 0) {
+    throw new Error("array shrink cleanup collection group remains populated");
+  }
+}
+
+async function verifyManagedShrinkScopeAbsent(base) {
+  if (!managedClearState) throw new Error("array shrink absence check has no frozen names");
+  const readback = await managedShrinkRequest("exact scope absence", `${base}:batchGet`, {
+    method: "POST",
+    headers: authorized({ "content-type": "application/json" }),
+    body: JSON.stringify({ documents: managedClearState.names }),
+    signal: timeoutSignal(),
+  });
+  if (
+    !readback.ok ||
+    !validateManagedClearReadback(managedClearState.names, await readback.json())
+  ) {
+    throw new Error("array shrink scope exact typed absence was not proved");
+  }
+  const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
+  for (const collectionId of managedClearScope(managedClearState.names, PROJECT, "(default)")) {
+    if ((await managedGroupNames(api, collectionId, managedShrinkRequest)).length !== 0) {
+      throw new Error("array shrink scope collection group remains populated");
+    }
+  }
+}
+
+async function managedGroupNames(api, collectionId, request = trackedFetch) {
+  const input = `${api}/documents:runQuery`;
+  const init = {
     method: "POST",
     headers: authorized({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -258,7 +515,11 @@ async function managedGroupNames(api, collectionId) {
       },
     }),
     signal: timeoutSignal(),
-  });
+  };
+  const response =
+    request === trackedFetch
+      ? await trackedFetch(input, init)
+      : await request("collection-group confirmation", input, init);
   if (!response.ok) throw new Error(`managed clear scope query ${response.status}`);
   const rows = await response.json();
   if (!Array.isArray(rows) || rows.some((row) => row.error)) {
@@ -490,7 +751,11 @@ async function main() {
     const names = JSON.parse(MANAGED_CLEAR_NAMES);
     if (names.length !== 6) throw new Error("managed clear requires six frozen boundary names");
     managedClearScope(names, PROJECT, "(default)");
-    managedClearState = { names };
+    managedClearState = {
+      names,
+      shrinkScope: managedShrinkScope(names, PROJECT, "(default)"),
+      shrinkRequests: 0,
+    };
     try {
       const previous = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));
       if (previous.status !== "complete") {
@@ -540,7 +805,7 @@ async function main() {
   } finally {
     try {
       if (!managedClearBlocked) {
-        for (const database of touchedDatabases) await clear(database);
+        for (const database of touchedDatabases) await clear(database, true);
       }
     } finally {
       if (META_OUT) {

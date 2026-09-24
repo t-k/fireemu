@@ -3,8 +3,10 @@
 //!
 //! Each call is answered by the same Admin core as REST: the request is rendered as the REST
 //! request it corresponds to, and the JSON answer is read back into the protobuf message, so
-//! the two transports cannot disagree. The representative methods C7 names are served;
-//! every other method is refused with `UNIMPLEMENTED`.
+//! the two transports cannot disagree. Every method REST serves is served; the methods of the
+//! managed infrastructure C1 excludes are refused with `UNIMPLEMENTED`. A request's resource
+//! name is checked against the kind of resource the method takes before it is routed, so a
+//! name of another kind can never reach another method's REST route.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -73,6 +75,20 @@ impl AdminGrpc {
     }
 }
 
+impl AdminGrpc {
+    /// What production answers every user-credentials method of a Standard database
+    /// (`FAILED_PRECONDITION`, scope decision C4), or `NOT_FOUND` for a database it lacks: REST's
+    /// answer for the database's userCreds collection.
+    async fn user_creds_refusal<T>(&self, request: &Request<T>, name: &str) -> Status {
+        let database = name.split("/userCreds").next().unwrap_or(name);
+        let path = format!("{database}/userCreds");
+        match self.call(request, "GET", &path, "", Value::Null).await {
+            Err(status) => status,
+            Ok(_) => Status::internal("user credentials are not served"),
+        }
+    }
+}
+
 fn code_of(status: &str) -> tonic::Code {
     use tonic::Code;
     match status {
@@ -114,6 +130,108 @@ fn percent_encode(value: &str) -> String {
         }
     }
     out
+}
+
+// ---- resource names --------------------------------------------------------------------------
+
+/// The kinds of resource an Admin method names.
+#[derive(Debug, Clone, Copy)]
+enum Kind {
+    Project,
+    Database,
+    CollectionGroup,
+    Index,
+    Field,
+    Operation,
+    UserCreds,
+}
+
+impl Kind {
+    /// The name's segments: a literal collection, or `None` for an id.
+    fn shape(self) -> &'static [Option<&'static str>] {
+        const P: Option<&str> = Some("projects");
+        const D: Option<&str> = Some("databases");
+        const G: Option<&str> = Some("collectionGroups");
+        match self {
+            Self::Project => &[P, None],
+            Self::Database => &[P, None, D, None],
+            Self::CollectionGroup => &[P, None, D, None, G, None],
+            Self::Index => &[P, None, D, None, G, None, Some("indexes"), None],
+            Self::Field => &[P, None, D, None, G, None, Some("fields"), None],
+            Self::Operation => &[P, None, D, None, Some("operations"), None],
+            Self::UserCreds => &[P, None, D, None, Some("userCreds"), None],
+        }
+    }
+
+    const fn noun(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Database => "database",
+            Self::CollectionGroup => "collection group",
+            Self::Index => "index",
+            Self::Field => "field",
+            Self::Operation => "operation",
+            Self::UserCreds => "user credentials",
+        }
+    }
+}
+
+/// `name` when it is a resource name of `kind`: the right collections, and ids that are
+/// non-empty and carry nothing a REST path would read as structure. Production refuses a
+/// malformed name with `INVALID_ARGUMENT`; the wording here is fireemu's (not observed).
+// Every tonic handler returns a Status; boxing it here would only unbox it again.
+#[allow(clippy::result_large_err)]
+fn resource(name: &str, kind: Kind) -> Result<&str, Status> {
+    let segments: Vec<&str> = name.split('/').collect();
+    let shape = kind.shape();
+    let fits = segments.len() == shape.len()
+        && segments
+            .iter()
+            .zip(shape)
+            .all(|(segment, want)| match want {
+                Some(literal) => segment == literal,
+                None => {
+                    !segment.is_empty()
+                        && !segment.contains(['%', '?', '#', ':', '\\'])
+                        && !segment.chars().any(char::is_control)
+                }
+            });
+    if fits {
+        Ok(name)
+    } else {
+        Err(Status::invalid_argument(format!(
+            "{name:?} is not a valid {} name.",
+            kind.noun()
+        )))
+    }
+}
+
+/// A field-mask path as REST spells it (`delete_protection_state` -> `deleteProtectionState`).
+fn camel(path: &str) -> String {
+    let mut out = String::new();
+    let mut upper = false;
+    for c in path.chars() {
+        if c == '_' {
+            upper = true;
+        } else if upper {
+            out.extend(c.to_uppercase());
+            upper = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn update_mask(mask: Option<&prost_types::FieldMask>) -> String {
+    mask.map(|m| {
+        m.paths
+            .iter()
+            .map(|p| camel(p))
+            .collect::<Vec<_>>()
+            .join(",")
+    })
+    .unwrap_or_default()
 }
 
 // ---- JSON -> protobuf ------------------------------------------------------------------------
@@ -252,6 +370,69 @@ fn index(v: &Value) -> admin::Index {
     }
 }
 
+fn field(v: &Value) -> admin::Field {
+    use admin::field as f;
+    let index_config = v["indexConfig"].is_object().then(|| f::IndexConfig {
+        indexes: v["indexConfig"]["indexes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(index)
+            .collect(),
+        uses_ancestor_config: v["indexConfig"]["usesAncestorConfig"]
+            .as_bool()
+            .unwrap_or(false),
+        ancestor_field: string(&v["indexConfig"], "ancestorField"),
+        reverting: v["indexConfig"]["reverting"].as_bool().unwrap_or(false),
+    });
+    let ttl_config = v["ttlConfig"].is_object().then(|| f::TtlConfig {
+        state: enumeration(
+            &v["ttlConfig"],
+            "state",
+            f::ttl_config::State::from_str_name,
+        ),
+        expiration_offset: duration(&v["ttlConfig"]["expirationOffset"]),
+    });
+    admin::Field {
+        name: string(v, "name"),
+        index_config,
+        ttl_config,
+    }
+}
+
+fn field_operation_metadata(v: &Value) -> admin::FieldOperationMetadata {
+    use admin::field_operation_metadata as m;
+    admin::FieldOperationMetadata {
+        start_time: timestamp(&v["startTime"]),
+        end_time: timestamp(&v["endTime"]),
+        field: string(v, "field"),
+        index_config_deltas: v["indexConfigDeltas"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|d| m::IndexConfigDelta {
+                change_type: enumeration(
+                    d,
+                    "changeType",
+                    m::index_config_delta::ChangeType::from_str_name,
+                ),
+                index: d["index"].is_object().then(|| index(&d["index"])),
+            })
+            .collect(),
+        state: enumeration(v, "state", admin::OperationState::from_str_name),
+        progress_documents: progress(&v["progressDocuments"]),
+        progress_bytes: progress(&v["progressBytes"]),
+        ttl_config_delta: v["ttlConfigDelta"].is_object().then(|| m::TtlConfigDelta {
+            change_type: enumeration(
+                &v["ttlConfigDelta"],
+                "changeType",
+                m::ttl_config_delta::ChangeType::from_str_name,
+            ),
+            expiration_offset: duration(&v["ttlConfigDelta"]["expirationOffset"]),
+        }),
+    }
+}
+
 fn progress(v: &Value) -> Option<admin::Progress> {
     v.is_object().then(|| admin::Progress {
         estimated_work: v["estimatedWork"]
@@ -283,7 +464,29 @@ fn pack(v: &Value) -> Option<prost_types::Any> {
             output_uri_prefix: string(v, "outputUriPrefix"),
         }
         .encode_to_vec(),
+        "google.firestore.admin.v1.Field" => field(v).encode_to_vec(),
+        "google.firestore.admin.v1.FieldOperationMetadata" => {
+            field_operation_metadata(v).encode_to_vec()
+        }
+        "google.firestore.admin.v1.BulkDeleteDocumentsMetadata" => {
+            admin::BulkDeleteDocumentsMetadata {
+                start_time: timestamp(&v["startTime"]),
+                end_time: timestamp(&v["endTime"]),
+                operation_state: enumeration(
+                    v,
+                    "operationState",
+                    admin::OperationState::from_str_name,
+                ),
+                progress_documents: progress(&v["progressDocuments"]),
+                progress_bytes: progress(&v["progressBytes"]),
+                collection_ids: strings(v, "collectionIds"),
+                namespace_ids: strings(v, "namespaceIds"),
+                snapshot_time: timestamp(&v["snapshotTime"]),
+            }
+            .encode_to_vec()
+        }
         "google.protobuf.Empty"
+        | "google.firestore.admin.v1.BulkDeleteDocumentsResponse"
         | "google.firestore.admin.v1.CreateDatabaseMetadata"
         | "google.firestore.admin.v1.UpdateDatabaseMetadata"
         | "google.firestore.admin.v1.DeleteDatabaseMetadata" => Vec::new(),
@@ -424,9 +627,27 @@ fn index_body(i: &admin::Index) -> Value {
     body
 }
 
+/// The part of a Field a patch sends: an `indexConfig` names its indexes (none inherits
+/// again), a `ttlConfig` enables a policy.
+fn field_body(f: &admin::Field) -> Value {
+    let mut body = json!({});
+    if let Some(config) = &f.index_config {
+        let indexes: Vec<Value> = config.indexes.iter().map(index_body).collect();
+        body["indexConfig"] = if indexes.is_empty() {
+            json!({})
+        } else {
+            json!({ "indexes": indexes })
+        };
+    }
+    if f.ttl_config.is_some() {
+        body["ttlConfig"] = json!({});
+    }
+    body
+}
+
 fn unimplemented(method: &str) -> Status {
     Status::unimplemented(format!(
-        "fireemu serves {method} over REST only, or not at all (FS-CONFIG-LIFECYCLE scope decisions C1 and C7)"
+        "fireemu does not serve {method}: managed infrastructure is out of scope (FS-CONFIG-LIFECYCLE scope decision C1)"
     ))
 }
 
@@ -435,7 +656,7 @@ type R<T> = Result<Response<T>, Status>;
 #[tonic::async_trait]
 impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     async fn create_index(&self, request: Request<admin::CreateIndexRequest>) -> R<lro::Operation> {
-        let parent = request.get_ref().parent.clone();
+        let parent = resource(&request.get_ref().parent, Kind::CollectionGroup)?.to_owned();
         let body = request
             .get_ref()
             .index
@@ -449,29 +670,72 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     }
     async fn list_indexes(
         &self,
-        _r: Request<admin::ListIndexesRequest>,
+        request: Request<admin::ListIndexesRequest>,
     ) -> R<admin::ListIndexesResponse> {
-        Err(unimplemented("ListIndexes"))
+        let r = request.get_ref();
+        let parent = resource(&r.parent, Kind::CollectionGroup)?.to_owned();
+        let query = encode_query(&[("filter", &r.filter), ("pageToken", &r.page_token)]);
+        let path = format!("{parent}/indexes");
+        let answer = self
+            .call(&request, "GET", &path, &query, Value::Null)
+            .await?;
+        Ok(Response::new(admin::ListIndexesResponse {
+            indexes: answer["indexes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(index)
+                .collect(),
+            next_page_token: string(&answer, "nextPageToken"),
+        }))
     }
     async fn get_index(&self, request: Request<admin::GetIndexRequest>) -> R<admin::Index> {
-        let name = request.get_ref().name.clone();
+        let name = resource(&request.get_ref().name, Kind::Index)?.to_owned();
         let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(index(&answer)))
     }
-    async fn delete_index(&self, _r: Request<admin::DeleteIndexRequest>) -> R<()> {
-        Err(unimplemented("DeleteIndex"))
+    async fn delete_index(&self, request: Request<admin::DeleteIndexRequest>) -> R<()> {
+        let name = resource(&request.get_ref().name, Kind::Index)?.to_owned();
+        self.call(&request, "DELETE", &name, "", Value::Null)
+            .await?;
+        Ok(Response::new(()))
     }
-    async fn get_field(&self, _r: Request<admin::GetFieldRequest>) -> R<admin::Field> {
-        Err(unimplemented("GetField"))
+    async fn get_field(&self, request: Request<admin::GetFieldRequest>) -> R<admin::Field> {
+        let name = resource(&request.get_ref().name, Kind::Field)?.to_owned();
+        let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
+        Ok(Response::new(field(&answer)))
     }
-    async fn update_field(&self, _r: Request<admin::UpdateFieldRequest>) -> R<lro::Operation> {
-        Err(unimplemented("UpdateField"))
+    async fn update_field(&self, request: Request<admin::UpdateFieldRequest>) -> R<lro::Operation> {
+        let r = request.get_ref();
+        let Some(patch) = &r.field else {
+            return Err(Status::invalid_argument("field is required."));
+        };
+        let name = resource(&patch.name, Kind::Field)?.to_owned();
+        let query = encode_query(&[("updateMask", &update_mask(r.update_mask.as_ref()))]);
+        let body = field_body(patch);
+        let answer = self.call(&request, "PATCH", &name, &query, body).await?;
+        Ok(Response::new(operation(&answer)))
     }
     async fn list_fields(
         &self,
-        _r: Request<admin::ListFieldsRequest>,
+        request: Request<admin::ListFieldsRequest>,
     ) -> R<admin::ListFieldsResponse> {
-        Err(unimplemented("ListFields"))
+        let r = request.get_ref();
+        let parent = resource(&r.parent, Kind::CollectionGroup)?.to_owned();
+        let query = encode_query(&[("filter", &r.filter), ("pageToken", &r.page_token)]);
+        let path = format!("{parent}/fields");
+        let answer = self
+            .call(&request, "GET", &path, &query, Value::Null)
+            .await?;
+        Ok(Response::new(admin::ListFieldsResponse {
+            fields: answer["fields"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(field)
+                .collect(),
+            next_page_token: string(&answer, "nextPageToken"),
+        }))
     }
     async fn export_documents(
         &self,
@@ -485,7 +749,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         if !r.namespace_ids.is_empty() {
             body["namespaceIds"] = json!(r.namespace_ids);
         }
-        let path = format!("{}:exportDocuments", r.name);
+        let path = format!("{}:exportDocuments", resource(&r.name, Kind::Database)?);
         let answer = self.call(&request, "POST", &path, "", body).await?;
         Ok(Response::new(operation(&answer)))
     }
@@ -501,15 +765,25 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         if !r.namespace_ids.is_empty() {
             body["namespaceIds"] = json!(r.namespace_ids);
         }
-        let path = format!("{}:importDocuments", r.name);
+        let path = format!("{}:importDocuments", resource(&r.name, Kind::Database)?);
         let answer = self.call(&request, "POST", &path, "", body).await?;
         Ok(Response::new(operation(&answer)))
     }
     async fn bulk_delete_documents(
         &self,
-        _r: Request<admin::BulkDeleteDocumentsRequest>,
+        request: Request<admin::BulkDeleteDocumentsRequest>,
     ) -> R<lro::Operation> {
-        Err(unimplemented("BulkDeleteDocuments"))
+        let r = request.get_ref();
+        let mut body = json!({});
+        if !r.collection_ids.is_empty() {
+            body["collectionIds"] = json!(r.collection_ids);
+        }
+        if !r.namespace_ids.is_empty() {
+            body["namespaceIds"] = json!(r.namespace_ids);
+        }
+        let path = format!("{}:bulkDeleteDocuments", resource(&r.name, Kind::Database)?);
+        let answer = self.call(&request, "POST", &path, "", body).await?;
+        Ok(Response::new(operation(&answer)))
     }
     async fn create_database(
         &self,
@@ -518,7 +792,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         let r = request.get_ref();
         let body = r.database.as_ref().map_or_else(|| json!({}), database_body);
         let query = encode_query(&[("databaseId", &r.database_id)]);
-        let path = format!("{}/databases", r.parent);
+        let path = format!("{}/databases", resource(&r.parent, Kind::Project)?);
         let answer = self.call(&request, "POST", &path, &query, body).await?;
         Ok(Response::new(operation(&answer)))
     }
@@ -526,7 +800,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         &self,
         request: Request<admin::GetDatabaseRequest>,
     ) -> R<admin::Database> {
-        let name = request.get_ref().name.clone();
+        let name = resource(&request.get_ref().name, Kind::Database)?.to_owned();
         let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(database(&answer)))
     }
@@ -540,7 +814,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         } else {
             ""
         };
-        let path = format!("{}/databases", r.parent);
+        let path = format!("{}/databases", resource(&r.parent, Kind::Project)?);
         let answer = self
             .call(&request, "GET", &path, query, Value::Null)
             .await?;
@@ -556,9 +830,17 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     }
     async fn update_database(
         &self,
-        _r: Request<admin::UpdateDatabaseRequest>,
+        request: Request<admin::UpdateDatabaseRequest>,
     ) -> R<lro::Operation> {
-        Err(unimplemented("UpdateDatabase"))
+        let r = request.get_ref();
+        let Some(patch) = &r.database else {
+            return Err(Status::invalid_argument("database is required."));
+        };
+        let name = resource(&patch.name, Kind::Database)?.to_owned();
+        let query = encode_query(&[("updateMask", &update_mask(r.update_mask.as_ref()))]);
+        let body = database_body(patch);
+        let answer = self.call(&request, "PATCH", &name, &query, body).await?;
+        Ok(Response::new(operation(&answer)))
     }
     async fn delete_database(
         &self,
@@ -566,7 +848,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     ) -> R<lro::Operation> {
         let r = request.get_ref();
         let query = encode_query(&[("etag", &r.etag)]);
-        let name = r.name.clone();
+        let name = resource(&r.name, Kind::Database)?.to_owned();
         let answer = self
             .call(&request, "DELETE", &name, &query, Value::Null)
             .await?;
@@ -574,39 +856,49 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     }
     async fn create_user_creds(
         &self,
-        _r: Request<admin::CreateUserCredsRequest>,
+        request: Request<admin::CreateUserCredsRequest>,
     ) -> R<admin::UserCreds> {
-        Err(unimplemented("CreateUserCreds"))
+        let name = resource(&request.get_ref().parent, Kind::Database)?.to_owned();
+        Err(self.user_creds_refusal(&request, &name).await)
     }
-    async fn get_user_creds(&self, _r: Request<admin::GetUserCredsRequest>) -> R<admin::UserCreds> {
-        Err(unimplemented("GetUserCreds"))
+    async fn get_user_creds(
+        &self,
+        request: Request<admin::GetUserCredsRequest>,
+    ) -> R<admin::UserCreds> {
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn list_user_creds(
         &self,
-        _r: Request<admin::ListUserCredsRequest>,
+        request: Request<admin::ListUserCredsRequest>,
     ) -> R<admin::ListUserCredsResponse> {
-        Err(unimplemented("ListUserCreds"))
+        let name = resource(&request.get_ref().parent, Kind::Database)?.to_owned();
+        Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn enable_user_creds(
         &self,
-        _r: Request<admin::EnableUserCredsRequest>,
+        request: Request<admin::EnableUserCredsRequest>,
     ) -> R<admin::UserCreds> {
-        Err(unimplemented("EnableUserCreds"))
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn disable_user_creds(
         &self,
-        _r: Request<admin::DisableUserCredsRequest>,
+        request: Request<admin::DisableUserCredsRequest>,
     ) -> R<admin::UserCreds> {
-        Err(unimplemented("DisableUserCreds"))
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn reset_user_password(
         &self,
-        _r: Request<admin::ResetUserPasswordRequest>,
+        request: Request<admin::ResetUserPasswordRequest>,
     ) -> R<admin::UserCreds> {
-        Err(unimplemented("ResetUserPassword"))
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        Err(self.user_creds_refusal(&request, &name).await)
     }
-    async fn delete_user_creds(&self, _r: Request<admin::DeleteUserCredsRequest>) -> R<()> {
-        Err(unimplemented("DeleteUserCreds"))
+    async fn delete_user_creds(&self, request: Request<admin::DeleteUserCredsRequest>) -> R<()> {
+        let name = resource(&request.get_ref().name, Kind::UserCreds)?.to_owned();
+        Err(self.user_creds_refusal(&request, &name).await)
     }
     async fn get_backup(&self, _r: Request<admin::GetBackupRequest>) -> R<admin::Backup> {
         Err(unimplemented("GetBackup"))
@@ -665,23 +957,49 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
 impl lro::operations_server::Operations for AdminGrpc {
     async fn list_operations(
         &self,
-        _r: Request<lro::ListOperationsRequest>,
+        request: Request<lro::ListOperationsRequest>,
     ) -> R<lro::ListOperationsResponse> {
-        Err(unimplemented("ListOperations"))
+        let r = request.get_ref();
+        // The collection is the database's (`/v1/{name=projects/*/databases/*}/operations`).
+        let database = resource(&r.name, Kind::Database)?.to_owned();
+        let query = encode_query(&[("filter", &r.filter), ("pageToken", &r.page_token)]);
+        let path = format!("{database}/operations");
+        let answer = self
+            .call(&request, "GET", &path, &query, Value::Null)
+            .await?;
+        Ok(Response::new(lro::ListOperationsResponse {
+            operations: answer["operations"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(operation)
+                .collect(),
+            next_page_token: string(&answer, "nextPageToken"),
+            unreachable: Vec::new(),
+        }))
     }
     async fn get_operation(&self, request: Request<lro::GetOperationRequest>) -> R<lro::Operation> {
-        let name = request.get_ref().name.clone();
+        let name = resource(&request.get_ref().name, Kind::Operation)?.to_owned();
         let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(operation(&answer)))
     }
-    async fn delete_operation(&self, _r: Request<lro::DeleteOperationRequest>) -> R<()> {
-        Err(unimplemented("DeleteOperation"))
+    async fn delete_operation(&self, request: Request<lro::DeleteOperationRequest>) -> R<()> {
+        let name = resource(&request.get_ref().name, Kind::Operation)?.to_owned();
+        self.call(&request, "DELETE", &name, "", Value::Null)
+            .await?;
+        Ok(Response::new(()))
     }
-    async fn cancel_operation(&self, _r: Request<lro::CancelOperationRequest>) -> R<()> {
-        Err(unimplemented("CancelOperation"))
+    async fn cancel_operation(&self, request: Request<lro::CancelOperationRequest>) -> R<()> {
+        let name = resource(&request.get_ref().name, Kind::Operation)?.to_owned();
+        let path = format!("{name}:cancel");
+        self.call(&request, "POST", &path, "", json!({})).await?;
+        Ok(Response::new(()))
     }
     async fn wait_operation(&self, _r: Request<lro::WaitOperationRequest>) -> R<lro::Operation> {
-        Err(unimplemented("WaitOperation"))
+        // Firestore publishes no WaitOperation binding; clients poll GetOperation.
+        Err(Status::unimplemented(
+            "fireemu does not serve WaitOperation; poll GetOperation instead",
+        ))
     }
 }
 

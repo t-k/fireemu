@@ -6,6 +6,8 @@
 pub mod catalog;
 pub mod fields;
 pub mod grpc;
+#[cfg(test)]
+mod grpc_tests;
 pub mod index_rest;
 pub mod indexes;
 pub mod locations;

@@ -25,15 +25,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from request_bytes_catalog_samples import compile_catalog_sample_plan
 from request_bytes_compiler import (
+    CATALOG_MAXIMUM,
     DOCUMENT_SAFETY_MARGIN,
-    REQUEST_LIMIT,
     compact_utf8,
-    compile_request_bytes_plan,
     document_size_bytes,
-    validate_request_bytes_plan,
 )
 
+# This audit studies the 10 MiB catalog samples. The strict campaign's 11 MiB
+# REQUEST_LIMIT is a different boundary and must not move it.
+AUDIT_LIMIT = CATALOG_MAXIMUM
 MAX_AUDIT_BYTES = 32 * 1024 * 1024  # local analysis bound, NOT a service quota
 MAX_AUDIT_WRITES = 64  # this companion is intentionally not a general converter
 _DATABASE = re.compile(r"projects/[A-Za-z0-9_-]+/databases/(?:\(default\)|[A-Za-z0-9_-]+)")
@@ -147,9 +149,9 @@ def measure_body(raw: bytes, database_resource: str) -> dict[str, Any]:
         "protobufEmbeddedPreconditionsBytes": precondition_bytes,
         "stringValueUtf8Bytes": payload_bytes,
         "rawMinusProtobufBytes": len(raw) - proto_size,
-        "protobufHeadroomTo10MiB": REQUEST_LIMIT - proto_size,
-        "rawExceeds10MiB": len(raw) > REQUEST_LIMIT,
-        "protobufExceeds10MiB": proto_size > REQUEST_LIMIT,
+        "protobufHeadroomTo10MiB": AUDIT_LIMIT - proto_size,
+        "rawExceeds10MiB": len(raw) > AUDIT_LIMIT,
+        "protobufExceeds10MiB": proto_size > AUDIT_LIMIT,
         "documentCount": len(writes),
         "maxDocumentLogicalBytes": max(logical_documents),
         "sumDocumentLogicalBytes": sum(logical_documents),
@@ -165,7 +167,7 @@ def candidate_at_proto_size(body: dict[str, Any], database_resource: str,
     Extend/shrink the final blob within the unchanged document safety margin.
     Demand exact remeasurement; never assume nested varint widths are constant.
     """
-    _require(type(target) is int and target in (REQUEST_LIMIT - 1, REQUEST_LIMIT, REQUEST_LIMIT + 1),
+    _require(type(target) is int and target in (AUDIT_LIMIT - 1, AUDIT_LIMIT, AUDIT_LIMIT + 1),
              "unsupported-protobuf-target")
     candidate = copy.deepcopy(body)
     original = measure_body(compact_utf8(candidate), database_resource)
@@ -185,15 +187,14 @@ def candidate_at_proto_size(body: dict[str, Any], database_resource: str,
 
 def audit_compiled(project: str, database: str, nonce: str) -> dict[str, Any]:
     """Reconstruct existing compiler inputs; do not call them actual raw evidence."""
-    plan = compile_request_bytes_plan(project, database, nonce)
-    validate_request_bytes_plan(plan)
+    plan = compile_catalog_sample_plan(project, database, nonce)
     database_resource = f"projects/{project}/databases/{database}"
     rows, candidates = [], []
-    for probe, target in zip(plan["probes"], (REQUEST_LIMIT - 1, REQUEST_LIMIT, REQUEST_LIMIT + 1), strict=True):
+    for probe, target in zip(plan["probes"], (AUDIT_LIMIT - 1, AUDIT_LIMIT, AUDIT_LIMIT + 1), strict=True):
         raw = compact_utf8(probe["body"])
         rows.append({"label": probe["label"], **measure_body(raw, database_resource)})
         candidate = candidate_at_proto_size(probe["body"], database_resource, target)
-        candidates.append({"label": f"protobuf-{target - REQUEST_LIMIT:+d}",
+        candidates.append({"label": f"protobuf-{target - AUDIT_LIMIT:+d}",
                            "targetProtobufBytes": target,
                            **measure_body(candidate, database_resource)})
     # Exactly the same logical input with two legal leading JSON whitespace bytes.

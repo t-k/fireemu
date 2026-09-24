@@ -17,8 +17,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 import request_bytes_metric_audit as audit
+from request_bytes_catalog_samples import compile_catalog_sample_plan
 from request_bytes_compiler import (
-    REQUEST_LIMIT,
+    CATALOG_MAXIMUM,
     compact_utf8,
     compile_request_bytes_plan,
     validate_request_bytes_plan,
@@ -38,9 +39,12 @@ def _body(text="x"):
 
 @pytest.fixture(scope="module")
 def original_plan():
-    plan = compile_request_bytes_plan(PROJECT, "(default)", NONCE)
-    validate_request_bytes_plan(plan)
-    return plan
+    return compile_catalog_sample_plan(PROJECT, "(default)", NONCE)
+
+
+def test_audit_is_anchored_on_the_10_mib_catalog_samples():
+    # The strict campaign moved to 11 MiB; this audit stays a 10 MiB study.
+    assert audit.AUDIT_LIMIT == CATALOG_MAXIMUM == 10_485_760
 
 
 @pytest.mark.parametrize("index, expected", [(0, 10484525), (1, 10484526), (2, 10484527)])
@@ -48,7 +52,7 @@ def test_real_compiler_raw_boundaries_are_all_below_proto_boundary(original_plan
     probe = original_plan["probes"][index]
     raw = compact_utf8(probe["body"])
     measured = audit.measure_body(raw, DATABASE)
-    assert len(raw) == REQUEST_LIMIT + index - 1
+    assert len(raw) == CATALOG_MAXIMUM + index - 1
     assert measured["protobufCommitRequestBytes"] == expected
     assert measured["rawMinusProtobufBytes"] == 1234
     assert measured["protobufExceeds10MiB"] is False
@@ -63,9 +67,9 @@ def test_real_compiler_raw_boundaries_are_all_below_proto_boundary(original_plan
 def test_proposed_proto_boundaries_are_exact_and_keep_create_only_shape(original_plan, offset, raw_size):
     probe = original_plan["probes"][offset + 1]
     before = compact_utf8(probe["body"])
-    candidate = audit.candidate_at_proto_size(probe["body"], DATABASE, REQUEST_LIMIT + offset)
+    candidate = audit.candidate_at_proto_size(probe["body"], DATABASE, CATALOG_MAXIMUM + offset)
     result = audit.measure_body(candidate, DATABASE)
-    assert result["protobufCommitRequestBytes"] == REQUEST_LIMIT + offset
+    assert result["protobufCommitRequestBytes"] == CATALOG_MAXIMUM + offset
     assert len(candidate) == raw_size
     assert result["everyDocumentBelowCampaignMargin"] is True
     assert result["maxDocumentLogicalBytes"] == 656461
@@ -227,14 +231,23 @@ def test_body_bound_is_local_and_not_the_claimed_service_limit(monkeypatch):
         audit.measure_body(raw, DATABASE)
 
 
-def test_no_network_client_gate_or_ledger_is_imported():
+def _imported_modules(path):
     import ast
-    tree = ast.parse(Path(audit.__file__).read_text())
+    tree = ast.parse(Path(path).read_text())
     modules = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(alias.name.split(".")[0] for alias in node.names)
         if isinstance(node, ast.ImportFrom):
             modules.add(node.module.split(".")[0])
-    assert modules <= {"__future__", "argparse", "copy", "hashlib", "json", "os", "re",
-                       "stat", "sys", "pathlib", "typing", "request_bytes_compiler"}
+    return modules
+
+
+def test_no_network_client_gate_or_ledger_is_imported():
+    assert _imported_modules(audit.__file__) <= {
+        "__future__", "argparse", "copy", "hashlib", "json", "os", "re", "stat", "sys",
+        "pathlib", "typing", "request_bytes_compiler", "request_bytes_catalog_samples",
+    }
+    # The catalog sample module only loads the compiler by exact path.
+    samples = Path(audit.__file__).with_name("request_bytes_catalog_samples.py")
+    assert _imported_modules(samples) <= {"__future__", "importlib", "pathlib", "typing"}

@@ -200,7 +200,9 @@ test("list condition proposal remains exact and pending integration", () => {
     assert.equal(condition.status, "PENDING_INTEGRATION");
     assert.equal(condition.recipeIds.length, count, condition.conditionId);
     assert.equal(
-      createHash("sha256").update([...condition.recipeIds].sort().join("\n")).digest("hex"),
+      createHash("sha256")
+        .update([...condition.recipeIds].sort().join("\n"))
+        .digest("hex"),
       digest,
       condition.conditionId,
     );
@@ -389,6 +391,53 @@ test("verified conditions are bound to their saved comparisons", async () => {
         assert.deepEqual(crossComparison.productionPrograms[recipeId], fixture.programs[recipeId]);
       }
     }
+  }
+});
+
+test("10 MiB accepted samples and strict 11 MiB Commit probes keep separate recipe identities", async () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const { corpus } = await prepareSandboxCorpus();
+  const accepted = closure.conditions.find(
+    ({ conditionId }) =>
+      conditionId === "FS-LIMIT-API-REQUEST-BYTES/rest-commit-json-accepted-samples",
+  );
+  const strict = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-LIMIT-API-REQUEST-BYTES/raw-16mib-over",
+  );
+  const acceptedIds = [
+    "writes/limits/decoded-request-bytes/under",
+    "writes/limits/decoded-request-bytes/exact",
+    "writes/limits/decoded-request-bytes/over",
+  ];
+  const strictIds = ["writes/limits/raw-11mib/11534336", "writes/limits/raw-11mib/11534337"];
+  assert.ok(accepted);
+  assert.ok(strict);
+  assert.deepEqual(accepted.recipeIds.slice(0, 3), acceptedIds);
+  assert.ok(strictIds.every((recipeId) => strict.recipeIds.includes(recipeId)));
+  assert.ok(acceptedIds.every((recipeId) => !strict.recipeIds.includes(recipeId)));
+
+  for (const [index, recipeId] of acceptedIds.entries()) {
+    const program = corpus.restPrograms.find(({ id }) => id === recipeId);
+    assert.ok(program, recipeId);
+    assert.equal(
+      Buffer.byteLength(JSON.stringify(program.steps[0].body)),
+      [10_485_759, 10_485_760, 10_485_761][index],
+    );
+    assert.equal(
+      createHash("sha256").update(JSON.stringify(program)).digest("hex"),
+      manifest.programs[recipeId],
+    );
+  }
+
+  for (const [index, recipeId] of strictIds.entries()) {
+    const program = corpus.restPrograms.find(({ id }) => id === recipeId);
+    assert.ok(program, recipeId);
+    assert.equal(Buffer.byteLength(program.steps[0].body), [11_534_336, 11_534_337][index]);
+    assert.equal(
+      createHash("sha256").update(JSON.stringify(program)).digest("hex"),
+      manifest.programs[recipeId],
+    );
   }
 });
 

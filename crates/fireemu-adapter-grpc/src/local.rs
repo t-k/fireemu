@@ -328,6 +328,8 @@ pub struct LocalBackend {
     implicit_database_creation: bool,
     /// Allocates identities for database instances independently of delayed wipe notifications.
     database_incarnations: std::sync::atomic::AtomicU64,
+    /// The Admin API's database catalog: created, patched and deleted databases.
+    admin: Arc<crate::admin::catalog::AdminCatalog>,
     /// The sessions' fault plans (looked up by project), when shared.
     faults: Mutex<Option<fireemu_core_session::fault::SharedFaultRegistry>>,
     /// Told after a fault plan moved the virtual clock (the functions runtime re-reads
@@ -1525,6 +1527,7 @@ impl LocalBackend {
             declared_databases: RwLock::new(BTreeSet::new()),
             implicit_database_creation: false,
             database_incarnations: std::sync::atomic::AtomicU64::new(0),
+            admin: Arc::new(crate::admin::catalog::AdminCatalog::new(seed, created_at)),
             faults: Mutex::new(None),
             clock_observer: Mutex::new(None),
             generations: Mutex::new(BTreeMap::new()),
@@ -1781,8 +1784,42 @@ impl LocalBackend {
             self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         let cleared = self.take_scope(scope);
+        self.admin.reset(|project| scope.owns_project(project));
         self.bump_generations(&cleared);
         self.announce_wipe(cleared);
+    }
+
+    /// Drops one database (`databases.delete`): its documents are gone, its streams observe
+    /// the wipe, and a later request is refused unless something creates it again.
+    pub fn delete_database(&self, project: &str, database: &str) {
+        let _exclusive = self.barrier.exclusive();
+        let key = (project.to_owned(), database.to_owned());
+        let removed = match self.databases.lock() {
+            Ok(mut dbs) => dbs.remove(&key).map(DatabaseHandle),
+            Err(_) => None,
+        };
+        if let Some(handle) = removed {
+            handle.detach();
+            self.history_budget
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove_committed(&key);
+        }
+        self.bump_generations(std::slice::from_ref(&key));
+        self.announce_wipe(vec![key]);
+    }
+
+    /// The Admin API's database catalog.
+    #[must_use]
+    pub fn admin(&self) -> &Arc<crate::admin::catalog::AdminCatalog> {
+        &self.admin
+    }
+
+    /// Whether a database exists in every project without a create call: `(default)` and the
+    /// databases the configuration declares.
+    #[must_use]
+    pub fn exists_without_create(&self, database: &str) -> bool {
+        self.database_exists_unprompted(database)
     }
 
     /// Removes every database `scope` owns from the catalog and detaches it, returning the
@@ -3452,6 +3489,9 @@ impl LocalBackend {
         parent: &Parent,
         admission: Admission,
     ) -> Result<DatabaseHandle, Status> {
+        if admission == Admission::RequestOnly {
+            self.admin_refusal(parent)?;
+        }
         let mut dbs = self.databases.lock().map_err(|_| lock_poisoned())?;
         // Decided under the catalog lock that would create the entry, so no request is
         // admitted by a database a concurrent request is being refused for.
@@ -3493,6 +3533,35 @@ impl LocalBackend {
                 })
                 .clone(),
         ))
+    }
+
+    /// What production answers the data plane for a database the Admin catalog says it must
+    /// not serve: a deleted database is `NOT_FOUND`; a Datastore-mode database and an
+    /// Enterprise database (created with Firestore data access disabled) are refused with
+    /// production's own messages.
+    fn admin_refusal(&self, parent: &Parent) -> Result<(), Status> {
+        use crate::admin::catalog::DataPlaneRefusal;
+        let (project, database) = (parent.project.as_str(), parent.database.as_str());
+        match self.admin.data_plane_refusal(
+            project,
+            database,
+            self.database_exists_unprompted(database),
+        ) {
+            None => Ok(()),
+            Some(DataPlaneRefusal::Missing) => Err(status(DecodeError::UnknownDatabase {
+                project: project.to_owned(),
+                database: database.to_owned(),
+            })),
+            Some(DataPlaneRefusal::DatastoreMode) => Err(Status::failed_precondition(format!(
+                "The Cloud Firestore API is not available for Firestore in Datastore Mode \
+                 database projects/{project}/databases/{database}."
+            ))),
+            Some(DataPlaneRefusal::NativeAccessDisabled) => Err(Status::failed_precondition(
+                "Access to this database via the Firestore in Native mode API is disabled. \
+                 Database Data Access modes are configured when a database is created, and \
+                 cannot be changed.",
+            )),
+        }
     }
 
     /// When this backend's databases came into being: the `createTime` and `updateTime` the

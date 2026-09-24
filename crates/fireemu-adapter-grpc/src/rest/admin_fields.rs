@@ -646,7 +646,7 @@ fn parse_ttl_config(value: &Value) -> Result<TtlConfigRequest, Status> {
 }
 
 /// The `google.longrunning.Operation` of one completed field configuration.
-fn operation_json(operation: &crate::local::FieldOperation) -> Value {
+pub(crate) fn operation_json(operation: &crate::local::FieldOperation) -> Value {
     let at = timestamp_to_json(&encode_instant(operation.at));
     json!({
         "name": operation.name,

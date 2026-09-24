@@ -454,7 +454,8 @@ fn an_operation_of_another_project_is_not_found_through_this_projects_listing() 
         Value::Null,
     );
     assert_eq!(status, 200, "{listed}");
-    assert_eq!(listed["operations"].as_array().map(Vec::len), Some(0));
+    // Production answers an empty listing with an empty object.
+    assert_eq!(listed, json!({}));
 }
 
 #[test]

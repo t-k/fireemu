@@ -166,7 +166,7 @@ pub const TEXT_KEY: &str = "fireemuText";
 
 /// `404 Not Found` as plain text: what the official emulator's HTTP adapter answers for a
 /// path or method it has no route for, before any JSON error envelope exists.
-fn not_found_text() -> RestResponse {
+pub(crate) fn not_found_text() -> RestResponse {
     RestResponse {
         status: 404,
         body: json!({TEXT_KEY: "Not Found\n"}),
@@ -783,6 +783,10 @@ impl RestState {
             if let Some(rest) = decode_path(&req.path)?.strip_prefix("/emulator/v1/projects/") {
                 return self.emulator_route(req, rest);
             }
+        }
+        // The Admin API's database, location and operation routes (FS-CONFIG-LIFECYCLE).
+        if let Some(response) = crate::admin::rest::route(self, req) {
+            return Ok(response);
         }
         let (raw_resource, action) = match req.path.rsplit_once(':') {
             Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),

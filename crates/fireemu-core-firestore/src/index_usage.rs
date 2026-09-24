@@ -21,7 +21,12 @@ pub struct IndexUsage {
 }
 
 impl IndexUsage {
-    fn add(&mut self, bytes: u64, count: u64) -> Result<(), FirestoreError> {
+    fn add(
+        &mut self,
+        bytes: u64,
+        count: u64,
+        document: &DocumentPath,
+    ) -> Result<(), FirestoreError> {
         self.entries = self.entries.saturating_add(count);
         self.total_bytes = self.total_bytes.saturating_add(bytes.saturating_mul(count));
         self.maximum_entry_bytes = self.maximum_entry_bytes.max(bytes);
@@ -43,6 +48,12 @@ impl IndexUsage {
             ),
         ] {
             if current > maximum {
+                if id == crate::limits::INDEX_ENTRIES_PER_DOCUMENT {
+                    return Err(FirestoreError::InvalidArgument(format!(
+                        "too many index entries for entity /{}",
+                        document.relative()
+                    )));
+                }
                 if id == crate::limits::INDEX_ENTRY_SUM_PER_DOCUMENT {
                     return Err(FirestoreError::InvalidArgument(
                         "Transaction too big. Decrease transaction size.".into(),
@@ -130,10 +141,18 @@ impl IndexSet {
             if let Some((position, items)) = array {
                 for IndexValue(value) in items.iter().map(IndexValue).collect::<BTreeSet<_>>() {
                     values[position].1 = value;
-                    usage.add(entry_size(scope, document, parent.as_ref(), &values)?, 1)?;
+                    usage.add(
+                        entry_size(scope, document, parent.as_ref(), &values)?,
+                        1,
+                        document,
+                    )?;
                 }
             } else {
-                usage.add(entry_size(scope, document, parent.as_ref(), &values)?, 1)?;
+                usage.add(
+                    entry_size(scope, document, parent.as_ref(), &values)?,
+                    1,
+                    document,
+                )?;
             }
         }
         Ok(usage)
@@ -190,12 +209,14 @@ impl IndexSet {
                             // directions. Production accepts 19,999 distinct elements
                             // plus two ordered entries, but rejects 20,000 elements.
                             2,
+                            document,
                         )?;
                     }
                 } else {
                     usage.add(
                         entry_size(scope, document, parent.as_ref(), &[(&canonical, value)])?,
                         1,
+                        document,
                     )?;
                 }
             }
@@ -221,18 +242,26 @@ fn entry_size(
 #[cfg(test)]
 mod tests {
     use super::IndexUsage;
+    use crate::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
 
     #[test]
     fn every_index_budget_accepts_equality_and_rejects_one_more() {
+        let document = DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            "tasks/a",
+        )
+        .unwrap();
         let mut count = IndexUsage::default();
-        assert!(count.add(1, 40_000).is_ok());
-        assert!(count.add(1, 1).is_err());
-        assert!(IndexUsage::default().add(7_680, 1).is_ok());
-        assert!(IndexUsage::default().add(7_681, 1).is_err());
+        assert!(count.add(1, 40_000, &document).is_ok());
+        assert!(count.add(1, 1, &document).is_err());
+        assert!(IndexUsage::default().add(7_680, 1, &document).is_ok());
+        assert!(IndexUsage::default().add(7_681, 1, &document).is_err());
         let mut sum = IndexUsage::default();
-        assert!(sum.add(4_096, 2_048).is_ok());
+        assert!(sum.add(4_096, 2_048, &document).is_ok());
         assert!(matches!(
-            sum.add(1, 1),
+            sum.add(1, 1, &document),
             Err(crate::store::FirestoreError::InvalidArgument(message))
                 if message == "Transaction too big. Decrease transaction size."
         ));

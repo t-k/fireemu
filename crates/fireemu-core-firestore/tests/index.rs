@@ -158,7 +158,78 @@ fn empty_document_with_long_name_has_an_oversized_name_index_entry() {
 }
 
 #[test]
-fn empty_document_at_recorded_4622_byte_name_is_accepted() {
+fn empty_document_at_recorded_4621_and_4622_byte_names_pass_index_accounting() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    for third_segment_bytes in [1152, 1153] {
+        let path = DocumentPath::parse(
+            &ProjectId::try_new("demo-app").unwrap(),
+            &DatabaseId::default_database(),
+            &format!(
+                "c/{}/c/{}/c/{}/c/{}",
+                "d".repeat(1153),
+                "d".repeat(1153),
+                "d".repeat(third_segment_bytes),
+                "d".repeat(1152),
+            ),
+        )
+        .unwrap();
+        assert!(IndexSet::default()
+            .document_index_usage(&path, &BTreeMap::new())
+            .is_ok());
+    }
+}
+
+#[test]
+fn frozen_default_aggregate_map_and_index_count_points_pass_index_accounting() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let indexes = IndexSet::default();
+    for (name, length) in [("agg-map-accept", 1_048_452), ("agg-map-refuse", 1_048_453)] {
+        let path = DocumentPath::parse(
+            &project,
+            &database,
+            &format!("oracle/{}/limits-03/{name}", "a".repeat(32)),
+        )
+        .unwrap();
+        let fields = BTreeMap::from([(
+            "m".into(),
+            Value::Map(BTreeMap::from([(
+                "s".into(),
+                Value::String("x".repeat(length)),
+            )])),
+        )]);
+        assert!(
+            indexes.document_index_usage(&path, &fields).is_ok(),
+            "{name}"
+        );
+    }
+    for (name, count) in [("iec-accept", 19_998), ("iec-refuse", 19_999)] {
+        let path = DocumentPath::parse(
+            &project,
+            &database,
+            &format!("oracle/{}/limits-03/{name}", "a".repeat(32)),
+        )
+        .unwrap();
+        let fields = BTreeMap::from([(
+            "a".into(),
+            Value::Array((0..count).map(Value::Integer).collect()),
+        )]);
+        assert!(
+            indexes.document_index_usage(&path, &fields).is_ok(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn index_entry_count_refusal_names_the_relative_entity_path() {
     use fireemu_core_firestore::path::DocumentPath;
     use fireemu_core_types::ids::{DatabaseId, ProjectId};
     use std::collections::BTreeMap;
@@ -166,18 +237,20 @@ fn empty_document_at_recorded_4622_byte_name_is_accepted() {
     let path = DocumentPath::parse(
         &ProjectId::try_new("demo-app").unwrap(),
         &DatabaseId::default_database(),
-        &format!(
-            "c/{}/c/{}/c/{}/c/{}",
-            "d".repeat(1153),
-            "d".repeat(1153),
-            "d".repeat(1153),
-            "d".repeat(1152),
-        ),
+        "ie2/arr20000",
     )
     .unwrap();
-    assert!(IndexSet::default()
-        .document_index_usage(&path, &BTreeMap::new())
-        .is_ok());
+    let fields = BTreeMap::from([(
+        "a".into(),
+        Value::Array((0..20_000).map(Value::Integer).collect()),
+    )]);
+    assert_eq!(
+        IndexSet::default()
+            .document_index_usage(&path, &fields)
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: too many index entries for entity /ie2/arr20000"
+    );
 }
 
 #[test]

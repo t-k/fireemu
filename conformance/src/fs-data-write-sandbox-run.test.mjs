@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import {
@@ -12,8 +15,10 @@ import {
   remainingSandboxBudget,
   selectComparableSandboxRecipes,
   sessionRequestCount,
+  withSandboxExclusiveLock,
   sandboxLedgerEntry,
   sandboxLedgerPath,
+  sandboxManagedClearNames,
 } from "./fs-data-write-sandbox-run.mjs";
 
 test("local comparison refuses a fixture or run from a different corpus", () => {
@@ -142,7 +147,7 @@ test("saved production comparison selects only identical program recipes and rep
 
 test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", async () => {
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
-  assert.equal(corpus.restPrograms.length, 73);
+  assert.equal(corpus.restPrograms.length, 68);
   assert.equal(restRequestCount, 237);
   assert.equal(liveStreamCount, 7);
   assert.equal(MAX_STREAM_FRAMES, 9);
@@ -165,12 +170,16 @@ test("all sandbox run directories share the canonical root ledger", () => {
   );
 });
 
-test("production REST session fixes project, endpoint and all-attempt cap", () => {
+test("production REST session fixes project, endpoint, managed scope and all-attempt cap", async () => {
+  const { corpus } = await prepareSandboxCorpus();
+  const managedNames = sandboxManagedClearNames(corpus);
   const env = productionRestEnvironment({
     input: "/tmp/input",
     output: "/tmp/output",
     meta: "/tmp/meta",
     token: "private",
+    managedNames,
+    journal: "/tmp/managed-clear.json",
   });
   assert.equal(env.FIRESTORE_PROBE_PROJECT, "fireemu-oracle-sbx");
   assert.equal(env.FIRESTORE_PROBE_HOST, "firestore.googleapis.com");
@@ -178,6 +187,10 @@ test("production REST session fixes project, endpoint and all-attempt cap", () =
   assert.equal(env.FIRESTORE_PROBE_RECORD_PROJECT, "demo-firestore-probe");
   assert.equal(env.FIRESTORE_PROBE_TOKEN, "private");
   assert.equal(env.FIRESTORE_PROBE_TIMEOUT_MS, "180000");
+  assert.equal(env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL, "/tmp/managed-clear.json");
+  assert.deepEqual(JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES), managedNames);
+  assert.equal(managedNames.length, 6);
+  assert.throws(() => sandboxManagedClearNames({ ...corpus, restPrograms: [] }), /last/);
 });
 
 test("a failed session still reports its bounded network attempts from metadata", () => {
@@ -210,6 +223,41 @@ test("private append-only ledger names project, database, bounded requests and c
   assert.equal(entry.estimatedUsd, 0.5);
   assert.equal(entry.taskId, "FS-DATA-WRITE-SANDBOX");
   assert.ok(Number.isFinite(Date.parse(entry.ts)));
+});
+
+test("exclusive sandbox lock rejects competitors and remains after failed work", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-sandbox-lock-"));
+  const lock = join(directory, "fs-data-write-exclusive.lock");
+  try {
+    await assert.rejects(
+      withSandboxExclusiveLock(directory, async () => {
+        assert.ok((await stat(lock)).isDirectory());
+        await assert.rejects(
+          withSandboxExclusiveLock(directory, async () => {}),
+          /EEXIST/,
+        );
+        throw new Error("recording failed");
+      }),
+      /recording failed/,
+    );
+    assert.ok((await stat(lock)).isDirectory());
+    await assert.rejects(
+      withSandboxExclusiveLock(directory, async () => {}),
+      /EEXIST/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("exclusive sandbox lock is released after successful work", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-sandbox-lock-"));
+  try {
+    assert.equal(await withSandboxExclusiveLock(directory, async () => "recorded"), "recorded");
+    await assert.rejects(stat(join(directory, "fs-data-write-exclusive.lock")), /ENOENT/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("local child cannot target a remote host", () => {

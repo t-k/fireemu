@@ -12,14 +12,20 @@ import {
   comparisonExitCode,
   findLegacyRecoveryResume,
   findV3RecoveryResume,
+  findDeltaV3RecoveryResume,
   localTarget,
   prepareLegacyRecoveryRun,
   legacyRecoveryEnvironment,
   v3RecoveryEnvironment,
+  deltaV3RecoveryEnvironment,
   prepareSandboxCorpus,
   productionRestEnvironment,
   remainingSandboxBudget,
   selectComparableSandboxRecipes,
+  selectDeltaV3Recipes,
+  deltaV3RequestBound,
+  deltaV3ManagedClearNames,
+  assertDeltaV3ProductionAdmission,
   sessionRequestCount,
   withSandboxExclusiveLock,
   withLegacyRecoveryReservation,
@@ -169,6 +175,157 @@ test("saved production comparison selects only identical program recipes and rep
   );
 });
 
+test("delta-v3 selection keeps only the six deletes and stream while partitioning every recipe", async () => {
+  const { corpus } = await prepareSandboxCorpus();
+  const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const deltaIds = new Set(
+    ["rest", "commit", "batch-write"].flatMap((route) =>
+      [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+    ),
+  );
+  const savedProgram = corpus.restPrograms.find((program) => !deltaIds.has(program.id));
+  const changedProgram = corpus.restPrograms.find(
+    (program) => program.id !== savedProgram.id && !deltaIds.has(program.id),
+  );
+  const savedStream = corpus.streamRecipes.find(
+    (recipe) =>
+      recipe.transport === "grpc" &&
+      recipe.id !== "writes/write-stream-terminal/response-before-half-close",
+  );
+  const sourceCommit = "a".repeat(40);
+  const oldDigest = "b".repeat(64);
+  const fixture = {
+    evidence: { corpusSha256: oldDigest, harnessRevision: sourceCommit },
+    programs: {
+      [savedProgram.id]: { steps: {} },
+      [changedProgram.id]: { steps: {} },
+    },
+    streams: { [savedStream.id]: {} },
+  };
+  const manifest = {
+    schemaVersion: 1,
+    sourceCommit,
+    corpusSha256: oldDigest,
+    programs: {
+      [savedProgram.id]: digest(savedProgram),
+      [changedProgram.id]: "c".repeat(64),
+    },
+    streams: { [savedStream.id]: digest(savedStream) },
+  };
+  const selected = selectDeltaV3Recipes(corpus, fixture, manifest);
+  assert.deepEqual(new Set(selected.deltaRestIds), deltaIds);
+  assert.deepEqual(selected.deltaStreamIds, [
+    "writes/write-stream-terminal/response-before-half-close",
+  ]);
+  assert.deepEqual(selected.retainedRestIds, [savedProgram.id]);
+  assert.deepEqual(selected.retainedStreamIds, [savedStream.id]);
+  assert.ok(selected.pendingRestIds.includes(changedProgram.id));
+  assert.ok(!selected.pendingRestIds.includes(savedProgram.id));
+  assert.ok(!selected.pendingRestIds.some((id) => deltaIds.has(id)));
+  assert.deepEqual(
+    new Set([...selected.deltaRestIds, ...selected.retainedRestIds, ...selected.pendingRestIds]),
+    new Set(corpus.restPrograms.map((program) => program.id)),
+  );
+  assert.deepEqual(
+    new Set([
+      ...selected.deltaStreamIds,
+      ...selected.retainedStreamIds,
+      ...selected.pendingStreamIds,
+    ]),
+    new Set(
+      corpus.streamRecipes
+        .filter((recipe) => recipe.transport === "grpc")
+        .map((recipe) => recipe.id),
+    ),
+  );
+  assert.equal(selected.recordingCorpus.restRequestCount, 30);
+  assert.equal(selected.recordingCorpus.streamRecipes.length, 1);
+  const ownedNames = deltaV3ManagedClearNames(selected.recordingCorpus);
+  assert.equal(ownedNames.length, 6);
+  assert.equal(new Set(ownedNames).size, 6);
+  assert.deepEqual(deltaV3RequestBound(selected.recordingCorpus), {
+    declaredHttp: 30,
+    managedHttpCap: 400,
+    maxHttpRequests: 430,
+    maxStreamFrames: 2,
+    maxCombinedOperations: 432,
+  });
+});
+
+test("delta-v3 production REST environment uses only the six names and strict HTTP cap", async () => {
+  const { corpus } = await prepareSandboxCorpus();
+  const programs = corpus.restPrograms.filter((program) =>
+    program.id.startsWith("writes/limits/near-limit-delete-refusal/"),
+  );
+  const names = deltaV3ManagedClearNames({ restPrograms: programs });
+  const env = productionRestEnvironment({
+    input: "/private/delta-corpus.json",
+    output: "/private/rest.json",
+    meta: "/private/meta.json",
+    token: "not-used",
+    managedNames: names,
+    journal: "/private/delta-cleanup.json",
+    runId: "a".repeat(32),
+    corpusDigest: "b".repeat(64),
+    sourceGitSha: "c".repeat(40),
+    deltaV3: true,
+  });
+  assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "430");
+  assert.equal(env.FIRESTORE_PROBE_DELTA_V3, "1");
+  assert.equal(env.FIRESTORE_PROBE_DELTA_LOCK_HELD, "1");
+  assert.equal(env.FIRESTORE_PROBE_DELTA_JOURNAL, "/private/delta-cleanup.json");
+  assert.equal("FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL" in env, true);
+  assert.equal(env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL, undefined);
+  assert.equal(JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES).length, 6);
+});
+
+test("delta-v3 production admission stays closed until independent presend review", () => {
+  assert.throws(
+    () => assertDeltaV3ProductionAdmission({ host: "firestore.googleapis.com" }),
+    /presend review/,
+  );
+  assert.doesNotThrow(() =>
+    assertDeltaV3ProductionAdmission({ host: "firestore.googleapis.com", presendReviewed: true }),
+  );
+  assert.doesNotThrow(() => assertDeltaV3ProductionAdmission({ host: "127.0.0.1:8080" }));
+});
+
+test("delete pair classification is route-local and requires typed target and outcome proofs", async () => {
+  const { classifyDeltaV3DeletePair } = await import("./fs-data-write-sandbox-run.mjs");
+  assert.equal(typeof classifyDeltaV3DeletePair, "function");
+  const accepted = {
+    documentCount: 12112,
+    deleteTargetExists: true,
+    deleteOutcomeProven: true,
+    postDeleteAbsent: true,
+    groupEmpty: true,
+    outcome: "accepted",
+  };
+  const refused = {
+    documentCount: 12113,
+    deleteTargetExists: true,
+    deleteOutcomeProven: true,
+    postDeletePresent: true,
+    groupContainsTarget: true,
+    outcome: "refused",
+  };
+  assert.deepEqual(classifyDeltaV3DeletePair("rest", accepted, refused), {
+    status: "adjacent-boundary",
+    route: "rest",
+  });
+  assert.deepEqual(
+    classifyDeltaV3DeletePair("commit", accepted, { ...accepted, documentCount: 12113 }),
+    {
+      status: "route-specific-exploration-required",
+      route: "commit",
+    },
+  );
+  assert.deepEqual(
+    classifyDeltaV3DeletePair("batch-write", { ...accepted, deleteTargetExists: false }, refused),
+    { status: "pending-indeterminate", route: "batch-write" },
+  );
+});
+
 test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", async () => {
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
   assert.equal(corpus.restPrograms.length, 74);
@@ -306,6 +463,85 @@ test("corpus-v3 recovery locates only a private journal bound to its durable res
       mode: 0o600,
     });
     await assert.rejects(findV3RecoveryResume(directory, names), /does not match/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("delta-v3 recovery resumes only its reserved six-name journal with the remaining HTTP window", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-delta-recovery-"));
+  const runDir = await mkdtemp(join(directory, "fs-data-write-production-"));
+  const { corpus } = await prepareSandboxCorpus();
+  const programs = corpus.restPrograms.filter((p) =>
+    p.id.startsWith("writes/limits/near-limit-delete-refusal/"),
+  );
+  const names = deltaV3ManagedClearNames({ restPrograms: programs });
+  const runId = "e".repeat(32);
+  const corpusDigest = "b".repeat(64);
+  const gitSha = "a".repeat(40);
+  const runtimeNames = names.map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const journalPath = join(runDir, "delta-cleanup.json");
+  try {
+    const reservation = sandboxLedgerEntry({
+      gitSha,
+      corpusDigest,
+      requests: null,
+      outcome: "reserved",
+      runDir,
+    });
+    await writeFile(join(directory, "sandbox-ledger.jsonl"), `${JSON.stringify(reservation)}\n`, {
+      mode: 0o600,
+    });
+    await writeFile(
+      journalPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "cleanup-delta-v3",
+        status: "recovering",
+        project: "fireemu-oracle-sbx",
+        database: "(default)",
+        runId,
+        corpusDigest,
+        sourceGitSha: gitSha,
+        names: runtimeNames,
+        writerExclusivity:
+          "task-lock-held; run-specific six collection groups have no external writer",
+        httpRequestCount: 30,
+        managedRequestCount: 11,
+        bulkDeleteIntent: true,
+        bulkDeleteOperation: "projects/fireemu-oracle-sbx/databases/(default)/operations/op_1",
+      }),
+      { mode: 0o600 },
+    );
+    const resume = await findDeltaV3RecoveryResume(directory, names, corpusDigest);
+    assert.equal(resume.journalPath, journalPath);
+    const env = deltaV3RecoveryEnvironment({
+      token: "private",
+      meta: join(runDir, "recovery.json"),
+      journal: journalPath,
+      names: runtimeNames,
+      runId,
+      corpusDigest,
+      sourceGitSha: gitSha,
+      remainingHttp: 400,
+    });
+    assert.equal(env.FIRESTORE_PROBE_RECOVERY_MODE, "recover-delta-v3");
+    assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "400");
+    assert.equal(env.FIRESTORE_PROBE_DELTA_JOURNAL, journalPath);
+    assert.throws(
+      () =>
+        deltaV3RecoveryEnvironment({
+          token: "private",
+          meta: "m",
+          journal: journalPath,
+          names: [...runtimeNames, "extra"],
+          runId,
+          corpusDigest,
+          sourceGitSha: gitSha,
+          remainingHttp: 400,
+        }),
+      /exact private/,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -470,6 +706,31 @@ test("private append-only ledger names project, database, bounded requests and c
   assert.equal(entry.estimatedUsd, 0.5);
   assert.equal(entry.taskId, "FS-DATA-WRITE-SANDBOX");
   assert.ok(Number.isFinite(Date.parse(entry.ts)));
+});
+
+test("ledger keeps bounded HTTP attempts separate from stream frames", () => {
+  const entry = sandboxLedgerEntry({
+    gitSha: "a".repeat(40),
+    corpusDigest: "b".repeat(64),
+    requests: 430,
+    streamFrames: 2,
+    outcome: "recorded",
+    runDir: "/private/delta-run",
+  });
+  assert.equal(entry.requests, 430);
+  assert.equal(entry.streamFrames, 2);
+  assert.throws(
+    () =>
+      sandboxLedgerEntry({
+        gitSha: "a".repeat(40),
+        corpusDigest: "b".repeat(64),
+        requests: 432,
+        streamFrames: 0,
+        outcome: "recorded",
+        runDir: "/private/delta-run",
+      }),
+    /request count/,
+  );
 });
 
 test("exclusive sandbox lock rejects competitors and remains after failed work", async () => {

@@ -215,6 +215,14 @@ test("array shrink is restricted to frozen legacy or corpus-v3 root document nam
   assert.throws(() => managedShrinkScope(corpusV3, "another-project", "(default)"));
 });
 
+test("delta-v3 cleanup has a distinct exact six-name shrink scope", () => {
+  const deltaNames = corpusV3.slice(6);
+  assert.equal(managedShrinkScope(deltaNames, "fireemu-oracle-sbx", "(default)"), "delta-v3");
+  assert.throws(() =>
+    managedShrinkScope([...deltaNames.slice(0, 5), corpusV3[0]], "fireemu-oracle-sbx", "(default)"),
+  );
+});
+
 test("array shrink accepts only the exact generated integer sequence field", () => {
   const document = {
     name: names[0],

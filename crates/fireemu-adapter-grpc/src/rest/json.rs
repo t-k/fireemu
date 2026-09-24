@@ -578,7 +578,11 @@ fn value_from_json_at(
         }),
         "timestampValue" => V::TimestampValue(timestamp_from_json(inner).map_err(|error| {
             match (path, inner.as_str()) {
-                (Some(path), Some(_)) => JsonError(format!(
+                (Some(path), Some(text))
+                    if !text.ends_with(['Z', 'z'])
+                        && !text
+                            .get(10..)
+                            .is_some_and(|tail| tail.bytes().any(|byte| byte == b'+' || byte == b'-')) => JsonError(format!(
                     "Invalid value at '{}' (type.googleapis.com/google.protobuf.Timestamp), Field 'timestampValue', Illegal timestamp format; timestamps must end with 'Z' or have a valid timezone offset.",
                     path.field("timestamp_value").to_proto_path()
                 )),

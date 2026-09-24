@@ -13,6 +13,7 @@
 // as the side produced it.
 
 import { readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
@@ -29,6 +30,8 @@ const OUT = process.env.FIRESTORE_PROBE_OUT;
 const META_OUT = process.env.FIRESTORE_PROBE_META_OUT;
 const MAX_REQUESTS = process.env.FIRESTORE_PROBE_MAX_REQUESTS;
 const REQUEST_TIMEOUT_MS = Number(process.env.FIRESTORE_PROBE_TIMEOUT_MS ?? 20_000);
+const MANAGED_CLEAR_JOURNAL = process.env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL;
+const MANAGED_CLEAR_NAMES = process.env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES;
 // Production target: `https`, an OAuth bearer token instead of the emulator's `owner`, no
 // emulator wipe route (documents are deleted through the public API instead), and the real
 // project id normalized back to the recording project so a production run compares row by
@@ -37,9 +40,78 @@ const SCHEME = process.env.FIRESTORE_PROBE_SCHEME ?? "http";
 const TOKEN = process.env.FIRESTORE_PROBE_TOKEN ?? "owner";
 const USER_TOKEN = process.env.FIRESTORE_PROBE_USER_TOKEN;
 const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
+const MANAGED_POLL_MS = /^127\.0\.0\.1:\d+$/.test(HOST ?? "")
+  ? Number(process.env.FIRESTORE_PROBE_MANAGED_POLL_MS ?? 60_000)
+  : 60_000;
+if (!Number.isInteger(MANAGED_POLL_MS) || MANAGED_POLL_MS < 1 || MANAGED_POLL_MS > 60_000) {
+  throw new Error("invalid managed-clear polling interval");
+}
 const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
 let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
+let managedClearBlocked = false;
+let managedClearState = null;
+
+export function managedClearScope(names, project, database) {
+  if (project !== "fireemu-oracle-sbx" || database !== "(default)" || !Array.isArray(names)) {
+    throw new Error("managed clear requires the fixed sandbox database");
+  }
+  const prefix = `projects/${project}/databases/${database}/documents/`;
+  const collections = [];
+  for (const name of names) {
+    if (typeof name !== "string" || !name.startsWith(prefix)) {
+      throw new Error("managed clear name is outside the sandbox");
+    }
+    const parts = name.slice(prefix.length).split("/");
+    if (parts.length !== 2 || parts.some((part) => !part || part === "." || part === "..")) {
+      throw new Error("managed clear requires a root document");
+    }
+    collections.push(parts[0]);
+  }
+  if (collections.length === 0 || new Set(collections).size !== collections.length) {
+    throw new Error("managed clear collection groups must be unique");
+  }
+  return collections;
+}
+
+export function validateManagedClearReadback(names, rows) {
+  return (
+    Array.isArray(rows) &&
+    rows.length === names.length &&
+    new Set(rows.map((row) => row?.missing)).size === names.length &&
+    names.every((name) => rows.some((row) => row?.missing === name && !row.found && !row.error))
+  );
+}
+
+export function isManagedClearCommitRefusal(status, body, candidate, parentPath, allowedNames) {
+  if (status !== 400 || parentPath !== "" || !candidate || !allowedNames?.includes(candidate)) {
+    return false;
+  }
+  try {
+    const error = JSON.parse(body)?.error;
+    return (
+      error?.status === "INVALID_ARGUMENT" &&
+      error?.message === "Transaction too big. Decrease transaction size."
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function validateManagedClearOperation(state, project) {
+  const prefix = `projects/${project}/databases/(default)/operations/`;
+  if (
+    project !== "fireemu-oracle-sbx" ||
+    state?.done !== true ||
+    state.error ||
+    typeof state.name !== "string" ||
+    !state.name.startsWith(prefix) ||
+    !/^[A-Za-z0-9_-]+$/.test(state.name.slice(prefix.length))
+  ) {
+    throw new Error("managed clear operation did not succeed in the fixed sandbox");
+  }
+  return state.name;
+}
 
 function trackedFetch(input, init) {
   requestCount = requestBudget === null ? requestCount + 1 : requestBudget.claim();
@@ -55,6 +127,7 @@ const timeoutSignal = () => AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 /** Wipes the emulator's documents so one program never sees another's writes. */
 async function clear(database = "(default)") {
   if (PRODUCTION) {
+    if (managedClearBlocked) throw new Error("managed clear needs operator recovery");
     await clearThroughPublicApi(database);
     return;
   }
@@ -78,9 +151,11 @@ async function clearThroughPublicApi(database) {
   for (let round = 0; round < 8; round += 1) {
     const collectionIds = await listCollectionIds(base, "");
     if (collectionIds === null || collectionIds.length === 0) return;
+    const managedFailures = [];
     for (const collectionId of collectionIds) {
-      await deleteCollection(base, "", collectionId);
+      managedFailures.push(...(await deleteCollection(base, "", collectionId)));
     }
+    if (managedFailures.length > 0) await managedClear(database, managedFailures);
   }
   throw new Error("clear: the production database still lists collections after 8 rounds");
 }
@@ -114,6 +189,7 @@ async function deleteCollection(base, parentPath, collectionId) {
   // recursion reaches every document however it was left behind.
   const names = [];
   const missing = [];
+  const managedFailures = [];
   let pageToken;
   do {
     const query = new URLSearchParams({
@@ -136,7 +212,7 @@ async function deleteCollection(base, parentPath, collectionId) {
   for (const name of [...names, ...missing]) {
     const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
     for (const child of (await listCollectionIds(base, relative)) ?? []) {
-      await deleteCollection(base, relative, child);
+      managedFailures.push(...(await deleteCollection(base, relative, child)));
     }
   }
   for (let index = 0; index < names.length; index += 400) {
@@ -147,8 +223,120 @@ async function deleteCollection(base, parentPath, collectionId) {
       body: JSON.stringify({ writes }),
       signal: timeoutSignal(),
     });
-    if (!commit.ok) throw new Error(`clear: commit ${commit.status} ${await commit.text()}`);
+    if (!commit.ok) {
+      const body = await commit.text();
+      const candidate = writes.length === 1 ? writes[0].delete : null;
+      if (
+        PRODUCTION &&
+        writes.length === 1 &&
+        isManagedClearCommitRefusal(
+          commit.status,
+          body,
+          candidate,
+          parentPath,
+          managedClearState?.names,
+        )
+      ) {
+        managedFailures.push(candidate);
+      } else {
+        throw new Error(`clear: commit ${commit.status} ${body}`);
+      }
+    }
   }
+  return managedFailures;
+}
+
+async function managedGroupNames(api, collectionId) {
+  const response = await trackedFetch(`${api}/documents:runQuery`, {
+    method: "POST",
+    headers: authorized({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId, allDescendants: true }],
+        select: { fields: [{ fieldPath: "__name__" }] },
+        limit: 2,
+      },
+    }),
+    signal: timeoutSignal(),
+  });
+  if (!response.ok) throw new Error(`managed clear scope query ${response.status}`);
+  const rows = await response.json();
+  if (!Array.isArray(rows) || rows.some((row) => row.error)) {
+    throw new Error("managed clear scope query returned an invalid result");
+  }
+  return rows.filter((row) => row.document).map((row) => row.document.name);
+}
+
+async function managedClear(database, names) {
+  managedClearBlocked = true;
+  if (!managedClearState || !MANAGED_CLEAR_JOURNAL || database !== "(default)") {
+    throw new Error("managed clear is not enabled for this observation");
+  }
+  const collectionIds = managedClearScope(names, PROJECT, database);
+  if (names.some((name) => !managedClearState.names.includes(name))) {
+    throw new Error("managed clear found a name outside the frozen corpus");
+  }
+  const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/${database}`;
+  for (const [index, collectionId] of collectionIds.entries()) {
+    const found = await managedGroupNames(api, collectionId);
+    if (found.length !== 1 || found[0] !== names[index]) {
+      throw new Error("managed clear collection group contains an unexpected document");
+    }
+  }
+  const journal = { status: "starting", project: PROJECT, database, names, collectionIds };
+  await writeFile(MANAGED_CLEAR_JOURNAL, `${JSON.stringify(journal)}\n`, { mode: 0o600 });
+  const started = await trackedFetch(`${api}:bulkDeleteDocuments`, {
+    method: "POST",
+    headers: authorized({ "content-type": "application/json" }),
+    body: JSON.stringify({ collectionIds, namespaceIds: [""] }),
+    signal: timeoutSignal(),
+  });
+  if (!started.ok) throw new Error(`managed clear start ${started.status}`);
+  const operation = (await started.json()).name;
+  if (
+    typeof operation !== "string" ||
+    !new RegExp(`^projects/${PROJECT}/databases/\\(default\\)/operations/[A-Za-z0-9_-]+$`).test(
+      operation,
+    )
+  ) {
+    throw new Error("managed clear operation escaped the sandbox");
+  }
+  journal.status = "active";
+  journal.operation = operation;
+  await writeFile(MANAGED_CLEAR_JOURNAL, `${JSON.stringify(journal)}\n`, { mode: 0o600 });
+  let terminal = false;
+  for (let attempt = 0; attempt < 360; attempt += 1) {
+    await new Promise((wake) => setTimeout(wake, MANAGED_POLL_MS));
+    const response = await trackedFetch(`${SCHEME}://${HOST}/v1/${operation}`, {
+      headers: authorized(),
+      signal: timeoutSignal(),
+    });
+    if (!response.ok) throw new Error(`managed clear poll ${response.status}`);
+    const state = await response.json();
+    if (state.done === true) {
+      validateManagedClearOperation(state, PROJECT);
+      terminal = true;
+      break;
+    }
+  }
+  if (!terminal) throw new Error("managed clear operation did not finish within six hours");
+  const readback = await trackedFetch(`${api}/documents:batchGet`, {
+    method: "POST",
+    headers: authorized({ "content-type": "application/json" }),
+    body: JSON.stringify({ documents: names }),
+    signal: timeoutSignal(),
+  });
+  if (!readback.ok || !validateManagedClearReadback(names, await readback.json())) {
+    throw new Error("managed clear exact-name typed absence was not proved");
+  }
+  for (const collectionId of collectionIds) {
+    if ((await managedGroupNames(api, collectionId)).length !== 0) {
+      throw new Error("managed clear collection group remains populated");
+    }
+  }
+  journal.status = "complete";
+  await writeFile(MANAGED_CLEAR_JOURNAL, `${JSON.stringify(journal)}\n`, { mode: 0o600 });
+  managedClearBlocked = false;
 }
 
 async function seed(documents) {
@@ -295,6 +483,23 @@ async function main() {
     );
   }
   const programs = JSON.parse(await readFile(IN, "utf8"));
+  if (PRODUCTION && (MANAGED_CLEAR_NAMES || MANAGED_CLEAR_JOURNAL)) {
+    if (!MANAGED_CLEAR_NAMES || !MANAGED_CLEAR_JOURNAL) {
+      throw new Error("managed clear requires both frozen names and a private journal");
+    }
+    const names = JSON.parse(MANAGED_CLEAR_NAMES);
+    if (names.length !== 6) throw new Error("managed clear requires six frozen boundary names");
+    managedClearScope(names, PROJECT, "(default)");
+    managedClearState = { names };
+    try {
+      const previous = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));
+      if (previous.status !== "complete") {
+        throw new Error("managed clear operation requires recovery before a new recording");
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
   const results = {};
   const touchedDatabases = new Set(["(default)"]);
   try {
@@ -334,7 +539,9 @@ async function main() {
     }
   } finally {
     try {
-      for (const database of touchedDatabases) await clear(database);
+      if (!managedClearBlocked) {
+        for (const database of touchedDatabases) await clear(database);
+      }
     } finally {
       if (META_OUT) {
         await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`);
@@ -344,4 +551,4 @@ async function main() {
   await writeFile(OUT, `${JSON.stringify(results, null, 2)}\n`);
 }
 
-await main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await main();

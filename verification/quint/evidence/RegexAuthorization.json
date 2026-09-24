@@ -50,7 +50,7 @@
     "verification/quint/tests/regex_authorization_connect.rs"
   ],
   "digests": {
-    ".github/workflows/quint.yml": "50d4edad3bc4122a6e76fbaf05b0e2e4fa2963951960e05d447b0a834d91a30e",
+    ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "crates/fireemu-core-rules/src/eval.rs": "20bc939227b5a4c8cbd6ae5c26d115fe92f02235da4dd426414c6944b9fc604f",
     "crates/fireemu-core-rules/src/parse.rs": "ebcf63731625d6b5237f4a4d1fddfb89ce776d0ce42aa71434b534f61ae2c45c",
     "crates/fireemu-core-rules/src/regex.rs": "873e10444696349edf5be984e590b164c72ba8603864eddb8defce574012b4ee",

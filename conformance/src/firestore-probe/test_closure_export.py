@@ -22,22 +22,17 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]
     ids = [program["id"] for program in programs]
-    assert len(ids) == len(set(ids)) == 73
+    assert len(ids) == len(set(ids)) == 68
     assert {
         "writes/limits/field-path-mask/1499",
         "writes/limits/field-path-mask/1500",
         "writes/limits/implied-array-key/1494",
         "writes/limits/implied-array-key/1495",
-        "writes/limits/index-entry-sum/500-19999",
-        "writes/limits/index-entry-sum/500-20000",
+        "writes/limits/index-entry-sum/adjacent",
         "writes/limits/index-entry-string-name/2641",
         "writes/limits/index-entry-string-name/2642",
         "writes/limits/empty-document-name/4627",
         "writes/limits/empty-document-name/4628",
-        "writes/limits/index-entry-sum/1000-12123",
-        "writes/limits/index-entry-sum/1000-12124",
-        "writes/limits/index-entry-sum/2000-7184",
-        "writes/limits/index-entry-sum/2000-7185",
         "writes/batch-write-malformed/two-fields-bad-integer",
         "writes/limits/aggregate-map/strict-only",
         "writes/limits/non-commit-rest-request-bytes/batch-write/10485760",
@@ -126,6 +121,7 @@ def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     ), "every sandbox REST program needs a direct closure condition"
     assert corpus["restRequestCount"] == sum(len(p["steps"]) for p in programs)
     assert corpus["restRequestCount"] < 400
+    assert programs[-1]["id"] == "writes/limits/index-entry-sum/adjacent"
 
 
 def test_collection_id_syntax_is_sent_in_fixed_sandbox_project() -> None:

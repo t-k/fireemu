@@ -56,7 +56,9 @@ def test_raw_request_boundary_is_exact_and_keeps_readback() -> None:
 def test_non_commit_batchwrite_request_boundary_is_exact_and_keeps_readback() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     for size in (10_485_760, 10_485_761):
-        program = programs[f"writes/limits/non-commit-rest-request-bytes/batch-write/{size}"]
+        program = programs[
+            f"writes/limits/non-commit-rest-request-bytes/batch-write/{size}"
+        ]
         assert len(program["steps"]) == 2
         step = program["steps"][0]
         assert step["method"] == "POST"
@@ -73,7 +75,9 @@ def test_non_commit_read_request_boundaries_seed_one_document() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     for family, suffix in (("batch-get", ":batchGet"), ("run-query", ":runQuery")):
         for size in (10_485_760, 10_485_761):
-            program = programs[f"writes/limits/non-commit-rest-request-bytes/{family}/{size}"]
+            program = programs[
+                f"writes/limits/non-commit-rest-request-bytes/{family}/{size}"
+            ]
             assert len(program["steps"]) == 2
             seed, probe = program["steps"]
             assert seed["id"] == "seed"
@@ -96,7 +100,9 @@ def test_non_commit_document_write_boundaries_keep_state_readback() -> None:
     programs = {program["id"]: program for program in _module().build_programs()}
     for family, method in (("create", "POST"), ("patch", "PATCH")):
         for size in (10_485_760, 10_485_761):
-            program = programs[f"writes/limits/non-commit-rest-request-bytes/{family}/{size}"]
+            program = programs[
+                f"writes/limits/non-commit-rest-request-bytes/{family}/{size}"
+            ]
             steps = program["steps"]
             assert len(steps) == (3 if family == "patch" else 2)
             probe = steps[-2]
@@ -163,20 +169,31 @@ def test_index_and_decoded_request_boundaries_have_exact_input_shapes() -> None:
             "body"
         ]["writes"][0]
         assert write["update"]["fields"] == {}
-    for length, count in (
-        (500, 19999),
-        (500, 20000),
-        (2000, 7184),
-        (2000, 7185),
-        (1000, 12123),
-        (1000, 12124),
+    boundary = programs["writes/limits/index-entry-sum/adjacent"]
+    assert len(boundary["steps"]) == 12
+    names = []
+    for index, (length, count) in enumerate(
+        (
+            (500, 19999),
+            (500, 20000),
+            (2000, 7184),
+            (2000, 7185),
+            (1000, 12123),
+            (1000, 12124),
+        )
     ):
-        program = programs[f"writes/limits/index-entry-sum/{length}-{count}"]
-        write = program["steps"][0]["body"]["writes"][0]
+        write_step, readback_step = boundary["steps"][2 * index : 2 * index + 2]
+        assert write_step["id"] == f"write-{length}-{count}"
+        assert readback_step["id"] == f"readback-{length}-{count}"
+        write = write_step["body"]["writes"][0]
+        names.append(write["update"]["name"])
+        assert readback_step["body"]["documents"] == [write["update"]["name"]]
         assert len(write["update"]["name"].split("/documents/")[1].encode()) == length
         values = write["update"]["fields"]["a"]["arrayValue"]["values"]
         assert len(values) == count
         assert len({value["integerValue"] for value in values}) == count
+    assert len(set(names)) == 6
+    assert len({name.split("/documents/")[1].split("/")[0] for name in names}) == 6
     program = programs["writes/limits/decoded-11x1040000"]
     writes = program["steps"][0]["body"]["writes"]
     assert len(writes) == 11

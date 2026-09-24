@@ -116,7 +116,7 @@
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
-      "recipeIds": ["writes/limits/index-entries-per-document", "writes/limits/index-entry-sum/500-20000"],
+      "recipeIds": ["writes/limits/index-entries-per-document", "writes/limits/index-entry-sum/adjacent"],
       "boundaryStatus": "PENDING_RECORDING",
       "status": "PENDING_RECORDING"
     },
@@ -130,7 +130,7 @@
     {
       "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
-      "recipeIds": ["writes/limits/index-entry-sum-per-document", "writes/limits/index-entry-sum/500-19999", "writes/limits/index-entry-sum/2000-7184", "writes/limits/index-entry-sum/2000-7185", "writes/limits/index-entry-sum/1000-12123", "writes/limits/index-entry-sum/1000-12124"],
+      "recipeIds": ["writes/limits/index-entry-sum-per-document", "writes/limits/index-entry-sum/adjacent"],
       "boundaryStatus": "UNBRACKETED",
       "status": "MISMATCH"
     },

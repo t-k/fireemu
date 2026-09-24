@@ -14,6 +14,7 @@ import {
   sessionRequestCount,
   sandboxLedgerEntry,
   sandboxLedgerPath,
+  sandboxManagedClearNames,
 } from "./fs-data-write-sandbox-run.mjs";
 
 test("local comparison refuses a fixture or run from a different corpus", () => {
@@ -165,12 +166,16 @@ test("all sandbox run directories share the canonical root ledger", () => {
   );
 });
 
-test("production REST session fixes project, endpoint and all-attempt cap", () => {
+test("production REST session fixes project, endpoint, managed scope and all-attempt cap", async () => {
+  const { corpus } = await prepareSandboxCorpus();
+  const managedNames = sandboxManagedClearNames(corpus);
   const env = productionRestEnvironment({
     input: "/tmp/input",
     output: "/tmp/output",
     meta: "/tmp/meta",
     token: "private",
+    managedNames,
+    journal: "/tmp/managed-clear.json",
   });
   assert.equal(env.FIRESTORE_PROBE_PROJECT, "fireemu-oracle-sbx");
   assert.equal(env.FIRESTORE_PROBE_HOST, "firestore.googleapis.com");
@@ -178,6 +183,10 @@ test("production REST session fixes project, endpoint and all-attempt cap", () =
   assert.equal(env.FIRESTORE_PROBE_RECORD_PROJECT, "demo-firestore-probe");
   assert.equal(env.FIRESTORE_PROBE_TOKEN, "private");
   assert.equal(env.FIRESTORE_PROBE_TIMEOUT_MS, "180000");
+  assert.equal(env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL, "/tmp/managed-clear.json");
+  assert.deepEqual(JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES), managedNames);
+  assert.equal(managedNames.length, 6);
+  assert.throws(() => sandboxManagedClearNames({ ...corpus, restPrograms: [] }), /last/);
 });
 
 test("a failed session still reports its bounded network attempts from metadata", () => {

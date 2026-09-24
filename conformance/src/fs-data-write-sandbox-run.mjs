@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rmdir, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { promisify } from "node:util";
 import { dirname, join, resolve } from "node:path";
@@ -13,6 +13,7 @@ import {
   validateSandboxCorpus,
 } from "./fs-data-write-sandbox.mjs";
 import { validateStreamRecipes } from "./firestore-probe/stream-session.mjs";
+import { managedClearScope } from "./firestore-probe/session.mjs";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -200,12 +201,32 @@ export function localTarget(value) {
   return { host, port };
 }
 
-export function productionRestEnvironment({ input, output, meta, token }) {
+export function sandboxManagedClearNames(corpus) {
+  const program = corpus?.restPrograms?.at(-1);
+  if (program?.id !== "writes/limits/index-entry-sum/adjacent") {
+    throw new Error("the managed-clear boundary program must be last");
+  }
+  const writes = program.steps.filter((step) => step.id.startsWith("write-"));
+  const names = writes.map((step) => step.body?.writes?.[0]?.update?.name);
+  if (writes.length !== 6 || program.steps.length !== 12) {
+    throw new Error("six paired boundary observations are required");
+  }
+  managedClearScope(names, SANDBOX_PROJECT, "(default)");
+  return names;
+}
+
+export function productionRestEnvironment({ input, output, meta, token, managedNames, journal }) {
   if (
-    ![input, output, meta, token].every((value) => typeof value === "string" && value.length > 0)
+    ![input, output, meta, token, journal].every(
+      (value) => typeof value === "string" && value.length > 0,
+    )
   ) {
     throw new Error("production REST session inputs are required");
   }
+  if (!Array.isArray(managedNames) || managedNames.length !== 6) {
+    throw new Error("production managed-clear names are required");
+  }
+  managedClearScope(managedNames, SANDBOX_PROJECT, "(default)");
   return {
     FIRESTORE_PROBE_TARGET: "production",
     FIRESTORE_PROBE_SCHEME: "https",
@@ -218,10 +239,12 @@ export function productionRestEnvironment({ input, output, meta, token }) {
     FIRESTORE_PROBE_META_OUT: meta,
     FIRESTORE_PROBE_MAX_REQUESTS: String(REST_CAP),
     FIRESTORE_PROBE_TIMEOUT_MS: "180000",
+    FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(managedNames),
+    FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: journal,
   };
 }
 
-async function runNode(name, script, env) {
+async function runNode(name, script, env, timeout = 1_200_000) {
   try {
     const childEnv = { ...process.env, ...env };
     for (const [key, value] of Object.entries(childEnv)) {
@@ -230,7 +253,7 @@ async function runNode(name, script, env) {
     await execFileAsync("node", [join(CONFORMANCE_DIR, "src", script)], {
       cwd: CONFORMANCE_DIR,
       env: childEnv,
-      timeout: 1_200_000,
+      timeout,
       maxBuffer: 1024 * 1024,
     });
   } catch (error) {
@@ -263,6 +286,7 @@ async function productionRecording({
   restRequestCount,
   liveStreamCount,
   rows,
+  managedNames,
 }) {
   remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD);
   const runDir = await mkdtemp(join(privateDir, "fs-data-write-production-"));
@@ -281,7 +305,10 @@ async function productionRecording({
         output: restOut,
         meta: metaOut,
         token,
+        managedNames,
+        journal: join(privateDir, "fs-data-write-managed-clear.json"),
       }),
+      25_200_000,
     );
     const meta = JSON.parse(await readFile(metaOut, "utf8"));
     requestCount = sessionRequestCount(meta);
@@ -341,6 +368,7 @@ async function recordProduction() {
   const ledgerPath = sandboxLedgerPath(gitCommonDir);
   const privateDir = dirname(ledgerPath);
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
+  const managedNames = sandboxManagedClearNames(corpus);
   const corpusDigest = sha256(JSON.stringify(corpus));
   const gitSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
   const rows = await readLedger(ledgerPath);
@@ -361,50 +389,72 @@ async function recordProduction() {
   const restIn = join(generatedDir, "rest-programs.json");
   await writeFile(corpusIn, JSON.stringify(corpus));
   await writeFile(restIn, JSON.stringify(corpus.restPrograms));
-  const first = await productionRecording({
-    corpusIn,
-    restIn,
-    privateDir,
-    token,
-    gitSha,
-    corpusDigest,
-    restRequestCount,
-    liveStreamCount,
-    rows,
-  });
-  const second = await productionRecording({
-    corpusIn,
-    restIn,
-    privateDir,
-    token,
-    gitSha,
-    corpusDigest,
-    restRequestCount,
-    liveStreamCount,
-    rows,
-  });
-  const sdkVersions = {
-    firebase: require("firebase/package.json").version,
-    firebaseAdmin: require("firebase-admin").SDK_VERSION,
-    firestore: require("@google-cloud/firestore/package.json").version,
-    grpc: require("@grpc/grpc-js/package.json").version,
-  };
-  const fixture = freezeSandboxFixture({
-    corpus,
-    first: first.rest,
-    second: second.rest,
-    firstStream: first.stream,
-    secondStream: second.stream,
-    recordedAt: [first.startedAt, second.startedAt],
-    harnessRevision: gitSha,
-    sdkVersions,
-    credentialToken: token,
-  });
-  const output = join(CONFORMANCE_DIR, "fs-data-write-production-matrix.json");
-  await writeFile(output, `${JSON.stringify(fixture, null, 2)}\n`);
-  process.stdout.write(
-    `${JSON.stringify({ output, firstRunDir: first.runDir, secondRunDir: second.runDir, requestCount: first.requestCount + second.requestCount, corpusDigest })}\n`,
-  );
+  // The lock spans both recordings and any managed-delete LRO. A failed/nonterminal
+  // operation deliberately retains it for reviewed recovery before another writer runs.
+  const lockPath = join(privateDir, "fs-data-write-exclusive.lock");
+  await mkdir(lockPath, { mode: 0o700 });
+  let releaseLock = false;
+  try {
+    const first = await productionRecording({
+      corpusIn,
+      restIn,
+      privateDir,
+      token,
+      gitSha,
+      corpusDigest,
+      restRequestCount,
+      liveStreamCount,
+      rows,
+      managedNames,
+    });
+    const second = await productionRecording({
+      corpusIn,
+      restIn,
+      privateDir,
+      token,
+      gitSha,
+      corpusDigest,
+      restRequestCount,
+      liveStreamCount,
+      rows,
+      managedNames,
+    });
+    try {
+      const state = JSON.parse(
+        await readFile(join(privateDir, "fs-data-write-managed-clear.json"), "utf8"),
+      );
+      if (state.status !== "complete") {
+        throw new Error("managed clear operation is not verified complete");
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    const sdkVersions = {
+      firebase: require("firebase/package.json").version,
+      firebaseAdmin: require("firebase-admin").SDK_VERSION,
+      firestore: require("@google-cloud/firestore/package.json").version,
+      grpc: require("@grpc/grpc-js/package.json").version,
+    };
+    const fixture = freezeSandboxFixture({
+      corpus,
+      first: first.rest,
+      second: second.rest,
+      firstStream: first.stream,
+      secondStream: second.stream,
+      recordedAt: [first.startedAt, second.startedAt],
+      harnessRevision: gitSha,
+      sdkVersions,
+      credentialToken: token,
+    });
+    const output = join(CONFORMANCE_DIR, "fs-data-write-production-matrix.json");
+    await writeFile(output, `${JSON.stringify(fixture, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ output, firstRunDir: first.runDir, secondRunDir: second.runDir, requestCount: first.requestCount + second.requestCount, corpusDigest })}\n`,
+    );
+    releaseLock = true;
+  } finally {
+    if (releaseLock) await rmdir(lockPath);
+  }
 }
 
 async function localChild() {

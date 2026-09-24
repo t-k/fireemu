@@ -392,6 +392,17 @@ impl IndexRegistry {
         state.dropped.insert(key);
     }
 
+    /// How many entries the registry holds, all maps together (tests only).
+    #[cfg(test)]
+    pub(crate) fn entry_count(&self) -> usize {
+        let state = self.lock();
+        state.live.len()
+            + state.deleted.len()
+            + state.withdrawn.len()
+            + state.dropped.len()
+            + state.tombstones.len()
+    }
+
     /// What a deleted database's index list answers.
     #[must_use]
     pub fn tombstone(&self, project: &str, database: &str) -> Vec<RuntimeIndex> {

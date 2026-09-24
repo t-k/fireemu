@@ -1541,3 +1541,39 @@ fn a_reloaded_index_file_is_what_the_admin_api_lists_and_the_planner_uses() {
         Some(1)
     );
 }
+
+#[test]
+fn refused_queries_leave_the_admin_index_registry_unchanged() {
+    // A query may name any project or database; planning only reads the registry, so a
+    // request without owner credentials can never grow it (security review, 2026-09-24).
+    let (state, _clock) = state();
+    let bounded = RestState {
+        local: Arc::new(
+            LocalBackend::new(
+                (*state.gateway).clone(),
+                Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(0)))),
+                7,
+            )
+            .with_project_boundary("p"),
+        ),
+        ..state
+    };
+    let before = bounded.local.admin().indexes().entry_count();
+    let query = json!({"structuredQuery": {
+        "from": [{"collectionId": "items"}],
+        "orderBy": [{"field": {"fieldPath": "a"}}, {"field": {"fieldPath": "b"}, "direction": "DESCENDING"}]
+    }});
+    for (project, database) in [
+        ("elsewhere", "(default)"),
+        ("p", "never-made"),
+        ("p", "(default)"),
+    ] {
+        for n in 0..20 {
+            let path = format!("/v1/projects/{project}{n}/databases/{database}/documents:runQuery");
+            call(&bounded, "POST", &path, query.clone());
+        }
+        let path = format!("/v1/projects/{project}/databases/{database}/documents:runQuery");
+        call(&bounded, "POST", &path, query.clone());
+    }
+    assert_eq!(bounded.local.admin().indexes().entry_count(), before);
+}

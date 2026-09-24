@@ -5491,7 +5491,10 @@ fn pending_retry_preserves_sms_after_a_mismatched_pending_credential() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            count - 1 + usize::from(strict)
+        );
         assert_ne!(finalize_mfa(&s, &json!({"mfaPendingCredential": a["mfaPendingCredential"], "phoneVerificationInfo": phone})).0, 200);
     }
 }
@@ -5580,7 +5583,8 @@ fn pending_retry_preserves_sms_codes_across_purpose_mismatches() {
             let remaining = store.verification_codes();
             assert_eq!(remaining.len(), 1);
             assert_eq!(remaining[0].session_info, plain_session);
-            assert_eq!(store.pending_sign_in_count(), count - 1);
+            let kept = usize::from(strict);
+            assert_eq!(store.pending_sign_in_count(), count - 1 + kept);
         }
         let (status, lookup) = post(
             &s,
@@ -5696,7 +5700,11 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        // Production keeps the pending credential after success (auth-mfa/sms).
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
 
         // One second past it the code is refused, but the pending credential is kept: the
         // same pending credential can start a fresh code and finalize with it.
@@ -5708,7 +5716,11 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         assert_eq!(refused["error"]["message"], "INVALID_SESSION_INFO");
         assert!(refused.get("idToken").is_none());
         assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 1);
+        // The pending credential of the first sign-in above is kept under production's rules.
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            1 + usize::from(strict)
+        );
         let fresh = start_phone_code(&s, &pending);
         assert_ne!(fresh["sessionInfo"], phone["sessionInfo"]);
         assert_ne!(
@@ -5725,7 +5737,11 @@ fn pending_retry_survives_sms_expiry_while_the_pending_credential_lives() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        // Both pending credentials of this test are kept under production's rules.
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            2 * usize::from(strict)
+        );
     }
 }
 
@@ -5768,10 +5784,13 @@ fn pending_retry_ends_when_the_pending_credential_expires() {
         assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
         let (status, refused) = start_phone_step(&s, &pending);
         assert_eq!(status, 400, "{refused}");
-        assert_eq!(
-            refused["error"]["message"],
+        // Production's word for a pending credential it no longer knows.
+        let unknown = if strict {
+            "INVALID_PENDING_TOKEN"
+        } else {
             "INVALID_MFA_PENDING_CREDENTIAL"
-        );
+        };
+        assert_eq!(refused["error"]["message"], unknown);
     }
 }
 
@@ -5786,7 +5805,11 @@ fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
         let (status, signed) = finalize_phone_step(&s, &pending, &phone);
         assert_eq!(status, 200, "{signed}");
         assert!(signed["idToken"].is_string());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        // Production keeps the pending credential after success (auth-mfa/sms).
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
         let (status, lookup) = post(
             &s,
             &format!("{V1}/accounts:lookup"),
@@ -5807,7 +5830,10 @@ fn pending_and_sms_expiry_matrix_keeps_expiry_causes_separate() {
         let fresh = start_phone_code(&s, &pending);
         let (status, signed) = finalize_phone_step(&s, &pending, &fresh);
         assert_eq!(status, 200, "{signed}");
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), 0);
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            usize::from(strict)
+        );
 
         let (s, _) = pending_expiry_state(strict, "expiry-matrix-pending@example.com");
         let pending = pending_login(&s, "expiry-matrix-pending@example.com");
@@ -5958,8 +5984,15 @@ fn pending_retry_refuses_finalize_after_the_account_is_disabled() {
         );
         assert_eq!(status, 200, "{lookup}");
         assert_eq!(lookup["users"][0]["localId"], user["localId"]);
-        assert!(s.store.lock().unwrap().verification_codes().is_empty());
-        assert_eq!(s.store.lock().unwrap().pending_sign_in_count(), count - 1);
+        // Production keeps the pending credential after success, and with it the codes it
+        // started (auth-mfa/sms#sign-in-finalize-again).
+        if !strict {
+            assert!(s.store.lock().unwrap().verification_codes().is_empty());
+        }
+        assert_eq!(
+            s.store.lock().unwrap().pending_sign_in_count(),
+            count - 1 + usize::from(strict)
+        );
     }
 }
 
@@ -6324,9 +6357,11 @@ fn pending_retry_observes_hook_time_delete_revoke_and_factor_changes() {
                 assert_eq!(status, 200, "{response}");
                 assert!(response["idToken"].is_string(), "{response}");
                 assert!(response["refreshToken"].is_string(), "{response}");
+                // This mutation runs under production's rules, which keep the pending
+                // credential after success (auth-mfa/sms#sign-in-finalize-again).
                 assert_eq!(
                     s.store.lock().unwrap().pending_sign_in_count(),
-                    before_pending - 1
+                    before_pending
                 );
                 assert_eq!(
                     get(&s, &format!("{EMU}/verificationCodes")).1["verificationCodes"],

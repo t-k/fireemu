@@ -17348,3 +17348,204 @@ fn strict_a_phone_start_beyond_five_factors_is_refused() {
         )
     );
 }
+
+// ---- AUTH-MFA strict: second-factor sign-in (auth-mfa/totp/sign-in, sms, interactions) ----
+
+/// A verified account with one TOTP factor; answers `(started, first-factor token, uid)`.
+fn totp_enrolled(s: &AuthState, email: &str) -> (Value, String, Value) {
+    let token = verified_session(s, email);
+    let started = start_totp(s, &token);
+    let (status, body) = finalize_totp(
+        s,
+        &token,
+        &started,
+        &totp_code_of(s, &started, 0),
+        Some("Authenticator"),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (_, user) = post(
+        s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": token}),
+    );
+    (started, token, user["users"][0]["localId"].clone())
+}
+
+fn pending_of(s: &AuthState, email: &str) -> Value {
+    let (status, body) = post(
+        s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body["mfaPendingCredential"].is_string(), "{body}");
+    body
+}
+
+fn totp_sign_in(s: &AuthState, pending: &Value, enrollment: &Value, code: &str) -> (u16, Value) {
+    post(
+        s,
+        &format!("{V2}/accounts/mfaSignIn:finalize"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": enrollment, "totpVerificationInfo": {"verificationCode": code}}),
+    )
+}
+
+#[test]
+fn strict_totp_sign_in_answers_as_production() {
+    let s = strict_mfa_state();
+    let (started, _, _) = totp_enrolled(&s, "sign@example.com");
+    let pending = pending_of(&s, "sign@example.com");
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let invalid = ("Request contains an invalid argument.", true);
+    let start = |extra: Value| {
+        let mut body = json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor});
+        for (k, v) in extra.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        post(&s, &format!("{V2}/accounts/mfaSignIn:start"), &body)
+    };
+    let (status, body) = start(json!({}));
+    assert_eq!((status, v2_refusal(&body)), (400, invalid));
+    let (status, body) = start(json!({"phoneSignInInfo": {}}));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_PHONE_NUMBER : Invalid format.", true))
+    );
+    let finalize = |body: Value| post(&s, &format!("{V2}/accounts/mfaSignIn:finalize"), &body);
+    let code = totp_code_of(&s, &started, 1);
+    let (status, body) = finalize(
+        json!({"mfaEnrollmentId": factor, "totpVerificationInfo": {"verificationCode": code}}),
+    );
+    assert_eq!((status, v2_refusal(&body)), (400, invalid));
+    let (status, body) = finalize(
+        json!({"mfaPendingCredential": "not-a-pending-credential", "mfaEnrollmentId": factor, "totpVerificationInfo": {"verificationCode": code}}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_PENDING_TOKEN", true))
+    );
+    let (status, body) = finalize(
+        json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor, "totpVerificationInfo": {}}),
+    );
+    assert_eq!((status, v2_refusal(&body)), (400, invalid));
+    let (status, body) = finalize(
+        json!({"mfaPendingCredential": pending["mfaPendingCredential"], "totpVerificationInfo": {"verificationCode": code}}),
+    );
+    assert_eq!((status, v2_refusal(&body)), (400, invalid));
+    let (status, body) = totp_sign_in(&s, &pending, &json!("not-an-enrollment"), &code);
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_MFA_ENROLLMENT_ID", true))
+    );
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &code);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body.as_object().unwrap().len(), 2, "{body}");
+    // The pending credential stays usable after it succeeded; a code already used is refused.
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &code);
+    assert_eq!((status, v2_refusal(&body)), (400, ("INVALID_CODE", true)));
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &totp_code_of(&s, &started, 2));
+    assert_eq!(status, 200, "{body}");
+}
+
+#[test]
+fn strict_a_pending_credential_across_account_changes() {
+    let s = strict_mfa_state();
+    // Disabled after the first factor: production still completes the sign-in.
+    let (started, _, uid) = totp_enrolled(&s, "disabled@example.com");
+    let pending = pending_of(&s, "disabled@example.com");
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let update = |fields: Value| {
+        let mut body = json!({"localId": uid});
+        for (k, v) in fields.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        assert_eq!(
+            admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &body).0,
+            200
+        );
+    };
+    update(json!({"disableUser": true}));
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &totp_code_of(&s, &started, 1));
+    assert_eq!(status, 200, "{body}");
+    update(json!({"disableUser": false}));
+    // Its factors cleared: the factor is no longer the account's.
+    let pending = pending_of(&s, "disabled@example.com");
+    update(json!({"mfa": {}}));
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &totp_code_of(&s, &started, 2));
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("INVALID_MFA_ENROLLMENT_ID", true))
+    );
+    // Deleted: the pending credential names an account that is gone.
+    let (started, _, uid) = totp_enrolled(&s, "deleted@example.com");
+    let pending = pending_of(&s, "deleted@example.com");
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": uid})
+        )
+        .0,
+        200
+    );
+    let (status, body) = totp_sign_in(&s, &pending, &factor, &totp_code_of(&s, &started, 1));
+    assert_eq!((status, v2_refusal(&body)), (400, ("USER_NOT_FOUND", true)));
+}
+
+#[test]
+fn strict_an_sms_sign_in_to_a_test_number_can_be_repeated() {
+    let s = strict_mfa_state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let token = verified_session(&s, "sms@example.com");
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let enroll = json!({"idToken": token, "displayName": "Phone", "phoneVerificationInfo": {"sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": "123456"}});
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &enroll,
+    );
+    assert_eq!(status, 200, "{body}");
+    // The enrollment session again: the number is enrolled now.
+    let fresh = body["idToken"].as_str().unwrap();
+    let mut again = enroll.clone();
+    again["idToken"] = json!(fresh);
+    let (status, body) = post(&s, &format!("{V2}/accounts/mfaEnrollment:finalize"), &again);
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account.", true))
+    );
+    let pending = pending_of(&s, "sms@example.com");
+    let factor = pending["mfaInfo"][0]["mfaEnrollmentId"].clone();
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor}),
+    );
+    assert_eq!(
+        (status, v2_refusal(&body)),
+        (400, ("Request contains an invalid argument.", true))
+    );
+    let (status, sent) = post(
+        &s,
+        &format!("{V2}/accounts/mfaSignIn:start"),
+        &json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor, "phoneSignInInfo": {}}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let finalize = json!({"mfaPendingCredential": pending["mfaPendingCredential"], "mfaEnrollmentId": factor, "phoneVerificationInfo": {"sessionInfo": sent["phoneResponseInfo"]["sessionInfo"], "code": "123456"}});
+    for attempt in 0..2 {
+        let (status, body) = post(&s, &format!("{V2}/accounts/mfaSignIn:finalize"), &finalize);
+        assert_eq!(status, 200, "attempt {attempt}: {body}");
+    }
+}

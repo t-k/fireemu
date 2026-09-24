@@ -1206,6 +1206,8 @@ pub struct AuthStore {
     /// credential is resolved directly rather than by scanning every user
     /// (`AUTH-TRANSIENT-04`). Kept in step with the users' own pending maps.
     pending_sign_in_owners: Arc<BTreeMap<String, LocalId>>,
+    /// Pending sign-ins of deleted accounts and when they started (production's rules).
+    orphaned_pending_sign_ins: Arc<BTreeMap<String, LogicalInstant>>,
     /// Process-local raw `IdP` requests; detached from default snapshots and restore.
     pending_idp: PendingIdpCache,
     /// Generated IDs held by in-flight blocking Auth candidates, grouped by reset generation and
@@ -1526,6 +1528,7 @@ impl AuthStore {
             verification_codes: Arc::new(BTreeMap::new()),
             temporary_proofs: BTreeMap::new(),
             pending_sign_in_owners: Arc::new(BTreeMap::new()),
+            orphaned_pending_sign_ins: Arc::new(BTreeMap::new()),
             pending_idp: PendingIdpCache::default(),
             generated_local_id_reservations: Arc::new(Mutex::new(BTreeMap::new())),
             generated_local_id_reservation_ticket: Arc::new(AtomicU64::new(0)),
@@ -1804,6 +1807,20 @@ impl AuthStore {
             }
         }
         self.remove_refresh_tokens_for(&key);
+        // Production answers a deleted account's pending credential USER_NOT_FOUND (sandbox
+        // recording 2026-09-24, auth-mfa/interactions#finalize-y-deleted); the ids are kept
+        // for the pending lifetime only.
+        if self.second_factor_rules_are_production() {
+            let started: Vec<(String, LogicalInstant)> = user
+                .mfa
+                .pending_sign_in_ids_and_starts()
+                .into_iter()
+                .collect();
+            if !started.is_empty() {
+                let orphaned = Arc::make_mut(&mut self.orphaned_pending_sign_ins);
+                orphaned.extend(started);
+            }
+        }
         Arc::make_mut(&mut self.pending_sign_in_owners).retain(|_, owner| *owner != key);
         self.pending_user_ids.remove(&key);
         Arc::make_mut(&mut self.verification_codes).retain(|_, c| match &c.purpose {
@@ -1831,6 +1848,7 @@ impl AuthStore {
         self.verification_codes = Arc::new(BTreeMap::new());
         self.temporary_proofs.clear();
         self.pending_sign_in_owners = Arc::new(BTreeMap::new());
+        self.orphaned_pending_sign_ins = Arc::new(BTreeMap::new());
         self.pending_idp = PendingIdpCache::default();
         self.reset_generation.fetch_add(1, Ordering::AcqRel);
         self.pending_user_ids.clear();
@@ -1874,10 +1892,23 @@ impl AuthStore {
         self.temporary_proofs
             .retain(|_, (_, issued)| !Self::expired(*issued, TEMPORARY_PROOF_TTL_SECONDS, now));
         let sign_in_ttl = LogicalDuration::from_seconds(PENDING_SIGN_IN_TTL_SECONDS);
+        if self.orphaned_pending_sign_ins.values().any(|started| {
+            started
+                .checked_add(sign_in_ttl)
+                .unwrap_or(LogicalInstant::MAX)
+                < now
+        }) {
+            Arc::make_mut(&mut self.orphaned_pending_sign_ins).retain(|_, started| {
+                started
+                    .checked_add(sign_in_ttl)
+                    .unwrap_or(LogicalInstant::MAX)
+                    >= now
+            });
+        }
         // Production still answers SESSION_EXPIRED twice the lifetime later (sandbox recording
         // 2026-09-24, auth-mfa/lifetime at 1805 s), so its expired sessions stay a day; the
         // per-user budget bounds them.
-        let enrollment_grace = if self.production_mfa {
+        let enrollment_grace = if self.second_factor_rules_are_production() {
             LogicalDuration::from_seconds(86_400)
         } else {
             self.policy.enrollment_session_ttl
@@ -3223,7 +3254,9 @@ impl AuthStore {
     /// Whether second factors follow production's project rules (the strict profile).
     #[must_use]
     pub const fn second_factor_rules_are_production(&self) -> bool {
-        self.production_mfa
+        // A tenant's second factors belong to AUTH-TENANT-BLOCKING (scope decision M2): they
+        // keep the rules they had.
+        self.production_mfa && self.tenant_id.is_none()
     }
 
     /// Switches action codes to production's lifetimes (see `production_oob_lifetimes`).
@@ -3837,8 +3870,11 @@ impl AuthStore {
         now: LogicalInstant,
     ) -> Result<(), MfaError> {
         self.check_phone_factors(uid, &factors)?;
+        // The list replaces every factor, TOTP ones included (production clears them all,
+        // sandbox recording 2026-09-24, auth-mfa/interactions#finalize-x-after-factors-cleared).
         if let Some(user) = self.users.get_mut(uid).map(Arc::make_mut) {
             user.mfa.phone_factors_mut().clear();
+            user.mfa.totp_factors_mut().clear();
         }
         for (phone, display_name) in factors {
             self.enroll_phone_factor_by(uid, &phone, display_name, now, true)?;
@@ -3880,6 +3916,7 @@ impl AuthStore {
         enrollment_id: &str,
         now: LogicalInstant,
     ) -> Result<SecondFactorAssertion, MfaError> {
+        let production = self.second_factor_rules_are_production();
         let user = self
             .users
             .get_mut(uid)
@@ -3901,10 +3938,14 @@ impl AuthStore {
         {
             return Err(MfaError::NoEnrolledFactor);
         }
-        user.mfa.pending_sign_ins_mut().remove(&pending.0);
-        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        // Production keeps the pending credential after success (sandbox recording
+        // 2026-09-24, auth-mfa/sms#sign-in-finalize-again).
+        if !production {
+            user.mfa.pending_sign_ins_mut().remove(&pending.0);
+            Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
         }
         user.last_sign_in_at = Some(now);
         self.activate_email_owner(uid);
@@ -4618,7 +4659,7 @@ impl AuthStore {
     ) -> Result<EnrolledFactor, MfaError> {
         let policy = self.policy;
         let window = self.totp_window();
-        let production = self.production_mfa;
+        let production = self.second_factor_rules_are_production();
         let enrollment_id = self.new_enrollment_id();
         let user = self
             .users
@@ -4706,7 +4747,7 @@ impl AuthStore {
     /// 2026-09-24, auth-mfa): microseconds when the user enrolls it, milliseconds when the
     /// Admin API writes it. Unchanged under the official emulator's rules.
     fn factor_time(&self, now: LogicalInstant, by_admin: bool) -> LogicalInstant {
-        if !self.production_mfa {
+        if !self.second_factor_rules_are_production() {
             return now;
         }
         let unit: i128 = if by_admin { 1_000_000 } else { 1_000 };
@@ -4717,7 +4758,7 @@ impl AuthStore {
     /// issues them, sandbox recording 2026-09-24), else the 28-character id of the official
     /// shape. It names a factor and is not a secret, so it follows the seeded stream.
     fn new_enrollment_id(&mut self) -> String {
-        if !self.production_mfa {
+        if !self.second_factor_rules_are_production() {
             return self.random_id28();
         }
         let mut bytes = [0_u8; 16];
@@ -4785,6 +4826,13 @@ impl AuthStore {
         Ok(PendingSignInId(pending_id))
     }
 
+    /// Whether `pending` was a pending sign-in of an account deleted since (production's
+    /// rules, within the pending lifetime).
+    #[must_use]
+    pub fn pending_sign_in_orphaned(&self, pending: &PendingSignInId) -> bool {
+        self.orphaned_pending_sign_ins.contains_key(&pending.0)
+    }
+
     /// User that owns a pending sign-in, if any: a direct lookup in the ownership index,
     /// confirmed against the user's own pending map so the two can never disagree.
     #[must_use]
@@ -4847,8 +4895,10 @@ impl AuthStore {
                 return Err(MfaError::PendingSignInUnknown);
             }
             // Disabled after the first factor: refused before the code is matched, so
-            // neither the pending credential nor the code's step is consumed.
-            if user.disabled {
+            // neither the pending credential nor the code's step is consumed. Production
+            // completes the sign-in of an account disabled after its first factor (sandbox
+            // recording 2026-09-24, auth-mfa/interactions#finalize-x-disabled).
+            if user.disabled && !self.second_factor_rules_are_production() {
                 return Err(MfaError::UserDisabled);
             }
 
@@ -4881,17 +4931,26 @@ impl AuthStore {
             })?
         };
 
+        let production = self.second_factor_rules_are_production();
         let user = self
             .users
             .get_mut(uid)
             .map(Arc::make_mut)
             .ok_or(MfaError::UserNotFound)?;
-        if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
-            return Err(MfaError::PendingSignInUnknown);
-        }
-        Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
-        if user.mfa.pending_count() == 0 {
-            self.pending_user_ids.remove(uid);
+        // Production keeps a pending credential usable after it succeeded, until it expires
+        // (sandbox recording 2026-09-24, auth-mfa/totp/sign-in#pending-1-again).
+        if production {
+            if user.mfa.pending_sign_in(&pending.0).is_none() {
+                return Err(MfaError::PendingSignInUnknown);
+            }
+        } else {
+            if user.mfa.pending_sign_ins_mut().remove(&pending.0).is_none() {
+                return Err(MfaError::PendingSignInUnknown);
+            }
+            Arc::make_mut(&mut self.pending_sign_in_owners).remove(&pending.0);
+            if user.mfa.pending_count() == 0 {
+                self.pending_user_ids.remove(uid);
+            }
         }
         let factor = user
             .mfa

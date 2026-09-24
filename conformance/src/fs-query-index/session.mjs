@@ -86,7 +86,7 @@ export function createSession(
     }
   }
 
-  async function sendRest(step, raw, { harness = false } = {}) {
+  async function sendRest(step, raw, { harness = false, symbols = new Map() } = {}) {
     const request = buildRestRequest(step, ctx, raw);
     guardRestRequest(request, ctx, { harness });
     claim(harness);
@@ -109,10 +109,10 @@ export function createSession(
     } catch {
       /* recorded as non-JSON */
     }
-    return { recorded: normalizeRestResponse(response.status, text, ctx), json };
+    return { recorded: normalizeRestResponse(response.status, text, ctx, symbols), json };
   }
 
-  function sendGrpc(step, raw) {
+  function sendGrpc(step, raw, symbols) {
     const built = buildGrpcRequest(step, ctx, raw);
     guardGrpcRequest(built, ctx);
     claim(false);
@@ -144,6 +144,7 @@ export function createSession(
             errorDetails: error ? statusDetails(protos, error.metadata ?? trailers) : [],
           },
           ctx,
+          symbols,
         );
         resolve({
           recorded,
@@ -249,6 +250,8 @@ export function createSession(
   async function runProgram(program) {
     const raw = new Map();
     const steps = {};
+    // Run-window instants are numbered per program (see normalizeValue).
+    const symbols = new Map();
     await wipe();
     let failure;
     try {
@@ -258,8 +261,8 @@ export function createSession(
         try {
           outcome =
             (step.transport ?? "rest") === "grpc"
-              ? await sendGrpc(step, raw)
-              : await sendRest(step, raw);
+              ? await sendGrpc(step, raw, symbols)
+              : await sendRest(step, raw, { symbols });
         } catch (error) {
           if (error.fatal || !/recorded nothing at/.test(String(error.message))) throw error;
           // An earlier step did not return what this one needs: record that, keep going.

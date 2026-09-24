@@ -5,6 +5,8 @@ import { PROGRAMS } from "./fs-query-index/corpus.mjs";
 import { scanFixture } from "./fs-query-index/fixture-scan.mjs";
 import {
   RECORDED_PROJECT,
+  decodeStatusDetail,
+  shiftInstant,
   SANDBOX_PROJECT,
   buildGrpcRequest,
   buildRestRequest,
@@ -20,7 +22,7 @@ import {
   toGrpcMessage,
   validateCorpus,
 } from "./fs-query-index/harness.mjs";
-import { classify, indexKey, selectPrograms } from "./fs-query-index/run.mjs";
+import { classify, estimatedUsd, indexKey, selectPrograms } from "./fs-query-index/run.mjs";
 
 const started = Date.parse("2026-09-24T00:00:00Z");
 const production = () =>
@@ -231,10 +233,10 @@ test("normalization masks only run-window times, durations and opaque tokens", (
     {
       document: {
         name: `projects/${RECORDED_PROJECT}/databases/(default)/documents/qn/d1`,
-        createTime: "<run-time>",
+        createTime: "<t1>",
         fields: { t: { timestampValue: "2020-01-01T00:00:00Z" } },
       },
-      readTime: "<run-time>",
+      readTime: "<t2>",
       explainMetrics: { executionStats: { executionDuration: "<duration>" } },
     },
     { nextPageToken: "<page-token>", transaction: "<transaction>" },
@@ -362,7 +364,8 @@ test("transient answers are indeterminate; a repeated production 5xx is behavior
     classify({ production: ok, alternative: { status: 201 }, fireemu: { status: 201 } }),
     "MATCH_NONDETERMINISTIC",
   );
-  assert.equal(classify({ production: ok, fireemu: { status: 503 } }), "INDETERMINATE");
+  assert.equal(classify({ production: ok, fireemu: { status: 503 } }), "MISMATCH");
+  assert.equal(classify({ production: { status: 429 }, fireemu: ok }), "INDETERMINATE");
   assert.equal(classify({ production: { status: 500 }, fireemu: { status: 500 } }), "MATCH");
   assert.equal(classify({ production: { status: 500 }, fireemu: { status: 200 } }), "MISMATCH");
 });
@@ -395,4 +398,210 @@ test("program selection by prefix and by exact id", () => {
   assert.equal(selectPrograms(programs, "fs-query-index/a/b", false).length, 2);
   assert.equal(selectPrograms(programs, "fs-query-index/a/b", true).length, 1);
   assert.throws(() => selectPrograms(programs, "none", false), /no program/);
+});
+
+test("the fixture scan refuses the project number, numeric project names and addresses", () => {
+  const number = "123456789012";
+  for (const prefix of ["", "a", "ab"]) {
+    const encoded = Buffer.from(`${prefix}consumer projects/${number}`).toString("base64");
+    assert.throws(() => scanFixture(encoded, [number]), /private value/, prefix);
+  }
+  const quota = JSON.stringify({
+    error: { details: [{ metadata: { consumer: `projects/${number}` } }] },
+  });
+  assert.throws(() => scanFixture(quota, []), /numeric project name/);
+  assert.throws(() => scanFixture('"owner@example.com"', []), /email/);
+  assert.doesNotThrow(() => scanFixture('{"@type":"type.googleapis.com/google.rpc.Help"}', []));
+});
+
+test("negative zero survives request serialization and the recorded form", () => {
+  const ctx = production();
+  const request = buildRestRequest(
+    { id: "a", rpc: "runQuery", body: { v: { doubleValue: "-0" } } },
+    ctx,
+    new Map(),
+  );
+  assert.equal(request.init.body, '{"v":{"doubleValue":"-0"}}');
+  assert.ok(Object.is(toGrpcMessage({ doubleValue: "-0" }).doubleValue, -0));
+  const recorded = normalizeRestResponse(200, '{"doubleValue":-0}', ctx);
+  assert.equal(JSON.parse(JSON.stringify(recorded)).body.doubleValue, "-0");
+  assert.equal(normalizeRestResponse(200, '{"doubleValue":0}', ctx).body.doubleValue, 0);
+});
+
+test("run-window instants become per-program symbols that keep equality", () => {
+  const ctx = production();
+  const symbols = new Map();
+  const write = normalizeRestResponse(200, '{"commitTime":"2026-09-24T00:00:05Z"}', ctx, symbols);
+  const echoed = normalizeRestResponse(
+    200,
+    '[{"readTime":"2026-09-24T00:00:05Z"},{"readTime":"2026-09-24T00:00:09Z"}]',
+    ctx,
+    symbols,
+  );
+  assert.equal(write.body.commitTime, "<t1>");
+  assert.deepEqual(echoed.body, [{ readTime: "<t1>" }, { readTime: "<t2>" }]);
+  // Symbols are numbered in sorted key order, whatever order the server sent the keys in.
+  const a = normalizeRestResponse(
+    200,
+    '{"u":"2026-09-24T00:00:01Z","c":"2026-09-24T00:00:02Z"}',
+    ctx,
+  );
+  const b = normalizeRestResponse(
+    200,
+    '{"c":"2026-09-24T00:00:02Z","u":"2026-09-24T00:00:01Z"}',
+    ctx,
+  );
+  assert.deepEqual(a.body, b.body);
+  assert.deepEqual(a.body, { c: "<t1>", u: "<t2>" });
+  // Times an hour before the run are still masked; seeded times are not.
+  assert.equal(normalizeRestResponse(200, '"2026-09-23T23:00:00Z"', ctx).body, "<t1>");
+  assert.equal(
+    normalizeRestResponse(200, '"2020-01-01T00:00:00Z"', ctx).body,
+    "2020-01-01T00:00:00Z",
+  );
+});
+
+test("chained instants shift with nanosecond precision and empty chains fail", () => {
+  assert.equal(shiftInstant("2026-09-24T00:00:05.123456Z", 0, 1), "2026-09-24T00:00:05.123456001Z");
+  assert.equal(
+    shiftInstant("2026-09-24T00:00:05.123456Z", 0, -1000),
+    "2026-09-24T00:00:05.123455Z",
+  );
+  assert.equal(shiftInstant("2026-09-24T00:00:05Z", -3660), "2026-09-23T22:59:05Z");
+  assert.equal(shiftInstant("2026-09-24T00:00:00.000001Z", 0, -1000), "2026-09-24T00:00:00Z");
+  const ctx = local();
+  const raw = new Map([["w", { commitTime: "2026-09-24T00:00:05Z", nextPageToken: "" }]]);
+  assert.equal(
+    resolveValue({ $time: { $from: "w", path: "commitTime", addSeconds: 1 } }, ctx, raw),
+    "2026-09-24T00:00:06Z",
+  );
+  assert.throws(
+    () => resolveValue({ $from: "w", path: "nextPageToken" }, ctx, raw),
+    /recorded nothing/,
+  );
+});
+
+test("guards refuse writes and scopes outside the sandbox database", () => {
+  const ctx = production();
+  const commit = (writes) =>
+    buildRestRequest({ id: "c", rpc: "commit", body: { writes } }, ctx, new Map());
+  const docs = `projects/${SANDBOX_PROJECT}/databases/(default)/documents`;
+  guardRestRequest(commit([{ update: { name: `${docs}/qt/t1`, fields: {} } }]), ctx);
+  assert.throws(
+    () =>
+      guardRestRequest(
+        commit([{ update: { name: `projects/${SANDBOX_PROJECT}/databases/cfg-x/documents/a/b` } }]),
+        ctx,
+      ),
+    /outside the sandbox database/,
+  );
+  assert.throws(
+    () =>
+      guardRestRequest(
+        commit([{ delete: `projects/${SANDBOX_PROJECT}/databases/cfg-x/documents/a/b` }]),
+        ctx,
+      ),
+    /outside the sandbox database/,
+  );
+  assert.throws(() => guardRestRequest(commit([{ delete: `${docs}/a/../../x` }]), ctx), /outside/);
+  assert.throws(
+    () =>
+      guardRestRequest(
+        buildRestRequest(
+          { id: "c", rpc: "commit", body: { transaction: "dA==", writes: [] } },
+          ctx,
+          new Map(),
+        ),
+        ctx,
+      ),
+    /transaction/,
+  );
+  // A reference value to another database is a compared value, not a target.
+  const other = {
+    referenceValue: `projects/${SANDBOX_PROJECT}/databases/other-db/documents/qn/d1`,
+  };
+  guardRestRequest(
+    buildRestRequest({ id: "q", rpc: "runQuery", body: { v: other } }, ctx, new Map()),
+    ctx,
+  );
+  assert.throws(() => guardGrpcRequest({ request: { parent: `${docs}X` } }, ctx), /outside/);
+  assert.throws(() => guardGrpcRequest({ request: { parent: `${docs}/a/..` } }, ctx), /outside/);
+  assert.throws(
+    () =>
+      guardGrpcRequest(
+        { request: { parent: docs, database: `projects/${SANDBOX_PROJECT}/databases/(default)` } },
+        ctx,
+      ),
+    /outside/,
+  );
+  assert.throws(
+    () =>
+      validateCorpus([
+        {
+          id: "fs-query-index/x/y",
+          steps: [{ id: "a", rpc: "runQuery", transport: "grpc", body: { parent: docs } }],
+        },
+      ]),
+    /own scope/,
+  );
+});
+
+test("gRPC conversion keeps null, and Struct values project to plain JSON", () => {
+  assert.deepEqual(toGrpcMessage({ value: { nullValue: null } }), {
+    value: { nullValue: "NULL_VALUE" },
+  });
+  const struct = {
+    fields: {
+      properties: { stringValue: "(a ASC)", kind: "stringValue" },
+      zero: { numberValue: 0, kind: "numberValue" },
+      no: { boolValue: false, kind: "boolValue" },
+      nothing: { nullValue: "NULL_VALUE", kind: "nullValue" },
+    },
+  };
+  assert.deepEqual(projectGrpcMessage({ planSummary: { indexesUsed: [struct] } }), {
+    planSummary: { indexesUsed: [{ properties: "(a ASC)", zero: 0, no: false, nothing: null }] },
+  });
+});
+
+test("status details decode ErrorInfo and Help", () => {
+  const field = (number, bytes) =>
+    Buffer.concat([Buffer.from([(number << 3) | 2, bytes.length]), bytes]);
+  const str = (value) => Buffer.from(value);
+  const errorInfo = Buffer.concat([
+    field(1, str("PIPELINE_REQUIRES_ENTERPRISE_EDITION")),
+    field(2, str("firestore.googleapis.com")),
+    field(3, Buffer.concat([field(1, str("k")), field(2, str("v"))])),
+  ]);
+  assert.deepEqual(
+    decodeStatusDetail({
+      typeUrl: "type.googleapis.com/google.rpc.ErrorInfo",
+      bytes: errorInfo.toString("base64"),
+    }),
+    {
+      "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+      reason: "PIPELINE_REQUIRES_ENTERPRISE_EDITION",
+      domain: "firestore.googleapis.com",
+      metadata: { k: "v" },
+    },
+  );
+  const help = field(1, Buffer.concat([field(1, str("Learn more")), field(2, str("https://x"))]));
+  assert.deepEqual(
+    decodeStatusDetail({
+      typeUrl: "type.googleapis.com/google.rpc.Help",
+      bytes: help.toString("base64"),
+    }),
+    {
+      "@type": "type.googleapis.com/google.rpc.Help",
+      links: [{ description: "Learn more", url: "https://x" }],
+    },
+  );
+  assert.deepEqual(decodeStatusDetail({ typeUrl: "t/other", bytes: "AQ==" }), {
+    "@type": "t/other",
+    bytes: "AQ==",
+  });
+});
+
+test("the cost estimate stays under the per-task budget", () => {
+  const usd = estimatedUsd(PROGRAMS, 2);
+  assert.ok(usd > 0.01 && usd < 10, `estimate ${usd}`);
 });

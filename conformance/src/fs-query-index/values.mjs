@@ -3,6 +3,7 @@
 export const nul = () => ({ nullValue: null });
 export const bool = (v) => ({ booleanValue: v });
 export const int = (v) => ({ integerValue: String(v) });
+/** A double; pass "-0" (proto3 JSON) for negative zero, which JSON numbers cannot carry. */
 export const dbl = (v) => ({ doubleValue: v });
 export const nan = () => ({ doubleValue: "NaN" });
 export const inf = (sign = 1) => ({ doubleValue: sign > 0 ? "Infinity" : "-Infinity" });

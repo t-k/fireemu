@@ -123,7 +123,7 @@ export const AGGREGATION_PROGRAMS = [
       onNumbers("sum-without-field", [{ alias: "s", sum: {} }]),
       onNumbers("sum-invalid-path", [sum("a..b", "s")]),
       onNumbers("sum-reserved-path", [sum("__x__", "s")]),
-      onNumbers("count-and-sum-same-alias-as-field", [count("n")]),
+      onNumbers("alias-equal-to-field-name", [count("n")]),
     ],
   },
 ];

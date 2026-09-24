@@ -7,6 +7,7 @@ import { aggregate, asc, count, f, field, from, int, query, sum } from "../value
 const commit = (id, writes) => ({ id, rpc: "commit", body: { writes } });
 const put = (path, n) => ({ update: { name: `{docs}/${path}`, fields: { n: int(n) } } });
 const atWrite = (step) => ({ $from: step, path: "commitTime" });
+const shifted = (step, shift) => ({ $time: { $from: step, path: "commitTime", ...shift } });
 const timeline = { from: from("qt"), select: { fields: [field("n")] } };
 
 const raw = (id, rawBody, extra = {}) => ({ id, rpc: "runQuery", rawBody, ...extra });
@@ -34,6 +35,18 @@ export const REQUEST_PROGRAMS = [
           readTime: atWrite("write-1"),
         },
       },
+      query("one-microsecond-before-write-1", timeline, {
+        body: { readTime: shifted("write-1", { addNanos: -1000 }) },
+      }),
+      query("nanosecond-after-write-1", timeline, {
+        body: { readTime: shifted("write-1", { addNanos: 1 }) },
+      }),
+      query("59-minutes-before-write-1", timeline, {
+        body: { readTime: shifted("write-1", { addSeconds: -3540 }) },
+      }),
+      query("61-minutes-before-write-1", timeline, {
+        body: { readTime: shifted("write-1", { addSeconds: -3660 }) },
+      }),
       query("future", timeline, { body: { readTime: "2099-01-01T00:00:00Z" } }),
       query("distant-past", timeline, { body: { readTime: "2020-01-01T00:00:00Z" } }),
       query("not-a-time", timeline, { body: { readTime: "yesterday" } }),

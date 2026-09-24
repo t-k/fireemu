@@ -96,6 +96,8 @@ const POINT_Y: u32 = 7;
 const REFERENCE_VALUE_APP: u32 = 13;
 const REFERENCE_VALUE_ELEMENT: u32 = 14;
 const REFERENCE_VALUE_NAMESPACE: u32 = 20;
+/// The database id a managed (Cloud Storage) export writes into keys and reference values.
+const REFERENCE_DATABASE: u32 = 23;
 const REFERENCE_ELEMENT_TYPE: u32 = 15;
 const REFERENCE_ELEMENT_ID: u32 = 16;
 const REFERENCE_ELEMENT_NAME: u32 = 17;
@@ -488,8 +490,42 @@ pub fn write_output_to(
     Ok(writer.finish().1)
 }
 
+/// How an entity names its application and database: the emulator's `dev~` application with a
+/// named database in the reference namespace (fireemu's extension), or production's managed
+/// export, whose application is the bare project id and whose keys and references carry a
+/// named database in field 23.
+#[derive(Debug, Clone, Copy)]
+enum EntityStyle<'a> {
+    Emulator,
+    Managed { database: &'a str },
+}
+
+impl EntityStyle<'_> {
+    fn app(self, project: &str) -> String {
+        match self {
+            Self::Emulator => format!("{APP_PREFIX}{project}"),
+            Self::Managed { .. } => project.to_owned(),
+        }
+    }
+}
+
 /// Encodes one document as an `EntityProto` record.
 pub fn write_entity(document: &ExportDocument) -> Result<Vec<u8>, FirestoreExportError> {
+    write_entity_styled(document, EntityStyle::Emulator)
+}
+
+/// Encodes one document of `database` as production's managed export writes it.
+pub fn write_managed_entity(
+    document: &ExportDocument,
+    database: &str,
+) -> Result<Vec<u8>, FirestoreExportError> {
+    write_entity_styled(document, EntityStyle::Managed { database })
+}
+
+fn write_entity_styled(
+    document: &ExportDocument,
+    style: EntityStyle<'_>,
+) -> Result<Vec<u8>, FirestoreExportError> {
     if document
         .fields
         .values()
@@ -504,8 +540,13 @@ pub fn write_entity(document: &ExportDocument) -> Result<Vec<u8>, FirestoreExpor
     }
     let mut w = Writer::new();
     w.write_message(ENTITY_KEY, |key| {
-        key.write_string(REFERENCE_APP, &format!("{APP_PREFIX}{}", document.project));
+        key.write_string(REFERENCE_APP, &style.app(&document.project));
         key.write_message(REFERENCE_PATH, |path| write_path(path, &document.path));
+        if let EntityStyle::Managed { database } = style {
+            if database != DatabaseId::DEFAULT {
+                key.write_string(REFERENCE_DATABASE, database);
+            }
+        }
     });
     // Only an empty list is written as an indexed property, exactly as the jar does.
     for (name, value) in &document.fields {
@@ -523,10 +564,10 @@ pub fn write_entity(document: &ExportDocument) -> Result<Vec<u8>, FirestoreExpor
             Value::Array(items) if items.is_empty() => {}
             Value::Array(items) => {
                 for item in items {
-                    write_property(&mut w, ENTITY_RAW_PROPERTY, name, item, true);
+                    write_property(&mut w, ENTITY_RAW_PROPERTY, name, item, true, style);
                 }
             }
-            other => write_property(&mut w, ENTITY_RAW_PROPERTY, name, other, false),
+            other => write_property(&mut w, ENTITY_RAW_PROPERTY, name, other, false, style),
         }
     }
     w.write_message(ENTITY_GROUP, |group| {
@@ -564,14 +605,21 @@ fn write_path(w: &mut Writer, path: &[(String, String)]) {
     }
 }
 
-fn write_property(w: &mut Writer, field: u32, name: &str, value: &Value, multiple: bool) {
+fn write_property(
+    w: &mut Writer,
+    field: u32,
+    name: &str,
+    value: &Value,
+    multiple: bool,
+    style: EntityStyle<'_>,
+) {
     w.write_message(field, |p| {
         if let Some(meaning) = meaning_of(value) {
             p.write_varint(PROPERTY_MEANING, meaning);
         }
         p.write_string(PROPERTY_NAME, name);
         p.write_bool(PROPERTY_MULTIPLE, multiple);
-        p.write_message(PROPERTY_VALUE, |v| write_value(v, value));
+        p.write_message(PROPERTY_VALUE, |v| write_value(v, value, style));
     });
 }
 
@@ -586,7 +634,7 @@ fn meaning_of(value: &Value) -> Option<u64> {
     }
 }
 
-fn write_value(w: &mut Writer, value: &Value) {
+fn write_value(w: &mut Writer, value: &Value, style: EntityStyle<'_>) {
     match value {
         // Null is an empty `PropertyValue`; an array is never reached, because
         // `write_entity` has already unrolled it into one property per element.
@@ -603,10 +651,11 @@ fn write_value(w: &mut Writer, value: &Value) {
         }),
         Value::Reference(name) => w.write_group(VALUE_REFERENCE, |r| {
             let (project, database, path) = split_reference(name).expect("validated reference");
-            r.write_string(REFERENCE_VALUE_APP, &format!("{APP_PREFIX}{project}"));
-            // The official format leaves namespace empty for the default database. The
-            // fireemu extension reuses this existing field for a named database id.
-            if database != DatabaseId::DEFAULT {
+            r.write_string(REFERENCE_VALUE_APP, &style.app(&project));
+            // The official emulator format leaves namespace empty for the default database,
+            // and the fireemu extension reuses it for a named database id. Production's
+            // managed export names a named database in field 23 after the path.
+            if database != DatabaseId::DEFAULT && matches!(style, EntityStyle::Emulator) {
                 r.write_string(REFERENCE_VALUE_NAMESPACE, &database);
             }
             for (collection, document) in path {
@@ -615,8 +664,11 @@ fn write_value(w: &mut Writer, value: &Value) {
                     e.write_string(REFERENCE_ELEMENT_NAME, &document);
                 });
             }
+            if database != DatabaseId::DEFAULT && matches!(style, EntityStyle::Managed { .. }) {
+                r.write_string(REFERENCE_DATABASE, &database);
+            }
         }),
-        Value::Map(fields) => w.write_bytes(VALUE_STRING, &write_nested_entity(fields)),
+        Value::Map(fields) => w.write_bytes(VALUE_STRING, &write_nested_entity(fields, style)),
         Value::Vector(values) => {
             let mut fields = BTreeMap::new();
             fields.insert(
@@ -627,13 +679,13 @@ fn write_value(w: &mut Writer, value: &Value) {
                 "value".to_owned(),
                 Value::Array(values.iter().map(|v| Value::Double(*v)).collect()),
             );
-            w.write_bytes(VALUE_STRING, &write_nested_entity(&fields));
+            w.write_bytes(VALUE_STRING, &write_nested_entity(&fields, style));
         }
     }
 }
 
 /// A map value is a nested `EntityProto` with an empty key and an empty entity group.
-fn write_nested_entity(fields: &BTreeMap<String, Value>) -> Vec<u8> {
+fn write_nested_entity(fields: &BTreeMap<String, Value>, style: EntityStyle<'_>) -> Vec<u8> {
     let mut w = Writer::new();
     w.write_message(ENTITY_KEY, |key| {
         key.write_string(REFERENCE_APP, "");
@@ -654,10 +706,10 @@ fn write_nested_entity(fields: &BTreeMap<String, Value>) -> Vec<u8> {
             Value::Array(items) if items.is_empty() => {}
             Value::Array(items) => {
                 for item in items {
-                    write_property(&mut w, ENTITY_RAW_PROPERTY, name, item, true);
+                    write_property(&mut w, ENTITY_RAW_PROPERTY, name, item, true, style);
                 }
             }
-            other => write_property(&mut w, ENTITY_RAW_PROPERTY, name, other, false),
+            other => write_property(&mut w, ENTITY_RAW_PROPERTY, name, other, false, style),
         }
     }
     w.write_bytes(ENTITY_GROUP, &[]);
@@ -716,6 +768,25 @@ pub fn read_entity(bytes: &[u8]) -> Result<ExportDocument, FirestoreExportError>
         path,
         fields: collect_fields(properties),
     })
+}
+
+/// The database a managed export's entity key names: field 23, or `(default)` without it.
+pub fn read_entity_database(bytes: &[u8]) -> Result<String, FirestoreExportError> {
+    let mut reader = Reader::new(bytes);
+    while let Some((field, wire)) = reader.field()? {
+        if (field, wire) == (ENTITY_KEY, WireType::Delimited) {
+            let mut key = Reader::new(reader.delimited()?);
+            while let Some((f, w)) = key.field()? {
+                if (f, w) == (REFERENCE_DATABASE, WireType::Delimited) {
+                    return Ok(key.string()?);
+                }
+                key.skip(f, w)?;
+            }
+            return Ok(DatabaseId::DEFAULT.to_owned());
+        }
+        reader.skip(field, wire)?;
+    }
+    shape("an exported entity has no key")
 }
 
 /// Rebuilds the field map from the flat property list: repeated properties with
@@ -945,6 +1016,15 @@ fn read_reference_value(bytes: &[u8]) -> Result<String, FirestoreExportError> {
                     REFERENCE_ELEMENT_ID,
                     REFERENCE_ELEMENT_NAME,
                 )?);
+            }
+            (REFERENCE_DATABASE, WireType::Delimited) => {
+                let named = reader.string()?;
+                DatabaseId::try_new(named.clone()).map_err(|error| {
+                    FirestoreExportError::Shape(format!(
+                        "the exported reference has an invalid database id {named:?}: {error}"
+                    ))
+                })?;
+                database = named;
             }
             _ => reader.skip(field, wire)?,
         }

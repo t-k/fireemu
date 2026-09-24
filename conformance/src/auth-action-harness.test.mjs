@@ -561,3 +561,36 @@ test("the client route allows exactly the owner's two email changes", () => {
   };
   assert.throws(() => validateActionCorpus([{ id: "p", steps: [create] }]), /never belong/);
 });
+
+test("client link requests take no query, and lvc addresses stay unowned in any spelling", () => {
+  const body = { requestType: "VERIFY_AND_CHANGE_EMAIL", idToken: "t", newEmail: "EMAIL(lvc-one)" };
+  const step = { id: "s", path: "v1/accounts:sendOobCode", auth: "key", body };
+  const withQuery = request(production, { ...step, query: { returnOobLink: "true" } });
+  assert.throws(() => guardActionRequest(withQuery, production), /no query/);
+  assert.throws(() =>
+    validateActionCorpus([{ id: "p", steps: [{ ...step, query: { email: "x" } }] }]),
+  );
+  assert.throws(() => validateActionCorpus([{ id: "p", steps: [{ ...step, auth: "admin" }] }]));
+  assert.throws(
+    () => validateActionCorpus([{ id: "p", steps: [step, { ...step, id: "t" }] }]),
+    /fresh/,
+  );
+  const create = (email) => ({
+    id: "c",
+    path: "v1/projects/{project}/accounts",
+    auth: "admin",
+    body: { email },
+  });
+  assert.throws(
+    () => validateActionCorpus([{ id: "p", steps: [create("EMAILMIXED(lvc-one)")] }]),
+    /never belong/,
+  );
+  assert.throws(
+    () => validateActionCorpus([{ id: "p", steps: [create("EMAILMIXED(unknown-1)")] }]),
+    /never belong/,
+  );
+  assert.throws(
+    () => validateActionCorpus([{ id: "p", steps: [create({ $from: "a:email" })] }]),
+    /by value/,
+  );
+});

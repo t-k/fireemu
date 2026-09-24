@@ -1,11 +1,15 @@
 {
   "schemaVersion": 1,
   "parent": "FS-CONFIG-LIFECYCLE",
-  "parentStatus": "WAITING_ORACLE",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
-    "decision": "PENDING",
-    "reviewer": null
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-24",
+    "reviewer": "independent clean-context closure review and security review (round 3 each)",
+    "reviewedCommit": "e12f33583",
+    "finalArtifactSha256": "6869c8325226d16d1f467bfc565d5052c5ce218a0bd7444b8d6753cb0a9876b4",
+    "followUps": "Non-blocking notes are tracked outside the closure: an index-file index withdrawn through the Admin API, and the index-file indexes of a deleted and recreated database, stay gone until a session reset even if the index file declares them again; decoded import documents are bounded only by the 1 GiB raw output budget; the withdrawn and dropped registries grow per owner delete until reset; a test that refused queries leave the index registry unchanged."
   },
   "scopeDecisions": [
     {
@@ -608,7 +612,43 @@
         "FS-CONFIG-LIFECYCLE",
         "fs-config"
       ],
-      "status": "PENDING_CORPUS"
+      "status": "VERIFIED",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T09:14:10.616Z",
+            "gitSha": "7419c955b72abfebd4819e696abce73df9853543",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T09:17:20.017Z",
+            "gitSha": "f9f86461ade51f266f20b28f6bf45b28888b5a40",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T09:42:27.042Z",
+            "gitSha": "c2b8462904d0b0439bc0f71d20febb401406e8c7",
+            "recordings": 2,
+            "project": "fireemu-fs-bisect-0924a"
+          }
+        ],
+        "finalArtifactSha256": "6869c8325226d16d1f467bfc565d5052c5ce218a0bd7444b8d6753cb0a9876b4",
+        "sourceCommit": "8d35c61bd131f0ee401f78213aa1e2f86583c10f",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 247,
+          "MATCH_NONDETERMINISTIC": 15,
+          "MATCH_RELABELED": 1
+        }
+      }
     }
   ]
 }

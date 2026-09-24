@@ -1,4 +1,5 @@
-// FS-QUERY-INDEX sandbox runner.
+// Sandbox runner of FS-QUERY-INDEX and, with FIREEMU_SANDBOX_LANE=fs-data-write-list, of the
+// FS-DATA-WRITE-LIST observation (lanes.mjs). File names below are the FS-QUERY-INDEX lane's.
 //
 //   node src/fs-query-index/run.mjs verify-indexes      read-only: the sandbox's composite
 //                                                       indexes and field overrides must equal
@@ -30,8 +31,6 @@ import { promisify } from "node:util";
 
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
-import { PROGRAMS } from "./corpus.mjs";
-import { approvedDivergence, crossRowChecks } from "./divergences.mjs";
 import { scanFixture } from "./fixture-scan.mjs";
 import {
   DATABASE,
@@ -44,14 +43,21 @@ import {
   sameRecording,
   validateCorpus,
 } from "./harness.mjs";
+import { selectLane } from "./lanes.mjs";
 import { runCorpus } from "./session.mjs";
 
 const execFileAsync = promisify(execFile);
-const FIXTURE = join(CONFORMANCE_DIR, "fs-query-index-production.json");
-const INDEXES = join(CONFORMANCE_DIR, "fs-query-index.indexes.json");
-const LOCAL_CONFIG = join(CONFORMANCE_DIR, "fs-query-index.fireemu.json");
-const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "fs-query-index");
-const TASK_ID = "FS-QUERY-INDEX-SANDBOX";
+const LANE = selectLane();
+const { PROGRAMS } = await import(LANE.corpus);
+// A lane without approved divergences compares every row strictly.
+const { approvedDivergence, crossRowChecks } = LANE.divergences
+  ? await import(LANE.divergences)
+  : { approvedDivergence: () => undefined, crossRowChecks: () => ({ demote: new Set() }) };
+const FIXTURE = join(CONFORMANCE_DIR, LANE.fixture);
+const INDEXES = join(CONFORMANCE_DIR, LANE.indexes);
+const LOCAL_CONFIG = join(CONFORMANCE_DIR, LANE.localConfig);
+const RUN_DIR = join(CONFORMANCE_DIR, ".runs", LANE.id);
+const TASK_ID = LANE.taskId;
 const ADMIN_ORIGIN = "https://firestore.googleapis.com/v1";
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
@@ -112,15 +118,7 @@ async function assertIgnored(path) {
 async function assertCleanTree() {
   const { stdout } = await execFileAsync(
     "git",
-    [
-      "status",
-      "--porcelain",
-      "--",
-      "src/fs-query-index",
-      "fs-query-index-production.json",
-      "fs-query-index.fireemu.json",
-      "fs-query-index.indexes.json",
-    ],
+    ["status", "--porcelain", "--", ...LANE.sources, LANE.fixture, LANE.localConfig, LANE.indexes],
     { cwd: CONFORMANCE_DIR },
   );
   if (stdout.trim()) throw new Error(`record-production needs a clean tree:\n${stdout}`);
@@ -285,7 +283,7 @@ async function verifyIndexes() {
     extra.length ||
     !sameRecording(actualOverrides, wantedOverrides)
   )
-    throw new Error("sandbox indexes do not equal fs-query-index.indexes.json");
+    throw new Error(`sandbox indexes do not equal ${LANE.indexes}`);
 }
 
 /**
@@ -374,7 +372,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
     target:
       "production Firestore REST v1 and gRPC google.firestore.v1, Standard edition, us-central1, database (default)",
     project: RECORDED_PROJECT,
-    indexes: "conformance/fs-query-index.indexes.json",
+    indexes: `conformance/${LANE.indexes}`,
     note: "Two recordings per program. Run-window times, execution durations, page and transaction tokens and the project id are placeholders; missing-index links keep their encoded index with the project id replaced. `second` holds the other recording of rows that differed.",
   };
   for (const program of programs) {
@@ -410,7 +408,7 @@ async function recordProduction() {
   }
   await assertCleanTree();
   const programs = selectPrograms(PROGRAMS);
-  const corpusRequests = validateCorpus(programs);
+  const corpusRequests = validateCorpus(programs, LANE.id);
   const meta = {
     sha: await gitSha(),
     harness: await harnessDigest(),
@@ -421,10 +419,7 @@ async function recordProduction() {
   const secrets = await privateValues();
   await assertIgnored(privateRoot);
   await assertIgnored(dirname(ledger));
-  const runDir = join(
-    privateRoot,
-    `fs-query-index-production-${meta.startedAt.replaceAll(":", "")}`,
-  );
+  const runDir = join(privateRoot, `${LANE.id}-production-${meta.startedAt.replaceAll(":", "")}`);
   await mkdir(runDir, { recursive: true, mode: 0o700 });
   const recordings = [];
   let outcome = "recorded";
@@ -765,7 +760,7 @@ async function exportComparison(out) {
   const comparison = JSON.parse(await readFile(join(RUN_DIR, "comparison.json"), "utf8"));
   const fixtureSha256 = sha256(await readFile(FIXTURE, "utf8"));
   const evidence = {
-    kind: "fs-query-index-comparison-v1",
+    kind: `${LANE.id}-comparison-v1`,
     artifactSha256: comparison.artifactSha256,
     fixtureSha256,
     summary: comparison.summary,

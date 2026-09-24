@@ -113,11 +113,17 @@ fn partition_query_rejects_non_string_page_tokens_instead_of_restarting() {
         for token in invalid_tokens() {
             let mut body = partition_body();
             body["pageToken"] = token.clone();
-            // The query transcoder refuses a non-string page token before the method runs.
-            assert_refused(
-                &call(&state, "POST", &path, body),
-                &format!("Invalid value at 'page_token' (TYPE_STRING), {token}"),
-            );
+            // Production's transcoder refuses a non-string page token before the method runs
+            // (strict); the emulator profile keeps fireemu's own refusal.
+            let response = call(&state, "POST", &path, body);
+            if strict {
+                assert_refused(
+                    &response,
+                    &format!("Invalid value at 'page_token' (TYPE_STRING), {token}"),
+                );
+            } else {
+                assert_type_error(&response);
+            }
         }
     }
 }

@@ -39,7 +39,7 @@ use fireemu_core_types::resources::{
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
-use crate::decode::{decode_structured_query, parse_parent, DecodeError, Parent};
+use crate::decode::{decode_structured_query_in, parse_parent, DecodeError, Parent};
 use crate::encode::{
     decode_document_name, decode_fields, decode_mask, decode_precondition, decode_transaction,
     decode_write, encode_document, encode_instant, encode_transaction, encode_value,
@@ -2672,7 +2672,8 @@ impl LocalBackend {
         parent: &Parent,
         sq: &pb::StructuredQuery,
     ) -> Result<AcceptedQuery, Status> {
-        let query = decode_structured_query(parent, sq).map_err(status)?;
+        let query = decode_structured_query_in(parent, sq, self.gateway.production_refusals())
+            .map_err(status)?;
         let database_indexes = self.planning_indexes(parent)?;
         self.gateway
             .validate_query_with_indexes(&query, &database_indexes)
@@ -2686,7 +2687,8 @@ impl LocalBackend {
         sq: &pb::StructuredQuery,
         aggregations: &[Aggregation],
     ) -> Result<AcceptedQuery, Status> {
-        let query = decode_structured_query(parent, sq).map_err(status)?;
+        let query = decode_structured_query_in(parent, sq, self.gateway.production_refusals())
+            .map_err(status)?;
         let database_indexes = self.planning_indexes(parent)?;
         self.gateway
             .validate_aggregation_query_with_indexes(&query, aggregations, &database_indexes)
@@ -3464,7 +3466,14 @@ impl LocalBackend {
                 (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
             })
         };
-        // The page token: `<version>:<fingerprint>:<index>`.
+        // The fingerprint covers the version too, so a token cannot be edited to read an
+        // older snapshot than the one it was issued for.
+        let bound = |version: u64| {
+            version.to_be_bytes().iter().fold(fingerprint, |h, b| {
+                (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+            })
+        };
+        // The page token: `<version>:<fingerprint of the request and version>:<index>`.
         let (token_version, start) = if req.page_token.is_empty() {
             (None, 0usize)
         } else {
@@ -3481,7 +3490,7 @@ impl LocalBackend {
             // query, count or read time, or before a reset), in its own words.
             let ((v, f), i) = parsed
                 .ok_or_else(|| Status::invalid_argument(crate::partition::TOKEN_UNREADABLE))?;
-            if f != fingerprint {
+            if f != bound(v) {
                 return Err(Status::invalid_argument(crate::partition::TOKEN_FOREIGN));
             }
             (Some(CommitVersion::from_value(v)), i)
@@ -3493,7 +3502,7 @@ impl LocalBackend {
                 (None, None) => db.current_version(),
             };
             if version > db.current_version() {
-                return Err(Status::invalid_argument("invalid page_token"));
+                return Err(Status::invalid_argument(crate::partition::TOKEN_FOREIGN));
             }
             if !split {
                 return Ok((Vec::new(), version));
@@ -3526,7 +3535,7 @@ impl LocalBackend {
         Ok(pb::PartitionQueryResponse {
             partitions: cursors[start..end].to_vec(),
             next_page_token: if end < cursors.len() {
-                format!("{}:{fingerprint}:{end}", version.value())
+                format!("{}:{}:{end}", version.value(), bound(version.value()))
             } else {
                 String::new()
             },
@@ -3953,6 +3962,7 @@ impl LocalBackend {
         // Production answers a read_time before the database existed with INVALID_ARGUMENT and
         // one inside the database's life but outside the retention window with
         // FAILED_PRECONDITION, in these words (conformance/firestore-production-matrix.json).
+        // Both profiles refuse it: fireemu did before the strict profile existed.
         if at < self.created_at {
             return Err(Status::invalid_argument(
                 "The requested 'read_time' cannot be before database creation time.",
@@ -5268,7 +5278,7 @@ impl LocalBackend {
         };
         let sq = crate::query_messages::aggregation_structured_query(saq);
         let sq = sq.as_ref();
-        let (aliases, aggregations) = decode_aggregations(saq)?;
+        let (aliases, aggregations) = decode_aggregations(saq, self.gateway.production_refusals())?;
         let accepted = self
             .accepted_aggregation_query(&parent, sq, &aggregations)
             .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
@@ -5898,8 +5908,9 @@ pub fn encode_commit(result: &CommitResult) -> pb::CommitResponse {
 /// (`crate::query_messages::decode_aggregations`).
 pub(crate) fn decode_aggregations(
     saq: &pb::StructuredAggregationQuery,
+    production_refusals: bool,
 ) -> Result<(Vec<String>, Vec<Aggregation>), Status> {
-    crate::query_messages::decode_aggregations(saq)
+    crate::query_messages::decode_aggregations(saq, production_refusals)
 }
 
 /// Catalog key of a database.

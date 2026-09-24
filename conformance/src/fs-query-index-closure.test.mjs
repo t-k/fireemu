@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { PROGRAMS } from "./fs-query-index/corpus.mjs";
-import { DIVERGENCES } from "./fs-query-index/divergences.mjs";
+import { DIVERGENCES, RANGE_ROWS } from "./fs-query-index/divergences.mjs";
 
 const closurePath = fileURLToPath(
   new URL("../../spec/compatibility/closure/FS-QUERY-INDEX.json", import.meta.url),
@@ -69,6 +69,20 @@ const statuses = new Set([
 ]);
 
 const load = () => JSON.parse(readFileSync(closurePath, "utf8"));
+
+/** The response paths each owner decision lets a row differ at. */
+const DECISION_PATHS = {
+  S4: [/\.error\.message$/, /\.indexesUsed\.\d+\.properties$/, /\.index_entries_scanned$/],
+  S5: [/\.partitions\.\d+(\.values\.0\.referenceValue)?$/, /\.aggregateFields\.c\.integerValue$/],
+};
+
+/** Whether a condition covers the partition range rows, whose totals must be recorded. */
+const rowsOwnRanges = (condition) =>
+  RANGE_ROWS.some((row) =>
+    condition.recipeIds.some(
+      (recipe) => recipe === "fs-query-index" || row.startsWith(`${recipe}/`),
+    ),
+  );
 const readRepo = (path) =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8"));
 
@@ -127,15 +141,17 @@ test("FS-QUERY-INDEX closure inventory cannot silently omit a declared condition
       steps.toSorted(),
       `${label}: the comparison covers every corpus step once`,
     );
-    if (comparison.rangeTotals) {
+    if (rowsOwnRanges(condition)) {
+      assert.ok(comparison.rangeTotals, `${label}: the range totals are recorded`);
       assert.equal(comparison.rangeTotals.production, comparison.rangeTotals.fireemu, label);
     }
     const rows = comparison.rows.filter(({ row }) => covered(row));
     const counted = {};
     for (const { status } of rows) counted[status] = (counted[status] ?? 0) + 1;
+    // The review covers the whole lane, so its figures are the comparison's summary.
     assert.deepEqual(
       condition.evidence.rows,
-      counted,
+      label === "FS-QUERY-INDEX/closure-review" ? comparison.summary : counted,
       `${label}: its figures are the comparison's`,
     );
     const fixture = JSON.parse(fixtureText);
@@ -162,6 +178,19 @@ test("FS-QUERY-INDEX closure inventory cannot silently omit a declared condition
         `${label}: ${divergence.row} differs only as its decision allows`,
       );
       assert.equal(compared.decision, divergence.scopeDecision, `${label}: ${divergence.row}`);
+      // The committed evidence carries no bodies, but its difference paths must lie within
+      // what the decision names.
+      const allowed = DECISION_PATHS[divergence.scopeDecision];
+      assert.ok(
+        compared.differences?.length > 0,
+        `${label}: ${divergence.row} lists its differences`,
+      );
+      for (const path of compared.differences) {
+        assert.ok(
+          allowed.some((pattern) => pattern.test(path)),
+          `${label}: ${divergence.row} differs at ${path}, outside ${divergence.scopeDecision}`,
+        );
+      }
     }
     const documented = new Set(divergences.map(({ row }) => row));
     const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);

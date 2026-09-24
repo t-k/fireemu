@@ -7,6 +7,8 @@
 use fireemu_core_firestore::field_path::FieldPathError;
 use fireemu_core_types::ids::IdSyntaxError;
 
+use fireemu_core_types::codec::echo;
+
 use crate::decode::{parse_parent, DecodeError, Parent};
 
 /// Production's refusal of a `runQuery` without a query (REST and gRPC alike: the transcoder
@@ -50,7 +52,7 @@ pub fn property_path_error(input: &str, error: &FieldPathError) -> DecodeError {
         FieldPathError::Empty => EMPTY_PROPERTY_PATH.to_owned(),
         FieldPathError::ReservedSegment { index } => {
             let segment = segment_text(input, *index);
-            format!("Invalid reserved name in field path {segment}")
+            format!("Invalid reserved name in field path {}", echo(segment))
         }
         FieldPathError::PathTooLong { .. } | FieldPathError::SegmentTooLong { .. } => {
             "property path is longer than 1500 bytes.".to_owned()
@@ -64,7 +66,8 @@ pub fn property_path_error(input: &str, error: &FieldPathError) -> DecodeError {
             "Invalid property path".to_owned()
         }
         _ => format!(
-            r#"Invalid property path "{input}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+            r#"Invalid property path "{}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#,
+            echo(input)
         ),
     };
     DecodeError::Refused(message)
@@ -83,12 +86,18 @@ pub fn collection_id_error(id: &str, error: &IdSyntaxError) -> DecodeError {
             "The query kind is longer than 1500 bytes.".to_owned()
         }
         IdSyntaxError::ReservedDunder | IdSyntaxError::DotSegment => {
-            format!("Collection id \"{id}\" is invalid because it is reserved.")
+            format!(
+                "Collection id \"{}\" is invalid because it is reserved.",
+                echo(id)
+            )
         }
         IdSyntaxError::ContainsSlash => {
-            format!("Collection id \"{id}\" is invalid because it contains \"/\".")
+            format!(
+                "Collection id \"{}\" is invalid because it contains \"/\".",
+                echo(id)
+            )
         }
-        other => format!("Collection id \"{id}\" is invalid: {other}"),
+        other => format!("Collection id \"{}\" is invalid: {other}", echo(id)),
     };
     DecodeError::Refused(message)
 }
@@ -97,7 +106,8 @@ pub fn collection_id_error(id: &str, error: &IdSyntaxError) -> DecodeError {
 #[must_use]
 pub fn reference_is_not_a_document(name: &str) -> String {
     format!(
-        "Document parent name \"{name}\" lacks \"/\" at index {}.",
+        "Document parent name \"{}\" lacks \"/\" at index {}.",
+        echo(name),
         name.len()
     )
 }
@@ -121,12 +131,15 @@ pub fn parse_query_parent(parent: &str) -> Result<Parent, DecodeError> {
 
 /// Production refuses a nearest-neighbour query that also carries a limit, an offset or a
 /// cursor (FS-QUERY-INDEX vector/with-query-clauses). Checked on the request as the caller
-/// sent it, because the gRPC service pages a query by adding a limit of its own.
+/// sent it, because the gRPC service pages a query by adding a limit of its own. Only with
+/// `production_refusals` (the strict profile); the emulator profile applies those stages
+/// before the nearest-neighbour ranking, as fireemu did before.
 #[allow(clippy::result_large_err)]
 pub fn check_find_nearest_request(
     query: &fireemu_proto_firestore::google::firestore::v1::StructuredQuery,
+    production_refusals: bool,
 ) -> Result<(), tonic::Status> {
-    if query.find_nearest.is_none() {
+    if !production_refusals || query.find_nearest.is_none() {
         return Ok(());
     }
     let refusal = if query.limit.is_some() {
@@ -145,9 +158,14 @@ pub fn check_find_nearest_request(
 /// (FS-QUERY-INDEX aggregation rows, recorded 2026-09-24): one to five aggregations, default
 /// aliases `field_1`, `field_2`, ... numbered over the unnamed aggregations only, aliases held
 /// to the property-name rules, and production's texts for every refusal.
+///
+/// Without `production_refusals` (the emulator profile) the aliases are what fireemu gave
+/// before: a default alias numbered by position, and no property-name rule, so the profile adds
+/// no rejection.
 #[allow(clippy::result_large_err)]
 pub fn decode_aggregations(
     saq: &fireemu_proto_firestore::google::firestore::v1::StructuredAggregationQuery,
+    production_refusals: bool,
 ) -> Result<(Vec<String>, Vec<fireemu_core_firestore::store::Aggregation>), tonic::Status> {
     use fireemu_core_firestore::store::Aggregation;
     use fireemu_proto_firestore::google::firestore::v1::structured_aggregation_query::aggregation::Operator as O;
@@ -179,7 +197,7 @@ pub fn decode_aggregations(
     let mut aliases: Vec<String> = Vec::with_capacity(saq.aggregations.len());
     let mut aggregations = Vec::with_capacity(saq.aggregations.len());
     let mut unnamed = 0;
-    for a in &saq.aggregations {
+    for (position, a) in saq.aggregations.iter().enumerate() {
         let aggregation = match &a.operator {
             Some(O::Count(count)) => Aggregation::Count {
                 up_to: match count.up_to {
@@ -202,7 +220,16 @@ pub fn decode_aggregations(
         };
         let alias = if a.alias.is_empty() {
             unnamed += 1;
-            format!("field_{unnamed}")
+            format!(
+                "field_{}",
+                if production_refusals {
+                    unnamed
+                } else {
+                    position + 1
+                }
+            )
+        } else if !production_refusals {
+            a.alias.clone()
         } else {
             if a.alias.len() > 1500 {
                 return Err(tonic::Status::invalid_argument(

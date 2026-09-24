@@ -1429,6 +1429,15 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
     })
 }
 
+/// A wrapper message's value as fireemu read it before (`int32`): `{"value": ...}` unwrapped at
+/// any depth, an empty wrapper as null.
+fn unwrap_wrapper(mut value: &Value) -> &Value {
+    while let Value::Object(wrapper) = value {
+        value = wrapper.get("value").unwrap_or(&Value::Null);
+    }
+    value
+}
+
 /// JSON → aggregation query.
 pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregationQuery, JsonError> {
     use pb::structured_aggregation_query::aggregation as agg;
@@ -1439,8 +1448,11 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
             .map(|a| {
                 let operator = if let Some(c) = a.get("count") {
                     Some(agg::Operator::Count(agg::Count {
-                        // `upTo` is an Int64Value (the transcoder spells it as a string).
-                        up_to: match c.get("upTo") {
+                        // `upTo` is an Int64Value (the transcoder spells it as a string). Its
+                        // wrapper message form is read as fireemu read it before:
+                        // `{"value": ...}` at any depth, and an empty wrapper as no cap. The
+                        // strict transcoder admits only the plain `{"value": n}` form.
+                        up_to: match c.get("upTo").map(unwrap_wrapper) {
                             None | Some(Value::Null) => None,
                             Some(Value::String(text)) => Some(
                                 text.parse::<i64>()

@@ -59,8 +59,13 @@ fn aggregation_order_normalization_preserves_invalid_argument_and_index_directio
             &gateway.indexes,
         )
         .unwrap();
+    // The emulator profile's canonical query carries no production-only refusals.
     assert_eq!(
-        accepted.query, query,
+        accepted.query,
+        Query {
+            production_refusals: false,
+            ..query.clone()
+        },
         "authorization must retain caller-supplied order metadata"
     );
     let fireemu_core_firestore::index::IndexDecision::AssumedIndex { requirement } =

@@ -8,6 +8,37 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `firestore.databaseCreateTime` sets the creation time the daemon's databases report and the instant before which a `read_time` is refused (strict profile). It defaults to the daemon's start.
+- Firestore Explain reports the index each query disjunct scans and production's billing (index and document entries, read operations, minimum query cost) for queries, aggregations and nearest-neighbour searches, in both profiles.
+- REST routes `{database}/documents:executePipeline` under the strict profile, answering production's Standard-edition refusal.
+
+### Changed
+
+These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Unless marked strict, they apply under the `emulator` profile too, where they change results or shapes but add no rejection.
+
+- REST `runQuery`, `runAggregationQuery` and `executePipeline` answer an error inside a one-element JSON array; refusal texts, `google.rpc` details (ErrorInfo, Help, BadRequest) and the missing-index console link (strict) are production's.
+- REST request bodies are read with production's JSON grammar: bare keys, single-quoted strings and trailing commas are accepted, and a body that is not JSON is refused in production's words with 20 bytes of context.
+- Strict only: query bodies go through production's transcoder check (schema, case-insensitive and numeric enums, wrapper forms, field violations).
+- A kindless query without `allDescendants` reads the parent's direct children, not every descendant.
+- `IS_NOT_NAN` excludes null, and a range against NaN matches nothing.
+- gRPC `RunQuery` no longer marks a response `done`.
+- findNearest ranks equal distances by document name, and count, sum and avg aggregate over its results. Strict only: a query-level limit, offset or cursor is refused, and a cosine search that meets a zero vector is refused with FAILED_PRECONDITION; the emulator profile keeps applying those stages before the ranking and leaves a zero vector out.
+- A count capped at zero answers without reading, after authorization. Strict only: unnamed aggregations are numbered `field_1`, `field_2`, ... over the unnamed ones only, and an alias that is reserved (`__x__`) or longer than 1500 bytes is refused; the emulator profile keeps numbering them by position and admits any alias.
+- PartitionQuery splits at sampled keys (about one in 141): `partition_count` cursors, nested across counts, in key order, without `before`, with production's refusal texts; a small group, a kindless query or one without an explicit order gets no partition.
+- Index selection merges automatic indexes with an array-contains filter, lets a collection-group composite serve a collection query, and checks aggregations over findNearest against their vector index.
+- Strict only: refusals only production makes during query canonicalization (a kindless filter or order, a duplicate order field, an empty OR, array membership and unary filters on `__name__`, a cursor longer than the explicit order), a `__name__` filter on a reference that is not a document, and a projection on a PartitionQuery.
+- Strict only: over REST, a query method on a root collection (`documents/users:runQuery`) is routed to the create template and refused for its query keys, as production's front end does; the emulator profile keeps the query route, which refuses the collection parent.
+- Under the emulator profile, a REST body that production's grammar refuses but standard JSON admits (nesting deeper than 100 levels) is read as standard JSON. In both profiles a JSON `-0` in a REST body is the integer 0, as production's grammar reads it.
+- findNearest's `distanceResultField` names one property, as production reads it: `a.b` is a field named `a.b`, not a nested path.
+- A `read_time` before the database's creation time is refused in production's words, in both profiles.
+
+### Fixed
+
+- A refusal echoes at most 1 KiB of the value, key, path or property path it names, and a transcoder refusal lists at most 16 violations, so a large request cannot grow the response or the daemon's memory many times its size.
+- The partition page token is bound to its snapshot version.
+
 ## [0.7.1] - 2026-09-10
 
 ### Fixed

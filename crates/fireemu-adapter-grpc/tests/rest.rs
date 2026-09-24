@@ -4884,3 +4884,550 @@ fn rest_name_filter_references_are_refused_for_their_own_fault() {
     let dotted = "projects/demo-app/databases/(default)/documents/qn/d/./x".to_owned();
     assert!(!refusal(&dotted).contains("lacks"), "{}", refusal(&dotted));
 }
+
+/// The refusals only production makes stay out of the emulator profile, which may add no
+/// rejection (`spec/compatibility/contract.json`): the transcoder's and the Standard REST
+/// pipeline route. Each is pinned on both profiles; the emulator side answers as it did before.
+#[test]
+fn production_only_refusals_differ_between_the_profiles() {
+    let strict = state_with_profile(true);
+    let emulator = state_with_profile(false);
+    for s in [&strict, &emulator] {
+        let (status, body) = call(
+            s,
+            "PATCH",
+            &format!("{DOCS}/c/d"),
+            json!({"fields": {"v": {"integerValue": "1"}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let query = |s: &RestState, body: Value| call(s, "POST", &format!("{DOCS}:runQuery"), body);
+    // The transcoder: an unknown field in the structured query.
+    let body = json!({"structuredQuery": {"from": [{"collectionId": "c"}], "extra": 1}});
+    let (status, refused) = query(&strict, body.clone());
+    assert_eq!(status, 400);
+    assert_eq!(
+        refused[0]["error"]["message"],
+        "Invalid JSON payload received. Unknown name \"extra\" at 'structured_query': Cannot find field."
+    );
+    let (status, answered) = query(&emulator, body);
+    assert_eq!(status, 200, "{answered}");
+    assert_eq!(answered.as_array().unwrap().len(), 1, "{answered}");
+    assert!(answered[0]["document"]["name"]
+        .as_str()
+        .unwrap()
+        .ends_with("/c/d"));
+    // The REST pipeline route on a Standard database.
+    let (status, _) = call(
+        &strict,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        json!({}),
+    );
+    assert_eq!(status, 400);
+    let (status, _) = call(
+        &emulator,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        json!({}),
+    );
+    assert_eq!(status, 404);
+}
+
+/// A read time before the database was created is refused on both profiles: production does,
+/// and fireemu did before FS-QUERY-INDEX (the emulator profile keeps every earlier refusal).
+#[test]
+fn a_read_time_before_database_creation_is_refused_on_both_profiles() {
+    // Half an hour before the database was created (its clock start), inside the retention
+    // hour.
+    let early = json!({"structuredQuery": {"from": [{"collectionId": "c"}]},
+        "readTime": "2026-08-29T11:31:00Z"});
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        let (status, refused) = call(&s, "POST", &format!("{DOCS}:runQuery"), early.clone());
+        assert_eq!(status, 400, "strict={strict} {refused}");
+        assert_eq!(
+            refused[0]["error"]["message"],
+            "The requested 'read_time' cannot be before database creation time.",
+            "strict={strict}"
+        );
+    }
+}
+
+/// Both profiles with `qn/a` (v 1) and `qn/b` (v 2). The tests below pin requests fireemu
+/// accepted before FS-QUERY-INDEX that production refuses: the strict profile refuses each in
+/// production's words, the emulator profile still answers them (confirmation review
+/// 2026-09-24, Must Fix 1 and 2).
+fn seeded_profiles() -> (RestState, RestState) {
+    let strict = state_with_profile(true);
+    let emulator = state_with_profile(false);
+    for s in [&strict, &emulator] {
+        for (id, v) in [("a", 1), ("b", 2)] {
+            let (status, body) = call(
+                s,
+                "PATCH",
+                &format!("{DOCS}/qn/{id}"),
+                json!({"fields": {"v": {"integerValue": v.to_string()}}}),
+            );
+            assert_eq!(status, 200, "{body}");
+        }
+    }
+    (strict, emulator)
+}
+
+#[test]
+fn the_emulator_profile_never_routes_a_query_method_to_a_create() {
+    let (_, emulator) = seeded_profiles();
+    // A query method on a root collection: production routes it to the create template and
+    // refuses the query keys; the emulator profile keeps the query route, which refuses the
+    // collection parent, and never creates a document.
+    let (status, body) = call(
+        &emulator,
+        "POST",
+        &format!("{DOCS}/qn:runQuery"),
+        json!({"structuredQuery": {"from": [{"collectionId": "qn"}]}}),
+    );
+    assert_eq!(status, 400, "{body}");
+    for method in ["runAggregationQuery", "partitionQuery"] {
+        let (status, body) = call(
+            &emulator,
+            "POST",
+            &format!("{DOCS}/qn:{method}"),
+            json!({"structuredQuery": {"from": [{"collectionId": "qn"}]}}),
+        );
+        assert_eq!(status, 400, "{method}: {body}");
+    }
+    let (status, body) = call(
+        &emulator,
+        "GET",
+        &format!("{DOCS}/qn:runQuery"),
+        json!(null),
+    );
+    assert_eq!(status, 404, "{body}");
+    let (status, listed) = call(
+        &emulator,
+        "POST",
+        &format!("{DOCS}:listCollectionIds"),
+        json!({}),
+    );
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(listed["collectionIds"], json!(["qn"]), "{listed}");
+}
+
+#[test]
+fn the_emulator_profile_keeps_the_earlier_aggregation_aliases() {
+    let (strict, emulator) = seeded_profiles();
+    let aggregate = |s: &RestState, aggregations: Value| {
+        call(
+            s,
+            "POST",
+            &format!("{DOCS}:runAggregationQuery"),
+            json!({"structuredAggregationQuery": {
+                "structuredQuery": {"from": [{"collectionId": "qn"}]},
+                "aggregations": aggregations}}),
+        )
+    };
+    // An alias equal to the name production gives the first unnamed aggregation.
+    let colliding =
+        json!([{"alias": "field_1", "count": {}}, {"sum": {"field": {"fieldPath": "v"}}}]);
+    let (status, body) = aggregate(&strict, colliding.clone());
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
+        "Aggregation aliases contain duplicate alias: field_1."
+    );
+    let (status, body) = aggregate(&emulator, colliding);
+    assert_eq!(status, 200, "{body}");
+    let fields = &body[0]["result"]["aggregateFields"];
+    assert_eq!(fields["field_1"]["integerValue"], "2", "{body}");
+    assert_eq!(fields["field_2"]["integerValue"], "3", "{body}");
+    // A reserved alias, and one longer than 1500 bytes.
+    let long = "a".repeat(1501);
+    for (alias, refusal) in [
+        (
+            "__x__".to_owned(),
+            "The property.name \"__x__\" is reserved.".to_owned(),
+        ),
+        (
+            long.clone(),
+            "The property.name is longer than 1500 bytes.".to_owned(),
+        ),
+    ] {
+        let aggregations = json!([{"alias": alias, "count": {}}]);
+        let (status, body) = aggregate(&strict, aggregations.clone());
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(stream_error(&body)["error"]["message"], refusal.as_str());
+        let (status, body) = aggregate(&emulator, aggregations);
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body[0]["result"]["aggregateFields"][alias.as_str()]["integerValue"],
+            "2"
+        );
+    }
+    // `count.upTo` in its wrapper message form, which fireemu read before (production's
+    // answer is not observed; the strict transcoder admits the wrapper message too).
+    // The emulator profile reads every wrapper form as before; the strict transcoder admits
+    // the plain wrapper and judges the empty and nested ones itself.
+    for (up_to, count, strict_too) in [
+        (json!({"value": 1}), "1", true),
+        (json!({}), "2", false),
+        (json!({"value": {"value": 1}}), "1", false),
+        (json!({"value": {}}), "2", false),
+    ] {
+        let wrapped = json!([{"alias": "c", "count": {"upTo": up_to}}]);
+        let profiles: &[&RestState] = if strict_too {
+            &[&strict, &emulator]
+        } else {
+            &[&emulator]
+        };
+        for s in profiles {
+            let (status, body) = aggregate(s, wrapped.clone());
+            assert_eq!(status, 200, "{up_to}: {body}");
+            assert_eq!(
+                body[0]["result"]["aggregateFields"]["c"]["integerValue"], count,
+                "{up_to}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_emulator_profile_keeps_partition_projections_and_name_comparisons() {
+    let (strict, emulator) = seeded_profiles();
+    // A projection on a partitioned query.
+    let partition = json!({"structuredQuery": {
+        "from": [{"collectionId": "qp", "allDescendants": true}],
+        "select": {"fields": [{"fieldPath": "v"}]},
+        "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": "ASCENDING"}]},
+        "partitionCount": "2"});
+    let (status, body) = call(
+        &strict,
+        "POST",
+        &format!("{DOCS}:partitionQuery"),
+        partition.clone(),
+    );
+    assert_eq!(
+        (status, &body["error"]["message"]),
+        (400, &json!("Property masks are not supported."))
+    );
+    // The emulator partitions it as it partitions the query without the projection: enough
+    // documents for sampled cursors, the same cursors either way.
+    let writes: Vec<Value> = (0..600)
+        .map(|i| json!({"update": {"name": format!("projects/demo-app/databases/(default)/documents/qp/p{i:03}"), "fields": {"v": {"integerValue": "1"}}}}))
+        .collect();
+    let (status, body) = call(
+        &emulator,
+        "POST",
+        &format!("{DOCS}:commit"),
+        json!({"writes": writes}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, projected) = call(
+        &emulator,
+        "POST",
+        &format!("{DOCS}:partitionQuery"),
+        partition.clone(),
+    );
+    assert_eq!(status, 200, "{projected}");
+    let mut unprojected = partition;
+    unprojected["structuredQuery"]
+        .as_object_mut()
+        .unwrap()
+        .remove("select");
+    let (status, plain) = call(
+        &emulator,
+        "POST",
+        &format!("{DOCS}:partitionQuery"),
+        unprojected,
+    );
+    assert_eq!(status, 200, "{plain}");
+    assert!(
+        projected["partitions"]
+            .as_array()
+            .is_some_and(|p| !p.is_empty()),
+        "{projected}"
+    );
+    assert_eq!(projected["partitions"], plain["partitions"]);
+
+    // A `__name__` filter on a reference that is not a document.
+    let collection = "projects/demo-app/databases/(default)/documents/qn";
+    let by_name = json!({"structuredQuery": {"from": [{"collectionId": "qn"}],
+        "where": {"fieldFilter": {"field": {"fieldPath": "__name__"}, "op": "GREATER_THAN",
+            "value": {"referenceValue": collection}}}}});
+    let (status, body) = call(
+        &strict,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        by_name.clone(),
+    );
+    assert_eq!(status, 400, "{body}");
+    let (status, body) = call(&emulator, "POST", &format!("{DOCS}:runQuery"), by_name);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body.as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row.get("document").is_some())
+            .count(),
+        2,
+        "{body}"
+    );
+}
+
+fn vector_value(values: &[f64]) -> Value {
+    json!({"mapValue": {"fields": {
+        "__type__": {"stringValue": "__vector__"},
+        "value": {"arrayValue": {"values": values.iter().map(|v| json!({"doubleValue": v})).collect::<Vec<_>>()}}
+    }}})
+}
+
+/// Both profiles with `items/near` (1, 0), `items/mid` (1, 1) and `items/far` (-1, 0), and the
+/// vector index the strict profile needs.
+fn nearest_profiles() -> (RestState, RestState) {
+    let strict = state_with_profile(true);
+    let emulator = state_with_profile(false);
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(IndexDefinition {
+        collection_group: CollectionId::try_new("items").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![IndexField {
+            path: FieldPath::parse("e").unwrap(),
+            mode: IndexFieldMode::Vector { dimension: 2 },
+        }],
+    });
+    strict
+        .local
+        .replace_project_database_indexes("demo-app", "(default)", indexes);
+    for s in [&strict, &emulator] {
+        for (id, e) in [
+            ("near", [1.0, 0.0]),
+            ("mid", [1.0, 1.0]),
+            ("far", [-1.0, 0.0]),
+        ] {
+            let (status, body) = call(
+                s,
+                "PATCH",
+                &format!("{DOCS}/items/{id}"),
+                json!({"fields": {"e": vector_value(&e)}}),
+            );
+            assert_eq!(status, 200, "{body}");
+        }
+    }
+    (strict, emulator)
+}
+
+/// A nearest-neighbour query on `items` from (1, 0), three results, with `extra` clauses.
+fn nearest_query(measure: &str, extra: &Value) -> Value {
+    let mut query = json!({"from": [{"collectionId": "items"}], "findNearest": {
+        "vectorField": {"fieldPath": "e"}, "queryVector": vector_value(&[1.0, 0.0]),
+        "distanceMeasure": measure, "limit": 3}});
+    query
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    query
+}
+
+fn result_ids(rows: &Value) -> Vec<String> {
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|row| row["document"]["name"].as_str())
+        .map(|name| name.rsplit('/').next().unwrap().to_owned())
+        .collect()
+}
+
+fn run_structured(s: &RestState, query: &Value) -> (u16, Value) {
+    call(
+        s,
+        "POST",
+        &format!("{DOCS}:runQuery"),
+        json!({"structuredQuery": query}),
+    )
+}
+
+fn count_of(s: &RestState, query: &Value) -> (u16, Value) {
+    call(
+        s,
+        "POST",
+        &format!("{DOCS}:runAggregationQuery"),
+        json!({"structuredAggregationQuery": {
+            "structuredQuery": query,
+            "aggregations": [{"alias": "n", "count": {}}]}}),
+    )
+}
+
+/// A query limit, offset or cursor beside `findNearest`: the strict profile refuses each in
+/// production's words, the emulator profile applies them before the ranking as fireemu did
+/// before (confirmation review 2026-09-24, Should Fix 2).
+#[test]
+fn the_emulator_profile_serves_nearest_neighbour_query_clauses() {
+    let (strict, emulator) = nearest_profiles();
+    for (extra, refusal, served) in [
+        (
+            json!({"limit": 2}),
+            "A query limit cannot be used with FindNearest",
+            // The first two by name (far, mid), then ranked.
+            vec!["mid", "far"],
+        ),
+        (
+            json!({"offset": 1}),
+            "A query offset cannot be used with FindNearest",
+            // All but the first by name (mid, near), then ranked.
+            vec!["near", "mid"],
+        ),
+        (
+            json!({"orderBy": [{"field": {"fieldPath": "__name__"}}],
+                "startAt": {"values": [{"referenceValue": "projects/demo-app/databases/(default)/documents/items/mid"}], "before": true}}),
+            "A cursor cannot be used with FindNearest",
+            vec!["near", "mid"],
+        ),
+    ] {
+        let (status, body) = run_structured(&strict, &nearest_query("EUCLIDEAN", &extra));
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(stream_error(&body)["error"]["message"], refusal);
+        let (status, body) = run_structured(&emulator, &nearest_query("EUCLIDEAN", &extra));
+        assert_eq!(status, 200, "{extra}: {body}");
+        assert_eq!(result_ids(&body), served, "{extra}: {body}");
+    }
+    // An aggregation over a nearest-neighbour query with a query limit.
+    let limited = nearest_query("EUCLIDEAN", &json!({"limit": 2}));
+    let (status, body) = count_of(&strict, &limited);
+    assert_eq!(status, 400, "{body}");
+    let (status, body) = count_of(&emulator, &limited);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body[0]["result"]["aggregateFields"]["n"]["integerValue"],
+        "2"
+    );
+}
+
+/// A zero vector among the candidates of a cosine search: the strict profile refuses the
+/// search as production does, the emulator profile leaves that candidate out, over runQuery
+/// and runAggregationQuery (the flag reaches the store on both paths).
+#[test]
+fn the_emulator_profile_leaves_a_zero_vector_out_of_a_cosine_search() {
+    let (strict, emulator) = nearest_profiles();
+    for s in [&strict, &emulator] {
+        let (status, body) = call(
+            s,
+            "PATCH",
+            &format!("{DOCS}/items/zero"),
+            json!({"fields": {"e": vector_value(&[0.0, 0.0])}}),
+        );
+        assert_eq!(status, 200, "{body}");
+    }
+    let cosine = nearest_query("COSINE", &json!({}));
+    let (status, body) = run_structured(&strict, &cosine);
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(
+        stream_error(&body)["error"]["message"],
+        "Cannot compute cosine distance against a vector with a magnitude of zero."
+    );
+    let (status, body) = run_structured(&emulator, &cosine);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(result_ids(&body), ["near", "mid", "far"], "{body}");
+    let (status, body) = count_of(&strict, &cosine);
+    assert_eq!(status, 400, "{body}");
+    let (status, body) = count_of(&emulator, &cosine);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body[0]["result"]["aggregateFields"]["n"]["integerValue"],
+        "3"
+    );
+}
+
+/// Every refusal text that repeats client input repeats at most 1 KiB of it (the shared echo
+/// bound, `spec/compatibility/contract.json`), on each profile that makes the refusal
+/// (confirmation review 2026-09-24, Should Fix 6).
+#[test]
+fn refusal_texts_echo_at_most_one_kibibyte_of_client_input() {
+    // Longer than the echo bound, shorter than the 1500-byte name limits checked first.
+    let long = "x".repeat(1400);
+    let reserved = format!("__{long}__");
+    let collection = format!("projects/demo-app/databases/(default)/documents/{long}");
+    let vector = json!({"mapValue": {"fields": {
+        "__type__": {"stringValue": "__vector__"},
+        "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}}}});
+    let inequalities: Vec<Value> = (0..20)
+        .map(|i| {
+            json!({"fieldFilter": {"field": {"fieldPath": format!("f{i}{}", "y".repeat(1400))},
+                "op": "GREATER_THAN", "value": {"integerValue": "1"}}})
+        })
+        .collect();
+    let cases = [
+        (
+            "collection id",
+            json!({"from": [{"collectionId": reserved}]}),
+            "Collection id \"__xxx",
+            true,
+        ),
+        (
+            "distance result field",
+            json!({"from": [{"collectionId": "c"}], "findNearest": {
+                "vectorField": {"fieldPath": "e"}, "queryVector": vector,
+                "distanceMeasure": "EUCLIDEAN", "limit": 1, "distanceResultField": reserved}}),
+            "The distanceResultField.property.name \"__xxx",
+            true,
+        ),
+        (
+            "inequality fields",
+            json!({"from": [{"collectionId": "c"}],
+                "where": {"compositeFilter": {"op": "AND", "filters": inequalities}}}),
+            "The query contains 20 distinct inequality fields: [f0yyy",
+            false,
+        ),
+        (
+            "kindless filter",
+            json!({"from": [{"allDescendants": true}], "where": {"fieldFilter": {
+                "field": {"fieldPath": long}, "op": "EQUAL", "value": {"integerValue": "1"}}}}),
+            "kind is required for filter: xxx",
+            false,
+        ),
+        (
+            "cursor reference",
+            json!({"from": [{"collectionId": "c"}],
+                "orderBy": [{"field": {"fieldPath": "__name__"}}],
+                "startAt": {"values": [{"referenceValue": collection}]}}),
+            "Document parent name \"projects/demo-app",
+            false,
+        ),
+        (
+            "duplicate order field",
+            json!({"from": [{"collectionId": "c"}], "orderBy": [
+                {"field": {"fieldPath": long}}, {"field": {"fieldPath": long}}]}),
+            "order by clause cannot contain duplicate fields xxx",
+            false,
+        ),
+    ];
+    for strict in [true, false] {
+        let s = state_with_profile(strict);
+        for (what, query, prefix, both_profiles) in &cases {
+            if !strict && !both_profiles {
+                continue;
+            }
+            let (status, body) = call(
+                &s,
+                "POST",
+                &format!("{DOCS}:runQuery"),
+                json!({"structuredQuery": query}),
+            );
+            assert_eq!(status, 400, "{what} strict={strict}: {body}");
+            let message = stream_error(&body)["error"]["message"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            assert!(
+                message.starts_with(prefix),
+                "{what} strict={strict}: {}",
+                &message[..message.len().min(200)]
+            );
+            assert!(
+                message.len() < 1024 + 256,
+                "{what} strict={strict}: {} bytes",
+                message.len()
+            );
+            assert!(message.contains("..."), "{what} strict={strict}");
+        }
+    }
+}

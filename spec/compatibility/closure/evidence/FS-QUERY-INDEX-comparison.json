@@ -1,10 +1,14 @@
 {
   "kind": "fs-query-index-comparison-v1",
-  "artifactSha256": "81603021cf7ffc2ce5caa39a62f0c89570e343973c0272f3a485270491ce6ada",
+  "artifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
   "fixtureSha256": "4db70b360ab433bdd8d4f700073eb70b09e4d23b5b1d9c699c461889964eaec7",
   "summary": {
     "MATCH": 675,
     "DIVERGENCE_APPROVED": 35
+  },
+  "rangeTotals": {
+    "production": "2000",
+    "fireemu": "2000"
   },
   "rows": [
     {

@@ -43,5 +43,36 @@ test("current AUTH-ACCOUNT comparison and inherited regression cover the saved f
   }
 
   assert.deepEqual(comparisons[0], comparisons[1]);
+  const execution = comparisons[0].execution;
+  assert.equal(execution.schemaVersion, 1);
+  assert.match(execution.receiptSha256, /^[0-9a-f]{64}$/);
+  assert.equal(execution.artifactSha256, comparisons[0].artifactSha256);
+  assert.match(execution.buildReceiptSha256, /^[0-9a-f]{64}$/);
+  assert.equal(execution.runId, "auth-a12-attested-recompare-20260924T124006Z");
+  assert.deepEqual(
+    execution.commands.map(({ argv, selector, rowCount, fixtureSha256, sanitizedExportSha256 }) => ({
+      argv,
+      selector,
+      rowCount,
+      fixtureSha256,
+      sanitizedExportSha256,
+    })),
+    [
+      {
+        argv: ["node", "src/auth-account/run.mjs", "check"],
+        selector: { environment: "AUTH_ACCOUNT_PROGRAMS", state: "unset", meaning: "all corpus programs" },
+        rowCount: 631,
+        fixtureSha256: "253e48959ca7ccdefd42c64bb8371107d7aeca698a969e78bb7974898e84b8b0",
+        sanitizedExportSha256: "ac7bfb7faf098cf45a590be10151d405d364e9a979ac07232bacdaef466b804b",
+      },
+      {
+        argv: ["node", "src/auth-credential/run.mjs", "check"],
+        selector: { environment: "AUTH_CREDENTIAL_PROGRAMS", state: "unset", meaning: "all corpus programs" },
+        rowCount: 222,
+        fixtureSha256: "fcffa45131e136404cbf3ff7f9fa40e6f78329ee665e0d27698c81f51772c0dc",
+        sanitizedExportSha256: "114089e4e0cb660ae8bdd2ac5d3b69c867aa8c164c34a79efc4e2e03301f3e5c",
+      },
+    ],
+  );
   assert.equal(Object.keys(fixture.programs).length, new Set(PROGRAMS.map(({ id }) => id)).size);
 });

@@ -40,6 +40,7 @@ const REST_CAP = 1000;
 const ATTEMPT_ESTIMATE_USD = 0.5;
 const HISTORICAL_UNKNOWN_HOLD_USD = 9.24;
 const HISTORICAL_UNKNOWN_HOLD_ID = "FS-DATA-WRITE-SANDBOX-2026-09-24-HISTORICAL-UNKNOWN";
+const V3_MANAGED_CLEAR_CAP = 400;
 export const MAX_STREAM_FRAMES = 9;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -241,6 +242,31 @@ export async function reserveProductionAttempt({ ledgerPath, rows, gitSha, corpu
   }
   rows.push(reservation);
   return reservation;
+}
+
+export async function reserveProductionAttemptWithToken({
+  ledgerPath,
+  rows,
+  gitSha,
+  corpusDigest,
+  runDir,
+  acquireToken,
+}) {
+  if (typeof acquireToken !== "function") {
+    throw new Error("production credential provider is required");
+  }
+  const reservation = await reserveProductionAttempt({
+    ledgerPath,
+    rows,
+    gitSha,
+    corpusDigest,
+    runDir,
+  });
+  const token = await acquireToken();
+  if (typeof token !== "string" || !token.trim()) {
+    throw new Error("production OAuth bearer is missing");
+  }
+  return { reservation, token: token.trim() };
 }
 
 export function legacyRecoveryEnvironment({
@@ -707,6 +733,132 @@ export function sandboxManagedClearNames(corpus) {
   return names;
 }
 
+function ownedMutationNamesForPrograms(programs) {
+  const prefix = `projects/${SANDBOX_PROJECT}/databases/(default)/documents/`;
+  const names = new Set();
+  const add = (name) => {
+    if (typeof name !== "string") return;
+    if (!name.startsWith(prefix)) {
+      if (name.startsWith("projects/")) {
+        throw new Error("corpus mutation escaped the fixed sandbox resource prefix");
+      }
+      return;
+    }
+    const parts = name.slice(prefix.length).split("/");
+    if (
+      parts.length < 2 ||
+      parts.length % 2 !== 0 ||
+      parts.some((part) => !part || part === "." || part === ".." || /%2f/i.test(part))
+    ) {
+      return;
+    }
+    names.add(name);
+  };
+  const collectWrites = (value) => {
+    if (Array.isArray(value)) {
+      for (const child of value) collectWrites(child);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "update" && typeof child?.name === "string") add(child.name);
+      else if (key === "delete" && typeof child === "string") add(child);
+      else if (key === "transform" && typeof child?.document === "string") add(child.document);
+      else collectWrites(child);
+    }
+  };
+  for (const program of programs) {
+    for (const step of program.steps) {
+      const method = step.method.toUpperCase();
+      if (method === "POST" && /:(commit|batchWrite)$/i.test(step.path)) {
+        let body = step.body;
+        if (typeof body === "string") {
+          try {
+            body = JSON.parse(body);
+          } catch {
+            body = null;
+          }
+        }
+        if (body && typeof body === "object") collectWrites(body.writes ?? []);
+      } else if (method === "POST" && step.path.includes("/documents/")) {
+        const url = new URL(step.path, "https://firestore.googleapis.com");
+        const marker = "/documents/";
+        const markerIndex = url.pathname.indexOf(marker);
+        if (markerIndex < 0 || /%2f/i.test(url.pathname)) continue;
+        const documentId = url.searchParams.get("documentId");
+        if (!documentId) throw new Error("corpus create must use an explicit documentId");
+        add(`${prefix}${url.pathname.slice(markerIndex + marker.length)}/${documentId}`);
+      } else if (method === "PATCH" || method === "DELETE") {
+        const url = new URL(step.path, "https://firestore.googleapis.com");
+        const marker = "/documents/";
+        const markerIndex = url.pathname.indexOf(marker);
+        if (markerIndex < 0 || /%2f/i.test(url.pathname)) continue;
+        add(`${prefix}${url.pathname.slice(markerIndex + marker.length)}`);
+      }
+    }
+  }
+  return [...names].toSorted();
+}
+
+function exactInventoryRequestBound(names) {
+  const prefix = `projects/${SANDBOX_PROJECT}/databases/(default)/documents/`;
+  const collectionGroupIds = new Set();
+  const targetNames = new Set(names);
+  const unownedAncestorDocs = new Set();
+  for (const name of names) {
+    const parts = name.slice(prefix.length).split("/");
+    collectionGroupIds.add(parts.at(-2));
+    for (let length = 2; length < parts.length - 1; length += 2) {
+      const ancestor = `${prefix}${parts.slice(0, length).join("/")}`;
+      if (!targetNames.has(ancestor)) unownedAncestorDocs.add(ancestor);
+    }
+  }
+  return 1 + collectionGroupIds.size + names.length + unownedAncestorDocs.size;
+}
+
+export function productionCleanupRequestBound(corpus) {
+  const { requestCount } = validateSandboxCorpus(corpus);
+  const programs = corpus.restPrograms;
+  const names = ownedMutationNamesForPrograms(programs);
+  const boundaryNames = sandboxManagedClearNames(corpus);
+  if (!boundaryNames.every((name) => names.includes(name))) {
+    throw new Error("exact cleanup request bound omitted a frozen boundary target");
+  }
+  const managedRequestBound = exactInventoryRequestBound(names);
+  const perProgramCleanupRequestBound = programs.reduce((total, program) => {
+    const targets = ownedMutationNamesForPrograms([program]);
+    return total + (targets.length ? exactInventoryRequestBound(targets) : 1);
+  }, 0);
+  return {
+    mutationNameCount: names.length,
+    rootCollectionCount: new Set(
+      names.map((name) => name.slice(name.indexOf("/documents/") + 11).split("/")[0]),
+    ).size,
+    nestedTargetCount: names.filter(
+      (name) => name.slice(name.indexOf("/documents/") + 11).split("/").length > 2,
+    ).length,
+    managedRequestBound,
+    perProgramCleanupRequestBound,
+    totalRequestBound: requestCount + managedRequestBound + perProgramCleanupRequestBound,
+  };
+}
+
+export function requireBoundedProductionCleanup(corpus) {
+  const bound = productionCleanupRequestBound(corpus);
+  if (bound.managedRequestBound > V3_MANAGED_CLEAR_CAP || bound.totalRequestBound > REST_CAP) {
+    throw new Error(
+      `production v3 cleanup is blocked: exact inventory needs ${bound.managedRequestBound} initial managed requests and ${bound.totalRequestBound} total requests before deletes; caps are ${V3_MANAGED_CLEAR_CAP} and ${REST_CAP}, and generic broad clear is disabled`,
+    );
+  }
+  return bound;
+}
+
+export async function withBoundedProductionCleanup(corpus, work) {
+  if (typeof work !== "function") throw new Error("bounded production work callback is required");
+  const bound = requireBoundedProductionCleanup(corpus);
+  return work(bound);
+}
+
 export async function withSandboxExclusiveLock(privateDir, work) {
   const lockPath = join(privateDir, "fs-data-write-exclusive.lock");
   try {
@@ -811,7 +963,6 @@ async function productionRecording({
   corpusIn,
   restIn,
   privateDir,
-  token,
   gitSha,
   corpusDigest,
   restRequestCount,
@@ -823,12 +974,13 @@ async function productionRecording({
   const runId = randomUUID().replaceAll("-", "");
   const journal = join(runDir, "managed-clear.json");
   const ledgerPath = join(privateDir, "sandbox-ledger.jsonl");
-  const reservation = await reserveProductionAttempt({
+  const { reservation, token } = await reserveProductionAttemptWithToken({
     ledgerPath,
     rows,
     gitSha,
     corpusDigest,
     runDir,
+    acquireToken: productionAccessToken,
   });
   const restOut = join(runDir, "rest-results.json");
   const metaOut = join(runDir, "rest-meta.json");
@@ -881,7 +1033,7 @@ async function productionRecording({
     }
     requestCount += streamFrames;
     outcome = "recorded";
-    return { rest, stream, startedAt, runDir, journal, requestCount };
+    return { rest, stream, startedAt, runDir, journal, requestCount, token };
   } finally {
     if (requestCount === null) {
       try {
@@ -919,21 +1071,13 @@ async function recordProduction() {
   const ledgerPath = sandboxLedgerPath(gitCommonDir);
   const privateDir = dirname(ledgerPath);
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
+  requireBoundedProductionCleanup(corpus);
   const managedNames = sandboxManagedClearNames(corpus);
   const corpusDigest = sha256(JSON.stringify(corpus));
   const gitSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
   const rows = await readLedger(ledgerPath);
   requireHistoricalUnknownHold(rows);
   remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD * 2);
-  const token = (
-    process.env.FIREEMU_PRODUCTION_TOKEN ??
-    (
-      await execFileAsync("gcloud", ["auth", "application-default", "print-access-token"], {
-        maxBuffer: 4096,
-      })
-    ).stdout
-  ).trim();
-  if (!token) throw new Error("production OAuth bearer is missing");
   await mkdir(privateDir, { recursive: true });
   await mkdir(RUNS_DIR, { recursive: true });
   const generatedDir = await mkdtemp(join(RUNS_DIR, "fs-data-write-corpus-"));
@@ -949,7 +1093,6 @@ async function recordProduction() {
       corpusIn,
       restIn,
       privateDir,
-      token,
       gitSha,
       corpusDigest,
       restRequestCount,
@@ -961,7 +1104,6 @@ async function recordProduction() {
       corpusIn,
       restIn,
       privateDir,
-      token,
       gitSha,
       corpusDigest,
       restRequestCount,
@@ -990,7 +1132,7 @@ async function recordProduction() {
       recordedAt: [first.startedAt, second.startedAt],
       harnessRevision: gitSha,
       sdkVersions,
-      credentialToken: token,
+      credentialToken: first.token,
     });
     const output = join(CONFORMANCE_DIR, "fs-data-write-production-matrix.json");
     await writeFile(output, `${JSON.stringify(fixture, null, 2)}\n`);
@@ -998,6 +1140,18 @@ async function recordProduction() {
       `${JSON.stringify({ output, firstRunDir: first.runDir, secondRunDir: second.runDir, requestCount: first.requestCount + second.requestCount, corpusDigest })}\n`,
     );
   });
+}
+
+async function productionAccessToken() {
+  const token =
+    process.env.FIREEMU_PRODUCTION_TOKEN ??
+    (
+      await execFileAsync("gcloud", ["auth", "application-default", "print-access-token"], {
+        maxBuffer: 4096,
+      })
+    ).stdout;
+  if (!token.trim()) throw new Error("production OAuth bearer is missing");
+  return token.trim();
 }
 
 async function recoverLegacy() {

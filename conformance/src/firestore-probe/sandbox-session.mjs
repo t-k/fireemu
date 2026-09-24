@@ -129,6 +129,14 @@ export function createShrinkRequestCounter(limit) {
     },
   };
 }
+
+export function assertV3ProductionCleanupAllowed({ host }) {
+  if (host && !/^127\.0\.0\.1:\d+$/.test(host)) {
+    throw new Error(
+      "v3 production cleanup is blocked: exact cleanup is over the fixed request caps and generic broad clear is disabled",
+    );
+  }
+}
 let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
 let managedClearBlocked = false;
@@ -1636,6 +1644,7 @@ function provesDeleteOutcome(program, steps, raw) {
 }
 
 async function main() {
+  assertV3ProductionCleanupAllowed({ host: HOST });
   if (RECOVERY_MODE !== undefined) {
     if (!["recover-legacy", "recover-v3"].includes(RECOVERY_MODE)) {
       throw new Error("unsupported Firestore probe recovery mode");

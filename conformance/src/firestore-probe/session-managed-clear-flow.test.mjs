@@ -161,6 +161,7 @@ async function observeCollector({
   deleteReadbackMode,
   deleteRunId = defaultDeleteRunId,
   programs,
+  hostOverride,
 } = {}) {
   const runtimeName = (name) => name.replaceAll("DELETE_RUN_ID", deleteRunId);
   scopeNames = scopeNames.map(runtimeName);
@@ -537,7 +538,7 @@ async function observeCollector({
         ...process.env,
         FIRESTORE_PROBE_TARGET: "production",
         FIRESTORE_PROBE_SCHEME: "http",
-        FIRESTORE_PROBE_HOST: `127.0.0.1:${port}`,
+        FIRESTORE_PROBE_HOST: hostOverride ?? `127.0.0.1:${port}`,
         FIRESTORE_PROBE_PROJECT: "fireemu-oracle-sbx",
         FIRESTORE_PROBE_IN: input,
         FIRESTORE_PROBE_OUT: output,
@@ -1868,6 +1869,16 @@ test("unfinished journal prevents another recording before any request", async (
     assert.ok(result.failure);
     assert.equal(result.requests.length, 0);
     await assert.rejects(readFile(result.output), /ENOENT/);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("v3 remote host is blocked before any production request", async () => {
+  const result = await observeCollector({ hostOverride: "localhost:8080" });
+  try {
+    assert.match(result.failure?.stderr ?? "", /generic broad clear is disabled/);
+    assert.equal(result.requests.length, 0);
   } finally {
     await rm(result.directory, { recursive: true, force: true });
   }

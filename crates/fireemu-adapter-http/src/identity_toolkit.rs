@@ -10121,6 +10121,11 @@ fn reset_password(
         return auth_error(&e);
     }
     if store.user(&uid).is_none_or(|u| u.disabled) {
+        // Strict: the refusal spends the code (sandbox recording 2026-09-24,
+        // password-reset#check-f-after-refused-reset).
+        if strict {
+            let _ = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at);
+        }
         return error(400, "USER_DISABLED");
     }
     if let Err(e) = store.consume_oob_code(code, Some(OobRequestType::PasswordReset), at) {
@@ -10236,13 +10241,17 @@ fn apply_oob_code(
                 // The address the first applied change replaced, as production and the
                 // official emulator record it.
                 if u.initial_email.is_none() {
-                    u.initial_email = replaced;
+                    u.initial_email.clone_from(&replaced);
                 }
             }
-            // Strict: the change revokes the sessions before it (sandbox recording
-            // 2026-09-24, change-email#lookup-token-before-change).
+            // Strict: the change revokes the sessions before it and voids the verification
+            // codes of the replaced address (sandbox recording 2026-09-24,
+            // change-email#lookup-token-before-change, #apply-old-verify-ch).
             if strict {
                 let _ = store.revoke_tokens(&uid, at);
+                if let Some(replaced) = replaced.as_deref() {
+                    store.retire_oob_codes(OobRequestType::VerifyEmail, replaced);
+                }
             }
             new_email_answer = Some(new_email);
         }
@@ -10701,6 +10710,12 @@ fn sign_in_with_email_link(
     if let Some(u) = store.user_mut(&uid) {
         u.email_link_signin = true;
         u.email_link_created |= is_new;
+        // Removing the password leaves an account without a provider; the link makes it an
+        // email-link account, whose sessions carry no anonymous `provider_id` (sandbox
+        // recording 2026-09-24, email-link/session#sign-in-p).
+        if u.provider == fireemu_core_auth::store::Provider::Anonymous {
+            u.provider = fireemu_core_auth::store::Provider::EmailLink;
+        }
     }
     // The account and the pending credential keep `Provider::EmailLink`, which drives
     // `providerUserInfo`, the `createAuthUri` sign-in methods and the `emailLink` sign-in

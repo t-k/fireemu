@@ -81,10 +81,10 @@ pub fn check_query(query: &Query) -> Result<bool, &'static str> {
             .then_some("Query limit is not supported.")
     })
     .or_else(|| (query.offset != 0).then_some("Query offset is not supported."))
+    // A projection is refused only by production: fireemu partitioned such a query before, and
+    // the emulator profile adds no rejection.
     .or_else(|| {
-        query
-            .projection
-            .is_some()
+        (query.projection.is_some() && query.production_refusals)
             .then_some("Property masks are not supported.")
     })
     .or_else(|| {

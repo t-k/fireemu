@@ -594,8 +594,8 @@ pub fn check_body(method: &str, body: &Value) -> Result<Value, Status> {
 /// body of many bad items costs what a body with a few does.
 const MAX_VIOLATIONS: usize = 16;
 /// The most bytes of a value, key or path one violation echoes; a longer one ends in `...`.
-/// Every recorded refusal echoes a short value.
-const MAX_ECHO: usize = 1024;
+/// Every recorded refusal echoes a short value. The bound all refusal texts share.
+const MAX_ECHO: usize = fireemu_core_types::codec::MAX_ECHO_BYTES;
 
 /// A `fmt::Write` that keeps the first [`MAX_ECHO`] bytes and stops the formatting after them.
 struct Bounded(String);

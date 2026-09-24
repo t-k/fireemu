@@ -39,7 +39,7 @@ use fireemu_core_types::resources::{
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
-use crate::decode::{decode_structured_query, parse_parent, DecodeError, Parent};
+use crate::decode::{decode_structured_query_in, parse_parent, DecodeError, Parent};
 use crate::encode::{
     decode_document_name, decode_fields, decode_mask, decode_precondition, decode_transaction,
     decode_write, encode_document, encode_instant, encode_transaction, encode_value,
@@ -2546,7 +2546,8 @@ impl LocalBackend {
         parent: &Parent,
         sq: &pb::StructuredQuery,
     ) -> Result<AcceptedQuery, Status> {
-        let query = decode_structured_query(parent, sq).map_err(status)?;
+        let query = decode_structured_query_in(parent, sq, self.gateway.production_refusals())
+            .map_err(status)?;
         let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
         let empty = fireemu_core_firestore::index::IndexSet::default();
         let project_key = (
@@ -2570,7 +2571,8 @@ impl LocalBackend {
         sq: &pb::StructuredQuery,
         aggregations: &[Aggregation],
     ) -> Result<AcceptedQuery, Status> {
-        let query = decode_structured_query(parent, sq).map_err(status)?;
+        let query = decode_structured_query_in(parent, sq, self.gateway.production_refusals())
+            .map_err(status)?;
         let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
         let empty = fireemu_core_firestore::index::IndexSet::default();
         let project_key = (
@@ -3795,9 +3797,8 @@ impl LocalBackend {
         // Production answers a read_time before the database existed with INVALID_ARGUMENT and
         // one inside the database's life but outside the retention window with
         // FAILED_PRECONDITION, in these words (conformance/firestore-production-matrix.json).
-        // Production's refusal only; the emulator profile reads the empty snapshot before the
-        // first commit instead.
-        if at < self.created_at && self.gateway.production_refusals() {
+        // Both profiles refuse it: fireemu did before the strict profile existed.
+        if at < self.created_at {
             return Err(Status::invalid_argument(
                 "The requested 'read_time' cannot be before database creation time.",
             ));
@@ -5112,7 +5113,7 @@ impl LocalBackend {
         };
         let sq = crate::query_messages::aggregation_structured_query(saq);
         let sq = sq.as_ref();
-        let (aliases, aggregations) = decode_aggregations(saq)?;
+        let (aliases, aggregations) = decode_aggregations(saq, self.gateway.production_refusals())?;
         let accepted = self
             .accepted_aggregation_query(&parent, sq, &aggregations)
             .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
@@ -5742,8 +5743,9 @@ pub fn encode_commit(result: &CommitResult) -> pb::CommitResponse {
 /// (`crate::query_messages::decode_aggregations`).
 pub(crate) fn decode_aggregations(
     saq: &pb::StructuredAggregationQuery,
+    production_refusals: bool,
 ) -> Result<(Vec<String>, Vec<Aggregation>), Status> {
-    crate::query_messages::decode_aggregations(saq)
+    crate::query_messages::decode_aggregations(saq, production_refusals)
 }
 
 /// Catalog key of a database.

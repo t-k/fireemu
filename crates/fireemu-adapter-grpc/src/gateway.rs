@@ -315,16 +315,22 @@ impl Gateway {
 
 /// Says once per distinct index which composite index production would need for a query
 /// the emulator policy served without it (every surface: unary, REST, Listen, aggregations).
+/// The fragment names client field paths, so it is cut at the shared echo bound, and a stderr
+/// that cannot take the line (a full non-blocking pipe) never fails the request.
 fn note_assumed_index(fragment: &str) {
+    use std::io::Write as _;
     static NOTED: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<String>>> =
         std::sync::OnceLock::new();
+    let fragment = fireemu_core_types::codec::echo(fragment);
+    let fragment = fragment.as_ref();
     let noted = NOTED.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()));
     let first = noted
         .lock()
         .map(|mut set| set.insert(fragment.to_owned()))
         .unwrap_or(false);
     if first {
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "[firestore] served without a configured composite index (emulator profile); production needs: {fragment}"
         );
     }

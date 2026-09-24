@@ -1462,6 +1462,150 @@ fn expired_tokens_have_a_skew_allowance_and_are_then_invalid() {
     );
 }
 
+/// An administrator's email change revokes the account's sessions and retires its refresh
+/// tokens; a profile-only change does not. Production has not been observed for this; the test
+/// pins fireemu's contract.
+#[test]
+fn an_administrative_email_change_revokes_sessions_and_a_profile_change_does_not() {
+    let s = strict_state();
+    let sign_up = |email: &str| {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{body}");
+        body
+    };
+    let changed = sign_up("before-change@example.com");
+    let profiled = sign_up("profile-only@example.com");
+    advance(&s, 2);
+    for (account, change) in [
+        (&changed, json!({"email": "after-change@example.com"})),
+        (&profiled, json!({"displayName": "Renamed"})),
+    ] {
+        let mut request = change;
+        request["localId"] = account["localId"].clone();
+        let (status, body) = admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &request);
+        assert_eq!(status, 200, "{body}");
+    }
+    let use_session = |account: &Value| {
+        let (lookup, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": account["idToken"]}),
+        );
+        let (refresh, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": account["refreshToken"]}),
+        );
+        let code = |body: &Value| body["error"]["message"].as_str().unwrap_or("").to_owned();
+        (lookup, code(&looked), refresh, code(&refreshed))
+    };
+    assert_eq!(
+        use_session(&changed),
+        (
+            400,
+            "TOKEN_EXPIRED".to_owned(),
+            400,
+            "INVALID_REFRESH_TOKEN".to_owned()
+        )
+    );
+    assert_eq!(
+        use_session(&profiled),
+        (200, String::new(), 200, String::new())
+    );
+}
+
+/// Disabling and re-enabling an account keeps its sessions in the strict profile, as production
+/// does (AUTH-ACCOUNT recording 2026-09-23, admin/disable), while the emulator profile revokes
+/// them as the official emulator does.
+#[test]
+fn disable_and_re_enable_keeps_sessions_only_in_the_strict_profile() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, account) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "toggle@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{account}");
+        advance(&s, 2);
+        // A profile-only update keeps the session in either profile.
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": account["localId"], "displayName": "Still Signed In"}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": account["idToken"]}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {looked}");
+        for disable in [true, false] {
+            let (status, body) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:update"),
+                &json!({"localId": account["localId"], "disableUser": disable}),
+            );
+            assert_eq!(status, 200, "{body}");
+        }
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": account["idToken"]}),
+        );
+        if strict {
+            assert_eq!(status, 200, "{looked}");
+        } else {
+            assert_eq!(
+                (status, looked["error"]["message"].clone()),
+                (400, json!("TOKEN_EXPIRED"))
+            );
+        }
+    }
+}
+
+/// The emulator profile keeps the official emulator's answer to an empty custom token, and a
+/// numeric uid names its account as a string (sandbox recording 2026-09-24,
+/// custom-token/validation#numeric-uid).
+#[test]
+fn custom_token_empty_and_numeric_uid_answers() {
+    let s = state();
+    let (status, empty) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": ""}),
+    );
+    assert_eq!(
+        (status, empty["error"]["message"].clone()),
+        (400, json!("MISSING_CUSTOM_TOKEN"))
+    );
+    for s in [state(), strict_state()] {
+        let now = 1_788_004_860;
+        let token = custom_token_from_payload(&json!({
+            "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
+            "iss": "firebase-auth-emulator@example.com",
+            "sub": "firebase-auth-emulator@example.com",
+            "iat": now,
+            "exp": now + 3600,
+            "uid": 12345,
+        }));
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(token_parts(&body["idToken"]).1["sub"], "12345");
+    }
+}
+
 #[test]
 fn anonymous_id_tokens_carry_a_top_level_provider_id() {
     let s = strict_state();

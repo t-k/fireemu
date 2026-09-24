@@ -1,5 +1,7 @@
 //! Functions runtime wiring: runner process, event subscriptions, control hooks.
 
+#[cfg(not(windows))]
+use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -7,6 +9,8 @@ use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(not(windows))]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -744,6 +748,16 @@ impl FunctionsSourceSnapshot {
             .take()
             .expect("a snapshot path is transferred once")
     }
+
+    async fn remove(self) -> Result<(), String> {
+        let path = self.into_path();
+        tokio::task::spawn_blocking(move || {
+            std::fs::remove_dir_all(&path)
+                .map_err(|error| format!("snapshot {} cleanup failed: {error}", path.display()))
+        })
+        .await
+        .map_err(|error| format!("snapshot cleanup worker failed: {error}"))?
+    }
 }
 
 impl std::ops::Deref for FunctionsSourceSnapshot {
@@ -856,14 +870,24 @@ fn link_dependency_directory(source: &Path, destination: &Path) -> Result<(), St
         .map_err(|e| format!("snapshot {}: {e}", destination.display()))
 }
 
+#[derive(Clone)]
+struct ReloadResources {
+    scan_budget: Arc<FunctionsSourceScanBudget>,
+    node_probe_cache: Arc<NodeProbeCache>,
+}
+
 fn start_reload_supervisors(
     runtime: &Arc<FunctionsRuntime>,
     cfg: &RuntimeConfig,
     hosts: &EmulatorHosts,
     runner_secret: &str,
     callable_trusted_protocol: bool,
+    node_probe_cache: &Arc<NodeProbeCache>,
 ) {
-    let scan_budget = Arc::new(FunctionsSourceScanBudget::new());
+    let resources = ReloadResources {
+        scan_budget: Arc::new(FunctionsSourceScanBudget::new()),
+        node_probe_cache: node_probe_cache.clone(),
+    };
     for codebase in cfg.functions_to_load() {
         tokio::spawn(supervise_codebase_reloads(
             Arc::downgrade(runtime),
@@ -872,7 +896,7 @@ fn start_reload_supervisors(
             hosts.clone(),
             runner_secret.to_owned(),
             callable_trusted_protocol,
-            scan_budget.clone(),
+            resources.clone(),
         ));
     }
 }
@@ -892,6 +916,12 @@ async fn join_codebase_starts<T: Send + 'static>(
     outcomes
 }
 
+async fn discard_reload_snapshot(snapshot: FunctionsSourceSnapshot, codebase: &str) {
+    if let Err(reason) = snapshot.remove().await {
+        eprintln!("warning: functions[{codebase}]: {reason}");
+    }
+}
+
 async fn supervise_codebase_reloads(
     weak_runtime: std::sync::Weak<FunctionsRuntime>,
     cfg: RuntimeConfig,
@@ -899,16 +929,20 @@ async fn supervise_codebase_reloads(
     hosts: EmulatorHosts,
     secret: String,
     callable_trusted_protocol: bool,
-    scan_budget: Arc<FunctionsSourceScanBudget>,
+    resources: ReloadResources,
 ) {
     let root = PathBuf::from(&codebase.source);
-    let mut observed_stamp = scan_budget.scan(&root, &codebase.ignore).await.ok();
+    let mut observed_stamp = resources
+        .scan_budget
+        .scan(&root, &codebase.ignore)
+        .await
+        .ok();
     loop {
         tokio::time::sleep(Duration::from_millis(750)).await;
         let Some(runtime) = weak_runtime.upgrade() else {
             return;
         };
-        let next_stamp = match scan_budget.scan(&root, &codebase.ignore).await {
+        let next_stamp = match resources.scan_budget.scan(&root, &codebase.ignore).await {
             Ok(stamp) => stamp,
             Err(reason) => {
                 eprintln!(
@@ -922,7 +956,8 @@ async fn supervise_codebase_reloads(
             continue;
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
-        let stable_stamp = scan_budget
+        let stable_stamp = resources
+            .scan_budget
             .scan(&root, &codebase.ignore)
             .await
             .unwrap_or(next_stamp);
@@ -934,7 +969,11 @@ async fn supervise_codebase_reloads(
             observed_stamp = Some(stable_stamp);
             continue;
         }
-        let snapshot = match scan_budget.snapshot(&root, &codebase.ignore).await {
+        let snapshot = match resources
+            .scan_budget
+            .snapshot(&root, &codebase.ignore)
+            .await
+        {
             Ok(snapshot) => snapshot,
             Err(reason) => {
                 eprintln!(
@@ -945,18 +984,28 @@ async fn supervise_codebase_reloads(
             }
         };
         let (snapshot_stamp, current_stamp) = tokio::join!(
-            scan_budget.scan(&snapshot, &codebase.ignore),
-            scan_budget.scan(&root, &codebase.ignore),
+            resources.scan_budget.scan(&snapshot, &codebase.ignore),
+            resources.scan_budget.scan(&root, &codebase.ignore),
         );
         if snapshot_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
             || current_stamp.as_ref().map(|stamp| stamp.content_signature) != Ok(stable)
         {
+            discard_reload_snapshot(snapshot, &codebase.codebase).await;
             continue;
         }
         observed_stamp = Some(stable_stamp);
         let mut staged = codebase.clone();
         staged.source = snapshot.to_string_lossy().into_owned();
-        match start_codebase(&cfg, &staged, &hosts, &secret, callable_trusted_protocol).await {
+        match start_codebase(
+            &cfg,
+            &staged,
+            &hosts,
+            &secret,
+            callable_trusted_protocol,
+            &resources.node_probe_cache,
+        )
+        .await
+        {
             Ok(mut spec) => {
                 spec.cleanup_dir = Some(snapshot.into_path());
                 match runtime.reload_codebase(spec) {
@@ -975,6 +1024,7 @@ async fn supervise_codebase_reloads(
                             "warning: functions[{}]: reload failed; keeping the last-known-good generation: {reason}",
                             codebase.codebase
                         );
+                discard_reload_snapshot(snapshot, &codebase.codebase).await;
             }
         }
     }
@@ -1627,8 +1677,25 @@ fn path_node_candidates(path: &std::ffi::OsStr) -> Vec<PathBuf> {
     candidates
 }
 
-fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
-    if let Some(program) = std::env::var_os("FIREEMU_NODE") {
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct NodeProbeKey {
+    path: Option<std::ffi::OsString>,
+    volta_home: Option<std::ffi::OsString>,
+    fireemu_node: Option<std::ffi::OsString>,
+}
+
+impl NodeProbeKey {
+    fn current() -> Self {
+        Self {
+            path: std::env::var_os("PATH"),
+            volta_home: std::env::var_os("VOLTA_HOME"),
+            fireemu_node: std::env::var_os("FIREEMU_NODE"),
+        }
+    }
+}
+
+fn node_candidates(key: &NodeProbeKey) -> Result<(Vec<PathBuf>, bool), String> {
+    if let Some(program) = &key.fireemu_node {
         let program = PathBuf::from(program);
         if !program.is_absolute() || !node_candidate_is_executable(&program) {
             return Err(format!(
@@ -1641,10 +1708,12 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
         return Ok((candidates, true));
     }
 
-    let mut candidates = std::env::var_os("PATH")
-        .map(|path| path_node_candidates(&path))
+    let mut candidates = key
+        .path
+        .as_ref()
+        .map(|path| path_node_candidates(path))
         .unwrap_or_default();
-    if let Some(home) = std::env::var_os("VOLTA_HOME") {
+    if let Some(home) = &key.volta_home {
         let root = PathBuf::from(home).join("tools/image/node");
         if root.is_absolute() {
             if let Ok(entries) = std::fs::read_dir(root) {
@@ -1661,6 +1730,70 @@ fn node_candidates() -> Result<(Vec<PathBuf>, bool), String> {
     }
     candidates.truncate(16);
     Ok((candidates, false))
+}
+
+#[cfg(not(windows))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProbedNodeCandidates {
+    installations: Vec<NodeInstallation>,
+    errors: Vec<String>,
+    explicit_node: bool,
+}
+
+#[derive(Default)]
+struct NodeProbeCache {
+    #[cfg(not(windows))]
+    entries: Mutex<HashMap<NodeProbeKey, NodeProbeEntry>>,
+}
+
+#[cfg(not(windows))]
+type NodeProbeEntry = Arc<OnceLock<Result<ProbedNodeCandidates, String>>>;
+
+#[cfg(not(windows))]
+impl NodeProbeCache {
+    fn probed(&self, key: &NodeProbeKey) -> Result<ProbedNodeCandidates, String> {
+        let entry = self
+            .entries
+            .lock()
+            .map_err(|_| "Node probe cache lock is poisoned".to_owned())?
+            .entry(key.clone())
+            .or_default()
+            .clone();
+        entry.get_or_init(|| probe_node_candidates(key)).clone()
+    }
+}
+
+#[cfg(not(windows))]
+fn probe_node_candidates(key: &NodeProbeKey) -> Result<ProbedNodeCandidates, String> {
+    let (candidates, explicit_node) = node_candidates(key)?;
+    let mut installations = Vec::new();
+    let mut errors = Vec::new();
+    for candidate in candidates {
+        match probe_node(&candidate) {
+            Ok(installation) => {
+                installations.push(installation);
+                if explicit_node {
+                    break;
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    Ok(ProbedNodeCandidates {
+        installations,
+        errors,
+        explicit_node,
+    })
+}
+
+async fn run_node_selection_blocking<F, T>(work: F) -> Result<T, String>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("Node selection task failed: {error}"))
 }
 
 #[cfg(not(windows))]
@@ -1831,9 +1964,10 @@ fn select_node_installation(
 #[cfg(windows)]
 fn default_runner_for_codebase(
     _codebase: &crate::config::FunctionsCodebase,
+    _node_probe_cache: &NodeProbeCache,
 ) -> Result<Vec<String>, String> {
     let script = locate_runner()?;
-    let (candidates, _) = node_candidates()?;
+    let (candidates, _) = node_candidates(&NodeProbeKey::current())?;
     let program = candidates.first().ok_or_else(|| {
         "no Node executable was found in an absolute PATH directory; set FIREEMU_NODE to an absolute executable or configure functions.runner explicitly".to_owned()
     })?;
@@ -1846,31 +1980,24 @@ fn default_runner_for_codebase(
 #[cfg(not(windows))]
 fn default_runner_for_codebase(
     codebase: &crate::config::FunctionsCodebase,
+    node_probe_cache: &NodeProbeCache,
 ) -> Result<Vec<String>, String> {
     let script = locate_runner()?;
     let engines = package_node_engine(Path::new(&codebase.source))?;
     if let Some(expression) = engines.as_deref() {
         let _ = node_engine_matches(expression, (0, 0, 0))?;
     }
-    let (candidates, explicit_node) = node_candidates()?;
+    let probed = node_probe_cache.probed(&NodeProbeKey::current())?;
+    let ProbedNodeCandidates {
+        installations,
+        errors: probe_errors,
+        explicit_node,
+    } = probed;
     let runtime_major = codebase.runtime.as_deref().and_then(|runtime| {
         runtime
             .strip_prefix("nodejs")
             .and_then(|major| major.parse::<u32>().ok())
     });
-    let mut installations = Vec::new();
-    let mut probe_errors = Vec::new();
-    for candidate in candidates {
-        match probe_node(&candidate) {
-            Ok(installation) => {
-                installations.push(installation);
-                if explicit_node {
-                    break;
-                }
-            }
-            Err(error) => probe_errors.push(error),
-        }
-    }
     if installations.is_empty() {
         let detail = if probe_errors.is_empty() {
             "no Node executable was found".to_owned()
@@ -1973,6 +2100,7 @@ pub async fn start(
                 .join(", ")
         ));
     }
+    let node_probe_cache = Arc::new(NodeProbeCache::default());
     let starts = codebases
         .iter()
         .map(|codebase| {
@@ -1981,6 +2109,7 @@ pub async fn start(
             let codebase = codebase.clone();
             let hosts = hosts.clone();
             let runner_secret = runner_secret.to_owned();
+            let node_probe_cache = node_probe_cache.clone();
             let start = tokio::spawn(async move {
                 start_codebase(
                     &cfg,
@@ -1988,6 +2117,7 @@ pub async fn start(
                     &hosts,
                     &runner_secret,
                     callable_trusted_protocol,
+                    &node_probe_cache,
                 )
                 .await
             });
@@ -2041,6 +2171,7 @@ pub async fn start(
         hosts,
         runner_secret,
         callable_trusted_protocol,
+        &node_probe_cache,
     );
     Ok(runtime)
 }
@@ -2117,6 +2248,7 @@ async fn start_codebase(
     hosts: &EmulatorHosts,
     runner_secret: &str,
     callable_trusted_protocol: bool,
+    node_probe_cache: &Arc<NodeProbeCache>,
 ) -> Result<fireemu_adapter_functions::runtime::CodebaseSpec, String> {
     let source = codebase.source.clone();
     let label = &codebase.codebase;
@@ -2125,10 +2257,17 @@ async fn start_codebase(
             "the Functions codebase {label:?}: source {source:?} is not a directory"
         ));
     }
-    let mut command = match cfg.functions_runner.clone() {
-        Some(command) => command,
-        None => default_runner_for_codebase(codebase)
-            .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?,
+    let mut command = if let Some(command) = cfg.functions_runner.clone() {
+        command
+    } else {
+        let codebase = codebase.clone();
+        let node_probe_cache = node_probe_cache.clone();
+        run_node_selection_blocking(move || {
+            default_runner_for_codebase(&codebase, &node_probe_cache)
+        })
+        .await
+        .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
+        .map_err(|error| format!("the Functions codebase {label:?}: {error}"))?
     };
     if cfg.functions_inspect_dynamic {
         command.insert(1, "--inspect-publish-uid=http".to_owned());
@@ -4090,13 +4229,16 @@ mod tests {
         snapshot_functions_source, source_scan_pacing_delay, stream_source_chunks,
         update_watch_hash, validate_functions_codebase_budget, BlockingAuthBridge,
         FunctionsSourceEntryBudget, FunctionsSourceFileVersion, FunctionsSourceScanBudget,
-        FunctionsSourceStamp, NodeInstallation, PubSubBridge, BLOCKING_AUTH_DEADLINE,
-        MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
+        FunctionsSourceSnapshot, FunctionsSourceStamp, NodeInstallation, PubSubBridge,
+        BLOCKING_AUTH_DEADLINE, MAX_BLOCKING_AUTH_RESPONSE_BYTES, MAX_FUNCTIONS_SOURCE_ENTRIES,
         MAX_FUNCTIONS_SOURCE_WATCH_BYTES_PER_SECOND, MAX_FUNCTIONS_SOURCE_WATCH_FILES_PER_SECOND,
         SOURCE_IO_BUFFER_BYTES,
     };
     #[cfg(not(windows))]
-    use super::{push_node_candidate, run_node_probe};
+    use super::{
+        push_node_candidate, run_node_probe, run_node_selection_blocking, NodeProbeCache,
+        NodeProbeKey,
+    };
     use fireemu_adapter_functions::manifest_json::parse_manifest;
     use fireemu_core_pubsub::{
         Filter, PubSubState, PushConfig, SubscriptionConfig, SubscriptionName, TopicName,
@@ -5254,6 +5396,95 @@ mod tests {
             patch,
             require_module,
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn discarded_reload_snapshot_is_removed() {
+        let root = std::env::temp_dir().join(format!(
+            "fireemu-discarded-reload-snapshot-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("nested/module.js"), "module.exports = 1;").unwrap();
+
+        FunctionsSourceSnapshot::new(root.clone())
+            .remove()
+            .await
+            .unwrap();
+
+        assert!(!root.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn node_probe_does_not_block_a_single_runtime_worker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("fireemu-node-probe-worker-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\n/bin/sleep 0.4\ncase \"$1\" in --version) echo v22.12.0;; -p) echo true;; esac\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let started = Instant::now();
+        let heartbeat = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            started.elapsed()
+        });
+        let installation = run_node_selection_blocking(move || probe_node(&program))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(installation.version, "22.12.0");
+        let heartbeat_elapsed = heartbeat.await.unwrap();
+        assert!(
+            heartbeat_elapsed < Duration::from_millis(250),
+            "heartbeat waited {heartbeat_elapsed:?}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_probe_cache_reuses_results_until_environment_changes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root =
+            std::env::temp_dir().join(format!("fireemu-node-probe-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let program = root.join("node");
+        let calls = root.join("calls");
+        let script = format!(
+            "#!/bin/sh\necho probe >> '{}'\ncase \"$1\" in --version) echo v22.12.0;; -p) echo true;; esac\n",
+            calls.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let key = NodeProbeKey {
+            path: None,
+            volta_home: None,
+            fireemu_node: Some(program.into_os_string()),
+        };
+        let cache = NodeProbeCache::default();
+        let first = cache.probed(&key).unwrap();
+        assert_eq!(cache.probed(&key).unwrap(), first);
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 2);
+
+        let changed = NodeProbeKey {
+            path: Some("/another/bin".into()),
+            ..key
+        };
+        assert_eq!(cache.probed(&changed).unwrap(), first);
+        assert_eq!(std::fs::read_to_string(&calls).unwrap().lines().count(), 4);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -1222,9 +1222,10 @@ fn verify_session_with_error(
 }
 
 /// Whether a route honours the legacy Identity Toolkit token. Production was observed to honour
-/// it on account lookup, update and delete, a verification mail, phone linking, a sign-up
-/// upgrade and MFA enrollment (sandbox recordings 2026-09-24); email-link and identity-provider linking and
-/// session-cookie creation refuse it (the last observed, the others until observed).
+/// it on account lookup, update and delete, a verification mail and an email change, phone
+/// linking, email-link linking, a sign-up upgrade and MFA enrollment (sandbox recordings
+/// 2026-09-24); identity-provider linking and session-cookie creation refuse it (the last
+/// observed, the other until observed).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegacyTokens {
     Honoured,
@@ -9929,8 +9930,10 @@ fn send_oob_code(
             if strict && str_field(body, "continueUrl").is_none() {
                 return error(400, "MISSING_CONTINUE_URI");
             }
+            // Only the Admin route was observed; a client under improved email privacy is
+            // not told that an address belongs to a disabled account.
             let owner = store.user_by_email(&email);
-            if strict && owner.is_some_and(|u| u.disabled) {
+            if strict && privileged && owner.is_some_and(|u| u.disabled) {
                 return error(400, "USER_DISABLED");
             }
             let uid = owner.map(|u| u.local_id.clone());
@@ -10238,9 +10241,9 @@ fn apply_oob_code(
             }
             if let Some(u) = store.user_mut(&uid) {
                 u.email_verified = true;
-                // The address the first applied change replaced, as production and the
-                // official emulator record it.
-                if u.initial_email.is_none() {
+                // Strict: the address the first applied change replaced, as production
+                // records it (the official emulator records it only on a direct update).
+                if strict && u.initial_email.is_none() {
                     u.initial_email.clone_from(&replaced);
                 }
             }
@@ -10394,8 +10397,8 @@ fn emulator_action(
             |email| json!({"success": "The email has been successfully changed.", "newEmail": email}),
         ),
         Some("signIn") => {
-            if store
-                .oob_code(code)
+            if live_oob_code(store, code, at)
+                .ok()
                 .is_none_or(|entry| entry.request_type != OobRequestType::EmailSignIn)
             {
                 action_expired("sign in", "Try signing in again.")
@@ -10418,10 +10421,10 @@ fn action_reset_password(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
-    let Some(entry) = store
-        .oob_code(code)
+    // A code past its lifetime is gone to the action page, also while strict still keeps it.
+    let Some(entry) = live_oob_code(store, code, at)
+        .ok()
         .filter(|c| c.request_type == OobRequestType::PasswordReset)
-        .cloned()
     else {
         return action_expired("reset your password", "Try resetting your password again.");
     };
@@ -10487,8 +10490,8 @@ fn action_apply(
     (what, retry): (&str, &str),
     success: impl FnOnce(&Value) -> Value,
 ) -> JsonResponse {
-    if store
-        .oob_code(code)
+    if live_oob_code(store, code, at)
+        .ok()
         .is_none_or(|entry| entry.request_type != expected)
     {
         return action_expired(what, retry);
@@ -11411,13 +11414,14 @@ fn parse_idp_claims(token: &str) -> Option<Value> {
 }
 
 /// The lower-cased host of an absolute `scheme://authority` URI, without user info or port;
-/// `None` when the URI has no scheme or no authority.
+/// `None` when the URI has no scheme or no authority. A backslash ends the authority, as a
+/// browser reads it, so `https://evil.example\@allowed.host/` names `evil.example`.
 fn absolute_uri_host(uri: &str) -> Option<String> {
     if !uri_is_absolute(uri) {
         return None;
     }
     let (_, rest) = uri.split_once("://")?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or_default();
     let host_port = authority
         .rsplit_once('@')
         .map_or(authority, |(_, host)| host);
@@ -11906,6 +11910,11 @@ mod tests {
             ("https://", None),
             ("mailto:someone@example.com", None),
             ("http://[::1/x", None),
+            (
+                "https://evil.example\\@demo-app.firebaseapp.com/x",
+                Some("evil.example"),
+            ),
+            ("https:\\\\evil.example", None),
         ] {
             assert_eq!(absolute_uri_host(uri).as_deref(), host, "{uri}");
         }

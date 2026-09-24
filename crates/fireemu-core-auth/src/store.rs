@@ -3068,6 +3068,18 @@ impl AuthStore {
         let email = Self::canonicalize_email(email);
         let new_email = new_email.map(|value| Self::canonicalize_email(&value));
         self.sweep_transient_credentials(now);
+        // At the cap, codes kept past their lifetime (production lifetimes) make room first,
+        // so abandoned codes cannot hold the cap for their whole retention.
+        if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
+            let production = self.production_oob_lifetimes;
+            Arc::make_mut(&mut self.oob_codes).retain(|_, code| {
+                !Self::expired(
+                    code.created_at,
+                    Self::oob_ttl(production, code.request_type),
+                    now,
+                )
+            });
+        }
         if self.oob_codes.len() >= MAX_OUTSTANDING_CODES {
             return Err(AuthError::TooManyOutstandingCodes);
         }

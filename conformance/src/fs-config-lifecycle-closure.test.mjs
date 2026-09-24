@@ -34,7 +34,7 @@ const requiredConditions = new Set([
 
 // Scope decisions that must stay recorded (owner decisions of 2026-09-24 and the agent's
 // delegated calls).
-const requiredDecisions = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10"];
+const requiredDecisions = ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11"];
 
 // The managed-infrastructure methods C1 keeps out of scope. None of them may be a recipe.
 const excludedSurfaces = ["backup", "backupSchedule", "restore", "clone", "pitr"];

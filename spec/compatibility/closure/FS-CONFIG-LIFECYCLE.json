@@ -68,6 +68,12 @@
       "decision": "Production long-running operations progress on their own schedule (an index takes minutes to build, an index operation stays PROCESSING after the index is READY, a deleted index keeps serving queries for a while, an exemption takes minutes to apply). Recordings compare the first response, every state the recording polls through after normalizing how many polls saw it, and the settled end state. fireemu must answer the same shapes and pass through the same states; how long it stays in each is not compared.",
       "decidedBy": "agent under the 2026-09-18 delegation",
       "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "C11",
+      "decision": "A project the credential cannot use is answered with production's 403 PERMISSION_DENIED (ErrorInfo CONSUMER_INVALID) only when the configuration opts in: under the strict profile, projects.unknownProjects = \"refuse\" makes the daemon's project the only one that exists. The default keeps serving every project in its own session, because parallel test workers commonly use one project id each, and emulators.singleProjectMode is not reused because firebase init writes it as true. The project-boundary comparison runs against the opt-in configuration (conformance/fs-config-lifecycle.fireemu.json).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
     }
   ],
   "conditions": [

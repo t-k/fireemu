@@ -723,6 +723,8 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
 
     try:
         for path, commit in zip((frozen_path, repaired_path), commits, strict=True):
+            # A failed add can leave an ambiguous partial path; only successful adds
+            # become owned cleanup targets, avoiding deletion of concurrent paths.
             run_git("worktree", "add", "--detach", str(path), commit)
             created.append(path)
             alias = path / "tools/sdk-smoke/node_modules/@google-cloud/firestore"

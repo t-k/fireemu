@@ -135,6 +135,10 @@ export const PROGRAMS = [
       { action: "publish", ruleset: "main" },
       get("main-allows-owner", "a", "fsr-pub/d"),
       get("main-keeps-open", "none", "fsr-pub-open/d"),
+      { action: "publish", ruleset: null },
+      get("deleted-release-refuses-owner", "a", "fsr-pub/d"),
+      get("deleted-release-refuses-open", "none", "fsr-pub-open/d"),
+      get("deleted-release-refuses-open-grpc", "none", "fsr-pub-open/d", { transport: "grpc" }),
     ],
   },
   {
@@ -149,6 +153,7 @@ export const PROGRAMS = [
         [
           ["fsr-open/d", { n: string("named") }],
           ["fsr-named-only/d", { n: string("named") }],
+          ["fsr-named-auth/d", { n: string("named") }],
         ],
         "named",
       ),
@@ -166,6 +171,8 @@ export const PROGRAMS = [
       get("named-open", "a", "fsr-open/d", { database: "named" }),
       get("named-named-only", "a", "fsr-named-only/d", { database: "named" }),
       get("named-named-only-unauthenticated", "none", "fsr-named-only/d", { database: "named" }),
+      get("named-auth-signed-in", "a", "fsr-named-auth/d", { database: "named" }),
+      get("named-auth-unauthenticated", "none", "fsr-named-auth/d", { database: "named" }),
       get("bare-open", "a", "fsr-open/d", { database: "bare" }),
       get("bare-named-only", "none", "fsr-named-only/d", { database: "bare" }),
       runQuery("bare-list", "a", "fsr-open", { database: "bare" }),
@@ -182,14 +189,37 @@ export const PROGRAMS = [
     id: "fs-rules/expiry/around-exp",
     ruleset: "main",
     seed: OPEN,
-    steps: [-60, 1, 10, 60, 240, 299, 301, 330, 600].flatMap((offset) => {
-      const tag = offset < 0 ? `minus-${-offset}` : `plus-${offset}`;
-      return [
-        get(`exp-${tag}`, "expiring", "fsr-any/d", {
+    // Every row has its own instant; REST and gRPC alternate across neighbouring seconds so each
+    // side of the 300 s allowance ITK uses is observed on both transports.
+    steps: [
+      [-60, "rest"],
+      [-59, "grpc"],
+      [1, "rest"],
+      [2, "grpc"],
+      [10, "rest"],
+      [11, "grpc"],
+      [60, "rest"],
+      [61, "grpc"],
+      [240, "rest"],
+      [241, "grpc"],
+      [298, "grpc"],
+      [299, "rest"],
+      [301, "grpc"],
+      [302, "rest"],
+      [330, "rest"],
+      [331, "grpc"],
+      [600, "rest"],
+      [601, "grpc"],
+    ].map(([offset, transport]) =>
+      get(
+        `exp-${offset < 0 ? `minus-${-offset}` : `plus-${offset}`}-${transport}`,
+        "expiring",
+        "fsr-any/d",
+        {
           waitUntil: { principal: "expiring", plus: offset },
-        }),
-        get(`exp-${tag}-grpc`, "expiring", "fsr-any/d", { transport: "grpc" }),
-      ];
-    }),
+          ...(transport === "grpc" ? { transport } : {}),
+        },
+      ),
+    ),
   },
 ];

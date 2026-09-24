@@ -188,7 +188,9 @@ export const FRAGMENTS = [
 export const PROGRAMS = [
   {
     id: "fs-rules/compile/acceptance",
-    ruleset: "main",
+    // Compilation needs no ruleset in force; run without one, so fireemu, where a compile probe
+    // is a load, restores nothing but an empty slot.
+    ruleset: null,
     steps: COMPILE_CASES.map(([name, source]) => ({ id: name, compile: source })),
   },
   {

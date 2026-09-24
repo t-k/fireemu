@@ -59,9 +59,10 @@
     },
     {
       "id": "R8",
-      "decision": "Named databases are observed on a small scale: one named database per run, created and deleted by the run, with its own release.",
+      "decision": "Named databases are observed on a small scale: two named databases per recording, one with its own release and one without, created and deleted by the recording.",
       "decidedBy": "owner (t-k)",
-      "decidedOn": "2026-09-24"
+      "decidedOn": "2026-09-24",
+      "revisedOn": "2026-09-25"
     },
     {
       "id": "R9",

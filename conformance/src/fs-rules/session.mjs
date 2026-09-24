@@ -23,6 +23,7 @@ import {
   isTransient,
   normalizeGrpc,
   normalizeRest,
+  normalizeString,
   PASSWORD,
   principalEmail,
   PRODUCTION,
@@ -54,6 +55,7 @@ export function createSession(
     maxRequests = Infinity,
     maxHarnessRequests = Infinity,
     log = () => {},
+    shouldStop = () => false,
   } = {},
 ) {
   let requests = 0;
@@ -63,8 +65,18 @@ export function createSession(
   const createdRulesets = new Set();
   /** The label of the ruleset in force per database (`null`: no release), as the harness set it. */
   const active = new Map();
+  /** Databases whose release this session created, patched or deleted: cleanup unpublishes them. */
+  const touched = new Set();
+  /** The label a publication replaced, per database, checked to be refused after each program. */
+  const superseded = new Map();
+  /** Every publication with how long it took to settle, for the evidence. */
+  const publications = [];
+  /** Sandbox configuration changes, for the ledger. */
+  const changes = [];
   let tenant;
   let tenantConfigChanged = false;
+  /** Cleanup is never refused by the harness ceiling: it must always run to the end. */
+  let cleaningUp = false;
   const gapic = new v1.FirestoreClient({ projectId: ctx.project });
   const protos = gapic._protos;
   const grpcClient =
@@ -80,7 +92,7 @@ export function createSession(
 
   const charge = (harness) => {
     if (harness) {
-      if (harnessRequests >= maxHarnessRequests)
+      if (harnessRequests >= maxHarnessRequests && !cleaningUp)
         throw fatal(`harness request ceiling ${maxHarnessRequests} reached`);
       harnessRequests += 1;
     } else {
@@ -115,11 +127,11 @@ export function createSession(
   }
 
   /** One harness HTTP call; a failure to reach the target is fatal. */
-  async function call(url, init, { expect = [200] } = {}) {
+  async function call(url, init, { expect = [200], timeout = timeoutMs } = {}) {
     charge(true);
     let response;
     try {
-      response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeout) });
     } catch (error) {
       throw fatal(
         `harness ${init.method} ${new URL(url).pathname}: ${error?.cause?.code ?? error?.name}`,
@@ -134,7 +146,7 @@ export function createSession(
     }
     if (!expect.includes(response.status)) {
       throw fatal(
-        `harness ${init.method} ${new URL(url).pathname}: HTTP ${response.status} ${text.slice(0, 300)}`,
+        `harness ${init.method} ${new URL(url).pathname}: HTTP ${response.status} ${normalizeString(text.slice(0, 300), ctx, principals)}`,
       );
     }
     return { status: response.status, json };
@@ -245,6 +257,16 @@ export function createSession(
       default:
         throw fatal(`unknown provider ${spec.provider}`);
     }
+    // A phone number or custom uid that already has an account signs in to it: that account
+    // belongs to someone else (another lane), so it is never adopted, and never deleted.
+    if (
+      ctx.target.kind === "production" &&
+      answer?.isNewUser !== true &&
+      spec.provider !== "anonymous" &&
+      spec.provider !== "password"
+    ) {
+      throw fatal(`principal ${name} signed in to an existing account; refusing to adopt it`);
+    }
     adopt(name, spec, answer);
     const principal = principals.get(name);
     principal.tenantId = tenantId;
@@ -274,11 +296,11 @@ export function createSession(
       ? `v1/projects/${ctx.project}/tenants/${principal.tenantId}/accounts`
       : `v1/projects/${ctx.project}/accounts`;
 
-  async function accountUpdate(name, changes) {
+  async function accountUpdate(name, fields) {
     const principal = principals.get(name);
     await admin("POST", "itk", `${accountsPath(principal)}:update`, {
       localId: principal.uid,
-      ...changes,
+      ...fields,
     });
   }
 
@@ -339,13 +361,15 @@ export function createSession(
     if (ctx.target.kind === "production") {
       const { json } = await admin("GET", "itk", `admin/v2/projects/${ctx.project}/config`);
       if (json?.multiTenant?.allowTenants !== true) {
+        // Recorded before the change, so a failure after it still restores the flag.
+        tenantConfigChanged = true;
         await admin(
           "PATCH",
           "itk",
           `admin/v2/projects/${ctx.project}/config?updateMask=multiTenant.allowTenants`,
           { multiTenant: { allowTenants: true } },
         );
-        tenantConfigChanged = true;
+        changes.push("multiTenant.allowTenants false -> true");
       }
     }
     const { json } = await admin("POST", "itk", `v2/projects/${ctx.project}/tenants`, {
@@ -355,13 +379,30 @@ export function createSession(
     const id = String(json?.name ?? "").split("/tenants/")[1];
     if (!id) throw fatal("tenant creation returned no name");
     tenant = { id };
+    changes.push("tenant created");
     return id;
   }
 
+  /** Deletes the run's tenant and restores the flag, whatever fails first; both read back. */
   async function deleteTenant() {
-    if (tenant && !tenant.deleted) {
-      await admin("DELETE", "itk", `v2/projects/${ctx.project}/tenants/${tenant.id}`);
-      tenant.deleted = true;
+    let failure;
+    try {
+      if (tenant && !tenant.deleted) {
+        await admin("DELETE", "itk", `v2/projects/${ctx.project}/tenants/${tenant.id}`, undefined, {
+          expect: [200, 404],
+        });
+        const { json } = await admin(
+          "GET",
+          "itk",
+          `v2/projects/${ctx.project}/tenants?pageSize=100`,
+        );
+        if ((json?.tenants ?? []).some(({ name }) => name.endsWith(`/tenants/${tenant.id}`)))
+          throw fatal("the run's tenant is still listed after its deletion");
+        tenant.deleted = true;
+        changes.push("tenant deleted");
+      }
+    } catch (error) {
+      failure = error;
     }
     if (tenantConfigChanged) {
       await admin(
@@ -370,8 +411,13 @@ export function createSession(
         `admin/v2/projects/${ctx.project}/config?updateMask=multiTenant.allowTenants`,
         { multiTenant: { allowTenants: false } },
       );
+      const { json } = await admin("GET", "itk", `admin/v2/projects/${ctx.project}/config`);
+      if (json?.multiTenant?.allowTenants === true)
+        throw fatal("multiTenant.allowTenants did not read back as restored");
       tenantConfigChanged = false;
+      changes.push("multiTenant.allowTenants restored to false (read back)");
     }
+    if (failure) throw failure;
   }
 
   // ---- databases -----------------------------------------------------------------------------
@@ -488,44 +534,71 @@ export function createSession(
     return json.name;
   }
 
-  /** The status of an unauthenticated get of a marker document: 404 in force, 403 not. */
+  /**
+   * The status of an unauthenticated get of a marker document over REST and over gRPC, as HTTP
+   * statuses: 404 (allowed: in force), 403 (refused), anything else unknown.
+   */
   async function markerStatus(label, which) {
     charge(true);
     const url = `${ctx.target.kind === "production" ? PRODUCTION.firestore : ctx.target.firestoreOrigin}/v1/${documentsName(ctx, which)}/fsr-marker/${label}`;
+    let rest;
     try {
-      return (await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })).status;
+      rest = (await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })).status;
     } catch {
-      return 0;
+      rest = 0;
     }
+    charge(true);
+    const code = await new Promise((resolve) => {
+      const metadata = new grpc.Metadata();
+      metadata.set("google-cloud-resource-prefix", databaseName(ctx, which));
+      grpcClient.makeUnaryRequest(
+        "/google.firestore.v1.Firestore/GetDocument",
+        (message) => protos.google.firestore.v1.GetDocumentRequest.serialize(message),
+        (bytes) => protos.google.firestore.v1.Document.deserialize(bytes),
+        { name: `${documentsName(ctx, which)}/fsr-marker/${label}` },
+        metadata,
+        { deadline: new Date(Date.now() + timeoutMs) },
+        (error) => resolve(error ? error.code : 0),
+      );
+    });
+    const grpcStatus = { 5: 404, 7: 403 }[code] ?? -code - 1;
+    return rest === grpcStatus ? rest : `rest ${rest} grpc ${code}`;
+  }
+
+  /** The markers a database must answer 403 for when `label` is in force (or nothing is). */
+  function refusedMarkers(label, previous, which) {
+    const refused = new Set();
+    if (previous && previous !== label) refused.add(previous);
+    // Without a release every marker this lane could have left in force must be refused.
+    if (!label) {
+      for (const id of which === "default" ? ["main", "alt"] : ["named"]) refused.add(markerOf(id));
+    }
+    return [...refused];
   }
 
   /**
-   * Waits until SETTLE_STREAK consecutive polls see `label` in force and `previous` not (or,
-   * with `label` null, the previous marker refused). Production serves a switch from several
-   * frontends that change over at different times, so one good answer proves nothing.
+   * Waits until SETTLE_STREAK consecutive polls, each over REST and gRPC, see `label` in force
+   * and every other marker refused. Production serves a switch from several frontends that
+   * change over at different times, so one good answer proves nothing.
    */
   async function settle(label, previous, which) {
-    const expect = [];
-    if (label) expect.push([label, 404]);
-    if (previous && previous !== label) expect.push([previous, 403]);
-    // Without a release every marker this lane could have left in force must be refused.
-    if (!label) {
-      for (const id of which === "default" ? ["main", "alt"] : ["named"]) {
-        if (markerOf(id) !== previous) expect.push([markerOf(id), 403]);
-      }
-    }
-    if (expect.length === 0) return;
+    const expect = [
+      ...(label ? [[label, 404]] : []),
+      ...refusedMarkers(label, previous, which).map((marker) => [marker, 403]),
+    ];
     // fireemu switches synchronously; a marker that disagrees there is a difference the rows
     // record, not a propagation delay.
-    if (ctx.target.kind !== "production") return;
+    if (expect.length === 0 || ctx.target.kind !== "production") return { settleMs: 0, polls: 0 };
     const start = Date.now();
     let streak = 0;
+    let polls = 0;
     while (Date.now() - start < SETTLE_LIMIT_MS) {
       let ok = true;
       for (const [marker, status] of expect)
         ok = ok && (await markerStatus(marker, which)) === status;
+      polls += 1;
       streak = ok ? streak + 1 : 0;
-      if (streak >= SETTLE_STREAK) return;
+      if (streak >= SETTLE_STREAK) return { settleMs: Date.now() - start, polls };
       await sleep(1000);
     }
     throw fatal(`release of ${label ?? "nothing"} on ${which} did not settle`);
@@ -536,6 +609,9 @@ export function createSession(
     const previous = active.get(which) ?? null;
     const label = rulesetId ? markerOf(rulesetId) : null;
     if (active.has(which) && previous === label) return;
+    // Known before anything is sent, so cleanup deletes a release whatever fails after this.
+    touched.add(which);
+    active.delete(which);
     if (ctx.target.kind === "production") {
       const name = `projects/${ctx.project}/releases/${releaseName(which)}`;
       if (rulesetId === null) {
@@ -547,9 +623,7 @@ export function createSession(
           "rules",
           `v1/${name}`,
           { release: { name, rulesetName } },
-          {
-            expect: [200, 404],
-          },
+          { expect: [200, 404] },
         );
         if (status === 404)
           await admin("POST", "rules", `v1/projects/${ctx.project}/releases`, {
@@ -569,13 +643,36 @@ export function createSession(
     } else {
       await loadLocal(rulesetSource(rulesetId));
     }
-    await settle(label, previous, which);
+    const settled = await settle(label, previous, which);
     active.set(which, label);
-    log(`release ${which}: ${label ?? "none"}`);
+    superseded.set(which, previous);
+    publications.push({ database: which, label, previous, ...settled });
+    log(`release ${which}: ${label ?? "none"} (${settled.polls} polls, ${settled.settleMs} ms)`);
+  }
+
+  /** Whether the rulesets in force are still the ones the rows ran under (10 polls each). */
+  async function stillInForce(databases) {
+    for (const which of databases) {
+      if (!active.has(which)) continue;
+      const label = active.get(which);
+      const expect = [
+        ...(label ? [[label, 404]] : []),
+        ...refusedMarkers(label, superseded.get(which), which).map((marker) => [marker, 403]),
+      ];
+      for (let i = 0; i < 10; i += 1) {
+        for (const [marker, status] of expect) {
+          if ((await markerStatus(marker, which)) !== status) return false;
+        }
+      }
+    }
+    return true;
   }
 
   const controlHeaders = () =>
     ctx.target.control?.token ? { authorization: `Bearer ${ctx.target.control.token}` } : {};
+
+  /** fireemu's ruleset load grows superlinearly with the ruleset (see the open issue). */
+  const LOCAL_LOAD_TIMEOUT_MS = 600_000;
 
   async function loadLocal(source, { expect = [200] } = {}) {
     return call(
@@ -585,26 +682,35 @@ export function createSession(
         headers: { ...ownerHeaders(), "content-type": "application/json" },
         body: JSON.stringify({ rules: { files: [{ name: "firestore.rules", content: source }] } }),
       },
-      { expect },
+      { expect, timeout: LOCAL_LOAD_TIMEOUT_MS },
     );
   }
 
-  /** Whether a ruleset compiles: production `rulesets.create`, fireemu's ruleset load. */
+  const COMPILE_STATUSES = [200, 400, 413, 429, 500, 502, 503, 504];
+
+  /**
+   * Whether a ruleset compiles: production `rulesets.create`, fireemu's ruleset load. A status
+   * other than 200 or 400 is recorded as it is and says nothing about compilation.
+   */
   async function compiles(source) {
     if (ctx.target.kind === "production") {
       const { status, json } = await admin(
         "POST",
         "rules",
         `v1/projects/${ctx.project}/rulesets`,
-        {
-          source: { files: [{ name: "firestore.rules", content: source }] },
-        },
-        { expect: [200, 400] },
+        { source: { files: [{ name: "firestore.rules", content: source }] } },
+        { expect: COMPILE_STATUSES },
       );
-      if (status === 200) await admin("DELETE", "rules", `v1/${json.name}`);
-      return { compiled: status === 200 };
+      if (status === 200) {
+        createdRulesets.add(json.name);
+        await admin("DELETE", "rules", `v1/${json.name}`);
+        createdRulesets.delete(json.name);
+      }
+      return status === 200 || status === 400
+        ? { compiled: status === 200 }
+        : { status, transport: "compile-status" };
     }
-    const { status } = await loadLocal(source, { expect: [200, 400] });
+    const { status } = await loadLocal(source, { expect: COMPILE_STATUSES });
     // A local load activates the ruleset: put the one in force back.
     const current = active.get("default");
     if (status === 200) {
@@ -615,14 +721,49 @@ export function createSession(
           headers: controlHeaders(),
         });
     }
-    return { compiled: status === 200 };
+    return status === 200 || status === 400
+      ? { compiled: status === 200 }
+      : { status, transport: "compile-status" };
   }
 
+  /** Deletes the run's rulesets; one still in use by a release (400) is a cleanup failure. */
   async function deleteCreatedRulesets() {
     for (const name of createdRulesets) {
-      await admin("DELETE", "rules", `v1/${name}`, undefined, { expect: [200, 404, 400] });
+      await admin("DELETE", "rules", `v1/${name}`, undefined, { expect: [200, 404] });
       createdRulesets.delete(name);
     }
+  }
+
+  /**
+   * Reads back that the run left nothing behind: no release, no database but `(default)`, no
+   * ruleset of the run, no project-level account of the run. Production only.
+   */
+  async function audit() {
+    if (ctx.target.kind !== "production") return [];
+    const problems = [];
+    const { json: releases } = await admin("GET", "rules", `v1/projects/${ctx.project}/releases`);
+    if ((releases?.releases ?? []).length) problems.push("a release remains");
+    const { json: databases } = await admin(
+      "GET",
+      "firestore",
+      `v1/projects/${ctx.project}/databases`,
+    );
+    const extra = (databases?.databases ?? []).filter(({ name }) => !name.endsWith("/(default)"));
+    if (extra.length) problems.push(`${extra.length} named database(s) remain`);
+    if (createdRulesets.size) problems.push(`${createdRulesets.size} ruleset(s) of the run remain`);
+    const { json: accounts } = await admin(
+      "POST",
+      "itk",
+      `v1/projects/${ctx.project}/accounts:query`,
+      {
+        returnUserInfo: true,
+        limit: 500,
+      },
+    );
+    const ours = new Set([...principals.values()].map(({ uid }) => uid));
+    const left = (accounts?.userInfo ?? []).filter(({ localId }) => ours.has(localId));
+    if (left.length) problems.push(`${left.length} account(s) of the run remain`);
+    return problems;
   }
 
   // ---- requests made as a principal ----------------------------------------------------------
@@ -674,15 +815,27 @@ export function createSession(
         json: null,
       };
     }
-    const text = await response.text();
+    let text = await response.text();
     let json = null;
     try {
       json = JSON.parse(text);
     } catch {
       /* recorded as non-JSON */
     }
+    // Production answers a batchGet in no particular order; SDKs reorder by request.
+    if (step.rpc === "batchGet" && Array.isArray(json)) {
+      json = inBatchOrder(json);
+      text = JSON.stringify(json);
+    }
     return { recorded: normalizeRest(response.status, text, ctx, principals), json };
   }
+
+  /** BatchGet results sorted by the document they name (`found.name` or `missing`). */
+  const inBatchOrder = (results) =>
+    results.toSorted((a, b) => {
+      const key = (result) => result?.found?.name ?? result?.missing ?? "";
+      return key(a).localeCompare(key(b));
+    });
 
   function sendGrpc(step, raw) {
     const built = buildFirestoreGrpc(step, ctx, raw, principals);
@@ -707,11 +860,12 @@ export function createSession(
     return new Promise((resolve) => {
       const messages = [];
       const finish = (error) => {
+        const received = built.method === "BatchGetDocuments" ? inBatchOrder(messages) : messages;
         const recorded = normalizeGrpc(
           {
             code: error ? error.code : 0,
             details: error ? error.details : "",
-            messages: JSON.parse(JSON.stringify(messages)),
+            messages: JSON.parse(JSON.stringify(received)),
           },
           ctx,
           principals,
@@ -810,8 +964,8 @@ export function createSession(
   async function runProgram(program) {
     const raw = new Map();
     const steps = {};
-    const touched = databasesOf(program);
-    for (const which of touched) await wipe(which);
+    const databases = databasesOf(program);
+    for (const which of databases) await wipe(which);
     let failure;
     try {
       if (program.ruleset !== undefined) await publish(program.ruleset);
@@ -820,6 +974,7 @@ export function createSession(
       for (const name of program.refresh ?? []) await refresh(name);
       await seed(program.seed, raw);
       for (const step of program.steps) {
+        if (shouldStop()) throw fatal("stopped by a signal");
         if (step.action) {
           await act(step, raw);
           continue;
@@ -858,24 +1013,16 @@ export function createSession(
           `${program.id}#${step.id} ${outcome.recorded.status ?? `grpc ${outcome.recorded.grpc}`}`,
         );
       }
-      // A row counts only if the ruleset it ran under was still in force after it.
-      if (ctx.target.kind === "production") {
-        for (const [which, label] of active) {
-          if (!touched.includes(which) || !label) continue;
-          for (let i = 0; i < 3; i += 1) {
-            if ((await markerStatus(label, which)) !== 404) {
-              for (const recorded of Object.values(steps)) recorded.publication = "unsettled";
-              break;
-            }
-          }
-        }
+      // A row counts only if the rulesets it ran under were still in force after it.
+      if (ctx.target.kind === "production" && !(await stillInForce(databases))) {
+        for (const recorded of Object.values(steps)) recorded.publication = "unsettled";
       }
     } catch (error) {
       failure = error;
     }
     let cleanup;
     try {
-      for (const which of touched) await wipe(which);
+      for (const which of databases) await wipe(which);
     } catch (error) {
       cleanup = error;
     }
@@ -897,12 +1044,13 @@ export function createSession(
     publish,
     wipe,
     principals,
-    /** Databases with a release this session made, `default` last. */
-    releasedDatabases: () =>
-      [...active.entries()]
-        .filter(([, label]) => label)
-        .map(([which]) => which)
-        .toSorted((a, b) => (a === "default") - (b === "default")),
+    audit,
+    beginCleanup: () => {
+      cleaningUp = true;
+    },
+    /** Databases whose release this session touched, `default` last. */
+    touchedDatabases: () => [...touched].toSorted((a, b) => (a === "default") - (b === "default")),
+    evidence: () => ({ publications, changes }),
     tenant: () => tenant,
     close: async () => {
       grpcClient.close();
@@ -941,13 +1089,18 @@ export async function runCorpus({ programs, principals: principalSpecs }, ctx, o
     fatalError = error;
   }
   const cleanupErrors = [];
+  session.beginCleanup();
   for (const step of [
-    ...session.releasedDatabases().map((which) => () => session.publish(null, which)),
+    ...session.touchedDatabases().map((which) => () => session.publish(null, which)),
     () => session.wipe(),
     () => session.deleteDatabases(),
     () => session.deletePrincipals(),
     () => session.deleteTenant(),
     () => session.deleteCreatedRulesets(),
+    async () => {
+      const problems = await session.audit();
+      if (problems.length) throw new Error(`audit: ${problems.join("; ")}`);
+    },
   ]) {
     try {
       await step();
@@ -961,6 +1114,7 @@ export async function runCorpus({ programs, principals: principalSpecs }, ctx, o
     results,
     failures,
     cleanupErrors,
+    ...session.evidence(),
     ...session.counts(),
   };
   if (fatalError) throw Object.assign(fatalError, { partial: out });

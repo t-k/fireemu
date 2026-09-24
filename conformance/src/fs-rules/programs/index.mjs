@@ -31,10 +31,11 @@ const statePrograms = states.PROGRAMS;
 
 export const PROGRAMS = [
   byId(statePrograms, "fs-rules/publication/no-release"),
+  byId(limits.PROGRAMS, "fs-rules/compile/acceptance"),
   ...principals.PROGRAMS,
   ...writes.PROGRAMS,
   ...query.PROGRAMS,
-  ...limits.PROGRAMS,
+  byId(limits.PROGRAMS, "fs-rules/runtime-limits/evaluation"),
   byId(statePrograms, "fs-rules/refusals/credentials"),
   byId(statePrograms, "fs-rules/token-states/after-account-change"),
   byId(statePrograms, "fs-rules/publication/switch"),

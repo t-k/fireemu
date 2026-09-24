@@ -93,14 +93,42 @@ const ACCESS_CASES = [
   ["write-get-before-updated", "create", `get(${DB}/fsr-acc-src/present).data.n == 1`],
 ];
 
+/**
+ * Negative controls and alternative routes on paths of their own, under the rule of the case
+ * they test, so a control is refused by the predicate and not because an earlier row created
+ * or changed its document.
+ */
+const RESOURCE_ALIASES = {
+  "create-shape-ctl": "create-shape",
+  "create-shape-by-create": "create-shape",
+  "create-time-ctl": "create-time-is-request-time",
+  "create-size-ctl": "create-size",
+  "create-method-by-patch": "create-method",
+  "update-diff-changed-same": "update-diff-changed",
+};
+const ACCESS_ALIASES = {
+  "write-get-after-partner-ctl": "write-get-after-partner",
+  "write-exists-after-partner-ctl": "write-exists-after-partner",
+  "write-get-after-self-ctl": "write-get-after-self",
+};
+
+const withAliases = (cases, aliases) => [
+  ...cases,
+  ...Object.entries(aliases).map(([alias, name]) => {
+    const [, method, predicate] = cases.find(([n]) => n === name);
+    return [alias, method, predicate];
+  }),
+];
+
 export const FRAGMENTS = [
   [
-    ...RESOURCE_CASES.map(([name, method, predicate]) =>
+    ...withAliases(RESOURCE_CASES, RESOURCE_ALIASES).map(([name, method, predicate]) =>
       allow(`/fsr-res/${name}`, method, predicate),
     ),
-    ...ACCESS_CASES.map(([name, method, predicate]) =>
+    ...withAliases(ACCESS_CASES, ACCESS_ALIASES).map(([name, method, predicate]) =>
       allow(`/fsr-acc/${name}`, method, predicate),
     ),
+    allow("/fsr-res/update-merged", "get", "true"),
     allow("/fsr-acc-partner/{d}", "create", `${R}.data.owner == request.auth.uid`),
     allow("/fsr-acc-src/{d}", "update, delete", "request.auth != null"),
     allow(
@@ -125,6 +153,7 @@ export const PROGRAMS = [
         "update-resource",
         "update-diff",
         "update-diff-changed",
+        "update-diff-changed-same",
         "update-method",
         "update-set-replaces",
         "update-increment",
@@ -142,7 +171,7 @@ export const PROGRAMS = [
     ),
     steps: [
       create("create-shape", "a", "fsr-res/create-shape", { n: integer(1), s: string("x") }),
-      create("create-shape-control", "a", "fsr-res/create-shape", {
+      create("create-shape-control", "a", "fsr-res/create-shape-ctl", {
         n: string("1"),
         s: string("x"),
       }),
@@ -159,17 +188,17 @@ export const PROGRAMS = [
           currentDocument: { exists: false },
         },
       ]),
-      create("create-time-is-request-time-control", "a", "fsr-res/create-time-is-request-time", {
+      create("create-time-is-request-time-control", "a", "fsr-res/create-time-ctl", {
         t: { timestampValue: "2020-01-01T00:00:00Z" },
       }),
       create("create-time-type", "a", "fsr-res/create-time-type", {}),
       create("create-size", "a", "fsr-res/create-size", { x: integer(1), y: integer(2) }),
-      create("create-size-control", "a", "fsr-res/create-size", { x: integer(1) }),
+      create("create-size-control", "a", "fsr-res/create-size-ctl", { x: integer(1) }),
       {
         id: "create-by-patch-precondition",
         as: "a",
         rpc: "patch",
-        doc: "fsr-res/create-method",
+        doc: "fsr-res/create-method-by-patch",
         params: { "currentDocument.exists": false },
         body: { fields: {} },
       },
@@ -178,7 +207,7 @@ export const PROGRAMS = [
         as: "a",
         rpc: "create",
         collection: "fsr-res",
-        params: { documentId: "create-shape" },
+        params: { documentId: "create-shape-by-create" },
         body: { fields: { n: integer(2), s: string("y") } },
       },
       commit("update-merged", "a", [update("fsr-res/update-merged", { b: integer(2) }, ["b"])]),
@@ -202,7 +231,7 @@ export const PROGRAMS = [
         update("fsr-res/update-diff-changed", { a: integer(2) }, ["a"]),
       ]),
       commit("update-diff-changed-same-value", "a", [
-        update("fsr-res/update-diff-changed", { a: integer(1) }, ["a"]),
+        update("fsr-res/update-diff-changed-same", { a: integer(1) }, ["a"]),
       ]),
       commit("update-method", "a", [update("fsr-res/update-method", { a: integer(1) })]),
       commit("update-set-replaces", "a", [
@@ -267,7 +296,7 @@ export const PROGRAMS = [
           transport: "grpc",
         },
       ),
-      get("post-state-update-merged", "a", "fsr-res/get-resource"),
+      get("post-state-update-merged", "a", "fsr-res/update-merged"),
     ],
   },
   {
@@ -294,7 +323,7 @@ export const PROGRAMS = [
           currentDocument: { exists: false },
         },
       ]),
-      create("write-get-after-partner-missing", "a", "fsr-acc/write-get-after-partner", {}),
+      create("write-get-after-partner-missing", "a", "fsr-acc/write-get-after-partner-ctl", {}),
       commit("write-get-before-partner-new", "a", [
         {
           update: { name: "{docs}/fsr-acc/write-get-before-partner", fields: {} },
@@ -316,7 +345,12 @@ export const PROGRAMS = [
           currentDocument: { exists: false },
         },
       ]),
-      create("write-exists-after-partner-missing", "a", "fsr-acc/write-exists-after-partner", {}),
+      create(
+        "write-exists-after-partner-missing",
+        "a",
+        "fsr-acc/write-exists-after-partner-ctl",
+        {},
+      ),
       commit("write-exists-after-deleted", "a", [
         {
           update: { name: "{docs}/fsr-acc/write-exists-after-deleted", fields: {} },
@@ -326,7 +360,7 @@ export const PROGRAMS = [
       ]),
       create("write-exists-before-deleted", "a", "fsr-acc/write-exists-before-deleted", {}),
       create("write-get-after-self", "a", "fsr-acc/write-get-after-self", { n: integer(7) }),
-      create("write-get-after-self-control", "a", "fsr-acc/write-get-after-self", {
+      create("write-get-after-self-control", "a", "fsr-acc/write-get-after-self-ctl", {
         n: integer(8),
       }),
       commit("write-get-after-updated", "a", [

@@ -14,7 +14,7 @@ import {
   SANDBOX_PROJECT,
 } from "./fs-rules/harness.mjs";
 import { markerOf, RULESET_IDS, rulesetSource } from "./fs-rules/rulesets.mjs";
-import { classify, recentAbort } from "./fs-rules/run.mjs";
+import { classify, otherLanesRecently, recentAbort } from "./fs-rules/run.mjs";
 
 const production = () =>
   createContext({
@@ -243,9 +243,10 @@ test("classification needs a current fixture and a determinate answer on both si
   assert.equal(classify({ production: denied, fireemu: undefined }), "MISSING");
   assert.equal(classify({ production: denied, fireemu: denied }), "MATCH");
   assert.equal(classify({ production: denied, fireemu: allowed }), "MISMATCH");
+  // Two recordings that differ say nothing unless the row is known to vary.
   assert.equal(
-    classify({ production: denied, alternative: allowed, fireemu: allowed }),
-    "MATCH_NONDETERMINISTIC",
+    classify({ row: "p#s", production: denied, alternative: allowed, fireemu: allowed }),
+    "INDETERMINATE",
   );
   assert.equal(classify({ production: { status: 500 }, fireemu: denied }), "INDETERMINATE");
 });
@@ -305,4 +306,18 @@ test("a run is refused within an hour of the task's last aborted run", () => {
     recentAbort([line("2026-09-24T11:30:00Z", "aborted", "OTHER")].join("\n"), now),
     undefined,
   );
+});
+
+test("other lanes that used the sandbox in the last 30 minutes are named", () => {
+  const now = Date.parse("2026-09-24T12:00:00Z");
+  const line = (ts, taskId, project = "fireemu-oracle-idp") =>
+    JSON.stringify({ ts, taskId, project });
+  const ledger = [
+    line("2026-09-24T11:45:00Z", "AUTH-ACTION-SANDBOX"),
+    line("2026-09-24T11:00:00Z", "AUTH-ACCOUNT-SANDBOX"),
+    line("2026-09-24T11:50:00Z", "FS-RULES-SANDBOX"),
+    line("2026-09-24T11:55:00Z", "FS-DATA-WRITE-SANDBOX", "fireemu-oracle-sbx"),
+    "not json",
+  ].join("\n");
+  assert.deepEqual(otherLanesRecently(ledger, now), ["AUTH-ACTION-SANDBOX"]);
 });

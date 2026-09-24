@@ -178,7 +178,7 @@ async function ownerFetch(target, method, url, body) {
  * than `(default)` or a release outside `cloud.firestore` exists, or a ruleset of the corpus
  * does not compile in production.
  */
-export async function preflight(target) {
+export async function preflight(target, ledgerText = "", now = Date.now()) {
   const rules = `${PRODUCTION.rules}/v1/projects/${SANDBOX_PROJECT}`;
   const releases = await ownerFetch(target, "GET", `${rules}/releases`);
   const databases = await ownerFetch(
@@ -192,7 +192,22 @@ export async function preflight(target) {
     `${PRODUCTION.firestore}/v1/projects/${SANDBOX_PROJECT}/databases/(default)/documents:runQuery`,
     { structuredQuery: { from: [{ allDescendants: true }], limit: 1 } },
   );
+  const accounts = await ownerFetch(
+    target,
+    "POST",
+    `${PRODUCTION.itk}/v1/projects/${SANDBOX_PROJECT}/accounts:query`,
+    { returnUserInfo: false },
+  );
+  const signJwt = await ownerFetch(
+    target,
+    "POST",
+    `https://iam.googleapis.com/v1/projects/-/serviceAccounts/${SIGNER_ACCOUNTS.project}:testIamPermissions`,
+    { permissions: ["iam.serviceAccounts.signJwt"] },
+  );
   const report = {
+    projectAccounts: Number(accounts.json?.recordsCount ?? -1),
+    signJwt: (signJwt.json?.permissions ?? []).includes("iam.serviceAccounts.signJwt"),
+    otherLanesRecently: otherLanesRecently(ledgerText, now),
     releases: (releases.json?.releases ?? []).map(({ name, rulesetName }) => ({
       name,
       rulesetName,
@@ -212,15 +227,25 @@ export async function preflight(target) {
   const foreign = report.databases.filter((db) => db !== "(default)");
   const problems = [
     ...(foreign.length ? [`databases other than (default) exist: ${foreign.join(", ")}`] : []),
-    ...(report.releases.some(({ name }) => !/\/releases\/cloud\.firestore(\/.*)?$/.test(name))
-      ? ["a release other than cloud.firestore exists"]
+    // A release left behind would make the first settle meaningless: cleanup it by hand first.
+    ...(report.releases.length ? ["a release exists"] : []),
+    // The AUTH lanes wipe every project-level account per program, and leave none when idle.
+    ...(report.projectAccounts !== 0
+      ? [`${report.projectAccounts} project-level account(s) exist`]
       : []),
+    ...(report.otherLanesRecently.length
+      ? [`other lanes used the sandbox within 30 minutes: ${report.otherLanesRecently.join(", ")}`]
+      : []),
+    ...(report.signJwt ? [] : ["the owner lacks signJwt on the sandbox's Admin SDK account"]),
     ...Object.entries(report.compiled)
       .filter(([, status]) => status !== 200)
       .map(([id, status]) => `ruleset ${id} does not compile (HTTP ${status})`),
   ];
   return { report, problems };
 }
+
+/** Set by SIGINT or SIGTERM: the session stops before its next step and cleans up. */
+let stopRequested = false;
 
 async function recordOnce(programs, web, signers) {
   const target = await productionTarget(web);
@@ -229,6 +254,7 @@ async function recordOnce(programs, web, signers) {
     ...ceilings(programs),
     signers,
     log: (line) => console.log(line),
+    shouldStop: () => stopRequested,
   });
 }
 
@@ -267,6 +293,22 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   return diffRecordings(first.results, second.results);
 }
 
+/** Tasks other than this one with a ledger line for the sandbox in the last 30 minutes. */
+export function otherLanesRecently(ledgerText, now = Date.now()) {
+  const tasks = new Set();
+  for (const line of ledgerText.split("\n")) {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry?.project !== SANDBOX_PROJECT || entry.taskId === TASK_ID) continue;
+    if (now - Date.parse(entry.ts) < 30 * 60_000) tasks.add(entry.taskId ?? "unknown");
+  }
+  return [...tasks];
+}
+
 /** Refuses a run within an hour of this task's last aborted run (per-IP account limits). */
 export function recentAbort(ledgerText, now = Date.now()) {
   const entries = ledgerText
@@ -298,7 +340,10 @@ async function recordProduction() {
   const corpusRequests = validateCorpus(programs);
   const web = await sandboxWebConfig();
   const target = await productionTarget(web);
-  const { report, problems } = await preflight(target);
+  const { report, problems } = await preflight(
+    target,
+    await readFile(ledger, "utf8").catch(() => ""),
+  );
   if (problems.length) throw new Error(`preflight: ${problems.join("; ")}`);
   const meta = {
     sha: await gitSha(),
@@ -317,6 +362,12 @@ async function recordProduction() {
     `${JSON.stringify({ ts: meta.startedAt, event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: programs.length })}\n`,
   );
   const signers = { project: { serviceAccount: SIGNER_ACCOUNTS.project } };
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      stopRequested = true;
+      console.error(`${signal}: stopping before the next step; cleanup follows`);
+    });
+  }
   const recordings = [];
   let outcome = "recorded";
   let error;
@@ -382,6 +433,8 @@ async function recordProduction() {
         outcome,
         taskId: TASK_ID,
         programs: meta.programs,
+        configurationChanges: recordings.flatMap((r) => r.changes ?? []),
+        publications: recordings.flatMap((r) => r.publications ?? []).length,
         ...(error ? { error } : {}),
       })}\n`,
     );
@@ -552,11 +605,18 @@ export async function runLocal(programs, { profile = "strict" } = {}) {
   return { binary, ...JSON.parse(await readFile(paths.out, "utf8")) };
 }
 
-export function classify({ stale, production, alternative, fireemu }) {
+/**
+ * Rows whose two production recordings may differ, with the reason. A differing row outside
+ * this list is INDETERMINATE: it may be a propagation artefact, not behavior.
+ */
+export const NONDETERMINISTIC_ROWS = {};
+
+export function classify({ row, stale, production, alternative, fireemu }) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
   if ([production, alternative, fireemu].some(isTransient)) return "INDETERMINATE";
+  if (alternative && !Object.hasOwn(NONDETERMINISTIC_ROWS, row)) return "INDETERMINATE";
   if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
   if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";
   return "MISMATCH";
@@ -580,9 +640,10 @@ async function check() {
       const production = saved?.steps?.[step.id];
       const alternative = saved?.second?.[step.id];
       const fireemu = local.results[program.id]?.steps?.[step.id];
+      const row = `${program.id}#${step.id}`;
       rows.push({
-        row: `${program.id}#${step.id}`,
-        status: classify({ stale, production, alternative, fireemu }),
+        row,
+        status: classify({ row, stale, production, alternative, fireemu }),
         production,
         ...(alternative ? { alternative } : {}),
         fireemu,

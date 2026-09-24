@@ -59,6 +59,11 @@ struct RegistryState {
     /// Deleted indexes, oldest first: production's link to create a missing index again
     /// names the index that was deleted.
     deleted: BTreeMap<(String, String), Vec<RuntimeIndex>>,
+    /// The databases whose index-file indexes were seeded, with those definitions: they are
+    /// the database's deployed indexes until it is deleted or they are.
+    seeded: BTreeMap<(String, String), Vec<IndexDefinition>>,
+    /// What a deleted database's index list still answers (production keeps listing them).
+    tombstones: BTreeMap<(String, String), Vec<RuntimeIndex>>,
     seed: u64,
 }
 
@@ -85,7 +90,24 @@ impl Default for IndexRegistry {
 /// 56-bit number, twelve characters long.
 fn index_id(seed: &mut u64) -> String {
     *seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    let mut z = *seed;
+    encode_index_id(*seed)
+}
+
+/// The id of an index the index file declares: derived from its definition, so it is the same
+/// every run.
+#[must_use]
+pub fn configured_index_id(definition: &IndexDefinition) -> String {
+    let mut digest = fireemu_core_types::hash::Sha256::new();
+    digest.update(b"fireemu:configured-index:");
+    digest.update(format!("{definition:?}").as_bytes());
+    let bytes = digest.finalize();
+    let mut word = [0_u8; 8];
+    word.copy_from_slice(&bytes[..8]);
+    encode_index_id(u64::from_be_bytes(word))
+}
+
+fn encode_index_id(seed: u64) -> String {
+    let mut z = seed;
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     z ^= z >> 31;
@@ -260,11 +282,74 @@ impl IndexRegistry {
         })
     }
 
-    /// Forgets the indexes of the projects `owned` selects, or of one database.
+    /// Forgets the indexes of the projects `owned` selects (a session reset): the index-file
+    /// indexes are seeded again on next use.
     pub fn forget(&self, owned: impl Fn(&str, &str) -> bool) {
         let mut state = self.lock();
         state.live.retain(|(p, d), _| !owned(p, d));
         state.deleted.retain(|(p, d), _| !owned(p, d));
+        state.seeded.retain(|(p, d), _| !owned(p, d));
+        state.tombstones.retain(|(p, d), _| !owned(p, d));
+    }
+
+    /// Adds the index-file indexes of a database, once, as built (`READY`) indexes.
+    pub fn seed_configured(&self, project: &str, database: &str, composites: &[IndexDefinition]) {
+        let mut state = self.lock();
+        let key = (project.to_owned(), database.to_owned());
+        if state.seeded.contains_key(&key) {
+            return;
+        }
+        state.seeded.insert(key.clone(), composites.to_vec());
+        let live = state.live.entry(key).or_default();
+        for definition in composites {
+            if live.iter().any(|i| &i.definition == definition) {
+                continue;
+            }
+            live.push(RuntimeIndex {
+                id: configured_index_id(definition),
+                definition: definition.clone(),
+                started: Instant::now(),
+                start_time: LogicalInstant::UNIX_EPOCH,
+                operation: String::new(),
+            });
+        }
+    }
+
+    /// The index-file indexes of a database that are no longer its indexes (deleted through
+    /// the Admin API, or gone with the database): the planner must not use them.
+    #[must_use]
+    pub fn retracted(&self, project: &str, database: &str) -> Vec<IndexDefinition> {
+        let state = self.lock();
+        let key = (project.to_owned(), database.to_owned());
+        let Some(seeded) = state.seeded.get(&key) else {
+            return Vec::new();
+        };
+        let live = state.live.get(&key);
+        seeded
+            .iter()
+            .filter(|d| !live.is_some_and(|all| all.iter().any(|i| &i.definition == *d)))
+            .cloned()
+            .collect()
+    }
+
+    /// Drops a deleted database's indexes: its index list keeps answering what it had, and a
+    /// database recreated under the id starts with none (production, 2026-09-24).
+    pub fn drop_database(&self, project: &str, database: &str) {
+        let mut state = self.lock();
+        let key = (project.to_owned(), database.to_owned());
+        let had = state.live.remove(&key).unwrap_or_default();
+        state.tombstones.insert(key.clone(), had);
+        state.deleted.remove(&key);
+    }
+
+    /// What a deleted database's index list answers.
+    #[must_use]
+    pub fn tombstone(&self, project: &str, database: &str) -> Vec<RuntimeIndex> {
+        self.lock()
+            .tombstones
+            .get(&(project.to_owned(), database.to_owned()))
+            .cloned()
+            .unwrap_or_default()
     }
 }
 

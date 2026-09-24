@@ -249,6 +249,21 @@ fn documents_of(
 
 /// How many documents of a database belong to one collection group (an index build's and a
 /// field change's progress counter).
+/// The document count of every collection group of a database, from one snapshot.
+pub(crate) fn group_document_counts(
+    state: &RestState,
+    project: &str,
+    database: &str,
+) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    for document in documents_of(state, project, database).unwrap_or_default() {
+        if let Some((collection, _)) = document.path.last() {
+            *counts.entry(collection.clone()).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
 pub(crate) fn group_document_count(
     state: &RestState,
     project: &str,

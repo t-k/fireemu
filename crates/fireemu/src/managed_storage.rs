@@ -149,7 +149,7 @@ impl ManagedStorage for StorageBridge {
             return Err(ImportRefusal::KindsUnavailable);
         }
         let mut documents = Vec::new();
-        let mut bytes = 0;
+        let mut bytes: u64 = 0;
         for entry in selected {
             if let Partition::Namespace(_) = entry.partition {
                 continue;
@@ -180,7 +180,7 @@ impl ManagedStorage for StorageBridge {
                     });
                 }
             }
-            bytes += entry.bytes;
+            bytes = bytes.saturating_add(entry.bytes);
         }
         Ok(ImportOutcome { documents, bytes })
     }

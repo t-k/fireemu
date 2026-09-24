@@ -32,7 +32,7 @@ impl AdminGrpc {
 
     // Every tonic handler returns a Status; boxing it here would only unbox it again.
     #[allow(clippy::result_large_err)]
-    fn call<T>(
+    async fn call<T>(
         &self,
         request: &Request<T>,
         method: &str,
@@ -45,7 +45,7 @@ impl AdminGrpc {
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
-        let response = self.rest.handle(&RestRequest {
+        let rest_request = RestRequest {
             method: method.to_owned(),
             path: format!("/v1/{path}"),
             query: query.to_owned(),
@@ -54,7 +54,13 @@ impl AdminGrpc {
             body,
             origin: None,
             browser_metadata: false,
-        });
+        };
+        // The REST core takes locks, waits out contention and reads or writes whole exports:
+        // it runs on the blocking pool, never on a runtime worker (as the REST surface does).
+        let rest = Arc::clone(&self.rest);
+        let response = tokio::task::spawn_blocking(move || rest.handle(&rest_request))
+            .await
+            .map_err(|error| Status::internal(format!("Admin request task failed: {error}")))?;
         if response.status == 200 {
             return Ok(response.body);
         }
@@ -436,7 +442,9 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
             .as_ref()
             .map(index_body)
             .unwrap_or_default();
-        let answer = self.call(&request, "POST", &format!("{parent}/indexes"), "", body)?;
+        let answer = self
+            .call(&request, "POST", &format!("{parent}/indexes"), "", body)
+            .await?;
         Ok(Response::new(operation(&answer)))
     }
     async fn list_indexes(
@@ -447,7 +455,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
     }
     async fn get_index(&self, request: Request<admin::GetIndexRequest>) -> R<admin::Index> {
         let name = request.get_ref().name.clone();
-        let answer = self.call(&request, "GET", &name, "", Value::Null)?;
+        let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(index(&answer)))
     }
     async fn delete_index(&self, _r: Request<admin::DeleteIndexRequest>) -> R<()> {
@@ -478,7 +486,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
             body["namespaceIds"] = json!(r.namespace_ids);
         }
         let path = format!("{}:exportDocuments", r.name);
-        let answer = self.call(&request, "POST", &path, "", body)?;
+        let answer = self.call(&request, "POST", &path, "", body).await?;
         Ok(Response::new(operation(&answer)))
     }
     async fn import_documents(
@@ -494,7 +502,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
             body["namespaceIds"] = json!(r.namespace_ids);
         }
         let path = format!("{}:importDocuments", r.name);
-        let answer = self.call(&request, "POST", &path, "", body)?;
+        let answer = self.call(&request, "POST", &path, "", body).await?;
         Ok(Response::new(operation(&answer)))
     }
     async fn bulk_delete_documents(
@@ -511,7 +519,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         let body = r.database.as_ref().map_or_else(|| json!({}), database_body);
         let query = encode_query(&[("databaseId", &r.database_id)]);
         let path = format!("{}/databases", r.parent);
-        let answer = self.call(&request, "POST", &path, &query, body)?;
+        let answer = self.call(&request, "POST", &path, &query, body).await?;
         Ok(Response::new(operation(&answer)))
     }
     async fn get_database(
@@ -519,7 +527,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         request: Request<admin::GetDatabaseRequest>,
     ) -> R<admin::Database> {
         let name = request.get_ref().name.clone();
-        let answer = self.call(&request, "GET", &name, "", Value::Null)?;
+        let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(database(&answer)))
     }
     async fn list_databases(
@@ -533,7 +541,9 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
             ""
         };
         let path = format!("{}/databases", r.parent);
-        let answer = self.call(&request, "GET", &path, query, Value::Null)?;
+        let answer = self
+            .call(&request, "GET", &path, query, Value::Null)
+            .await?;
         Ok(Response::new(admin::ListDatabasesResponse {
             databases: answer["databases"]
                 .as_array()
@@ -557,7 +567,9 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         let r = request.get_ref();
         let query = encode_query(&[("etag", &r.etag)]);
         let name = r.name.clone();
-        let answer = self.call(&request, "DELETE", &name, &query, Value::Null)?;
+        let answer = self
+            .call(&request, "DELETE", &name, &query, Value::Null)
+            .await?;
         Ok(Response::new(operation(&answer)))
     }
     async fn create_user_creds(
@@ -659,7 +671,7 @@ impl lro::operations_server::Operations for AdminGrpc {
     }
     async fn get_operation(&self, request: Request<lro::GetOperationRequest>) -> R<lro::Operation> {
         let name = request.get_ref().name.clone();
-        let answer = self.call(&request, "GET", &name, "", Value::Null)?;
+        let answer = self.call(&request, "GET", &name, "", Value::Null).await?;
         Ok(Response::new(operation(&answer)))
     }
     async fn delete_operation(&self, _r: Request<lro::DeleteOperationRequest>) -> R<()> {

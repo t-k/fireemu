@@ -13,7 +13,7 @@
   "recipeSha256": "e4c9363c00d2df590b4723fb7960292e947a29c435a0c6f137c8236667dfbde3",
   "comparisonMode": "sandbox-stream-comparator",
   "normalizationApproval": "docs.local/instructions/2026-09-24-fs-data-write-directive-addendum-4.md#5",
-  "localRunPath": "/Users/tk/work/firebase-emulator/.worktree/compatibility-inventory/conformance/.runs/fs-data-write-local-ePbOM9",
+  "localRunPath": "conformance/.runs/fs-data-write-local-ePbOM9",
   "sourceBinding": {
     "sourceHead": "1cb4758372f21a467306a0a701994b7c1a02a8bb",
     "executableSha256": "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",

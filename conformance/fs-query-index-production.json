@@ -5723,6 +5723,150 @@
         }
       }
     },
+    "fs-query-index/explain/merge-order": {
+      "corpusDigest": "55983bd623f54705c3da04bc2fd0ec31d5e1f1d7d033f7821ef9b0247deaa15f",
+      "harnessDigest": "a287d2d3cfac95fca550a4cc50ab8c09a0b6fffa8f536698b414ee4bdabf6437",
+      "recordedAt": "2026-09-24T01:46:37.110Z",
+      "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+      "steps": {
+        "larger-later-field-plan": {
+          "status": 200,
+          "body": [
+            {
+              "explainMetrics": {
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(b ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(a ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "larger-later-field-analyze": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "c": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qx/x1",
+                "updateTime": "<t1>"
+              },
+              "explainMetrics": {
+                "executionStats": {
+                  "debugStats": {
+                    "billing_details": {
+                      "documents_billable": "1",
+                      "index_entries_billable": "0",
+                      "min_query_cost": "0",
+                      "small_ops": "0"
+                    },
+                    "documents_scanned": "1",
+                    "index_entries_scanned": "6"
+                  },
+                  "executionDuration": "<duration>",
+                  "readOperations": "1",
+                  "resultsReturned": "1"
+                },
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(b ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(a ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "larger-earlier-field-plan": {
+          "status": 200,
+          "body": [
+            {
+              "explainMetrics": {
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(b ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(a ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "larger-earlier-field-analyze": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "c": {
+                    "integerValue": "2"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qx/x2",
+                "updateTime": "<t1>"
+              },
+              "explainMetrics": {
+                "executionStats": {
+                  "debugStats": {
+                    "billing_details": {
+                      "documents_billable": "1",
+                      "index_entries_billable": "0",
+                      "min_query_cost": "0",
+                      "small_ops": "0"
+                    },
+                    "documents_scanned": "1",
+                    "index_entries_scanned": "5"
+                  },
+                  "executionDuration": "<duration>",
+                  "readOperations": "1",
+                  "resultsReturned": "1"
+                },
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(b ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(a ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        }
+      }
+    },
     "fs-query-index/explain/queries": {
       "corpusDigest": "77d26b0b4905006000896f26da1d9a807e55f22c5513e7dfffafa85ea92f7097",
       "harnessDigest": "a287d2d3cfac95fca550a4cc50ab8c09a0b6fffa8f536698b414ee4bdabf6437",
@@ -18037,10 +18181,10 @@
       }
     },
     "fs-query-index/filter-validation/operators-and-values": {
-      "corpusDigest": "dc8281ff7f8c6f96344ee08a9342a7eee24e6468e4a4e30b65984fa751795c8d",
+      "corpusDigest": "7f47f5daa954e56bdad7d2f5128c6dbc9a4414fe6210a37f89a017542a0ef9c8",
       "harnessDigest": "a287d2d3cfac95fca550a4cc50ab8c09a0b6fffa8f536698b414ee4bdabf6437",
-      "recordedAt": "2026-09-24T00:54:33.874Z",
-      "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+      "recordedAt": "2026-09-24T01:46:37.110Z",
+      "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
         "operator-unspecified": {
           "status": 400,
@@ -18072,6 +18216,18 @@
                   }
                 ],
                 "message": "Invalid value at 'structured_query.where.field_filter.op' (type.googleapis.com/google.firestore.v1.StructuredQuery.FieldFilter.Operator), \"SIMILAR_TO\"",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "operator-unknown-number": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Unknown FieldFilter operator.",
                 "status": "INVALID_ARGUMENT"
               }
             }
@@ -18475,10 +18631,10 @@
       }
     },
     "fs-query-index/filter-validation/paths-and-names": {
-      "corpusDigest": "b3bbfa700da1904c359327cda8f12b6acfcf8cd00f8d5508394a77ab837e971d",
+      "corpusDigest": "e1c3326c4eac21f79f0e41d9f9679a127ba8aa8cc26e277d486e29b4cfc47701",
       "harnessDigest": "a287d2d3cfac95fca550a4cc50ab8c09a0b6fffa8f536698b414ee4bdabf6437",
-      "recordedAt": "2026-09-24T00:54:33.874Z",
-      "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+      "recordedAt": "2026-09-24T01:46:37.110Z",
+      "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
         "field-path-empty": {
           "status": 400,
@@ -18573,6 +18729,94 @@
                 "message": "Invalid property path \"``\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
                 "status": "INVALID_ARGUMENT"
               }
+            }
+          ]
+        },
+        "field-path-hyphen": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a-b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "field-path-leading-digit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"1a\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "field-path-space": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "field-path-tilde": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a~b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "field-path-star": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a*b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "field-path-slash": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid property path \"a/b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "field-path-quoted-escaped-backtick": {
+          "status": 200,
+          "body": [
+            {
+              "readTime": "<t1>"
+            }
+          ]
+        },
+        "field-path-quoted-literal-backslash": {
+          "status": 200,
+          "body": [
+            {
+              "readTime": "<t1>"
             }
           ]
         },
@@ -28067,10 +28311,10 @@
       }
     },
     "fs-query-index/query-limits/not-in-and-inequalities": {
-      "corpusDigest": "4a43ba1de078f1514472d9ff95f30225ad68edd5998687a9d86aede37354356d",
+      "corpusDigest": "67ab8011bf6ac4f2d24c10879eb10048fd7cd1fd5367adfd2cd552dec2914ef7",
       "harnessDigest": "a287d2d3cfac95fca550a4cc50ab8c09a0b6fffa8f536698b414ee4bdabf6437",
-      "recordedAt": "2026-09-24T00:54:33.874Z",
-      "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+      "recordedAt": "2026-09-24T01:46:37.110Z",
+      "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
         "not-in-10": {
           "status": 200,
@@ -28117,6 +28361,30 @@
           "body": [
             {
               "readTime": "<t1>"
+            }
+          ]
+        },
+        "inequality-fields-11-letters": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The query contains 11 distinct inequality fields: [g, f, e, d, c, b, a, k, j, i, h]. A query may not have more than 10 distinct inequality fields.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "inequality-fields-12-reversed": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "The query contains 12 distinct inequality fields: [g9, g7, g8, g5, g6, g3, g4, g1, g2, g10, g11, g0]. A query may not have more than 10 distinct inequality fields.",
+                "status": "INVALID_ARGUMENT"
+              }
             }
           ]
         },
@@ -28407,10 +28675,10 @@
       }
     },
     "fs-query-index/request-shape/rest": {
-      "corpusDigest": "16c74075465fe0d8a3dd8c358ea48dd5c5d12287f5a2b1fb4a32ba9d800e8fa5",
+      "corpusDigest": "612c79f1ca46624dc6d6f664aa0a81d29b392c27f6d9d858e879f2193408de8d",
       "harnessDigest": "a287d2d3cfac95fca550a4cc50ab8c09a0b6fffa8f536698b414ee4bdabf6437",
-      "recordedAt": "2026-09-24T00:54:33.874Z",
-      "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+      "recordedAt": "2026-09-24T01:46:37.110Z",
+      "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
         "body-empty-object": {
           "status": 400,
@@ -28449,6 +28717,646 @@
           ]
         },
         "body-array": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "details": [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [
+                      {
+                        "description": "Invalid JSON payload received. Unknown name \"\": Root element must be a message."
+                      }
+                    ]
+                  }
+                ],
+                "message": "Invalid JSON payload received. Unknown name \"\": Root element must be a message.",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "body-truncated": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Invalid JSON payload received. Unexpected end of string. Expected a value.\n\n^",
+                "status": "INVALID_ARGUMENT"
+              }
+            }
+          ]
+        },
+        "body-trailing-comma": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 0
+                  },
+                  "g": {
+                    "stringValue": "even"
+                  },
+                  "h": {
+                    "integerValue": "0"
+                  },
+                  "n": {
+                    "integerValue": "0"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "0"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "0"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "s": {
+                    "stringValue": "j"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-01T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "0"
+                        },
+                        {
+                          "integerValue": "1"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d0",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 0.5
+                  },
+                  "g": {
+                    "stringValue": "odd"
+                  },
+                  "h": {
+                    "integerValue": "1"
+                  },
+                  "n": {
+                    "integerValue": "1"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "1"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "1"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "opt": {
+                    "integerValue": "1"
+                  },
+                  "s": {
+                    "stringValue": "i"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-02T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "1"
+                        },
+                        {
+                          "integerValue": "2"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d1",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 1
+                  },
+                  "g": {
+                    "stringValue": "even"
+                  },
+                  "h": {
+                    "integerValue": "2"
+                  },
+                  "n": {
+                    "integerValue": "2"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "0"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "2"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "opt": {
+                    "integerValue": "2"
+                  },
+                  "s": {
+                    "stringValue": "h"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-03T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "2"
+                        },
+                        {
+                          "integerValue": "0"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d2",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 1.5
+                  },
+                  "g": {
+                    "stringValue": "odd"
+                  },
+                  "h": {
+                    "integerValue": "0"
+                  },
+                  "n": {
+                    "integerValue": "3"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "1"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "3"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "opt": {
+                    "integerValue": "3"
+                  },
+                  "s": {
+                    "stringValue": "g"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-04T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "0"
+                        },
+                        {
+                          "integerValue": "1"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d3",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 2
+                  },
+                  "g": {
+                    "stringValue": "even"
+                  },
+                  "h": {
+                    "integerValue": "1"
+                  },
+                  "n": {
+                    "integerValue": "4"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "0"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "4"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "s": {
+                    "stringValue": "f"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-05T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "1"
+                        },
+                        {
+                          "integerValue": "2"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d4",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 2.5
+                  },
+                  "g": {
+                    "stringValue": "odd"
+                  },
+                  "h": {
+                    "integerValue": "2"
+                  },
+                  "n": {
+                    "integerValue": "5"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "1"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "5"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "opt": {
+                    "integerValue": "5"
+                  },
+                  "s": {
+                    "stringValue": "e"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-06T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "2"
+                        },
+                        {
+                          "integerValue": "0"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d5",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 3
+                  },
+                  "g": {
+                    "stringValue": "even"
+                  },
+                  "h": {
+                    "integerValue": "0"
+                  },
+                  "n": {
+                    "integerValue": "6"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "0"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "6"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "opt": {
+                    "integerValue": "6"
+                  },
+                  "s": {
+                    "stringValue": "d"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-07T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "0"
+                        },
+                        {
+                          "integerValue": "1"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d6",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 3.5
+                  },
+                  "g": {
+                    "stringValue": "odd"
+                  },
+                  "h": {
+                    "integerValue": "1"
+                  },
+                  "n": {
+                    "integerValue": "7"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "1"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "7"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "opt": {
+                    "integerValue": "7"
+                  },
+                  "s": {
+                    "stringValue": "c"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-08T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "1"
+                        },
+                        {
+                          "integerValue": "2"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d7",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 4
+                  },
+                  "g": {
+                    "stringValue": "even"
+                  },
+                  "h": {
+                    "integerValue": "2"
+                  },
+                  "n": {
+                    "integerValue": "8"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "0"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "8"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "s": {
+                    "stringValue": "b"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-09T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "2"
+                        },
+                        {
+                          "integerValue": "0"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d8",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "d": {
+                    "doubleValue": 4.5
+                  },
+                  "g": {
+                    "stringValue": "odd"
+                  },
+                  "h": {
+                    "integerValue": "0"
+                  },
+                  "n": {
+                    "integerValue": "9"
+                  },
+                  "nested": {
+                    "mapValue": {
+                      "fields": {
+                        "a": {
+                          "integerValue": "1"
+                        },
+                        "b": {
+                          "mapValue": {
+                            "fields": {
+                              "c": {
+                                "integerValue": "9"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "opt": {
+                    "integerValue": "9"
+                  },
+                  "s": {
+                    "stringValue": "a"
+                  },
+                  "t": {
+                    "timestampValue": "2020-01-01T00:00:00Z"
+                  },
+                  "tags": {
+                    "arrayValue": {
+                      "values": [
+                        {
+                          "integerValue": "0"
+                        },
+                        {
+                          "integerValue": "1"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qn/d9",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "body-string": {
           "status": 400,
           "body": [
             {
@@ -34305,10 +35213,10 @@
       }
     },
     "fs-query-index/vector/measures": {
-      "corpusDigest": "ebc8e4ddc87b9df03c0390207c03145722cb73fa44bacaf17b8fc57a3ce664c1",
+      "corpusDigest": "17877b78943671ef7b827a834b6c2e23879c3cbc1385ab2a02ceece91ecbba6b",
       "harnessDigest": "a287d2d3cfac95fca550a4cc50ab8c09a0b6fffa8f536698b414ee4bdabf6437",
-      "recordedAt": "2026-09-24T00:54:33.874Z",
-      "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+      "recordedAt": "2026-09-24T01:46:37.110Z",
+      "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
         "euclidean": {
           "status": 200,
@@ -34640,6 +35548,36 @@
               "document": {
                 "createTime": "<t1>",
                 "fields": {
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "dist": {
+                    "doubleValue": 0
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
                   "n": {
                     "integerValue": "1"
                   }
@@ -34653,6 +35591,60 @@
               "document": {
                 "createTime": "<t1>",
                 "fields": {
+                  "color": {
+                    "stringValue": "green"
+                  },
+                  "dist": {
+                    "doubleValue": 0.8660254037844386
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "emb2": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
                   "n": {
                     "integerValue": "11"
                   }
@@ -34666,6 +35658,36 @@
               "document": {
                 "createTime": "<t1>",
                 "fields": {
+                  "color": {
+                    "stringValue": "green"
+                  },
+                  "dist": {
+                    "doubleValue": 1
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 2
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
                   "n": {
                     "integerValue": "10"
                   }
@@ -34679,6 +35701,36 @@
               "document": {
                 "createTime": "<t1>",
                 "fields": {
+                  "color": {
+                    "stringValue": "blue"
+                  },
+                  "dist": {
+                    "doubleValue": 1
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
                   "n": {
                     "integerValue": "4"
                   }
@@ -34692,6 +35744,36 @@
               "document": {
                 "createTime": "<t1>",
                 "fields": {
+                  "color": {
+                    "stringValue": "blue"
+                  },
+                  "dist": {
+                    "doubleValue": 1
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
                   "n": {
                     "integerValue": "9"
                   }
@@ -34705,6 +35787,36 @@
               "document": {
                 "createTime": "<t1>",
                 "fields": {
+                  "color": {
+                    "stringValue": "blue"
+                  },
+                  "dist": {
+                    "doubleValue": 1.4142135623730951
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
                   "n": {
                     "integerValue": "2"
                   }
@@ -34718,6 +35830,36 @@
               "document": {
                 "createTime": "<t1>",
                 "fields": {
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "dist": {
+                    "doubleValue": 1.4142135623730951
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 1
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
                   "n": {
                     "integerValue": "3"
                   }
@@ -34731,6 +35873,36 @@
               "document": {
                 "createTime": "<t1>",
                 "fields": {
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "dist": {
+                    "doubleValue": 2
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": -1
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
                   "n": {
                     "integerValue": "5"
                   }
@@ -35083,6 +36255,982 @@
                 "message": "Cannot compute cosine distance against a vector with a magnitude of zero.",
                 "status": "FAILED_PRECONDITION"
               }
+            }
+          ]
+        },
+        "euclidean-distance-values": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "distance": {
+                    "doubleValue": 0
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v1",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "green"
+                  },
+                  "distance": {
+                    "doubleValue": 0.8660254037844386
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "emb2": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "11"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v11",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "green"
+                  },
+                  "dist": {
+                    "integerValue": "99"
+                  },
+                  "distance": {
+                    "doubleValue": 1
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 2
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "10"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v10",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "blue"
+                  },
+                  "distance": {
+                    "doubleValue": 1
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "4"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v4",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "blue"
+                  },
+                  "distance": {
+                    "doubleValue": 1
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "9"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v9",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "blue"
+                  },
+                  "distance": {
+                    "doubleValue": 1.4142135623730951
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "2"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v2",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "distance": {
+                    "doubleValue": 1.4142135623730951
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 1
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "3"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v3",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "distance": {
+                    "doubleValue": 2
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": -1
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "5"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v5",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "dot-product-distance-values": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "green"
+                  },
+                  "dist": {
+                    "integerValue": "99"
+                  },
+                  "distance": {
+                    "doubleValue": 2
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 2
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "10"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v10",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "distance": {
+                    "doubleValue": 1
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v1",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "blue"
+                  },
+                  "distance": {
+                    "doubleValue": 1
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "4"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v4",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "green"
+                  },
+                  "distance": {
+                    "doubleValue": 0.5
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "emb2": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "11"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v11",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "blue"
+                  },
+                  "distance": {
+                    "doubleValue": 0
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "2"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v2",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "distance": {
+                    "doubleValue": 0
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 1
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "3"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v3",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "blue"
+                  },
+                  "distance": {
+                    "doubleValue": 0
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "9"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v9",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "distance": {
+                    "doubleValue": -1
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": -1
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "5"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v5",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "distance-field-dotted-name": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "a.b": {
+                    "doubleValue": 0
+                  },
+                  "color": {
+                    "stringValue": "red"
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v1",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "a.b": {
+                    "doubleValue": 0.8660254037844386
+                  },
+                  "color": {
+                    "stringValue": "green"
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "emb2": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "11"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v11",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "distance-field-replaces-existing": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "doubleValue": 0
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 0
+                              },
+                              {
+                                "doubleValue": 0
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v1",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            },
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "color": {
+                    "doubleValue": 0.8660254037844386
+                  },
+                  "emb": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              },
+                              {
+                                "doubleValue": 0.5
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "emb2": {
+                    "mapValue": {
+                      "fields": {
+                        "__type__": {
+                          "stringValue": "__vector__"
+                        },
+                        "value": {
+                          "arrayValue": {
+                            "values": [
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              },
+                              {
+                                "doubleValue": 1
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "n": {
+                    "integerValue": "11"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qvec/v11",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
             }
           ]
         }
@@ -35442,10 +37590,10 @@
       }
     },
     "fs-query-index/vector/with-query-clauses": {
-      "corpusDigest": "ab8032a4193d4427d62974775bcb739b790fd669fb3fb2c6f3e3cef66bd2a49c",
+      "corpusDigest": "20e7e6a98c4aaac3375ea177a32283012096cd12915d8b373f22a32856bf57a4",
       "harnessDigest": "a287d2d3cfac95fca550a4cc50ab8c09a0b6fffa8f536698b414ee4bdabf6437",
-      "recordedAt": "2026-09-24T00:54:33.874Z",
-      "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
+      "recordedAt": "2026-09-24T01:46:37.110Z",
+      "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
         "prefilter-equality": {
           "status": 200,
@@ -35701,6 +37849,30 @@
                     "integerValue": "3"
                   }
                 }
+              }
+            }
+          ]
+        },
+        "sum-over-nearest": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "Missing vector index configuration. Please create the required index with the following gcloud command: gcloud firestore indexes composite create --project=demo-fs-query-index --collection-group=qvec --query-scope=COLLECTION --field-config=order=ASCENDING,field-path=n --field-config=vector-config='{\"dimension\":\"3\",\"flat\": \"{}\"}',field-path=emb",
+                "status": "FAILED_PRECONDITION"
+              }
+            }
+          ]
+        },
+        "count-over-nearest-with-limit": {
+          "status": 400,
+          "body": [
+            {
+              "error": {
+                "code": 400,
+                "message": "A query limit cannot be used with FindNearest",
+                "status": "INVALID_ARGUMENT"
               }
             }
           ]

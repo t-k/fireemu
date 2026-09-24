@@ -361,6 +361,7 @@ pub fn read_overall(bytes: &[u8]) -> Result<Vec<OverallEntry>, FirestoreExportEr
         return shape("the overall export metadata does not start with its prefix record");
     }
     let mut entries = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
     for record in rest {
         let mut reader = Reader::new(record);
         while let Some((field, wire)) = reader.field()? {
@@ -394,6 +395,11 @@ pub fn read_overall(bytes: &[u8]) -> Result<Vec<OverallEntry>, FirestoreExportEr
             if metadata_file.starts_with('/') || metadata_file.split('/').any(|p| p == "..") {
                 return shape(format!(
                     "the overall export metadata names {metadata_file:?}"
+                ));
+            }
+            if !seen.insert(metadata_file.clone()) {
+                return shape(format!(
+                    "the overall export metadata names {metadata_file:?} twice"
                 ));
             }
             let partition = match (kind_mode, kind, namespace_mode, namespace) {
@@ -517,6 +523,30 @@ mod tests {
         assert_eq!(overall[0].partition, Partition::Kind("items".into()));
         let entities = read_managed_output(&export.files[2].1).unwrap();
         assert_eq!(entities[0].database, "(default)");
+    }
+
+    #[test]
+    fn an_overall_metadata_naming_a_partition_twice_is_refused() {
+        // One partition listed over and over would make an import read it over and over.
+        let entry = overall_entry(&Partition::AllKinds, 1, 10);
+        let overall = write_log(&[vec![0x33], entry.clone(), entry]);
+        let error = read_overall(&overall).unwrap_err().to_string();
+        assert!(error.contains("twice"), "{error}");
+    }
+
+    #[test]
+    fn a_partition_naming_an_output_twice_is_refused() {
+        let mut w = Writer::new();
+        w.write_message(2, |o| {
+            o.write_string(1, "__all__");
+            o.write_string(2, "output-0");
+        });
+        w.write_message(2, |o| {
+            o.write_string(1, "__all__");
+            o.write_string(2, "output-0");
+        });
+        let error = read_partition_outputs(&w.finish()).unwrap_err().to_string();
+        assert!(error.contains("twice"), "{error}");
     }
 
     #[test]

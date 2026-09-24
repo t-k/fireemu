@@ -2573,17 +2573,15 @@ impl LocalBackend {
         &self,
         parent: &Parent,
     ) -> Result<fireemu_core_firestore::index::IndexSet, Status> {
-        let mut set = {
-            let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
-            indexes
-                .get(&(
-                    Some(parent.project.as_str().to_owned()),
-                    parent.database.as_str().to_owned(),
-                ))
-                .or_else(|| indexes.get(&(None, parent.database.as_str().to_owned())))
-                .cloned()
-                .unwrap_or_default()
-        };
+        let (project, database) = (parent.project.as_str(), parent.database.as_str());
+        let mut set = self.configured_indexes(project, database)?;
+        // The index-file indexes are the database's deployed indexes: one deleted through the
+        // Admin API, or gone with its database, no longer serves.
+        let registry = self.admin.indexes();
+        registry.seed_configured(project, database, set.composites());
+        for definition in registry.retracted(project, database) {
+            set.remove_composite(&definition);
+        }
         self.admin.indexes().overlay(
             parent.project.as_str(),
             parent.database.as_str(),
@@ -2598,6 +2596,29 @@ impl LocalBackend {
             false,
         );
         Ok(set)
+    }
+
+    /// The indexes the configuration (index file or control API) declares for a database.
+    fn configured_indexes(
+        &self,
+        project: &str,
+        database: &str,
+    ) -> Result<fireemu_core_firestore::index::IndexSet, Status> {
+        let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
+        Ok(indexes
+            .get(&(Some(project.to_owned()), database.to_owned()))
+            .or_else(|| indexes.get(&(None, database.to_owned())))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// Makes the index-file indexes of a database visible to the Admin API (once).
+    pub(crate) fn seed_configured_indexes(&self, project: &str, database: &str) {
+        if let Ok(set) = self.configured_indexes(project, database) {
+            self.admin
+                .indexes()
+                .seed_configured(project, database, set.composites());
+        }
     }
 
     /// A query refusal in production's words: a missing index that an Admin create is still

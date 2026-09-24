@@ -338,6 +338,20 @@ pub(crate) fn record_index(
 
 /// What `operations.get` answers for `op` now.
 fn current(state: &RestState, project: &str, database: &str, op: &StoredOperation) -> Value {
+    current_counted(state, project, database, op, &mut |group| {
+        super::managed::group_document_count(state, project, database, group)
+    })
+}
+
+/// [`current`], counting a collection group's documents with `count` (a list counts every
+/// group from one snapshot instead of copying the database once per operation).
+fn current_counted(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    op: &StoredOperation,
+    count: &mut dyn FnMut(&str) -> u64,
+) -> Value {
     if op.kind == OperationKind::Field {
         return state
             .local
@@ -359,12 +373,7 @@ fn current(state: &RestState, project: &str, database: &str, op: &StoredOperatio
                 "projects/{project}/databases/{database}/operations/{}",
                 op.id
             );
-            let documents = super::managed::group_document_count(
-                state,
-                project,
-                database,
-                index.definition.collection_group.as_str(),
-            );
+            let documents = count(index.definition.collection_group.as_str());
             // The build finished after it started: production reports two instants.
             let end = fireemu_core_types::time::LogicalInstant::from_nanos(
                 index.start_time.as_nanos() + 1_000_000,
@@ -435,6 +444,59 @@ fn parse_filter(params: &BTreeMap<String, Vec<String>>) -> Result<Option<bool>, 
     }
 }
 
+/// `operations.list`, with its `filter`.
+fn list(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    params: &BTreeMap<String, Vec<String>>,
+) -> RestResponse {
+    let store = state.local.admin().operations();
+    if !super::rest::database_exists(state, project, database)
+        && !store.has_database(project, database)
+    {
+        return super::rest::missing_database(project, database);
+    }
+    let filter = match parse_filter(params) {
+        Ok(filter) => filter,
+        Err(response) => return response,
+    };
+    // Production lists a database's document and index work, not the operations
+    // that created, updated or deleted the database itself.
+    let mut counts: Option<BTreeMap<String, u64>> = None;
+    let mut operations: Vec<Value> = store
+        .list(project, database)
+        .iter()
+        .filter(|op| !op.kind.is_database_operation())
+        .map(|op| {
+            current_counted(state, project, database, op, &mut |group| {
+                counts
+                    .get_or_insert_with(|| {
+                        super::managed::group_document_counts(state, project, database)
+                    })
+                    .get(group)
+                    .copied()
+                    .unwrap_or(0)
+            })
+        })
+        .collect();
+    let prefix = format!("projects/{project}/databases/{database}/operations/");
+    operations.extend(
+        state
+            .local
+            .field_operations(project)
+            .into_iter()
+            .filter(|op| op.name.starts_with(&prefix))
+            .map(|op| crate::rest::admin_fields::operation_json(&op)),
+    );
+    operations.retain(|op| filter.is_none_or(|done| is_done(op) == done));
+    if operations.is_empty() {
+        ok(json!({}))
+    } else {
+        ok(json!({ "operations": operations }))
+    }
+}
+
 /// `operations.list`, `operations.get`, `operations.delete` and `operations.cancel`.
 pub(crate) fn route(
     state: &RestState,
@@ -451,40 +513,7 @@ pub(crate) fn route(
         state.local.field_operation(project, &name)
     };
     match (method, rest, action) {
-        ("GET", [], None) => {
-            if !super::rest::database_exists(state, project, database)
-                && !store.has_database(project, database)
-            {
-                return super::rest::missing_database(project, database);
-            }
-            let filter = match parse_filter(params) {
-                Ok(filter) => filter,
-                Err(response) => return response,
-            };
-            // Production lists a database's document and index work, not the operations
-            // that created, updated or deleted the database itself.
-            let mut operations: Vec<Value> = store
-                .list(project, database)
-                .iter()
-                .filter(|op| !op.kind.is_database_operation())
-                .map(|op| current(state, project, database, op))
-                .collect();
-            let prefix = format!("projects/{project}/databases/{database}/operations/");
-            operations.extend(
-                state
-                    .local
-                    .field_operations(project)
-                    .into_iter()
-                    .filter(|op| op.name.starts_with(&prefix))
-                    .map(|op| crate::rest::admin_fields::operation_json(&op)),
-            );
-            operations.retain(|op| filter.is_none_or(|done| is_done(op) == done));
-            if operations.is_empty() {
-                ok(json!({}))
-            } else {
-                ok(json!({ "operations": operations }))
-            }
-        }
+        ("GET", [], None) => list(state, project, database, params),
         ("GET", [id], None) => match store.get(project, database, id) {
             Some(op) => ok(current(state, project, database, &op)),
             None => match field_operation(id) {

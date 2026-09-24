@@ -1259,6 +1259,14 @@ fn a_bounded_backend_refuses_other_projects_as_production_refuses_a_foreign_one(
     }
     let (status, _) = call(&bounded, "GET", "/v1/projects/p/databases", Value::Null);
     assert_eq!(status, 200);
+    // An encoded spelling of the daemon's project is not a way around the boundary.
+    let (status, _) = call(
+        &bounded,
+        "POST",
+        "/v1/projects/%70/databases?databaseId=sneaky",
+        native(),
+    );
+    assert_eq!(status, 403);
 }
 
 #[test]
@@ -1359,4 +1367,134 @@ fn a_deleted_default_database_lists_nothing_and_can_be_recreated_after_the_coold
         missing["error"]["message"],
         "Document \"projects/p/databases/(default)/documents/c/d\" not found."
     );
+}
+
+fn configured_state() -> RestState {
+    // (default) with one index declared in the index file, as a deployed index.
+    let (state, _clock) = state();
+    let mut indexes = IndexSet::default();
+    indexes.add_composite(fireemu_core_firestore::index::IndexDefinition {
+        collection_group: fireemu_core_types::ids::CollectionId::try_new("items").unwrap(),
+        query_scope: fireemu_core_firestore::index::IndexQueryScope::Collection,
+        fields: vec![
+            fireemu_core_firestore::index::IndexField {
+                path: fireemu_core_firestore::field_path::FieldPath::parse("a").unwrap(),
+                mode: fireemu_core_firestore::index::IndexFieldMode::Ascending,
+            },
+            fireemu_core_firestore::index::IndexField {
+                path: fireemu_core_firestore::field_path::FieldPath::parse("b").unwrap(),
+                mode: fireemu_core_firestore::index::IndexFieldMode::Descending,
+            },
+        ],
+    });
+    let gateway = Gateway {
+        indexes,
+        ..(*state.gateway).clone()
+    };
+    RestState {
+        local: Arc::new(LocalBackend::new(
+            gateway.clone(),
+            Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+                1_790_000_000_000_000_000,
+            )))),
+            7,
+        )),
+        gateway: Arc::new(gateway),
+        ..state
+    }
+}
+
+#[test]
+fn indexes_declared_in_the_index_file_are_listed_deleted_and_dropped_with_their_database() {
+    // Production (2026-09-24) lists deployed indexes READY; after its database is deleted it
+    // still lists them, and a recreated database has none.
+    let state = configured_state();
+    state.local.admin().set_deleted_id_cooldown(0);
+    let list = "/v1/projects/p/databases/(default)/collectionGroups/-/indexes";
+    let (status, listed) = call(&state, "GET", list, Value::Null);
+    assert_eq!(status, 200, "{listed}");
+    let index = &listed["indexes"][0];
+    assert_eq!(index["state"], "READY", "{listed}");
+    assert_eq!(
+        index["fields"],
+        json!([{"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "DESCENDING"},
+               {"fieldPath": "__name__", "order": "DESCENDING"}])
+    );
+    let name = index["name"].as_str().unwrap().to_owned();
+    let id = name.rsplit('/').next().unwrap().to_owned();
+    assert_eq!(
+        call(&state, "GET", &format!("/v1/{name}"), Value::Null).1,
+        *index
+    );
+    let (status, duplicate) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/(default)/collectionGroups/items/indexes",
+        json!({"queryScope": "COLLECTION", "fields": [
+            {"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "DESCENDING"}]}),
+    );
+    assert_eq!(
+        (status, duplicate["error"]["message"].as_str()),
+        (
+            409,
+            Some(format!("index already exists with index ID = {id}").as_str())
+        )
+    );
+    let query = json!({"structuredQuery": {
+        "from": [{"collectionId": "items"}],
+        "where": {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "EQUAL", "value": {"integerValue": "1"}}},
+        "orderBy": [{"field": {"fieldPath": "b"}, "direction": "DESCENDING"}]
+    }});
+    let docs = "/v1/projects/p/databases/(default)/documents";
+    assert_eq!(
+        call(&state, "POST", &format!("{docs}:runQuery"), query.clone()).0,
+        200
+    );
+
+    // Deleting the database keeps its index list served; recreating it starts with none.
+    call(
+        &state,
+        "DELETE",
+        "/v1/projects/p/databases/(default)",
+        Value::Null,
+    );
+    let (status, after_delete) = call(&state, "GET", list, Value::Null);
+    assert_eq!((status, &after_delete["indexes"][0]), (200, index));
+    let (status, _) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=(default)",
+        native(),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(call(&state, "GET", list, Value::Null), (200, json!({})));
+    assert_eq!(
+        call(&state, "POST", &format!("{docs}:runQuery"), query).0,
+        400
+    );
+}
+
+#[test]
+fn deleting_a_declared_index_withdraws_it_from_queries() {
+    let state = configured_state();
+    let list = "/v1/projects/p/databases/(default)/collectionGroups/-/indexes";
+    let (_, listed) = call(&state, "GET", list, Value::Null);
+    let name = listed["indexes"][0]["name"].as_str().unwrap().to_owned();
+    assert_eq!(
+        call(&state, "DELETE", &format!("/v1/{name}"), Value::Null).0,
+        200
+    );
+    assert_eq!(call(&state, "GET", list, Value::Null), (200, json!({})));
+    let query = json!({"structuredQuery": {
+        "from": [{"collectionId": "items"}],
+        "where": {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "EQUAL", "value": {"integerValue": "1"}}},
+        "orderBy": [{"field": {"fieldPath": "b"}, "direction": "DESCENDING"}]
+    }});
+    let (status, _) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/(default)/documents:runQuery",
+        query,
+    );
+    assert_eq!(status, 400);
 }

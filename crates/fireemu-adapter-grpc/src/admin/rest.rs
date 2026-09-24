@@ -240,14 +240,25 @@ pub(crate) fn foreign_project_message(project: &str) -> String {
 /// Production's refusal of a request naming a project other than the only one a bounded
 /// backend has (scope decision C11); `None` for every other request.
 pub(crate) fn foreign_project(state: &RestState, path: &str) -> Option<RestResponse> {
-    let decoded = crate::rest::decode_path(path).unwrap_or_else(|_| path.to_owned());
-    let rest = decoded
-        .strip_prefix("/v1/projects/")
-        .or_else(|| decoded.strip_prefix("/v1beta1/projects/"))?;
-    let project = rest.split(['/', ':']).next()?;
-    if project.is_empty() || !state.local.refuses_project(project) {
-        return None;
-    }
+    let project_of = |path: &str| -> Option<String> {
+        let rest = path
+            .strip_prefix("/v1/projects/")
+            .or_else(|| path.strip_prefix("/v1beta1/projects/"))?;
+        rest.split(['/', ':'])
+            .next()
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+    };
+    // Both spellings are checked: a route that reads the raw segment must not see a project
+    // an encoded spelling slipped past the boundary.
+    let decoded = crate::rest::decode_path(path)
+        .ok()
+        .and_then(|d| project_of(&d));
+    let project = [project_of(path), decoded]
+        .into_iter()
+        .flatten()
+        .find(|p| state.local.refuses_project(p))?;
+    let project = project.as_str();
     let message = foreign_project_message(project);
     Some(error(
         tonic::Code::PermissionDenied,
@@ -405,11 +416,11 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
                 super::index_rest::route(state, project, database, group, method, rest, &req.body)
             }
             // Production still lists the indexes of a database it just deleted
-            // (fireemu-fs-bisect-0924a, 2026-09-24); fireemu forgot them with the database.
+            // (fireemu-fs-bisect-0924a, 2026-09-24).
             Err(_)
                 if method == "GET" && rest.is_empty() && was_deleted(state, project, database) =>
             {
-                ok(json!({}))
+                super::index_rest::deleted_database_list(state, project, database, group)
             }
             Err(response) => response,
         },
@@ -859,7 +870,9 @@ fn delete_database(
     match admin.delete(project, database, unprompted, now) {
         Ok(tombstone) => {
             state.local.delete_database(project, database);
-            admin.indexes().forget(|p, d| p == project && d == database);
+            // The index-file indexes are seeded first, so the deleted list carries them too.
+            state.local.seed_configured_indexes(project, database);
+            admin.indexes().drop_database(project, database);
             admin.fields().forget(|p, d| p == project && d == database);
             let resource = database_json(&tombstone.record, now, Some(tombstone.delete_time));
             let operation = operations::record(

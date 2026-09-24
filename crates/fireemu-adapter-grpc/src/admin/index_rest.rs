@@ -111,6 +111,29 @@ pub(crate) fn operation_json(
     }
 }
 
+/// The index list of a deleted database: the indexes it had when it was deleted.
+pub(crate) fn deleted_database_list(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    group: &str,
+) -> RestResponse {
+    let indexes: Vec<Value> = state
+        .local
+        .admin()
+        .indexes()
+        .tombstone(project, database)
+        .iter()
+        .filter(|i| group == "-" || i.definition.collection_group.as_str() == group)
+        .map(|i| index_json(project, database, i, IndexState::Ready))
+        .collect();
+    if indexes.is_empty() {
+        ok(json!({}))
+    } else {
+        ok(json!({ "indexes": indexes }))
+    }
+}
+
 fn violation(field: &str, message: &str) -> RestResponse {
     error(
         tonic::Code::InvalidArgument,
@@ -235,6 +258,7 @@ pub(crate) fn route(
     rest: &[&str],
     body: &Value,
 ) -> RestResponse {
+    state.local.seed_configured_indexes(project, database);
     let registry = state.local.admin().indexes();
     let now = state.local.admin_now();
     match (method, rest) {

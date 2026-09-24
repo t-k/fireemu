@@ -508,3 +508,93 @@ test("a run within an hour of anything but a clean recording is refused", async 
     "a started line is not an outcome",
   );
 });
+
+test("a clock-skew sample needs both readings and a round trip of at most a second", async () => {
+  const { skewSample } = await import("./auth-mfa/session.mjs");
+  const sent = Date.parse("2026-09-24T15:05:13Z") / 1000;
+  const announced = "2026-09-24T15:20:13.400000Z";
+  assert.ok(Math.abs(skewSample(announced, sent, sent + 0.4) - 0.2) < 1e-6);
+  assert.equal(skewSample(announced, undefined, sent + 0.4), undefined);
+  assert.equal(skewSample(announced, sent, sent + 1.5), undefined, "slow round trip");
+  assert.equal(skewSample("not a time", sent, sent + 0.2), undefined);
+});
+
+/** A stub production Identity Toolkit: config and wipe routes, and every other call answered. */
+function stubProduction(answer = () => ({ idToken: "x" })) {
+  let mfa = { state: "DISABLED" };
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    calls.push(`${init.method ?? "GET"} ${pathname}`);
+    const reply = (body) => new Response(JSON.stringify(body), { status: 200 });
+    if (pathname.endsWith("/config")) {
+      if (init.method === "PATCH") mfa = JSON.parse(init.body).mfa;
+      return reply({ mfa });
+    }
+    if (pathname.endsWith(":batchGet")) return reply({ users: [] });
+    return reply(answer(pathname));
+  };
+  return { calls, mfa: () => mfa, restore: () => (globalThis.fetch = realFetch) };
+}
+
+test("window rows are not sent without a clock-skew estimate (fail closed)", async () => {
+  const { runCorpus } = await import("./auth-mfa/session.mjs");
+  const stub = stubProduction();
+  const program = {
+    id: "auth-mfa/totp/sign-in",
+    config: { mfa: MFA_CONFIGS.enabled },
+    steps: [{ id: "window", path: "v1/accounts:lookup", auth: "key", body: {}, align: true }],
+  };
+  try {
+    await assert.rejects(
+      runCorpus([program], production, { configSettleMs: 0 }),
+      (error) => error.fatal && /no clock skew estimate/.test(error.message),
+    );
+  } finally {
+    stub.restore();
+  }
+  assert.ok(!stub.calls.includes("POST /v1/accounts:lookup"), "the window row was not sent");
+  assert.deepEqual(stub.mfa(), MFA_CONFIGS.disabled);
+});
+
+test("a stop before a program changes no config", async () => {
+  const { runCorpus } = await import("./auth-mfa/session.mjs");
+  const stub = stubProduction();
+  const controller = new AbortController();
+  controller.abort();
+  const program = { id: "auth-mfa/sms", config: { mfa: MFA_CONFIGS.enabled }, steps: [] };
+  try {
+    await assert.rejects(
+      runCorpus([program], production, { signal: controller.signal, configSettleMs: 0 }),
+      /stopped by a signal before auth-mfa\/sms/,
+    );
+  } finally {
+    stub.restore();
+  }
+  assert.ok(!stub.calls.some((call) => call.startsWith("PATCH")), stub.calls.join("\n"));
+});
+
+test("a hand restore is due only after this task's run did not end cleanly", async () => {
+  const { restoreDue } = await import("./auth-mfa/run.mjs");
+  const line = (fields) =>
+    JSON.stringify({ project: "fireemu-oracle-idp", taskId: "AUTH-MFA-SANDBOX", ...fields });
+  assert.equal(restoreDue(""), false);
+  assert.equal(restoreDue(line({ event: "started" })), true);
+  assert.equal(restoreDue(line({ outcome: "aborted-signal" })), true);
+  assert.equal(restoreDue(line({ outcome: "recorded" })), false);
+  assert.equal(restoreDue(line({ outcome: "restored-by-hand" })), true);
+  const other = JSON.stringify({
+    project: "fireemu-oracle-idp",
+    taskId: "FS-RULES-SANDBOX",
+    event: "started",
+  });
+  assert.equal(restoreDue(`${line({ outcome: "recorded" })}\n${other}`), false);
+});
+
+test("a rate-limited MFA answer is indeterminate, never a behavior", async () => {
+  const { isTransient } = await import("./auth-account/harness.mjs");
+  for (const message of ["TOO_MANY_ATTEMPTS_TRY_LATER", "QUOTA_EXCEEDED : Exceeded quota"])
+    assert.equal(isTransient({ status: 400, body: { error: { message } } }), true, message);
+  assert.equal(isTransient({ status: 400, body: { error: { message: "INVALID_CODE" } } }), false);
+});

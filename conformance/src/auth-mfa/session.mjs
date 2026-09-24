@@ -157,6 +157,19 @@ export function resolveCodes(value, raw, codes, nowSeconds, sent) {
   return value;
 }
 
+/**
+ * One clock-skew sample from an enrollment start: production started the session between the
+ * send and the receipt, at its announced deadline less the announced lifetime. A sample is
+ * kept only when both clock readings exist and the round trip took at most a second, so its
+ * error stays within half a second.
+ */
+export function skewSample(announced, sentAt, receivedAt) {
+  const started = Date.parse(announced) / 1000 - ANNOUNCED_SESSION_SECONDS;
+  if (![started, sentAt, receivedAt].every(Number.isFinite)) return undefined;
+  if (receivedAt - sentAt > 1 || receivedAt < sentAt) return undefined;
+  return started - (sentAt + receivedAt) / 2;
+}
+
 const usesCodes = (value) => /"\$(totp|totpWrong|sameCode)"/.test(JSON.stringify(value ?? null));
 
 export function createSession(
@@ -426,9 +439,13 @@ export function createSession(
       if (signal?.aborted) throw fatal(`stopped by a signal before ${program.id}#${step.id}`);
       // fireemu's clock follows the wall clock only forward: once an alignment or an age moved
       // it ahead, a real sleep would not move it, so it moves the clock instead.
+      const stopped = (where) => {
+        if (signal?.aborted) throw fatal(`stopped by a signal ${where} ${program.id}#${step.id}`);
+      };
       if (step.delayMs) await wait(step.delayMs / 1000);
       if (step.waitSeconds >= 600) assertNothingSilent(steps, step);
       if (step.waitSeconds) await wait(step.waitSeconds);
+      stopped("after the delay before");
       if (step.age) {
         const since = acquired.get(step.age.from);
         if (since === undefined) throw fatal(`${step.id}: ${step.age.from} was never sent`);
@@ -439,18 +456,28 @@ export function createSession(
       }
       if (step.align) {
         // The window rows compare codes a few steps from the edge of what production accepts: a
-        // skewed clock here would move them across it (pre-send review SF-3).
-        const worst = Math.max(0, ...timings.skew.map((s) => Math.abs(s)));
-        if (worst > MAX_CLOCK_SKEW_SECONDS)
-          throw fatal(
-            `clock skew ${worst.toFixed(1)} s against production; not sending ${step.id}`,
-          );
+        // skewed clock here would move them across it (pre-send review SF-3). Without an
+        // estimate the rows are not sent either (fail closed).
+        if (ctx.target.kind === "production") {
+          if (timings.skew.length === 0)
+            throw fatal(`no clock skew estimate before ${program.id}#${step.id}`);
+          const worst = Math.max(...timings.skew.map((sample) => Math.abs(sample)));
+          if (worst > MAX_CLOCK_SKEW_SECONDS)
+            throw fatal(
+              `clock skew ${worst.toFixed(1)} s against production; not sending ${step.id}`,
+            );
+        }
         await align();
+        stopped("while aligning before");
       }
       let outcome;
       let sentAt;
       try {
-        const needsClock = usesCodes(step.body) || step.deadline || agedFrom.has(step.id);
+        const needsClock =
+          usesCodes(step.body) ||
+          step.deadline ||
+          agedFrom.has(step.id) ||
+          step.path.endsWith("mfaEnrollment:start");
         const now = needsClock ? await nowSeconds() : undefined;
         const sent = [];
         const concrete = {
@@ -472,10 +499,8 @@ export function createSession(
         collectSecrets(outcome.json, seenSecrets);
         const announced = outcome.json?.totpSessionInfo?.finalizeEnrollmentTime;
         if (receivedAt !== undefined && typeof announced === "string") {
-          // Production started the session between send and receipt: its start is the
-          // announced deadline less the announced lifetime.
-          const started = Date.parse(announced) / 1000 - ANNOUNCED_SESSION_SECONDS;
-          if (Number.isFinite(started)) timings.skew.push(started - (now + receivedAt) / 2);
+          const sample = skewSample(announced, now, receivedAt);
+          if (sample !== undefined) timings.skew.push(sample);
         }
       } catch (error) {
         if (error.fatal || !/recorded nothing at/.test(String(error.message))) throw error;
@@ -515,6 +540,8 @@ export function createSession(
   }
 
   async function runProgram(program) {
+    // A stop between programs changes nothing more.
+    if (signal?.aborted) throw fatal(`stopped by a signal before ${program.id}`);
     const raw = new Map();
     const steps = {};
     const registry = createEnrollmentRegistry();

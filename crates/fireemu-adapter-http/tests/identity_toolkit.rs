@@ -16694,3 +16694,62 @@ fn strict_the_action_page_applies_an_email_change_like_the_api() {
         );
     }
 }
+
+fn set_project_mfa(s: &AuthState, mfa: &Value) {
+    let (status, body) = admin(
+        s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+        &json!({ "mfa": mfa }),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+/// A verified password account's ID token.
+fn verified_session(s: &AuthState, email: &str) -> String {
+    create(
+        s,
+        &json!({"email": email, "password": "password123", "emailVerified": true}),
+    );
+    let (status, body) = post(
+        s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": email, "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body["idToken"].as_str().unwrap().to_owned()
+}
+
+/// The project's `mfa` config enables TOTP enrollment without the `auth.totp` extension, in
+/// either profile (the emulator profile accepts more than the official emulator here, a
+/// fireemu-only extension; it refuses nothing new). Switched off again, it refuses as before.
+#[test]
+fn the_project_mfa_config_enables_totp_enrollment() {
+    for (strict, s) in [(true, strict_state()), (false, state())] {
+        assert!(!s.totp_extension_enabled);
+        let start = |token: &str| {
+            post(
+                &s,
+                &format!("{V2}/accounts/mfaEnrollment:start"),
+                &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+            )
+        };
+        let token = verified_session(&s, "totp@example.com");
+        let (status, _) = start(&token);
+        assert_eq!(status, 400, "strict={strict}: TOTP is off by default");
+        set_project_mfa(
+            &s,
+            &json!({"state": "ENABLED", "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 5}}]}),
+        );
+        let (status, body) = start(&token);
+        assert_eq!(status, 200, "strict={strict} {body}");
+        assert!(
+            body["totpSessionInfo"]["sharedSecretKey"].is_string(),
+            "{body}"
+        );
+        set_project_mfa(&s, &json!({"state": "DISABLED"}));
+        let other = verified_session(&s, "totp-off@example.com");
+        let (status, _) = start(&other);
+        assert_eq!(status, 400, "strict={strict}: switched off again");
+    }
+}

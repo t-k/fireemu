@@ -8,9 +8,9 @@
   "programs": {
     "fs-config/bulk-delete/collections": {
       "corpusDigest": "816c1f413fa22181c576e78f30458d31339a7b4ea185566e12bedf47ae329f0c",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-database": {
           "status": 200,
@@ -200,9 +200,9 @@
     },
     "fs-config/database/create/basic": {
       "corpusDigest": "311890360d62511f8ec0b1e4b8957b82fd0cfa142ada0d5e3ce6d5eb29ecd4d1",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create": {
           "status": 200,
@@ -334,9 +334,9 @@
     },
     "fs-config/database/create/id-reuse": {
       "corpusDigest": "49c28ebcd50275f91619332c26d0130cf4ef9d210d74f15afca5a479ad75fa7b",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create": {
           "status": 200,
@@ -445,9 +445,9 @@
     },
     "fs-config/database/create/refusals": {
       "corpusDigest": "4fa89283abceeff90e677cebc2753ad566ad662b47077dc5a36489fe737e8b11",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "bad-id": {
           "status": 400,
@@ -626,9 +626,9 @@
     },
     "fs-config/database/create/variants": {
       "corpusDigest": "217adab3cdd2a8fe475f389ccfb842c7f29b3b9f3d12e56296c86c47f429f084",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "datastore-mode": {
           "status": 200,
@@ -794,9 +794,9 @@
     },
     "fs-config/database/delete/basic": {
       "corpusDigest": "2194100752f9c3672f6538606b5eb45240806f367360df0ccdb4bf63d264962b",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create": {
           "status": 200,
@@ -839,207 +839,6 @@
             ]
           }
         },
-        "delete": {
-          "status": 409,
-          "body": {
-            "error": {
-              "code": 409,
-              "message": "There are concurrent database changes, please try again.",
-              "status": "ABORTED"
-            }
-          }
-        },
-        "operation": {
-          "status": -1,
-          "unresolved": "step delete recorded nothing at name",
-          "dependencyTransient": false
-        },
-        "get-after": {
-          "status": 200,
-          "body": {
-            "appEngineIntegrationMode": "DISABLED",
-            "concurrencyMode": "PESSIMISTIC",
-            "createTime": "<t1>",
-            "databaseEdition": "STANDARD",
-            "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-            "earliestVersionTime": "<t1>",
-            "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-            "etag": "<etag>",
-            "freeTier": false,
-            "locationId": "us-central1",
-            "name": "projects/demo-fs-config/databases/<db:a>",
-            "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-            "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-            "type": "FIRESTORE_NATIVE",
-            "uid": "<uid1>",
-            "updateTime": "<t1>",
-            "versionRetentionPeriod": "3600s"
-          }
-        },
-        "list-show-deleted": {
-          "status": 200,
-          "body": {
-            "databases": [
-              {
-                "appEngineIntegrationMode": "DISABLED",
-                "concurrencyMode": "PESSIMISTIC",
-                "createTime": "<t1>",
-                "databaseEdition": "STANDARD",
-                "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "earliestVersionTime": "<t1>",
-                "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                "etag": "<etag>",
-                "freeTier": false,
-                "locationId": "us-central1",
-                "name": "projects/demo-fs-config/databases/<db:a>",
-                "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-                "type": "FIRESTORE_NATIVE",
-                "uid": "<uid1>",
-                "updateTime": "<t1>",
-                "versionRetentionPeriod": "3600s"
-              },
-              {
-                "appEngineIntegrationMode": "DISABLED",
-                "concurrencyMode": "PESSIMISTIC",
-                "createTime": "2026-09-23T23:01:49.496838Z",
-                "databaseEdition": "STANDARD",
-                "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "earliestVersionTime": "<t2>",
-                "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                "etag": "<etag>",
-                "freeTier": true,
-                "locationId": "us-central1",
-                "name": "projects/demo-fs-config/databases/(default)",
-                "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-                "type": "FIRESTORE_NATIVE",
-                "uid": "<uid2>",
-                "updateTime": "2026-09-23T23:01:49.496838Z",
-                "versionRetentionPeriod": "3600s"
-              }
-            ]
-          }
-        },
-        "list-after": {
-          "status": 200,
-          "body": {
-            "databases": [
-              {
-                "appEngineIntegrationMode": "DISABLED",
-                "concurrencyMode": "PESSIMISTIC",
-                "createTime": "<t1>",
-                "databaseEdition": "STANDARD",
-                "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "earliestVersionTime": "<t1>",
-                "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                "etag": "<etag>",
-                "freeTier": false,
-                "locationId": "us-central1",
-                "name": "projects/demo-fs-config/databases/<db:a>",
-                "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-                "type": "FIRESTORE_NATIVE",
-                "uid": "<uid1>",
-                "updateTime": "<t1>",
-                "versionRetentionPeriod": "3600s"
-              },
-              {
-                "appEngineIntegrationMode": "DISABLED",
-                "concurrencyMode": "PESSIMISTIC",
-                "createTime": "2026-09-23T23:01:49.496838Z",
-                "databaseEdition": "STANDARD",
-                "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "earliestVersionTime": "<t2>",
-                "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                "etag": "<etag>",
-                "freeTier": true,
-                "locationId": "us-central1",
-                "name": "projects/demo-fs-config/databases/(default)",
-                "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-                "type": "FIRESTORE_NATIVE",
-                "uid": "<uid2>",
-                "updateTime": "2026-09-23T23:01:49.496838Z",
-                "versionRetentionPeriod": "3600s"
-              }
-            ]
-          }
-        },
-        "document-after": {
-          "trace": [
-            {
-              "status": 200,
-              "body": {
-                "createTime": "<t1>",
-                "fields": {
-                  "a": {
-                    "integerValue": "1"
-                  }
-                },
-                "name": "projects/demo-fs-config/databases/<db:a>/documents/items/a",
-                "updateTime": "<t1>"
-              }
-            }
-          ],
-          "settled": {
-            "status": 200,
-            "body": {
-              "createTime": "<t1>",
-              "fields": {
-                "a": {
-                  "integerValue": "1"
-                }
-              },
-              "name": "projects/demo-fs-config/databases/<db:a>/documents/items/a",
-              "updateTime": "<t1>"
-            }
-          },
-          "unsettled": true
-        },
-        "delete-again": {
-          "status": 200,
-          "body": {
-            "metadata": {
-              "@type": "type.googleapis.com/google.firestore.admin.v1.DeleteDatabaseMetadata"
-            },
-            "name": "projects/demo-fs-config/databases/<db:a>/operations/<op2>",
-            "response": {
-              "@type": "type.googleapis.com/google.firestore.admin.v1.Database",
-              "appEngineIntegrationMode": "DISABLED",
-              "concurrencyMode": "PESSIMISTIC",
-              "createTime": "<t1>",
-              "databaseEdition": "STANDARD",
-              "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-              "deleteTime": "<t2>",
-              "earliestVersionTime": "<t2>",
-              "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-              "etag": "<etag>",
-              "freeTier": false,
-              "locationId": "us-central1",
-              "name": "projects/demo-fs-config/databases/<uid1>",
-              "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-              "previousId": "<db:a>",
-              "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-              "type": "FIRESTORE_NATIVE",
-              "uid": "<uid1>",
-              "updateTime": "<t1>",
-              "versionRetentionPeriod": "3600s"
-            }
-          }
-        },
-        "delete-missing": {
-          "status": 404,
-          "body": {
-            "error": {
-              "code": 404,
-              "message": "Requested database was not found.",
-              "status": "NOT_FOUND"
-            }
-          }
-        }
-      },
-      "second": {
         "delete": {
           "status": 200,
           "body": {
@@ -1117,11 +916,11 @@
               {
                 "appEngineIntegrationMode": "DISABLED",
                 "concurrencyMode": "PESSIMISTIC",
-                "createTime": "<t2>",
+                "createTime": "<t1>",
                 "databaseEdition": "STANDARD",
                 "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "deleteTime": "<t3>",
-                "earliestVersionTime": "<t3>",
+                "deleteTime": "<t2>",
+                "earliestVersionTime": "<t2>",
                 "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
                 "etag": "<etag>",
                 "freeTier": false,
@@ -1132,7 +931,7 @@
                 "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
                 "type": "FIRESTORE_NATIVE",
                 "uid": "<uid1>",
-                "updateTime": "<t2>",
+                "updateTime": "<t1>",
                 "versionRetentionPeriod": "3600s"
               },
               {
@@ -1141,7 +940,7 @@
                 "createTime": "2026-09-23T23:01:49.496838Z",
                 "databaseEdition": "STANDARD",
                 "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "earliestVersionTime": "<t1>",
+                "earliestVersionTime": "<t3>",
                 "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
                 "etag": "<etag>",
                 "freeTier": true,
@@ -1186,6 +985,19 @@
         "document-after": {
           "trace": [
             {
+              "status": 200,
+              "body": {
+                "createTime": "<t1>",
+                "fields": {
+                  "a": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-config/databases/<db:a>/documents/items/a",
+                "updateTime": "<t1>"
+              }
+            },
+            {
               "status": 404,
               "body": {
                 "error": {
@@ -1216,14 +1028,24 @@
               "status": "NOT_FOUND"
             }
           }
+        },
+        "delete-missing": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Requested database was not found.",
+              "status": "NOT_FOUND"
+            }
+          }
         }
       }
     },
     "fs-config/database/delete/protection-and-etag": {
       "corpusDigest": "ed81149905470fdf7c7458ef2e352dd02733863cc2f9631c835658183f5ef502",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create": {
           "status": 200,
@@ -1372,9 +1194,9 @@
     },
     "fs-config/database/mode-gating/datastore-and-enterprise": {
       "corpusDigest": "b7f714ec5f3789799bac0f3d18c6f9767faf541f0e773c2118d4746864015241",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-datastore": {
           "status": 200,
@@ -1502,9 +1324,9 @@
     },
     "fs-config/database/mode-gating/enterprise-only-apis": {
       "corpusDigest": "70c2276f836db83afc97b58572b32f68b9f006014faa7e5674e1ca600f26fde0",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create": {
           "status": 200,
@@ -1600,9 +1422,9 @@
     },
     "fs-config/database/patch/fields": {
       "corpusDigest": "6e0975f9af9b7372f01464993a28ca9fb06a32b826300033a0dd873a0835cff5",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create": {
           "status": 200,
@@ -1871,9 +1693,9 @@
     },
     "fs-config/database/projection/default-and-named": {
       "corpusDigest": "47b4d8ff29f062b9f9a180f6c7af90e68b20dfdb2827626e9f5888530cbd3fde",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "get-default": {
           "status": 200,
@@ -2047,98 +1869,6 @@
               "message": "Project 'demo-fs-config' or database '<db:z>' does not exist.",
               "status": "NOT_FOUND"
             }
-          }
-        }
-      },
-      "second": {
-        "list": {
-          "status": 200,
-          "body": {
-            "databases": [
-              {
-                "appEngineIntegrationMode": "DISABLED",
-                "concurrencyMode": "PESSIMISTIC",
-                "createTime": "<t2>",
-                "databaseEdition": "STANDARD",
-                "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "earliestVersionTime": "<t2>",
-                "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                "etag": "<etag>",
-                "freeTier": false,
-                "locationId": "us-central1",
-                "name": "projects/demo-fs-config/databases/<db:a>",
-                "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-                "type": "FIRESTORE_NATIVE",
-                "uid": "<uid2>",
-                "updateTime": "<t2>",
-                "versionRetentionPeriod": "3600s"
-              },
-              {
-                "appEngineIntegrationMode": "DISABLED",
-                "concurrencyMode": "PESSIMISTIC",
-                "createTime": "2026-09-23T23:01:49.496838Z",
-                "databaseEdition": "STANDARD",
-                "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "earliestVersionTime": "<t1>",
-                "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                "etag": "<etag>",
-                "freeTier": true,
-                "locationId": "us-central1",
-                "name": "projects/demo-fs-config/databases/(default)",
-                "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-                "type": "FIRESTORE_NATIVE",
-                "uid": "<uid1>",
-                "updateTime": "2026-09-23T23:01:49.496838Z",
-                "versionRetentionPeriod": "3600s"
-              }
-            ]
-          }
-        },
-        "list-show-deleted-false": {
-          "status": 200,
-          "body": {
-            "databases": [
-              {
-                "appEngineIntegrationMode": "DISABLED",
-                "concurrencyMode": "PESSIMISTIC",
-                "createTime": "<t2>",
-                "databaseEdition": "STANDARD",
-                "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "earliestVersionTime": "<t2>",
-                "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                "etag": "<etag>",
-                "freeTier": false,
-                "locationId": "us-central1",
-                "name": "projects/demo-fs-config/databases/<db:a>",
-                "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-                "type": "FIRESTORE_NATIVE",
-                "uid": "<uid2>",
-                "updateTime": "<t2>",
-                "versionRetentionPeriod": "3600s"
-              },
-              {
-                "appEngineIntegrationMode": "DISABLED",
-                "concurrencyMode": "PESSIMISTIC",
-                "createTime": "2026-09-23T23:01:49.496838Z",
-                "databaseEdition": "STANDARD",
-                "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-                "earliestVersionTime": "<t1>",
-                "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-                "etag": "<etag>",
-                "freeTier": true,
-                "locationId": "us-central1",
-                "name": "projects/demo-fs-config/databases/(default)",
-                "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-                "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-                "type": "FIRESTORE_NATIVE",
-                "uid": "<uid1>",
-                "updateTime": "2026-09-23T23:01:49.496838Z",
-                "versionRetentionPeriod": "3600s"
-              }
-            ]
           }
         }
       }
@@ -2658,9 +2388,9 @@
     },
     "fs-config/export/documents": {
       "corpusDigest": "e332d24cf603072282bff426fc2adfc5234a92868db7b35013d96a2b89d78177",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-database": {
           "status": 200,
@@ -2993,9 +2723,9 @@
     },
     "fs-config/export/interop/fireemu-to-production": {
       "corpusDigest": "708b4ce83be704ecb3231703545d5da17f8299f4fa9b9642386d327439a141fa",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T09:14:10.616Z",
-      "gitSha": "7419c955b72abfebd4819e696abce73df9853543",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-source-placeholder": {
           "status": 200,
@@ -3495,9 +3225,9 @@
     },
     "fs-config/export/interop/production-to-fireemu": {
       "corpusDigest": "77c3a635c73c2d6ccc23baa72884be849607ef08866777ee122b16899bd430ae",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T09:14:10.616Z",
-      "gitSha": "7419c955b72abfebd4819e696abce73df9853543",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-source": {
           "status": 200,
@@ -4165,9 +3895,9 @@
     },
     "fs-config/field/index-config/exemption": {
       "corpusDigest": "f381a4ca4c096ea1af4f1305b078578a4a2ebd9afefe0f8d9fd1c24235baeb6d",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-database": {
           "status": 200,
@@ -5718,9 +5448,9 @@
     },
     "fs-config/field/ttl/policy": {
       "corpusDigest": "801af2371ae9e54fcca7946d08d42c9db48adf094840ba395453783c68e79db3",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T09:17:20.017Z",
-      "gitSha": "f9f86461ade51f266f20b28f6bf45b28888b5a40",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-database": {
           "status": 200,
@@ -6331,10 +6061,10 @@
       }
     },
     "fs-config/grpc/admin": {
-      "corpusDigest": "3771ae6e96ea1b1c7e84e319bebeb837d4634cc00d0f08e57f8217ea4411b72b",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "corpusDigest": "11455a6b20e9f83a34bcf6dafdf06c74f0d169fdcc6f3681b8cdc3b4ddd63b19",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "list-databases": {
           "transport": "grpc",
@@ -6530,6 +6260,51 @@
             "name": "projects/demo-fs-config/databases/<db:a>/collectionGroups/items/indexes/<index1>",
             "queryScope": "COLLECTION",
             "state": "CREATING"
+          }
+        },
+        "list-indexes": {
+          "transport": "grpc",
+          "code": 0,
+          "body": {
+            "indexes": [
+              {
+                "density": "SPARSE_ALL",
+                "fields": [
+                  {
+                    "fieldPath": "a",
+                    "order": "ASCENDING"
+                  },
+                  {
+                    "fieldPath": "b",
+                    "order": "DESCENDING"
+                  },
+                  {
+                    "fieldPath": "__name__",
+                    "order": "DESCENDING"
+                  }
+                ],
+                "name": "projects/demo-fs-config/databases/<db:a>/collectionGroups/items/indexes/<index1>",
+                "queryScope": "COLLECTION",
+                "state": "CREATING"
+              }
+            ]
+          }
+        },
+        "list-operations": {
+          "transport": "grpc",
+          "code": 0,
+          "body": {
+            "operations": [
+              {
+                "metadata": {
+                  "@type": "type.googleapis.com/google.firestore.admin.v1.IndexOperationMetadata",
+                  "index": "projects/demo-fs-config/databases/<db:a>/collectionGroups/items/indexes/<index1>",
+                  "startTime": "<t1>",
+                  "state": "INITIALIZING"
+                },
+                "name": "projects/demo-fs-config/databases/<db:a>/operations/<op2>"
+              }
+            ]
           }
         },
         "export": {
@@ -6836,9 +6611,9 @@
     },
     "fs-config/import/documents": {
       "corpusDigest": "d2e0e5551e9e449e86ad0c7cef00d0f666b66f497efde16f53ad8c2b06efb7ff",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-source": {
           "status": 200,
@@ -6955,6 +6730,24 @@
                   "outputUriPrefix": "gs://<bucket>/import-documents/all",
                   "progressBytes": {},
                   "progressDocuments": {},
+                  "startTime": "<t1>"
+                },
+                "name": "projects/demo-fs-config/databases/<db:a>/operations/<op2>"
+              }
+            },
+            {
+              "status": 200,
+              "body": {
+                "metadata": {
+                  "@type": "type.googleapis.com/google.firestore.admin.v1.ExportDocumentsMetadata",
+                  "operationState": "PROCESSING",
+                  "outputUriPrefix": "gs://<bucket>/import-documents/all",
+                  "progressBytes": {
+                    "completedWork": "628"
+                  },
+                  "progressDocuments": {
+                    "completedWork": "3"
+                  },
                   "startTime": "<t1>"
                 },
                 "name": "projects/demo-fs-config/databases/<db:a>/operations/<op2>"
@@ -7385,13 +7178,81 @@
             }
           }
         }
+      },
+      "second": {
+        "export-all-operation": {
+          "trace": [
+            {
+              "status": 200,
+              "body": {
+                "metadata": {
+                  "@type": "type.googleapis.com/google.firestore.admin.v1.ExportDocumentsMetadata",
+                  "operationState": "PROCESSING",
+                  "outputUriPrefix": "gs://<bucket>/import-documents/all",
+                  "progressBytes": {},
+                  "progressDocuments": {},
+                  "startTime": "<t1>"
+                },
+                "name": "projects/demo-fs-config/databases/<db:a>/operations/<op2>"
+              }
+            },
+            {
+              "status": 200,
+              "body": {
+                "done": true,
+                "metadata": {
+                  "@type": "type.googleapis.com/google.firestore.admin.v1.ExportDocumentsMetadata",
+                  "endTime": "<t1>",
+                  "operationState": "SUCCESSFUL",
+                  "outputUriPrefix": "gs://<bucket>/import-documents/all",
+                  "progressBytes": {
+                    "completedWork": "628"
+                  },
+                  "progressDocuments": {
+                    "completedWork": "3"
+                  },
+                  "startTime": "<t2>"
+                },
+                "name": "projects/demo-fs-config/databases/<db:a>/operations/<op2>",
+                "response": {
+                  "@type": "type.googleapis.com/google.firestore.admin.v1.ExportDocumentsResponse",
+                  "outputUriPrefix": "gs://<bucket>/import-documents/all"
+                }
+              }
+            }
+          ],
+          "settled": {
+            "status": 200,
+            "body": {
+              "done": true,
+              "metadata": {
+                "@type": "type.googleapis.com/google.firestore.admin.v1.ExportDocumentsMetadata",
+                "endTime": "<t1>",
+                "operationState": "SUCCESSFUL",
+                "outputUriPrefix": "gs://<bucket>/import-documents/all",
+                "progressBytes": {
+                  "completedWork": "628"
+                },
+                "progressDocuments": {
+                  "completedWork": "3"
+                },
+                "startTime": "<t2>"
+              },
+              "name": "projects/demo-fs-config/databases/<db:a>/operations/<op2>",
+              "response": {
+                "@type": "type.googleapis.com/google.firestore.admin.v1.ExportDocumentsResponse",
+                "outputUriPrefix": "gs://<bucket>/import-documents/all"
+              }
+            }
+          }
+        }
       }
     },
     "fs-config/index/lifecycle/composite": {
       "corpusDigest": "4aa04e214ba2825cb21edd42ea9a3d59fe51c4aacc4c6340a72fa223b647d1f7",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-database": {
           "status": 200,
@@ -8094,9 +7955,9 @@
     },
     "fs-config/index/query-effect/composite": {
       "corpusDigest": "a22760ccb2cf8e416668d0376d3bcbb269f08fabdaa19dc694415e70a284842f",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-database": {
           "status": 200,
@@ -8175,7 +8036,7 @@
             {
               "error": {
                 "code": 400,
-                "message": "The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/demo-fs-config/firestore/databases/<db:a>/indexes?create_composite=Clpwcm9qZWN0cy9kZW1vLWZzLWNvbmZpZy9kYXRhYmFzZXMvPGRiOmE-L2NvbGxlY3Rpb25Hcm91cHMvaXRlbXMvaW5kZXhlcy9fEAEaBQoBYRABGgUKAWIQAhoMCghfX25hbWVfXxAC",
+                "message": "The query requires an index. That index is currently building and cannot be used yet. See its status here: https://console.firebase.google.com/v1/r/project/demo-fs-config/firestore/databases/<db:a>/indexes?create_composite=CmVwcm9qZWN0cy9kZW1vLWZzLWNvbmZpZy9kYXRhYmFzZXMvPGRiOmE-L2NvbGxlY3Rpb25Hcm91cHMvaXRlbXMvaW5kZXhlcy88aW5kZXgxPhABGgUKAWEQARoFCgFiEAIaDAoIX19uYW1lX18QAg",
                 "status": "FAILED_PRECONDITION"
               }
             }
@@ -8378,27 +8239,13 @@
             ]
           }
         }
-      },
-      "second": {
-        "query-building": {
-          "status": 400,
-          "body": [
-            {
-              "error": {
-                "code": 400,
-                "message": "The query requires an index. That index is currently building and cannot be used yet. See its status here: https://console.firebase.google.com/v1/r/project/demo-fs-config/firestore/databases/<db:a>/indexes?create_composite=CmVwcm9qZWN0cy9kZW1vLWZzLWNvbmZpZy9kYXRhYmFzZXMvPGRiOmE-L2NvbGxlY3Rpb25Hcm91cHMvaXRlbXMvaW5kZXhlcy88aW5kZXgxPhABGgUKAWEQARoFCgFiEAIaDAoIX19uYW1lX18QAg",
-                "status": "FAILED_PRECONDITION"
-              }
-            }
-          ]
-        }
       }
     },
     "fs-config/locations/catalog": {
       "corpusDigest": "ff94a6de4312328e8d51031bd52fbf2cc81c8e51d8e2289065b538eeab0b9c6e",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "list": {
           "status": 200,
@@ -9609,9 +9456,9 @@
     },
     "fs-config/operations/lifecycle": {
       "corpusDigest": "5af3a9d3bce50530c4a0bb3d394f641fa475c23bdd8aefa88ca600e921e1e2c5",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "create-database": {
           "status": 200,
@@ -9893,9 +9740,9 @@
     },
     "fs-config/project-boundary/foreign-and-missing": {
       "corpusDigest": "afeb177d5ade330e14f9f5b3fa54e545b1041c4dc56d585e0b11caaaeb63188c",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:14:29.389Z",
+      "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
       "steps": {
         "foreign-list-databases": {
           "status": 403,

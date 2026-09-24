@@ -1027,7 +1027,9 @@ impl RestState {
         let document_id = first(params, "documentId").unwrap_or("");
         let document_resource =
             (!document_id.is_empty()).then(|| format!("{parent}/{collection_id}/{document_id}"));
-        transcode::check_document_keys(body, "document")?;
+        if self.gateway.production_refusals() {
+            transcode::check_document_keys(body, "document")?;
+        }
         let req = pb::CreateDocumentRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
@@ -1148,26 +1150,31 @@ impl RestState {
             }
             // The streaming methods answer an error as a one-element array, like their results.
             "runQuery" => stream_errors(
-                transcode::check_body(action, body)
+                self.transcoded(action, body)
                     .and_then(|body| self.run_query(principal, resource, &body)),
             ),
             "runAggregationQuery" => stream_errors(
-                transcode::check_body(action, body)
+                self.transcoded(action, body)
                     .and_then(|body| self.run_aggregation_query(principal, resource, &body)),
             ),
             // The template is `{database=projects/*/databases/*}/documents:executePipeline`;
             // any other resource names no route.
+            // Only the strict profile has this route: before it the emulator profile named no
+            // REST pipeline route, and it may add no rejection.
             "executePipeline" => {
-                if matches!(
-                    resource.split('/').collect::<Vec<_>>().as_slice(),
-                    ["projects", _, "databases", _, "documents"]
-                ) {
+                if self.gateway.production_refusals()
+                    && matches!(
+                        resource.split('/').collect::<Vec<_>>().as_slice(),
+                        ["projects", _, "databases", _, "documents"]
+                    )
+                {
                     stream_errors(self.execute_pipeline(principal))
                 } else {
                     Ok(not_found_text())
                 }
             }
-            "partitionQuery" => transcode::check_body(action, body)
+            "partitionQuery" => self
+                .transcoded(action, body)
                 .and_then(|body| self.partition_query(principal, resource, &body)),
             "listCollectionIds" => {
                 json::strict_keys(
@@ -1220,6 +1227,16 @@ impl RestState {
 
     /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does;
     /// an Enterprise database has no REST pipeline route here.
+    /// A custom method's body after production's transcoder: checked and normalized under the
+    /// strict profile, as sent under the emulator profile (which may add no rejection).
+    fn transcoded(&self, action: &str, body: &Value) -> Result<Value, Status> {
+        if self.gateway.production_refusals() {
+            transcode::check_body(action, body)
+        } else {
+            Ok(body.clone())
+        }
+    }
+
     fn execute_pipeline(&self, principal: &Caller) -> Result<RestResponse, Status> {
         // Owner first, as over gRPC.
         if let Some(rules) = &self.rules {
@@ -1469,7 +1486,10 @@ impl RestState {
             ));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
-        crate::query_messages::check_find_nearest_request(&structured)?;
+        crate::query_messages::check_find_nearest_request(
+            &structured,
+            self.gateway.production_refusals(),
+        )?;
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         exclusive_selectors(body)?;
@@ -1553,7 +1573,10 @@ impl RestState {
         if let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(query)) =
             &aggregation.query_type
         {
-            crate::query_messages::check_find_nearest_request(query)?;
+            crate::query_messages::check_find_nearest_request(
+                query,
+                self.gateway.production_refusals(),
+            )?;
         }
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;

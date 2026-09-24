@@ -575,6 +575,10 @@
             {
               "behaviour": "seeded fault injection on firestore.commit / read / beginTransaction",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "Query semantics follow production as recorded on 2026-09-24 in both profiles: RunQuery marks no response done (where the pinned official emulator does), a kindless query without allDescendants reads the parent's direct children, IS_NOT_NAN excludes null, a range against NaN matches nothing, unnamed aggregations are numbered field_1, field_2 over the unnamed ones only, a count capped at zero answers after authorization without reading, Explain reports the index each disjunct scans and production's billing, and PartitionQuery (which the pinned official emulator leaves unimplemented) splits at sampled keys. The official emulator's answer to the others was not re-measured",
+              "precision": "documented-not-observed"
             }
           ],
           "productionOnly": [
@@ -645,6 +649,10 @@
             },
             {
               "behaviour": "removal compares the semantic eventTrigger object rather than depending on JSON member insertion order, and a successful source reload rebuilds the manifest-owned table at the new generation instead of retaining manually duplicated stale-generation registrations",
+              "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "runQuery, runAggregationQuery and executePipeline answer an error inside a one-element JSON array, as production does, and request bodies are read with production's JSON grammar (bare keys, single quotes, trailing commas) with its refusal texts, in both profiles; production's transcoder check of query bodies (schema, enum and wrapper forms, field violations), the Standard :executePipeline route and a read_time before database creation are strict-profile refusals only, because the emulator profile may add no rejection",
               "precision": "exact-for-local-semantics"
             }
           ],
@@ -741,12 +749,16 @@
           ],
           "fireemuOnly": [
             {
-              "behaviour": "REST and gRPC findNearest execution with projection, Euclidean/cosine/dot-product distance, finite thresholds, limits and ordinary pre-ranking query stages; Listen and WebChannel reject findNearest targets explicitly",
+              "behaviour": "REST and gRPC findNearest execution with projection, Euclidean/cosine/dot-product distance, finite thresholds and a result limit; equal distances rank by document name and count, sum and avg aggregate the nearest results (production, recorded 2026-09-24); under the strict profile a query-level limit, offset or cursor is refused as production refuses it, while the emulator profile, which may add no rejection, applies those ordinary stages before the nearest ranking as fireemu did before; Listen and WebChannel reject findNearest targets explicitly",
               "precision": "finite-local-read-subset"
             },
             {
-              "behaviour": "Non-document-name explicit ordering materializes at most offset + limit <= 1000 ordinary rows before nearest ranking; unbounded offsets require document-name ordering or a top-level limit",
+              "behaviour": "Under the emulator profile, non-document-name explicit ordering before the nearest ranking materializes at most offset + limit <= 1000 ordinary rows; unbounded offsets require document-name ordering or a top-level limit",
               "precision": "resource-safety-divergence"
+            },
+            {
+              "behaviour": "A cosine search that meets a zero vector, the query's or a candidate's, is refused with FAILED_PRECONDITION under the strict profile as production refuses it; the emulator profile leaves such a candidate out as a distance that is not finite, as fireemu did before",
+              "precision": "exact-for-local-semantics"
             }
           ],
           "productionOnly": [

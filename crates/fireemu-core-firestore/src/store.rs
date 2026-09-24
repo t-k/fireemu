@@ -4177,8 +4177,10 @@ impl FirestoreState {
             }
         }
         // Production refuses a cosine search that meets a zero vector, the query's or a
-        // candidate's (FS-QUERY-INDEX vector/measures, recorded 2026-09-24).
-        let cosine = find_nearest.distance_measure == DistanceMeasure::Cosine;
+        // candidate's (FS-QUERY-INDEX vector/measures, recorded 2026-09-24); without
+        // production's refusals such a candidate is left out as a distance that is not finite.
+        let cosine =
+            find_nearest.distance_measure == DistanceMeasure::Cosine && query.production_refusals;
         if cosine && find_nearest.query_vector.iter().all(|c| *c == 0.0) {
             return Err(FirestoreError::FailedPrecondition(
                 COSINE_ZERO_VECTOR.into(),

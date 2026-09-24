@@ -3795,7 +3795,9 @@ impl LocalBackend {
         // Production answers a read_time before the database existed with INVALID_ARGUMENT and
         // one inside the database's life but outside the retention window with
         // FAILED_PRECONDITION, in these words (conformance/firestore-production-matrix.json).
-        if at < self.created_at {
+        // Production's refusal only; the emulator profile reads the empty snapshot before the
+        // first commit instead.
+        if at < self.created_at && self.gateway.production_refusals() {
             return Err(Status::invalid_argument(
                 "The requested 'read_time' cannot be before database creation time.",
             ));

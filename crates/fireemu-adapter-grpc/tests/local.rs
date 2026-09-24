@@ -1413,9 +1413,41 @@ async fn grpc_run_query_supports_standard_find_nearest() {
 
 #[tokio::test]
 async fn grpc_find_nearest_refuses_query_limits_offsets_and_cursors() {
-    // Production refuses each (FS-QUERY-INDEX vector/with-query-clauses, 2026-09-24).
-    let (mut client, _, handle) =
+    // Production refuses each (FS-QUERY-INDEX vector/with-query-clauses, 2026-09-24): a
+    // strict-profile refusal only. The emulator profile applies those stages before the
+    // nearest-neighbour ranking, as fireemu did before, and adds no rejection.
+    let (mut emulator, _, emulator_handle) =
         start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
+    let served = emulator
+        .run_query(pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: "items".to_owned(),
+                        ..Default::default()
+                    }],
+                    find_nearest: Some(sq::FindNearest {
+                        vector_field: Some(sq::FieldReference {
+                            field_path: "embedding".to_owned(),
+                        }),
+                        query_vector: Some(vector(&[1.0, 0.0])),
+                        distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                        limit: Some(2),
+                        ..Default::default()
+                    }),
+                    limit: Some(2),
+                    offset: 1,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        })
+        .await;
+    assert!(served.is_ok(), "{served:?}");
+    emulator_handle.abort();
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(false, IndexValidationPolicy::Production).await;
     let nearest = || sq::FindNearest {
         vector_field: Some(sq::FieldReference {
             field_path: "embedding".to_owned(),

@@ -361,6 +361,10 @@ pub struct Query {
     pub projection: Option<Vec<FieldPath>>,
     /// Optional nearest-neighbor stage, applied after ordinary query stages.
     pub find_nearest: Option<FindNearest>,
+    /// Whether execution refuses what only production refuses (the strict profile): a
+    /// cosine search that meets a zero vector. The emulator profile's canonicalization clears
+    /// it, and such a candidate is then left out as a distance that is not finite.
+    pub production_refusals: bool,
 }
 
 /// Structural validation errors found while canonicalizing.
@@ -633,6 +637,7 @@ impl Query {
             limit: None,
             projection: None,
             find_nearest: None,
+            production_refusals: true,
         }
     }
 
@@ -692,6 +697,7 @@ impl Query {
         };
         let q = Self {
             filter,
+            production_refusals: production,
             ..self.clone()
         };
         if let Some(find_nearest) = &q.find_nearest {

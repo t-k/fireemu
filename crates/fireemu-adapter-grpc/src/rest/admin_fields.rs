@@ -125,13 +125,8 @@ fn page_offset(binding: [u8; 6], token: &str) -> Result<usize, Status> {
     Ok(offset as usize)
 }
 
-fn mode_json(
-    selector: &FieldSelector,
-    scope: IndexQueryScope,
-    mode: IndexFieldMode,
-    state: &str,
-) -> Value {
-    let mut entry = json!({ "fieldPath": selector.field_id });
+fn mode_json(field_id: &str, scope: IndexQueryScope, mode: IndexFieldMode, state: &str) -> Value {
+    let mut entry = json!({ "fieldPath": field_id });
     match mode {
         IndexFieldMode::Ascending => entry["order"] = json!("ASCENDING"),
         IndexFieldMode::Descending => entry["order"] = json!("DESCENDING"),
@@ -154,7 +149,7 @@ fn delta_index_json(
     scope: IndexQueryScope,
     mode: IndexFieldMode,
 ) -> Value {
-    let mut index = mode_json(selector, scope, mode, "READY");
+    let mut index = mode_json(&selector.field_id, scope, mode, "READY");
     if let Some(object) = index.as_object_mut() {
         object.remove("state");
     }
@@ -162,6 +157,19 @@ fn delta_index_json(
 }
 
 /// The built-in automatic single-field indexes of a field with no override anywhere.
+/// The database-wide default (`__default__/fields/*`): the built-in single-field indexes,
+/// with no ancestor to inherit from.
+fn database_default_json(project: &str, database: &str) -> Value {
+    let indexes: Vec<Value> = builtin_modes()
+        .into_iter()
+        .map(|(scope, mode)| mode_json(WILDCARD_FIELD, scope, mode, "READY"))
+        .collect();
+    json!({
+        "name": ancestor_field(project, database),
+        "indexConfig": {"indexes": indexes},
+    })
+}
+
 fn builtin_modes() -> Vec<(IndexQueryScope, IndexFieldMode)> {
     vec![
         (IndexQueryScope::Collection, IndexFieldMode::Ascending),
@@ -201,7 +209,7 @@ fn index_config_json(
             } else {
                 "READY"
             };
-            mode_json(selector, scope, mode, state)
+            mode_json(&selector.field_id, scope, mode, state)
         })
         .collect();
     let mut config = json!({});
@@ -296,6 +304,12 @@ impl RestState {
             ("GET", [_, project, _, database, _, group, _]) => {
                 self.assert_database(project, database)?;
                 self.list_fields(project, database, group, params)
+            }
+            ("GET", [_, project, _, database, _, group, _, field])
+                if *group == DEFAULT_GROUP && *field == WILDCARD_FIELD =>
+            {
+                self.assert_database(project, database)?;
+                Ok(ok(database_default_json(project, database)))
             }
             ("GET", [_, project, _, database, _, group, _, field]) => {
                 self.assert_database(project, database)?;
@@ -664,7 +678,13 @@ impl RestState {
             }
             crate::admin::fields::FieldChange::TtlRemove => {}
             crate::admin::fields::FieldChange::IndexConfig(_) => {
-                response["indexConfig"] = self.field_json(&selector)["indexConfig"].clone();
+                // The operation answers the field it wrote: production leaves out
+                // usesAncestorConfig there even for a revert to the inherited indexes.
+                let mut config = self.field_json(&selector)["indexConfig"].clone();
+                if let Some(config) = config.as_object_mut() {
+                    config.remove("usesAncestorConfig");
+                }
+                response["indexConfig"] = config;
             }
         }
         json!({

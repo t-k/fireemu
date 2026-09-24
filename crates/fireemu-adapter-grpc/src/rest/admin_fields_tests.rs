@@ -304,6 +304,46 @@ fn patching_the_index_config_exempts_the_field_and_a_revert_restores_it() {
         field["indexConfig"]["indexes"].as_array().map(Vec::len),
         Some(3)
     );
+    // The revert's operation answers the field it wrote, which production reports without
+    // usesAncestorConfig (2026-09-24), unlike a later read of the field.
+    let operation = reverted["name"].as_str().unwrap();
+    let (_, done) = call(&state, "GET", &format!("/v1/{operation}"), Value::Null);
+    assert_eq!(done["done"], true, "{done}");
+    assert!(
+        done["response"]["indexConfig"]
+            .get("usesAncestorConfig")
+            .is_none(),
+        "{done}"
+    );
+    assert_eq!(
+        done["response"]["indexConfig"]["indexes"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+}
+
+#[test]
+fn the_database_wide_default_reads_back_its_indexes_without_an_ancestor() {
+    let state = state();
+    let (status, body) = call(
+        &state,
+        "GET",
+        "/v1/projects/demo/databases/(default)/collectionGroups/__default__/fields/*",
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body,
+        json!({
+            "name": "projects/demo/databases/(default)/collectionGroups/__default__/fields/*",
+            "indexConfig": {"indexes": [
+                {"fields": [{"fieldPath": "*", "order": "ASCENDING"}], "queryScope": "COLLECTION", "state": "READY"},
+                {"fields": [{"fieldPath": "*", "order": "DESCENDING"}], "queryScope": "COLLECTION", "state": "READY"},
+                {"fields": [{"arrayConfig": "CONTAINS", "fieldPath": "*"}], "queryScope": "COLLECTION", "state": "READY"}
+            ]}
+        })
+    );
 }
 
 #[test]

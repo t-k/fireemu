@@ -17,6 +17,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { credentialMetadata, selectCredential } from "./credentials.mjs";
+import { requireChildProductionAdmission } from "../fs-data-write-admission.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 import { createRequestBudget } from "./request-budget.mjs";
 import {
@@ -198,6 +199,10 @@ export function isExactDeltaV3ProductionScope({
   }
   return false;
 }
+export function isLoopbackHost(host) {
+  return /^(?:127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host ?? "");
+}
+
 let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
 let managedClearBlocked = false;
@@ -2244,6 +2249,15 @@ function deleteBoundaryProof(program, steps, raw, blocked) {
 }
 
 async function main() {
+  // A child launched by hand with production variables must not reach the service.
+  // Recovery modes only delete this task's own journaled names and keep their own checks.
+  if (RECOVERY_MODE === undefined) {
+    requireChildProductionAdmission({
+      production: PRODUCTION && !isLoopbackHost(HOST),
+      env: process.env,
+      runId: process.env.FIRESTORE_PROBE_DELETE_RUN_ID,
+    });
+  }
   const deltaNames = (() => {
     try {
       return JSON.parse(MANAGED_CLEAR_NAMES ?? "null");

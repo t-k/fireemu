@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 import { normalize, normalizeError } from "../normalize.mjs";
+import { requireChildProductionAdmission } from "../fs-data-write-admission.mjs";
 import { normalizeRecordedResponse } from "./production-normalization.mjs";
 
 const require = createRequire(import.meta.url);
@@ -50,6 +51,49 @@ export async function makeStreamRequestByWireBytes(targetBytes) {
   } finally {
     await client.close();
   }
+}
+
+const LIVE_SPECS = new Map([
+  [TRAILERS_ID, { action: "invalid-empty-write-after-handshake", maxFrames: 2 }],
+  [HALF_CLOSE_ID, { action: "half-close-after-handshake", maxFrames: 1 }],
+  [RESPONSE_HALF_CLOSE_ID, { action: "empty-write-response-before-half-close", maxFrames: 2 }],
+  [UNARY_EXACT_ID, { action: "get-document-transaction-bytes", maxFrames: 1, wireBytes: 10_485_760 }],
+  [UNARY_OVER_ID, { action: "get-document-transaction-bytes", maxFrames: 1, wireBytes: 10_485_761 }],
+  [STREAM_EXACT_ID, { action: "write-stream-token-bytes", maxFrames: 1, wireBytes: 10_485_760 }],
+  [STREAM_OVER_ID, { action: "write-stream-token-bytes", maxFrames: 1, wireBytes: 10_485_761 }],
+]);
+
+/**
+ * A recording may carry any non-empty subset of the live recipes (delta-v3 records one).
+ * Each recipe must still match its fixed action, frame count and wire size.
+ */
+export function validateLiveStreamSubset(recipes) {
+  if (!Array.isArray(recipes)) throw new Error("unsupported stream recipe subset");
+  const live = [];
+  const seen = new Set();
+  for (const recipe of recipes) {
+    if (recipe?.id === SAVED_ID) {
+      if (recipe.transport !== "saved-reference" || recipe.source !== SAVED_SOURCE) {
+        throw new Error("unsupported stream recipe subset");
+      }
+      continue;
+    }
+    const spec = LIVE_SPECS.get(recipe?.id);
+    if (
+      !spec ||
+      seen.has(recipe.id) ||
+      recipe.transport !== "grpc" ||
+      recipe.action !== spec.action ||
+      recipe.maxFrames !== spec.maxFrames ||
+      (spec.wireBytes !== undefined && recipe.wireBytes !== spec.wireBytes)
+    ) {
+      throw new Error("unsupported stream recipe subset");
+    }
+    seen.add(recipe.id);
+    live.push(recipe);
+  }
+  if (live.length === 0) throw new Error("unsupported stream recipe subset");
+  return live;
 }
 
 /** Keep live gRPC sends limited to the fixed terminal and request-byte actions. */
@@ -367,8 +411,13 @@ async function main() {
   const target = process.env.FIRESTORE_STREAM_TARGET;
   const token = process.env.FIRESTORE_STREAM_TOKEN;
   if (!input || !output || !target || !token) throw new Error("stream session inputs are required");
+  requireChildProductionAdmission({
+    production: target === "production",
+    env: process.env,
+    runId: process.env.FIRESTORE_STREAM_RUN_ID,
+  });
   const corpus = JSON.parse(await readFile(input, "utf8"));
-  const { live } = validateStreamRecipes(corpus.streamRecipes);
+  const live = validateLiveStreamSubset(corpus.streamRecipes);
   const options = {
     target,
     projectId: SANDBOX_PROJECT,

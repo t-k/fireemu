@@ -1,10 +1,40 @@
 {
   "kind": "auth-account-comparison-v1",
-  "artifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
+  "artifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+  "execution": {
+    "schemaVersion": 1,
+    "runId": "auth-a12-attested-recompare-20260924T124006Z",
+    "receiptSha256": "b1432c7f38beab191a756fb4d805aff86db459d07f8ad9dd2cc8c7b7fb433b85",
+    "buildReceiptSha256": "45f3aece5f4303cf5ed4ea099872dab0e6e21ac9b8d2dbb5bb466777ad81c976",
+    "artifactSha256": "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+    "commands": [
+      {
+        "argv": ["node", "src/auth-account/run.mjs", "check"],
+        "selector": {
+          "environment": "AUTH_ACCOUNT_PROGRAMS",
+          "state": "unset",
+          "meaning": "all corpus programs"
+        },
+        "rowCount": 631,
+        "fixtureSha256": "253e48959ca7ccdefd42c64bb8371107d7aeca698a969e78bb7974898e84b8b0",
+        "sanitizedExportSha256": "ac7bfb7faf098cf45a590be10151d405d364e9a979ac07232bacdaef466b804b"
+      },
+      {
+        "argv": ["node", "src/auth-credential/run.mjs", "check"],
+        "selector": {
+          "environment": "AUTH_CREDENTIAL_PROGRAMS",
+          "state": "unset",
+          "meaning": "all corpus programs"
+        },
+        "rowCount": 222,
+        "fixtureSha256": "fcffa45131e136404cbf3ff7f9fa40e6f78329ee665e0d27698c81f51772c0dc",
+        "sanitizedExportSha256": "114089e4e0cb660ae8bdd2ac5d3b69c867aa8c164c34a79efc4e2e03301f3e5c"
+      }
+    ]
+  },
   "fixtureSha256": "253e48959ca7ccdefd42c64bb8371107d7aeca698a969e78bb7974898e84b8b0",
   "summary": {
-    "MATCH": 630,
-    "MISMATCH": 1
+    "MATCH": 631
   },
   "rows": [
     {
@@ -829,12 +859,7 @@
     },
     {
       "row": "auth-account/admin/custom-attributes#invalid-json",
-      "status": "MISMATCH",
-      "differences": [
-        "body.error.message",
-        "body.error.errors.0.message"
-      ],
-      "sameErrorCode": true
+      "status": "MATCH"
     },
     {
       "row": "auth-account/admin/custom-attributes#json-array",

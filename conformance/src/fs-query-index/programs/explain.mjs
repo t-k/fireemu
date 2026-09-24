@@ -127,6 +127,30 @@ export const EXPLAIN_PROGRAMS = [
     ],
   },
   {
+    // Which member of an index merge production lists first: the one with fewer matching
+    // entries, or the one on the later field. `a == 1` has 3 entries; `b == 1` gets 6.
+    id: "fs-query-index/explain/merge-order",
+    seed: INDEX_SEED.concat(
+      Array.from({ length: 4 }, (_, i) => [`qx/m${i}`, { a: int(0), b: int(1), c: int(10 + i) }]),
+    ),
+    steps: [
+      ...both(
+        "larger-later-field",
+        indexed({
+          where: and(f("a", "EQUAL", int(1)), f("b", "EQUAL", int(1))),
+          orderBy: [asc("c")],
+        }),
+      ),
+      ...both(
+        "larger-earlier-field",
+        indexed({
+          where: and(f("a", "EQUAL", int(0)), f("b", "EQUAL", int(2))),
+          orderBy: [asc("c")],
+        }),
+      ),
+    ],
+  },
+  {
     id: "fs-query-index/explain/vector",
     seed: VECTOR_SEED,
     steps: [

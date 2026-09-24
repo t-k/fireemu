@@ -47,6 +47,7 @@ export const VECTOR_PROGRAMS = [
       search(
         "distance-field-existing-name",
         nearest("EUCLIDEAN", { distanceResultField: "dist", limit: 11 }),
+        { select: undefined },
       ),
       search("distance-field-nested", nearest("EUCLIDEAN", { distanceResultField: "a.b" })),
       search("euclidean-threshold", nearest("EUCLIDEAN", { distanceThreshold: 1.5, limit: 10 })),

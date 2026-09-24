@@ -276,3 +276,141 @@ test("a program that fails still switches the config back and reads it back", as
     globalThis.fetch = original;
   }
 });
+
+/** A fake sandbox: config switch, empty account list, and a scripted answer per client path. */
+function fakeSandbox(answers = {}) {
+  const state = { passwordRequired: true, sent: [], redirects: [] };
+  const fetch = async (url, init) => {
+    const { pathname } = new URL(url);
+    state.sent.push(`${init.method} ${pathname}`);
+    state.redirects.push(init.redirect);
+    const json = (body, status = 200) => new Response(JSON.stringify(body), { status });
+    if (pathname.endsWith("/config")) {
+      if (init.method === "PATCH") {
+        state.passwordRequired = JSON.parse(init.body).signIn.email.passwordRequired;
+      }
+      return json({
+        signIn: {
+          email: state.passwordRequired
+            ? { enabled: true, passwordRequired: true }
+            : { enabled: true },
+        },
+      });
+    }
+    if (pathname.endsWith(":batchGet")) return json({});
+    for (const [suffix, answer] of Object.entries(answers))
+      if (pathname.endsWith(suffix)) return answer();
+    return json({});
+  };
+  return { state, fetch };
+}
+
+async function withFetch(fake, run) {
+  const original = globalThis.fetch;
+  globalThis.fetch = fake;
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+test("a used-up harness budget still wipes and switches email links back", async () => {
+  const { state, fetch } = fakeSandbox();
+  await withFetch(fetch, async () => {
+    // One config read and one PATCH and one read-back: the budget ends with the apply.
+    const session = createSession(local, { maxHarnessRequests: 3, maxCleanupRequests: 10 });
+    const program = {
+      id: "p",
+      config: { "signIn.email.passwordRequired": false },
+      steps: [{ id: "s", path: "v1/accounts:lookup", auth: "key", body: {} }],
+    };
+    const result = await session.runProgram(program);
+    assert.equal(result.steps.s.status, 200);
+    assert.equal(state.passwordRequired, true);
+    assert.deepEqual(result.config.restored, { "signIn.email.passwordRequired": true });
+  });
+});
+
+test("an Admin link request answered without a link stops the run", async () => {
+  const { state, fetch } = fakeSandbox({
+    ":sendOobCode": () => new Response(JSON.stringify({ kind: "k", email: "x" }), { status: 200 }),
+  });
+  await withFetch(fetch, async () => {
+    const session = createSession(local);
+    const step = (id, extra = {}) => ({
+      ...adminOob({ requestType: "PASSWORD_RESET", email: "EMAIL(a)", returnOobLink: true }),
+      id,
+      ...extra,
+    });
+    await assert.rejects(
+      session.runProgram({ id: "p", steps: [step("first"), step("second")] }),
+      (error) => error.fatal && /without the link/.test(error.message),
+    );
+    assert.equal(state.sent.filter((s) => s.endsWith(":sendOobCode")).length, 1);
+    // An address without an account may answer so; the run goes on.
+    const unknown = {
+      ...adminOob({
+        requestType: "PASSWORD_RESET",
+        email: "EMAIL(unknown-a)",
+        returnOobLink: true,
+      }),
+      id: "unknown",
+      noLinkExpected: true,
+    };
+    const result = await session.runProgram({ id: "q", steps: [unknown] });
+    assert.equal(result.steps.unknown.status, 200);
+  });
+});
+
+test("requests never follow a redirect", async () => {
+  const { state, fetch } = fakeSandbox();
+  await withFetch(fetch, async () => {
+    await createSession(local).runProgram({
+      id: "p",
+      steps: [{ id: "s", path: "v1/accounts:lookup", auth: "key", body: {} }],
+    });
+  });
+  assert.ok(state.redirects.length > 0);
+  assert.ok(
+    state.redirects.every((mode) => mode === "error"),
+    state.redirects.join(","),
+  );
+});
+
+test("unknown addresses never belong to an account and the client never changes an address", () => {
+  const program = (step) => [{ id: "p", steps: [step] }];
+  for (const step of [
+    {
+      id: "a",
+      path: "v1/projects/{project}/accounts",
+      auth: "admin",
+      body: { email: "EMAIL(unknown-1)" },
+    },
+    {
+      id: "b",
+      path: "v1/projects/{project}/accounts:update",
+      auth: "admin",
+      body: { email: "EMAIL(unknown-1)" },
+    },
+    adminOob({
+      requestType: "VERIFY_AND_CHANGE_EMAIL",
+      email: "EMAIL(a)",
+      newEmail: "EMAIL(unknown-1)",
+      returnOobLink: true,
+    }),
+    {
+      id: "c",
+      path: "v1/accounts:signInWithEmailLink",
+      auth: "key",
+      body: { email: "EMAIL(unknown-1)", oobCode: "x" },
+    },
+    { id: "d", path: "v1/accounts:update", auth: "key", body: { idToken: "x", email: "EMAIL(b)" } },
+    {
+      ...adminOob({ requestType: "PASSWORD_RESET", email: "EMAIL(a)", returnOobLink: true }),
+      noLinkExpected: true,
+    },
+  ]) {
+    assert.throws(() => validateActionCorpus(program(step)), Error, JSON.stringify(step));
+  }
+});

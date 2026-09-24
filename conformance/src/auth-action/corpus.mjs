@@ -2,7 +2,9 @@
 // Programs only record answers; they never assert. Each program runs on an empty project (the
 // session wipes before and after) and uses run-unique EMAIL(...)/UID(...) values.
 //
-// Codes come from the Admin sendOobCode with returnOobLink, which sends no mail. A newer code
+// Codes come from the Admin sendOobCode with returnOobLink, which mails no code. Applying an
+// email change may still send the old @example.com address a notice (example.com publishes a
+// null MX, so nothing is delivered). A newer code
 // of one type can retire an older one, so every program generates a code right before it uses
 // it and names each code by the step that generated it. Only the email-link programs switch
 // signIn.email.passwordRequired off, and the session switches it back afterwards.
@@ -147,16 +149,19 @@ const generateAdmin = program("auth-action/generate/admin", [
   resetLink("reset-link-continue-malformed", "a", { continueUrl: "not a url" }),
   resetLink("reset-link-continue-empty", "a", { continueUrl: "" }),
   resetLink("reset-link-in-app", "a", { continueUrl: CONTINUE, canHandleCodeInApp: true }),
-  resetLink("reset-link-unknown", "unknown-a"),
+  { ...resetLink("reset-link-unknown", "unknown-a"), noLinkExpected: true },
   resetLink("reset-link-disabled", "d"),
   oob("reset-link-missing-email", "PASSWORD_RESET"),
-  oob("reset-link-invalid-email", "PASSWORD_RESET", { email: "not-an-email" }),
+  {
+    ...oob("reset-link-invalid-email", "PASSWORD_RESET", { email: "not-an-email" }),
+    noLinkExpected: true,
+  },
   oob("missing-request-type", undefined, { email: "EMAIL(a)" }),
   oob("unknown-request-type", "NOT_A_REQUEST_TYPE", { email: "EMAIL(a)" }),
   oob("unspecified-request-type", "OOB_REQ_TYPE_UNSPECIFIED", { email: "EMAIL(a)" }),
   verifyLink("verify-link", "a"),
   check("verify-link-check", "verify-link"),
-  verifyLink("verify-link-unknown", "unknown-v"),
+  { ...verifyLink("verify-link-unknown", "unknown-v"), noLinkExpected: true },
   verifyLink("verify-link-disabled", "d"),
   oob("verify-link-missing-email", "VERIFY_EMAIL"),
   changeLink("change-link", "a", "a-new"),
@@ -165,7 +170,7 @@ const generateAdmin = program("auth-action/generate/admin", [
   changeLink("change-link-taken", "a", "d"),
   changeLink("change-link-same", "a", "a"),
   changeLink("change-link-invalid-new", "a", "a", { newEmail: "not-an-email" }),
-  changeLink("change-link-unknown", "unknown-c", "c-new"),
+  { ...changeLink("change-link-unknown", "unknown-c", "c-new"), noLinkExpected: true },
   changeLink("change-link-disabled", "d", "d-new"),
   signInLink("sign-in-link-password-required", "a"),
   signIn("sign-in-a", "a"),

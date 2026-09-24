@@ -82,14 +82,18 @@ async function harnessDigest() {
   );
 }
 
-/** Per recording: every step once; the harness gets its own budget for wipes, config and waits. */
+/**
+ * Per recording: every step once; the harness gets its own budget for config and waits, and
+ * wipes and config restores a separate reserve (two wipes of up to 41 requests and one restore
+ * of up to 31 per program, and the final wipe).
+ */
 const ceilings = (programs) => ({
   maxRequests: programs.reduce((total, p) => total + p.steps.length, 0),
   maxHarnessRequests: programs.reduce(
-    (total, p) =>
-      total + 12 + (p.config ? 2 * 31 : 0) + p.steps.filter((s) => s.waitSeconds).length,
+    (total, p) => total + 4 + (p.config ? 32 : 0) + p.steps.filter((s) => s.waitSeconds).length,
     20,
   ),
+  maxCleanupRequests: programs.reduce((total, p) => total + 82 + (p.config ? 31 : 0), 41),
 });
 
 async function assertIgnored(path) {
@@ -228,7 +232,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
     : { version: 1, recordedAgainst: {}, programs: {} };
   fixture.recordedAgainst = {
     target:
-      "production Identity Toolkit and Secure Token REST, Identity Platform sandbox; action codes from the Admin sendOobCode with returnOobLink (no mail)",
+      "production Identity Toolkit and Secure Token REST, Identity Platform sandbox; action codes from the Admin sendOobCode with returnOobLink (no code is mailed; an applied email change may notify the old @example.com address, which has a null MX)",
     project: RECORDED_PROJECT,
     note: "Two recordings per program. Action codes are placeholders; an action link is recorded as its query parameters, with its code recorded as whether it is the answer's oobCode and its API key by presence, not by where its handler lives (scope decision E2). Tokens are recorded as their decoded header shape and claims, with times relative to the token's own iat. Refresh tokens, generated ids, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
     baselineConfig: BASELINE_CONFIG,
@@ -255,6 +259,8 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   );
   const text = `${JSON.stringify(fixture, null, 2)}\n`;
   scanFixture(text, secrets);
+  // A link nested in another link would carry its code and key past describeLink.
+  if (/oobCode=|apiKey=/.test(text)) throw new Error("fixture holds a raw action link");
   await writeFile(FIXTURE, text);
   return diffRecordings(first.results, second.results);
 }

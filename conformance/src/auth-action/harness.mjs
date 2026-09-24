@@ -4,8 +4,10 @@
 //
 // Production is only ever the disposable Identity Platform sandbox. Action codes are obtained
 // through the Admin `accounts:sendOobCode` with `returnOobLink: true`, which returns the code
-// and sends no mail. The client `accounts:sendOobCode` is only ever a PASSWORD_RESET for an
-// address that has no account, which production answers without sending anything.
+// and mails nothing. The client `accounts:sendOobCode` is only ever a PASSWORD_RESET for an
+// address that has no account, which production answers without sending anything. Applying an
+// email change may send the old address a change notice; every address is @example.com, which
+// publishes a null MX (RFC 7505), so nothing is delivered.
 
 import { REQUEST_CAP, SANDBOX_PROJECT, TEST_PHONES } from "../auth-account/harness.mjs";
 import { normalizeCredentialResponse } from "../auth-credential/tokens.mjs";
@@ -269,6 +271,26 @@ export function validateActionCorpus(programs) {
         throw new Error(`${step.id}: unknown api`);
       if (step.waitSeconds && index !== programs.length - 1)
         throw new Error(`${program.id}#${step.id}: only the last program may wait`);
+      if (step.noLinkExpected) {
+        // Only an address that cannot receive anything may come back without a link.
+        const email = String(step.body?.email ?? "");
+        if (
+          step.path !== "v1/projects/{project}/accounts:sendOobCode" ||
+          (!/^EMAIL\(unknown[a-z0-9-]*\)$/.test(email) && /@|^EMAIL/.test(email))
+        )
+          throw new Error(`${step.id}: only an unknown address may expect no link`);
+      }
+      for (const key of ["email", "newEmail"]) {
+        const creates =
+          step.path === "v1/projects/{project}/accounts" ||
+          step.path.endsWith("accounts:update") ||
+          step.path.endsWith("accounts:signInWithEmailLink") ||
+          (key === "newEmail" && step.path.endsWith("accounts:sendOobCode"));
+        if (creates && String(step.body?.[key] ?? "").startsWith("EMAIL(unknown"))
+          throw new Error(`${step.id}: an unknown-* address must never belong to an account`);
+      }
+      if (step.path === "v1/accounts:update" && step.body?.email !== undefined)
+        throw new Error(`${step.id}: the client update never changes the address`);
       if (step.path === "v1/projects/{project}/accounts:sendOobCode") {
         if (step.auth !== "admin" || step.body?.returnOobLink !== true)
           throw new Error(`${step.id}: the Admin sendOobCode asks for the link back`);

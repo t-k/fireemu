@@ -1173,7 +1173,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "the strict profile accepts only signed custom tokens verified against auth.customTokenSigners, answers password and custom-token sign-in without returnSecureToken with production's legacy Identity Toolkit token (honoured where production was observed to honour it: account lookup, update and delete, a verification mail, phone linking, a sign-up upgrade and MFA enrollment; refused by email-link and identity-provider linking and session-cookie creation), answers MFA enrollment with production's v2 error shape and TOTP-disabled refusal, and applies production's custom-token claim rules; the emulator profile keeps the official emulator's unsigned and JSON fake tokens and secure tokens",
+              "behaviour": "the strict profile accepts only signed custom tokens verified against auth.customTokenSigners, answers password and custom-token sign-in without returnSecureToken with production's legacy Identity Toolkit token (honoured where production was observed to honour it: account lookup, update and delete, a verification mail and an email change, phone linking, email-link linking, a sign-up upgrade and MFA enrollment; refused by identity-provider linking and session-cookie creation), answers MFA enrollment with production's v2 error shape and TOTP-disabled refusal, and applies production's custom-token claim rules; the emulator profile keeps the official emulator's unsigned and JSON fake tokens and secure tokens",
               "precision": "documented-divergence"
             },
             {
@@ -1185,7 +1185,7 @@
               "precision": "documented-divergence"
             },
             {
-              "behaviour": "the strict profile applies production's action-code rules (AUTH-ACTION sandbox recording 2026-09-24): a newer reset, change or sign-in code retires the older one, a deleted account's codes are void, a reset or verification finds its account by the code's address, a disabled account refuses a code, an update with an ID token ignores oobCode, and production's refusal codes; the emulator profile keeps the official emulator's codes and answers",
+              "behaviour": "the strict profile applies production's action-code rules (AUTH-ACTION sandbox recording 2026-09-24): a newer reset, change or sign-in code retires the older one, a deleted account's codes are void, a reset or verification finds its account by the code's address, a disabled account refuses a code (a refused reset spends it), an applied change voids the replaced address's verification codes and records it as initialEmail, an update with an ID token ignores oobCode, a reset code expires after an hour as EXPIRED_OOB_CODE while the other kinds outlive it, and production's refusal codes; the emulator profile keeps the official emulator's codes and answers and its one-hour local code lifetime",
               "precision": "documented-divergence"
             }
           ],

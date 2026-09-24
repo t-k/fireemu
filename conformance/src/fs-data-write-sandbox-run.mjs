@@ -22,7 +22,7 @@ import {
   validateSandboxCorpus,
 } from "./fs-data-write-sandbox.mjs";
 import { validateStreamRecipes } from "./firestore-probe/stream-session.mjs";
-import { legacyManagedClearNames, managedClearScope } from "./firestore-probe/session.mjs";
+import { legacyManagedClearNames, managedClearScope } from "./firestore-probe/sandbox-session.mjs";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -506,7 +506,7 @@ async function productionRecording({
   try {
     await runNode(
       "production REST",
-      "firestore-probe/session.mjs",
+      "firestore-probe/sandbox-session.mjs",
       productionRestEnvironment({
         input: restIn,
         output: restOut,
@@ -692,7 +692,7 @@ async function recoverLegacy() {
       try {
         await runNode(
           "legacy array recovery",
-          "firestore-probe/session.mjs",
+          "firestore-probe/sandbox-session.mjs",
           legacyRecoveryEnvironment({ token, meta, journal, names }),
           1_200_000,
         );
@@ -737,7 +737,7 @@ async function localChild() {
   const streamOut = join(runDir, "stream-results.json");
   await writeFile(restIn, JSON.stringify(corpus.restPrograms));
   await writeFile(corpusIn, JSON.stringify(corpus));
-  await runNode("local REST", "firestore-probe/session.mjs", {
+  await runNode("local REST", "firestore-probe/sandbox-session.mjs", {
     FIRESTORE_PROBE_TARGET: "local",
     FIRESTORE_PROBE_HOST: `${host}:${port}`,
     FIRESTORE_PROBE_SCHEME: "http",

@@ -715,6 +715,7 @@ function isTransactionTooBigRefusal(status, body) {
 
 async function writeManagedRecoveryJournal(status, extra = {}) {
   if (!MANAGED_CLEAR_JOURNAL) throw new Error("managed recovery journal is required");
+  const recovery = managedClearState?.recoveryJournal;
   const entry = {
     schemaVersion: 1,
     mode: "recover-legacy",
@@ -722,9 +723,43 @@ async function writeManagedRecoveryJournal(status, extra = {}) {
     project: PROJECT,
     database: "(default)",
     names: LEGACY_SHRINK_NAMES,
+    ...(recovery ? { deletedNames: recovery.deletedNames } : {}),
+    ...(recovery?.deleteIntent ? { deleteIntent: recovery.deleteIntent } : {}),
     ...extra,
   };
   await writeFile(MANAGED_CLEAR_JOURNAL, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+}
+
+async function readManagedRecoveryJournal() {
+  let journal;
+  try {
+    journal = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return { deletedNames: [], deleteIntent: null };
+    throw new Error("legacy recovery journal is unreadable", { cause: error });
+  }
+  const deletedNames = journal?.deletedNames ?? [];
+  const deleteIntent = journal?.deleteIntent ?? null;
+  if (
+    journal?.schemaVersion !== 1 ||
+    journal.mode !== "recover-legacy" ||
+    journal.project !== PROJECT ||
+    journal.database !== "(default)" ||
+    JSON.stringify(journal.names) !== JSON.stringify(LEGACY_SHRINK_NAMES) ||
+    !Array.isArray(deletedNames) ||
+    deletedNames.some((name) => !LEGACY_SHRINK_NAMES.includes(name)) ||
+    new Set(deletedNames).size !== deletedNames.length ||
+    (deleteIntent !== null &&
+      (deleteIntent.action !== "commit-delete" ||
+        !LEGACY_SHRINK_NAMES.includes(deleteIntent.name) ||
+        typeof deleteIntent.updateTime !== "string" ||
+        !deleteIntent.updateTime ||
+        !Array.isArray(deleteIntent.priorDeletedNames) ||
+        JSON.stringify(deleteIntent.priorDeletedNames) !== JSON.stringify(deletedNames)))
+  ) {
+    throw new Error("legacy recovery journal does not match the frozen deletion scope");
+  }
+  return { deletedNames, deleteIntent };
 }
 
 async function preflightLegacyRecoveryScope(base) {
@@ -797,18 +832,34 @@ async function preflightLegacyRecoveryScope(base) {
 async function recoverLegacyManagedClear() {
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
   managedClearBlocked = true;
+  managedClearState.recoveryJournal = await readManagedRecoveryJournal();
   await writeManagedRecoveryJournal("starting");
   await preflightLegacyRecoveryScope(base);
+  const { deletedNames, deleteIntent } = managedClearState.recoveryJournal;
+  if (deletedNames.some((name) => managedClearState.preflightUpdateTimes.has(name))) {
+    throw new Error("legacy recovery found a previously deleted name present again");
+  }
+  if (deleteIntent && !managedClearState.preflightUpdateTimes.has(deleteIntent.name)) {
+    managedClearState.recoveryJournal.deletedNames.push(deleteIntent.name);
+    managedClearState.recoveryJournal.deleteIntent = null;
+    await writeManagedRecoveryJournal("deleting");
+  }
   await writeManagedRecoveryJournal("preflight-complete", {
     presentNames: [...managedClearState.preflightUpdateTimes.keys()],
     absentNames: LEGACY_SHRINK_NAMES.filter(
       (name) => !managedClearState.preflightUpdateTimes.has(name),
     ),
   });
-  const deletedNames = [];
   for (const name of LEGACY_SHRINK_NAMES) {
     if (!managedClearState.preflightUpdateTimes.has(name)) continue;
     const updateTime = await shrinkBoundaryDocument(name);
+    managedClearState.recoveryJournal.deleteIntent = {
+      action: "commit-delete",
+      name,
+      priorDeletedNames: [...managedClearState.recoveryJournal.deletedNames],
+      updateTime,
+    };
+    await writeManagedRecoveryJournal("deleting");
     const deleted = await managedShrinkRequest("exact legacy document delete", `${base}:commit`, {
       method: "POST",
       headers: authorized({ "content-type": "application/json" }),
@@ -833,26 +884,25 @@ async function recoverLegacyManagedClear() {
     ) {
       throw new Error("legacy recovery exact delete acknowledgement is uncertain");
     }
-    if (!Object.hasOwn(acknowledgement.writeResults[0], "updateTime")) {
-      const readback = await managedShrinkRequest(
-        "legacy recovery exact delete absence",
-        `${base}:batchGet`,
-        {
-          method: "POST",
-          headers: authorized({ "content-type": "application/json" }),
-          body: JSON.stringify({ documents: [name] }),
-          signal: timeoutSignal(),
-        },
-      );
-      if (!readback.ok || !validateManagedClearReadback([name], await readback.json())) {
-        throw new Error("legacy recovery exact delete typed absence was not proved");
-      }
+    const readback = await managedShrinkRequest(
+      "legacy recovery exact delete absence",
+      `${base}:batchGet`,
+      {
+        method: "POST",
+        headers: authorized({ "content-type": "application/json" }),
+        body: JSON.stringify({ documents: [name] }),
+        signal: timeoutSignal(),
+      },
+    );
+    if (!readback.ok || !validateManagedClearReadback([name], await readback.json())) {
+      throw new Error("legacy recovery exact delete typed absence was not proved");
     }
-    deletedNames.push(name);
-    await writeManagedRecoveryJournal("deleting", { deletedNames });
+    managedClearState.recoveryJournal.deletedNames.push(name);
+    managedClearState.recoveryJournal.deleteIntent = null;
+    await writeManagedRecoveryJournal("deleting");
   }
   await verifyManagedShrinkScopeAbsent(base);
-  await writeManagedRecoveryJournal("complete", { deletedNames });
+  await writeManagedRecoveryJournal("complete");
   managedClearBlocked = false;
 }
 

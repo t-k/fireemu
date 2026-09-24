@@ -35,6 +35,7 @@ const legacyNames = resourceNames([
 async function observeCollector({
   failureMode,
   initialJournalStatus,
+  initialJournal,
   scopeNames = names,
   extraNames = [],
   visibleNames = [scopeNames[0]],
@@ -46,7 +47,7 @@ async function observeCollector({
   childCollectionNames = [],
   extraChildPageCollections = [],
   recoveryOnly = false,
-  deleteAckShape = "update-time",
+  deleteAckShape = "production",
   deleteReadbackMode,
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "fireemu-array-shrink-"));
@@ -60,9 +61,11 @@ async function observeCollector({
       Array.from({ length: programCount }, (_, index) => ({ id: `empty-${index}`, steps: [] })),
     ),
   );
-  if (initialJournalStatus)
+  if (initialJournal) await writeFile(journal, JSON.stringify(initialJournal));
+  else if (initialJournalStatus)
     await writeFile(journal, JSON.stringify({ status: initialJournalStatus }));
   const requests = [];
+  const journalAtDeleteRequests = [];
   const legacyLengths = [12_116, 12_121, 12_123, 7_179, 7_183, 7_184];
   const records = new Map(
     [...scopeNames, ...extraNames].map((name, index) => {
@@ -101,6 +104,12 @@ async function observeCollector({
       request.on("end", () => resolve(value));
     });
     requests.push({ method: request.method, pathname, body });
+    if (recoveryOnly && pathname.endsWith("/documents:commit")) {
+      const writes = JSON.parse(body).writes;
+      if (writes.some((write) => write.delete)) {
+        journalAtDeleteRequests.push(JSON.parse(await readFile(journal, "utf8")));
+      }
+    }
     const send = (status, value) => {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(value));
@@ -235,6 +244,10 @@ async function observeCollector({
         });
       } else {
         records.get(writes[0].delete).deleted = true;
+        if (deleteAckShape === "uncertain") {
+          send(503, { error: { status: "UNAVAILABLE" } });
+          return;
+        }
         send(
           200,
           deleteAckShape === "malformed"
@@ -245,7 +258,9 @@ async function observeCollector({
                 ? {}
                 : deleteAckShape === "without-update-time"
                   ? { writeResults: [{}] }
-                  : { writeResults: [{ updateTime: records.get(writes[0].delete).updateTime }] },
+                  : deleteAckShape === "update-time"
+                    ? { writeResults: [{ updateTime: records.get(writes[0].delete).updateTime }] }
+                    : { writeResults: [{}] },
         );
       }
     } else if (pathname.endsWith("/documents:runQuery")) {
@@ -361,7 +376,7 @@ async function observeCollector({
   const snapshot = new Map(
     [...records].map(([name, record]) => [name, { ...record, values: [...record.values] }]),
   );
-  return { directory, output, meta, journal, requests, failure, snapshot };
+  return { directory, output, meta, journal, requests, journalAtDeleteRequests, failure, snapshot };
 }
 
 test("collector array-removes bounded chunks with updateTime CAS before exact deletion", async () => {
@@ -491,7 +506,6 @@ test("legacy recovery proves exact absence when a delete result omits updateTime
     visibleNames: legacyNames.slice(1),
     arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
     recoveryOnly: true,
-    deleteAckShape: "without-update-time",
   });
   try {
     assert.equal(result.failure, undefined);
@@ -511,6 +525,85 @@ test("legacy recovery proves exact absence when a delete result omits updateTime
     const journal = JSON.parse(await readFile(result.journal, "utf8"));
     assert.equal(journal.status, "complete");
     assert.deepEqual(journal.deletedNames, legacyNames.slice(1));
+    assert.equal(result.journalAtDeleteRequests.length, 5);
+    const intents = result.journalAtDeleteRequests.map((entry) => entry.deleteIntent);
+    assert.deepEqual(
+      intents.map(({ action, name, priorDeletedNames }) => ({
+        action,
+        name,
+        priorDeletedNames,
+      })),
+      legacyNames.slice(1).map((name, index) => ({
+        action: "commit-delete",
+        name,
+        priorDeletedNames: legacyNames.slice(1, index + 1),
+      })),
+    );
+    assert.ok(intents.every((intent) => typeof intent.updateTime === "string"));
+    assert.deepEqual(
+      intents.map((intent) => intent.updateTime),
+      deletes.map((write) => write.currentDocument.updateTime),
+    );
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("uncertain legacy delete acknowledgement leaves the write-ahead intent", async () => {
+  const result = await observeCollector({
+    scopeNames: legacyNames,
+    visibleNames: [legacyNames[0]],
+    arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
+    recoveryOnly: true,
+    deleteAckShape: "uncertain",
+  });
+  try {
+    assert.ok(result.failure);
+    assert.equal(result.journalAtDeleteRequests.length, 1);
+    const journal = JSON.parse(await readFile(result.journal, "utf8"));
+    assert.deepEqual(journal.deleteIntent, {
+      action: "commit-delete",
+      name: legacyNames[0],
+      priorDeletedNames: [],
+      updateTime: "t12",
+    });
+    assert.deepEqual(journal.deletedNames, []);
+    assert.equal(journal.status, "deleting");
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery resumes a pending intent when typed preflight proves the target absent", async () => {
+  const target = legacyNames[0];
+  const result = await observeCollector({
+    scopeNames: legacyNames,
+    visibleNames: legacyNames.slice(1),
+    arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
+    recoveryOnly: true,
+    initialJournal: {
+      schemaVersion: 1,
+      mode: "recover-legacy",
+      status: "deleting",
+      project: "fireemu-oracle-sbx",
+      database: "(default)",
+      names: legacyNames,
+      deletedNames: [],
+      deleteIntent: {
+        action: "commit-delete",
+        name: target,
+        priorDeletedNames: [],
+        updateTime: "t12",
+      },
+    },
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    assert.equal(result.journalAtDeleteRequests.length, 5);
+    const journal = JSON.parse(await readFile(result.journal, "utf8"));
+    assert.equal(journal.status, "complete");
+    assert.deepEqual(journal.deletedNames, legacyNames);
+    assert.equal(journal.deleteIntent, undefined);
   } finally {
     await rm(result.directory, { recursive: true, force: true });
   }
@@ -541,10 +634,10 @@ test("legacy recovery stops on malformed, missing, or multiple delete results", 
           ).length,
           0,
         );
-        assert.equal(
-          JSON.parse(await readFile(result.journal, "utf8")).status,
-          "preflight-complete",
-        );
+        const journal = JSON.parse(await readFile(result.journal, "utf8"));
+        assert.equal(journal.status, "deleting");
+        assert.equal(journal.deleteIntent.name, legacyNames[0]);
+        assert.deepEqual(journal.deletedNames, []);
       } finally {
         await rm(result.directory, { recursive: true, force: true });
       }
@@ -560,7 +653,6 @@ test("legacy recovery stops when delete acknowledgement readback is not exact ab
         visibleNames: [legacyNames[0]],
         arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
         recoveryOnly: true,
-        deleteAckShape: "without-update-time",
         deleteReadbackMode,
       });
       try {
@@ -574,10 +666,7 @@ test("legacy recovery stops when delete acknowledgement readback is not exact ab
           ).length,
           1,
         );
-        assert.equal(
-          JSON.parse(await readFile(result.journal, "utf8")).status,
-          "preflight-complete",
-        );
+        assert.equal(JSON.parse(await readFile(result.journal, "utf8")).status, "deleting");
       } finally {
         await rm(result.directory, { recursive: true, force: true });
       }

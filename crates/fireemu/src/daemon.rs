@@ -180,6 +180,28 @@ fn auth_project_config(cfg: &RuntimeConfig) -> ProjectAuthConfig {
     }
 }
 
+/// The default project's sign-in providers: fireemu's defaults with `auth.signIn`'s members.
+fn auth_sign_in_config(cfg: &RuntimeConfig) -> fireemu_core_auth::store::SignInConfig {
+    let settings = &cfg.auth_sign_in;
+    let mut config = fireemu_core_auth::store::SignInConfig::default();
+    if let Some(value) = settings.email_enabled {
+        config.email_enabled = value;
+    }
+    if let Some(value) = settings.password_required {
+        config.password_required = value;
+    }
+    if let Some(value) = settings.anonymous_enabled {
+        config.anonymous_enabled = value;
+    }
+    if let Some(value) = settings.phone_enabled {
+        config.phone_enabled = value;
+    }
+    if let Some(numbers) = &settings.test_phone_numbers {
+        config.test_phone_numbers.clone_from(numbers);
+    }
+    config
+}
+
 fn auth_namespace_config_patch(
     config: crate::config::AuthNamespaceConfig,
 ) -> AuthNamespaceConfigPatch {
@@ -1397,6 +1419,9 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         if let Ok(mut store) = auth_store.lock() {
             let config = auth_project_config(&cfg);
             store.set_config(config);
+            store
+                .set_sign_in_config(auth_sign_in_config(&cfg))
+                .map_err(|error| format!("auth.signIn: {error:?}"))?;
             if let Some(policy) = &cfg.auth_password_policy {
                 store.set_password_policy(policy.to_auth_policy());
             }
@@ -1658,9 +1683,9 @@ mod tests {
 
     use super::{
         apply_auth_config_overrides, apply_auth_password_policy_overrides, auth_project_config,
-        auth_signup_quota_config, blocking_auth_selection, close_functions_source_admission,
-        function_log_input, reapply_explicit_auth_config, reapply_explicit_auth_password_policies,
-        reapply_explicit_auth_quota,
+        auth_sign_in_config, auth_signup_quota_config, blocking_auth_selection,
+        close_functions_source_admission, function_log_input, reapply_explicit_auth_config,
+        reapply_explicit_auth_password_policies, reapply_explicit_auth_quota,
     };
 
     #[test]
@@ -1686,6 +1711,34 @@ mod tests {
                 disabled_user_signup: true,
                 disabled_user_deletion: true,
             }
+        );
+    }
+
+    #[test]
+    fn auth_sign_in_config_applies_only_the_configured_providers() {
+        let cfg = crate::config::RuntimeConfig::from_json(&json!({
+            "schemaVersion": 1,
+            "auth": {"signIn": {
+                "anonymous": {"enabled": false},
+                "phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}},
+            }},
+        }))
+        .expect("valid Auth settings");
+        let config = auth_sign_in_config(&cfg);
+        assert!(config.email_enabled && !config.password_required && config.phone_enabled);
+        assert!(!config.anonymous_enabled);
+        assert_eq!(
+            config
+                .test_phone_numbers
+                .get("+16505550101")
+                .map(String::as_str),
+            Some("123456")
+        );
+        let defaults = crate::config::RuntimeConfig::from_json(&json!({"schemaVersion": 1}))
+            .expect("defaults");
+        assert_eq!(
+            auth_sign_in_config(&defaults),
+            fireemu_core_auth::store::SignInConfig::default()
         );
     }
 

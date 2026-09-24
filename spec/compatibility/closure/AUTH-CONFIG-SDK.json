@@ -83,6 +83,12 @@
       "decision": "An omitted or empty updateMask is not observed on the shared sandbox, and the harness refuses to send one: production's reading of either is undocumented, and if it replaced every settable member the harness could not write back the members other lanes own (mfa, multiTenant, blockingFunctions). fireemu keeps its present reading (an empty mask changes nothing; an omitted mask is inferred from the members present) until either is observed on a project no other lane uses. Recorded as an unobserved edge.",
       "decidedBy": "lane (sandbox safety; pre-send review 1, 2026-09-25)",
       "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K14",
+      "decision": "The sign-in providers (email/password, passwordRequired, anonymous, phone and test numbers) start enabled in both profiles, although a new production project enables none: a real project always enables what it uses, and a strict default of none would stop every first sign-up. The difference from production's initial configuration is known and recorded here; the startup key auth.signIn carries a production project's providers over.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
     }
   ],
   "conditions": [

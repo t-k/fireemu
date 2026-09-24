@@ -229,7 +229,7 @@ const PROTECTION: &[(&str, Option<bool>)] = &[
     ("DELETE_PROTECTION_ENABLED", Some(true)),
 ];
 
-fn missing_database(project: &str, database: &str) -> RestResponse {
+pub(crate) fn missing_database(project: &str, database: &str) -> RestResponse {
     error(
         tonic::Code::NotFound,
         &format!("Project '{project}' or database '{database}' does not exist."),
@@ -251,10 +251,11 @@ fn refusal_response(refusal: &CatalogRefusal, project: &str, database: &str) -> 
             ),
             None,
         ),
-        CatalogRefusal::NotFound { deleted: true } => {
+        // A patch or delete of a database that never existed is answered like one that was
+        // deleted; only a read names the project.
+        CatalogRefusal::NotFound { .. } => {
             error(tonic::Code::NotFound, "Requested database was not found.", None)
         }
-        CatalogRefusal::NotFound { deleted: false } => missing_database(project, database),
         CatalogRefusal::Protected => error(
             tonic::Code::FailedPrecondition,
             "Cannot delete the database because delete protection state is set to DELETE_PROTECTION_ENABLED.",
@@ -678,10 +679,18 @@ fn patch_database(
                     None,
                 )
             }
-            other => {
+            "type" => {}
+            "databaseEdition" | "database_edition" => {
                 return error(
                     tonic::Code::InvalidArgument,
-                    &format!("Updating field '{other}' is not supported."),
+                    "Changing the edition of a database is not supported.",
+                    None,
+                )
+            }
+            _ => {
+                return error(
+                    tonic::Code::InvalidArgument,
+                    "Invalid updateMask for database proto.",
                     None,
                 )
             }
@@ -707,6 +716,16 @@ fn patch_database(
         Ok(v) => v.flatten(),
         Err(response) => return response,
     };
+    let database_type = match parse_enum(
+        body,
+        "type",
+        "database.type",
+        "Database.DatabaseType",
+        TYPES,
+    ) {
+        Ok(v) => v.flatten(),
+        Err(response) => return response,
+    };
     let masked =
         |names: [&str; 2]| mask.is_empty() || mask.iter().any(|p| names.contains(&p.as_str()));
     let now = state.local.admin_now();
@@ -724,6 +743,12 @@ fn patch_database(
             if masked(["deleteProtectionState", "delete_protection_state"]) {
                 if let Some(protected) = protection {
                     record.delete_protection = protected;
+                }
+            }
+            // Production switches an empty Native database to Datastore mode (2026-09-24).
+            if masked(["type", "type"]) {
+                if let Some(database_type) = database_type {
+                    record.database_type = database_type;
                 }
             }
         },
@@ -764,7 +789,7 @@ fn delete_database(
         if admin.get(project, database, unprompted).is_some() {
             return error(
                 tonic::Code::Aborted,
-                "The database etag does not match the current etag.",
+                "There are concurrent database changes, please try again.",
                 None,
             );
         }

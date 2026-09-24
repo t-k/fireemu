@@ -99,6 +99,13 @@ impl OperationStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Whether any operation of `project`/`database` is kept (a deleted database's are).
+    #[must_use]
+    pub fn has_database(&self, project: &str, database: &str) -> bool {
+        self.lock()
+            .contains_key(&(project.to_owned(), database.to_owned()))
+    }
+
     /// Records an operation of `kind`, rendering its answers from `metadata` and `response`.
     pub fn record(
         &self,
@@ -445,6 +452,11 @@ pub(crate) fn route(
     };
     match (method, rest, action) {
         ("GET", [], None) => {
+            if !super::rest::database_exists(state, project, database)
+                && !store.has_database(project, database)
+            {
+                return super::rest::missing_database(project, database);
+            }
             let filter = match parse_filter(params) {
                 Ok(filter) => filter,
                 Err(response) => return response,

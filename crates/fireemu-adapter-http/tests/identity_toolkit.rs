@@ -1823,11 +1823,12 @@ fn strict_refuses_unsigned_custom_tokens_without_configured_signers() {
     }
 }
 
-/// A legacy token opens only the account routes production was observed to honour it on
-/// (lookup, update, delete); sending a verification mail, upgrading through sign-up or managing
-/// MFA enrollments refuses it.
+/// Production honours a legacy token on account lookup, update and delete, a verification
+/// mail, phone linking, a sign-up upgrade and MFA enrollment (sandbox recording 2026-09-24,
+/// id-token/without-return-secure-token). Email-link and identity-provider linking, not yet observed, keep
+/// refusing it (they verify their own credential first, so no request isolates that here).
 #[test]
-fn legacy_tokens_are_honoured_only_by_account_lookup_update_and_delete() {
+fn legacy_tokens_are_honoured_where_production_honours_them() {
     let s = strict_state_with_signer();
     let (status, _) = post(
         &s,
@@ -1842,48 +1843,67 @@ fn legacy_tokens_are_honoured_only_by_account_lookup_update_and_delete() {
     );
     assert_eq!(status, 200, "{legacy}");
     let token = legacy["idToken"].clone();
-    let (status, _) = post(
-        &s,
-        &format!("{V1}/accounts:lookup"),
-        &json!({"idToken": token}),
+    let code = |(status, body): (u16, Value)| {
+        (
+            status,
+            body["error"]["message"].as_str().unwrap_or("").to_owned(),
+        )
+    };
+    let v2 = "/identitytoolkit.googleapis.com/v2";
+    assert_eq!(
+        code(post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": token})
+        )),
+        (200, String::new())
     );
-    assert_eq!(status, 200);
-    for (path, body) in [
-        (
-            "accounts:sendOobCode".to_owned(),
-            json!({"idToken": token, "requestType": "VERIFY_EMAIL"}),
-        ),
-        (
-            "accounts:signUp".to_owned(),
-            json!({"idToken": token, "email": "upgraded@example.com", "password": "hunter22"}),
-        ),
-        (
-            "accounts/mfaEnrollment:start".to_owned(),
-            json!({"idToken": token, "totpEnrollmentInfo": {}}),
-        ),
-        (
-            "accounts/mfaEnrollment:withdraw".to_owned(),
-            json!({"idToken": token, "mfaEnrollmentId": "unknown"}),
-        ),
-    ] {
-        let url = if path.starts_with("accounts/") {
-            format!("/identitytoolkit.googleapis.com/v2/{path}")
-        } else {
-            format!("{V1}/{path}")
-        };
-        let (status, refused) = post(&s, &url, &body);
-        assert_eq!(status, 400, "{path}: {refused}");
-        assert_eq!(
-            refused["error"]["message"], "INVALID_ID_TOKEN",
-            "{path}: {refused}"
-        );
-    }
-    let (status, _) = post(
-        &s,
-        &format!("{V1}/accounts:delete"),
-        &json!({"idToken": token}),
+    assert_eq!(
+        code(post(
+            &s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"idToken": token, "requestType": "VERIFY_EMAIL"}),
+        )),
+        (200, String::new())
     );
-    assert_eq!(status, 200);
+    let (status, started) = post(
+        &s,
+        &format!("{v2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(
+        (status, started.clone()),
+        (
+            400,
+            json!({"error": {"code": 400, "message": "OPERATION_NOT_ALLOWED : TOTP based MFA not enabled.", "status": "INVALID_ARGUMENT"}})
+        )
+    );
+    let (status, withdrawn) = post(
+        &s,
+        &format!("{v2}/accounts/mfaEnrollment:withdraw"),
+        &json!({"idToken": token, "mfaEnrollmentId": "unknown"}),
+    );
+    assert_eq!(
+        (status, withdrawn),
+        (
+            400,
+            json!({"error": {"code": 400, "message": "MFA_ENROLLMENT_NOT_FOUND", "status": "INVALID_ARGUMENT"}})
+        )
+    );
+    // A sign-up upgrade with a legacy token of a custom account adds the address.
+    let (status, custom) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": trusted_custom_token("legacy-upgrade", &json!({}), 1_788_004_860)}),
+    );
+    assert_eq!(status, 200, "{custom}");
+    let (status, upgraded) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"idToken": custom["idToken"], "email": "upgraded@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{upgraded}");
+    assert_eq!(upgraded["email"], "upgraded@example.com");
 }
 
 /// `validDuration` follows the official emulator's `Number(v) || two weeks` in the emulator
@@ -10781,6 +10801,45 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
         &format!("{PROJECT_CONFIG}?updateMask={mask}"),
         body,
     )
+}
+
+/// Linking a phone number to a signed-in account answers with a session whose provider is the
+/// phone sign-in (sandbox recording 2026-09-24,
+/// id-token/without-return-secure-token#phone-link-with-legacy-token).
+#[test]
+fn a_phone_link_answers_with_a_phone_session() {
+    let s = state();
+    let (status, config) = patch_sign_in(
+        &s,
+        "signIn.email.enabled,signIn.phoneNumber.enabled,signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {
+            "email": {"enabled": true},
+            "phoneNumber": {"enabled": true, "testPhoneNumbers": {"+16505550105": "123456"}},
+        }}),
+    );
+    assert_eq!(status, 200, "{config}");
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "phone-link@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+16505550105", "recaptchaToken": "x"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, linked) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"idToken": account["idToken"], "sessionInfo": sent["sessionInfo"], "code": "123456"}),
+    );
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(
+        token_parts(&linked["idToken"]).1["firebase"]["sign_in_provider"],
+        "phone"
+    );
 }
 
 /// The Admin config sets the sign-in providers and test phone numbers the sandbox baseline

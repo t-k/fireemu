@@ -1176,6 +1176,15 @@ fn verify(store: &AuthStore, body: &Value, at: LogicalInstant) -> Result<LocalId
     verify_session(store, body, at).map(|s| s.uid)
 }
 
+/// [`verify`] on a route production was observed to honour the legacy token on.
+fn verify_honouring_legacy(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> Result<LocalId, JsonResponse> {
+    verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured).map(|s| s.uid)
+}
+
 /// The session an `idToken` proves: the user and the provider it signed in with (the
 /// official emulator reads `firebase.sign_in_provider` back from the token for the routes
 /// whose behaviour depends on the first factor).
@@ -1212,8 +1221,9 @@ fn verify_session_with_error(
 }
 
 /// Whether a route honours the legacy Identity Toolkit token. Production was observed to honour
-/// it on account lookup, update and delete (sandbox recording 2026-09-24); every other route
-/// refuses it until observed.
+/// it on account lookup, update and delete, a verification mail, phone linking, a sign-up
+/// upgrade and MFA enrollment (sandbox recordings 2026-09-24); email-link and identity-provider linking and
+/// session-cookie creation refuse it (the last observed, the others until observed).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LegacyTokens {
     Honoured,
@@ -3478,11 +3488,23 @@ fn dispatch(
             }),
         },
         Handler::PasswordPolicy => password_policy_json(store.password_policy()),
-        Handler::MfaEnrollmentStart => {
-            mfa_enrollment_start(store, body, at, options.totp_extension_enabled)
-        }
+        // Strict: production's answer when TOTP is not enabled, and the v2 API's error shape
+        // (sandbox recording 2026-09-24); the emulator keeps the official emulator's.
+        Handler::MfaEnrollmentStart => v2_error_shape(
+            mfa_enrollment_start(
+                store,
+                body,
+                at,
+                options.totp_extension_enabled,
+                !options.stateless_refresh_tokens,
+            ),
+            !options.stateless_refresh_tokens,
+        ),
         Handler::MfaEnrollmentFinalize => mfa_enrollment_finalize(store, body, at),
-        Handler::MfaEnrollmentWithdraw => mfa_enrollment_withdraw(store, body, at),
+        Handler::MfaEnrollmentWithdraw => v2_error_shape(
+            mfa_enrollment_withdraw(store, body, at),
+            !options.stateless_refresh_tokens,
+        ),
         Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
         Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
         Handler::Token => {
@@ -6767,7 +6789,7 @@ fn sign_up(
         NewUser::anonymous()
     };
     let (uid, created_new) = if has_session {
-        let uid = match verify(store, body, at) {
+        let uid = match verify_honouring_legacy(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
         };
@@ -7066,6 +7088,16 @@ fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
         && exp.saturating_sub(iat) <= 3600
         && iat <= now_secs.saturating_add(leeway)
         && now_secs < exp.saturating_add(leeway)
+}
+
+/// The v2 API's refusal: a gRPC status name and no `errors` list (sandbox recording
+/// 2026-09-24, mfaEnrollment:start and :withdraw). Applied in the strict profile only.
+fn v2_error_shape(response: JsonResponse, strict: bool) -> JsonResponse {
+    if strict && response.status == 400 {
+        secure_token_error_shape(response)
+    } else {
+        response
+    }
 }
 
 /// Production's custom-token answer names the account only inside the token (sandbox
@@ -9416,7 +9448,7 @@ fn verify_enrollment_session(
     if matches!(body.get("idToken"), None | Some(Value::Null)) {
         return Err(error(400, "INVALID_ID_TOKEN"));
     }
-    verify_session(store, body, at)
+    verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured)
 }
 
 fn mfa_enrollment_start(
@@ -9424,6 +9456,7 @@ fn mfa_enrollment_start(
     body: &Value,
     at: LogicalInstant,
     totp_extension_enabled: bool,
+    strict: bool,
 ) -> JsonResponse {
     let session = match verify_enrollment_session(store, body, at) {
         Ok(s) => s,
@@ -9457,7 +9490,14 @@ fn mfa_enrollment_start(
         );
     }
     if !totp_extension_enabled {
-        return error(400, "INVALID_ARGUMENT : ((Missing phoneEnrollmentInfo.))");
+        return error(
+            400,
+            if strict {
+                "OPERATION_NOT_ALLOWED : TOTP based MFA not enabled."
+            } else {
+                "INVALID_ARGUMENT : ((Missing phoneEnrollmentInfo.))"
+            },
+        );
     }
     if let Some(refusal) = phone_enrollment_refusal(store, &session, None, true) {
         return refusal;
@@ -9784,10 +9824,12 @@ fn send_oob_code(
                 str_field(body, "idToken"),
                 str_field(body, "email"),
             ) {
-                (false, _, _) | (true, Some(_), _) => match verify(store, body, at) {
-                    Ok(uid) => uid,
-                    Err(r) => return r,
-                },
+                (false, _, _) | (true, Some(_), _) => {
+                    match verify_honouring_legacy(store, body, at) {
+                        Ok(uid) => uid,
+                        Err(r) => return r,
+                    }
+                }
                 (true, None, Some(email)) => match store.user_by_email(email) {
                     Some(u) => u.local_id.clone(),
                     None => return error(400, "EMAIL_NOT_FOUND"),
@@ -10426,7 +10468,7 @@ fn sign_in_with_phone_number(
         return error(400, "INVALID_SESSION_INFO");
     }
     if body.get("idToken").is_some_and(|t| !t.is_null()) {
-        let uid = match verify(store, body, at) {
+        let uid = match verify_honouring_legacy(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
         };
@@ -10454,7 +10496,15 @@ fn sign_in_with_phone_number(
         if let Err(e) = store.set_phone_number(&uid, Some(&verified.phone_number)) {
             return auth_error(&e);
         }
-        return match issue_tokens(store, &uid, None, at) {
+        // The new session is a phone sign-in (sandbox recording 2026-09-24).
+        return match issue_tokens_with(
+            store,
+            &uid,
+            None,
+            at,
+            None,
+            Some(fireemu_core_auth::store::Provider::Phone),
+        ) {
             Ok(mut tokens) => {
                 // Production's link answer carries no email (sandbox recording 2026-09-23).
                 if let Some(fields) = tokens.as_object_mut() {
@@ -11191,7 +11241,7 @@ fn mfa_enrollment_withdraw(
     body: &Value,
     at: LogicalInstant,
 ) -> JsonResponse {
-    let uid = match verify(store, body, at) {
+    let uid = match verify_honouring_legacy(store, body, at) {
         Ok(uid) => uid,
         Err(r) => return r,
     };

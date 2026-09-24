@@ -53,6 +53,9 @@ test("v3 production cleanup refuses the generic broad-clear path before network"
   );
   assert.equal(networkCalls, 0);
   assert.doesNotThrow(() => assertV3ProductionCleanupAllowed({ host: "127.0.0.1:8080" }));
+  assert.doesNotThrow(() =>
+    assertV3ProductionCleanupAllowed({ host: "firestore.googleapis.com", exactDeltaV3: true }),
+  );
 });
 
 test("shrink request counter cannot reset between cleanup phases", () => {

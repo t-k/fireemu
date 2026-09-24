@@ -50,6 +50,9 @@ test("persists source, executable, config, and runtime bindings before preservin
           await readFile(
             join(root, "conformance/.runs/fs-data-write-local-run/local-run-binding.json"),
           );
+          await readFile(
+            join(root, "conformance/.runs/fs-data-write-local-run/local-config-sha256.json"),
+          );
         }
         const resultCode = args.includes("compare-local") ? 1 : 0;
         assert.ok(allowedCodes.includes(resultCode));
@@ -59,9 +62,16 @@ test("persists source, executable, config, and runtime bindings before preservin
 
     assert.equal(code, 1);
     assert.equal(calls.at(-1).args[1], "compare-local");
+    assert.deepEqual(calls[0], { command: "cargo", args: ["build", "--locked", "-p", "fireemu"] });
     const binding = JSON.parse(
       await readFile(
         join(root, "conformance/.runs/fs-data-write-local-run/local-run-binding.json"),
+        "utf8",
+      ),
+    );
+    const legacyBinding = JSON.parse(
+      await readFile(
+        join(root, "conformance/.runs/fs-data-write-local-run/local-config-sha256.json"),
         "utf8",
       ),
     );
@@ -71,6 +81,10 @@ test("persists source, executable, config, and runtime bindings before preservin
     );
     assert.match(binding.executableSha256, /^[a-f0-9]{64}$/);
     assert.equal(binding.configSha256.length, 64);
+    assert.deepEqual(legacyBinding, {
+      config: "conformance/fs-data-write-sandbox.fireemu.json",
+      configSha256: binding.configSha256,
+    });
     assert.equal(binding.runtimeInputs["conformance/src/fs-data-write-sandbox-run.mjs"].length, 64);
     assert.ok(binding.commandVersions.node);
   } finally {
@@ -123,6 +137,89 @@ test("rejects an executable changed by the local child before writing a binding"
         },
       }),
       /executable changed during local run/,
+    );
+    await assert.rejects(
+      readFile(join(root, "conformance/.runs/fs-data-write-local-run/local-run-binding.json")),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects tracked source edits made by the local child before writing bindings", async () => {
+  const root = await createSourceRoot();
+  try {
+    await assert.rejects(
+      runLocalCheck({
+        root,
+        run: async (command, args) => {
+          if (command === "git") {
+            return {
+              output: execFileSync(command, args, { cwd: root, encoding: "utf8" }),
+              code: 0,
+            };
+          }
+          if (args[0] === "exec") {
+            await writeFile(join(root, "Cargo.toml"), "[workspace]\n# modified during child\n");
+            return {
+              output: `${JSON.stringify({ runDir: join(root, "conformance/.runs/fs-data-write-local-run") })}\n`,
+              code: 0,
+            };
+          }
+          return { output: "", code: 0 };
+        },
+      }),
+      /tracked source worktree changed during local run/,
+    );
+    await assert.rejects(
+      readFile(join(root, "conformance/.runs/fs-data-write-local-run/local-run-binding.json")),
+    );
+    await assert.rejects(
+      readFile(join(root, "conformance/.runs/fs-data-write-local-run/local-config-sha256.json")),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a source HEAD change made by the local child before writing bindings", async () => {
+  const root = await createSourceRoot();
+  try {
+    await assert.rejects(
+      runLocalCheck({
+        root,
+        run: async (command, args) => {
+          if (command === "git") {
+            return {
+              output: execFileSync(command, args, { cwd: root, encoding: "utf8" }),
+              code: 0,
+            };
+          }
+          if (args[0] === "exec") {
+            await writeFile(join(root, "Cargo.toml"), "[workspace]\n# committed during child\n");
+            execFileSync("git", ["add", "Cargo.toml"], { cwd: root });
+            execFileSync(
+              "git",
+              [
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-qm",
+                "mid-run",
+              ],
+              { cwd: root },
+            );
+            return {
+              output: `${JSON.stringify({ runDir: join(root, "conformance/.runs/fs-data-write-local-run") })}\n`,
+              code: 0,
+            };
+          }
+          return { output: "", code: 0 };
+        },
+      }),
+      /source HEAD changed during local run/,
     );
     await assert.rejects(
       readFile(join(root, "conformance/.runs/fs-data-write-local-run/local-run-binding.json")),

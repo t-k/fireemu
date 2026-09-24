@@ -6,6 +6,7 @@
 
 pub mod base32;
 pub mod claims;
+pub mod config_members;
 pub mod federation;
 pub mod jwt;
 pub mod mfa;

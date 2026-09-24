@@ -67,6 +67,7 @@ const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 mod custom_token;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
 mod password_hash;
+mod project_config;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
 pub mod widget;
@@ -3491,10 +3492,7 @@ fn dispatch(
             sign_in_with_idp(store, body, at, options.inbound_credential_policy)
         }
         Handler::CreateAuthUri => create_auth_uri(store, body),
-        Handler::Projects => JsonResponse {
-            status: 200,
-            body: json!({"projectId": store.project_id(), "authorizedDomains": ["localhost"]}),
-        },
+        Handler::Projects => client_project_config(store, !options.stateless_refresh_tokens),
         Handler::RecaptchaParams => JsonResponse {
             status: 200,
             body: json!({
@@ -3663,6 +3661,7 @@ fn apply_project_config_fields(
             field
                 if field == "passwordPolicyConfig"
                     || field.starts_with("passwordPolicyConfig.")
+                    || project_config::stored_member_field(field)
                     || SIGN_IN_PROVIDER_FIELDS.contains(&field)
                     || valid_blocking_config_field(field)
                     || valid_quota_field(field) => {}
@@ -3809,9 +3808,8 @@ fn password_policy_from_update(
     if policy_fields.is_empty() {
         return Ok(None);
     }
-    let Some(value) = body.get("passwordPolicyConfig") else {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    };
+    // A masked policy the body leaves out is cleared, as a null one is.
+    let value = body.get("passwordPolicyConfig").unwrap_or(&Value::Null);
     if value.is_null() && policy_fields.contains(&"passwordPolicyConfig") {
         if policy_fields.len() != 1 {
             return Err(error(400, "INVALID_ARGUMENT"));
@@ -4443,9 +4441,8 @@ fn quota_config_from_update(
     if quota_fields.contains(&"quota") && quota_fields.len() != 1 {
         return Err(error(400, "INVALID_ARGUMENT"));
     }
-    let Some(quota_value) = body.get("quota") else {
-        return Err(error(400, "INVALID_ARGUMENT"));
-    };
+    // A masked quota the body leaves out is cleared, as a null one is.
+    let quota_value = body.get("quota").unwrap_or(&Value::Null);
     if quota_value.is_null() {
         if quota_fields.contains(&"quota") {
             return Ok(Some(SignupQuotaConfig::default()));
@@ -4488,9 +4485,13 @@ fn quota_config_from_update(
         .iter()
         .any(|field| *field == "quota" || *field == "quota.signUpQuotaConfig")
     {
-        if let Some(value) = quota.get("signUpQuotaConfig") {
-            selected.insert("signUpQuotaConfig".to_owned(), value.clone());
-        }
+        selected.insert(
+            "signUpQuotaConfig".to_owned(),
+            quota
+                .get("signUpQuotaConfig")
+                .cloned()
+                .unwrap_or(Value::Null),
+        );
     }
     if quota_fields
         .iter()
@@ -4590,7 +4591,8 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 | "quota"
                 | "blockingFunctions"
                 | "authorizedDomains"
-        ) {
+        ) && !project_config::STORED_MEMBERS.contains(&key.as_str())
+        {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
     }
@@ -4795,6 +4797,64 @@ fn contains_non_null_value(value: &Value) -> bool {
 }
 
 #[allow(clippy::too_many_lines)]
+/// The Admin v2 config document of `project` as the running profile answers it
+/// ([`project_config`]).
+fn project_config_document(
+    state: &AuthState,
+    project: &str,
+    store: &AuthStore,
+    config: fireemu_core_auth::store::ProjectAuthConfig,
+) -> Value {
+    let quota = quota_config_json(store.signup_quota().config());
+    let mut sign_in = json!({});
+    add_sign_in_config_json(&mut sign_in, store.sign_in_config());
+    let sign_in_written = {
+        let current = store.sign_in_config();
+        let initial = SignInConfig::default();
+        current.email_enabled != initial.email_enabled
+            || current.password_required != initial.password_required
+            || current.anonymous_enabled != initial.anonymous_enabled
+            || current.phone_enabled != initial.phone_enabled
+            || current.test_phone_numbers != initial.test_phone_numbers
+    };
+    let policy = store.password_policy();
+    let tenancy = state.tenancy.as_ref().and_then(|t| t.read().ok());
+    let simulation = quota
+        .get("quotaSimulation")
+        .filter(|value| value.get("mode").and_then(Value::as_str) != Some("off"))
+        .cloned();
+    let sources = project_config::ConfigSources {
+        project,
+        project_number: store.project_number(),
+        api_key: tenancy.as_ref().and_then(|t| t.api_key_for(project)),
+        sign_in: sign_in.get("signIn").cloned().unwrap_or_else(|| json!({})),
+        sign_in_written,
+        allow_duplicate_emails: config.allow_duplicate_emails,
+        improved_email_privacy: config.enable_improved_email_privacy,
+        disabled_user_signup: config.disabled_user_signup,
+        disabled_user_deletion: config.disabled_user_deletion,
+        password_policy: policy
+            .configured
+            .then(|| password_policy_config_json(policy)),
+        sign_up_quota: quota.get("signUpQuotaConfig").cloned(),
+        quota_simulation: simulation,
+        authorized_domains: store.authorized_domains(),
+        authorized_domains_written: store.sign_in_config().authorized_domains.is_some(),
+        blocking_functions: state
+            .blocking
+            .as_ref()
+            .filter(|hook| hook.blocking_auth_project() == Some(project))
+            .and_then(|hook| hook.blocking_auth_settings()),
+        members: store.stored_config_members(),
+    };
+    if state.stateless_refresh_tokens {
+        project_config::emulator_document(&sources)
+    } else {
+        project_config::strict_document(&sources)
+    }
+}
+
+#[allow(clippy::too_many_lines)]
 fn project_config_management(
     state: &AuthState,
     handler: routes::Handler,
@@ -4812,21 +4872,7 @@ fn project_config_management(
         let Ok(store) = selected_store.lock() else {
             return error(500, "INTERNAL");
         };
-        let mut body = project_config_json_with_auth_settings(
-            store.config(),
-            store.password_policy(),
-            store.signup_quota().config(),
-        );
-        add_sign_in_config_json(&mut body, store.sign_in_config());
-        body["authorizedDomains"] = json!(store.authorized_domains());
-        if let Some(blocking) = state
-            .blocking
-            .as_ref()
-            .filter(|hook| hook.blocking_auth_project() == Some(project))
-            .and_then(|hook| hook.blocking_auth_settings())
-        {
-            body["blockingFunctions"] = blocking;
-        }
+        let body = project_config_document(state, project, &store, store.config());
         return JsonResponse { status: 200, body };
     }
     if !body.is_object() {
@@ -4884,13 +4930,20 @@ fn project_config_management(
             {
                 fields.push("authorizedDomains".to_owned());
             }
+            for member in project_config::STORED_MEMBERS {
+                if body.get(*member).is_some_and(|value| !value.is_null()) {
+                    fields.push((*member).to_owned());
+                }
+            }
             fields
         }
         Err(response) => return response,
     };
     if fields.iter().any(|field| {
         (field.starts_with("passwordPolicyConfig") && !valid_password_policy_field(field))
-            || (!valid_project_config_field(field) && !valid_blocking_config_field(field))
+            || (!valid_project_config_field(field)
+                && !valid_blocking_config_field(field)
+                && !project_config::stored_member_field(field))
     }) {
         return error(400, "INVALID_ARGUMENT");
     }
@@ -4907,6 +4960,21 @@ fn project_config_management(
     {
         Ok(update) => update.is_some(),
         Err(response) => return response,
+    };
+    // The stored members too, from the current ones: a masked leaf merges into its member.
+    let stored_members = {
+        let Ok(store) = selected_store.lock() else {
+            return error(500, "INTERNAL");
+        };
+        match project_config::apply_stored_members(
+            store.stored_config_members(),
+            body,
+            &fields,
+            project,
+        ) {
+            Ok(update) => update,
+            Err(()) => return error(400, "INVALID_ARGUMENT"),
+        }
     };
     // Keep a rollback snapshot while the paired Auth candidate is published. Runtime-backed
     // bridges include private discovery markers in this snapshot so a failed Auth update cannot
@@ -4967,6 +5035,16 @@ fn project_config_management(
                         Err(response) => return rollback_blocking(response),
                     }
                 }
+                if stored_members.is_some() {
+                    match registry.update_project_stored_members(project, |current| {
+                        project_config::apply_stored_members(current, body, &fields, project)
+                            .map(|next| next.unwrap_or_else(|| current.clone()))
+                    }) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
+                        Err(()) => return rollback_blocking(error(400, "INVALID_ARGUMENT")),
+                    }
+                }
                 config
             }
             Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
@@ -5012,8 +5090,12 @@ fn project_config_management(
                 return rollback_blocking(error(400, "INVALID_ARGUMENT"));
             }
         }
+        let has_members = stored_members.is_some();
+        if let Some(members) = stored_members {
+            store.set_stored_config_members(members);
+        }
         drop(store);
-        if !patch.is_empty() || has_policy || has_quota || has_sign_in {
+        if !patch.is_empty() || has_policy || has_quota || has_sign_in || has_members {
             if let Some(project) = pending_project {
                 if let Err(response) = install_routed_candidate(state, project, selected_store) {
                     return rollback_blocking(response);
@@ -5028,22 +5110,7 @@ fn project_config_management(
             let Ok(store) = selected_store.lock() else {
                 return error(500, "INTERNAL");
             };
-            let mut body = project_config_json_with_auth_settings(
-                config,
-                store.password_policy(),
-                store.signup_quota().config(),
-            );
-            add_sign_in_config_json(&mut body, store.sign_in_config());
-            body["authorizedDomains"] = json!(store.authorized_domains());
-            if let Some(blocking) = state
-                .blocking
-                .as_ref()
-                .filter(|hook| hook.blocking_auth_project() == Some(project))
-                .and_then(|hook| hook.blocking_auth_settings())
-            {
-                body["blockingFunctions"] = blocking;
-            }
-            body
+            project_config_document(state, project, &store, config)
         },
     }
 }
@@ -7148,6 +7215,25 @@ fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
 
 /// The v2 API's refusal: a gRPC status name and no `errors` list (sandbox recording
 /// 2026-09-24, mfaEnrollment:start and :withdraw). Applied in the strict profile only.
+/// `GET v1/projects`: the project named by its number, as production and the official
+/// emulator both answer, and the project's authorized domains (sandbox read 2026-09-25). The
+/// emulator profile keeps the official emulator's `localhost` until domains are configured.
+fn client_project_config(store: &AuthStore, strict: bool) -> JsonResponse {
+    let project = store.project_number().map_or_else(
+        || store.project_id().to_owned(),
+        |number| number.to_string(),
+    );
+    let domains = if strict || store.sign_in_config().authorized_domains.is_some() {
+        store.authorized_domains()
+    } else {
+        vec!["localhost".to_owned()]
+    };
+    JsonResponse {
+        status: 200,
+        body: json!({"projectId": project, "authorizedDomains": domains}),
+    }
+}
+
 fn v2_error_shape(response: JsonResponse, strict: bool) -> JsonResponse {
     if strict && response.status == 400 {
         secure_token_error_shape(response)
@@ -11859,17 +11945,22 @@ fn project_config_json_with_password_policy(
     result
 }
 
-fn project_config_json_with_auth_settings(
-    config: fireemu_core_auth::store::ProjectAuthConfig,
-    policy: &PasswordPolicy,
-    quota: &SignupQuotaConfig,
-) -> Value {
-    let mut result = project_config_json_with_password_policy(config, policy);
-    result["quota"] = quota_config_json(quota);
-    result
-}
-
 fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
+    // A project without a configured policy answers production's default policy (sandbox
+    // read 2026-09-25): no symbol list and no sign-in upgrade member.
+    if !policy.configured {
+        return JsonResponse {
+            status: 200,
+            body: json!({
+                "customStrengthOptions": {
+                    "minPasswordLength": policy.min_length,
+                    "maxPasswordLength": fireemu_core_auth::password_policy::MAX_PASSWORD_UTF16_UNITS,
+                },
+                "schemaVersion": 1,
+                "enforcementState": "ENFORCE",
+            }),
+        };
+    }
     // Production's order first, then any other configured character in code-point order.
     let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
     let allowed: Vec<String> = order

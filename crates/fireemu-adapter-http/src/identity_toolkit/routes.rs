@@ -992,6 +992,19 @@ pub(crate) const ROUTES: &[Route] = &[
     ),
     admin_config("GET", "config:get", Handler::AdminGetProjectConfig),
     admin_config("PATCH", "config:update", Handler::AdminUpdateProjectConfig),
+    // The Admin SDK's project config manager names the same resource without `admin/`.
+    admin_v2(
+        "GET",
+        "/config",
+        "config:get",
+        Handler::AdminGetProjectConfig,
+    ),
+    admin_v2(
+        "PATCH",
+        "/config",
+        "config:update",
+        Handler::AdminUpdateProjectConfig,
+    ),
     // Emulator inspection routes.
     emulator(
         "GET",

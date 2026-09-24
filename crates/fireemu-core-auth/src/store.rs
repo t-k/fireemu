@@ -1228,6 +1228,8 @@ pub struct AuthStore {
     config: ProjectAuthConfig,
     /// The project's sign-in providers and test phone numbers.
     sign_in: SignInConfig,
+    /// Written config members read back as written ([`crate::config_members`]).
+    stored_members: crate::config_members::StoredConfigMembers,
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
     /// their caller explicitly requests a reservation through the typed API.
     signup_quota: SignupQuota,
@@ -1530,6 +1532,7 @@ impl AuthStore {
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
             sign_in: SignInConfig::default(),
+            stored_members: crate::config_members::StoredConfigMembers::default(),
             signup_quota: SignupQuota::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
@@ -2028,6 +2031,20 @@ impl AuthStore {
         }
         self.sign_in = config;
         Ok(())
+    }
+
+    /// The project's written config members ([`crate::config_members`]).
+    #[must_use]
+    pub const fn stored_config_members(&self) -> &crate::config_members::StoredConfigMembers {
+        &self.stored_members
+    }
+
+    /// Replaces the project's written config members.
+    pub fn set_stored_config_members(
+        &mut self,
+        members: crate::config_members::StoredConfigMembers,
+    ) {
+        self.stored_members = members;
     }
 
     /// Whether a principal may create an end-user account in this namespace.
@@ -4992,6 +5009,7 @@ impl AuthSnapshot {
             // silently transfer those settings.
             restored.config = live.config;
             restored.sign_in = live.sign_in.clone();
+            restored.stored_members = live.stored_members.clone();
             // A temporary proof is a credential of the captured namespace.
             restored.temporary_proofs.clear();
             // The local sign-up quota is namespace-owned control state as well. Preserve both
@@ -7070,6 +7088,36 @@ impl AuthRegistry {
         if parent.set_sign_in_config(next.clone()).is_err() {
             return Ok(None);
         }
+        Ok(Some(next))
+    }
+
+    /// Replaces a project's written config members under its namespace gate, as
+    /// [`Self::update_project_sign_in_config`] does for its sign-in providers. `Ok(None)`: no
+    /// such project, or its gate or store is unavailable.
+    pub fn update_project_stored_members<F, E>(
+        &self,
+        project: &str,
+        update: F,
+    ) -> Result<Option<crate::config_members::StoredConfigMembers>, E>
+    where
+        F: FnOnce(
+            &crate::config_members::StoredConfigMembers,
+        ) -> Result<crate::config_members::StoredConfigMembers, E>,
+    {
+        let Some(gate) = self.operation_gate(project, None) else {
+            return Ok(None);
+        };
+        let Ok(_operation) = gate.lock() else {
+            return Ok(None);
+        };
+        let Some(parent) = self.project_store(project) else {
+            return Ok(None);
+        };
+        let Ok(mut parent) = parent.lock() else {
+            return Ok(None);
+        };
+        let next = update(parent.stored_config_members())?;
+        parent.set_stored_config_members(next.clone());
         Ok(Some(next))
     }
 

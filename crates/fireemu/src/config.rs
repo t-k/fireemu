@@ -968,9 +968,10 @@ pub struct RuntimeConfig {
     /// ordinary blocking handlers.
     pub auth_forward_inbound_credentials: bool,
     /// `auth.improvedEmailPrivacy`: production's email enumeration protection, on by default
-    /// for every new Firebase project. Sign-in with a wrong password or an unknown address
-    /// answers `INVALID_LOGIN_CREDENTIALS`, and a password reset for an unknown address is
-    /// acknowledged. `false` restores the official Auth emulator's revealing answers.
+    /// for every new Firebase project and so under the strict profile. Sign-in with a wrong
+    /// password or an unknown address answers `INVALID_LOGIN_CREDENTIALS`, and a password reset
+    /// for an unknown address is acknowledged. The emulator profile starts with it off, with the
+    /// official Auth emulator's revealing answers.
     pub auth_improved_email_privacy: bool,
     /// Whether auth.improvedEmailPrivacy was explicitly present in the input.
     pub auth_improved_email_privacy_explicit: bool,
@@ -2616,6 +2617,11 @@ impl RuntimeConfig {
         self.enforce_limits = profile.enforce_limits();
         self.token_acceptance = profile.token_acceptance();
         self.implicit_database_creation = profile.implicit_database_creation();
+        // A new production project protects against email enumeration; the official Auth
+        // emulator starts with it off (owner decision K3, AUTH-CONFIG-SDK).
+        if !self.auth_improved_email_privacy_explicit {
+            self.auth_improved_email_privacy = profile == CompatibilityProfile::Strict;
+        }
     }
 
     fn parse_daemon(d: &serde_json::Map<String, Value>, cfg: &mut Self) -> Result<(), ConfigError> {
@@ -3561,6 +3567,26 @@ mod tests {
         assert!(strict.enforce_limits);
         assert_eq!(strict.token_acceptance, TokenAcceptance::Verified);
         assert!(!strict.implicit_database_creation);
+    }
+
+    #[test]
+    fn email_enumeration_protection_defaults_by_profile_and_yields_to_the_key() {
+        // A new production project turns improved email privacy on; the official emulator
+        // starts with it off (owner decision K3, AUTH-CONFIG-SDK).
+        assert!(with_profile(json!({})).unwrap().auth_improved_email_privacy);
+        assert!(
+            !with_profile(json!({"profile": "emulator"}))
+                .unwrap()
+                .auth_improved_email_privacy
+        );
+        for (profile, value) in [("emulator", true), ("strict", false)] {
+            let cfg = with_profile(json!({
+                "profile": profile,
+                "auth": {"improvedEmailPrivacy": value},
+            }))
+            .unwrap();
+            assert_eq!(cfg.auth_improved_email_privacy, value, "{profile}");
+        }
     }
 
     #[test]

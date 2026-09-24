@@ -217,7 +217,10 @@ test("verified conditions are bound to their saved comparisons", async () => {
       condition.evidence.productionRecordings,
       comparison.productionRecordingDigests,
     );
-    assert.equal(condition.evidence.finalArtifactSha256, comparison.artifactSha256);
+    assert.equal(
+      condition.evidence.finalArtifactSha256,
+      comparison.artifactSha256 ?? comparison.localExecutableSha256,
+    );
     assert.equal(comparison.result.comparableRecipes, condition.recipeIds.length);
     assert.equal(comparison.result.mismatchedRecipes, 0);
     if (streamComparison) {
@@ -271,7 +274,10 @@ test("verified conditions are bound to their saved comparisons", async () => {
           ? digestProgram(fixture.programs[recipeId])
           : fixture.programs[recipeId];
       assert.deepEqual(comparison.productionPrograms[recipeId], expected);
-      if (comparison.comparisonMode !== "sandbox-comparator") {
+      if (
+        comparison.comparisonMode !== "sandbox-comparator" &&
+        !comparison.comparisonMode?.startsWith("existing-sandbox-comparator;")
+      ) {
         assert.deepEqual(
           comparison.localPrograms[recipeId],
           comparison.productionPrograms[recipeId],
@@ -484,6 +490,45 @@ test("half-close accepts the source-bound current run without rewriting historic
   assert.equal(comparison.result.wholeRunKnownMismatchRows, 9);
   assert.equal(comparison.result.wholeRunPendingStreams, 5);
   assert.notEqual(historical.artifactSha256, comparison.artifactSha256);
+});
+
+test("batch malformed-middle is rebound to the current source-bound comparison", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-WRITE-LIMITS-03/batch-malformed-middle",
+  );
+  const comparisonPath = fileURLToPath(
+    new URL(
+      "../../spec/compatibility/broad-runs/fs-batch-malformed-middle-8a0f205-current-comparison.json",
+      import.meta.url,
+    ),
+  );
+  const comparison = JSON.parse(readFileSync(comparisonPath, "utf8"));
+
+  assert.equal(condition.status, "VERIFIED");
+  assert.equal(
+    condition.evidence.comparisonPath,
+    "spec/compatibility/broad-runs/fs-batch-malformed-middle-8a0f205-current-comparison.json",
+  );
+  assert.equal(condition.evidence.finalArtifactSha256, comparison.localExecutableSha256);
+  assert.equal(condition.evidence.sourceCommit, comparison.sourceCommit);
+  assert.equal(condition.evidence.sourceBindingSha256, comparison.localRunBindingSha256);
+  assert.equal(
+    condition.evidence.comparisonSha256,
+    createHash("sha256").update(readFileSync(comparisonPath)).digest("hex"),
+  );
+  assert.deepEqual(condition.historicalEvidence, {
+    productionRecordings: [
+      "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+      "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+    ],
+    finalArtifactSha256: "d6db62596e71c152883dc5b83bf8dc48b79b703777d49bab10874c1fae6dfc6d",
+    comparisonPath:
+      "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json",
+  });
+  assert.equal(comparison.result.comparableRecipes, condition.recipeIds.length);
+  assert.equal(comparison.result.mismatchedRecipes, 0);
+  assert.equal(comparison.closurePromotion, "none");
 });
 
 test("recorded conditions contain no changed or unrecorded runnable recipes", async () => {

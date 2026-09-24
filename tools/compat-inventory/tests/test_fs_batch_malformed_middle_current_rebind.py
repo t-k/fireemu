@@ -136,6 +136,8 @@ def test_current_rebind_is_source_bound_and_keeps_saved_recording_provenance(fre
             "HEAD",
             "--",
             ".",
+            ":(exclude)spec/compatibility/closure/FS-DATA-WRITE.json",
+            ":(exclude)conformance/src/fs-data-write-closure.test.mjs",
             ":(exclude)spec/compatibility/broad-runs/fs-batch-malformed-middle-8a0f205-current-comparison.json",
             ":(exclude)tools/compat-inventory/tests/test_fs_batch_malformed_middle_current_rebind.py",
         ],

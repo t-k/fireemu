@@ -724,6 +724,7 @@ async function writeManagedRecoveryJournal(status, extra = {}) {
     database: "(default)",
     names: LEGACY_SHRINK_NAMES,
     ...(recovery ? { deletedNames: recovery.deletedNames } : {}),
+    ...(recovery ? { verifiedAbsentNames: recovery.verifiedAbsentNames } : {}),
     ...(recovery?.deleteIntent ? { deleteIntent: recovery.deleteIntent } : {}),
     ...extra,
   };
@@ -735,10 +736,13 @@ async function readManagedRecoveryJournal() {
   try {
     journal = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));
   } catch (error) {
-    if (error?.code === "ENOENT") return { deletedNames: [], deleteIntent: null };
+    if (error?.code === "ENOENT") {
+      return { deletedNames: [], verifiedAbsentNames: [], deleteIntent: null };
+    }
     throw new Error("legacy recovery journal is unreadable", { cause: error });
   }
   const deletedNames = journal?.deletedNames ?? [];
+  const verifiedAbsentNames = journal?.verifiedAbsentNames ?? [];
   const deleteIntent = journal?.deleteIntent ?? null;
   if (
     journal?.schemaVersion !== 1 ||
@@ -749,6 +753,10 @@ async function readManagedRecoveryJournal() {
     !Array.isArray(deletedNames) ||
     deletedNames.some((name) => !LEGACY_SHRINK_NAMES.includes(name)) ||
     new Set(deletedNames).size !== deletedNames.length ||
+    !Array.isArray(verifiedAbsentNames) ||
+    verifiedAbsentNames.some((name) => !LEGACY_SHRINK_NAMES.includes(name)) ||
+    new Set(verifiedAbsentNames).size !== verifiedAbsentNames.length ||
+    verifiedAbsentNames.some((name) => deletedNames.includes(name)) ||
     (deleteIntent !== null &&
       (deleteIntent.action !== "commit-delete" ||
         !LEGACY_SHRINK_NAMES.includes(deleteIntent.name) ||
@@ -759,7 +767,7 @@ async function readManagedRecoveryJournal() {
   ) {
     throw new Error("legacy recovery journal does not match the frozen deletion scope");
   }
-  return { deletedNames, deleteIntent };
+  return { deletedNames, verifiedAbsentNames, deleteIntent };
 }
 
 async function preflightLegacyRecoveryScope(base) {
@@ -839,16 +847,43 @@ async function recoverLegacyManagedClear() {
   if (deletedNames.some((name) => managedClearState.preflightUpdateTimes.has(name))) {
     throw new Error("legacy recovery found a previously deleted name present again");
   }
+  if (
+    managedClearState.recoveryJournal.verifiedAbsentNames.some((name) =>
+      managedClearState.preflightUpdateTimes.has(name),
+    )
+  ) {
+    throw new Error("legacy recovery found a previously verified-absent name present again");
+  }
   if (deleteIntent && !managedClearState.preflightUpdateTimes.has(deleteIntent.name)) {
     managedClearState.recoveryJournal.deletedNames.push(deleteIntent.name);
+    managedClearState.recoveryJournal.verifiedAbsentNames =
+      managedClearState.recoveryJournal.verifiedAbsentNames.filter(
+        (name) => name !== deleteIntent.name,
+      );
     managedClearState.recoveryJournal.deleteIntent = null;
     await writeManagedRecoveryJournal("deleting");
   }
+  const pendingAcknowledgedName =
+    deleteIntent && !managedClearState.preflightUpdateTimes.has(deleteIntent.name)
+      ? deleteIntent.name
+      : null;
+  managedClearState.recoveryJournal.verifiedAbsentNames = [
+    ...new Set([
+      ...managedClearState.recoveryJournal.verifiedAbsentNames,
+      ...LEGACY_SHRINK_NAMES.filter(
+        (name) =>
+          !managedClearState.preflightUpdateTimes.has(name) &&
+          !managedClearState.recoveryJournal.deletedNames.includes(name) &&
+          name !== pendingAcknowledgedName,
+      ),
+    ]),
+  ];
   await writeManagedRecoveryJournal("preflight-complete", {
     presentNames: [...managedClearState.preflightUpdateTimes.keys()],
     absentNames: LEGACY_SHRINK_NAMES.filter(
       (name) => !managedClearState.preflightUpdateTimes.has(name),
     ),
+    verifiedAbsentNames: managedClearState.recoveryJournal.verifiedAbsentNames,
   });
   for (const name of LEGACY_SHRINK_NAMES) {
     if (!managedClearState.preflightUpdateTimes.has(name)) continue;

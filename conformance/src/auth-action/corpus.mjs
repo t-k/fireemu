@@ -615,27 +615,44 @@ const ownership = program("auth-action/ownership", [
 ]);
 
 // ---- an address another account takes over (follow-up directive 2026-09-25, S1) -------------
-// A's reset and verification codes name A's address. A moves to another address and B signs up
-// with the old one: does production apply A's old codes to B?
+// A's code names A's address. A moves to another address and B signs up with the old one: does
+// production apply A's old code to B? The reset and the verification each get a pair of their
+// own, since an applied reset also verifies the address it reaches. The rows after B's sign-up
+// read as an answer about A's code only when B exists: the recording is kept only if both
+// sign-ups answered 200 and B's lookup found it in both recordings (pre-send review M2).
 
-const addressReuse = program("auth-action/address-reuse", [
-  adminCreate("create-a", "ra"),
-  resetLink("reset-link-a", "ra"),
-  verifyLink("verify-link-a", "ra"),
-  adminUpdate("admin-move-a", "ra", { email: "EMAIL(ra-moved)" }),
-  client("sign-up-b", "signUp", {
-    email: "EMAIL(ra)",
+const signUpWith = (id, name) => ({
+  ...client(id, "signUp", {
+    email: `EMAIL(${name})`,
     password: "password123",
     returnSecureToken: true,
   }),
-  check("check-reset-after-reuse", "reset-link-a"),
-  reset("reset-after-reuse", "reset-link-a", "password456"),
-  signIn("sign-in-b-new-password", "ra", "password456"),
-  signIn("sign-in-b-original-password", "ra"),
-  check("check-verify-after-reuse", "verify-link-a"),
-  apply("apply-verify-after-reuse", "verify-link-a"),
-  adminCall("admin-lookup-both", "lookup", { email: ["EMAIL(ra)", "EMAIL(ra-moved)"] }),
-  adminLookup("admin-lookup-a", "ra"),
+  // The moved address must have left the email index before it is taken again.
+  delayMs: 1100,
+});
+
+const addressReuse = program("auth-action/address-reuse", [
+  adminCreate("create-rr", "rr"),
+  resetLink("reset-link-rr", "rr"),
+  adminUpdate("admin-move-rr", "rr", { email: "EMAIL(rr-moved)" }),
+  signUpWith("sign-up-rr-b", "rr"),
+  lookupWith("lookup-rr-b", "sign-up-rr-b"),
+  check("check-reset-after-reuse", "reset-link-rr"),
+  reset("reset-after-reuse", "reset-link-rr", "password456"),
+  signIn("sign-in-rr-b-new-password", "rr", "password456"),
+  signIn("sign-in-rr-b-original-password", "rr"),
+  signIn("sign-in-rr-a-new-password", "rr-moved", "password456"),
+  adminCall("admin-lookup-rr-b", "lookup", { email: ["EMAIL(rr)"] }),
+  adminLookup("admin-lookup-rr-a", "rr"),
+  adminCreate("create-rv", "rv"),
+  verifyLink("verify-link-rv", "rv"),
+  adminUpdate("admin-move-rv", "rv", { email: "EMAIL(rv-moved)" }),
+  signUpWith("sign-up-rv-b", "rv"),
+  lookupWith("lookup-rv-b", "sign-up-rv-b"),
+  check("check-verify-after-reuse", "verify-link-rv"),
+  { ...apply("apply-verify-after-reuse", "verify-link-rv"), ...sameAccount("sign-up-rv-b") },
+  adminCall("admin-lookup-rv-b", "lookup", { email: ["EMAIL(rv)"] }),
+  adminLookup("admin-lookup-rv-a", "rv"),
 ]);
 
 // ---- code lifetime (the last program: it waits an hour) ----------------------------------------

@@ -2324,6 +2324,165 @@ fn slow_object(name: &str) -> StorageEvent {
 }
 
 #[tokio::test]
+async fn http_completion_after_reset_keeps_only_current_epoch_records() {
+    let (runtime, _clock) = start().await;
+    let echo = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    assert_eq!(
+        runtime
+            .invoke_http(&echo, "POST", "/echo", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    let hold = runtime
+        .http_target("demo-app", "us-central1", "hold")
+        .unwrap();
+    let held_runtime = runtime.clone();
+    let request = tokio::spawn(async move {
+        held_runtime
+            .invoke_http(&hold, "POST", "/hold", &[], &[])
+            .await
+    });
+    for _ in 0..100 {
+        if runtime.status()["running"].as_u64().unwrap_or(0) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        runtime.status()["running"].as_u64().unwrap_or(0) > 0,
+        "the HTTP request did not enter: {}",
+        runtime.status()
+    );
+    assert!(
+        !request.is_finished(),
+        "the HTTP request finished before reset"
+    );
+
+    runtime.reset();
+    runtime.reset();
+    let _ = tokio::time::timeout(Duration::from_secs(4), request)
+        .await
+        .expect("the old HTTP invocation settled after reset")
+        .unwrap();
+    wait_for_runner(&runtime).await;
+    let echo = runtime
+        .http_target("demo-app", "us-central1", "echo")
+        .unwrap();
+    assert_eq!(
+        runtime
+            .invoke_http(&echo, "POST", "/echo", &[], &[])
+            .await
+            .unwrap()
+            .status,
+        200
+    );
+    let history = runtime.history();
+    runtime.shutdown().await;
+    assert_eq!(
+        history
+            .iter()
+            .filter(|record| record.function == "echo")
+            .count(),
+        2,
+        "the records before reset and from the current epoch survive: {history:?}"
+    );
+    assert!(
+        history.iter().all(|record| record.function != "hold"),
+        "the stale HTTP invocation appended a record: {history:?}"
+    );
+}
+
+#[tokio::test]
+async fn stream_start_failure_after_reset_does_not_record_the_old_invocation() {
+    let (runtime, _clock) = start().await;
+    let hold = runtime
+        .http_target("demo-app", "us-central1", "hold")
+        .unwrap();
+    let held_runtime = runtime.clone();
+    let request = tokio::spawn(async move {
+        held_runtime
+            .invoke_http_stream(&hold, "POST", "/hold", &[], &[])
+            .await
+    });
+    for _ in 0..100 {
+        if runtime.status()["running"].as_u64().unwrap_or(0) > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        runtime.status()["running"].as_u64().unwrap_or(0) > 0,
+        "the stream did not enter: {}",
+        runtime.status()
+    );
+    assert!(!request.is_finished(), "the stream finished before reset");
+
+    runtime.reset();
+    let _ = tokio::time::timeout(Duration::from_secs(4), request)
+        .await
+        .expect("the old stream start settled after reset")
+        .unwrap();
+    let history = runtime.history();
+    runtime.shutdown().await;
+    assert!(
+        history.iter().all(|record| record.function != "hold"),
+        "the stale stream start appended a record: {history:?}"
+    );
+}
+
+#[tokio::test]
+async fn stream_body_completion_after_reset_does_not_record_the_old_invocation() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (runtime, _clock) = start().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (release, released) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = [0_u8; 1024];
+        assert!(socket.read(&mut request).await.unwrap() > 0);
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\ncontent-type: text/event-stream\r\n\r\n")
+            .await
+            .unwrap();
+        released.await.unwrap();
+        socket.write_all(b"4\r\ntest\r\n0\r\n\r\n").await.unwrap();
+    });
+    let target = fireemu_adapter_functions::runtime::HttpTarget {
+        function: "echo".to_owned(),
+        addr: addr.to_string(),
+    };
+    let started = runtime
+        .invoke_http_stream(&target, "POST", "/echo", &[], &[])
+        .await
+        .unwrap();
+    let fireemu_adapter_functions::runtime::HttpStreamStart::Streaming(mut response) = started
+    else {
+        panic!("the runner sent streaming headers");
+    };
+    assert_eq!(response.status, 200);
+
+    runtime.reset();
+    release.send(()).unwrap();
+    assert_eq!(response.body.recv().await.unwrap().as_ref(), b"test");
+    assert!(response.body.recv().await.is_none());
+    response.terminal.await.unwrap().unwrap();
+    server.await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let history = runtime.history();
+    runtime.shutdown().await;
+    assert!(
+        history.iter().all(|record| record.function != "echo"),
+        "the stale stream body appended a record: {history:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_completion_that_resolves_after_a_reset_appends_no_record() {
     // FN-EPOCH-01 / 02 / 04 / 05: a handler that finishes (or times out) after a reset must
     // not append an invocation record or a dead letter to the new epoch, while the records

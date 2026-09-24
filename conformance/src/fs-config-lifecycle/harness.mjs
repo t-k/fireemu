@@ -476,8 +476,28 @@ export function normalizeRestResponse(status, text, ctx, program, symbols, step 
   if (step.objectListing) body = reduceObjectListing(body, program);
   return {
     status,
-    ...(body === undefined ? {} : { body: normalizeValue(body, "", ctx, symbols) }),
+    ...(body === undefined ? {} : { body: sortListings(normalizeValue(body, "", ctx, symbols)) }),
   };
+}
+
+/** Collections whose listing order follows server-assigned ids, which neither side controls. */
+const ID_ORDERED_LISTINGS = ["indexes", "databases", "operations", "fields"];
+
+/**
+ * Sorts the entries of an id-ordered listing by their normalized content. Production lists
+ * indexes, databases and operations in the order of ids it draws at random (fireemu draws its
+ * own), so the order says nothing about behavior; every entry is still compared.
+ */
+export function sortListings(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  const out = { ...body };
+  for (const key of ID_ORDERED_LISTINGS) {
+    if (Array.isArray(out[key]))
+      out[key] = out[key].toSorted((a, b) =>
+        JSON.stringify(canonical(a)).localeCompare(JSON.stringify(canonical(b))),
+      );
+  }
+  return out;
 }
 
 function canonical(value) {

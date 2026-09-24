@@ -376,3 +376,11 @@ test("masking the export window leaves every other byte of a partition metadata 
   );
   assert.deepEqual(maskExportWindow(masked), masked);
 });
+
+test("id-ordered listings are compared regardless of the order the server listed them", async () => {
+  const { sortListings } = await import("./harness.mjs");
+  const a = { name: "x/<index2>", state: "READY" };
+  const b = { name: "x/<index1>", state: "CREATING" };
+  assert.deepEqual(sortListings({ indexes: [a, b] }), sortListings({ indexes: [b, a] }));
+  assert.deepEqual(sortListings({ other: [a, b] }).other, [a, b], "other arrays keep their order");
+});

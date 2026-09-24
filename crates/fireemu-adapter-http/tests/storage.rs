@@ -781,21 +781,46 @@ fn json_api_dialect_for_the_admin_sdk() {
     let listed = json_body(&r);
     assert_eq!(listed["kind"], "storage#objects");
     assert_eq!(listed["items"][0]["name"], "a/b.txt");
-    // Copy routes exist only on the short /b/... spelling, as the official emulator
-    // registers them; the /storage/v1 spelling is its 501 catch-all.
-    assert_eq!(
-        handle(
-            &s,
-            req(
-                "POST",
-                &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/copy.txt"),
-                &owner,
-                b"",
-            ),
-        )
-        .status,
-        501
+    // Production JSON API routes also accept the /storage/v1 spelling.
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/patch
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/rewrite
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/copy
+    let patched = handle(
+        &s,
+        req(
+            "PATCH",
+            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt"),
+            &owner,
+            br#"{"cacheControl":"no-cache"}"#,
+        ),
     );
+    assert_eq!(patched.status, 200);
+    assert_eq!(json_body(&patched)["cacheControl"], "no-cache");
+    let rewritten_long = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/rewriteTo/b/{BUCKET}/o/long-copy.txt"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(rewritten_long.status, 200);
+    assert_eq!(
+        json_body(&rewritten_long)["resource"]["name"],
+        "long-copy.txt"
+    );
+    let copied_long = handle(
+        &s,
+        req(
+            "POST",
+            &format!("/storage/v1/b/{BUCKET}/o/a%2Fb.txt/copyTo/b/{BUCKET}/o/long-copied.txt"),
+            &owner,
+            b"",
+        ),
+    );
+    assert_eq!(copied_long.status, 200);
+    assert_eq!(json_body(&copied_long)["name"], "long-copied.txt");
     let r = handle(
         &s,
         req(
@@ -840,6 +865,30 @@ fn json_api_dialect_for_the_admin_sdk() {
     );
     assert_eq!(r.status, 404);
     assert!(json_body(&r)["error"]["errors"].is_array());
+}
+
+#[test]
+fn strict_json_list_rejects_filters_it_cannot_apply() {
+    // https://cloud.google.com/storage/docs/json_api/v1/objects/list
+    let strict = state(None);
+    let emulator = state_with(None, TokenAcceptance::EmulatorMock);
+    for filter in [
+        "matchGlob=*.txt",
+        "startOffset=b",
+        "endOffset=z",
+        "versions=true",
+        "includeTrailingDelimiter=true",
+    ] {
+        let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
+        let rejected = handle(&strict, req("GET", &path, &[], b""));
+        assert_eq!(rejected.status, 400, "{filter}");
+        let compatible = handle(&emulator, req("GET", &path, &[], b""));
+        assert_eq!(compatible.status, 200, "{filter}");
+    }
+    for filter in ["versions=false", "includeTrailingDelimiter=false"] {
+        let path = format!("/storage/v1/b/{BUCKET}/o?{filter}");
+        assert_eq!(handle(&strict, req("GET", &path, &[], b"")).status, 200);
+    }
 }
 
 #[test]
@@ -1639,9 +1688,33 @@ fn json_api_preconditions_generations_and_ranges_are_strict() {
     assert_eq!((r.status, r.body.as_ref()), (206, &b"89"[..]));
     let r = get("bytes=2-4");
     assert_eq!((r.status, r.body.as_ref()), (206, &b"234"[..]));
-    // An unsatisfiable range is ignored and the whole object served, as the official
-    // emulator (express `req.range` answering -1) serves it.
+    // Production rejects a valid but unsatisfiable range, while emulator mode keeps the
+    // official emulator's whole-object fallback.
+    // https://cloud.google.com/storage/docs/json_api/v1/status-codes
+    // https://www.rfc-editor.org/rfc/rfc9110.html#section-14.4
     let r = get("bytes=10-");
+    assert_eq!(r.status, 416);
+    assert_eq!(header(&r, "content-range"), Some("bytes */10"));
+    let compatible = state_with(None, TokenAcceptance::EmulatorMock);
+    let uploaded = handle(
+        &compatible,
+        req(
+            "POST",
+            &format!("/upload/storage/v1/b/{BUCKET}/o?uploadType=multipart"),
+            &[("content-type", &ct)],
+            &body,
+        ),
+    );
+    assert_eq!(uploaded.status, 200);
+    let r = handle(
+        &compatible,
+        req(
+            "GET",
+            &format!("{object}?alt=media"),
+            &[("range", "bytes=10-")],
+            b"",
+        ),
+    );
     assert_eq!((r.status, r.body.as_ref()), (200, &b"0123456789"[..]));
     // Resumable JSON API: the declared span must match the body and the total.
     let r = handle(
@@ -1744,8 +1817,7 @@ service firebase.storage {
     );
     assert_eq!(r.status, 200);
     let generation = json_body(&r)["generation"].as_str().unwrap().to_owned();
-    // The JSON API is the privileged dialect: rules never run on it, and the copy routes
-    // exist only on the short /b/... spelling (the long one is the official 501 catch-all).
+    // The JSON API is the privileged dialect: rules never run on either spelling.
     let r = handle(
         &s,
         req(
@@ -1755,7 +1827,8 @@ service firebase.storage {
             b"",
         ),
     );
-    assert_eq!(r.status, 501);
+    assert_eq!(r.status, 200);
+    assert_eq!(json_body(&r)["resource"]["name"], "open/dst");
     let r = handle(&s, req(
             "POST",
             &format!("/b/{BUCKET}/o/closed%2Fmissing/rewriteTo/b/{BUCKET}/o/open%2Fdst?ifSourceGenerationMatch=1"),
@@ -2306,6 +2379,34 @@ fn a_multipart_upload_carves_the_data_part_out_of_its_request_buffer() {
         data.as_slice(),
         "the exact bytes survive"
     );
+}
+
+#[test]
+fn a_form_upload_carves_the_file_part_out_of_its_request_buffer() {
+    let s = state(None);
+    let data = payload();
+    let boundary = "form-storage-buffer";
+    let mut body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"key\"\r\n\r\nform.bin\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"form.bin\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+    )
+    .into_bytes();
+    body.extend_from_slice(&data);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    let arrived_at = body.as_ptr();
+    let r = handle(
+        &s,
+        owned_req(
+            "POST",
+            &format!("/{BUCKET}"),
+            &[(
+                "content-type",
+                &format!("multipart/form-data; boundary={boundary}"),
+            )],
+            body,
+        ),
+    );
+    assert_eq!(r.status, 204, "{}", String::from_utf8_lossy(&r.body));
+    assert_eq!(stored_buffer(&s, "form.bin"), (arrived_at, data.len()));
 }
 
 #[test]

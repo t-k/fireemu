@@ -4884,3 +4884,47 @@ fn rest_name_filter_references_are_refused_for_their_own_fault() {
     let dotted = "projects/demo-app/databases/(default)/documents/qn/d/./x".to_owned();
     assert!(!refusal(&dotted).contains("lacks"), "{}", refusal(&dotted));
 }
+
+/// The refusals only production makes stay out of the emulator profile, which may add no
+/// rejection (`spec/compatibility/contract.json`): the transcoder's, the Standard REST
+/// pipeline route, and a read time before the database was created. Each is pinned on both
+/// profiles.
+#[test]
+fn production_only_refusals_differ_between_the_profiles() {
+    let strict = state_with_profile(true);
+    let emulator = state_with_profile(false);
+    let query = |s: &RestState, body: Value| call(s, "POST", &format!("{DOCS}:runQuery"), body);
+    // The transcoder: an unknown field in the structured query.
+    let body = json!({"structuredQuery": {"from": [{"collectionId": "c"}], "extra": 1}});
+    let (status, refused) = query(&strict, body.clone());
+    assert_eq!(status, 400);
+    assert_eq!(
+        refused[0]["error"]["message"],
+        "Invalid JSON payload received. Unknown name \"extra\" at 'structured_query': Cannot find field."
+    );
+    let (status, answered) = query(&emulator, body);
+    assert!(
+        !answered.to_string().contains("Invalid JSON payload received"),
+        "{status} {answered}"
+    );
+    // The REST pipeline route on a Standard database.
+    let (status, _) = call(&strict, "POST", &format!("{DOCS}:executePipeline"), json!({}));
+    assert_eq!(status, 400);
+    let (status, _) = call(&emulator, "POST", &format!("{DOCS}:executePipeline"), json!({}));
+    assert_eq!(status, 404);
+    // A read time half an hour before the database was created (its clock start), inside the
+    // retention hour.
+    let early = json!({"structuredQuery": {"from": [{"collectionId": "c"}]},
+        "readTime": "2026-08-29T11:31:00Z"});
+    let (status, refused) = query(&strict, early.clone());
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(
+        refused[0]["error"]["message"],
+        "The requested 'read_time' cannot be before database creation time."
+    );
+    let (status, answered) = query(&emulator, early);
+    assert!(
+        !answered.to_string().contains("before database creation time"),
+        "{status} {answered}"
+    );
+}

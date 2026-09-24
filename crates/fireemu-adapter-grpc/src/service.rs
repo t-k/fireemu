@@ -343,7 +343,7 @@ impl GatewayService {
         };
         let sq = crate::query_messages::aggregation_structured_query(aggregation);
         let sq = sq.as_ref();
-        crate::query_messages::check_find_nearest_request(sq)?;
+        crate::query_messages::check_find_nearest_request(sq, self.gateway.production_refusals())?;
         let (_, aggregations) = decode_aggregations(aggregation)?;
         let accepted = if let Some(local) = self.local_backend() {
             local.accepted_aggregation_query(&parent, sq, &aggregations)?
@@ -627,7 +627,15 @@ impl Firestore for GatewayService {
             rules.require_owner(&caller.principal, "ExecutePipeline")?;
         }
         if self.gateway.ctx.edition != fireemu_core_types::edition::FirestoreEdition::Enterprise {
-            let mut status = crate::production_status::pipeline_requires_enterprise();
+            // Production's refusal under the strict profile; the emulator profile keeps the
+            // refusal it always made, in fireemu's words.
+            let mut status = if self.gateway.production_refusals() {
+                crate::production_status::pipeline_requires_enterprise()
+            } else {
+                Status::failed_precondition(
+                    "pipelines require firestore.edition = enterprise (Enterprise Native)",
+                )
+            };
             if let Ok(v) = "FS_PIPE_EDITION".parse() {
                 status.metadata_mut().insert("fireemu-code", v);
             }
@@ -1109,7 +1117,10 @@ impl GatewayService {
             if let Some(pb::run_query_request::QueryType::StructuredQuery(query)) =
                 req.query_type.as_ref()
             {
-                crate::query_messages::check_find_nearest_request(query)?;
+                crate::query_messages::check_find_nearest_request(
+                    query,
+                    self.gateway.production_refusals(),
+                )?;
             }
             let explain_query = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {

@@ -121,12 +121,15 @@ pub fn parse_query_parent(parent: &str) -> Result<Parent, DecodeError> {
 
 /// Production refuses a nearest-neighbour query that also carries a limit, an offset or a
 /// cursor (FS-QUERY-INDEX vector/with-query-clauses). Checked on the request as the caller
-/// sent it, because the gRPC service pages a query by adding a limit of its own.
+/// sent it, because the gRPC service pages a query by adding a limit of its own. Only with
+/// `production_refusals` (the strict profile); the emulator profile applies those stages
+/// before the nearest-neighbour ranking, as fireemu did before.
 #[allow(clippy::result_large_err)]
 pub fn check_find_nearest_request(
     query: &fireemu_proto_firestore::google::firestore::v1::StructuredQuery,
+    production_refusals: bool,
 ) -> Result<(), tonic::Status> {
-    if query.find_nearest.is_none() {
+    if !production_refusals || query.find_nearest.is_none() {
         return Ok(());
     }
     let refusal = if query.limit.is_some() {

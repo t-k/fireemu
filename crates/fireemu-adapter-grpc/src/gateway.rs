@@ -151,6 +151,13 @@ pub struct Gateway {
 }
 
 impl Gateway {
+    /// Whether requests get the refusals only production makes: the strict profile's index
+    /// policy. The emulator profile may add no rejection (`spec/compatibility/contract.json`).
+    #[must_use]
+    pub fn production_refusals(&self) -> bool {
+        self.ctx.policy == IndexValidationPolicy::Production
+    }
+
     /// Runs every strict check on a decoded query.
     pub fn validate_query(&self, query: &Query) -> Result<AcceptedQuery, Rejection> {
         self.validate_query_with_indexes(query, &self.indexes)

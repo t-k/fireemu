@@ -80,3 +80,23 @@ test("FS-RULES parent promotion requires every condition and an approved closure
     allVerified && closure.closureReview?.decision === "APPROVED",
   );
 });
+
+test("closure recipes and corpus programs cover each other", async () => {
+  const { PROGRAMS } = await import("./fs-rules/corpus.mjs");
+  const covers = (recipe, programId) => programId === recipe || programId.startsWith(`${recipe}/`);
+  const own = load()
+    .conditions.flatMap(({ recipeIds }) => recipeIds)
+    .filter((id) => id.startsWith("fs-rules/"));
+  for (const recipe of own) {
+    assert.ok(
+      PROGRAMS.some(({ id }) => covers(recipe, id)),
+      `closure recipe ${recipe} has no corpus program`,
+    );
+  }
+  for (const { id } of PROGRAMS) {
+    assert.ok(
+      own.some((recipe) => covers(recipe, id)),
+      `corpus program ${id} belongs to no closure recipe`,
+    );
+  }
+});

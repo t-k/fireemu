@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -29,6 +30,11 @@ SAVED_RESULT_REL = Path(
     "spec/compatibility/broad-runs/fs-write-txn-567565bdd-saved-result.json"
 )
 SAVED_RESULT_SHA = "22a45a9bf2e441f9ed7c675093f7bc8a130bbf58778c01c146b982ddb1131a3f"
+SAVED_PREPARED_REL = Path(
+    "docs.local/logs/2026-09-17/stream-production-preflight/"
+    "approved-prepared-inputs-dee.json"
+)
+SAVED_PREPARED_SHA = "b43dbf0bffb4ea575467d12fa49727c78d15a34900401bbb9b3d0ebbc29d65d5"
 SAVED_AUTHORITY_PATH = Path(
     "tools/compat-broad/fs-write-txn-recompare-v2/saved_authority.py"
 )
@@ -71,6 +77,82 @@ def sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def offline_subprocess_environment(
+    node_executable: str | None = None,
+) -> dict[str, str]:
+    git_path = shutil.which("git")
+    require(git_path is not None, "Git executable is unavailable")
+    git_executable = Path(git_path).resolve(strict=True)
+    regular(git_executable)
+    require(os.access(git_executable, os.X_OK), "Git executable is not executable")
+    search_path = [str(git_executable.parent)]
+    if node_executable is not None:
+        node_path = Path(node_executable).resolve(strict=True)
+        require(
+            node_path.is_file() and os.access(node_path, os.X_OK),
+            "Node executable is unavailable",
+        )
+        search_path.append(str(node_path.parent))
+    path_value = os.pathsep.join(dict.fromkeys(search_path))
+    require(
+        Path(shutil.which("git", path=path_value) or "").resolve() == git_executable,
+        "isolated Git resolution differs",
+    )
+    if node_executable is not None:
+        require(
+            Path(shutil.which("node", path=path_value) or "").resolve()
+            == Path(node_executable).resolve(),
+            "isolated Node resolution differs",
+        )
+    return {
+        "PATH": path_value,
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ATTR_NOSYSTEM": "1",
+    }
+
+
+def verified_node_executable(node_runtime: object) -> str:
+    require(isinstance(node_runtime, dict), "Node runtime record is missing")
+    raw_path = node_runtime.get("path")
+    expected_sha = node_runtime.get("sha256")
+    require(
+        isinstance(raw_path, str)
+        and isinstance(expected_sha, str)
+        and re.fullmatch(r"[0-9a-f]{64}", expected_sha) is not None,
+        "Node runtime record is malformed",
+    )
+    path = Path(raw_path)
+    require(path.is_absolute(), "Node executable path must be absolute")
+    regular(path)
+    executable = path.resolve(strict=True)
+    require(executable == path, "Node executable path is not canonical")
+    require(os.access(executable, os.X_OK), "Node executable is not executable")
+    require(
+        sha(executable.read_bytes()) == expected_sha, "Node executable digest differs"
+    )
+    return str(executable)
+
+
+def historical_worktree_parent(input_root: Path) -> Path:
+    root = input_root.resolve(strict=True)
+    parent = root / ".worktree"
+    info = parent.lstat()
+    require(
+        stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode),
+        "real worktree parent required",
+    )
+    resolved = parent.resolve(strict=True)
+    require(
+        resolved == parent and resolved.is_relative_to(root),
+        "real worktree parent required",
+    )
+    return resolved
+
+
 def require_classifications(v1: str, v2: str) -> None:
     require(v1 == "SEMANTIC_MISMATCH", "V1 classification differs")
     require(v2 == "EXPECTED_NONDETERMINISM", "V2 classification differs")
@@ -109,11 +191,17 @@ def read(path: Path, expected: str, snapshots: dict[Path, bytes]) -> bytes:
 
 
 def git(root: Path, *args: str) -> str:
-    return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+    return subprocess.check_output(
+        ["git", "-C", str(root), *args],
+        text=True,
+        env=offline_subprocess_environment(),
+    ).strip()
 
 
 def git_bytes(root: Path, *args: str) -> bytes:
-    return subprocess.check_output(["git", "-C", str(root), *args])
+    return subprocess.check_output(
+        ["git", "-C", str(root), *args], env=offline_subprocess_environment()
+    )
 
 
 def authority_sources(root: Path, authority_commit: str) -> dict[str, str]:
@@ -523,7 +611,7 @@ def validate_local_acquisition(
 def validate_saved_production_authority(root: Path, input_root: Path) -> str:
     source_dir = root / V2_DIR
     script = source_dir / "saved_authority.py"
-    worktree_base = input_root / ".worktree"
+    worktree_base = historical_worktree_parent(input_root)
     frozen_path = worktree_base / "stream-credential-preparation"
     repaired_path = worktree_base / "stream-repair-shadow"
     sdk_source = (
@@ -533,8 +621,11 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
     )
     for path in (frozen_path, repaired_path):
         require(not os.path.lexists(path), "historical authority worktree path exists")
+    base_env = offline_subprocess_environment()
     registered = subprocess.check_output(
-        ["git", "-C", str(input_root), "worktree", "list", "--porcelain"], text=True
+        ["git", "-C", str(input_root), "worktree", "list", "--porcelain"],
+        text=True,
+        env=base_env,
     )
     require(
         all(str(path) not in registered for path in (frozen_path, repaired_path)),
@@ -548,8 +639,13 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
         == "ab6947259f63e324aaa87ab6934fd538b5defce75a19f40a8896728223c23dc7",
         "historical pricing SDK source differs",
     )
+    prepared_bytes = read(input_root / SAVED_PREPARED_REL, SAVED_PREPARED_SHA, {})
+    prepared = json.loads(prepared_bytes)
+    saved_node = verified_node_executable(prepared["plan"]["nodeRuntime"])
+    child_env = offline_subprocess_environment(saved_node)
     created: list[Path] = []
     aliases: list[Path] = []
+    preserve_paths: set[Path] = set()
 
     def run_git(*args: str) -> None:
         subprocess.run(
@@ -557,6 +653,7 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
             text=True,
             capture_output=True,
             check=True,
+            env=child_env,
         )
 
     try:
@@ -567,12 +664,19 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
             run_git("worktree", "add", "--detach", str(path), commit)
             created.append(path)
             alias = path / "tools/sdk-smoke/node_modules/@google-cloud/firestore"
-            require(not os.path.lexists(alias), "historical SDK alias path exists")
+            if os.path.lexists(alias):
+                preserve_paths.add(path)
+                raise ValueError("historical SDK alias path exists")
             alias.parent.mkdir(parents=True, exist_ok=True)
-            alias.symlink_to(sdk_source, target_is_directory=True)
+            try:
+                alias.symlink_to(sdk_source, target_is_directory=True)
+            except FileExistsError as error:
+                preserve_paths.add(path)
+                raise ValueError("historical SDK alias path exists") from error
             aliases.append(alias)
         with tempfile.TemporaryDirectory(prefix="c1-saved-authority-") as temp:
             output = Path(temp) / "proof.json"
+            child_env["HOME"] = temp
             result = subprocess.run(
                 [
                     sys.executable,
@@ -587,7 +691,7 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
                 capture_output=True,
                 timeout=180,
                 check=False,
-                env=os.environ.copy(),
+                env=child_env,
             )
             require(
                 result.returncode == 0 and output.is_file(),
@@ -620,20 +724,23 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
         )
         return sha(json.dumps(proof, sort_keys=True, separators=(",", ":")).encode())
     finally:
+        cleanup_errors: list[Exception] = []
         for alias in reversed(aliases):
-            require(
-                alias.is_symlink() and alias.resolve() == sdk_source.resolve(),
-                "historical SDK alias identity changed",
-            )
-            alias.unlink()
-            for parent in (alias.parent, alias.parent.parent):
-                try:
-                    parent.rmdir()
-                except OSError:
-                    pass
+            if alias.is_symlink() and alias.resolve() == sdk_source.resolve():
+                alias.unlink()
+            else:
+                preserve_paths.update(
+                    path for path in created if alias.is_relative_to(path)
+                )
+                cleanup_errors.append(
+                    ValueError("historical SDK alias identity changed")
+                )
         for path in reversed(created):
-            require(
-                not subprocess.check_output(
+            if path in preserve_paths:
+                cleanup_errors.append(ValueError("historical source path is not owned"))
+                continue
+            try:
+                dirty = subprocess.check_output(
                     [
                         "git",
                         "-C",
@@ -643,10 +750,14 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
                         "--untracked-files=all",
                     ],
                     text=True,
-                ).strip(),
-                "historical source worktree is dirty",
-            )
-            run_git("worktree", "remove", str(path))
+                    env=child_env,
+                ).strip()
+                require(not dirty, "historical source worktree is dirty")
+                run_git("worktree", "remove", str(path))
+            except Exception as error:  # noqa: BLE001 -- Cleanup must attempt every owned path.
+                cleanup_errors.append(error)
+        if cleanup_errors:
+            raise ValueError("historical authority temporary cleanup incomplete")
 
 
 def compare(
@@ -707,7 +818,7 @@ process.stdout.write(JSON.stringify({v1Classification:v1Comparison.classificatio
         capture_output=True,
         timeout=30,
         check=False,
-        env={},
+        env=offline_subprocess_environment(node),
     )
     require(result.returncode == 0, "comparison execution failed")
     value = json.loads(result.stdout)
@@ -830,7 +941,7 @@ def run(args: argparse.Namespace) -> dict:
         == PRODUCTION_SHA,
         "published saved comparison does not corroborate the historical proof",
     )
-    node = local["gate"]["plan"]["nodeRuntime"]["path"]
+    node = verified_node_executable(local["gate"]["plan"]["nodeRuntime"])
     result = compare(root, production, local, artifact_sha, node)
     require_classifications(result["v1Classification"], result["v2Classification"])
     for path, expected in (

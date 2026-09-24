@@ -244,6 +244,13 @@ fn index_entry_count_refusal_names_the_relative_entity_path() {
         "a".into(),
         Value::Array((0..20_000).map(Value::Integer).collect()),
     )]);
+    let accepted = BTreeMap::from([(
+        "a".into(),
+        Value::Array((0..19_999).map(Value::Integer).collect()),
+    )]);
+    assert!(IndexSet::default()
+        .document_index_usage(&path, &accepted)
+        .is_ok());
     assert_eq!(
         IndexSet::default()
             .document_index_usage(&path, &fields)
@@ -273,6 +280,7 @@ fn indexed_1500_byte_string_uses_recorded_long_name_refusal_points() {
     let fields = BTreeMap::from([("s".into(), Value::String("x".repeat(1500)))]);
     let indexes = IndexSet::default();
     assert!(indexes.document_index_usage(&path(2600), &fields).is_ok());
+    assert!(indexes.document_index_usage(&path(2641), &fields).is_ok());
     for relative_bytes in [2642, 2643] {
         assert_eq!(
             indexes
@@ -290,6 +298,120 @@ fn indexed_1500_byte_string_uses_recorded_long_name_refusal_points() {
         query_scope: IndexQueryScope::Collection,
     });
     assert!(exempt.document_index_usage(&path(2642), &fields).is_ok());
+}
+
+/// Exploratory production points only; this deliberately ignored diagnostic pins the saved
+/// default-database empty-document pair without treating one exploratory recording as closure
+/// evidence. Enable it only after corpus v3 reproduces the point and a reviewed formula replaces
+/// the current conservative name guard.
+#[test]
+#[ignore = "exploratory sbx point; awaiting corpus-v3 reproduction and reviewed formula"]
+fn exploratory_default_empty_document_index_entry_pair() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let path = |relative_bytes: usize| {
+        let segment_bytes = relative_bytes - 11;
+        let base = segment_bytes / 4;
+        let remainder = segment_bytes % 4;
+        let segments: Vec<String> = (0..4)
+            .map(|index| "x".repeat(base + usize::from(index < remainder)))
+            .collect();
+        DocumentPath::parse(
+            &project,
+            &database,
+            &format!(
+                "c/{}/c/{}/c/{}/c/{}",
+                segments[0], segments[1], segments[2], segments[3]
+            ),
+        )
+        .unwrap()
+    };
+    let indexes = IndexSet::default();
+    assert!(indexes
+        .document_index_usage(&path(4627), &BTreeMap::new())
+        .is_ok());
+    assert_eq!(
+        indexes
+            .document_index_usage(&path(4628), &BTreeMap::new())
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: Index entry is too large."
+    );
+}
+
+/// Exploratory production points only; these default-database transaction-size pairs are
+/// intentionally ignored because the current 8 MiB per-document accumulator does not
+/// reproduce the recorded transaction-size boundary. They remain pending compatibility inputs
+/// until corpus v3 provides the required independent recordings.
+#[test]
+#[ignore = "exploratory sbx points; awaiting corpus-v3 reproduction and reviewed formula"]
+fn exploratory_default_array_transaction_size_pairs() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let project = ProjectId::try_new("demo-app").unwrap();
+    let database = DatabaseId::default_database();
+    let path = |relative_bytes: usize| {
+        let segment_bytes = relative_bytes - 11;
+        let base = segment_bytes / 4;
+        let remainder = segment_bytes % 4;
+        let segments: Vec<String> = (0..4)
+            .map(|index| "x".repeat(base + usize::from(index < remainder)))
+            .collect();
+        DocumentPath::parse(
+            &project,
+            &database,
+            &format!(
+                "c/{}/c/{}/c/{}/c/{}",
+                segments[0], segments[1], segments[2], segments[3]
+            ),
+        )
+        .unwrap()
+    };
+    let fields = |count| {
+        BTreeMap::from([(
+            "a".to_owned(),
+            Value::Array((0..count).map(Value::Integer).collect()),
+        )])
+    };
+    let indexes = IndexSet::default();
+
+    // Exploratory sandbox pair: 500-byte relative name, entry-count refusal.
+    assert!(matches!(
+        indexes.document_index_usage(&path(500), &fields(20_000)),
+        Err(fireemu_core_firestore::store::FirestoreError::InvalidArgument(message))
+            if message.starts_with("too many index entries for entity /")
+    ));
+    assert!(indexes
+        .document_index_usage(&path(500), &fields(19_999))
+        .is_ok());
+
+    // Exploratory sandbox pairs: transaction-size refusals.
+    assert!(indexes
+        .document_index_usage(&path(1000), &fields(12_123))
+        .is_ok());
+    assert_eq!(
+        indexes
+            .document_index_usage(&path(1000), &fields(12_124))
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: Transaction too big. Decrease transaction size."
+    );
+    assert!(indexes
+        .document_index_usage(&path(2000), &fields(7_184))
+        .is_ok());
+    assert_eq!(
+        indexes
+            .document_index_usage(&path(2000), &fields(7_185))
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: Transaction too big. Decrease transaction size."
+    );
 }
 
 #[test]

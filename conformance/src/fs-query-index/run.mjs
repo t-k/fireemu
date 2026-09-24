@@ -1,0 +1,589 @@
+// FS-QUERY-INDEX sandbox runner.
+//
+//   node src/fs-query-index/run.mjs verify-indexes      read-only: the sandbox's composite
+//                                                       indexes and field overrides must equal
+//                                                       fs-query-index.indexes.json, all READY
+//   node src/fs-query-index/run.mjs record-production   record the corpus twice against
+//                                                       fireemu-oracle-query/(default) and update
+//                                                       fs-query-index-production.json
+//   node src/fs-query-index/run.mjs rebuild-fixture <runDir>
+//   node src/fs-query-index/run.mjs check               run the corpus against fireemu and
+//                                                       compare with the saved production rows
+//   node src/fs-query-index/run.mjs export-comparison <out.json>
+//
+// `record-production` needs owner ADC (`gcloud auth application-default`),
+// FIREEMU_SANDBOX_LEDGER (the private append-only run ledger) and FIREEMU_FS_QUERY_PRIVATE_DIR
+// (a git-ignored directory for the raw recordings). FS_QUERY_INDEX_PROGRAMS limits a run to
+// programs whose id starts with one of its comma-separated prefixes (FS_QUERY_INDEX_PROGRAMS_EXACT=1
+// for exact ids); recorded programs replace their previous entries and the others are kept.
+// `check` uses FIREEMU_BIN (or the workspace build) and writes .runs/fs-query-index/comparison.json.
+
+import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { promisify } from "node:util";
+
+import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
+import { resolveFireemuBinary } from "../evidence.mjs";
+import { PROGRAMS } from "./corpus.mjs";
+import { scanFixture } from "./fixture-scan.mjs";
+import {
+  DATABASE,
+  RECORDED_PROJECT,
+  SANDBOX_PROJECT,
+  createContext,
+  diffRecordings,
+  isTransient,
+  sameRecording,
+  validateCorpus,
+} from "./harness.mjs";
+import { runCorpus } from "./session.mjs";
+
+const execFileAsync = promisify(execFile);
+const FIXTURE = join(CONFORMANCE_DIR, "fs-query-index-production.json");
+const INDEXES = join(CONFORMANCE_DIR, "fs-query-index.indexes.json");
+const LOCAL_CONFIG = join(CONFORMANCE_DIR, "fs-query-index.fireemu.json");
+const RUN_DIR = join(CONFORMANCE_DIR, ".runs", "fs-query-index");
+const TASK_ID = "FS-QUERY-INDEX-SANDBOX";
+const ADMIN_ORIGIN = "https://firestore.googleapis.com/v1";
+const sha256 = (text) => createHash("sha256").update(text).digest("hex");
+
+export function selectPrograms(
+  programs,
+  selection = process.env.FS_QUERY_INDEX_PROGRAMS ?? "",
+  exact = process.env.FS_QUERY_INDEX_PROGRAMS_EXACT === "1",
+) {
+  const prefixes = selection.split(",").filter(Boolean);
+  const selected = prefixes.length
+    ? programs.filter((p) =>
+        prefixes.some((prefix) => (exact ? p.id === prefix : p.id.startsWith(prefix))),
+      )
+    : programs;
+  if (selected.length === 0) throw new Error("no program matches FS_QUERY_INDEX_PROGRAMS");
+  return selected;
+}
+
+export const programDigest = (program) => sha256(JSON.stringify(program));
+
+/** Normalization and request semantics a saved row depends on; a change makes it stale. */
+export async function harnessDigest() {
+  const sources = await Promise.all(
+    ["harness.mjs", "session.mjs"].map((file) =>
+      readFile(join(CONFORMANCE_DIR, "src/fs-query-index", file), "utf8"),
+    ),
+  );
+  const indexes = await readFile(INDEXES, "utf8");
+  return sha256(`${sources.join("\n")}\n${indexes}`);
+}
+
+/** Per recording: every step once; the harness gets its own budget for wipes and seeds. */
+const ceilings = (programs) => ({
+  maxRequests: programs.reduce((total, p) => total + p.steps.length, 0),
+  maxHarnessRequests: programs.reduce(
+    (total, p) => total + 8 + 2 * Math.ceil((p.seed?.length ?? 0) / 500),
+    20,
+  ),
+});
+
+/** Private recordings must never be committable. */
+async function assertIgnored(path) {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  try {
+    // Asked of the repository that contains the path (docs.local lives in the main checkout,
+    // not in this worktree); a path in no repository cannot be committed at all.
+    await execFileAsync("git", ["-C", path, "rev-parse", "--show-toplevel"]);
+  } catch {
+    return;
+  }
+  try {
+    await execFileAsync("git", ["-C", path, "check-ignore", "-q", path]);
+  } catch {
+    throw new Error(`${path} is not ignored by git; private recordings must not be committable`);
+  }
+}
+
+async function assertCleanTree() {
+  const { stdout } = await execFileAsync(
+    "git",
+    [
+      "status",
+      "--porcelain",
+      "--",
+      "src/fs-query-index",
+      "fs-query-index-production.json",
+      "fs-query-index.fireemu.json",
+      "fs-query-index.indexes.json",
+    ],
+    { cwd: CONFORMANCE_DIR },
+  );
+  if (stdout.trim()) throw new Error(`record-production needs a clean tree:\n${stdout}`);
+}
+
+async function gitSha() {
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: CONFORMANCE_DIR });
+  return stdout.trim();
+}
+
+async function accessToken() {
+  const { stdout } = await execFileAsync("gcloud", [
+    "auth",
+    "application-default",
+    "print-access-token",
+  ]);
+  return stdout.trim();
+}
+
+async function adminGet(path, token) {
+  const response = await fetch(`${ADMIN_ORIGIN}/${path}`, {
+    headers: { authorization: `Bearer ${token}`, "x-goog-user-project": SANDBOX_PROJECT },
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(`GET ${path}: HTTP ${response.status}`);
+  return body;
+}
+
+const fieldKey = (field) =>
+  `${field.fieldPath}:${field.order ?? ""}${field.arrayConfig ?? ""}${field.vectorConfig ? `vector${field.vectorConfig.dimension}` : ""}`;
+
+/** The configured indexes of the sandbox database, in the file's canonical form. */
+export async function productionIndexes(token) {
+  const group = `projects/${SANDBOX_PROJECT}/databases/${DATABASE}/collectionGroups/-`;
+  const composites = [];
+  let pageToken = "";
+  do {
+    const page = await adminGet(
+      `${group}/indexes${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`,
+      token,
+    );
+    composites.push(...(page.indexes ?? []));
+    pageToken = page.nextPageToken ?? "";
+  } while (pageToken);
+  const overrides = [];
+  pageToken = "";
+  do {
+    const page = await adminGet(
+      `${group}/fields?filter=${encodeURIComponent("indexConfig.usesAncestorConfig:false")}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`,
+      token,
+    );
+    overrides.push(...(page.fields ?? []));
+    pageToken = page.nextPageToken ?? "";
+  } while (pageToken);
+  return { composites, overrides };
+}
+
+/**
+ * An index in canonical text form. Production appends `__name__` in the direction of the last
+ * field; the file may list it explicitly. Both forms are dropped when implied.
+ */
+export function indexKey(groupId, queryScope, fields) {
+  const vector = fields.at(-1)?.vectorConfig ? fields.slice(-1) : [];
+  let ordered = vector.length ? fields.slice(0, -1) : fields;
+  const last = ordered.at(-1);
+  if (last?.fieldPath === "__name__" && (ordered.length > 1 || vector.length)) {
+    const implied = ordered.at(-2)?.order ?? "ASCENDING";
+    if ((last.order ?? "ASCENDING") === implied) ordered = ordered.slice(0, -1);
+  }
+  return `${groupId}|${queryScope}|${[...ordered, ...vector].map(fieldKey).join(",")}`;
+}
+
+async function verifyIndexes() {
+  const token = await accessToken();
+  const expected = JSON.parse(await readFile(INDEXES, "utf8"));
+  const { composites, overrides } = await productionIndexes(token);
+  const wanted = expected.indexes
+    .map((i) => indexKey(i.collectionGroup, i.queryScope, i.fields))
+    .toSorted();
+  const actual = composites
+    .map((i) =>
+      indexKey(i.name.split("/collectionGroups/")[1].split("/")[0], i.queryScope, i.fields),
+    )
+    .toSorted();
+  const notReady = composites.filter((i) => i.state !== "READY").map((i) => i.name);
+  const missing = wanted.filter((w) => !actual.includes(w));
+  const extra = actual.filter((a) => !wanted.includes(a));
+  const overrideIds = overrides
+    .map((o) => o.name.split("/collectionGroups/")[1].replace("/fields/", ":"))
+    .filter((id) => !id.startsWith("__default__"))
+    .toSorted();
+  const wantedOverrides = (expected.fieldOverrides ?? [])
+    .map((o) => `${o.collectionGroup}:${o.fieldPath}`)
+    .toSorted();
+  const result = {
+    composites: composites.length,
+    notReady,
+    missing,
+    extra,
+    overrideIds,
+    wantedOverrides,
+  };
+  console.log(JSON.stringify(result, null, 2));
+  if (
+    notReady.length ||
+    missing.length ||
+    extra.length ||
+    !sameRecording(overrideIds, wantedOverrides)
+  )
+    throw new Error("sandbox indexes do not equal fs-query-index.indexes.json");
+}
+
+async function recordOnce(programs, run, token) {
+  const ctx = createContext({
+    run,
+    target: { kind: "production", token, quotaProject: SANDBOX_PROJECT },
+  });
+  return runCorpus(programs, ctx, { ...ceilings(programs), log: (line) => console.log(line) });
+}
+
+/**
+ * Writes the committed fixture from two recordings. Kept separate from recording so that a
+ * refusal here (for example by the secret scan) never loses a production run: the recordings
+ * are saved privately first and `rebuild-fixture` can retry from them.
+ */
+async function writeFixture({ programs, recordings, meta, secrets }) {
+  const [first, second] = recordings;
+  const fixture = existsSync(FIXTURE)
+    ? JSON.parse(await readFile(FIXTURE, "utf8"))
+    : { version: 1, recordedAgainst: {}, programs: {} };
+  fixture.recordedAgainst = {
+    target:
+      "production Firestore REST v1 and gRPC google.firestore.v1, Standard edition, us-central1, database (default)",
+    project: RECORDED_PROJECT,
+    indexes: "conformance/fs-query-index.indexes.json",
+    note: "Two recordings per program. Run-window times, execution durations, page and transaction tokens and the project id are placeholders; missing-index links keep their encoded index with the project id replaced. `second` holds the other recording of rows that differed.",
+  };
+  for (const program of programs) {
+    const one = first.results[program.id];
+    const two = second.results[program.id];
+    if (!one || !two) continue;
+    const differing = Object.fromEntries(
+      Object.entries(two.steps).filter(([id, rec]) => !sameRecording(rec, one.steps[id])),
+    );
+    fixture.programs[program.id] = {
+      corpusDigest: programDigest(program),
+      harnessDigest: meta.harness,
+      recordedAt: meta.startedAt,
+      gitSha: meta.sha,
+      steps: one.steps,
+      ...(Object.keys(differing).length ? { second: differing } : {}),
+    };
+  }
+  fixture.programs = Object.fromEntries(
+    Object.entries(fixture.programs).toSorted(([a], [b]) => a.localeCompare(b)),
+  );
+  const text = `${JSON.stringify(fixture, null, 2)}\n`;
+  scanFixture(text, secrets);
+  await writeFile(FIXTURE, text);
+  return diffRecordings(first.results, second.results);
+}
+
+async function recordProduction() {
+  const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
+  const privateRoot = process.env.FIREEMU_FS_QUERY_PRIVATE_DIR;
+  if (!ledger || !privateRoot) {
+    throw new Error("FIREEMU_SANDBOX_LEDGER and FIREEMU_FS_QUERY_PRIVATE_DIR are required");
+  }
+  await assertCleanTree();
+  const programs = selectPrograms(PROGRAMS);
+  const corpusRequests = validateCorpus(programs);
+  const meta = {
+    sha: await gitSha(),
+    harness: await harnessDigest(),
+    startedAt: new Date().toISOString(),
+    programs: programs.map((p) => p.id),
+    corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
+  };
+  await assertIgnored(privateRoot);
+  const runDir = join(
+    privateRoot,
+    `fs-query-index-production-${meta.startedAt.replaceAll(":", "")}`,
+  );
+  await mkdir(runDir, { recursive: true, mode: 0o700 });
+  const recordings = [];
+  let outcome = "recorded";
+  let error;
+  let token;
+  try {
+    token = await accessToken();
+    await verifyIndexes();
+    for (const offset of [0, 1]) {
+      token = await accessToken();
+      const recording = await recordOnce(programs, String(Date.now() + offset), token);
+      recordings.push(recording);
+      await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
+        mode: 0o600,
+      });
+    }
+  } catch (caught) {
+    outcome = caught.fatal ? "aborted-fatal" : "aborted";
+    error = String(caught.message ?? caught);
+    if (caught.partial) recordings.push(caught.partial);
+  }
+  await writeFile(join(runDir, "meta.json"), JSON.stringify({ ...meta, outcome, error }, null, 2), {
+    mode: 0o600,
+  });
+  const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
+  const failures = recordings.flatMap((r) => r.failures);
+  try {
+    if (!error) {
+      const nondeterministic = await writeFixture({
+        programs,
+        recordings,
+        meta,
+        secrets: [token, SANDBOX_PROJECT],
+      });
+      if (failures.length) outcome = "recorded-with-program-failures";
+      console.log(
+        JSON.stringify(
+          { programs: programs.length, corpusRequests, requests, nondeterministic, failures },
+          null,
+          2,
+        ),
+      );
+    }
+  } catch (caught) {
+    outcome = "not-written";
+    error = `${String(caught.message ?? caught)} (recordings kept in ${runDir})`;
+  } finally {
+    await appendFile(
+      ledger,
+      `${JSON.stringify({
+        ts: new Date().toISOString(),
+        project: SANDBOX_PROJECT,
+        database: DATABASE,
+        gitSha: meta.sha,
+        corpusDigest: sha256(JSON.stringify(programs)),
+        requests,
+        estimatedUsd: 0.01,
+        outcome,
+        taskId: TASK_ID,
+        programs: meta.programs.length,
+        runDir,
+        ...(error ? { error } : {}),
+      })}\n`,
+    );
+  }
+  if (error) throw new Error(error);
+  if (failures.length) process.exitCode = 1;
+}
+
+/** Retries the fixture from a saved run directory; sends nothing to production. */
+async function rebuildFixture(runDir) {
+  const meta = JSON.parse(await readFile(join(runDir, "meta.json"), "utf8"));
+  if (meta.harness !== (await harnessDigest()))
+    throw new Error("harness changed since the recording");
+  const recordings = await Promise.all(
+    [1, 2].map(async (n) =>
+      JSON.parse(await readFile(join(runDir, `recording-${n}.json`), "utf8")),
+    ),
+  );
+  const programs = PROGRAMS.filter((p) => meta.programs.includes(p.id));
+  const changed = programs.filter((p) => meta.corpusDigests?.[p.id] !== programDigest(p));
+  if (changed.length || programs.length !== meta.programs.length) {
+    throw new Error(`corpus changed since the recording: ${changed.map((p) => p.id).join(", ")}`);
+  }
+  const nondeterministic = await writeFixture({
+    programs,
+    recordings,
+    meta,
+    secrets: [SANDBOX_PROJECT],
+  });
+  console.log(JSON.stringify({ programs: programs.length, nondeterministic }, null, 2));
+}
+
+async function sessionLocal() {
+  const programs = JSON.parse(await readFile(process.env.FS_QUERY_INDEX_IN, "utf8"));
+  const host = process.env.FIRESTORE_EMULATOR_HOST;
+  if (!host) throw new Error("FIRESTORE_EMULATOR_HOST is not set");
+  const url = new URL(`http://${host}`);
+  const ctx = createContext({
+    run: process.env.FS_QUERY_INDEX_RUN,
+    target: {
+      kind: "local",
+      origin: url.origin,
+      grpcHost: url.hostname,
+      grpcPort: Number(url.port),
+    },
+  });
+  const out = await runCorpus(programs, ctx, ceilings(programs));
+  await writeFile(process.env.FS_QUERY_INDEX_OUT, JSON.stringify(out));
+}
+
+async function runLocal(programs) {
+  await mkdir(RUN_DIR, { recursive: true });
+  const inPath = join(RUN_DIR, "programs.json");
+  const outPath = join(RUN_DIR, "fireemu.json");
+  await writeFile(inPath, JSON.stringify(programs));
+  const binary = resolveFireemuBinary();
+  const child = spawn(
+    binary,
+    [
+      "exec",
+      "--config",
+      LOCAL_CONFIG,
+      "--project",
+      SANDBOX_PROJECT,
+      "--only",
+      "firestore",
+      "--firestore-port",
+      "0",
+      "--http-port",
+      "0",
+      "--storage-port",
+      "0",
+      "--ui-port",
+      "0",
+      "--hub-port",
+      "0",
+      "--logging-port",
+      "0",
+      "--",
+      process.execPath,
+      join(CONFORMANCE_DIR, "src/fs-query-index/run.mjs"),
+      "session-local",
+    ],
+    {
+      // The config's paths are relative to the repository root.
+      cwd: REPO_ROOT,
+      stdio: ["ignore", "inherit", "inherit"],
+      env: {
+        ...process.env,
+        FS_QUERY_INDEX_IN: inPath,
+        FS_QUERY_INDEX_OUT: outPath,
+        FS_QUERY_INDEX_RUN: String(Date.now()),
+      },
+    },
+  );
+  const code = await new Promise((resolve) => child.once("exit", resolve));
+  if (code !== 0) throw new Error(`fireemu session exited ${code}`);
+  return { binary, ...JSON.parse(await readFile(outPath, "utf8")) };
+}
+
+export function classify({ stale, production, alternative, fireemu }) {
+  if (stale) return "STALE_FIXTURE";
+  if (production === undefined) return "MISSING_FIXTURE";
+  if (fireemu === undefined) return "MISSING";
+  // A server error production returned identically in both recordings (no `second` row) is
+  // behavior, not noise: compare it, and fireemu's own 5xx with it.
+  const repeatedServerError =
+    alternative === undefined &&
+    (production.status >= 500 || (production.transport === "grpc" && production.code === 13));
+  const transient = (recorded) => isTransient(recorded) && !repeatedServerError;
+  if ([production, alternative, fireemu].some(transient)) return "INDETERMINATE";
+  if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
+  if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";
+  return "MISMATCH";
+}
+
+async function check() {
+  const fixture = existsSync(FIXTURE)
+    ? JSON.parse(await readFile(FIXTURE, "utf8"))
+    : { programs: {} };
+  const selected = selectPrograms(PROGRAMS);
+  const harness = await harnessDigest();
+  const local = await runLocal(selected);
+  const rows = [];
+  for (const program of selected) {
+    const saved = fixture.programs[program.id];
+    const stale =
+      saved !== undefined &&
+      (saved.corpusDigest !== programDigest(program) || saved.harnessDigest !== harness);
+    for (const step of program.steps) {
+      const production = saved?.steps?.[step.id];
+      const alternative = saved?.second?.[step.id];
+      const fireemu = local.results[program.id]?.steps?.[step.id];
+      rows.push({
+        row: `${program.id}#${step.id}`,
+        status: classify({ stale, production, alternative, fireemu }),
+        production,
+        ...(alternative ? { alternative } : {}),
+        fireemu,
+      });
+    }
+  }
+  const known = new Set(PROGRAMS.map((p) => p.id));
+  const orphans = Object.keys(fixture.programs).filter((id) => !known.has(id));
+  const summary = {};
+  for (const { status } of rows) summary[status] = (summary[status] ?? 0) + 1;
+  const artifactSha256 = sha256(await readFile(local.binary));
+  await writeFile(
+    join(RUN_DIR, "comparison.json"),
+    `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
+  );
+  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
+  for (const row of rows.filter((r) => !passing.has(r.status))) {
+    console.log(`\n${row.status} ${row.row}`);
+    console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 600)}`);
+    console.log(`  fireemu    ${String(JSON.stringify(row.fireemu)).slice(0, 600)}`);
+  }
+  console.log(JSON.stringify({ summary, orphans, failures: local.failures }, null, 2));
+  if (!rows.every((r) => passing.has(r.status)) || orphans.length || local.failures.length) {
+    process.exitCode = 1;
+  }
+}
+
+/** The paths where two recordings differ. */
+export function differencePaths(production, fireemu) {
+  const differences = [];
+  const walk = (a, b, path) => {
+    if (JSON.stringify(a) === JSON.stringify(b)) return;
+    if (
+      a &&
+      b &&
+      typeof a === "object" &&
+      typeof b === "object" &&
+      Array.isArray(a) === Array.isArray(b)
+    ) {
+      for (const key of new Set([...Object.keys(a), ...Object.keys(b)]))
+        walk(a[key], b[key], `${path}.${key}`);
+      return;
+    }
+    differences.push(path.slice(1));
+  };
+  walk(production, fireemu, "");
+  return differences;
+}
+
+/**
+ * Writes the committed closure evidence from the last `check`: the artifact, the fixture it
+ * was compared with, and every row's classification (no response bodies).
+ */
+async function exportComparison(out) {
+  if (!out) throw new Error("usage: export-comparison <output.json>");
+  const comparison = JSON.parse(await readFile(join(RUN_DIR, "comparison.json"), "utf8"));
+  const fixtureSha256 = sha256(await readFile(FIXTURE, "utf8"));
+  const evidence = {
+    kind: "fs-query-index-comparison-v1",
+    artifactSha256: comparison.artifactSha256,
+    fixtureSha256,
+    summary: comparison.summary,
+    rows: comparison.rows.map(({ row, status, production, fireemu }) =>
+      status === "MISMATCH"
+        ? { row, status, differences: differencePaths(production, fireemu) }
+        : { row, status },
+    ),
+  };
+  await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);
+  console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
+}
+
+const mode = process.argv[2];
+if (import.meta.url === `file://${process.argv[1]}`) {
+  if (mode === "verify-indexes") await verifyIndexes();
+  else if (mode === "record-production") await recordProduction();
+  else if (mode === "rebuild-fixture") await rebuildFixture(process.argv[3]);
+  else if (mode === "check") await check();
+  else if (mode === "export-comparison") await exportComparison(process.argv[3]);
+  else if (mode === "session-local") await sessionLocal();
+  else if (mode === "local") {
+    const local = await runLocal(selectPrograms(PROGRAMS));
+    await writeFile(join(RUN_DIR, "fireemu-results.json"), `${JSON.stringify(local, null, 2)}\n`);
+    console.log(JSON.stringify({ requests: local.requests, failures: local.failures }, null, 2));
+  } else {
+    console.error(
+      "usage: run.mjs verify-indexes|record-production|rebuild-fixture|check|export-comparison|local",
+    );
+    process.exitCode = 2;
+  }
+}

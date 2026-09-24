@@ -1,0 +1,275 @@
+{
+  "schemaVersion": 1,
+  "parent": "FS-QUERY-INDEX",
+  "parentStatus": "IMPLEMENTING",
+  "oracleTrack": "disposable-sandbox",
+  "oracle": {
+    "project": "fireemu-oracle-query",
+    "database": "(default)",
+    "edition": "STANDARD",
+    "location": "us-central1",
+    "indexes": "conformance/fs-query-index.indexes.json"
+  },
+  "closureReview": {
+    "decision": "PENDING"
+  },
+  "scopeDecisions": [
+    {
+      "id": "Q1",
+      "decision": "The whole corpus is observed over REST v1; representative cases of every surface are also observed over gRPC google.firestore.v1. Client SDK paths (limitToLast reversal, listeners, caches) belong to FS-LISTEN-SDK.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-LISTEN-SDK"
+    },
+    {
+      "id": "Q2",
+      "decision": "The sandbox (default) database carries the lane superset conformance/fs-query-index.indexes.json (the shared conformance/firestore.indexes.json plus lane-only collection groups). The shared file stays unchanged because other campaigns bind its digest.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "Q3",
+      "decision": "Under the strict profile a missing-index refusal matches production exactly, console link and encoded index included. The emulator profile keeps its firestore.indexes.json fragment hint and is not closure evidence.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "Q4a",
+      "decision": "Vector search (findNearest) on the Standard edition is in scope.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "Q4b",
+      "decision": "Pipeline execution semantics stay FS-ENTERPRISE-EXCLUDED; the Standard-edition refusal of ExecutePipeline is production behavior and is in scope.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-ENTERPRISE-EXCLUDED"
+    },
+    {
+      "id": "Q4c",
+      "decision": "Index and field administration methods (collectionGroups.indexes.*, collectionGroups.fields.*) that the API denominator assigns here belong to FS-CONFIG-LIFECYCLE; Listen target types (QueryTarget, BloomFilter, ExistenceFilter) belong to FS-LISTEN-SDK.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-CONFIG-LIFECYCLE"
+    },
+    {
+      "id": "Q4d",
+      "decision": "Read times on runQuery, runAggregationQuery and partitionQuery are observed here; queries inside transactions and transaction options stay in FS-TRANSACTION.",
+      "decidedBy": "owner",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-TRANSACTION"
+    },
+    {
+      "id": "S1",
+      "decision": "Closure evidence is the sandbox re-record. Historical production evidence (the 2026-09-07 matrix query rows, the aggregation corpora, the Explain v5 receipt and the 2026-09-08 index-merge check) corroborates it and stays immutable. The historical 324-row regression belongs to FS-DATA-WRITE, as do listDocuments, listCollectionIds and the index-entry write limits.",
+      "decidedBy": "lane agent, following the parent table and the AUTH-ACCOUNT precedent; confirmed at closure review",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-DATA-WRITE"
+    },
+    {
+      "id": "S2",
+      "decision": "Zero gap: response bodies, including error message text, must equal production after normalization. A documented divergence needs an owner decision naming the row.",
+      "decidedBy": "owner (standing zero-gap directive of 2026-09-18)",
+      "decidedOn": "2026-09-18"
+    },
+    {
+      "id": "S3",
+      "decision": "Rules-based query authorization belongs to FS-RULES; this corpus runs with owner credentials.",
+      "decidedBy": "lane agent, following the parent table and the AUTH-ACCOUNT precedent; confirmed at closure review",
+      "decidedOn": "2026-09-24",
+      "movedTo": "FS-RULES"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "FS-QUERY-INDEX/field-filters",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/field-filters"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "EQUAL, NOT_EQUAL, ranges, ARRAY_CONTAINS, ARRAY_CONTAINS_ANY, IN and NOT_IN over every value class, including null, NaN, numeric int/double equivalence, type-restricted ranges, nested and quoted field paths and __name__ filters."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/unary-filters",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/unary-filters"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "IS_NULL, IS_NOT_NULL, IS_NAN and IS_NOT_NAN on present, missing, nested and __name__ fields, with and without ordering."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/composite-filters",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/composite-filters"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "AND and OR composites, nesting, single-child and duplicate filters, disjunctive expansion and result deduplication, ordered and limited disjunctions."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/filter-validation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/filter-validation"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Refusals of malformed operators, values, field paths and __name__ values, and of forbidden filter combinations (negation, not-in, array-contains families, key equality with other inequalities)."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/query-limits",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/query-limits"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Every query-plan limit as an accepted/refused pair one unit apart: 30 disjunctions (IN, ARRAY_CONTAINS_ANY, __name__ IN, OR and products), 10 NOT_IN values, 10 inequality fields, 100 components (root, subcollection, orders, disjunctions)."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/order-by",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/order-by"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Default, explicit, multi-field, nested, map/array and cross-type ordering, missing-field exclusion, implied orders from inequalities, __name__ directions and order-clause refusals."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/cursors",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/cursors"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "startAt/endAt with before true, false and omitted, prefixes, name tiebreaks, descending order, type-mismatched and empty cursors, __name__ reference validation and cursor refusals."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/offset-limit",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/offset-limit"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "limit and offset values and wire forms, int32 bounds, negative values, skippedResults, offset past the end and the limitToLast wire form."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/projection",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/projection"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "select with fields, nested leaves and maps, missing fields, empty lists, __name__, duplicates, invalid paths and unselected filter/order fields."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/collection-group",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/collection-group"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Collection and collection-group scopes from the root, existing, missing and absent parents, kindless queries, group-scoped filters and orders, __name__ ranges and cursors, and group counts."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/aggregation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/aggregation"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "count, sum and avg semantics over every numeric class and non-numeric values, upTo, limit/offset/cursor/order interplay, default and explicit aliases and every aggregation refusal."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/vector",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/vector"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "findNearest with EUCLIDEAN, COSINE and DOT_PRODUCT, distance result fields and thresholds, the 1000 limit pair, malformed vectors and options, missing vector indexes, prefilters and other query clauses."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/partition-query",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/partition-query"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "PartitionQuery on small and 2,000-document groups: partition counts, page size and tokens, range reconstruction, parents and every refusal."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/explain",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/explain"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Plan-only and analyzed Explain for queries, aggregations and findNearest over automatic, composite, merged and collection-group indexes, and Explain of refused queries."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/index-selection",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/index-selection"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Which queries automatic single-field indexes, composites, merges, collection-group scopes and exemptions serve, and the exact missing-index refusal (message and console link) when none does."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/read-time",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/read-time"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "runQuery, runAggregationQuery and partitionQuery at a read time between writes, and refusals of future, too-old and malformed read times."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/request-shape",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/request-shape"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "REST request bodies and parents: empty, non-JSON and unknown fields, enum and integer encodings, from-clause collection ids including the 1500-byte pair, and collection or odd-depth parents."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/pipeline-standard-refusal",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/pipeline"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "ExecutePipeline on a Standard-edition database is refused over REST and gRPC; pipeline semantics themselves are FS-ENTERPRISE-EXCLUDED (scope decision Q4)."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/grpc-transport",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index/grpc"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Representative queries, aggregations, refusals, Explain, findNearest, read times and partitions through google.firestore.v1 gRPC (scope decision Q1)."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "fs-query-index"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The whole corpus compared on one saved release artifact."
+    },
+    {
+      "conditionId": "FS-QUERY-INDEX/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "FS-QUERY-INDEX"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Independent clean-context closure and safety review of the final evidence."
+    }
+  ]
+}

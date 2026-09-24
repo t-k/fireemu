@@ -12,11 +12,14 @@ Behavior below was measured against a real Identity Platform project on 2026-09-
 
 ### Added
 
+- Both profiles: Storage JSON API accepts the documented `/storage/v1` object PATCH, `copyTo`, and `rewriteTo` routes. The official emulator answers 501 on these spellings.
 - `auth.customTokenSigners` maps service accounts to their public JWK sets (RSA keys of at least 2048 bits). With it, `signInWithCustomToken` verifies RS256 signatures and applies production's custom-token rules in either profile; a verifying token of another project's service account is refused with `CREDENTIAL_MISMATCH`.
 - `auth.apiKeys` declares the project's Web API keys. A client request with any other key is refused with production's `400 API_KEY_INVALID` envelope (unlike the official emulator, which validates no key). An unknown key under a registered session now gets the same envelope instead of `INVALID_API_KEY`.
 
 ### Changed
 
+- Strict profile: Storage JSON API list returns 400 for unsupported filters instead of silently ignoring `matchGlob`, `startOffset`, `endOffset`, `versions=true`, or `includeTrailingDelimiter=true`. An unsatisfiable media range returns 416 with `Content-Range: bytes */N`. The emulator profile keeps the official emulator's responses.
+- Both profiles: Storage form uploads transfer the file bytes from the request buffer into the object store without a second file-sized allocation.
 - Strict profile: `signInWithCustomToken` accepts only signed tokens, as production does. Without `auth.customTokenSigners` every custom token, including the Admin SDK's unsigned emulator tokens and JSON fake tokens, is refused with `INVALID_CUSTOM_TOKEN`, and the startup banner says so. Use `auth.customTokenSigners`, or the emulator profile for the Admin SDK's emulator tokens.
 - Strict profile: password and custom-token sign-in without `returnSecureToken` return production's legacy Identity Toolkit token (issuer `https://identitytoolkit.google.com/`, two-week lifetime) and no refresh token. The routes production was observed to honour it on accept it: account lookup, update and delete, a verification mail, phone linking, a sign-up upgrade and MFA enrollment. Email-link and identity-provider linking and session-cookie creation refuse it. A request whose blocking trigger runs keeps secure tokens. The emulator profile keeps secure tokens.
 - Strict profile: `createSessionCookie` decodes `validDuration` as an int64, refusing a fraction or text with `INVALID_ARGUMENT` and zero with `INVALID_DURATION`. The emulator profile keeps the official emulator's `Number(validDuration) || two weeks`.

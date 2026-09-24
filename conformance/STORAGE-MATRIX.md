@@ -161,7 +161,7 @@ parity: 30 &middot; documented-divergence: 3
 
 ## json-api
 
-parity: 63 &middot; documented-divergence: 12
+parity: 60 &middot; documented-divergence: 15
 
 | program | step | status |
 | --- | --- | --- |
@@ -193,7 +193,7 @@ parity: 63 &middot; documented-divergence: 12
 | `gcs-update-list-delete` | `patch` | parity |
 | `gcs-update-list-delete` | `patch-remove-custom-key` | parity |
 | `gcs-update-list-delete` | `patch-missing` | parity |
-| `gcs-update-list-delete` | `patch-storage-v1-spelling` | parity |
+| `gcs-update-list-delete` | `patch-storage-v1-spelling` | documented-divergence |
 | `gcs-update-list-delete` | `put-update` | parity |
 | `gcs-update-list-delete` | `list-delimited` | parity |
 | `gcs-update-list-delete` | `list-flat-names` | parity |
@@ -213,12 +213,12 @@ parity: 63 &middot; documented-divergence: 12
 | `gcs-copy-rewrite` | `copy-into-closed-path` | parity |
 | `gcs-copy-rewrite` | `copy-without-credentials` | parity |
 | `gcs-copy-rewrite` | `copy-missing-source` | parity |
-| `gcs-copy-rewrite` | `copy-storage-v1-spelling` | parity |
+| `gcs-copy-rewrite` | `copy-storage-v1-spelling` | documented-divergence |
 | `gcs-copy-rewrite` | `copy-onto-itself` | parity |
 | `gcs-copy-rewrite` | `copied-bytes` | parity |
 | `gcs-preconditions` | `insert-if-generation-match-zero-on-existing` | documented-divergence |
 | `gcs-preconditions` | `insert-if-generation-match-current` | parity |
-| `gcs-preconditions` | `patch-if-metageneration-mismatch` | parity |
+| `gcs-preconditions` | `patch-if-metageneration-mismatch` | documented-divergence |
 | `gcs-preconditions` | `get-if-generation-not-match-current` | documented-divergence |
 | `gcs-preconditions` | `delete-if-generation-mismatch` | documented-divergence |
 | `gcs-preconditions` | `malformed-precondition` | documented-divergence |

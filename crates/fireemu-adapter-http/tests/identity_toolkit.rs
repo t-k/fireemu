@@ -15368,3 +15368,87 @@ fn batch_create_upserts_and_checks_duplicates_like_production() {
     assert_eq!(body["error"]["message"], "DUPLICATE_EMAIL : i8@example.com");
     assert!(lookup("i8").is_null());
 }
+
+/// The project config carries its authorized domains: the domains a new Firebase project
+/// starts with, replaced by a masked PATCH and read back in production's shape (the sandbox
+/// answers with its two Firebase Hosting domains, AUTH-ACTION scope decision E6).
+#[test]
+fn authorized_domains_round_trip_through_the_admin_config() {
+    let s = state();
+    let (status, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(status, 200, "{read}");
+    assert_eq!(
+        read["authorizedDomains"],
+        json!(["localhost", "demo-app.firebaseapp.com", "demo-app.web.app"])
+    );
+    let domains = json!(["demo-app.firebaseapp.com", "demo-app.web.app"]);
+    let (status, patched) = admin(
+        &s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask=authorizedDomains"),
+        &json!({"authorizedDomains": domains}),
+    );
+    assert_eq!(status, 200, "{patched}");
+    assert_eq!(patched["authorizedDomains"], domains);
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(read["authorizedDomains"], domains);
+    for invalid in [json!([1]), json!("demo-app.web.app"), json!([""])] {
+        let (status, refused) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=authorizedDomains"),
+            &json!({"authorizedDomains": invalid}),
+        );
+        assert_eq!(
+            (status, refused["error"]["message"].as_str()),
+            (400, Some("INVALID_ARGUMENT")),
+            "{invalid}"
+        );
+    }
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(read["authorizedDomains"], domains);
+}
+
+/// Strict: a continue URL whose host is not an authorized domain is refused before a code is
+/// made (sandbox exploration 2026-09-24, to be recorded in auth-action/generate/admin). The
+/// emulator profile keeps the official emulator's answer, which does not check the domain.
+#[test]
+fn strict_link_generation_refuses_a_continue_url_outside_the_authorized_domains() {
+    for (s, strict) in [(strict_state(), true), (state(), false)] {
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"email": "domains@example.com", "password": "password1"}),
+        );
+        assert_eq!(status, 200);
+        let generate = |url: &str| {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:sendOobCode"),
+                &json!({"requestType": "PASSWORD_RESET", "email": "domains@example.com", "returnOobLink": true, "continueUrl": url}),
+            )
+        };
+        let (status, body) = generate("https://demo-app.firebaseapp.com/done?x=1");
+        assert_eq!(status, 200, "{body}");
+        let (status, body) = generate("http://localhost:5000/done");
+        assert_eq!(status, 200, "{body}");
+        let (status, body) = generate("https://unauthorized.example.com/done");
+        if strict {
+            assert_eq!(
+                (status, body["error"]["message"].as_str()),
+                (
+                    400,
+                    Some("UNAUTHORIZED_DOMAIN : Domain not allowlisted by project")
+                ),
+            );
+            assert!(
+                s.store.lock().unwrap().oob_codes().len() == 2,
+                "a refused request makes no code"
+            );
+        } else {
+            assert_eq!(status, 200, "{body}");
+        }
+    }
+}

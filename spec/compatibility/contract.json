@@ -1143,6 +1143,38 @@
             {
               "behaviour": "the console lines for issued email action links and SMS codes carry the official wording but a two-space `auth:` prefix instead of the CLI's `i  auth:` bullet, are printed once per issued code after the issuing request, and can be silenced with auth.logActionCodes = false (the official emulator has no such switch); a RECOVER_EMAIL line is not produced because the recover-email action is not served",
               "precision": "exact-for-local-semantics"
+            },
+            {
+              "behaviour": "Identity Toolkit honours an ID token and a custom token for five minutes past exp and then refuses them with INVALID_ID_TOKEN or INVALID_CUSTOM_TOKEN rather than TOKEN_EXPIRED, in both profiles, as production does (AUTH-CREDENTIAL sandbox recording 2026-09-24); the official emulator never reads an ID token's exp and ignores a fake custom token's exp, which the emulator profile keeps for custom tokens",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "session cookies carry a header of alg and kid with no typ in both profiles, as production's do; the official emulator's carry typ JWT, which the Admin SDK's verifySessionCookie does not read",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an administrator's validSince is stored as given and may move back, and sessions are judged against it when they are used, in both profiles as in production; a client update's validSince is ignored as production ignores it; the official emulator sets validSince to the current time for any value, from either caller, and re-issues the client's tokens",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "createSessionCookie decodes validDuration as an int64 in the strict profile (TYPE_INT64 refusal for a fraction or text, INVALID_DURATION for zero) as production does; the emulator profile keeps the official emulator's Number(validDuration) || two weeks",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "createSessionCookie called with an API key and no credential answers production's 401 UNAUTHENTICATED CREDENTIALS_MISSING, and with a deleted account's ID token USER_NOT_FOUND, in both profiles",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "an API key outside auth.apiKeys, or outside the keys a session registered, is refused with production's 400 API_KEY_INVALID envelope; the official emulator validates no key",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "a custom-token sign-in marks the account customAuth and the account then reports validSince, in both profiles as production does; the official emulator reports customAuth without validSince",
+              "precision": "documented-divergence"
+            },
+            {
+              "behaviour": "the strict profile accepts only signed custom tokens verified against auth.customTokenSigners, answers password and custom-token sign-in without returnSecureToken with production's legacy Identity Toolkit token (honoured only by account lookup, update and delete), and applies production's custom-token claim rules; the emulator profile keeps the official emulator's unsigned and JSON fake tokens and secure tokens",
+              "precision": "documented-divergence"
             }
           ],
           "productionOnly": [

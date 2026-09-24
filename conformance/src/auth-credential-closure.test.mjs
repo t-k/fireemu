@@ -90,6 +90,44 @@ function assertBoundToFixture(comparison, label) {
   );
 }
 
+const readFixture = (path) =>
+  JSON.parse(readFileSync(fileURLToPath(new URL(`../../${path}`, import.meta.url)), "utf8"));
+
+/** `recordedAt gitSha` of every fixture program a condition's recipes cover, deduplicated. */
+function recordedRuns(recipes) {
+  const covers = (recipe, program) =>
+    program === recipe ||
+    program.startsWith(`${recipe}/`) ||
+    ((recipe === "auth-credential" || recipe === "auth-account") &&
+      program.startsWith(`${recipe}/`));
+  const runs = new Set();
+  for (const path of Object.values(FIXTURES)) {
+    for (const [program, { recordedAt, gitSha }] of Object.entries(readFixture(path).programs)) {
+      if (recipes.some((recipe) => covers(recipe, program))) runs.add(`${recordedAt} ${gitSha}`);
+    }
+  }
+  return [...runs].toSorted();
+}
+
+test("the fixture binding refuses a stale digest and a dropped row", () => {
+  const comparison = readJson(
+    "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-comparison.json",
+  );
+  assert.doesNotThrow(() => assertBoundToFixture(comparison, "committed"));
+  assert.throws(
+    () => assertBoundToFixture({ ...comparison, fixtureSha256: "0".repeat(64) }, "stale"),
+    /committed conformance\/auth-credential-production.json/,
+  );
+  assert.throws(
+    () => assertBoundToFixture({ ...comparison, rows: comparison.rows.slice(1) }, "dropped"),
+    /exactly the recorded rows/,
+  );
+  assert.throws(
+    () => assertBoundToFixture({ ...comparison, kind: "unknown" }, "kind"),
+    /unknown comparison kind/,
+  );
+});
+
 test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared condition", () => {
   const closure = load();
   assert.equal(closure.parent, "AUTH-CREDENTIAL");
@@ -110,6 +148,12 @@ test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared conditio
       assert.equal(run.recordings, 2, `${label}: every production run is recorded twice`);
       assert.equal(run.project, "fireemu-oracle-idp", label);
     }
+    // The named runs are exactly the recordings the fixtures hold for the condition's programs.
+    assert.deepEqual(
+      runs.map(({ recordedAt, gitSha }) => `${recordedAt} ${gitSha}`).toSorted(),
+      recordedRuns(condition.recipeIds),
+      `${label}: productionRecordings name the fixtures' own recordings`,
+    );
     assert.match(condition.evidence?.finalArtifactSha256 ?? "", /^[0-9a-f]{64}$/, label);
     // A verified row is backed by committed comparisons of the same artifact in which every
     // row of its programs matches production.

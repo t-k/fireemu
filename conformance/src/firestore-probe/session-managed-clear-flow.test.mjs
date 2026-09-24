@@ -1490,16 +1490,21 @@ test("delta-v3 recovery re-entry polls the journaled LRO without starting anothe
   }
 });
 
-test("delta-v3 recovery validates an interrupted seed before exact cleanup", async () => {
+test("delta-v3 recovery resolves a real commit seed intent after either crash window without replay", async () => {
   const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
   const { corpus } = await prepareSandboxCorpus();
-  const fields = corpus.restPrograms.find(
+  const seed = corpus.restPrograms.find(
     (program) => program.id === "writes/limits/near-limit-delete-refusal/rest/12112",
-  ).steps[0].body.writes[0].update.fields;
+  ).steps[0];
   const runId = "e".repeat(32);
   const deltaNames = allV3Names.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
   const name = deltaNames[0];
-  const journal = {
+  const update = structuredClone(seed.body.writes[0].update);
+  update.name = update.name
+    .replaceAll("DELETE_RUN_ID", runId)
+    .replaceAll("PROJECT", "fireemu-oracle-sbx");
+  const seedBody = JSON.stringify({ writes: [{ update }] });
+  const journal = (bodySha256) => ({
     schemaVersion: 1,
     mode: "cleanup-delta-v3",
     status: "write-ahead-mutation",
@@ -1516,37 +1521,48 @@ test("delta-v3 recovery validates an interrupted seed before exact cleanup", asy
     bulkDeleteOperation: null,
     pendingMutation: {
       name,
-      method: "PATCH",
+      method: "POST",
       stepId: "seed",
-      url: `https://firestore.googleapis.com/v1/${name}`,
-      bodySha256: createHash("sha256").update(JSON.stringify(fields)).digest("hex"),
+      url: "https://firestore.googleapis.com/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:commit",
+      bodySha256,
     },
-  };
-  const result = await observeCollector({
-    scopeNames: deltaNames,
-    visibleNames: deltaNames,
-    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
-    deleteRunId: runId,
-    deltaV3: true,
-    recoveryMode: "recover-delta-v3",
-    initialDeltaJournal: journal,
-    corpusDigest: journal.corpusDigest,
   });
-  try {
-    assert.ifError(result.failure);
-    assert.equal(
-      result.requests.some(
-        (request) => request.pathname === `/v1/${name}` && request.method === "PATCH",
-      ),
-      false,
-    );
-    const recovered = JSON.parse(
-      await readFile(join(result.directory, "delta-cleanup.json"), "utf8"),
-    );
-    assert.equal(recovered.status, "complete");
-    assert.equal(recovered.lastMutation.recoveredOutcome, "target-present");
-  } finally {
-    await rm(result.directory, { recursive: true, force: true });
+  for (const [outcome, visibleNames] of [
+    ["target-present", deltaNames],
+    ["target-absent", deltaNames.slice(1)],
+  ]) {
+    const initialJournal = journal(createHash("sha256").update(seedBody).digest("hex"));
+    const result = await observeCollector({
+      scopeNames: deltaNames,
+      visibleNames,
+      arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+      deleteRunId: runId,
+      deltaV3: true,
+      recoveryMode: "recover-delta-v3",
+      initialDeltaJournal: initialJournal,
+      corpusDigest: initialJournal.corpusDigest,
+    });
+    try {
+      assert.ifError(result.failure);
+      assert.equal(
+        result.requests.some((request) => {
+          if (request.method !== "POST" || !request.pathname.endsWith("/documents:commit"))
+            return false;
+          const writes = JSON.parse(request.body).writes;
+          return writes.some(
+            (write) => write.update?.name === name && write.update.fields?.a?.arrayValue,
+          );
+        }),
+        false,
+      );
+      const recovered = JSON.parse(
+        await readFile(join(result.directory, "delta-cleanup.json"), "utf8"),
+      );
+      assert.equal(recovered.status, "complete");
+      assert.equal(recovered.lastMutation.recoveredOutcome, outcome);
+    } finally {
+      await rm(result.directory, { recursive: true, force: true });
+    }
   }
 });
 

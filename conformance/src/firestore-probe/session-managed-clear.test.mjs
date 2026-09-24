@@ -12,6 +12,7 @@ import {
   validateShrinkBoundaryDocument,
   validateShrinkBoundaryState,
   assertV3ProductionCleanupAllowed,
+  isExactDeltaV3ProductionScope,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -55,6 +56,32 @@ test("v3 production cleanup refuses the generic broad-clear path before network"
   assert.doesNotThrow(() => assertV3ProductionCleanupAllowed({ host: "127.0.0.1:8080" }));
   assert.doesNotThrow(() =>
     assertV3ProductionCleanupAllowed({ host: "firestore.googleapis.com", exactDeltaV3: true }),
+  );
+});
+
+test("delta-v3 remote scope requires the dedicated journal binding and exact names", () => {
+  const runId = "a".repeat(32);
+  const deltaNames = corpusV3.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const scope = {
+    mode: true,
+    lockHeld: true,
+    project: "fireemu-oracle-sbx",
+    maxRequests: 430,
+    deltaJournal: "/private/delta.json",
+    managedClearJournal: "/private/delta.json",
+    names: deltaNames,
+  };
+  assert.equal(isExactDeltaV3ProductionScope(scope), true);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, managedClearJournal: undefined }), false);
+  assert.equal(
+    isExactDeltaV3ProductionScope({ ...scope, managedClearJournal: "/private/legacy.json" }),
+    false,
+  );
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, lockHeld: false }), false);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, maxRequests: 431 }), false);
+  assert.equal(
+    isExactDeltaV3ProductionScope({ ...scope, names: [...deltaNames, deltaNames[0]] }),
+    false,
   );
 });
 

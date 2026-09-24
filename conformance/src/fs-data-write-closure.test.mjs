@@ -50,6 +50,10 @@ const requiredConditions = new Set([
   "FS-DATA-WRITE/write-stream-empty-write-response",
   "FS-DATA-WRITE/final-artifact-regression",
   "FS-DATA-WRITE/closure-review",
+  "FS-DATA-WRITE-LIST/list-documents-rest",
+  "FS-DATA-WRITE-LIST/list-collection-ids-rest",
+  "FS-DATA-WRITE-LIST/list-grpc",
+  "FS-DATA-WRITE-LIST/setup-writes",
 ]);
 
 const requiredRecipes = new Map([
@@ -161,6 +165,63 @@ test("VERIFIED requires a resolved production boundary classification", () => {
   for (const boundaryStatus of ["BRACKETED", "RULE_TRANSITION", "NOT_APPLICABLE"]) {
     assert.doesNotThrow(() => verifyAcceptedCondition({ ...condition, boundaryStatus }));
   }
+});
+
+test("list condition proposal remains exact and pending integration", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const expected = new Map([
+    [
+      "FS-DATA-WRITE-LIST/list-documents-rest",
+      [127, "1733f727d1ee927c7979be913f961f155ef1bb27f02dbf9e887e8550ef8f8f07"],
+    ],
+    [
+      "FS-DATA-WRITE-LIST/list-collection-ids-rest",
+      [35, "209eacb4c61e14a8fe58f1575e9689cab030e8855b37a00d7255d7cfb84e889c"],
+    ],
+    [
+      "FS-DATA-WRITE-LIST/list-grpc",
+      [36, "ee99ec519d91cefe373559b1766b986832b858133ddd8f16361e2f9cb8670229"],
+    ],
+    [
+      "FS-DATA-WRITE-LIST/setup-writes",
+      [3, "923390681e5cfaad43aba4c31f5066c0d334164284d29a3ca60745a4905dfac8"],
+    ],
+  ]);
+  const listConditions = closure.conditions.filter(({ conditionId }) =>
+    conditionId.startsWith("FS-DATA-WRITE-LIST/"),
+  );
+
+  assert.equal(closure.conditions.length, 33);
+  assert.equal(listConditions.length, expected.size);
+  const recipeIds = [];
+  for (const condition of listConditions) {
+    const [count, digest] = expected.get(condition.conditionId) ?? [];
+    assert.ok(count, `unexpected list condition ${condition.conditionId}`);
+    assert.equal(condition.status, "PENDING_INTEGRATION");
+    assert.equal(condition.recipeIds.length, count, condition.conditionId);
+    assert.equal(
+      createHash("sha256").update([...condition.recipeIds].sort().join("\n")).digest("hex"),
+      digest,
+      condition.conditionId,
+    );
+    assert.deepEqual(condition.evidence.productionRecordings, [
+      "e6bcc4b467e48d8a285d1cb754ce37bc3decf56dd5e822ef7f1e77abb089ed33",
+      "5ef3ad1593391e2948f980cfde0b39747406c56d14597cbe7950158aafac3637",
+    ]);
+    assert.equal(condition.evidence.fixturePath, "conformance/fs-data-write-list-production.json");
+    assert.equal(
+      condition.evidence.comparisonPath,
+      "spec/compatibility/closure/evidence/FS-DATA-WRITE-LIST-comparison.json",
+    );
+    assert.ok(condition.evidence.sourceCommit);
+    assert.ok(condition.evidence.proposedArtifactSha256);
+    assert.equal(condition.evidence.currentArtifact, undefined);
+    recipeIds.push(...condition.recipeIds);
+  }
+  assert.equal(recipeIds.length, 201);
+  assert.equal(new Set(recipeIds).size, 201, "each proposed recipe must belong to one condition");
+  assert.equal(closure.parentStatus, "WAITING_ORACLE");
+  assert.equal(closure.closureReview.decision, "PENDING");
 });
 
 test("verified conditions are bound to their saved comparisons", async () => {
@@ -566,6 +627,7 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
         "UNBRACKETED",
         "NOT_APPLICABLE",
         "PENDING_RECORDING",
+        "OBSERVED (page size 300)",
       ].includes(condition.boundaryStatus),
       `${condition.conditionId}: missing boundary classification`,
     );
@@ -612,6 +674,7 @@ test("FS-DATA-WRITE closure inventory cannot silently omit a declared condition"
         "MISMATCH",
         "VERIFIED",
         "PENDING_REVIEW",
+        "PENDING_INTEGRATION",
       ].includes(condition.status),
       `${condition.conditionId}: unknown status`,
     );

@@ -5066,14 +5066,28 @@ fn the_emulator_profile_keeps_the_earlier_aggregation_aliases() {
     }
     // `count.upTo` in its wrapper message form, which fireemu read before (production's
     // answer is not observed; the strict transcoder admits the wrapper message too).
-    let wrapped = json!([{"alias": "c", "count": {"upTo": {"value": 1}}}]);
-    for s in [&strict, &emulator] {
-        let (status, body) = aggregate(s, wrapped.clone());
-        assert_eq!(status, 200, "{body}");
-        assert_eq!(
-            body[0]["result"]["aggregateFields"]["c"]["integerValue"],
-            "1"
-        );
+    // The emulator profile reads every wrapper form as before; the strict transcoder admits
+    // the plain wrapper and judges the empty and nested ones itself.
+    for (up_to, count, strict_too) in [
+        (json!({"value": 1}), "1", true),
+        (json!({}), "2", false),
+        (json!({"value": {"value": 1}}), "1", false),
+        (json!({"value": {}}), "2", false),
+    ] {
+        let wrapped = json!([{"alias": "c", "count": {"upTo": up_to}}]);
+        let profiles: &[&RestState] = if strict_too {
+            &[&strict, &emulator]
+        } else {
+            &[&emulator]
+        };
+        for s in profiles {
+            let (status, body) = aggregate(s, wrapped.clone());
+            assert_eq!(status, 200, "{up_to}: {body}");
+            assert_eq!(
+                body[0]["result"]["aggregateFields"]["c"]["integerValue"], count,
+                "{up_to}"
+            );
+        }
     }
 }
 
@@ -5082,7 +5096,7 @@ fn the_emulator_profile_keeps_partition_projections_and_name_comparisons() {
     let (strict, emulator) = seeded_profiles();
     // A projection on a partitioned query.
     let partition = json!({"structuredQuery": {
-        "from": [{"collectionId": "qn", "allDescendants": true}],
+        "from": [{"collectionId": "qp", "allDescendants": true}],
         "select": {"fields": [{"fieldPath": "v"}]},
         "orderBy": [{"field": {"fieldPath": "__name__"}, "direction": "ASCENDING"}]},
         "partitionCount": "2"});
@@ -5096,13 +5110,44 @@ fn the_emulator_profile_keeps_partition_projections_and_name_comparisons() {
         (status, &body["error"]["message"]),
         (400, &json!("Property masks are not supported."))
     );
+    // The emulator partitions it as it partitions the query without the projection: enough
+    // documents for sampled cursors, the same cursors either way.
+    let writes: Vec<Value> = (0..600)
+        .map(|i| json!({"update": {"name": format!("projects/demo-app/databases/(default)/documents/qp/p{i:03}"), "fields": {"v": {"integerValue": "1"}}}}))
+        .collect();
     let (status, body) = call(
         &emulator,
         "POST",
-        &format!("{DOCS}:partitionQuery"),
-        partition,
+        &format!("{DOCS}:commit"),
+        json!({"writes": writes}),
     );
     assert_eq!(status, 200, "{body}");
+    let (status, projected) = call(
+        &emulator,
+        "POST",
+        &format!("{DOCS}:partitionQuery"),
+        partition.clone(),
+    );
+    assert_eq!(status, 200, "{projected}");
+    let mut unprojected = partition;
+    unprojected["structuredQuery"]
+        .as_object_mut()
+        .unwrap()
+        .remove("select");
+    let (status, plain) = call(
+        &emulator,
+        "POST",
+        &format!("{DOCS}:partitionQuery"),
+        unprojected,
+    );
+    assert_eq!(status, 200, "{plain}");
+    assert!(
+        projected["partitions"]
+            .as_array()
+            .is_some_and(|p| !p.is_empty()),
+        "{projected}"
+    );
+    assert_eq!(projected["partitions"], plain["partitions"]);
 
     // A `__name__` filter on a reference that is not a document.
     let collection = "projects/demo-app/databases/(default)/documents/qn";

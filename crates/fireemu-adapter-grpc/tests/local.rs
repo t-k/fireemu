@@ -8749,3 +8749,234 @@ async fn grpc_execute_pipeline_on_standard_keeps_each_profiles_words() {
         handle.abort();
     }
 }
+
+#[tokio::test]
+async fn grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking() {
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("items/a", &[("embedding", vector(&[1.0, 0.0]))]),
+                update_write("items/b", &[("embedding", vector(&[-1.0, 0.0]))]),
+                update_write("items/c", &[("embedding", vector(&[0.0, 1.0]))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let responses = collect_responses(
+        &mut client,
+        pb::RunQueryRequest {
+            parent: DOCS.to_owned(),
+            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                pb::StructuredQuery {
+                    from: vec![sq::CollectionSelector {
+                        collection_id: "items".to_owned(),
+                        ..Default::default()
+                    }],
+                    offset: 1,
+                    limit: Some(2),
+                    find_nearest: Some(sq::FindNearest {
+                        vector_field: Some(sq::FieldReference {
+                            field_path: "embedding".to_owned(),
+                        }),
+                        query_vector: Some(vector(&[1.0, 0.0])),
+                        distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                        limit: Some(2),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        responses
+            .iter()
+            .map(|response| response.skipped_results)
+            .sum::<i32>(),
+        1,
+        "the original offset is reported in skipped_results"
+    );
+    let ids = responses
+        .iter()
+        .filter_map(|response| response.document.as_ref())
+        .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["c", "b"]);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn grpc_find_nearest_skipped_results_use_pre_offset_matches() {
+    let (mut client, _, handle) =
+        start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("items/a", &[("embedding", vector(&[1.0, 0.0]))]),
+                update_write("items/b", &[("embedding", vector(&[-1.0, 0.0]))]),
+                update_write("items/c", &[("embedding", vector(&[0.0, 1.0]))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    for (offset, expected_skipped, expected_ids) in [(2, 2, vec!["c"]), (5, 3, vec![])] {
+        let responses = collect_responses(
+            &mut client,
+            pb::RunQueryRequest {
+                parent: DOCS.to_owned(),
+                query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+                    pb::StructuredQuery {
+                        from: vec![sq::CollectionSelector {
+                            collection_id: "items".to_owned(),
+                            ..Default::default()
+                        }],
+                        offset,
+                        limit: Some(2),
+                        find_nearest: Some(sq::FindNearest {
+                            vector_field: Some(sq::FieldReference {
+                                field_path: "embedding".to_owned(),
+                            }),
+                            query_vector: Some(vector(&[1.0, 0.0])),
+                            distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+                            limit: Some(2),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            responses
+                .iter()
+                .map(|response| response.skipped_results)
+                .sum::<i32>(),
+            expected_skipped,
+            "offset {offset}"
+        );
+        let ids = responses
+            .iter()
+            .filter_map(|response| response.document.as_ref())
+            .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected_ids, "offset {offset}");
+    }
+    handle.abort();
+}
+
+async fn collect_responses(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    req: pb::RunQueryRequest,
+) -> Vec<pb::RunQueryResponse> {
+    let mut stream = client.run_query(req).await.unwrap().into_inner();
+    let mut out = Vec::new();
+    while let Some(response) = stream.next().await {
+        out.push(response.unwrap());
+    }
+    out
+}
+
+/// A cosine search that meets a zero vector over gRPC: the strict profile refuses it as
+/// production does, the emulator profile leaves that candidate out as fireemu did before
+/// (confirmation review 2026-09-24, round 2).
+#[tokio::test]
+async fn grpc_cosine_search_over_a_zero_vector_differs_between_the_profiles() {
+    let request = || pb::RunQueryRequest {
+        parent: DOCS.to_owned(),
+        query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: "items".to_owned(),
+                    ..Default::default()
+                }],
+                find_nearest: Some(sq::FindNearest {
+                    vector_field: Some(sq::FieldReference {
+                        field_path: "embedding".to_owned(),
+                    }),
+                    query_vector: Some(vector(&[1.0, 0.0])),
+                    distance_measure: sq::find_nearest::DistanceMeasure::Cosine as i32,
+                    limit: Some(3),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    };
+    for policy in [
+        IndexValidationPolicy::Emulator,
+        IndexValidationPolicy::Production,
+    ] {
+        let (mut client, _, backend, handle) = start_with_backend_and_policy(false, policy).await;
+        let mut indexes = IndexSet::default();
+        indexes.add_composite(IndexDefinition {
+            collection_group: CollectionId::try_new("items").unwrap(),
+            query_scope: IndexQueryScope::Collection,
+            fields: vec![IndexField {
+                path: FieldPath::parse("embedding").unwrap(),
+                mode: IndexFieldMode::Vector { dimension: 2 },
+            }],
+        });
+        backend.replace_project_database_indexes(
+            "demo-app",
+            fireemu_core_types::ids::DatabaseId::DEFAULT,
+            indexes,
+        );
+        client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![
+                    update_write("items/near", &[("embedding", vector(&[1.0, 0.0]))]),
+                    update_write("items/zero", &[("embedding", vector(&[0.0, 0.0]))]),
+                    update_write("items/far", &[("embedding", vector(&[-1.0, 0.0]))]),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let mut names = Vec::new();
+        let mut refused = None;
+        let mut stream = match client.run_query(request()).await {
+            Ok(response) => Some(response.into_inner()),
+            Err(status) => {
+                refused = Some(status);
+                None
+            }
+        };
+        while let Some(message) = match stream.as_mut() {
+            Some(stream) => stream.next().await,
+            None => None,
+        } {
+            match message {
+                Ok(response) => names.extend(
+                    response
+                        .document
+                        .map(|d| d.name.rsplit('/').next().unwrap().to_owned()),
+                ),
+                Err(status) => refused = Some(status),
+            }
+        }
+        if policy == IndexValidationPolicy::Production {
+            let refused = refused.expect("the strict profile refuses the search");
+            assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
+            assert_eq!(
+                refused.message(),
+                "Cannot compute cosine distance against a vector with a magnitude of zero."
+            );
+        } else {
+            assert!(refused.is_none(), "{refused:?}");
+            assert_eq!(names, ["near", "far"]);
+        }
+        handle.abort();
+    }
+}

@@ -950,6 +950,7 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::InvalidPhoneNumber => error(400, "INVALID_PHONE_NUMBER"),
         AuthError::EmailNotFound => error(400, "EMAIL_NOT_FOUND"),
         AuthError::InvalidOobCode => error(400, "INVALID_OOB_CODE"),
+        AuthError::ExpiredOobCode => error(400, "EXPIRED_OOB_CODE"),
         AuthError::InvalidSessionInfo => error(400, "INVALID_SESSION_INFO"),
         AuthError::InvalidVerificationCode => error(400, "INVALID_CODE"),
         AuthError::FederatedUserIdAlreadyLinked => error(400, "FEDERATED_USER_ID_ALREADY_LINKED"),
@@ -3076,6 +3077,9 @@ fn handle_with_policy(
             }
         }
     }
+    // Strict (stateful refresh sessions) follows production's action-code lifetimes: a reset
+    // code lives an hour and is then refused as expired (sandbox recording 2026-09-24).
+    store.set_production_oob_lifetimes(!state.stateless_refresh_tokens);
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
@@ -10063,6 +10067,20 @@ fn unauthorized_continue_url(store: &AuthStore, body: &Value) -> Option<JsonResp
     ))
 }
 
+/// An outstanding code by value: `INVALID_OOB_CODE` for none, `EXPIRED_OOB_CODE` for one past
+/// its lifetime under production lifetimes (sandbox recording 2026-09-24, auth-action/expiry).
+fn live_oob_code(
+    store: &AuthStore,
+    code: &str,
+    at: LogicalInstant,
+) -> Result<fireemu_core_auth::store::OobCode, JsonResponse> {
+    match store.oob_code(code) {
+        None => Err(error(400, "INVALID_OOB_CODE")),
+        Some(entry) if store.oob_code_expired(entry, at) => Err(error(400, "EXPIRED_OOB_CODE")),
+        Some(entry) => Ok(entry.clone()),
+    }
+}
+
 /// `accounts:resetPassword`: verifies a `PASSWORD_RESET` code (`verifyPasswordResetCode`)
 /// and, with `newPassword`, consumes it and sets the password (`confirmPasswordReset`).
 fn reset_password(
@@ -10075,8 +10093,9 @@ fn reset_password(
     let Some(code) = str_field(body, "oobCode") else {
         return error(400, "MISSING_OOB_CODE");
     };
-    let Some(entry) = store.oob_code(code).cloned() else {
-        return error(400, "INVALID_OOB_CODE");
+    let entry = match live_oob_code(store, code, at) {
+        Ok(entry) => entry,
+        Err(response) => return response,
     };
     let new_password = match opt_str(body, "newPassword") {
         // Check mode (`checkActionCode` / `verifyPasswordResetCode`): describe the code
@@ -10178,8 +10197,9 @@ fn apply_oob_code(
     at: LogicalInstant,
     strict: bool,
 ) -> JsonResponse {
-    let Some(entry) = store.oob_code(code).cloned() else {
-        return error(400, "INVALID_OOB_CODE");
+    let entry = match live_oob_code(store, code, at) {
+        Ok(entry) => entry,
+        Err(response) => return response,
     };
     let Some(owner) = entry.uid.clone() else {
         return error(400, "INVALID_OOB_CODE");
@@ -10613,11 +10633,10 @@ fn sign_in_with_email_link(
         return error(400, "MISSING_OOB_CODE");
     };
     let email = canonicalize_email(email);
-    let Some(entry) = store
-        .oob_code(code)
-        .filter(|c| c.request_type == OobRequestType::EmailSignIn)
-    else {
-        return error(400, "INVALID_OOB_CODE");
+    let entry = match live_oob_code(store, code, at) {
+        Ok(entry) if entry.request_type == OobRequestType::EmailSignIn => entry,
+        Ok(_) => return error(400, "INVALID_OOB_CODE"),
+        Err(response) => return response,
     };
     if entry.email != email {
         return error(

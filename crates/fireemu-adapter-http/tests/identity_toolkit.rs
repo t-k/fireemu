@@ -16102,3 +16102,53 @@ fn email_link_sign_in_follows_the_sandbox() {
         }
     }
 }
+
+/// Strict: a password reset code lives an hour and is then refused as expired; the other kinds
+/// outlive the hour (sandbox recording 2026-09-24, auth-action/expiry). The emulator profile
+/// keeps its one-hour local policy for every kind.
+#[test]
+fn strict_action_codes_follow_the_sandbox_lifetimes() {
+    for (s, strict) in [(strict_state(), true), (state(), false)] {
+        email_links_on(&s);
+        create(
+            &s,
+            &json!({"localId": "a", "email": "a@example.com", "password": "password123"}),
+        );
+        let (_, verify) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_EMAIL", "email": "a@example.com"}),
+        );
+        let (_, link) = oob(
+            &s,
+            &json!({"requestType": "EMAIL_SIGNIN", "email": "n@example.com", "continueUrl": "https://demo-app.firebaseapp.com/finish"}),
+        );
+        let (_, reset) = oob(
+            &s,
+            &json!({"requestType": "PASSWORD_RESET", "email": "a@example.com"}),
+        );
+        advance(&s, 3_599);
+        assert_eq!(check_code(&s, &reset["oobCode"]).0, 200);
+        advance(&s, 2);
+        let expired = if strict {
+            "EXPIRED_OOB_CODE"
+        } else {
+            "INVALID_OOB_CODE"
+        };
+        let (status, body) = check_code(&s, &reset["oobCode"]);
+        assert_eq!((status, message(&body)), (400, Some(expired)));
+        let (status, body) = reset_with(&s, &reset["oobCode"], "password456");
+        assert_eq!((status, message(&body)), (400, Some(expired)));
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"oobCode": verify["oobCode"]}),
+        );
+        assert_eq!(status, if strict { 200 } else { 400 }, "{body}");
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithEmailLink"),
+            &json!({"oobCode": link["oobCode"], "email": "n@example.com"}),
+        );
+        assert_eq!(status, if strict { 200 } else { 400 }, "{body}");
+    }
+}

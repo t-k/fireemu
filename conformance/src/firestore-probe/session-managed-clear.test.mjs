@@ -11,7 +11,7 @@ import {
   validateLegacyDebrisDocument,
   validateShrinkBoundaryDocument,
   validateShrinkBoundaryState,
-} from "./session.mjs";
+} from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
 const names = [`${prefix}g500a/doc`, `${prefix}g1000b/doc`];

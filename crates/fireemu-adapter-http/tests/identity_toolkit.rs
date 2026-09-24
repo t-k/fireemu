@@ -15452,3 +15452,61 @@ fn strict_link_generation_refuses_a_continue_url_outside_the_authorized_domains(
         }
     }
 }
+
+/// An Admin email-link generator is refused while password sign-in is required, as the
+/// client route is (sandbox, 2026-09-24, `auth-action/generate/admin#sign-in-link-password-required`;
+/// the official emulator refuses it too).
+#[test]
+fn admin_email_link_generation_needs_email_link_sign_in() {
+    for s in [strict_state(), state()] {
+        let (status, body) = patch_sign_in(
+            &s,
+            "signIn.email.passwordRequired",
+            &json!({"signIn": {"email": {"enabled": true, "passwordRequired": true}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let (status, refused) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:sendOobCode"),
+            &json!({"requestType": "EMAIL_SIGNIN", "email": "link@example.com", "returnOobLink": true, "continueUrl": "https://demo-app.firebaseapp.com/finish", "canHandleCodeInApp": true}),
+        );
+        assert_eq!(
+            (status, refused["error"]["message"].as_str()),
+            (400, Some("OPERATION_NOT_ALLOWED"))
+        );
+        assert!(s.store.lock().unwrap().oob_codes().is_empty());
+    }
+}
+
+/// An email link used with another address names the mismatch (sandbox exploration
+/// 2026-09-24; the official emulator answers the same) and leaves the code usable.
+#[test]
+fn an_email_link_for_another_address_is_refused_as_a_mismatch() {
+    let s = state();
+    let (status, sent) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link@example.com", "returnOobLink": true, "continueUrl": "https://demo-app.firebaseapp.com/finish"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"oobCode": sent["oobCode"], "email": "other@example.com"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (
+            400,
+            Some("INVALID_EMAIL : The email provided does not match the sign-in email address.")
+        )
+    );
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"oobCode": sent["oobCode"], "email": "link@example.com"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+}

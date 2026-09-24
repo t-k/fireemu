@@ -9845,10 +9845,9 @@ fn send_oob_code(
             match store.user_by_email(&email) {
                 Some(u) => (email.clone(), Some(u.local_id.clone()), None),
                 // Improved email privacy: an unknown address is answered as if a mail had
-                // been sent, and no code is created. An Admin link generator is already
-                // authenticated and can read every account, so hiding the address from it
-                // would only withhold the link it asked for: it keeps `EMAIL_NOT_FOUND`.
-                None if store.config().enable_improved_email_privacy && !return_oob_link => {
+                // been sent, and no code is created, for the Admin link generator too
+                // (sandbox recording 2026-09-24; the official emulator answers the same).
+                None if store.config().enable_improved_email_privacy => {
                     return JsonResponse {
                         status: 200,
                         body: json!({"kind": "identitytoolkit#GetOobConfirmationCodeResponse", "email": email}),
@@ -9858,6 +9857,12 @@ fn send_oob_code(
             }
         }
         OobRequestType::EmailSignIn => {
+            // The Admin generator is refused while email links are off, as the client route
+            // is (sandbox recording 2026-09-24; the official emulator refuses it too).
+            let sign_in = store.sign_in_config();
+            if !sign_in.email_enabled || sign_in.password_required {
+                return error(400, "OPERATION_NOT_ALLOWED");
+            }
             let Some(email) = str_field(body, "email").map(canonicalize_email) else {
                 return error(400, "MISSING_EMAIL");
             };
@@ -10417,11 +10422,17 @@ fn sign_in_with_email_link(
         return error(400, "MISSING_OOB_CODE");
     };
     let email = canonicalize_email(email);
-    let matches = store
+    let Some(entry) = store
         .oob_code(code)
-        .is_some_and(|c| c.request_type == OobRequestType::EmailSignIn && c.email == email);
-    if !matches {
+        .filter(|c| c.request_type == OobRequestType::EmailSignIn)
+    else {
         return error(400, "INVALID_OOB_CODE");
+    };
+    if entry.email != email {
+        return error(
+            400,
+            "INVALID_EMAIL : The email provided does not match the sign-in email address.",
+        );
     }
     // With a session: link the (now verified) email to that user instead. The code is
     // consumed only once the request is known to succeed.

@@ -258,16 +258,21 @@ fn get_after_reads_the_state_after_the_write_and_fails_closed_elsewhere() {
         eval(&format!("!exists(/databases/$(database)/documents/nothing) && getAfter({counter_path}).data.n == 2"), &deleted),
         Decision::Deny(DenyReason::NoMatchingAllow)
     ));
-    // Reads (no after-state) fail closed with an explicit reason.
+    // In a read there is no write to apply: getAfter() and existsAfter() read the current
+    // state, as production answers (FS-RULES, 2026-09-24).
     let read_only = Access {
         before: access.before.clone(),
         after: None,
     };
-    assert!(matches!(
-        eval(&format!("getAfter({counter_path}).data.n == 2"), &read_only),
-        Decision::Deny(DenyReason::Unsupported(_))
-    ));
-    // Budget: get and getAfter of one path are two accesses.
+    for cond in [
+        format!("getAfter({counter_path}).data.n == 1"),
+        format!("existsAfter({counter_path})"),
+        "!existsAfter(/databases/$(database)/documents/counters/x)".to_owned(),
+    ] {
+        assert!(matches!(eval(&cond, &read_only), Decision::Allow), "{cond}");
+    }
+    // Budget: get and getAfter of one path are one access (production allows ten distinct
+    // documents read with both); an eleventh distinct document exceeds the budget.
     let mut terms: Vec<String> = (0..5)
         .map(|i| {
             format!(
@@ -275,7 +280,7 @@ fn get_after_reads_the_state_after_the_write_and_fails_closed_elsewhere() {
             )
         })
         .collect();
-    terms.push("exists(/databases/$(database)/documents/d/extra)".to_owned());
+    terms.push("!exists(/databases/$(database)/documents/d/extra)".to_owned());
     let many = terms.join(" && ");
     let docs: BTreeMap<String, RulesValue> = (0..5)
         .map(|i| {
@@ -289,13 +294,42 @@ fn get_after_reads_the_state_after_the_write_and_fails_closed_elsewhere() {
         before: docs.clone(),
         after: Some(docs),
     };
+    assert!(matches!(eval(&many, &full), Decision::Allow));
+    let eleven = format!(
+        "{many} && !exists(/databases/$(database)/documents/d/a) && !exists(/databases/$(database)/documents/d/b) && !exists(/databases/$(database)/documents/d/c) && !exists(/databases/$(database)/documents/d/e) && !exists(/databases/$(database)/documents/d/f)"
+    );
     assert!(matches!(
-        eval(&many, &full),
+        eval(&eleven, &full),
         Decision::Deny(DenyReason::BudgetExceeded {
             limit_id: "RULES-DOC-ACCESS-SINGLE",
             current: 11,
             maximum: 10
         })
+    ));
+}
+
+#[test]
+fn get_of_a_missing_document_is_null() {
+    let access = Access {
+        before: BTreeMap::new(),
+        after: Some(BTreeMap::new()),
+    };
+    let c = ctx(&[]);
+    let eval = |cond: &str| {
+        evaluate_request_with(&parse_ruleset(&rules(cond)).unwrap(), &c, Some(&access)).decision
+    };
+    let missing = "/databases/$(database)/documents/nothing/here";
+    for cond in [
+        format!("get({missing}) == null"),
+        format!("getAfter({missing}) == null"),
+        format!("!exists({missing}) && !existsAfter({missing})"),
+    ] {
+        assert!(matches!(eval(&cond), Decision::Allow), "{cond}");
+    }
+    // Reading a member of it is still an error, which makes that allow false.
+    assert!(matches!(
+        eval(&format!("get({missing}).data.n == 1")),
+        Decision::Deny(DenyReason::NoMatchingAllow)
     ));
 }
 

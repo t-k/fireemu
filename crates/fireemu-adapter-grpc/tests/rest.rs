@@ -2037,6 +2037,7 @@ fn rest_binds_unknown_mock_tokens_to_the_requested_project() {
     );
     assert_eq!(status, 401, "{body}");
 
+    // The strict profile refuses a token it cannot verify in production's words.
     let strict = state_with(Some(OWNER_RULES), TokenAcceptance::Verified);
     let (status, body) = call_as(
         &strict,
@@ -2045,7 +2046,11 @@ fn rest_binds_unknown_mock_tokens_to_the_requested_project() {
         write,
         Some(&bearer),
     );
-    assert_eq!(status, 401, "{body}");
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(
+        body["error"]["message"], "Missing or insufficient permissions.",
+        "{body}"
+    );
 }
 
 const EMULATOR: &str = "/emulator/v1/projects/demo-app";

@@ -16,7 +16,7 @@
 //!   `duration`, `latlng`, `math` and `hashing` namespaces, `map.diff()`, and the
 //!   `firestore.get()` / `firestore.exists()` namespace of Storage rules.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -738,6 +738,9 @@ fn build_request_with_resource(
     // runtime, and `request.keys()` does not list them (recorded, area `detail`).
     if let Some(resource) = request_resource {
         m.insert("resource".to_owned(), resource);
+    } else if ctx.method == Method::Delete && ctx.service == RulesService::Firestore {
+        // A delete has no incoming document; production presents it as null (FS-RULES).
+        m.insert("resource".to_owned(), RulesValue::Null);
     }
     if let Some(query) = ctx.request_query.clone() {
         m.insert("query".to_owned(), query);
@@ -3619,7 +3622,15 @@ impl<'a> Evaluator<'a> {
                     .into(),
             ));
         };
-        let reads = self.doc_cache.len() as u64 + 1;
+        // The budget counts documents, not calls: get() and getAfter() of one path are one
+        // access, as production counts them (FS-RULES, 2026-09-24).
+        let reads = self
+            .doc_cache
+            .keys()
+            .map(|(_, cached)| cached)
+            .chain(core::iter::once(&key.1))
+            .collect::<BTreeSet<_>>()
+            .len() as u64;
         if reads > self.doc_reads_max {
             return Err(EvalError::Budget {
                 limit_id: "RULES-DOC-ACCESS-SINGLE",
@@ -3627,12 +3638,11 @@ impl<'a> Evaluator<'a> {
                 maximum: self.doc_reads_max,
             });
         }
+        // In a read no write is applied, so the state after it is the current state.
         let doc = if after {
-            access.get_after(&key.1).ok_or_else(|| {
-                EvalError::Unsupported(
-                    "getAfter() is only available while a write is authorized".into(),
-                )
-            })?
+            access
+                .get_after(&key.1)
+                .unwrap_or_else(|| access.get(&key.1))
         } else {
             access.get(&key.1)
         };
@@ -3659,7 +3669,9 @@ impl<'a> Evaluator<'a> {
         Ok(match (name, doc) {
             ("exists" | "existsAfter", d) => RulesValue::Bool(d.is_some()),
             (_, Some(d)) => d,
-            (_, None) => return Err(soft(format!("{name}() of a missing document"))),
+            // Production answers null for a missing document (FS-RULES, 2026-09-24); reading
+            // a member of it is the error.
+            (_, None) => RulesValue::Null,
         })
     }
 

@@ -2713,29 +2713,22 @@ service cloud.firestore {
         ))
         .await
         .is_ok());
-    // A read cannot use getAfter(): fails closed with the reason.
-    h.rules.replace_source(
-        "rules_version = '2';
+    // A read applies no write, so getAfter() reads the current state there, as production
+    // answers (FS-RULES, 2026-09-24): the counter is now 1.
+    h.rules
+        .replace_source(
+            "rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /posts/{id} { allow read: if getAfter(/databases/$(database)/documents/stats/posts).data.count == 1; }
   }
 }",
-    )
-    .unwrap();
-    trace_denials(&h);
-    let err = h
-        .client
+        )
+        .unwrap();
+    h.client
         .get_document(with_bearer(get("posts/p1"), &alice_token))
         .await
-        .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
-    assert_eq!(err.message(), "Missing or insufficient permissions.");
-    assert!(
-        latest_denial(&h).contains("getAfter()"),
-        "{}",
-        latest_denial(&h)
-    );
+        .unwrap();
     h.handle.abort();
 }
 
@@ -3067,6 +3060,7 @@ async fn the_emulator_profile_binds_unknown_mock_tokens_to_the_requested_project
     assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
     firebase.handle.abort();
 
+    // The strict profile refuses a token it cannot verify in production's words.
     let mut strict = start_with(TokenAcceptance::Verified).await;
     let err = strict
         .client
@@ -3080,7 +3074,7 @@ async fn the_emulator_profile_binds_unknown_mock_tokens_to_the_requested_project
         ))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
 
     let (strict_tx, strict_rx) = mpsc::channel(4);
     let mut strict_responses = strict
@@ -3106,7 +3100,7 @@ async fn the_emulator_profile_binds_unknown_mock_tokens_to_the_requested_project
         .await
         .unwrap();
     let err = strict_responses.next().await.unwrap().unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "{err}");
     strict.handle.abort();
 }
 
@@ -3121,8 +3115,9 @@ async fn the_strict_profile_refuses_a_mock_token_the_auth_store_cannot_verify() 
         ))
         .await
         .unwrap_err();
+    // The mock token expired an hour after the epoch: production's expiry refusal.
     assert_eq!(err.code(), tonic::Code::Unauthenticated, "{err}");
-    assert!(err.message().contains("invalid ID token"), "{err}");
+    assert_eq!(err.message(), "Missing or invalid authentication.", "{err}");
     h.handle.abort();
 }
 
@@ -3259,5 +3254,143 @@ async fn the_emulator_profile_still_allows_everything_while_no_ruleset_is_loaded
     for outcome in outcomes_without_ruleset(&mut h, &alice_token).await {
         assert_eq!(outcome, None);
     }
+    h.handle.abort();
+}
+
+/// Production answers an end user's `ListCollectionIds` and `PartitionQuery` with the same
+/// `PERMISSION_DENIED` as every Security Rules denial (FS-RULES, 2026-09-24).
+#[tokio::test]
+async fn end_users_may_not_list_collection_ids_or_partition_queries() {
+    let mut h = start().await;
+    let (_alice, alice_token) = h.user("alice@example.com");
+    let err = h
+        .client
+        .list_collection_ids(with_bearer(
+            pb::ListCollectionIdsRequest {
+                parent: DOCS.to_owned(),
+                ..Default::default()
+            },
+            &alice_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
+    let err = h
+        .client
+        .partition_query(with_bearer(
+            pb::PartitionQueryRequest {
+                parent: DOCS.to_owned(),
+                partition_count: 2,
+                ..Default::default()
+            },
+            &alice_token,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert_eq!(err.message(), "Missing or insufficient permissions.");
+    // The owner is not refused.
+    h.client
+        .list_collection_ids(with_bearer(
+            pb::ListCollectionIdsRequest {
+                parent: DOCS.to_owned(),
+                ..Default::default()
+            },
+            "owner",
+        ))
+        .await
+        .unwrap();
+    h.handle.abort();
+}
+
+/// How Firestore refuses a credential it cannot use (FS-RULES production recording,
+/// 2026-09-24), before any rule is read: a token past its allowance is `UNAUTHENTICATED`
+/// "Missing or invalid authentication."; a bearer value that is not a JWT is
+/// `UNAUTHENTICATED` with the front end's OAuth text; every other unusable credential -- a
+/// JWT that does not verify, an empty bearer, another scheme -- is the ordinary
+/// `PERMISSION_DENIED`, even for a document every caller may read.
+#[tokio::test]
+async fn unusable_credentials_are_refused_in_productions_shapes() {
+    let mut h = start().await;
+    h.rules
+        .replace_source(
+            "rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /open/{id} { allow read: if true; }
+  }
+}",
+        )
+        .unwrap();
+    let (alice, token) = h.user("alice@example.com");
+    let expired = {
+        let store = h.auth.lock().unwrap();
+        let uid = store.user_by_id(&alice).unwrap().local_id.clone();
+        let claims = store
+            .id_token_claims(
+                &uid,
+                None,
+                LogicalInstant::from_nanos(START.as_nanos() - 7_200_000_000_000),
+            )
+            .unwrap();
+        encode_unsigned(&claims)
+    };
+    let payload = token.split('.').nth(1).unwrap();
+    let signed_garbage = format!("eyJhbGciOiJSUzI1NiJ9.{payload}.c2lnbmF0dXJl");
+    let oauth = "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.";
+    let cases: [(&str, String, tonic::Code, &str); 6] = [
+        (
+            "expired",
+            format!("Bearer {expired}"),
+            tonic::Code::Unauthenticated,
+            "Missing or invalid authentication.",
+        ),
+        (
+            "not a JWT",
+            "Bearer fsr-not-a-token".to_owned(),
+            tonic::Code::Unauthenticated,
+            oauth,
+        ),
+        (
+            "bad signature",
+            format!("Bearer {signed_garbage}"),
+            tonic::Code::PermissionDenied,
+            "Missing or insufficient permissions.",
+        ),
+        (
+            "empty bearer",
+            "Bearer ".to_owned(),
+            tonic::Code::PermissionDenied,
+            "Missing or insufficient permissions.",
+        ),
+        (
+            "basic",
+            "Basic ZnNyOmZzcg==".to_owned(),
+            tonic::Code::PermissionDenied,
+            "Missing or insufficient permissions.",
+        ),
+        (
+            "lowercase scheme",
+            format!("bearer {token}"),
+            tonic::Code::PermissionDenied,
+            "Missing or insufficient permissions.",
+        ),
+    ];
+    for (name, header, code, message) in cases {
+        let mut request = tonic::Request::new(get("open/d"));
+        request
+            .metadata_mut()
+            .insert("authorization", header.parse().unwrap());
+        let err = h.client.get_document(request).await.unwrap_err();
+        assert_eq!((err.code(), err.message()), (code, message), "{name}");
+    }
+    // The same valid token is honoured.
+    let err = h
+        .client
+        .get_document(with_bearer(get("open/d"), &token))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::NotFound);
     h.handle.abort();
 }

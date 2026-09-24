@@ -3241,3 +3241,27 @@ service cloud.firestore {
         "{report:?}"
     );
 }
+
+/// A delete has no incoming document: production's `request.resource` is present and null
+/// then (FS-RULES, 2026-09-24), so `request.resource == null` holds and reading its data is
+/// the error.
+#[test]
+fn a_delete_carries_a_null_request_resource() {
+    let request = ctx(
+        Method::Delete,
+        "/databases/(default)/documents/notes/one",
+        None,
+    );
+    let decision = |condition: &str| {
+        let source = format!(
+            "rules_version = '2'; service cloud.firestore {{ match /databases/{{database}}/documents/notes/{{id}} {{ allow delete: if {condition}; }} }}"
+        );
+        evaluate_request(&parse_ruleset(&source).unwrap(), &request).decision
+    };
+    assert!(matches!(decision("request.resource == null"), Decision::Allow));
+    assert!(matches!(decision("'resource' in request"), Decision::Allow));
+    assert!(matches!(
+        decision("request.resource.data.n == 1"),
+        Decision::Deny(DenyReason::NoMatchingAllow)
+    ));
+}

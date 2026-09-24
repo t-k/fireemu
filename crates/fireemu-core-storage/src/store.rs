@@ -1461,12 +1461,13 @@ impl StorageState {
         Ok((meta, reservation))
     }
 
-    /// Lists objects of `bucket` under `prefix`, bytewise by name, the way the official
-    /// emulator lists them: every folded prefix is returned on every page, only items are
-    /// paged, the page token is the name of the first item of the next page (the token
-    /// item is included), and a token that names no item restarts from the beginning.
-    /// `max_results` caps the items only (`None` is the official default of 1000;
-    /// `Some(0)` is an empty page whose token names the first item).
+    /// Lists objects and folded prefixes in bytewise name order. Both kinds of entry count
+    /// toward a positive `max_results`, as specified by the Firebase and Cloud Storage list APIs:
+    /// <https://firebase.google.com/docs/reference/js/storage.listoptions>
+    /// <https://cloud.google.com/storage/docs/json_api/v1/objects/list>
+    /// The token names the first entry of the next page, which that page includes. An
+    /// unknown token restarts the listing. Production handling of `max_results=0` is
+    /// unobserved, so that input retains its existing empty-page behavior.
     #[must_use]
     pub fn list(
         &self,
@@ -1476,40 +1477,77 @@ impl StorageState {
         page_token: Option<&str>,
         max_results: Option<usize>,
     ) -> ListPage {
-        let max = max_results.unwrap_or(DEFAULT_LIST_PAGE_SIZE);
+        let max = max_results
+            .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
+            .min(DEFAULT_LIST_PAGE_SIZE);
         let delimiter = delimiter.filter(|delimiter| !delimiter.is_empty());
-        let token_is_item = page_token.is_some_and(|token| {
+        let lower = (bucket.clone(), ObjectName::range_start(prefix));
+        let fold = |name: &str| {
+            let rest = &name[prefix.len()..];
+            delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])))
+        };
+        if max == 0 {
+            let token_is_item = page_token.is_some_and(|token| {
+                self.objects
+                    .get(&(bucket.clone(), ObjectName::range_start(token)))
+                    .is_some_and(|metadata| {
+                        let name = metadata.name.as_str();
+                        name.starts_with(prefix) && fold(name).is_none()
+                    })
+            });
+            let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
+            let mut prefixes = Vec::new();
+            let mut next_page_token = None;
+            for ((candidate_bucket, name), _) in self.objects.range(lower..) {
+                if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+                    break;
+                }
+                if let Some(folded) = fold(name.as_str()) {
+                    if prefixes.last() != Some(&folded) {
+                        prefixes.push(folded);
+                    }
+                } else if name.as_str() >= item_start && next_page_token.is_none() {
+                    next_page_token = Some(name.as_str().to_owned());
+                }
+            }
+            return ListPage {
+                items: Vec::new(),
+                prefixes,
+                next_page_token,
+            };
+        }
+        let token_is_entry = page_token.is_some_and(|token| {
             self.objects
-                .get(&(bucket.clone(), ObjectName::range_start(token)))
-                .is_some_and(|metadata| {
-                    let name = metadata.name.as_str();
-                    name.starts_with(prefix)
-                        && delimiter
-                            .is_none_or(|delimiter| !name[prefix.len()..].contains(delimiter))
+                .range(lower.clone()..)
+                .any(|((candidate_bucket, name), _)| {
+                    if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
+                        return false;
+                    }
+                    let folded = fold(name.as_str());
+                    folded.as_deref().unwrap_or(name.as_str()) == token
                 })
         });
-        let item_start = page_token.filter(|_| token_is_item).unwrap_or(prefix);
-        let lower = (bucket.clone(), ObjectName::range_start(prefix));
-        let mut items = Vec::with_capacity(max.min(DEFAULT_LIST_PAGE_SIZE));
+        let start = page_token.filter(|_| token_is_entry).unwrap_or(prefix);
+        let mut items = Vec::with_capacity(max);
         let mut prefixes: Vec<String> = Vec::new();
         let mut next_page_token = None;
         for ((candidate_bucket, name), meta) in self.objects.range(lower..) {
             if candidate_bucket != bucket || !name.as_str().starts_with(prefix) {
                 break;
             }
-            let rest = &name.as_str()[prefix.len()..];
-            let folded =
-                delimiter.and_then(|d| rest.find(d).map(|i| format!("{prefix}{}{d}", &rest[..i])));
+            let folded = fold(name.as_str());
+            let entry_name = folded.as_deref().unwrap_or(name.as_str());
+            if entry_name < start || folded.as_ref().is_some_and(|p| prefixes.last() == Some(p)) {
+                continue;
+            }
+            if items.len() + prefixes.len() == max {
+                next_page_token = Some(entry_name.to_owned());
+                break;
+            }
             if let Some(p) = folded {
-                // Names sharing a folded prefix are contiguous in name order, so a
-                // duplicate is always adjacent.
-                if prefixes.last() != Some(&p) {
-                    prefixes.push(p);
-                }
-            } else if name.as_str() >= item_start && items.len() < max {
+                prefixes.push(p);
+            } else {
                 items.push(meta.clone());
-            } else if name.as_str() >= item_start && next_page_token.is_none() {
-                next_page_token = Some(name.as_str().to_owned());
             }
         }
         ListPage {

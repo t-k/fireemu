@@ -1395,6 +1395,7 @@
             "the official Storage emulator parses no generation or metageneration precondition and verifies no declared checksum: it was measured to overwrite an object guarded by ifGenerationMatch=0, delete through a stale guard, and store a payload whose declared md5 did not match the bytes",
             "the official Storage emulator ignores resumable offsets and the JSON API Content-Range chunk protocol: it appends whatever arrives and finalizes every PUT, so a two-chunk upload was measured to commit its first chunk as the whole object",
             "the official Storage emulator registers JSON API object update (PATCH) and copy only on the short /b/... spelling: the /storage/v1/... spelling of those answers its 501 catch-all, and a bucket GET answers the 404 missing-object envelope; fireemu reproduces that route table exactly",
+            "the official Storage emulator pages items alone and repeats every folded prefix on every page; fireemu uses the combined items-and-prefixes maxResults budget documented by the Firebase and Cloud Storage list APIs",
             "a JSON API media insert without a name crashes the pinned official CLI outright (an unhandled TypeError after its own 400 exits firebase emulators:exec with code 2); fireemu answers a plain 400, and the row is recorded here because no fixture can record a crash"
           ],
           "fireemuOnly": [
@@ -1404,6 +1405,10 @@
             },
             {
               "behaviour": "generation / metageneration preconditions, declared checksums, resumable offsets and the Content-Range chunk protocol are honoured as production honours them, refusing requests the official emulator admits (and corrupts state on); every such step is pinned as a documented divergence in conformance/storage-matrix.json",
+              "precision": "conservative"
+            },
+            {
+              "behaviour": "both Storage dialects count items and folded prefixes together toward maxResults, return each prefix on one page only and cap the page at 1000; conformance/storage-matrix.json pins the official emulator's different pagination",
               "precision": "conservative"
             }
           ],

@@ -2413,6 +2413,89 @@ async fn read_response(stream: &mut tokio::net::TcpStream) -> String {
     String::from_utf8_lossy(&response).into_owned()
 }
 
+#[test]
+fn four_large_uploads_leave_tokio_workers_available() {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    static BUDGET: BodyBudget = BodyBudget::new(512 * 1024 * 1024);
+    const BODY_BYTES: usize = 64 * 1024 * 1024;
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let shared = Arc::new(state(None));
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = runtime.spawn(serve_storage_with_budget(listener, shared.clone(), &BUDGET));
+
+    // Holding the store lock makes all admitted handlers wait at the same synchronous
+    // boundary. Each 64 MiB write exceeds the socket buffer, so completed writes show
+    // that at least two handlers have drained most of their request bodies.
+    let store_guard = shared.store.lock().unwrap();
+    let payload = Arc::new(vec![7u8; BODY_BYTES]);
+    let (written_tx, written_rx) = mpsc::channel();
+    let clients: Vec<_> = (0..4)
+        .map(|index| {
+            let payload = payload.clone();
+            let written_tx = written_tx.clone();
+            std::thread::spawn(move || {
+                let mut stream = std::net::TcpStream::connect(address).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(120)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(30)))
+                    .unwrap();
+                stream
+                    .write_all(upload_head(&format!("worker-{index}.bin"), BODY_BYTES).as_bytes())
+                    .unwrap();
+                stream.write_all(&payload).unwrap();
+                written_tx.send(()).unwrap();
+                let mut response = [0u8; 4096];
+                let received = stream.read(&mut response).unwrap();
+                String::from_utf8_lossy(&response[..received]).into_owned()
+            })
+        })
+        .collect();
+    drop(written_tx);
+    let handlers_reached_lock =
+        (0..2).all(|_| written_rx.recv_timeout(Duration::from_secs(10)).is_ok());
+    std::thread::sleep(Duration::from_millis(20));
+
+    let (heartbeat_tx, heartbeat_rx) = mpsc::channel();
+    runtime.spawn(async move {
+        let _ = heartbeat_tx.send(());
+    });
+    let heartbeat_responded = heartbeat_rx
+        .recv_timeout(Duration::from_millis(500))
+        .is_ok();
+
+    drop(store_guard);
+    for client in clients {
+        let response = client.join().unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    }
+    server.abort();
+    runtime.block_on(async {
+        let _ = server.await;
+    });
+    assert!(
+        handlers_reached_lock,
+        "two upload bodies did not reach the handler"
+    );
+    assert!(
+        heartbeat_responded,
+        "Storage handlers blocked both Tokio workers"
+    );
+    assert_eq!(BUDGET.in_flight(), 0);
+}
+
 #[tokio::test]
 async fn set_rules_over_http_changes_later_storage_authorization() {
     use tokio::io::AsyncWriteExt;

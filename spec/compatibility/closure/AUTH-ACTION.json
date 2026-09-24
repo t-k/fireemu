@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-ACTION",
-  "parentStatus": "PENDING_CLOSURE_REVIEW",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -79,7 +79,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "Admin sendOobCode with returnOobLink for every request type: answer members, link parameters, continueUrl on authorized, unauthorized, malformed and empty values, canHandleCodeInApp, unknown, disabled and mixed-case addresses, missing and unknown request types, missing and invalid addresses, the new address of an email change (missing, taken, the same, invalid), email-link generation while password sign-in is required, and codes selected by an ID token instead of an address. The Admin email-change generator reads only the address (MISSING_EMAIL for an ID token alone), so the inspection row after it records only that dependency.",
       "evidence": {
         "productionRecordings": [
@@ -140,7 +140,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "Password reset codes: inspection without use, weak and empty passwords, missing, unknown and truncated codes, use and reuse, a newer code retiring an older one, sign-in with the old and new password, tokens issued before the reset, the account after the reset, and codes issued before an Admin or client password change, an email change, a disable (and re-enable) and a deletion; a verification code offered as a reset code. A code whose address another account took after it was issued acts on that account, in production as in both fireemu profiles (auth-action/address-reuse, follow-up directive S1).",
       "evidence": {
         "productionRecordings": [
@@ -177,7 +177,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "Email verification codes: inspection, apply and reapply, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable (the refusal keeps the code) and a deletion, and a reset code applied as a verification. Whether a newer verification code retires an older one is unobserved: production refuses a second verification link for an address within minutes (TOO_MANY_ATTEMPTS_TRY_LATER), so the corpus gives each link an address of its own, and fireemu keeps every verification code. That refusal is a known production behavior fireemu does not implement (scope decision E10), not a matched one. A code whose address another account took after it was issued acts on that account, in production as in both fireemu profiles (auth-action/address-reuse, follow-up directive S1).",
       "evidence": {
         "productionRecordings": [
@@ -213,7 +213,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "VERIFY_AND_CHANGE_EMAIL codes: inspection, a newer code and the older one, apply and reapply, sign-in by the old and new addresses, tokens and refresh issued before the change, the new address taken before use, the account's address changed, disabled or deleted before use, a change code offered as a reset code, and a verification code of the old address applied after the change.",
       "evidence": {
         "productionRecordings": [
@@ -363,7 +363,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "A PASSWORD_RESET code about ten seconds before and after its one-hour lifetime (inspection, use, a second account's code, and a new code afterwards; production answers EXPIRED_OOB_CODE); VERIFY_EMAIL, VERIFY_AND_CHANGE_EMAIL and EMAIL_SIGNIN codes inspected and used after the same hour. Their full lifetime is unobserved (owner decision 2026-09-24): the recording shows them live at about 3,610 s, the exploration at 3,900 s. No Google document states their lifetime (searched 2026-09-25: the Admin email-action-link, email-link sign-in and GetOobCodeResponse references), so fireemu's strict profile never refuses them as expired (owner decision 2026-09-25); at the per-project cap of outstanding codes the oldest of them older than 3,900 s makes room. An expired PASSWORD_RESET code is kept a day to be refused as expired (an inference). Exploration before the recording (not evidence): docs.local/runs/auth-action-explore-20260924/lifetime-*.jsonl.",
       "evidence": {
         "productionRecordings": [
@@ -396,7 +396,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "Every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row compared on one final artifact, with the Rust workspace tests of that source.",
       "evidence": {
         "productionRecordings": [
@@ -481,7 +481,7 @@
           "passed": 3374,
           "failed": 0
         },
-        "mutation": "Every viable mutant of the branch diff in fireemu-adapter-http and fireemu-core-auth is caught: docs.local/mutation/auth-action/head-37e8e0e46/RESULT.md for the promoted branch, and docs.local/mutation/auth-action/follow-up-20260925/ for the follow-up directive's diff (40 caught; the 2 survivors in scope are pinned by tests in 6643ae32e; 2 more lie in the fireemu binary crate, whose tests catch them) (private).",
+        "mutation": "docs.local/mutation/auth-action/head-37e8e0e46/RESULT.md covers the promoted branch (every viable mutant in fireemu-adapter-http and fireemu-core-auth caught). docs.local/mutation/auth-action/follow-up-20260925/ covers the follow-up directive's diff up to 36a07517b (40 caught; the 2 survivors in scope pinned by tests in 6643ae32e; 2 more in the fireemu binary crate, whose tests catch them). e292cc0e8 (the emulator profile resolving a code by its address) was not mutation-tested; pinning that it spends an unowned code is tracked in docs.local/issues/open/auth-action-unobserved-edges.md (private).",
         "buildTree": "clean (git status --porcelain empty at build); artifact copy, sha256, source commit and check logs in docs.local/runs/auth-action-final-20260925/ (private)"
       }
     },
@@ -495,7 +495,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "Independent clean-context closure and security review of the final artifact and evidence.",
       "evidence": {
         "productionRecordings": [
@@ -531,12 +531,11 @@
   ],
   "closureReview": {
     "decision": "APPROVED",
-    "decidedOn": "2026-09-24",
-    "reviewer": "independent clean-context closure review and security review of artifact bf3c6b12, and a clean-context confirmation review of their follow-ups (39d0b675b, 329900786, b50c3f529) on the rebuilt artifact",
-    "reviewedCommit": "b50c3f529",
-    "finalArtifactSha256": "06bbbf6f1b9d05c353e1836f9bb191299903ae4dacef133e1b268b047533d3a6",
-    "report": "docs.local/reviews/2026-09-24-auth-action-confirmation-review.md (private; the earlier reviews are -closure-review.md and -security-review.md)",
-    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-action-unobserved-edges.md): code lifetimes beyond one hour, VERIFY_EMAIL supersession (unobservable under production's per-address limit), sessions after an email link removes a password, a client sign-in link for a disabled account, a link sign-in of a disabled account, and a closure-test count of rows whose dependency returned nothing.",
-    "followUp": "The promotion review of 2026-09-25 kept the promotion conditionally; the follow-up directive (docs.local, 2026-09-25) reopens the conditions it touches until its fixes are rebound and a confirmation review approves them."
+    "decidedOn": "2026-09-25",
+    "reviewer": "independent clean-context closure review and security review of artifact bf3c6b12, a clean-context confirmation review of their follow-ups on artifact 06bbbf6f, the independent promotion review of 2026-09-25 (promotion kept, conditionally), and a clean-context confirmation review of the follow-up directive's fixes on artifact ca106b00",
+    "reviewedCommit": "8097c7c01",
+    "finalArtifactSha256": "ca106b009c547fbe426fd7ed6ef579d5bddef023d31b6b5793381a5e514cb7ef",
+    "report": "docs.local/reviews/2026-09-25-auth-action-follow-up-confirmation.md (private; earlier: 2026-09-24-auth-action-confirmation-review.md, -closure-review.md, -security-review.md, and docs.local/instructions/2026-09-24-auth-action-promotion-review.md)",
+    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-action-unobserved-edges.md): code lifetimes beyond one hour, VERIFY_EMAIL supersession (unobservable under production's per-address limit), sessions after an email link removes a password, a client sign-in link for a disabled account, a link sign-in of a disabled account, and a closure-test count of rows whose dependency returned nothing. After the follow-up directive: pinning that the emulator profile spends a code whose address nobody owns, and the official emulator's order of the weak-password check before the owner lookup (confirmation review S1, S2)."
   }
 }

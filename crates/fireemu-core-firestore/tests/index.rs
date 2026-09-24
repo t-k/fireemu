@@ -229,6 +229,31 @@ fn frozen_default_aggregate_map_and_index_count_points_pass_index_accounting() {
 }
 
 #[test]
+fn index_entry_count_refusal_names_the_relative_entity_path() {
+    use fireemu_core_firestore::path::DocumentPath;
+    use fireemu_core_types::ids::{DatabaseId, ProjectId};
+    use std::collections::BTreeMap;
+
+    let path = DocumentPath::parse(
+        &ProjectId::try_new("demo-app").unwrap(),
+        &DatabaseId::default_database(),
+        "ie2/arr20000",
+    )
+    .unwrap();
+    let fields = BTreeMap::from([(
+        "a".into(),
+        Value::Array((0..20_000).map(Value::Integer).collect()),
+    )]);
+    assert_eq!(
+        IndexSet::default()
+            .document_index_usage(&path, &fields)
+            .unwrap_err()
+            .to_string(),
+        "invalid argument: too many index entries for entity /ie2/arr20000"
+    );
+}
+
+#[test]
 fn indexed_1500_byte_string_uses_recorded_long_name_refusal_points() {
     use fireemu_core_firestore::path::DocumentPath;
     use fireemu_core_types::ids::{DatabaseId, ProjectId};

@@ -56,6 +56,35 @@ fn state(scope: LimitScope) -> FirestoreState {
     FirestoreState::with_limit_scope(scope)
 }
 
+#[test]
+fn an_index_entry_count_refusal_preserves_the_whole_commit_state() {
+    let mut store = state(LimitScope::Production);
+    store
+        .commit(&[set("ie2/control", "v", Value::Integer(1))], None, t(0))
+        .expect("control");
+    let before = store.get(&path("ie2/control")).cloned();
+    let refused = store.commit(
+        &[
+            set(
+                "ie2/arr20000",
+                "a",
+                Value::Array((0..20_000).map(Value::Integer).collect()),
+            ),
+            set("ie2/control", "v", Value::Integer(2)),
+        ],
+        None,
+        t(1),
+    );
+    assert!(
+        matches!(refused, Err(FirestoreError::InvalidArgument(ref message))
+            if message == "too many index entries for entity /ie2/arr20000"),
+        "{}",
+        outcome(&refused)
+    );
+    assert!(store.get(&path("ie2/arr20000")).is_none());
+    assert_eq!(store.get(&path("ie2/control")).cloned(), before);
+}
+
 /// A one-line rendering of a commit outcome. The values under test are megabytes wide, so a
 /// failure must never print the request back.
 fn outcome<T>(result: &Result<T, FirestoreError>) -> String {

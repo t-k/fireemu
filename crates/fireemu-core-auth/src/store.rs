@@ -1195,6 +1195,9 @@ pub struct AuthStore {
     /// hour, the other kinds longer, and an expired code is refused as expired. Otherwise every
     /// code lives an hour and then disappears (the emulator profile's local policy).
     production_oob_lifetimes: bool,
+    /// Whether second factors follow production's project rules (the strict profile): the
+    /// project's `mfa` config decides whether a sign-in asks for one.
+    production_mfa: bool,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
     /// Outstanding phone `temporaryProof`s: proof to the verified number and its issue time.
@@ -1518,6 +1521,7 @@ impl AuthStore {
             lifecycle_epoch: None,
             legacy_tokens_issued: false,
             production_oob_lifetimes: false,
+            production_mfa: false,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             temporary_proofs: BTreeMap::new(),
@@ -3192,6 +3196,27 @@ impl AuthStore {
         if self.oob_codes.values().any(voided) {
             Arc::make_mut(&mut self.oob_codes).retain(|_, c| !voided(c));
         }
+    }
+
+    /// Switches second factors to production's project rules (see `production_mfa`).
+    pub fn set_production_mfa(&mut self, production: bool) {
+        self.production_mfa = production;
+    }
+
+    /// Whether a sign-in of an account with enrolled factors must ask for one: always under
+    /// the official emulator's rules; under production's only while the project's MFA is on
+    /// (sandbox recording 2026-09-24, `auth-mfa/disabled`).
+    #[must_use]
+    pub fn second_factor_required(&self) -> bool {
+        // A tenant's own MFA config belongs to AUTH-TENANT-BLOCKING (scope decision M2); a
+        // tenant keeps asking for enrolled factors.
+        !self.production_mfa || self.tenant_id.is_some() || self.mfa_config.state.is_on()
+    }
+
+    /// Whether second factors follow production's project rules (the strict profile).
+    #[must_use]
+    pub const fn second_factor_rules_are_production(&self) -> bool {
+        self.production_mfa
     }
 
     /// Switches action codes to production's lifetimes (see `production_oob_lifetimes`).

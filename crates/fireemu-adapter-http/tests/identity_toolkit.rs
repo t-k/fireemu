@@ -15450,29 +15450,36 @@ fn strict_link_generation_refuses_a_continue_url_outside_the_authorized_domains(
     }
 }
 
-/// An Admin email-link generator is refused while password sign-in is required, as the
-/// client route is (sandbox, 2026-09-24, `auth-action/generate/admin#sign-in-link-password-required`;
-/// the official emulator refuses it too).
+/// Strict: an Admin email-link generator is refused while password sign-in is required
+/// (sandbox, 2026-09-24, `auth-action/generate/admin#sign-in-link-password-required`). The
+/// official emulator always reports email links as enabled (firebase-tools `state.js`
+/// `enableEmailLinkSignin`), so the emulator profile generates the link, adding no rejection.
 #[test]
-fn admin_email_link_generation_needs_email_link_sign_in() {
-    for s in [strict_state(), state()] {
+fn admin_email_link_generation_needs_email_link_sign_in_in_strict() {
+    for (strict, s) in [(true, strict_state()), (false, state())] {
         let (status, body) = patch_sign_in(
             &s,
             "signIn.email.passwordRequired",
             &json!({"signIn": {"email": {"enabled": true, "passwordRequired": true}}}),
         );
         assert_eq!(status, 200, "{body}");
-        let (status, refused) = admin(
+        let (status, answer) = admin(
             &s,
             "POST",
             &format!("{ADMIN}/accounts:sendOobCode"),
             &json!({"requestType": "EMAIL_SIGNIN", "email": "link@example.com", "returnOobLink": true, "continueUrl": "https://demo-app.firebaseapp.com/finish", "canHandleCodeInApp": true}),
         );
-        assert_eq!(
-            (status, refused["error"]["message"].as_str()),
-            (400, Some("OPERATION_NOT_ALLOWED"))
-        );
-        assert!(s.store.lock().unwrap().oob_codes().is_empty());
+        if strict {
+            assert_eq!(
+                (status, answer["error"]["message"].as_str()),
+                (400, Some("OPERATION_NOT_ALLOWED"))
+            );
+            assert!(s.store.lock().unwrap().oob_codes().is_empty());
+        } else {
+            assert_eq!(status, 200, "{answer}");
+            assert!(answer["oobCode"].is_string(), "{answer}");
+            assert_eq!(s.store.lock().unwrap().oob_codes().len(), 1);
+        }
     }
 }
 
@@ -16611,5 +16618,79 @@ fn the_project_mfa_config_is_read_back_and_replaced_whole() {
         );
         assert_eq!(status, 200, "{body}");
         assert_eq!(read(&s), json!({"state": "DISABLED"}));
+    }
+}
+
+/// Strict: an email change applied from the emulator's action page follows the same rules as
+/// `accounts:update` with the code: earlier sessions are revoked, the replaced address is
+/// recorded as `initialEmail`, and the replaced address's verification codes are void. The
+/// emulator profile keeps the official emulator's answers on both routes.
+#[test]
+fn strict_the_action_page_applies_an_email_change_like_the_api() {
+    for (strict, via_page) in [(true, true), (true, false), (false, true), (false, false)] {
+        let label = format!("strict={strict} page={via_page}");
+        let s = if strict { strict_state() } else { state() };
+        create(
+            &s,
+            &json!({"localId": "c", "email": "c@example.com", "password": "password123"}),
+        );
+        let (status, session) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "c@example.com", "password": "password123", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{label} {session}");
+        let (_, verify) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_EMAIL", "email": "c@example.com"}),
+        );
+        let (_, change) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "email": "c@example.com", "newEmail": "c-new@example.com"}),
+        );
+        advance(&s, 2);
+        let code = change["oobCode"].as_str().unwrap();
+        if via_page {
+            let r = handle(
+                &s,
+                "GET",
+                &format!(
+                    "/emulator/action?mode=verifyAndChangeEmail&oobCode={code}&apiKey=fake-api-key"
+                ),
+                &Value::Null,
+            );
+            assert_eq!(r.status, 200, "{label} {}", r.body);
+        } else {
+            let (status, body) = post(
+                &s,
+                &format!("{V1}/accounts:update"),
+                &json!({"oobCode": code}),
+            );
+            assert_eq!(status, 200, "{label} {body}");
+        }
+        let (_, users) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": ["c"]}),
+        );
+        assert_eq!(users["users"][0]["email"], "c-new@example.com", "{label}");
+        assert_eq!(
+            users["users"][0].get("initialEmail").is_some(),
+            strict,
+            "{label}"
+        );
+        let (status, _) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": session["idToken"]}),
+        );
+        assert_eq!(status == 400, strict, "{label}: earlier session revoked");
+        let old_verify = verify["oobCode"].as_str().unwrap();
+        assert_eq!(
+            s.store.lock().unwrap().oob_code(old_verify).is_none(),
+            strict,
+            "{label}: the replaced address's verification code is void"
+        );
     }
 }

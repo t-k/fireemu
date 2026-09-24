@@ -647,13 +647,8 @@ fn with_type(type_url: &str, value: Value) -> Value {
     Value::Object(out)
 }
 
-fn patch_database(
-    state: &RestState,
-    project: &str,
-    database: &str,
-    params: &BTreeMap<String, Vec<String>>,
-    body: &Value,
-) -> RestResponse {
+/// The `updateMask` of a database patch, refusing the paths production does not update.
+fn update_mask(params: &BTreeMap<String, Vec<String>>) -> Result<Vec<String>, RestResponse> {
     let mask: Vec<String> = param(params, "updateMask")
         .map(|m| {
             m.split(',')
@@ -664,38 +659,39 @@ fn patch_database(
         })
         .unwrap_or_default();
     for path in &mask {
-        match path.as_str() {
+        let refusal = match path.as_str() {
             "deleteProtectionState"
             | "delete_protection_state"
             | "concurrencyMode"
-            | "concurrency_mode" => {}
+            | "concurrency_mode"
+            | "type" => continue,
             "pointInTimeRecoveryEnablement" | "point_in_time_recovery_enablement" => {
-                return crate::rest::error_response(&Status::unimplemented(MANAGED_INFRASTRUCTURE))
+                return Err(crate::rest::error_response(&Status::unimplemented(
+                    MANAGED_INFRASTRUCTURE,
+                )))
             }
-            "locationId" | "location_id" => {
-                return error(
-                    tonic::Code::InvalidArgument,
-                    "Changing database location is not supported.",
-                    None,
-                )
-            }
-            "type" => {}
+            "locationId" | "location_id" => "Changing database location is not supported.",
             "databaseEdition" | "database_edition" => {
-                return error(
-                    tonic::Code::InvalidArgument,
-                    "Changing the edition of a database is not supported.",
-                    None,
-                )
+                "Changing the edition of a database is not supported."
             }
-            _ => {
-                return error(
-                    tonic::Code::InvalidArgument,
-                    "Invalid updateMask for database proto.",
-                    None,
-                )
-            }
-        }
+            _ => "Invalid updateMask for database proto.",
+        };
+        return Err(error(tonic::Code::InvalidArgument, refusal, None));
     }
+    Ok(mask)
+}
+
+fn patch_database(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    params: &BTreeMap<String, Vec<String>>,
+    body: &Value,
+) -> RestResponse {
+    let mask = match update_mask(params) {
+        Ok(mask) => mask,
+        Err(response) => return response,
+    };
     let concurrency = match parse_enum(
         body,
         "concurrencyMode",

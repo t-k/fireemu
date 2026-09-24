@@ -609,6 +609,35 @@ test("legacy recovery resumes a pending intent when typed preflight proves the t
   }
 });
 
+test("legacy recovery preserves a typed-absent name from a journal created before write-ahead intents", async () => {
+  const alreadyAbsent = legacyNames[0];
+  const result = await observeCollector({
+    scopeNames: legacyNames,
+    visibleNames: legacyNames.slice(1),
+    arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
+    recoveryOnly: true,
+    initialJournal: {
+      schemaVersion: 1,
+      mode: "recover-legacy",
+      status: "preflight-complete",
+      project: "fireemu-oracle-sbx",
+      database: "(default)",
+      names: legacyNames,
+      presentNames: legacyNames.slice(1),
+      absentNames: [alreadyAbsent],
+    },
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    const journal = JSON.parse(await readFile(result.journal, "utf8"));
+    assert.equal(journal.status, "complete");
+    assert.deepEqual(journal.deletedNames, legacyNames.slice(1));
+    assert.deepEqual(journal.verifiedAbsentNames, [alreadyAbsent]);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
 test("legacy recovery stops on malformed, missing, or multiple delete results", async (t) => {
   for (const deleteAckShape of ["malformed", "missing", "multiple"]) {
     await t.test(deleteAckShape, async () => {

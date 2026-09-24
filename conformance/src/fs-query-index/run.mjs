@@ -21,11 +21,18 @@
 // programs whose id starts with one of its comma-separated prefixes (FS_QUERY_INDEX_PROGRAMS_EXACT=1
 // for exact ids); recorded programs replace their previous entries and the others are kept.
 // `check` uses FIREEMU_BIN (or the workspace build) and writes .runs/fs-query-index/comparison.json.
+//
+// With FIREEMU_SANDBOX_LANE=fs-data-write-list the same commands run the listDocuments /
+// listCollectionIds lane: corpus src/fs-list/corpus.mjs, fixture fs-data-write-list-production.json,
+// run directory .runs/fs-data-write-list, ledger task FS-DATA-WRITE-LIST. The environment names
+// above (FS_QUERY_INDEX_PROGRAMS, FIREEMU_FS_QUERY_PRIVATE_DIR) serve both lanes. Both lanes wipe
+// the whole sandbox `(default)` database, so a recording holds a lock file next to the ledger and
+// the other lane cannot record at the same time.
 
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
@@ -373,7 +380,7 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
       "production Firestore REST v1 and gRPC google.firestore.v1, Standard edition, us-central1, database (default)",
     project: RECORDED_PROJECT,
     indexes: `conformance/${LANE.indexes}`,
-    note: "Two recordings per program. Run-window times, execution durations, page and transaction tokens and the project id are placeholders; missing-index links keep their encoded index with the project id replaced. `second` holds the other recording of rows that differed.",
+    note: `Two recordings per program. Run-window times, execution durations, page and transaction tokens (also where an answer echoes a token the request carried) and the project id are placeholders; the project id is recorded as ${RECORDED_PROJECT} in every lane. Missing-index links keep their encoded index with the project id replaced. \`second\` holds the other recording of rows that differed.`,
   };
   for (const program of programs) {
     const one = first.results[program.id];
@@ -400,7 +407,39 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   return diffRecordings(first.results, second.results);
 }
 
+/**
+ * Runs `record` while holding `<ledger>.lock`, created exclusively: the lanes sharing the
+ * sandbox `(default)` database each wipe all of it, so two recordings must never overlap. A
+ * lock left by a crashed run names its lane and process and must be removed by hand.
+ */
+export async function withRecordingLock(ledger, lane, record) {
+  const lock = `${ledger}.lock`;
+  let handle;
+  try {
+    handle = await open(lock, "wx", 0o600);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    const holder = await readFile(lock, "utf8").catch(() => "unknown");
+    throw new Error(
+      `another recording holds ${lock} (${holder.trim()}); both lanes wipe (default)`,
+    );
+  }
+  try {
+    await handle.writeFile(`${lane} pid ${process.pid} since ${new Date().toISOString()}\n`);
+    await handle.close();
+    return await record();
+  } finally {
+    await rm(lock, { force: true });
+  }
+}
+
 async function recordProduction() {
+  const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
+  if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
+  return withRecordingLock(ledger, LANE.id, recordProductionLocked);
+}
+
+async function recordProductionLocked() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
   const privateRoot = process.env.FIREEMU_FS_QUERY_PRIVATE_DIR;
   if (!ledger || !privateRoot) {

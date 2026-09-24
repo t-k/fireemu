@@ -41,6 +41,7 @@ const ids = (id, body = {}, extra = {}) => ({ id, rpc: "listCollectionIds", body
 const next = (step) => ({ $from: step, path: "nextPageToken" });
 const commit = (id, writes) => ({ id, rpc: "commit", body: { writes } });
 const put = (path, n) => ({ update: { name: `{docs}/${path}`, fields: { n: int(n) } } });
+const putA = (path, a) => ({ update: { name: `{docs}/${path}`, fields: { a: int(a) } } });
 const remove = (path) => ({ delete: `{docs}/${path}` });
 const atWrite = (step) => ({ $from: step, path: "commitTime" });
 const shifted = (step, shift) => ({ $time: { $from: step, path: "commitTime", ...shift } });
@@ -48,6 +49,164 @@ const shifted = (step, shift) => ({ $time: { $from: step, path: "commitTime", ..
 const grpc = (id, rpc, body = {}, extra = {}) => ({ id, rpc, transport: "grpc", body, ...extra });
 
 export const PROGRAMS = [
+  {
+    // Page tokens across a commit between two pages: a key cursor over live data, or a pinned
+    // snapshot (pre-send review, 2026-09-24).
+    id: "fs-data-write-list/list-documents/paging-under-writes",
+    seed: [
+      ["lpw/d1", { a: int(1) }],
+      ["lpw/d2", { a: int(2) }],
+      ["lpw/d3", { a: int(3) }],
+      ["lpw/d4", { a: int(4) }],
+      ["lpw/d5", { a: int(5) }],
+      ["lpa/x", {}],
+      ["lpc/x", {}],
+    ],
+    steps: [
+      list("page-1", "lpw", [["pageSize", "2"]]),
+      list("order-page-1", "lpw", [
+        ["orderBy", "a desc"],
+        ["pageSize", "2"],
+      ]),
+      list("missing-page-1", "lpw", [
+        ["showMissing", "true"],
+        ["pageSize", "2"],
+      ]),
+      ids("root-page-1", { pageSize: 1 }),
+      commit("change", [
+        // Before the name cursor.
+        putA("lpw/d0", 0),
+        // After the name cursor, and first in a-desc order.
+        putA("lpw/d25", 25),
+        // The document right after the name cursor.
+        remove("lpw/d3"),
+        // Crosses the a-desc cursor.
+        putA("lpw/d4", 0),
+        // A new missing document after the cursor.
+        putA("lpw/d45/sub/s", 1),
+        // A new root collection after the ids cursor, and one that disappears.
+        putA("lpb/x", 1),
+        remove("lpc/x"),
+      ]),
+      list("page-2-after-change", "lpw", [
+        ["pageSize", "2"],
+        ["pageToken", next("page-1")],
+      ]),
+      list("page-3-after-change", "lpw", [
+        ["pageSize", "2"],
+        ["pageToken", next("page-2-after-change")],
+      ]),
+      list("page-2-token-reused", "lpw", [
+        ["pageSize", "2"],
+        ["pageToken", next("page-1")],
+      ]),
+      list("order-page-2-after-change", "lpw", [
+        ["orderBy", "a desc"],
+        ["pageSize", "2"],
+        ["pageToken", next("order-page-1")],
+      ]),
+      list("missing-page-2-after-change", "lpw", [
+        ["showMissing", "true"],
+        ["pageSize", "2"],
+        ["pageToken", next("missing-page-1")],
+      ]),
+      ids("root-page-2-after-change", { pageSize: 1, pageToken: next("root-page-1") }),
+      ids("root-page-3-after-change", {
+        pageSize: 1,
+        pageToken: next("root-page-2-after-change"),
+      }),
+      grpc("grpc-page-1", "listDocuments", { collectionId: "lpw", pageSize: 2 }),
+      grpc("grpc-page-2-with-rest-token", "listDocuments", {
+        collectionId: "lpw",
+        pageSize: 2,
+        pageToken: next("page-1"),
+      }),
+    ],
+  },
+  {
+    // Missing documents between present ones in paged listings, and a collection of missing
+    // documents only (pre-send review, 2026-09-24).
+    id: "fs-data-write-list/list-documents/missing-interleaved",
+    seed: [
+      ["lmi/a0/sub/s", {}],
+      ["lmi/a1/sub/s", {}],
+      ["lmi/b1", {}],
+      ["lmi/c0/sub/s", {}],
+      ["lmi/c1", {}],
+      ["lmi/d0/sub/s", {}],
+      ["lmo/x/sub/s", {}],
+      ["lmo/y/sub/s", {}],
+    ],
+    steps: [
+      list("page-size-1", "lmi", [["pageSize", "1"]]),
+      list("page-size-1-next", "lmi", [
+        ["pageSize", "1"],
+        ["pageToken", next("page-size-1")],
+      ]),
+      list("page-size-1-next-2", "lmi", [
+        ["pageSize", "1"],
+        ["pageToken", next("page-size-1-next")],
+      ]),
+      list("page-size-1-next-3", "lmi", [
+        ["pageSize", "1"],
+        ["pageToken", next("page-size-1-next-2")],
+      ]),
+      list("page-size-2", "lmi", [["pageSize", "2"]]),
+      list("page-size-2-next", "lmi", [
+        ["pageSize", "2"],
+        ["pageToken", next("page-size-2")],
+      ]),
+      list("page-size-2-next-2", "lmi", [
+        ["pageSize", "2"],
+        ["pageToken", next("page-size-2-next")],
+      ]),
+      list("show-missing-page-size-2", "lmi", [
+        ["showMissing", "true"],
+        ["pageSize", "2"],
+      ]),
+      list("show-missing-page-size-2-next", "lmi", [
+        ["showMissing", "true"],
+        ["pageSize", "2"],
+        ["pageToken", next("show-missing-page-size-2")],
+      ]),
+      list("show-missing-page-size-2-next-2", "lmi", [
+        ["showMissing", "true"],
+        ["pageSize", "2"],
+        ["pageToken", next("show-missing-page-size-2-next")],
+      ]),
+      list("order-by-name-page-size-1", "lmi", [
+        ["orderBy", "__name__"],
+        ["pageSize", "1"],
+      ]),
+      list("order-by-field-page-size-1", "lmi", [
+        ["orderBy", "a"],
+        ["pageSize", "1"],
+      ]),
+      list("only-missing", "lmo"),
+      list("only-missing-page-size-1", "lmo", [["pageSize", "1"]]),
+      list("only-missing-show-missing-page-size-1", "lmo", [
+        ["showMissing", "true"],
+        ["pageSize", "1"],
+      ]),
+      grpc("grpc-page-size-1", "listDocuments", { collectionId: "lmi", pageSize: 1 }),
+    ],
+  },
+  {
+    // The default and largest page sizes (pre-send review, 2026-09-24).
+    id: "fs-data-write-list/list-documents/large",
+    seed: Array.from({ length: 301 }, (_, i) => [`lbig/d${String(i).padStart(3, "0")}`, {}]),
+    steps: [
+      list("default", "lbig", [["mask.fieldPaths", "__name__"]]),
+      list("page-size-1000", "lbig", [
+        ["pageSize", "1000"],
+        ["mask.fieldPaths", "__name__"],
+      ]),
+      list("page-size-300", "lbig", [
+        ["pageSize", "300"],
+        ["mask.fieldPaths", "__name__"],
+      ]),
+    ],
+  },
   {
     id: "fs-data-write-list/list-documents/paging",
     seed: LIST_SEED,
@@ -89,6 +248,15 @@ export const PROGRAMS = [
       list("page-token-garbage", "lst", [["pageToken", "garbage"]]),
       list("page-token-base64", "lst", [["pageToken", "AAAA"]]),
       list("page-token-empty", "lst", [["pageToken", ""]]),
+      list("token-with-mask", "lst", [
+        ["pageSize", "2"],
+        ["mask.fieldPaths", "a"],
+        ["pageToken", next("page-size-2")],
+      ]),
+      list("page-size-plus-sign", "lst", [["pageSize", "+2"]]),
+      list("page-size-leading-zero", "lst", [["pageSize", "02"]]),
+      list("page-size-exponent", "lst", [["pageSize", "1e1"]]),
+      list("page-size-empty", "lst", [["pageSize", ""]]),
     ],
   },
   {
@@ -135,6 +303,8 @@ export const PROGRAMS = [
         ["mask.fieldPaths", "b"],
         ["orderBy", "a"],
       ]),
+      list("mask-comma-separated", "lst", [["mask.fieldPaths", "a,b"]]),
+      list("mask-quoted", "lst", [["mask.fieldPaths", "`a`"]]),
     ],
   },
   {
@@ -173,6 +343,12 @@ export const PROGRAMS = [
       ]),
       list("show-missing-deep", "deep", [["showMissing", "true"]], { parent: "lst/missing2" }),
       list("show-missing-empty-collection", "nothing", [["showMissing", "true"]]),
+      list("show-missing-capitalized", "lst", [["showMissing", "True"]]),
+      list("show-missing-empty", "lst", [["showMissing", ""]]),
+      list("token-with-show-missing-dropped", "lst", [
+        ["pageSize", "3"],
+        ["pageToken", next("show-missing-paged")],
+      ]),
     ],
   },
   {
@@ -193,14 +369,22 @@ export const PROGRAMS = [
         ["transaction", "AAAA"],
         ["readTime", "2099-01-01T00:00:00Z"],
       ]),
+      list("snake-page-size", "lst", [["page_size", "2"]]),
+      list("snake-order-by", "lst", [["order_by", "a desc"]]),
+      list("snake-mask", "lst", [["mask.field_paths", "a"]]),
+      list("snake-show-missing", "lst", [["show_missing", "true"]]),
+      list("snake-and-camel-page-size", "lst", [
+        ["pageSize", "1"],
+        ["page_size", "2"],
+      ]),
     ],
   },
   {
     id: "fs-data-write-list/list-documents/read-time",
     seed: [],
     steps: [
-      commit("write-1", [put("lsr/r1", 1), put("lsr/r2", 2)]),
-      commit("write-2", [put("lsr/r1", 10), put("lsr/r3", 3), remove("lsr/r2")]),
+      commit("write-1", [put("lsr/r1", 1), put("lsr/r2", 2), putA("lsg/g1", 1)]),
+      commit("write-2", [put("lsr/r1", 10), put("lsr/r3", 3), remove("lsr/r2"), remove("lsg/g1")]),
       list("current", "lsr"),
       list("at-write-1", "lsr", [["readTime", atWrite("write-1")]]),
       list("at-write-2", "lsr", [["readTime", atWrite("write-2")]]),
@@ -241,6 +425,29 @@ export const PROGRAMS = [
       }),
       ids("collection-ids-future", { readTime: "2099-01-01T00:00:00Z" }),
       ids("collection-ids-not-a-time", { readTime: "yesterday" }),
+      list("snake-read-time", "lsr", [["read_time", atWrite("write-1")]]),
+      list("read-time-offset", "lsr", [["readTime", "2099-01-01T09:00:00+09:00"]]),
+      list("read-time-ten-digits", "lsr", [["readTime", "2099-01-01T00:00:00.1234567891Z"]]),
+      list("read-time-empty", "lsr", [["readTime", ""]]),
+      grpc("grpc-at-write-1", "listDocuments", {
+        collectionId: "lsr",
+        readTime: atWrite("write-1"),
+      }),
+      grpc("grpc-paged-at-write-1", "listDocuments", {
+        collectionId: "lsr",
+        pageSize: 1,
+        readTime: atWrite("write-1"),
+      }),
+      grpc("grpc-collection-ids-at-write-1", "listCollectionIds", { readTime: atWrite("write-1") }),
+      ids("collection-ids-current"),
+      ids("collection-ids-microsecond-before-write-2", {
+        readTime: shifted("write-2", { addNanos: -1000 }),
+      }),
+      ids("collection-ids-paged-at-write-1", { pageSize: 1, readTime: atWrite("write-1") }),
+      ids("collection-ids-paged-at-write-1-next-without-read-time", {
+        pageSize: 1,
+        pageToken: next("collection-ids-paged-at-write-1"),
+      }),
     ],
   },
   {
@@ -270,6 +477,13 @@ export const PROGRAMS = [
       ids("unknown-field", { unknownField: 1 }),
       ids("collection-parent", {}, { path: "v1/{docs}/lst:listCollectionIds" }),
       ids("empty-body-text", undefined, { rawBody: "" }),
+      ids("root-page-size-5", { pageSize: 5 }),
+      ids("page-size-fraction", { pageSize: 1.5 }),
+      ids("page-size-overflow", { pageSize: 2147483648 }),
+      ids("page-size-float-text", { pageSize: "2.0" }),
+      ids("page-size-null", { pageSize: null }),
+      ids("page-token-empty", { pageToken: "" }),
+      ids("read-time-empty", { readTime: "" }),
     ],
   },
   {
@@ -308,6 +522,30 @@ export const PROGRAMS = [
         collectionId: "lst",
         readTime: "2099-01-01T00:00:00Z",
       }),
+      grpc("collection-parent", "listDocuments", { collectionId: "x" }, { parent: "lst" }),
+      grpc(
+        "every-collection-of-document-paged",
+        "listDocuments",
+        { pageSize: 2 },
+        { parent: "lst/d01" },
+      ),
+      grpc(
+        "every-collection-of-document-paged-next",
+        "listDocuments",
+        { pageSize: 2, pageToken: next("every-collection-of-document-paged") },
+        { parent: "lst/d01" },
+      ),
+      grpc(
+        "every-collection-with-order-by",
+        "listDocuments",
+        { orderBy: "n" },
+        { parent: "lst/d01" },
+      ),
+      grpc("mask-invalid", "listDocuments", {
+        collectionId: "lst",
+        mask: { fieldPaths: ["a..b"] },
+      }),
+      grpc("page-size-0", "listDocuments", { collectionId: "lst", pageSize: 0 }),
     ],
   },
   {

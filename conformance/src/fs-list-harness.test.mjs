@@ -2,17 +2,24 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { PROGRAMS } from "./fs-list/corpus.mjs";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import {
+  RECORDED_PROJECT,
   SANDBOX_PROJECT,
   buildGrpcRequest,
   buildRestRequest,
   createContext,
   guardGrpcRequest,
   guardRestRequest,
+  normalizeStep,
+  projectGrpcMessage,
   validateCorpus,
 } from "./fs-query-index/harness.mjs";
 import { LANES, selectLane } from "./fs-query-index/lanes.mjs";
-import { estimatedUsd } from "./fs-query-index/run.mjs";
+import { estimatedUsd, renormalize, withRecordingLock } from "./fs-query-index/run.mjs";
 
 const started = Date.parse("2026-09-24T00:00:00Z");
 const production = () =>
@@ -177,4 +184,186 @@ test("gRPC list requests are scoped to the step parent and convert their read ti
   assert.equal(ids.method, "ListCollectionIds");
   assert.deepEqual(ids.request, { parent: docs, pageSize: 2 });
   guardGrpcRequest(ids, ctx);
+});
+
+test("validation keeps dot segments, foreign methods and chained transactions out", () => {
+  const program = (step) => [{ id: "fs-data-write-list/x/y", steps: [{ id: "a", ...step }] }];
+  const lane = "fs-data-write-list";
+  for (const collectionId of [".", ".."]) {
+    assert.throws(
+      () => validateCorpus(program({ rpc: "listDocuments", collectionId }), lane),
+      /names one collection/,
+    );
+  }
+  for (const step of [
+    { rpc: "listCollectionIds", path: "v1/{docs}:beginTransaction" },
+    { rpc: "runQuery", path: "v1/{docs}/a/b:batchWrite" },
+    { rpc: "listDocuments", collectionId: "lst", path: "v1/{docs}/lst" },
+    { rpc: "get", path: "v1/{docs}/lst/d" },
+  ]) {
+    assert.throws(() => validateCorpus(program(step), lane), /must end in :/, JSON.stringify(step));
+  }
+  validateCorpus(
+    program({ rpc: "listCollectionIds", path: "v1/{docs}/lst:listCollectionIds" }),
+    lane,
+  );
+  assert.throws(
+    () =>
+      validateCorpus(
+        program({
+          rpc: "listDocuments",
+          collectionId: "lst",
+          query: [["transaction", { $from: "b", path: "transaction" }]],
+        }),
+        lane,
+      ),
+    /must be a literal/,
+  );
+});
+
+test("the guard refuses resource and system parameters in a list query", () => {
+  const ctx = production();
+  for (const key of ["parent", "collectionId", "fields", "access_token", "prettyPrint", "alt"]) {
+    assert.throws(
+      () =>
+        guardRestRequest(
+          {
+            url: `https://firestore.googleapis.com/v1/${docs}/lst?${key}=x`,
+            init: { method: "GET", headers: {} },
+          },
+          ctx,
+        ),
+      /not reviewed/,
+      key,
+    );
+  }
+});
+
+const listRaw = (query, response) => ({
+  transport: "rest",
+  request: query,
+  response: { status: 400, text: JSON.stringify(response) },
+});
+
+test("a list answer echoing a requested read time or page token records their symbols", () => {
+  const ctx = production();
+  const readTime = "2026-09-24T00:10:00.123456Z";
+  const token = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789";
+  const recorded = normalizeStep(
+    listRaw(
+      [
+        ["readTime", readTime],
+        ["pageToken", token],
+        ["pageSize", "garbage-literal"],
+      ],
+      { error: { message: `token ${token} at ${readTime} is stale; garbage-literal` } },
+    ),
+    ctx,
+    new Map(),
+  );
+  assert.equal(recorded.body.error.message, "token <page-token> at <r1> is stale; garbage-literal");
+  // A short literal token is corpus text, not a server token, and stays.
+  const literal = normalizeStep(
+    listRaw([["pageToken", "garbage"]], { error: { message: "garbage" } }),
+    ctx,
+    new Map(),
+  );
+  assert.equal(literal.body.error.message, "garbage");
+  // A gRPC body token is registered the same way.
+  const grpcRow = normalizeStep(
+    {
+      transport: "grpc",
+      request: { pageToken: token },
+      response: { messages: [], code: 3, details: `bad ${token}`, errorDetails: [] },
+    },
+    ctx,
+    new Map(),
+  );
+  assert.equal(grpcRow.message, "bad <page-token>");
+});
+
+test("a saved list recording normalizes again to the same rows", () => {
+  const ctx = production();
+  const program = PROGRAMS.find((p) => p.id.endsWith("/list-documents/read-time"));
+  const step = program.steps.find((s) => s.id === "at-write-1");
+  const readTime = "2026-09-24T00:10:00.123456Z";
+  const raw = {
+    transport: "rest",
+    request: [["readTime", readTime]],
+    response: {
+      status: 200,
+      text: JSON.stringify({
+        documents: [
+          {
+            name: `${docs}/lsr/r1`,
+            createTime: readTime,
+            updateTime: readTime,
+          },
+        ],
+      }),
+    },
+  };
+  const row = normalizeStep(raw, ctx, new Map());
+  assert.equal(
+    row.body.documents[0].name,
+    `projects/${RECORDED_PROJECT}/databases/(default)/documents/lsr/r1`,
+  );
+  assert.equal(row.body.documents[0].createTime, "<r1>");
+  const recording = {
+    context: { run: "1", startedMs: started },
+    results: { [program.id]: { steps: { [step.id]: { stale: true } }, raw: { [step.id]: raw } } },
+  };
+  const again = renormalize(recording, [program]);
+  assert.deepEqual(again.results[program.id].steps[step.id], row);
+});
+
+test("list answers over gRPC project to the REST shape, missing documents included", () => {
+  const projected = projectGrpcMessage({
+    documents: [
+      { name: `${docs}/lst/missing1`, fields: {}, createTime: null, updateTime: null },
+      {
+        name: `${docs}/lst/d05`,
+        fields: {},
+        createTime: { seconds: "1790000000", nanos: 5000 },
+        updateTime: { seconds: "1790000000", nanos: 5000 },
+      },
+    ],
+    nextPageToken: "",
+  });
+  assert.deepEqual(projected, {
+    documents: [
+      { name: `${docs}/lst/missing1` },
+      {
+        name: `${docs}/lst/d05`,
+        createTime: "2026-09-21T14:13:20.000005Z",
+        updateTime: "2026-09-21T14:13:20.000005Z",
+      },
+    ],
+  });
+});
+
+test("a recording holds an exclusive lock that the other lane cannot take", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "fireemu-lock-"));
+  const ledger = join(dir, "ledger.jsonl");
+  try {
+    let inner;
+    const outer = await withRecordingLock(ledger, "fs-query-index", async () => {
+      inner = await withRecordingLock(ledger, "fs-data-write-list", async () => "ran").catch(
+        (error) => error,
+      );
+      return "outer";
+    });
+    assert.equal(outer, "outer");
+    assert.match(String(inner?.message), /another recording holds .*fs-query-index pid/);
+    assert.deepEqual(await readdir(dir), []);
+    await assert.rejects(
+      withRecordingLock(ledger, "fs-query-index", async () => {
+        throw new Error("boom");
+      }),
+      /boom/,
+    );
+    assert.deepEqual(await readdir(dir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

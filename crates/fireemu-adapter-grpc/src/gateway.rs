@@ -203,11 +203,6 @@ impl Gateway {
         indexes: &IndexSet,
         aggregations: Option<&[Aggregation]>,
     ) -> Result<AcceptedQuery, Rejection> {
-        if aggregations.is_some() && canonical.find_nearest.is_some() {
-            return Err(Rejection::Unsupported(
-                "findNearest is unsupported for aggregation queries".to_owned(),
-            ));
-        }
         // Production refuses a cursor whose `__name__` value is not a document reference,
         // or whose reference names a document the query does not select. The compatibility
         // contract keeps production-only refusals out of the `emulator` profile, and the
@@ -247,8 +242,14 @@ impl Gateway {
         }
         // Limits above count the caller's clauses, not implicit aggregation orders.
         let execution_query = match aggregations {
-            Some(aggregations) => normalize_aggregation_query(&canonical, aggregations)
-                .map_err(|error| Rejection::InvalidQuery(error.to_string()))?,
+            Some(aggregations) => {
+                normalize_aggregation_query(&canonical, aggregations).map_err(|error| {
+                    Rejection::InvalidQuery(match error {
+                        fireemu_core_firestore::store::FirestoreError::InvalidArgument(m) => m,
+                        other => other.to_string(),
+                    })
+                })?
+            }
             None => canonical.clone(),
         };
         let decision = aggregations.map_or_else(

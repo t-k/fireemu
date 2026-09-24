@@ -14,6 +14,7 @@ use tonic::{Code, Status};
 
 const ERROR_INFO: &str = "type.googleapis.com/google.rpc.ErrorInfo";
 const HELP: &str = "type.googleapis.com/google.rpc.Help";
+const BAD_REQUEST: &str = "type.googleapis.com/google.rpc.BadRequest";
 
 /// `google.rpc.ErrorInfo`.
 #[derive(Clone, PartialEq, Message)]
@@ -33,6 +34,22 @@ struct Link {
     description: String,
     #[prost(string, tag = "2")]
     url: String,
+}
+
+/// `google.rpc.BadRequest.FieldViolation`.
+#[derive(Clone, PartialEq, Message)]
+struct FieldViolation {
+    #[prost(string, tag = "1")]
+    field: String,
+    #[prost(string, tag = "2")]
+    description: String,
+}
+
+/// `google.rpc.BadRequest`.
+#[derive(Clone, PartialEq, Message)]
+struct BadRequest {
+    #[prost(message, repeated, tag = "1")]
+    field_violations: Vec<FieldViolation>,
 }
 
 /// `google.rpc.Help`.
@@ -92,6 +109,84 @@ pub fn pipeline_requires_enterprise() -> Status {
     )
 }
 
+fn error_info(reason: &str, metadata: &[(&str, String)]) -> prost_types::Any {
+    any(
+        ERROR_INFO,
+        &ErrorInfo {
+            reason: reason.to_owned(),
+            domain: "firestore.googleapis.com".to_owned(),
+            metadata: metadata
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), value.clone()))
+                .collect(),
+        },
+    )
+}
+
+/// Production's text for a cosine search that meets a zero vector.
+pub const COSINE_ZERO_VECTOR: &str =
+    "Cannot compute cosine distance against a vector with a magnitude of zero.";
+
+/// A `FAILED_PRECONDITION` in production's shape: the texts production attaches an
+/// `ErrorInfo` to carry it, every other one is plain.
+#[must_use]
+pub fn failed_precondition(message: &str) -> Status {
+    if message == COSINE_ZERO_VECTOR {
+        return with_details(
+            Code::FailedPrecondition,
+            message,
+            vec![error_info("COSINE_DISTANCE_ON_ZERO_VECTOR", &[])],
+        );
+    }
+    Status::failed_precondition(message)
+}
+
+/// Production's refusal of an aggregation query with more than five aggregations.
+#[must_use]
+pub fn too_many_aggregations(actual: usize) -> Status {
+    with_details(
+        Code::InvalidArgument,
+        &format!(
+            "The maximum number of aggregations allowed in an aggregation query is 5. Received: {actual}"
+        ),
+        vec![error_info(
+            "TOO_MANY_AGGREGATIONS",
+            &[
+                ("actual_aggregations", actual.to_string()),
+                ("max_aggregations", "5".to_owned()),
+            ],
+        )],
+    )
+}
+
+/// The request transcoder's refusal: `INVALID_ARGUMENT` whose message joins the violation
+/// descriptions with newlines, with one `BadRequest` field violation each (`field` is empty for
+/// an unknown name at the root).
+#[must_use]
+pub fn bad_request(violations: &[(String, String)]) -> Status {
+    let message = violations
+        .iter()
+        .map(|(_, description)| description.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    with_details(
+        Code::InvalidArgument,
+        &message,
+        vec![any(
+            BAD_REQUEST,
+            &BadRequest {
+                field_violations: violations
+                    .iter()
+                    .map(|(field, description)| FieldViolation {
+                        field: field.clone(),
+                        description: description.clone(),
+                    })
+                    .collect(),
+            },
+        )],
+    )
+}
+
 /// The REST `details` array for a status's encoded `google.rpc.Status` details, or `None` when
 /// it carries none this module renders. Unknown detail types are left out, as they are not
 /// produced by fireemu.
@@ -116,6 +211,21 @@ pub fn details_to_json(details: &[u8]) -> Option<Vec<Value>> {
                     out["metadata"] = json!(info.metadata);
                 }
                 Some(out)
+            }
+            BAD_REQUEST => {
+                let request = BadRequest::decode(detail.value.as_slice()).ok()?;
+                let violations: Vec<Value> = request
+                    .field_violations
+                    .iter()
+                    .map(|v| {
+                        let mut out = json!({"description": v.description});
+                        if !v.field.is_empty() {
+                            out["field"] = json!(v.field);
+                        }
+                        out
+                    })
+                    .collect();
+                Some(json!({"@type": BAD_REQUEST, "fieldViolations": violations}))
             }
             HELP => {
                 let help = Help::decode(detail.value.as_slice()).ok()?;

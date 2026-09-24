@@ -508,42 +508,48 @@ fn decode_cursor(cursor: &pb::Cursor) -> Result<Cursor, DecodeError> {
 }
 
 fn decode_find_nearest(find_nearest: &sq::FindNearest) -> Result<FindNearest, DecodeError> {
-    let vector_field = field_path(Some(find_nearest.vector_field.as_ref().ok_or_else(
-        || DecodeError::InvalidQuery("findNearest.vectorField is required".into()),
-    )?))?;
-    let query_vector =
-        decode_value(find_nearest.query_vector.as_ref().ok_or_else(|| {
-            DecodeError::InvalidQuery("findNearest.queryVector is required".into())
-        })?)?;
+    // Production's texts (FS-QUERY-INDEX vector/validation, recorded 2026-09-24).
+    let vector_field = field_path(find_nearest.vector_field.as_ref())?;
+    let query_vector = decode_value(find_nearest.query_vector.as_ref().ok_or_else(|| {
+        DecodeError::Refused("Cannot convert firestore.v1.Value with type unset.".into())
+    })?)?;
     let Value::Vector(query_vector) = query_vector else {
-        return Err(DecodeError::InvalidQuery(
-            "findNearest.queryVector must be a vector".into(),
+        return Err(DecodeError::Refused(
+            "Query Value must be of type vector.".into(),
         ));
     };
     let distance_measure =
         match sq::find_nearest::DistanceMeasure::try_from(find_nearest.distance_measure)
-            .map_err(|_| DecodeError::InvalidQuery("unknown findNearest distance measure".into()))?
+            .unwrap_or(sq::find_nearest::DistanceMeasure::Unspecified)
         {
             sq::find_nearest::DistanceMeasure::Euclidean => DistanceMeasure::Euclidean,
             sq::find_nearest::DistanceMeasure::Cosine => DistanceMeasure::Cosine,
             sq::find_nearest::DistanceMeasure::DotProduct => DistanceMeasure::DotProduct,
             sq::find_nearest::DistanceMeasure::Unspecified => {
-                return Err(DecodeError::InvalidQuery(
-                    "findNearest.distanceMeasure is required".into(),
-                ))
+                return Err(DecodeError::Refused("Unknown Distance Measure.".into()))
             }
         };
     let limit = find_nearest
         .limit
-        .ok_or_else(|| DecodeError::InvalidQuery("findNearest.limit is required".into()))?;
-    let limit = u32::try_from(limit)
-        .map_err(|_| DecodeError::InvalidQuery("findNearest.limit must be positive".into()))?;
+        .and_then(|limit| u32::try_from(limit).ok())
+        .ok_or_else(|| {
+            DecodeError::Refused(
+                "FindNearest.limit must be a positive integer of no more than 1000".into(),
+            )
+        })?;
+    // Production reads the distance result field as one property name, not a path.
     let distance_result_field = if find_nearest.distance_result_field.is_empty() {
         None
     } else {
+        let name = find_nearest.distance_result_field.as_str();
         Some(
-            FieldPath::parse(&find_nearest.distance_result_field)
-                .map_err(|e| DecodeError::InvalidFieldPath(e.to_string()))?,
+            FieldPath::from_segments([name])
+                .or_else(|_| FieldPath::parse(name))
+                .map_err(|_| {
+                    DecodeError::Refused(format!(
+                        "The distanceResultField.property.name \"{name}\" is reserved."
+                    ))
+                })?,
         )
     };
     Ok(FindNearest {

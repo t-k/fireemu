@@ -93,6 +93,158 @@ pub fn parse_query_parent(parent: &str) -> Result<Parent, DecodeError> {
     })
 }
 
+/// Production refuses a nearest-neighbour query that also carries a limit, an offset or a
+/// cursor (FS-QUERY-INDEX vector/with-query-clauses). Checked on the request as the caller
+/// sent it, because the gRPC service pages a query by adding a limit of its own.
+#[allow(clippy::result_large_err)]
+pub fn check_find_nearest_request(
+    query: &fireemu_proto_firestore::google::firestore::v1::StructuredQuery,
+) -> Result<(), tonic::Status> {
+    if query.find_nearest.is_none() {
+        return Ok(());
+    }
+    let refusal = if query.limit.is_some() {
+        "A query limit cannot be used with FindNearest"
+    } else if query.offset != 0 {
+        "A query offset cannot be used with FindNearest"
+    } else if query.start_at.is_some() || query.end_at.is_some() {
+        "A cursor cannot be used with FindNearest"
+    } else {
+        return Ok(());
+    };
+    Err(tonic::Status::invalid_argument(refusal))
+}
+
+/// Decodes the aggregations of a `StructuredAggregationQuery` the way production does
+/// (FS-QUERY-INDEX aggregation rows, recorded 2026-09-24): one to five aggregations, default
+/// aliases `field_1`, `field_2`, ... numbered over the unnamed aggregations only, aliases held
+/// to the property-name rules, and production's texts for every refusal.
+#[allow(clippy::result_large_err)]
+pub fn decode_aggregations(
+    saq: &fireemu_proto_firestore::google::firestore::v1::StructuredAggregationQuery,
+) -> Result<(Vec<String>, Vec<fireemu_core_firestore::store::Aggregation>), tonic::Status> {
+    use fireemu_core_firestore::store::Aggregation;
+    use fireemu_proto_firestore::google::firestore::v1::structured_aggregation_query::aggregation::Operator as O;
+    const MAXIMUM: usize = 5;
+    if saq.aggregations.is_empty() {
+        return Err(tonic::Status::invalid_argument(
+            "Aggregations can not be empty.",
+        ));
+    }
+    if saq.aggregations.len() > MAXIMUM {
+        return Err(crate::production_status::too_many_aggregations(
+            saq.aggregations.len(),
+        ));
+    }
+    let field = |reference: Option<
+        &fireemu_proto_firestore::google::firestore::v1::structured_query::FieldReference,
+    >| {
+        let Some(reference) = reference else {
+            return Err(tonic::Status::invalid_argument(EMPTY_PROPERTY_PATH));
+        };
+        fireemu_core_firestore::field_path::FieldPath::parse(&reference.field_path).map_err(
+            |error| {
+                tonic::Status::invalid_argument(
+                    property_path_error(&reference.field_path, &error).to_string(),
+                )
+            },
+        )
+    };
+    let mut aliases: Vec<String> = Vec::with_capacity(saq.aggregations.len());
+    let mut aggregations = Vec::with_capacity(saq.aggregations.len());
+    let mut unnamed = 0;
+    for a in &saq.aggregations {
+        let aggregation = match &a.operator {
+            Some(O::Count(count)) => Aggregation::Count {
+                up_to: match count.up_to {
+                    None => None,
+                    Some(n) if n >= 0 => Some(u64::try_from(n).unwrap_or(u64::MAX)),
+                    Some(_) => {
+                        return Err(tonic::Status::invalid_argument(
+                            "The `up_to` value in a COUNT aggregation must be greater than or equal to zero.",
+                        ))
+                    }
+                },
+            },
+            Some(O::Sum(sum)) => Aggregation::Sum(field(sum.field.as_ref())?),
+            Some(O::Avg(avg)) => Aggregation::Avg(field(avg.field.as_ref())?),
+            None => {
+                return Err(tonic::Status::invalid_argument(
+                    "Operator field in Aggregation is not set.",
+                ))
+            }
+        };
+        let alias = if a.alias.is_empty() {
+            unnamed += 1;
+            format!("field_{unnamed}")
+        } else {
+            if a.alias.len() > 1500 {
+                return Err(tonic::Status::invalid_argument(
+                    "The property.name is longer than 1500 bytes.",
+                ));
+            }
+            if a.alias.len() >= 4 && a.alias.starts_with("__") && a.alias.ends_with("__") {
+                return Err(tonic::Status::invalid_argument(format!(
+                    "The property.name \"{}\" is reserved.",
+                    a.alias
+                )));
+            }
+            a.alias.clone()
+        };
+        aliases.push(alias);
+        aggregations.push(aggregation);
+    }
+    for (index, alias) in aliases.iter().enumerate() {
+        if aliases[..index].contains(alias) {
+            return Err(tonic::Status::invalid_argument(format!(
+                "Aggregation aliases contain duplicate alias: {alias}."
+            )));
+        }
+    }
+    Ok((aliases, aggregations))
+}
+
+/// Production answers an aggregation whose every aggregation is a count capped at zero without
+/// reading anything: zero, at the instant before the epoch (FS-QUERY-INDEX
+/// aggregation/options#count-up-to-zero). `None` when the query must run (or is an Explain or a
+/// read in a transaction or at a read time, which were not observed this way).
+#[must_use]
+pub fn zero_capped_count(
+    aliases: &[String],
+    aggregations: &[fireemu_core_firestore::store::Aggregation],
+    excluded: bool,
+) -> Option<fireemu_proto_firestore::google::firestore::v1::RunAggregationQueryResponse> {
+    use fireemu_core_firestore::store::Aggregation;
+    use fireemu_proto_firestore::google::firestore::v1 as pb;
+    if excluded
+        || !aggregations
+            .iter()
+            .all(|a| matches!(a, Aggregation::Count { up_to: Some(0) }))
+    {
+        return None;
+    }
+    Some(pb::RunAggregationQueryResponse {
+        result: Some(pb::AggregationResult {
+            aggregate_fields: aliases
+                .iter()
+                .map(|alias| {
+                    (
+                        alias.clone(),
+                        pb::Value {
+                            value_type: Some(pb::value::ValueType::IntegerValue(0)),
+                        },
+                    )
+                })
+                .collect(),
+        }),
+        read_time: Some(prost_types::Timestamp {
+            seconds: -1,
+            nanos: 999_999_000,
+        }),
+        ..Default::default()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1101,7 +1101,10 @@ fn field_operator(value: Option<&Value>) -> Result<i32, JsonError> {
 
 fn unary_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     use sq::unary_filter::Operator as O;
-    let value = value.ok_or_else(|| JsonError("unaryFilter.op is required".into()))?;
+    // An absent operator is the proto default; the query decoder refuses it as production does.
+    let Some(value) = value else {
+        return Ok(O::Unspecified as i32);
+    };
     let operator = match value {
         Value::String(name) => O::from_str_name(name),
         Value::Number(number) => number
@@ -1134,7 +1137,7 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
                     .map_err(|_| JsonError("unknown composite filter operator".into()))?
             }
             Some(_) => return err("compositeFilter.op must be a string or enum number"),
-            None => return err("compositeFilter.op is required"),
+            None => sq::composite_filter::Operator::Unspecified,
         };
         sq::filter::FilterType::CompositeFilter(sq::CompositeFilter {
             op: op as i32,
@@ -1161,7 +1164,8 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
                 .map(sq::unary_filter::OperandType::Field),
         })
     } else {
-        return err("filter must be compositeFilter, fieldFilter or unaryFilter");
+        // No filter type set: the query decoder refuses it as production does.
+        return Ok(sq::Filter { filter_type: None });
     };
     Ok(sq::Filter {
         filter_type: Some(filter_type),
@@ -1250,12 +1254,9 @@ fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNeare
             "distanceThreshold",
         ],
     )?;
-    let vector_field = field_reference(raw.get("vectorField"))?
-        .ok_or_else(|| JsonError("findNearest.vectorField is required".into()))?;
-    let query_vector = value_from_json(
-        raw.get("queryVector")
-            .ok_or_else(|| JsonError("findNearest.queryVector is required".into()))?,
-    )?;
+    // Absent members are proto defaults; the query decoder refuses them as production does.
+    let vector_field = field_reference(raw.get("vectorField"))?;
+    let query_vector = raw.get("queryVector").map(value_from_json).transpose()?;
     let distance_measure = match raw.get("distanceMeasure") {
         Some(Value::String(name)) => sq::find_nearest::DistanceMeasure::from_str_name(name)
             .ok_or_else(|| JsonError("unknown distance measure".into()))?,
@@ -1269,11 +1270,10 @@ fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNeare
             sq::find_nearest::DistanceMeasure::try_from(number)
                 .map_err(|_| JsonError("unknown distance measure".into()))?
         }
-        None => return err("findNearest.distanceMeasure is required"),
+        None => sq::find_nearest::DistanceMeasure::Unspecified,
         Some(_) => return err("findNearest.distanceMeasure must be a string or enum number"),
     };
-    let limit = int32(raw.get("limit"), "findNearest.limit")?
-        .ok_or_else(|| JsonError("findNearest.limit is required".into()))?;
+    let limit = int32(raw.get("limit"), "findNearest.limit")?;
     let distance_result_field = raw
         .get("distanceResultField")
         .map(|value| {
@@ -1287,16 +1287,24 @@ fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNeare
     let distance_threshold = raw
         .get("distanceThreshold")
         .map(|value| {
-            value
-                .as_f64()
-                .ok_or_else(|| JsonError("findNearest.distanceThreshold must be a number".into()))
+            // proto3 JSON spells non-finite doubles as strings.
+            match value {
+                Value::String(text) => match text.as_str() {
+                    "NaN" => Some(f64::NAN),
+                    "Infinity" => Some(f64::INFINITY),
+                    "-Infinity" => Some(f64::NEG_INFINITY),
+                    other => other.parse::<f64>().ok(),
+                },
+                other => other.as_f64(),
+            }
+            .ok_or_else(|| JsonError("findNearest.distanceThreshold must be a number".into()))
         })
         .transpose()?;
     Ok(pb::structured_query::FindNearest {
-        vector_field: Some(vector_field),
-        query_vector: Some(query_vector),
+        vector_field,
+        query_vector,
         distance_measure: distance_measure as i32,
-        limit: Some(limit),
+        limit,
         distance_result_field,
         distance_threshold,
     })
@@ -1440,19 +1448,32 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
             .iter()
             .map(|a| {
                 let operator = if let Some(c) = a.get("count") {
-                    agg::Operator::Count(agg::Count {
-                        up_to: int32(c.get("upTo"), "count.upTo")?.map(i64::from),
-                    })
+                    Some(agg::Operator::Count(agg::Count {
+                        // `upTo` is an Int64Value (the transcoder spells it as a string).
+                        up_to: match c.get("upTo") {
+                            None | Some(Value::Null) => None,
+                            Some(Value::String(text)) => Some(
+                                text.parse::<i64>()
+                                    .map_err(|_| JsonError("count.upTo must be an int64".into()))?,
+                            ),
+                            Some(value) => {
+                                Some(value.as_i64().ok_or_else(|| {
+                                    JsonError("count.upTo must be an int64".into())
+                                })?)
+                            }
+                        },
+                    }))
                 } else if let Some(s) = a.get("sum") {
-                    agg::Operator::Sum(agg::Sum {
+                    Some(agg::Operator::Sum(agg::Sum {
                         field: field_reference(s.get("field"))?,
-                    })
+                    }))
                 } else if let Some(s) = a.get("avg") {
-                    agg::Operator::Avg(agg::Avg {
+                    Some(agg::Operator::Avg(agg::Avg {
                         field: field_reference(s.get("field"))?,
-                    })
+                    }))
                 } else {
-                    return err("aggregation must be count, sum or avg");
+                    // No operator: the aggregation decoder refuses it as production does.
+                    None
                 };
                 Ok(pb::structured_aggregation_query::Aggregation {
                     alias: a
@@ -1460,7 +1481,7 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_owned(),
-                    operator: Some(operator),
+                    operator,
                 })
             })
             .collect::<Result<Vec<_>, JsonError>>(),

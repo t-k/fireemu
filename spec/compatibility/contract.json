@@ -704,7 +704,7 @@
         },
         {
           "id": "FS-CLAIM-VECTOR",
-          "statement": "Firestore Standard/Native findNearest vector queries are implemented locally on both the v1 gRPC RunQuery and Firestore REST :runQuery surfaces. The local implementation supports Euclidean, cosine and dot-product distance measures, optional distance-result projection, finite distance thresholds, a result limit from 1 through 1000, ordinary query projection, filters, offsets and limits before nearest ranking, and the declared vector-index policy: strict production planning requires a dimensioned vector index matching the query vector and a matching composite vector index when prefilters are present, while the emulator profile assumes the vector index. This is a local implementation mapping: production parity and SDK execution are unobserved, and findNearest is refused for Listen/WebChannel targets.",
+          "statement": "Firestore Standard/Native findNearest vector queries are implemented locally on both the v1 gRPC RunQuery and Firestore REST :runQuery surfaces. The local implementation supports Euclidean, cosine and dot-product distance measures, optional distance-result projection, finite distance thresholds, a result limit from 1 through 1000, ordinary query projection and filters (a query-level limit, offset or cursor is refused as production refuses it), and the declared vector-index policy: strict production planning requires a dimensioned vector index matching the query vector and a matching composite vector index when prefilters are present, while the emulator profile assumes the vector index. This is a local implementation mapping: production parity and SDK execution are unobserved, and findNearest is refused for Listen/WebChannel targets.",
           "capabilities": [
             {
               "id": "FS-QRY-1",
@@ -719,7 +719,7 @@
             "tests": [
               "rest_run_query_supports_standard_find_nearest",
               "grpc_run_query_supports_standard_find_nearest",
-              "grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking",
+              "grpc_find_nearest_refuses_query_limits_offsets_and_cursors",
               "nearest_vector_query_orders_euclidean_cosine_and_dot_product",
               "nearest_projection_controls_synthesized_distance_field",
               "nearest_vector_query_limit_and_threshold_are_applied",

@@ -2464,7 +2464,8 @@ fn malformed_structured_query_lists_are_rejected_and_valid_arrays_remain_usable(
         json!({"from": [null]}),
         json!({"orderBy": [1]}),
         json!({"from": [{"collectionId": 1}]}),
-        json!({"from": [{"allDescendants": "true"}]}),
+        // (`"true"` is a boolean to production's transcoder, so it is not refused here.)
+        json!({"from": [{"allDescendants": 1}]}),
         json!({"orderBy": [{"direction": 3}]}),
         json!({"select": "not an object"}),
         json!({"select": {"fields": "not an array"}}),

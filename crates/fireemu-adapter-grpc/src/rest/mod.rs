@@ -8,6 +8,7 @@
 
 pub mod coverage;
 pub mod json;
+pub mod transcode;
 
 pub mod admin_fields;
 #[cfg(test)]
@@ -1138,12 +1139,17 @@ impl RestState {
                 Ok(ok(json!({})))
             }
             // The streaming methods answer an error as a one-element array, like their results.
-            "runQuery" => stream_errors(self.run_query(principal, resource, body)),
-            "runAggregationQuery" => {
-                stream_errors(self.run_aggregation_query(principal, resource, body))
-            }
+            "runQuery" => stream_errors(
+                transcode::check_body(action, body)
+                    .and_then(|body| self.run_query(principal, resource, &body)),
+            ),
+            "runAggregationQuery" => stream_errors(
+                transcode::check_body(action, body)
+                    .and_then(|body| self.run_aggregation_query(principal, resource, &body)),
+            ),
             "executePipeline" => stream_errors(self.execute_pipeline()),
-            "partitionQuery" => self.partition_query(principal, resource, body),
+            "partitionQuery" => transcode::check_body(action, body)
+                .and_then(|body| self.partition_query(principal, resource, &body)),
             "listCollectionIds" => {
                 json::strict_keys(
                     body,
@@ -1225,7 +1231,7 @@ impl RestState {
             rules.require_owner(principal, "partitionQuery")?;
         }
         let Some(sq) = body.get("structuredQuery") else {
-            return Err(Status::invalid_argument("structuredQuery is required"));
+            return Err(Status::invalid_argument("Query is required."));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
         let partition_count = match body.get("partitionCount") {
@@ -1267,12 +1273,22 @@ impl RestState {
                 .map(pb::partition_query_request::ConsistencySelector::ReadTime),
             request_options: None,
         })?;
-        let mut out = json!({
-            "partitions": response.partitions.iter().map(|c| json!({
-                "values": c.values.iter().map(value_to_json).collect::<Vec<_>>(),
-                "before": c.before,
-            })).collect::<Vec<_>>(),
-        });
+        // proto3 JSON: an empty list and a false `before` are left out, as production does.
+        let mut out = json!({});
+        if !response.partitions.is_empty() {
+            out["partitions"] = response
+                .partitions
+                .iter()
+                .map(|c| {
+                    let mut cursor =
+                        json!({"values": c.values.iter().map(value_to_json).collect::<Vec<_>>()});
+                    if c.before {
+                        cursor["before"] = json!(true);
+                    }
+                    cursor
+                })
+                .collect();
+        }
         if !response.next_page_token.is_empty() {
             out["nextPageToken"] = Value::String(response.next_page_token);
         }
@@ -1423,9 +1439,12 @@ impl RestState {
         )
         .map_err(|e| bad(&e))?;
         let Some(sq) = body.get("structuredQuery") else {
-            return Err(Status::invalid_argument("structuredQuery is required"));
+            return Err(Status::invalid_argument(
+                "only structured queries are supported",
+            ));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
+        crate::query_messages::check_find_nearest_request(&structured)?;
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         exclusive_selectors(body)?;
@@ -1502,19 +1521,21 @@ impl RestState {
         .map_err(|e| bad(&e))?;
         let Some(saq) = body.get("structuredAggregationQuery") else {
             return Err(Status::invalid_argument(
-                "structuredAggregationQuery is required",
+                "Only structured aggregation queries are supported.",
             ));
         };
         let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
-        if !matches!(
-            aggregation.query_type,
-            Some(pb::structured_aggregation_query::QueryType::StructuredQuery(_))
-        ) {
-            return Err(Status::invalid_argument(
-                "aggregation query requires a structuredQuery",
-            ));
+        // Production aggregates an absent query as the empty one: every document under the
+        // parent (FS-QUERY-INDEX request-shape#aggregation-without-structured-query).
+        let mut aggregation = aggregation;
+        if aggregation.query_type.is_none() {
+            aggregation.query_type = Some(
+                pb::structured_aggregation_query::QueryType::StructuredQuery(
+                    pb::StructuredQuery::default(),
+                ),
+            );
         }
         exclusive_selectors(body)?;
         let consistency_selector =

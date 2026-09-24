@@ -1305,17 +1305,6 @@ async fn collect_docs(
     }
     out
 }
-async fn collect_responses(
-    client: &mut FirestoreClient<tonic::transport::Channel>,
-    req: pb::RunQueryRequest,
-) -> Vec<pb::RunQueryResponse> {
-    let mut stream = client.run_query(req).await.unwrap().into_inner();
-    let mut out = Vec::new();
-    while let Some(response) = stream.next().await {
-        out.push(response.unwrap());
-    }
-    out
-}
 
 fn vector(values: &[f64]) -> pb::Value {
     pb::Value {
@@ -1423,86 +1412,48 @@ async fn grpc_run_query_supports_standard_find_nearest() {
 }
 
 #[tokio::test]
-async fn grpc_find_nearest_applies_ordinary_offset_and_limit_before_ranking() {
+async fn grpc_find_nearest_refuses_query_limits_offsets_and_cursors() {
+    // Production refuses each (FS-QUERY-INDEX vector/with-query-clauses, 2026-09-24).
     let (mut client, _, handle) =
         start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
-    client
-        .commit(pb::CommitRequest {
-            database: DB.to_owned(),
-            writes: vec![
-                update_write("items/a", &[("embedding", vector(&[1.0, 0.0]))]),
-                update_write("items/b", &[("embedding", vector(&[-1.0, 0.0]))]),
-                update_write("items/c", &[("embedding", vector(&[0.0, 1.0]))]),
-            ],
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let responses = collect_responses(
-        &mut client,
-        pb::RunQueryRequest {
-            parent: DOCS.to_owned(),
-            query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
-                pb::StructuredQuery {
-                    from: vec![sq::CollectionSelector {
-                        collection_id: "items".to_owned(),
-                        ..Default::default()
-                    }],
-                    offset: 1,
-                    limit: Some(2),
-                    find_nearest: Some(sq::FindNearest {
-                        vector_field: Some(sq::FieldReference {
-                            field_path: "embedding".to_owned(),
-                        }),
-                        query_vector: Some(vector(&[1.0, 0.0])),
-                        distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
-                        limit: Some(2),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-            )),
-            ..Default::default()
-        },
-    )
-    .await;
-    assert_eq!(
-        responses
-            .iter()
-            .map(|response| response.skipped_results)
-            .sum::<i32>(),
-        1,
-        "the original offset is reported in skipped_results"
-    );
-    let ids = responses
-        .iter()
-        .filter_map(|response| response.document.as_ref())
-        .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
-        .collect::<Vec<_>>();
-    assert_eq!(ids, ["c", "b"]);
-    handle.abort();
-}
-
-#[tokio::test]
-async fn grpc_find_nearest_skipped_results_use_pre_offset_matches() {
-    let (mut client, _, handle) =
-        start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
-    client
-        .commit(pb::CommitRequest {
-            database: DB.to_owned(),
-            writes: vec![
-                update_write("items/a", &[("embedding", vector(&[1.0, 0.0]))]),
-                update_write("items/b", &[("embedding", vector(&[-1.0, 0.0]))]),
-                update_write("items/c", &[("embedding", vector(&[0.0, 1.0]))]),
-            ],
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    for (offset, expected_skipped, expected_ids) in [(2, 2, vec!["c"]), (5, 3, vec![])] {
-        let responses = collect_responses(
-            &mut client,
-            pb::RunQueryRequest {
+    let nearest = || sq::FindNearest {
+        vector_field: Some(sq::FieldReference {
+            field_path: "embedding".to_owned(),
+        }),
+        query_vector: Some(vector(&[1.0, 0.0])),
+        distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
+        limit: Some(2),
+        ..Default::default()
+    };
+    let cursor = || pb::Cursor {
+        values: vec![vector(&[1.0, 0.0])],
+        before: true,
+    };
+    for (query, expected) in [
+        (
+            pb::StructuredQuery {
+                limit: Some(2),
+                ..Default::default()
+            },
+            "A query limit cannot be used with FindNearest",
+        ),
+        (
+            pb::StructuredQuery {
+                offset: 1,
+                ..Default::default()
+            },
+            "A query offset cannot be used with FindNearest",
+        ),
+        (
+            pb::StructuredQuery {
+                start_at: Some(cursor()),
+                ..Default::default()
+            },
+            "A cursor cannot be used with FindNearest",
+        ),
+    ] {
+        let status = client
+            .run_query(pb::RunQueryRequest {
                 parent: DOCS.to_owned(),
                 query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
                     pb::StructuredQuery {
@@ -1510,38 +1461,16 @@ async fn grpc_find_nearest_skipped_results_use_pre_offset_matches() {
                             collection_id: "items".to_owned(),
                             ..Default::default()
                         }],
-                        offset,
-                        limit: Some(2),
-                        find_nearest: Some(sq::FindNearest {
-                            vector_field: Some(sq::FieldReference {
-                                field_path: "embedding".to_owned(),
-                            }),
-                            query_vector: Some(vector(&[1.0, 0.0])),
-                            distance_measure: sq::find_nearest::DistanceMeasure::Euclidean as i32,
-                            limit: Some(2),
-                            ..Default::default()
-                        }),
-                        ..Default::default()
+                        find_nearest: Some(nearest()),
+                        ..query
                     },
                 )),
                 ..Default::default()
-            },
-        )
-        .await;
-        assert_eq!(
-            responses
-                .iter()
-                .map(|response| response.skipped_results)
-                .sum::<i32>(),
-            expected_skipped,
-            "offset {offset}"
-        );
-        let ids = responses
-            .iter()
-            .filter_map(|response| response.document.as_ref())
-            .map(|document| document.name.rsplit('/').next().unwrap().to_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(ids, expected_ids, "offset {offset}");
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.message(), expected);
     }
     handle.abort();
 }
@@ -3475,33 +3404,23 @@ async fn run_query_logical_completion_covers_every_page_and_limit() {
             query.limit = limit;
             let mut stream = client.run_query(request).await.unwrap().into_inner();
             let mut names = Vec::new();
-            let mut done = false;
+            // Production marks no response `done`: the stream's end is the completion.
             while let Some(response) = stream.next().await {
-                assert!(
-                    !done,
-                    "response after completion: count={count}, limit={limit:?}"
-                );
                 let response = response.unwrap();
                 assert!(response.transaction.is_empty());
+                assert_eq!(response.continuation_selector, None);
                 if let Some(document) = response.document {
                     names.push(document.name);
                 }
-                done = matches!(
-                    response.continuation_selector,
-                    Some(pb::run_query_response::ContinuationSelector::Done(true))
-                );
-                if done {
-                    let expected = limit.map_or(count, |limit| count.min(i64::from(limit)));
-                    assert_eq!(
-                        names,
-                        (0..expected)
-                            .map(|index| format!("{DOCS}/{collection}/{index:03}"))
-                            .collect::<Vec<_>>(),
-                        "logical completion: count={count}, limit={limit:?}"
-                    );
-                }
             }
-            assert!(done, "missing completion: count={count}, limit={limit:?}");
+            let expected = limit.map_or(count, |limit| count.min(i64::from(limit)));
+            assert_eq!(
+                names,
+                (0..expected)
+                    .map(|index| format!("{DOCS}/{collection}/{index:03}"))
+                    .collect::<Vec<_>>(),
+                "logical completion: count={count}, limit={limit:?}"
+            );
             let parent = fireemu_adapter_grpc::decode::parse_parent(DOCS).unwrap();
             assert_eq!(
                 backend.read_unadmitted(&parent, |state| state
@@ -3563,10 +3482,7 @@ async fn paged_query_preserves_offset_and_read_time_metadata() {
                 .map(|index| format!("{DOCS}/offset-page/{index:03}"))
                 .collect::<Vec<_>>()
         );
-        assert!(matches!(
-            responses.last().unwrap().continuation_selector,
-            Some(pb::run_query_response::ContinuationSelector::Done(true))
-        ));
+        assert_eq!(responses.last().unwrap().continuation_selector, None);
     }
     handle.abort();
 }
@@ -3639,22 +3555,17 @@ async fn large_read_only_query_pages_preserve_snapshot_completion_and_cleanup() 
             .unwrap();
         let mut response = Some(first);
         let mut names = Vec::new();
-        let mut done = false;
+        // Production marks no response `done`; the stream's end completes it.
         while let Some(item) = response {
-            assert!(!done, "completion must be terminal");
             assert_eq!(item.read_time, read_time);
             assert!(item.transaction.is_empty());
+            assert_eq!(item.continuation_selector, None);
             if let Some(document) = item.document {
                 assert_eq!(document.fields.get("payload"), Some(&s(&payload)));
                 names.push(document.name);
             }
-            done = matches!(
-                item.continuation_selector,
-                Some(pb::run_query_response::ContinuationSelector::Done(true))
-            );
             response = stream.next().await.transpose().unwrap();
         }
-        assert!(done);
         assert_eq!(
             names,
             (0..count)

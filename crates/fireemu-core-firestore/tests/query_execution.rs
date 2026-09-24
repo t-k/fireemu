@@ -58,7 +58,8 @@ fn reference_filter(filter: &FilterExpr, doc: &Document) -> bool {
                 (UnaryOp::IsNull, Some(v)) => v == Value::Null,
                 (UnaryOp::IsNotNull, Some(v)) => v != Value::Null,
                 (UnaryOp::IsNan, Some(v)) => is_nan(&v),
-                (UnaryOp::IsNotNan, Some(v)) => !is_nan(&v),
+                // Production excludes null too (FS-QUERY-INDEX unary-filters#is-not-nan).
+                (UnaryOp::IsNotNan, Some(v)) => !is_nan(&v) && v != Value::Null,
                 (_, None) => false,
             }
         }
@@ -77,7 +78,9 @@ fn reference_filter(filter: &FilterExpr, doc: &Document) -> bool {
                 | FieldOp::LessThanOrEqual
                 | FieldOp::GreaterThan
                 | FieldOp::GreaterThanOrEqual => {
-                    if !reference_comparable(&v, value) || is_nan {
+                    // A range against NaN matches nothing (FS-QUERY-INDEX range#gt-nan).
+                    let operand_nan = matches!(value, Value::Double(d) if d.is_nan());
+                    if !reference_comparable(&v, value) || is_nan || operand_nan {
                         return false;
                     }
                     match (op, v.canonical_cmp(value)) {

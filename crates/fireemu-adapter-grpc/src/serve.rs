@@ -472,12 +472,15 @@ async fn rest_call(
         match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(e) => {
-                return Ok(json_response(
-                    &crate::rest::error_response(&Status::invalid_argument(format!(
-                        "invalid JSON body: {e}"
-                    ))),
-                    origin.as_deref(),
-                ))
+                // Production's transcoder refuses in its own words, inside the result array
+                // for a streaming method.
+                let mut response = crate::rest::error_response(&Status::invalid_argument(
+                    crate::rest::transcode::syntax_error_message(&bytes, &e),
+                ));
+                if crate::rest::transcode::is_streaming_method(&path) {
+                    response.body = serde_json::Value::Array(vec![response.body]);
+                }
+                return Ok(json_response(&response, origin.as_deref()));
             }
         }
     };

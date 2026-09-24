@@ -1,6 +1,6 @@
 # Out-of-band action code campaign preparation
 
-Status: `PREPARATION`. This page describes a prepared, credential-free, production-unobserved campaign. No production operation, Cloud read, credential acquisition or receipt rewrite occurred. `AUTH-ACTION` remains `WAITING_ORACLE`, and the number of production-unobserved conditions this page closes is 0.
+Status: superseded on 2026-09-24 by the sandbox closure track ([closure inventory](../../spec/compatibility/closure/AUTH-ACTION.json), harness `conformance/src/auth-action/`); the campaign below was never executed and is kept as the earlier design. Original status: `PREPARATION`. This page describes a prepared, credential-free, production-unobserved campaign. No production operation, Cloud read, credential acquisition or receipt rewrite occurred. `AUTH-ACTION` remains `WAITING_ORACLE`, and the number of production-unobserved conditions this page closes is 0.
 
 ## What the row still needs
 

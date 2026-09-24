@@ -9181,16 +9181,24 @@ async fn a_read_write_transaction_holds_an_ordered_listing_it_pages() {
     )
     .await;
     assert_eq!(listed_ids(&page), ["d3", "d2"]);
-    // `o/d1` was not returned, but the listing that reads it is the transaction's read set.
-    let refused = client
-        .commit(pb::CommitRequest {
-            database: DB.to_owned(),
-            writes: vec![update_write("o/d1", &[("n", i(9))])],
-            ..Default::default()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(refused.code(), tonic::Code::Aborted);
+    // The listing is the transaction's read set: a write to a document of an earlier page
+    // (`o/d5`), to one not returned yet (`o/d1`) and an insert before the token (`o/d0`) are
+    // each refused while it is open.
+    for write in [
+        update_write("o/d5", &[("n", i(8))]),
+        update_write("o/d1", &[("n", i(9))]),
+        update_write("o/d0", &[("n", i(7))]),
+    ] {
+        let refused = client
+            .commit(pb::CommitRequest {
+                database: DB.to_owned(),
+                writes: vec![write],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::Aborted);
+    }
     client
         .commit(pb::CommitRequest {
             database: DB.to_owned(),

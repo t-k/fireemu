@@ -1363,6 +1363,9 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         .with_implicit_database_creation(cfg.implicit_database_creation);
         // Scope decision C11: under the strict profile, projects.unknownProjects = "refuse"
         // makes the daemon's project the only one that exists.
+        if let Some(seconds) = cfg.deleted_database_id_cooldown {
+            backend.admin().set_deleted_id_cooldown(seconds);
+        }
         let backend = Arc::new(
             if cfg.refuse_unknown_projects
                 && cfg.profile == crate::config::CompatibilityProfile::Strict

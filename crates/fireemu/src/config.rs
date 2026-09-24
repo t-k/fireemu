@@ -945,6 +945,9 @@ pub struct RuntimeConfig {
     /// typically within 24 hours and within 72 hours at worst, so the default is 24 hours
     /// and the accepted range ends at the documented outer bound.
     pub ttl_sweep_interval: LogicalDuration,
+    /// `firestore.deletedDatabaseIdCooldownSeconds`: how long a deleted database id stays
+    /// unavailable. `None` keeps production's 300 seconds.
+    pub deleted_database_id_cooldown: Option<i64>,
     /// When the daemon's databases were created (`firestore.databaseCreateTime`): the
     /// `createTime` they report and the instant before which a `read_time` is refused. Unset,
     /// it is the daemon's start; a run compared with a production database names that
@@ -1268,6 +1271,7 @@ impl Default for RuntimeConfig {
             token_acceptance: profile.token_acceptance(),
             implicit_database_creation: profile.implicit_database_creation(),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
+            deleted_database_id_cooldown: None,
             database_create_time: None,
             require_demo_prefix: true,
             refuse_unknown_projects: false,
@@ -3174,6 +3178,16 @@ impl RuntimeConfig {
                         .map_err(|e| ConfigError(format!("firestore.databaseCreateTime: {e}")))?,
                 );
             }
+            if let Some(value) = fs.get("deletedDatabaseIdCooldownSeconds") {
+                let seconds = value.as_u64().filter(|s| *s <= 300).ok_or_else(|| {
+                    ConfigError(
+                        "firestore.deletedDatabaseIdCooldownSeconds must be a whole number of \
+                         seconds from 0 to production's 300"
+                            .to_owned(),
+                    )
+                })?;
+                cfg.deleted_database_id_cooldown = i64::try_from(seconds).ok();
+            }
             if let Some(value) = fs.get("ttlSweepIntervalSeconds") {
                 let seconds = value.as_u64().ok_or_else(|| {
                     ConfigError(
@@ -3522,6 +3536,27 @@ mod tests {
             base.insert(k, v);
         }
         RuntimeConfig::from_json(&json)
+    }
+
+    #[test]
+    fn the_deleted_database_id_cooldown_is_production_s_unless_shortened() {
+        let parse = |firestore: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "firestore": firestore}))
+        };
+        assert_eq!(parse(json!({})).unwrap().deleted_database_id_cooldown, None);
+        assert_eq!(
+            parse(json!({"deletedDatabaseIdCooldownSeconds": 5}))
+                .unwrap()
+                .deleted_database_id_cooldown,
+            Some(5)
+        );
+        for bad in [json!(301), json!(-1), json!("5")] {
+            let error = parse(json!({"deletedDatabaseIdCooldownSeconds": bad})).unwrap_err();
+            assert!(
+                error.0.contains("deletedDatabaseIdCooldownSeconds"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

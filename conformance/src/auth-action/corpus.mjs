@@ -574,6 +574,42 @@ const ownership = program("auth-action/ownership", [
   adminLookup("admin-lookup-b", "b"),
 ]);
 
+// ---- code lifetime (the last program: it waits an hour) ----------------------------------------
+
+// Exploration (not evidence, 2026-09-24): a PASSWORD_RESET code answered at +3595 s after its
+// generation and was EXPIRED_OOB_CODE at +3600 s; the other three types still answered at
+// +3900 s. The checks straddle the reset code's hour by about ten seconds on either side, and
+// record the other types' lower bound at the same time.
+const WAIT_BEFORE = 3585;
+const WAIT_ACROSS = 25;
+
+const expiry = program(
+  "auth-action/expiry",
+  [
+    adminCreate("create-a", "a"),
+    adminCreate("create-b", "b"),
+    resetLink("reset-link-a", "a"),
+    resetLink("reset-link-b", "b"),
+    verifyLink("verify-link-a", "a"),
+    changeLink("change-link-b", "b", "b-new"),
+    signInLink("link-n", "n"),
+    { ...check("check-reset-before-hour", "reset-link-a"), waitSeconds: WAIT_BEFORE },
+    { ...check("check-reset-across-hour", "reset-link-a"), waitSeconds: WAIT_ACROSS },
+    reset("reset-after-hour", "reset-link-a"),
+    reset("reset-b-after-hour", "reset-link-b"),
+    check("check-verify-after-hour", "verify-link-a"),
+    check("check-change-after-hour", "change-link-b"),
+    check("check-sign-in-link-after-hour", "link-n"),
+    apply("apply-verify-after-hour", "verify-link-a"),
+    apply("apply-change-after-hour", "change-link-b"),
+    emailLinkSignIn("sign-in-link-after-hour", "link-n", "n"),
+    resetLink("reset-link-a-renewed", "a"),
+    reset("reset-with-renewed-code", "reset-link-a-renewed"),
+    adminCall("admin-lookup-after-hour", "lookup", { localId: ["UID(a)", "UID(b)"] }),
+  ],
+  EMAIL_LINK_ON,
+);
+
 /** Every program, in recording order. */
 export const PROGRAMS = [
   generateAdmin,
@@ -585,4 +621,5 @@ export const PROGRAMS = [
   emailLinkSession,
   legacyToken,
   ownership,
+  expiry,
 ];

@@ -20,6 +20,7 @@ const requiredConditions = new Set([
   "AUTH-ACTION/email-link-session-claims",
   "AUTH-ACTION/legacy-token-actions",
   "AUTH-ACTION/code-ownership",
+  "AUTH-ACTION/code-expiry",
   "AUTH-ACTION/final-artifact-regression",
   "AUTH-ACTION/closure-review",
 ]);

@@ -173,6 +173,18 @@
       "note": "Whose code it is: a verification or change code of one account applied with another account's ID token or a garbage token, and a reset code checked and used while naming another account's address."
     },
     {
+      "conditionId": "AUTH-ACTION/code-expiry",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-action/expiry"
+      ],
+      "configProjections": [
+        "default"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "A PASSWORD_RESET code about ten seconds before and after its one-hour lifetime (inspection, use, a second account's code, and a new code afterwards); VERIFY_EMAIL, VERIFY_AND_CHANGE_EMAIL and EMAIL_SIGNIN codes inspected and used after the same hour, which records their lifetime's lower bound. Their full lifetime is longer than a bounded recording and stays unobserved (owner decision 2026-09-24). Exploration before the recording (not evidence): docs.local/runs/auth-action-explore-20260924/lifetime-*.jsonl."
+    },
+    {
       "conditionId": "AUTH-ACTION/final-artifact-regression",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [

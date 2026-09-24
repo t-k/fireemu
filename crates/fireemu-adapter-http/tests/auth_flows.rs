@@ -183,6 +183,7 @@ fn state() -> AuthState {
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        custom_token_trust: None,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -432,7 +433,7 @@ fn password_reset_goes_through_an_oob_code_the_test_can_read() {
     let (status, signed) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
-        &json!({"email": "a@example.com", "password": "newpassword1"}),
+        &json!({"email": "a@example.com", "password": "newpassword1", "returnSecureToken": true}),
     );
     assert_eq!(status, 200, "{signed}");
     assert_eq!(
@@ -748,6 +749,7 @@ fn strict_profile_password_reset_revokes_the_existing_refresh_token() {
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
+        custom_token_trust: None,
         ..state()
     };
     let signed_up = sign_up(&s, "strict-reset@example.com");
@@ -2584,7 +2586,7 @@ fn allow_duplicate_emails_still_refuses_a_second_password_account() {
     let (status, signed_in) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
-        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
+        &json!({"email": "duplicate@example.com", "password": "hunter22", "returnSecureToken": true}),
     );
     assert_eq!(status, 200, "{signed_in}");
     assert_eq!(
@@ -8087,8 +8089,9 @@ fn broad_client_update_failed_credentials_never_apply_regular_attributes() {
             s.clock
                 .lock()
                 .unwrap()
+                // Past the five-minute allowance (sandbox recording 2026-09-24).
                 .advance(fireemu_core_types::time::LogicalDuration::from_seconds(
-                    3601,
+                    3901,
                 ))
                 .unwrap();
         } else if failure == "disabled" {

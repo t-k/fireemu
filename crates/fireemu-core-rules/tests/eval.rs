@@ -1285,6 +1285,7 @@ fn auth_context_is_built_from_id_token_claims() {
         email_verified: true,
         display_name: Some("User One".into()),
         photo_url: Some("https://example.test/u1.png".into()),
+        provider_id: None,
         firebase: FirebaseClaims {
             identities: BTreeMap::from([("email".to_owned(), vec!["u1@example.com".to_owned()])]),
             sign_in_provider: "password".into(),

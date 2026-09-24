@@ -55,6 +55,15 @@ Three local answers are the reason the campaign is worth an owner's budget.
 
 A fourth observation is carried by the readback control rather than by a dedicated stage: after a successful password reset, the local runtime reports the account's email as verified. The readback records that state on both sides, so the production answer is compared rather than assumed.
 
+## Token claims moved from AUTH-CREDENTIAL
+
+AUTH-CREDENTIAL scope decision C7 (owner, 2026-09-24) moves these token-claim conditions here; they are required conditions of this parent and are not verified anywhere else:
+
+- The ID token of an email-link sign-in (`accounts:signInWithEmailLink`) carries the claims production issues, including `firebase.sign_in_provider` and the identities of the address.
+- A refresh of that session and a session cookie made from it keep them.
+
+AUTH-CREDENTIAL's harness (`conformance/src/auth-credential/`) records a token as its header shape and every claim, and can be reused for these rows.
+
 ## Conditions this campaign does not observe
 
 | Condition | Why it is excluded |

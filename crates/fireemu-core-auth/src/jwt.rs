@@ -10,7 +10,9 @@ use fireemu_core_types::ids::ProjectId;
 use fireemu_core_types::json::{parse, JsonValue};
 use fireemu_core_types::time::LogicalInstant;
 
-use crate::claims::IdTokenClaims;
+use std::collections::BTreeMap;
+
+use crate::claims::{ClaimValue, IdTokenClaims};
 use crate::store::AuthStore;
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -242,19 +244,52 @@ pub fn encode_with(claims: &IdTokenClaims, signer: Option<&dyn IdTokenSigner>) -
     encode_payload_with(&claims.canonical_json(), signer)
 }
 
-/// Encodes an already serialized JSON payload with `signer`, or unsigned without one (a
-/// session cookie is an ID token's claims under another issuer and lifetime).
+/// Whether an issued token's header names its type. Production ID tokens carry `typ: JWT`;
+/// session cookies and the legacy Identity Toolkit token carry only `alg` and `kid` (sandbox
+/// recording 2026-09-24).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderShape {
+    /// `{"alg", "kid", "typ": "JWT"}`.
+    Typed,
+    /// `{"alg", "kid"}`.
+    Untyped,
+}
+
+/// The unsigned header of each shape: the internal form a response carries until it is signed.
+#[must_use]
+pub const fn unsigned_header(shape: HeaderShape) -> &'static [u8] {
+    match shape {
+        HeaderShape::Typed => br#"{"alg":"none","typ":"JWT"}"#,
+        HeaderShape::Untyped => br#"{"alg":"none"}"#,
+    }
+}
+
+/// Encodes an already serialized JSON payload with `signer`, or unsigned without one.
 #[must_use]
 pub fn encode_payload_with(payload_json: &str, signer: Option<&dyn IdTokenSigner>) -> String {
+    encode_payload_shaped(payload_json, signer, HeaderShape::Typed)
+}
+
+/// Encodes an already serialized JSON payload in `shape` with `signer`, or unsigned without
+/// one (a session cookie is an ID token's claims under another issuer, lifetime and shape).
+#[must_use]
+pub fn encode_payload_shaped(
+    payload_json: &str,
+    signer: Option<&dyn IdTokenSigner>,
+    shape: HeaderShape,
+) -> String {
     let Some(signer) = signer else {
-        let header = base64url_encode(br#"{"alg":"none","typ":"JWT"}"#);
+        let header = base64url_encode(unsigned_header(shape));
         return format!("{header}.{}.", base64url_encode(payload_json.as_bytes()));
     };
-    let header = format!(
-        r#"{{"alg":"{}","kid":"{}","typ":"JWT"}}"#,
-        signer.alg(),
-        signer.kid()
-    );
+    let header = match shape {
+        HeaderShape::Typed => format!(
+            r#"{{"alg":"{}","kid":"{}","typ":"JWT"}}"#,
+            signer.alg(),
+            signer.kid()
+        ),
+        HeaderShape::Untyped => format!(r#"{{"alg":"{}","kid":"{}"}}"#, signer.alg(), signer.kid()),
+    };
     let signing_input = format!(
         "{}.{}",
         base64url_encode(header.as_bytes()),
@@ -383,6 +418,141 @@ pub struct TokenVerification {
     pub second_factor: Option<String>,
 }
 
+/// Issuer of the legacy Identity Toolkit token production returns from password and
+/// custom-token sign-in when the request does not ask for secure tokens (sandbox recording
+/// 2026-09-24, auth-credential/id-token/without-return-secure-token).
+pub const LEGACY_TOKEN_ISSUER: &str = "https://identitytoolkit.google.com/";
+/// The legacy token's lifetime: two weeks.
+pub const LEGACY_TOKEN_TTL_SECONDS: i64 = 14 * 24 * 60 * 60;
+
+/// What a legacy Identity Toolkit token says about its session.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegacyToken<'a> {
+    /// The account.
+    pub uid: &'a str,
+    /// `sign_in_provider` (`password`, `custom`).
+    pub sign_in_provider: &'a str,
+    /// The account's address and whether it is verified, when it has one.
+    pub email: Option<(&'a str, bool)>,
+    /// A custom token's developer claims (`extra_claims`), when it carried any.
+    pub extra_claims: Option<&'a BTreeMap<String, ClaimValue>>,
+    /// The issuing store's session epoch, only while fireemu session isolation is active (the
+    /// same local-only marker ID tokens carry under `firebase`).
+    pub session_epoch: Option<&'a str>,
+}
+
+/// The claims of a legacy token issued at `iat` for `project`: no `sub`, `auth_time` or
+/// `firebase` block, the provider at the top level, a two-week lifetime.
+#[must_use]
+pub fn legacy_token_payload(project: &str, iat: i64, token: &LegacyToken<'_>) -> String {
+    let mut claims = BTreeMap::new();
+    claims.insert(
+        "iss".to_owned(),
+        ClaimValue::String(LEGACY_TOKEN_ISSUER.to_owned()),
+    );
+    claims.insert("aud".to_owned(), ClaimValue::String(project.to_owned()));
+    claims.insert("iat".to_owned(), ClaimValue::Int(iat));
+    claims.insert(
+        "exp".to_owned(),
+        ClaimValue::Int(iat.saturating_add(LEGACY_TOKEN_TTL_SECONDS)),
+    );
+    claims.insert(
+        "user_id".to_owned(),
+        ClaimValue::String(token.uid.to_owned()),
+    );
+    claims.insert(
+        "sign_in_provider".to_owned(),
+        ClaimValue::String(token.sign_in_provider.to_owned()),
+    );
+    if let Some((email, verified)) = token.email {
+        claims.insert("email".to_owned(), ClaimValue::String(email.to_owned()));
+        claims.insert("verified".to_owned(), ClaimValue::Bool(verified));
+    }
+    if let Some(extra) = token.extra_claims.filter(|extra| !extra.is_empty()) {
+        claims.insert("extra_claims".to_owned(), ClaimValue::Map(extra.clone()));
+    }
+    if let Some(epoch) = token.session_epoch {
+        claims.insert(
+            "fireemu_session_epoch".to_owned(),
+            ClaimValue::String(epoch.to_owned()),
+        );
+    }
+    crate::claims::canonical_map_json(&claims)
+}
+
+/// Verifies a legacy Identity Toolkit token: signature mode, issuer, audience, expiry,
+/// issued-at, subject existence, revocation (its `iat` stands for `auth_time`) and disabled
+/// users. Production honours it on account lookup and refuses it for a session cookie.
+pub fn verify_legacy_token(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    leeway_seconds: i64,
+) -> Result<(TokenVerification, DecodedToken), JwtError> {
+    let decoded = decode_token(token, store.signer())?;
+    let iss = decoded.string("iss").ok_or(JwtError::Malformed)?;
+    // A store that never issued a legacy token (the emulator profile, a tenant) honours none.
+    if iss != LEGACY_TOKEN_ISSUER || !store.legacy_tokens_issued() {
+        return Err(JwtError::WrongIssuer {
+            expected: format!("https://securetoken.google.com/{}", store.project_id()),
+            actual: iss.to_owned(),
+        });
+    }
+    if store.tenant_id().is_some() {
+        return Err(JwtError::WrongTenant {
+            expected: store.tenant_id().map(str::to_owned),
+            actual: None,
+        });
+    }
+    if let Some(expected) = store.lifecycle_epoch_claim() {
+        let actual = decoded.string("fireemu_session_epoch").map(str::to_owned);
+        if actual.as_deref() != Some(expected.as_str()) {
+            return Err(JwtError::WrongSessionEpoch { expected, actual });
+        }
+    }
+    let aud = decoded.string("aud").ok_or(JwtError::Malformed)?;
+    if aud != store.project_id() {
+        return Err(JwtError::WrongAudience {
+            expected: store.project_id().to_owned(),
+            actual: aud.to_owned(),
+        });
+    }
+    let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    let exp = decoded.exp().ok_or(JwtError::Malformed)?;
+    if now_secs >= exp.saturating_add(leeway_seconds) {
+        return Err(JwtError::Expired);
+    }
+    let issued_at = decoded
+        .payload
+        .get("iat")
+        .and_then(JsonValue::as_i64)
+        .filter(|iat| *iat <= now_secs)
+        .ok_or(JwtError::Malformed)?;
+    let uid = decoded
+        .string("user_id")
+        .ok_or(JwtError::Malformed)?
+        .to_owned();
+    let user = store.user_by_id(&uid).ok_or(JwtError::UnknownUser)?;
+    if user.disabled {
+        return Err(JwtError::UserDisabled);
+    }
+    if !store.token_is_valid(
+        &user.local_id,
+        LogicalInstant::from_unix_seconds(issued_at),
+        LogicalInstant::from_unix_seconds(exp.saturating_add(leeway_seconds)),
+        now,
+    ) {
+        return Err(JwtError::Revoked);
+    }
+    Ok((
+        TokenVerification {
+            uid,
+            second_factor: None,
+        },
+        decoded,
+    ))
+}
+
 /// Verifies an ID token against the store: signature mode, issuer, audience, expiry,
 /// issued-at and authentication times, subject existence, revocation and disabled users.
 pub fn verify_id_token(
@@ -476,6 +646,21 @@ pub fn verify_id_token_decoded(
     store: &AuthStore,
     now: LogicalInstant,
 ) -> Result<(TokenVerification, DecodedToken), JwtError> {
+    verify_id_token_decoded_with_leeway(token, store, now, 0)
+}
+
+/// Identity Toolkit's allowance past a token's `exp`: production accepted an ID token and a
+/// custom token ten seconds after `exp` and refused them 330 seconds after (sandbox recording
+/// 2026-09-24); the conventional five-minute clock-skew allowance lies between.
+pub const IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS: i64 = 300;
+
+/// [`verify_id_token_decoded`] that still honours a token up to `leeway_seconds` past `exp`.
+pub fn verify_id_token_decoded_with_leeway(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    leeway_seconds: i64,
+) -> Result<(TokenVerification, DecodedToken), JwtError> {
     let decoded = decode_token(token, store.signer())?;
     let expected_iss = format!("https://securetoken.google.com/{}", store.project_id());
     let iss = decoded.string("iss").ok_or(JwtError::Malformed)?;
@@ -518,7 +703,7 @@ pub fn verify_id_token_decoded(
     }
     let exp = decoded.exp().ok_or(JwtError::Malformed)?;
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    if now_secs >= exp {
+    if now_secs >= exp.saturating_add(leeway_seconds) {
         return Err(JwtError::Expired);
     }
     // Firebase's ID-token contract requires both iat and auth_time not to be in

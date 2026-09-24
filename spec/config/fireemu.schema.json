@@ -160,6 +160,38 @@
         "enabled": { "type": "boolean" },
         "projectIssuer": { "type": "string", "pattern": "^https://securetoken\\.google\\.com/[a-z0-9-]+$" },
         "idTokenSigning": { "enum": ["session-rsa", "unsigned-emulator"] },
+        "apiKeys": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The default project's Web API keys. When present, a client request with any other key is refused with production's 400 API_KEY_INVALID before the service reads it; when absent, any key is accepted, as by the official emulator.",
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" }
+        },
+        "customTokenSigners": {
+          "type": "object",
+          "description": "Service accounts whose signed custom tokens are accepted, each mapped to its public JWK set (the document Google publishes at https://www.googleapis.com/service_accounts/v1/jwk/<service account>). When present, signInWithCustomToken accepts only RS256 tokens these keys verify and refuses a verifying token of another project's service account with CREDENTIAL_MISMATCH, as production does. When absent, the unsigned tokens the Admin SDK mints in emulator mode are accepted.",
+          "propertyNames": { "pattern": "^[^@\\s]+@([a-z0-9-]+\\.iam|appspot)\\.gserviceaccount\\.com$" },
+          "additionalProperties": {
+            "type": "object",
+            "required": ["keys"],
+            "properties": {
+              "keys": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": ["kty", "n", "e"],
+                  "properties": {
+                    "kty": { "const": "RSA" },
+                    "alg": { "const": "RS256" },
+                    "kid": { "type": "string" },
+                    "n": { "type": "string" },
+                    "e": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
         "totp": {
           "type": "object",
           "description": "Explicitly enables fireemu's TOTP extension. When absent, TOTP enrollment matches the official Auth emulator and is rejected.",

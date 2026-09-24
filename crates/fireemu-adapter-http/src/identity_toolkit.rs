@@ -22,7 +22,7 @@ use fireemu_core_app_check::admission::{AdmissionRequest, PrivilegedBypass, Serv
 use fireemu_core_app_check::header::classify_app_check_header;
 use fireemu_core_auth::base32;
 use fireemu_core_auth::claims::{ClaimValue, CustomClaims};
-use fireemu_core_auth::jwt::{base64url_decode, encode_payload_with, encode_with, JwtError};
+use fireemu_core_auth::jwt::{base64url_decode, encode_with, HeaderShape, JwtError};
 use fireemu_core_auth::mfa::{MfaError, PendingSignInContext, PendingSignInCredentials};
 use fireemu_core_auth::password_policy::{EnforcementState, PasswordPolicy, ViolationCode};
 use fireemu_core_auth::signup_quota::{
@@ -64,6 +64,8 @@ const QUOTA_SIMULATION_FIELDS: [&str; 4] = [
 ];
 const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
+mod custom_token;
+pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
 mod password_hash;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
@@ -677,6 +679,9 @@ pub struct AuthState {
     pub stateless_refresh_tokens: bool,
     /// Expiry policy for unsigned fake custom tokens.
     pub fake_custom_token_expiry: FakeCustomTokenExpiry,
+    /// Service-account keys signed custom tokens verify against (`auth.customTokenSigners`).
+    /// With none, the unsigned tokens the Admin SDK mints in emulator mode are accepted.
+    pub custom_token_trust: Option<Arc<CustomTokenTrust>>,
     /// Profile-specific Admin query behavior.
     pub query_limits: AuthQueryLimits,
     /// Whether client routes refuse a request carrying neither an API key nor a credential.
@@ -821,9 +826,15 @@ fn sign_response_tokens(
         if parts.next() != Some("") || parts.next().is_some() {
             return error(500, "INTERNAL");
         }
-        if base64url_decode(header).as_deref() != Ok(br#"{"alg":"none","typ":"JWT"}"#) {
+        let Ok(header) = base64url_decode(header) else {
             return error(500, "INTERNAL");
-        }
+        };
+        let Some(shape) = [HeaderShape::Typed, HeaderShape::Untyped]
+            .into_iter()
+            .find(|shape| header == fireemu_core_auth::jwt::unsigned_header(*shape))
+        else {
+            return error(500, "INTERNAL");
+        };
         let Ok(payload) = base64url_decode(payload) else {
             return error(500, "INTERNAL");
         };
@@ -833,7 +844,7 @@ fn sign_response_tokens(
         let Ok(payload) = std::str::from_utf8(&payload) else {
             return error(500, "INTERNAL");
         };
-        *token = encode_payload_with(payload, Some(signer));
+        *token = fireemu_core_auth::jwt::encode_payload_shaped(payload, Some(signer), shape);
     }
     response
 }
@@ -1025,8 +1036,9 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
 
 fn jwt_error(e: &JwtError) -> JsonResponse {
     match e {
-        // Production has no detail for a revoked token either (sandbox recording 2026-09-23).
-        JwtError::Expired | JwtError::Revoked => error(400, "TOKEN_EXPIRED"),
+        // Production has no detail for a revoked token either (sandbox recording 2026-09-23),
+        // and answers a token past its expiry allowance as invalid, not expired (2026-09-24).
+        JwtError::Revoked => error(400, "TOKEN_EXPIRED"),
         JwtError::UserDisabled => error(400, "USER_DISABLED"),
         _ => error(400, "INVALID_ID_TOKEN"),
     }
@@ -1164,6 +1176,15 @@ fn verify(store: &AuthStore, body: &Value, at: LogicalInstant) -> Result<LocalId
     verify_session(store, body, at).map(|s| s.uid)
 }
 
+/// [`verify`] on a route production was observed to honour the legacy token on.
+fn verify_honouring_legacy(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+) -> Result<LocalId, JsonResponse> {
+    verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured).map(|s| s.uid)
+}
+
 /// The session an `idToken` proves: the user and the provider it signed in with (the
 /// official emulator reads `firebase.sign_in_provider` back from the token for the routes
 /// whose behaviour depends on the first factor).
@@ -1196,20 +1217,59 @@ fn verify_session_with_error(
     at: LogicalInstant,
     map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
 ) -> Result<Session, JsonResponse> {
+    verify_session_accepting(store, body, at, map_error, LegacyTokens::Refused)
+}
+
+/// Whether a route honours the legacy Identity Toolkit token. Production was observed to honour
+/// it on account lookup, update and delete, a verification mail, phone linking, a sign-up
+/// upgrade and MFA enrollment (sandbox recordings 2026-09-24); email-link and identity-provider linking and
+/// session-cookie creation refuse it (the last observed, the others until observed).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LegacyTokens {
+    Honoured,
+    Refused,
+}
+
+fn verify_session_accepting(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
+    legacy_tokens: LegacyTokens,
+) -> Result<Session, JsonResponse> {
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return Err(error(400, "MISSING_ID_TOKEN")),
         Some(Value::String(t)) => t.as_str(),
         Some(_) => return Err(error(400, "INVALID_ID_TOKEN")),
     };
-    let (v, decoded) = fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at)
+    // Account lookup, update and delete also honour the legacy Identity Toolkit token (sandbox
+    // recording 2026-09-24); every other route verifies ID tokens only.
+    let leeway = fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS;
+    let (v, decoded) =
+        match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(token, store, at, leeway)
+        {
+            // A token of another issuer may be a legacy token; that verifier checks the issuer.
+            Err(fireemu_core_auth::jwt::JwtError::WrongIssuer { .. })
+                if legacy_tokens == LegacyTokens::Honoured =>
+            {
+                fireemu_core_auth::jwt::verify_legacy_token(token, store, at, leeway)
+            }
+            verified => verified,
+        }
         .map_err(|e| map_error(&e))?;
-    let provider = decoded
-        .payload
-        .get("firebase")
-        .and_then(|f| f.get("sign_in_provider"))
-        .and_then(JsonValue::as_str)
-        .unwrap_or("")
-        .to_owned();
+    let legacy = decoded.payload.get("iss").and_then(JsonValue::as_str)
+        == Some(fireemu_core_auth::jwt::LEGACY_TOKEN_ISSUER);
+    let provider = if legacy {
+        decoded.payload.get("sign_in_provider")
+    } else {
+        decoded
+            .payload
+            .get("firebase")
+            .and_then(|f| f.get("sign_in_provider"))
+    }
+    .and_then(JsonValue::as_str)
+    .unwrap_or("")
+    .to_owned();
     let second_factor = decoded.payload.get("firebase").and_then(|firebase| {
         let sign_in_second_factor = firebase.get("sign_in_second_factor")?.as_str()?;
         let second_factor_identifier = firebase.get("second_factor_identifier")?.as_str()?;
@@ -1221,7 +1281,12 @@ fn verify_session_with_error(
     });
     let sign_in_attributes = sign_in_attributes(&decoded.payload);
     let mut extra_claims = CustomClaims::default();
-    if let JsonValue::Object(values) = &decoded.payload {
+    let developer = if legacy {
+        decoded.payload.get("extra_claims")
+    } else {
+        Some(&decoded.payload)
+    };
+    if let Some(JsonValue::Object(values)) = developer {
         for (name, value) in values {
             // Reserved token fields are rejected by insert; everything else is a developer,
             // user or blocking-function session claim that a replacement token must retain.
@@ -1287,6 +1352,100 @@ fn admin_guard(
                 store.project_id()
             ),
         ));
+    }
+    Ok(())
+}
+
+/// Production's API front end refuses a key the project does not own before the service reads
+/// the request (sandbox recording 2026-09-24, auth-credential/refresh/refusals#invalid-api-key).
+fn invalid_api_key(service: &str) -> JsonResponse {
+    const MESSAGE: &str = "API key not valid. Please pass a valid API key.";
+    let mut response = invalid_api_key_without_errors(service);
+    // Identity Toolkit adds its `errors` list; Secure Token does not (2026-09-24).
+    if service == "identitytoolkit.googleapis.com" {
+        response.body["error"]["errors"] =
+            json!([{"message": MESSAGE, "domain": "global", "reason": "badRequest"}]);
+    }
+    response
+}
+
+fn invalid_api_key_without_errors(service: &str) -> JsonResponse {
+    const MESSAGE: &str = "API key not valid. Please pass a valid API key.";
+    JsonResponse {
+        status: 400,
+        body: json!({"error": {
+            "code": 400,
+            "message": MESSAGE,
+            "status": "INVALID_ARGUMENT",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "API_KEY_INVALID",
+                    "domain": "googleapis.com",
+                    "metadata": {"service": service},
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+                    "locale": "en-US",
+                    "message": MESSAGE,
+                },
+            ],
+        }}),
+    }
+}
+
+/// Production's refusal of an API key where session management needs a credential.
+fn session_management_credentials_missing() -> JsonResponse {
+    JsonResponse {
+        status: 401,
+        body: json!({"error": {
+            "code": 401,
+            "message": "API keys are not supported by this API. Expected OAuth2 access token or other authentication credentials that assert a principal. See https://cloud.google.com/docs/authentication",
+            "errors": [{
+                "message": "Login Required.",
+                "domain": "global",
+                "reason": "required",
+                "location": "Authorization",
+                "locationType": "header",
+            }],
+            "status": "UNAUTHENTICATED",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "domain": "googleapis.com",
+                "metadata": {
+                    "method": "google.cloud.identitytoolkit.v1.SessionManagementService.CreateSessionCookie",
+                    "service": "identitytoolkit.googleapis.com",
+                },
+            }],
+        }}),
+    }
+}
+
+/// The Google API a request path addresses, as the front end names it.
+fn api_service(path: &str) -> &'static str {
+    if path.starts_with("/securetoken.googleapis.com/") {
+        "securetoken.googleapis.com"
+    } else {
+        "identitytoolkit.googleapis.com"
+    }
+}
+
+/// Refuses an API key the project did not declare, when it declared any.
+fn declared_api_key_check(
+    state: &AuthState,
+    path: &str,
+    query: Option<&str>,
+) -> Result<(), JsonResponse> {
+    let (Ok((Some(key), _)), Some(tenancy)) = (query_selectors(query), state.tenancy.as_ref())
+    else {
+        return Ok(());
+    };
+    let Ok(tenancy) = tenancy.read() else {
+        return Err(error(500, "INTERNAL"));
+    };
+    if tenancy.refuses_api_key(&key) {
+        return Err(invalid_api_key(api_service(path)));
     }
     Ok(())
 }
@@ -2024,7 +2183,7 @@ fn dispatch_with_blocking_hook(
         body,
         headers,
         at,
-        state.into(),
+        &blocking_dispatch_options(state),
     );
     if blocking.blocking_auth_revision() != expected_blocking_revision {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
@@ -2258,7 +2417,7 @@ fn dispatch_with_blocking_hook(
                 body,
                 headers,
                 at,
-                state.into(),
+                &blocking_dispatch_options(state),
             )
         };
         if committed_response.status != 200 {
@@ -2525,6 +2684,13 @@ fn handle_with_policy(
     // Production's API front end answers a caller without identity before the service reads
     // any selector, tenant or body (sandbox recording 2026-09-23).
     if let Err(response) = caller_identity_check(state, resolution, headers, api_key) {
+        return if api_service(path) == "securetoken.googleapis.com" {
+            secure_token_error_shape(response)
+        } else {
+            response
+        };
+    }
+    if let Err(response) = declared_api_key_check(state, path, query) {
         return response;
     }
     let emulator_clear = matches!(
@@ -2933,7 +3099,7 @@ fn handle_with_policy(
             body,
             headers,
             at,
-            state.into(),
+            &state.into(),
         );
         let retain_candidate = response.status == 200
             && pending_routed_project.is_some()
@@ -3012,7 +3178,7 @@ fn handle_with_policy(
             body,
             headers,
             at,
-            state.into(),
+            &state.into(),
         );
         // Determine creation from the request's returned identity and the isolated store
         // transition. A global user-count delta is not a per-request result: another actor may
@@ -3054,15 +3220,20 @@ fn handle_with_policy(
             body,
             headers,
             at,
-            state.into(),
+            &state.into(),
         );
         drop(store);
         response
     };
     let response = if response.status == 200 {
+        let body = without_nulls(response.body);
         JsonResponse {
             status: 200,
-            body: without_nulls(response.body),
+            body: if route.handler == routes::Handler::SignInWithCustomToken {
+                public_custom_token_answer(body)
+            } else {
+                body
+            },
         }
     } else {
         response
@@ -3146,6 +3317,18 @@ fn caller_identity_check(
         routes::Resolution::NotFound => return Ok(()),
     };
     match class {
+        // Session management refuses an API key in place of a credential with its own shape
+        // (sandbox recording 2026-09-24, session-cookie/sessions#client-api-key).
+        routes::RouteClass::Admin
+            if api_key
+                && matches!(
+                    resolution,
+                    routes::Resolution::Matched { route, .. }
+                        if route.handler == routes::Handler::AdminCreateSessionCookie
+                ) =>
+        {
+            Err(session_management_credentials_missing())
+        }
         routes::RouteClass::Admin => admin_request_guard(headers, "", api_key),
         routes::RouteClass::EndUser
             if state.client_api_key == ClientApiKeyPolicy::Required && !api_key =>
@@ -3184,13 +3367,28 @@ fn privilege_check(
 }
 
 /// Runs the handler of a resolved route.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct DispatchOptions {
     totp_extension_enabled: bool,
     stateless_refresh_tokens: bool,
     fake_custom_token_expiry: FakeCustomTokenExpiry,
+    custom_token_trust: Option<Arc<CustomTokenTrust>>,
+    /// Whether sign-in without `returnSecureToken` answers with the legacy token, as
+    /// production does. The emulator profile (stateless refresh tokens) keeps the official
+    /// emulator's secure tokens. A request whose blocking trigger is selected keeps secure tokens
+    /// too: the hook re-issues tokens through the refresh session a legacy sign-in does not open,
+    /// and the legacy behaviour of blocking functions is unobserved.
+    legacy_tokens: bool,
     query_limits: AuthQueryLimits,
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+}
+
+/// The options of a request whose blocking trigger is selected: it keeps secure tokens.
+fn blocking_dispatch_options(state: &AuthState) -> DispatchOptions {
+    DispatchOptions {
+        legacy_tokens: false,
+        ..state.into()
+    }
 }
 
 impl From<&AuthState> for DispatchOptions {
@@ -3199,6 +3397,8 @@ impl From<&AuthState> for DispatchOptions {
             totp_extension_enabled: state.totp_extension_enabled,
             stateless_refresh_tokens: state.stateless_refresh_tokens,
             fake_custom_token_expiry: state.fake_custom_token_expiry,
+            custom_token_trust: state.custom_token_trust.clone(),
+            legacy_tokens: !state.stateless_refresh_tokens,
             query_limits: state.query_limits,
             inbound_credential_policy: state.blocking.as_deref().map_or_else(
                 fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
@@ -3224,7 +3424,7 @@ fn dispatch(
     body: &Value,
     headers: &RequestHeaders,
     at: LogicalInstant,
-    options: DispatchOptions,
+    options: &DispatchOptions,
 ) -> JsonResponse {
     use routes::Handler;
     match handler {
@@ -3246,12 +3446,16 @@ fn dispatch(
             }
         }
         Handler::SignUp => sign_up(store, body, at, None),
-        Handler::SignInWithPassword => sign_in_with_password(store, body, at),
+        Handler::SignInWithPassword => {
+            sign_in_with_password(store, body, at, options.legacy_tokens)
+        }
         Handler::SignInWithCustomToken => sign_in_with_custom_token(
             store,
             body,
             at,
             options.fake_custom_token_expiry == FakeCustomTokenExpiry::Reject,
+            options.custom_token_trust.as_deref(),
+            options.legacy_tokens,
         ),
         Handler::Lookup => lookup(store, body, at, false),
         Handler::Update | Handler::AdminUpdate => update(
@@ -3284,11 +3488,23 @@ fn dispatch(
             }),
         },
         Handler::PasswordPolicy => password_policy_json(store.password_policy()),
-        Handler::MfaEnrollmentStart => {
-            mfa_enrollment_start(store, body, at, options.totp_extension_enabled)
-        }
+        // Strict: production's answer when TOTP is not enabled, and the v2 API's error shape
+        // (sandbox recording 2026-09-24); the emulator keeps the official emulator's.
+        Handler::MfaEnrollmentStart => v2_error_shape(
+            mfa_enrollment_start(
+                store,
+                body,
+                at,
+                options.totp_extension_enabled,
+                !options.stateless_refresh_tokens,
+            ),
+            !options.stateless_refresh_tokens,
+        ),
         Handler::MfaEnrollmentFinalize => mfa_enrollment_finalize(store, body, at),
-        Handler::MfaEnrollmentWithdraw => mfa_enrollment_withdraw(store, body, at),
+        Handler::MfaEnrollmentWithdraw => v2_error_shape(
+            mfa_enrollment_withdraw(store, body, at),
+            !options.stateless_refresh_tokens,
+        ),
         Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
         Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
         Handler::Token => {
@@ -3310,7 +3526,10 @@ fn dispatch(
             with_link["returnOobLink"] = json!(true);
             send_oob_code(store, &with_link, at, headers, true)
         }
-        Handler::AdminCreateSessionCookie => create_session_cookie(store, body, at),
+        // Stateful refresh sessions mark the strict profile.
+        Handler::AdminCreateSessionCookie => {
+            create_session_cookie(store, body, at, !options.stateless_refresh_tokens)
+        }
         Handler::TenantCreate
         | Handler::TenantList
         | Handler::TenantGet
@@ -6319,11 +6538,17 @@ fn select_store(
                 };
                 match tenancy.project_of_api_key(key).map(str::to_owned) {
                     Some(project) => Some(project),
-                    None if tenancy.registered().is_empty() => None,
+                    None if tenancy.registered().is_empty() || tenancy.is_default_api_key(key) => {
+                        None
+                    }
                     None => {
                         // An explicit API-key selector is an assertion about the target
                         // project. Never silently route an unknown key to the default namespace.
-                        return Err(error(400, "INVALID_API_KEY"));
+                        return Err(invalid_api_key(if exchanges_refresh_token {
+                            "securetoken.googleapis.com"
+                        } else {
+                            "identitytoolkit.googleapis.com"
+                        }));
                     }
                 }
             }
@@ -6564,7 +6789,7 @@ fn sign_up(
         NewUser::anonymous()
     };
     let (uid, created_new) = if has_session {
-        let uid = match verify(store, body, at) {
+        let uid = match verify_honouring_legacy(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
         };
@@ -6662,15 +6887,38 @@ fn sign_in_with_custom_token(
     body: &Value,
     at: LogicalInstant,
     reject_expired: bool,
+    trust: Option<&CustomTokenTrust>,
+    legacy_tokens: bool,
 ) -> JsonResponse {
-    let Some(token) = str_field(body, "token").filter(|t| !t.is_empty()) else {
-        return error(400, "MISSING_CUSTOM_TOKEN");
+    // Production's rules apply with configured signers and in the strict profile; the
+    // emulator profile keeps the official emulator's leniency (sandbox recording 2026-09-24).
+    let production_rules = trust.is_some() || reject_expired;
+    // Production accepts only a signed token. The strict profile therefore needs the signers
+    // (`auth.customTokenSigners`) to verify one, and without them refuses every custom token as
+    // production refuses an unsigned one; the daemon says so at startup.
+    if reject_expired && trust.is_none() && str_field(body, "token").is_some_and(|t| !t.is_empty())
+    {
+        return error(400, "INVALID_CUSTOM_TOKEN");
+    }
+    // An empty token is a malformed one to production and a missing one to the emulator.
+    let token = match str_field(body, "token") {
+        Some("") if production_rules => {
+            return error(400, custom_token::INVALID_ASSERTION_FORMAT);
+        }
+        None | Some("") => return error(400, "MISSING_CUSTOM_TOKEN"),
+        Some(token) => token,
     };
-    // Like the official emulator, a strict JSON object is accepted as a fake custom token
+    // With configured signers only a token they signed is accepted, as in production; without
+    // them, like the official emulator, a strict JSON object is accepted as a fake custom token
     // beside the unsigned JWT the Admin SDK mints.
-    let payload = if token.trim_start().starts_with('{') {
+    let (payload, jwt) = if let Some(trust) = trust {
+        match trust.verify(token, store.project_id()) {
+            Ok(claims) => (claims, true),
+            Err(refusal) => return error(400, refusal.message()),
+        }
+    } else if token.trim_start().starts_with('{') {
         match fireemu_core_types::json::parse(token) {
-            Ok(v) => v,
+            Ok(v) => (v, false),
             Err(_) => {
                 return error(
                     400,
@@ -6680,13 +6928,26 @@ fn sign_in_with_custom_token(
         }
     } else {
         let Ok(decoded) = fireemu_core_auth::jwt::decode_unsigned(token) else {
-            return error(400, "INVALID_CUSTOM_TOKEN : Invalid assertion format");
+            return error(
+                400,
+                if production_rules {
+                    custom_token::INVALID_ASSERTION_FORMAT
+                } else {
+                    "INVALID_CUSTOM_TOKEN : Invalid assertion format"
+                },
+            );
         };
-        if decoded.payload.get("aud").and_then(JsonValue::as_str) != Some(CUSTOM_TOKEN_AUDIENCE) {
+        if !production_rules
+            && decoded.payload.get("aud").and_then(JsonValue::as_str) != Some(CUSTOM_TOKEN_AUDIENCE)
+        {
             return error(400, "INVALID_CUSTOM_TOKEN : wrong audience");
         }
-        decoded.payload
+        (decoded.payload, true)
     };
+    let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    if production_rules && jwt && !custom_token_claims_hold(&payload, now_secs) {
+        return error(400, "INVALID_CUSTOM_TOKEN");
+    }
     if let Some(tenant_id) = payload.get("tenant_id") {
         let Some(tenant_id) = tenant_id.as_str() else {
             return error(400, "INVALID_CUSTOM_TOKEN : tenant_id must be a string");
@@ -6695,49 +6956,63 @@ fn sign_in_with_custom_token(
             return error(400, "TENANT_ID_MISMATCH");
         }
     }
-    let uid = payload
-        .get("uid")
-        .or_else(|| payload.get("user_id"))
-        .and_then(|v| match v {
-            JsonValue::String(s) => Some(s.clone()),
-            JsonValue::Int(i) => Some(i.to_string()),
-            _ => None,
-        })
-        .filter(|s| !s.is_empty());
+    let uid = match payload.get("uid").or_else(|| payload.get("user_id")) {
+        Some(JsonValue::String(s)) => Some(s.clone()),
+        Some(JsonValue::Int(i)) => Some(i.to_string()),
+        _ => None,
+    };
     let Some(uid) = uid else {
         return error(400, "MISSING_IDENTIFIER");
     };
-    // Custom-token uids keep the Admin SDK's 128-character bound; the wider Admin create
-    // bound was observed only for accounts:create.
+    // Production bounds the uid to 1..=128 characters (sandbox recording 2026-09-24).
+    if production_rules && (uid.is_empty() || uid.chars().count() > 128) {
+        return error(
+            400,
+            "INVALID_IDENTIFIER : Invalid user ID length. Expect to have length between 1 and 128.",
+        );
+    }
+    if uid.is_empty() {
+        return error(400, "MISSING_IDENTIFIER");
+    }
     if uid.chars().count() > 128 {
         return auth_error(&AuthError::InvalidLocalId);
     }
     let uid = uid.as_str();
-    let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    if reject_expired
-        && payload
-            .get("exp")
-            .and_then(JsonValue::as_i64)
-            .is_some_and(|exp| now_secs >= exp)
-    {
-        return error(400, "TOKEN_EXPIRED");
-    }
     let mut extra = CustomClaims::default();
     if let Some(claims) = payload.get("claims") {
         let JsonValue::Object(claims) = claims else {
-            return error(400, "INVALID_CUSTOM_TOKEN : claims must be an object");
+            return error(
+                400,
+                if production_rules {
+                    "INVALID_CLAIMS"
+                } else {
+                    "INVALID_CUSTOM_TOKEN : claims must be an object"
+                },
+            );
         };
         for (k, v) in claims {
             let Some(cv) = claims_from_json(v) else {
                 return error(400, "INVALID_CUSTOM_TOKEN : unsupported claim value");
             };
             if let Err(e) = extra.insert(k, cv) {
-                return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
+                return error(
+                    400,
+                    &if production_rules {
+                        format!("FORBIDDEN_CLAIM : {k}")
+                    } else {
+                        format!("INVALID_CUSTOM_TOKEN : {e}")
+                    },
+                );
             }
         }
     }
-    if let Err(e) = extra.check_size() {
-        return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
+    // Production accepted developer claims past the 1000-byte account-claim limit (sandbox
+    // recording 2026-09-24, custom-token/sign-in#claims-over-limit); the official emulator's
+    // bound stays in the emulator profile.
+    if !production_rules {
+        if let Err(e) = extra.check_size() {
+            return error(400, &format!("INVALID_CUSTOM_TOKEN : {e}"));
+        }
     }
     let (uid, is_new) = if let Some(u) = store.user_by_id(uid) {
         (u.local_id.clone(), false)
@@ -6755,7 +7030,27 @@ fn sign_in_with_custom_token(
     if store.user(&uid).is_some_and(|u| u.disabled) {
         return error(400, "USER_DISABLED");
     }
+    // Any custom-token sign-in marks the account (sandbox recording 2026-09-24,
+    // id-token/methods#admin-lookup-after-custom-sign-in).
+    if let Some(user) = store.user_mut(&uid) {
+        user.custom_auth = true;
+    }
     store.record_sign_in(&uid, at);
+    if legacy_tokens && wants_legacy_token(store, body) {
+        let id_token = match legacy_sign_in_token(store, &uid, at, "custom", Some(&extra)) {
+            Ok(token) => token,
+            Err(r) => return r,
+        };
+        return JsonResponse {
+            status: 200,
+            body: json!({
+                "kind": "identitytoolkit#VerifyCustomTokenResponse",
+                "localId": uid.as_str(),
+                "idToken": id_token,
+                "isNewUser": is_new,
+            }),
+        };
+    }
     match issue_tokens_with(
         store,
         &uid,
@@ -6765,12 +7060,83 @@ fn sign_in_with_custom_token(
         Some(fireemu_core_auth::store::Provider::Custom),
     ) {
         Ok(mut body) => {
+            // `localId` and `email` stay until the request's creation is committed; the answer
+            // is trimmed afterwards (`public_custom_token_answer`).
             body["kind"] = json!("identitytoolkit#VerifyCustomTokenResponse");
             body["isNewUser"] = json!(is_new);
             JsonResponse { status: 200, body }
         }
         Err(r) => r,
     }
+}
+
+/// The claims production requires of a custom token (sandbox recording 2026-09-24): its
+/// audience, `iss` equal to `sub`, an `iat` and an `exp` at most an hour apart, an `iat` no more
+/// than the skew allowance ahead, and an `exp` no more than the allowance behind.
+fn custom_token_claims_hold(payload: &JsonValue, now_secs: i64) -> bool {
+    let leeway = fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS;
+    let text = |name: &str| payload.get(name).and_then(JsonValue::as_str);
+    let (Some(iat), Some(exp)) = (
+        payload.get("iat").and_then(JsonValue::as_i64),
+        payload.get("exp").and_then(JsonValue::as_i64),
+    ) else {
+        return false;
+    };
+    text("aud") == Some(CUSTOM_TOKEN_AUDIENCE)
+        && text("iss").is_some()
+        && text("iss") == text("sub")
+        && exp.saturating_sub(iat) <= 3600
+        && iat <= now_secs.saturating_add(leeway)
+        && now_secs < exp.saturating_add(leeway)
+}
+
+/// The v2 API's refusal: a gRPC status name and no `errors` list (sandbox recording
+/// 2026-09-24, mfaEnrollment:start and :withdraw). Applied in the strict profile only.
+fn v2_error_shape(response: JsonResponse, strict: bool) -> JsonResponse {
+    if strict && response.status == 400 {
+        secure_token_error_shape(response)
+    } else {
+        response
+    }
+}
+
+/// Production's custom-token answer names the account only inside the token (sandbox
+/// recording 2026-09-24): the `localId` and `email` the creation commit reads are removed once
+/// it has run.
+fn public_custom_token_answer(mut body: Value) -> Value {
+    if let Some(object) = body.as_object_mut() {
+        object.remove("localId");
+        object.remove("email");
+    }
+    body
+}
+
+/// Whether a sign-in answers with the legacy Identity Toolkit token: production does so for
+/// password and custom-token sign-in unless `returnSecureToken` is true (sandbox recording
+/// 2026-09-24). Tenant namespaces keep secure tokens until their legacy shape is observed.
+fn wants_legacy_token(store: &AuthStore, body: &Value) -> bool {
+    body.get("returnSecureToken").and_then(Value::as_bool) != Some(true)
+        && store.tenant_id().is_none()
+}
+
+/// A legacy Identity Toolkit token for `uid`, in the unsigned internal form the response
+/// signer replaces. It opens no refresh session.
+fn legacy_sign_in_token(
+    store: &mut AuthStore,
+    uid: &LocalId,
+    at: LogicalInstant,
+    sign_in_provider: &str,
+    developer_claims: Option<&CustomClaims>,
+) -> Result<String, JsonResponse> {
+    let iat = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    let payload = store
+        .legacy_token_payload(uid, iat, sign_in_provider, developer_claims)
+        .map_err(|e| auth_error(&e))?;
+    Ok(fireemu_core_auth::jwt::encode_payload_shaped(
+        &payload,
+        None,
+        HeaderShape::Untyped,
+    ))
 }
 
 fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) -> Value {
@@ -6801,7 +7167,12 @@ fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) ->
     })
 }
 
-fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn sign_in_with_password(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    legacy_tokens: bool,
+) -> JsonResponse {
     // The official order: the email is checked (present, well-formed) before the password.
     let Some(email) = str_field(body, "email") else {
         return error(400, "MISSING_EMAIL");
@@ -6845,6 +7216,24 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
                     .collect(),
             ),
         ));
+    }
+    if legacy_tokens && wants_legacy_token(store, body) && mfa_info(store, &uid, true).is_empty() {
+        let id_token = match legacy_sign_in_token(store, &uid, at, "password", None) {
+            Ok(token) => token,
+            Err(r) => return r,
+        };
+        let mut response = json!({
+            "localId": uid.as_str(),
+            "email": store.user(&uid).and_then(|u| u.email.clone()),
+            "idToken": id_token,
+        });
+        for (key, value) in extra {
+            response[key] = value;
+        }
+        return JsonResponse {
+            status: 200,
+            body: response,
+        };
     }
     finish_sign_in(
         store,
@@ -6997,8 +7386,8 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
-    let valid_since =
-        (has_password || u.tokens_revoked || u.admin_created).then_some(u.tokens_valid_after);
+    let valid_since = (has_password || u.tokens_revoked || u.admin_created || u.custom_auth)
+        .then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
         "tenantId": store.tenant_id(),
@@ -7021,6 +7410,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "lastRefreshAt": u.last_refresh_at.and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
         "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
+        "customAuth": u.custom_auth.then_some(true),
     })
 }
 
@@ -7139,13 +7529,19 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
     if !admin {
         // Select the trust boundary before parsing any administrator search criteria.
         // End-user lookup always verifies a token and can return only its subject.
-        let session = match verify_session_with_error(store, body, at, |e| {
-            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
-                error(400, "USER_NOT_FOUND")
-            } else {
-                jwt_error(e)
-            }
-        }) {
+        let session = match verify_session_accepting(
+            store,
+            body,
+            at,
+            |e| {
+                if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                    error(400, "USER_NOT_FOUND")
+                } else {
+                    jwt_error(e)
+                }
+            },
+            LegacyTokens::Honoured,
+        ) {
             Ok(session) => session,
             Err(response) => return response,
         };
@@ -7699,7 +8095,7 @@ fn update(
     } else {
         // Authenticate the client before planning any mutation. A supplied localId is
         // never a client selector, and does not change self-service invalidation rules.
-        match verify_session(store, body, at) {
+        match verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured) {
             Ok(session) => {
                 if self_service {
                     if let Err(response) = validate_client_update_shapes(body) {
@@ -7935,15 +8331,23 @@ fn update(
     // matching the recorded disable/re-enable flow. Preserve the emulator's validSince
     // behavior, and keep credential changes and explicit revocation independent of disablement.
     let credentials_changed = plan.password.is_some() || email_changed || plan.revoke_at.is_some();
-    if credentials_changed || (stateless_refresh_tokens && plan.disable == Some(true)) {
-        let _ = store.revoke_tokens(&uid, plan.revoke_at.unwrap_or(at));
+    let implicit_revocation = plan.password.is_some() || email_changed;
+    if implicit_revocation || (stateless_refresh_tokens && plan.disable == Some(true)) {
+        let _ = store.revoke_tokens(&uid, at);
     }
-    // A privileged password replacement advances `validSince` but keeps the refresh-session
-    // record. This preserves the same-second boundary: a session issued in the replacement
-    // second is not older than the floored revocation instant. Older sessions fail as
-    // TOKEN_EXPIRED. Explicit revocation and administrative email changes still retire the
-    // session immediately. Credential-removal flags retain their existing session behavior.
-    let removes_refresh_credential = plan.revoke_at.is_some() || (email_changed && !self_service);
+    // An administrator's validSince is stored as given, even when it is earlier than before;
+    // sessions are judged against it when they are used (sandbox recording 2026-09-24). A
+    // client update's validSince changes nothing (AUTH-ACCOUNT recording 2026-09-23,
+    // privilege/valid-token-admin-fields#admin-readback-valid-since).
+    if let Some(valid_since) = plan.revoke_at.filter(|_| !self_service) {
+        let _ = store.set_valid_since(&uid, valid_since);
+    }
+    // A privileged password replacement or an explicit validSince advances `validSince` but
+    // keeps the refresh-session record, so a session issued in the revocation second is not
+    // older than the floored instant and older sessions fail as TOKEN_EXPIRED. Administrative
+    // email changes still retire the session immediately. Credential-removal flags retain their
+    // existing session behavior.
+    let removes_refresh_credential = email_changed && !self_service;
     if !stateless_refresh_tokens && removes_refresh_credential {
         store.revoke_refresh_tokens(&uid);
     }
@@ -7951,7 +8355,11 @@ fn update(
         json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"});
     if let Some(u) = store.user(&uid) {
         response["email"] = json!(u.email);
-        response["emailVerified"] = json!(u.email_verified);
+        // As in a lookup: with an address, and while true after one was removed; never for an
+        // account that had none (sandbox recording 2026-09-24).
+        if u.email.is_some() || u.email_verified || u.email_verified_recorded {
+            response["emailVerified"] = json!(u.email_verified);
+        }
         response["displayName"] = json!(u.display_name);
         response["photoUrl"] = json!(u.photo_url);
         // Production's Admin update answer carries no `newEmail` (sandbox recording
@@ -8028,13 +8436,19 @@ fn delete_account(
         }
     } else {
         // As for lookup, a token whose account is gone is USER_NOT_FOUND.
-        match verify_session_with_error(store, body, at, |e| {
-            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
-                error(400, "USER_NOT_FOUND")
-            } else {
-                jwt_error(e)
-            }
-        }) {
+        match verify_session_accepting(
+            store,
+            body,
+            at,
+            |e| {
+                if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                    error(400, "USER_NOT_FOUND")
+                } else {
+                    jwt_error(e)
+                }
+            },
+            LegacyTokens::Honoured,
+        ) {
             Ok(session) => session.uid,
             Err(r) => return r,
         }
@@ -8402,28 +8816,50 @@ const SESSION_COOKIE_MAX_SECONDS: i64 = 14 * 24 * 60 * 60;
 /// the session-cookie issuer and the requested lifetime. Unsigned when the session is, as
 /// the official emulator's cookies are (the Admin SDK's `verifySessionCookie` accepts only
 /// `alg: none` while it points at an emulator).
-fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn create_session_cookie(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
+    // Strict: `validDuration` is an int64 decoded with the request; an omitted one is the maximum
+    // and any other value, zero included, must lie within the bounds (sandbox recording
+    // 2026-09-24). Emulator: the official emulator's `Number(v) || two weeks`.
+    let valid_duration = match body.get("validDuration") {
+        None | Some(Value::Null) => SESSION_COOKIE_MAX_SECONDS,
+        Some(value) if !strict => emulator_valid_duration(value),
+        Some(value) => {
+            let decoded = match value {
+                Value::String(text) => text.parse::<i64>().ok(),
+                Value::Number(n) => n.as_i64(),
+                _ => None,
+            };
+            let Some(decoded) = decoded else {
+                return proto_field_error(
+                    "valid_duration",
+                    &format!("Invalid value at 'valid_duration' (TYPE_INT64), {value}"),
+                );
+            };
+            decoded
+        }
+    };
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return error(400, "MISSING_ID_TOKEN"),
         Some(Value::String(t)) => t.as_str(),
         Some(_) => return error(400, "INVALID_ID_TOKEN"),
     };
-    let valid_duration = match body.get("validDuration") {
-        None | Some(Value::Null) => SESSION_COOKIE_MAX_SECONDS,
-        Some(Value::String(s)) => s.parse::<i64>().unwrap_or(0),
-        Some(Value::Number(n)) => n.as_i64().unwrap_or(0),
-        Some(_) => 0,
-    };
-    let valid_duration = if valid_duration == 0 {
-        SESSION_COOKIE_MAX_SECONDS
-    } else {
-        valid_duration
-    };
     if !(SESSION_COOKIE_MIN_SECONDS..=SESSION_COOKIE_MAX_SECONDS).contains(&valid_duration) {
         return error(400, "INVALID_DURATION");
     }
-    let (_, decoded) = match fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at) {
+    let (_, decoded) = match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(
+        token,
+        store,
+        at,
+        fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
+    ) {
         Ok(v) => v,
+        // A deleted account's token names nobody (sandbox recording 2026-09-24).
+        Err(JwtError::UnknownUser) => return error(400, "USER_NOT_FOUND"),
         Err(e) => return jwt_error(&e),
     };
     let Ok(mut payload) = serde_json::from_str::<Value>(&decoded.payload_json) else {
@@ -8436,11 +8872,31 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
         "https://session.firebase.google.com/{}",
         store.project_id()
     ));
-    let cookie = fireemu_core_auth::jwt::encode_payload_with(&payload.to_string(), None);
+    let cookie = fireemu_core_auth::jwt::encode_payload_shaped(
+        &payload.to_string(),
+        None,
+        HeaderShape::Untyped,
+    );
     JsonResponse {
         status: 200,
         body: json!({"sessionCookie": cookie}),
     }
+}
+
+/// The official emulator's `Number(validDuration) || two weeks`, in whole seconds: zero, blank
+/// text and a value that is not a number mean the maximum, and a fraction is truncated as the
+/// emulator's signer truncates the resulting expiry.
+fn emulator_valid_duration(value: &Value) -> i64 {
+    let number = match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(text) => text.trim().parse::<f64>().ok(),
+        Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
+        _ => None,
+    }
+    .filter(|n| n.is_finite() && *n != 0.0);
+    // A float-to-integer `as` saturates, so an enormous value stays out of range, as it is.
+    #[allow(clippy::cast_possible_truncation)]
+    number.map_or(SESSION_COOKIE_MAX_SECONDS, |n| n.trunc() as i64)
 }
 
 /// `application/x-www-form-urlencoded` query decoding through the shared codec: `+` is a
@@ -8991,7 +9447,7 @@ fn verify_enrollment_session(
     if matches!(body.get("idToken"), None | Some(Value::Null)) {
         return Err(error(400, "INVALID_ID_TOKEN"));
     }
-    verify_session(store, body, at)
+    verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured)
 }
 
 fn mfa_enrollment_start(
@@ -8999,6 +9455,7 @@ fn mfa_enrollment_start(
     body: &Value,
     at: LogicalInstant,
     totp_extension_enabled: bool,
+    strict: bool,
 ) -> JsonResponse {
     let session = match verify_enrollment_session(store, body, at) {
         Ok(s) => s,
@@ -9032,7 +9489,14 @@ fn mfa_enrollment_start(
         );
     }
     if !totp_extension_enabled {
-        return error(400, "INVALID_ARGUMENT : ((Missing phoneEnrollmentInfo.))");
+        return error(
+            400,
+            if strict {
+                "OPERATION_NOT_ALLOWED : TOTP based MFA not enabled."
+            } else {
+                "INVALID_ARGUMENT : ((Missing phoneEnrollmentInfo.))"
+            },
+        );
     }
     if let Some(refusal) = phone_enrollment_refusal(store, &session, None, true) {
         return refusal;
@@ -9181,10 +9645,13 @@ fn refresh(
     at: LogicalInstant,
     stateless_refresh_tokens: bool,
 ) -> JsonResponse {
-    if str_field(body, "grant_type") != Some("refresh_token") {
-        return error(400, "INVALID_GRANT_TYPE");
+    // An empty field is an absent one, as proto3 reads it (sandbox recording 2026-09-24).
+    match str_field(body, "grant_type") {
+        None | Some("") => return error(400, "MISSING_GRANT_TYPE"),
+        Some("refresh_token") => {}
+        Some(_) => return error(400, "INVALID_GRANT_TYPE"),
     }
-    let Some(token) = str_field(body, "refresh_token") else {
+    let Some(token) = str_field(body, "refresh_token").filter(|token| !token.is_empty()) else {
         return error(400, "MISSING_REFRESH_TOKEN");
     };
     let session = match if stateless_refresh_tokens {
@@ -9356,10 +9823,12 @@ fn send_oob_code(
                 str_field(body, "idToken"),
                 str_field(body, "email"),
             ) {
-                (false, _, _) | (true, Some(_), _) => match verify(store, body, at) {
-                    Ok(uid) => uid,
-                    Err(r) => return r,
-                },
+                (false, _, _) | (true, Some(_), _) => {
+                    match verify_honouring_legacy(store, body, at) {
+                        Ok(uid) => uid,
+                        Err(r) => return r,
+                    }
+                }
                 (true, None, Some(email)) => match store.user_by_email(email) {
                     Some(u) => u.local_id.clone(),
                     None => return error(400, "EMAIL_NOT_FOUND"),
@@ -9998,7 +10467,7 @@ fn sign_in_with_phone_number(
         return error(400, "INVALID_SESSION_INFO");
     }
     if body.get("idToken").is_some_and(|t| !t.is_null()) {
-        let uid = match verify(store, body, at) {
+        let uid = match verify_honouring_legacy(store, body, at) {
             Ok(uid) => uid,
             Err(r) => return r,
         };
@@ -10026,7 +10495,15 @@ fn sign_in_with_phone_number(
         if let Err(e) = store.set_phone_number(&uid, Some(&verified.phone_number)) {
             return auth_error(&e);
         }
-        return match issue_tokens(store, &uid, None, at) {
+        // The new session is a phone sign-in (sandbox recording 2026-09-24).
+        return match issue_tokens_with(
+            store,
+            &uid,
+            None,
+            at,
+            None,
+            Some(fireemu_core_auth::store::Provider::Phone),
+        ) {
             Ok(mut tokens) => {
                 // Production's link answer carries no email (sandbox recording 2026-09-23).
                 if let Some(fields) = tokens.as_object_mut() {
@@ -10763,7 +11240,7 @@ fn mfa_enrollment_withdraw(
     body: &Value,
     at: LogicalInstant,
 ) -> JsonResponse {
-    let uid = match verify(store, body, at) {
+    let uid = match verify_honouring_legacy(store, body, at) {
         Ok(uid) => uid,
         Err(r) => return r,
     };

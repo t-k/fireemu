@@ -1116,6 +1116,14 @@ pub struct RuntimeConfig {
     pub scheduler_overlap: String,
     /// ID token signing (`auth.idTokenSigning`): `unsigned-emulator` or `session-rsa`.
     pub id_token_signing: fireemu_core_auth::jwt::SigningMode,
+    /// Service accounts whose signed custom tokens are accepted, each with its public JWK set
+    /// (`auth.customTokenSigners`). When set, only tokens they signed are accepted, as in
+    /// production; when absent, the unsigned tokens of the Admin SDK's emulator mode are.
+    pub auth_custom_token_signers: Option<serde_json::Map<String, Value>>,
+    /// The default project's API keys (`auth.apiKeys`). When any is declared, client requests
+    /// with another key are refused as production's API front end refuses them; when none is,
+    /// any key is accepted, as by the official emulator.
+    pub auth_api_keys: Vec<String>,
     /// App Check (`appCheck`); disabled by default.
     pub app_check: AppCheckConfig,
 }
@@ -1326,16 +1334,20 @@ impl Default for RuntimeConfig {
             scheduler_overlap: "allow".to_owned(),
             scheduler_catch_up: "all".to_owned(),
             id_token_signing: fireemu_core_auth::jwt::SigningMode::UnsignedEmulator,
+            auth_custom_token_signers: None,
+            auth_api_keys: Vec::new(),
             app_check: AppCheckConfig::disabled(),
         }
     }
 }
 
 /// The keys of the `auth` section (spec/config/fireemu.schema.json).
-pub(crate) const AUTH_KEYS: [&str; 16] = [
+pub(crate) const AUTH_KEYS: [&str; 18] = [
     "enabled",
+    "apiKeys",
     "projectIssuer",
     "idTokenSigning",
+    "customTokenSigners",
     "totp",
     "secretMaterialization",
     "forwardInboundCredentials",
@@ -3231,6 +3243,39 @@ impl RuntimeConfig {
                 }
                 cfg.id_token_signing = m;
             }
+            if let Some(keys) = auth.get("apiKeys") {
+                let keys = keys
+                    .as_array()
+                    .filter(|keys| !keys.is_empty())
+                    .ok_or_else(|| {
+                        ConfigError("auth.apiKeys must be a non-empty array of keys".to_owned())
+                    })?;
+                cfg.auth_api_keys = keys
+                    .iter()
+                    .map(|key| {
+                        key.as_str()
+                            .filter(|key| {
+                                !key.is_empty()
+                                    && key.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+                            })
+                            .map(str::to_owned)
+                            .ok_or_else(|| {
+                                ConfigError(
+                                    "auth.apiKeys entries must be non-empty strings of [A-Za-z0-9._-]"
+                                        .to_owned(),
+                                )
+                            })
+                    })
+                    .collect::<Result<_, _>>()?;
+            }
+            if let Some(signers) = auth.get("customTokenSigners") {
+                let signers = signers.as_object().ok_or_else(|| {
+                    ConfigError("auth.customTokenSigners must be an object".to_owned())
+                })?;
+                fireemu_adapter_http::identity_toolkit::CustomTokenTrust::from_jwks(signers)
+                    .map_err(|e| ConfigError(format!("auth.customTokenSigners: {e}")))?;
+                cfg.auth_custom_token_signers = Some(signers.clone());
+            }
             if let Some(forward) = auth.get("forwardInboundCredentials") {
                 cfg.auth_forward_inbound_credentials = forward.as_bool().ok_or_else(|| {
                     ConfigError("auth.forwardInboundCredentials must be a boolean".to_owned())
@@ -4712,6 +4757,47 @@ mod tests {
             Err(ConfigError("auth must be an object".to_owned()))
         );
         assert!(parse(&json!({"idTokenSigning": "hs256"})).is_err());
+    }
+
+    #[test]
+    fn custom_token_signers_are_validated_when_the_configuration_is_read() {
+        // A public 2048-bit modulus; the key it belongs to was discarded.
+        let modulus = "0lwNtQWMVy0QqgEvrBmoFqwky_dcMx8CgS-o2rTesEV7QbG4cvNigTcDV7b_u0twRkJdonkMPjbUs0b8NKe_0_UOZ5vE_kILFG4TtPdeZWub8xnqhETc7WifXhEfqcB8xFbRyIxU9V0d_epsuNnQ-Nd7NlnFsH-aaq6f1HKp55_BVNxudwmHwT49P6JhNDDh7FWyoYBBBFtQ0St8dky4MFQTd2swZP4pEA8xGp-q-1mxbn0g9gfbq5voYWtOaDW9a2lsC_S_d6DecsrNWn4YYJ7Qc5xcx4pI70a23zftkVBj_I-Eip2hcvNUEsZJA4LlR4BgDLsNWu3ZWQxe08fOew";
+        let jwks = json!({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "k", "n": modulus, "e": "AQAB"}]});
+        let account = "firebase-adminsdk-x@demo-project.iam.gserviceaccount.com";
+        let parsed = parse(&json!({"customTokenSigners": {account: jwks.clone()}})).unwrap();
+        assert_eq!(
+            parsed.auth_custom_token_signers,
+            Some(json!({account: jwks}).as_object().unwrap().clone())
+        );
+        assert_eq!(parse(&json!({})).unwrap().auth_custom_token_signers, None);
+        assert_eq!(
+            parse(&json!({"customTokenSigners": []})),
+            Err(ConfigError(
+                "auth.customTokenSigners must be an object".to_owned()
+            ))
+        );
+        assert_eq!(
+            parse(&json!({"apiKeys": ["fake-api-key", "AIza.x_y"]}))
+                .unwrap()
+                .auth_api_keys,
+            ["fake-api-key", "AIza.x_y"]
+        );
+        assert!(parse(&json!({})).unwrap().auth_api_keys.is_empty());
+        for bad in [
+            json!([]),
+            json!("k"),
+            json!([""]),
+            json!(["a b"]),
+            json!([1]),
+        ] {
+            assert!(parse(&json!({"apiKeys": bad})).is_err(), "{bad}");
+        }
+        let refused = parse(&json!({"customTokenSigners": {"a@example.com": {"keys": []}}}));
+        assert!(
+            matches!(&refused, Err(ConfigError(m)) if m.contains("not a service-account address")),
+            "{refused:?}"
+        );
     }
 
     #[test]

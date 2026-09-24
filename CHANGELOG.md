@@ -8,6 +8,27 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+Behavior below was measured against a real Identity Platform project on 2026-09-24 (AUTH-CREDENTIAL). Each item names the profiles it affects; "unlike the official emulator" marks where the emulator profile now differs from the Firebase Emulator Suite.
+
+### Added
+
+- `auth.customTokenSigners` maps service accounts to their public JWK sets (RSA keys of at least 2048 bits). With it, `signInWithCustomToken` verifies RS256 signatures and applies production's custom-token rules in either profile; a verifying token of another project's service account is refused with `CREDENTIAL_MISMATCH`.
+- `auth.apiKeys` declares the project's Web API keys. A client request with any other key is refused with production's `400 API_KEY_INVALID` envelope (unlike the official emulator, which validates no key). An unknown key under a registered session now gets the same envelope instead of `INVALID_API_KEY`.
+
+### Changed
+
+- Strict profile: `signInWithCustomToken` accepts only signed tokens, as production does. Without `auth.customTokenSigners` every custom token, including the Admin SDK's unsigned emulator tokens and JSON fake tokens, is refused with `INVALID_CUSTOM_TOKEN`, and the startup banner says so. Use `auth.customTokenSigners`, or the emulator profile for the Admin SDK's emulator tokens.
+- Strict profile: password and custom-token sign-in without `returnSecureToken` return production's legacy Identity Toolkit token (issuer `https://identitytoolkit.google.com/`, two-week lifetime) and no refresh token. The routes production was observed to honour it on accept it: account lookup, update and delete, a verification mail, phone linking, a sign-up upgrade and MFA enrollment. Email-link and identity-provider linking and session-cookie creation refuse it. A request whose blocking trigger runs keeps secure tokens. The emulator profile keeps secure tokens.
+- Strict profile: `createSessionCookie` decodes `validDuration` as an int64, refusing a fraction or text with `INVALID_ARGUMENT` and zero with `INVALID_DURATION`. The emulator profile keeps the official emulator's `Number(validDuration) || two weeks`.
+- Both profiles: Identity Toolkit honours an ID token for five minutes past its `exp`, then refuses it with `INVALID_ID_TOKEN` instead of `TOKEN_EXPIRED`. A strict custom token gets the same allowance and `INVALID_CUSTOM_TOKEN`. A revoked session still answers `TOKEN_EXPIRED`. Unlike the official emulator, which never reads an ID token's `exp`.
+- Both profiles: an administrator's `validSince` is stored as given and may move back, and sessions are judged against it when they are used, so a refresh token is `TOKEN_EXPIRED` below it and works again once it moves back. A client update's `validSince` is ignored. Unlike the official emulator, which sets `validSince` to the current time for any value from either caller.
+- Both profiles: session cookies carry `{alg, kid}` with no `typ` (unlike the official emulator's `typ: JWT`, which the Admin SDK does not read).
+- Both profiles: `createSessionCookie` answers an API key without a credential with production's `401 UNAUTHENTICATED` (`CREDENTIALS_MISSING`), and a deleted account's ID token with `USER_NOT_FOUND`.
+- Both profiles: a custom-token sign-in marks the account `customAuth`, and the account then reports `validSince` (the official emulator reports `customAuth` only). Custom-token answers never include `localId` or `email`, and anonymous ID tokens carry a top-level `provider_id`, as with the official emulator.
+- Both profiles: Secure Token reads an empty `grant_type` or `refresh_token` as missing (`MISSING_GRANT_TYPE`, `MISSING_REFRESH_TOKEN`). In the strict profile a Secure Token request with no API key gets its front end's 403 without an `errors` list; the emulator profile keeps accepting a keyless request.
+- Strict profile: MFA enrollment answers `OPERATION_NOT_ALLOWED : TOTP based MFA not enabled.` when TOTP is off, and its refusals carry the v2 API's shape (a status name and no `errors` list). The emulator profile keeps the official emulator's answers.
+- Both profiles: linking a phone number answers with a session whose `sign_in_provider` is `phone`, as production does and as the official emulator does.
+
 ## [0.7.1] - 2026-09-10
 
 ### Fixed

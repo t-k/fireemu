@@ -17,9 +17,17 @@ use rsa::signature::Verifier;
 use rsa::{BigUint, RsaPublicKey};
 use sha2::Sha256;
 
+/// Production's refusal of a token that is not a compact JWT (sandbox recording 2026-09-24).
+pub const INVALID_ASSERTION_FORMAT: &str =
+    "INVALID_CUSTOM_TOKEN : Invalid assertion format. 3 dot separated segments required.";
+
 /// Why a custom token was refused before its claims were read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomTokenRefusal {
+    /// Not three dot-separated segments.
+    Format,
+    /// No signature segment.
+    MissingSignature,
     /// Not a signed RS256 JWT of a trusted signer, or the signature does not verify.
     Invalid,
     /// Correctly signed by a service account of another project.
@@ -31,6 +39,8 @@ impl CustomTokenRefusal {
     #[must_use]
     pub const fn message(self) -> &'static str {
         match self {
+            Self::Format => INVALID_ASSERTION_FORMAT,
+            Self::MissingSignature => "INVALID_CUSTOM_TOKEN : Missing signature.",
             Self::Invalid => "INVALID_CUSTOM_TOKEN",
             Self::CredentialMismatch => "CREDENTIAL_MISMATCH",
         }
@@ -102,11 +112,17 @@ impl CustomTokenTrust {
     pub fn verify(&self, token: &str, project: &str) -> Result<JsonValue, CustomTokenRefusal> {
         let parts: Vec<&str> = token.split('.').collect();
         let [header_b64, payload_b64, signature_b64] = parts.as_slice() else {
-            return Err(CustomTokenRefusal::Invalid);
+            return Err(CustomTokenRefusal::Format);
         };
+        // The algorithm is judged before the signature's presence: an `alg: none` token is
+        // plainly invalid, an RS256 one without a signature is missing it (sandbox recording
+        // 2026-09-24).
         let header = decode_object(header_b64)?;
         if header.get("alg").and_then(JsonValue::as_str) != Some("RS256") {
             return Err(CustomTokenRefusal::Invalid);
+        }
+        if signature_b64.is_empty() {
+            return Err(CustomTokenRefusal::MissingSignature);
         }
         let claims = decode_object(payload_b64)?;
         let issuer = claims
@@ -262,17 +278,24 @@ mod tests {
         let (input, signature) = token.rsplit_once('.').expect("three parts");
         let mut bytes = base64url_decode(signature).expect("signature");
         bytes[10] ^= 0xff;
+        assert_eq!(
+            trust.verify(&format!("{input}."), PROJECT),
+            Err(CustomTokenRefusal::MissingSignature)
+        );
+        for malformed in ["not-a-jwt", "", "a.b", "a.b.c.d"] {
+            assert_eq!(
+                trust.verify(malformed, PROJECT),
+                Err(CustomTokenRefusal::Format)
+            );
+        }
         let refused = [
             format!("{input}.{}", base64url_encode(&bytes)),
-            format!("{input}."),
             sign(&own, &serde_json::json!({"alg": "none"}), &claims(OWN)),
             sign(&own, &serde_json::json!({"alg": "RS512"}), &claims(OWN)),
             // Signed by a key that is not the issuer's.
             sign(&other, &rs256(), &claims(OWN)),
             // An issuer nobody configured.
             sign(&other, &rs256(), &claims(OTHER)),
-            "not-a-jwt".to_owned(),
-            String::new(),
         ];
         for token in refused {
             assert_eq!(

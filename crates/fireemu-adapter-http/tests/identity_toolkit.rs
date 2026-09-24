@@ -7426,6 +7426,99 @@ fn self_service_password_change_invalidates_an_existing_session_cookie() {
     assert!(valid(new_cookie["sessionCookie"].as_str().unwrap()));
 }
 
+/// Session-cookie creation as production answers it (sandbox recording 2026-09-24,
+/// auth-credential/session-cookie): a zero duration is refused, a duration that is not an
+/// int64 is a proto decoding error, an API key cannot stand in for the owner credential, and a
+/// deleted account's token is USER_NOT_FOUND.
+#[test]
+fn session_cookie_requests_are_decoded_and_authorized_as_production_does() {
+    let s = strict_state();
+    let (status, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "cookie-decode@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_up}");
+    let cookie = |duration: Value| {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:createSessionCookie"),
+            &json!({"idToken": signed_up["idToken"], "validDuration": duration}),
+        )
+    };
+    let (status, zero) = cookie(json!(0));
+    assert_eq!(
+        (status, zero["error"]["message"].clone()),
+        (400, json!("INVALID_DURATION"))
+    );
+    for (duration, rendered) in [(json!(3600.5), "3600.5"), (json!("an hour"), "\"an hour\"")] {
+        let description = format!("Invalid value at 'valid_duration' (TYPE_INT64), {rendered}");
+        let (status, refused) = cookie(duration);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused,
+            json!({"error": {
+                "code": 400,
+                "message": description,
+                "errors": [{"message": description, "reason": "invalid"}],
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{"field": "valid_duration", "description": description}],
+                }],
+            }})
+        );
+    }
+    assert_eq!(cookie(json!("3600")).0, 200);
+    let keyed = handle(
+        &s,
+        "POST",
+        &format!("{ADMIN}:createSessionCookie?key=fake-api-key"),
+        &json!({"idToken": signed_up["idToken"], "validDuration": 3600}),
+    );
+    assert_eq!(keyed.status, 401, "{}", keyed.body);
+    assert_eq!(
+        keyed.body,
+        json!({"error": {
+            "code": 401,
+            "message": "API keys are not supported by this API. Expected OAuth2 access token or other authentication credentials that assert a principal. See https://cloud.google.com/docs/authentication",
+            "errors": [{
+                "message": "Login Required.",
+                "domain": "global",
+                "reason": "required",
+                "location": "Authorization",
+                "locationType": "header",
+            }],
+            "status": "UNAUTHENTICATED",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "domain": "googleapis.com",
+                "metadata": {
+                    "method": "google.cloud.identitytoolkit.v1.SessionManagementService.CreateSessionCookie",
+                    "service": "identitytoolkit.googleapis.com",
+                },
+            }],
+        }})
+    );
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": signed_up["localId"]})
+        )
+        .0,
+        200
+    );
+    let (status, deleted) = cookie(json!(3600));
+    assert_eq!(
+        (status, deleted["error"]["message"].clone()),
+        (400, json!("USER_NOT_FOUND"))
+    );
+}
+
 #[test]
 fn session_cookie_rejects_invalid_expired_revoked_deleted_and_disabled_id_tokens() {
     for transition in ["invalid", "expired", "revoked", "deleted", "disabled"] {
@@ -7962,6 +8055,179 @@ fn signed_custom_token(
     format!("{input}.{}", base64url_encode(&signature.to_vec()))
 }
 
+fn signed_payload(key: &rsa::RsaPrivateKey, payload: &Value) -> String {
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rsa::signature::{SignatureEncoding, Signer};
+    let header = base64url_encode(br#"{"alg":"RS256","kid":"k1","typ":"JWT"}"#);
+    let input = format!(
+        "{header}.{}",
+        base64url_encode(payload.to_string().as_bytes())
+    );
+    let signature =
+        rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(key.clone()).sign(input.as_bytes());
+    format!("{input}.{}", base64url_encode(&signature.to_vec()))
+}
+
+/// The claim rules production applies to a verified custom token (sandbox recording
+/// 2026-09-24, auth-credential/custom-token/sign-in and validation).
+#[test]
+fn signed_custom_tokens_follow_production_claim_rules() {
+    use fireemu_adapter_http::identity_toolkit::{CustomTokenTrust, CUSTOM_TOKEN_AUDIENCE};
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rand_core::SeedableRng;
+    use rsa::traits::PublicKeyParts;
+    let account = "firebase-adminsdk-x@demo-app.iam.gserviceaccount.com";
+    let key =
+        rsa::RsaPrivateKey::new(&mut rand_chacha::ChaCha20Rng::seed_from_u64(21), 2048).unwrap();
+    let jwks = json!({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "k1",
+        "n": base64url_encode(&key.n().to_bytes_be()), "e": base64url_encode(&key.e().to_bytes_be())}]});
+    let trust = CustomTokenTrust::from_jwks(json!({account: jwks}).as_object().unwrap()).unwrap();
+    let s = AuthState {
+        custom_token_trust: Some(Arc::new(trust)),
+        ..strict_state()
+    };
+    let now = 1_788_004_860_i64;
+    let base = |uid: &str| {
+        json!({"iss": account, "sub": account, "aud": CUSTOM_TOKEN_AUDIENCE,
+            "iat": now, "exp": now + 3600, "uid": uid})
+    };
+    let with = |uid: &str, changes: &[(&str, Value)], removed: &[&str]| {
+        let mut payload = base(uid);
+        for (name, value) in changes {
+            payload[*name] = value.clone();
+        }
+        for name in removed {
+            payload.as_object_mut().unwrap().remove(*name);
+        }
+        signed_payload(&key, &payload)
+    };
+    let sign_in = |token: Value| {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        );
+        (
+            status,
+            body["error"]["message"].as_str().unwrap_or("").to_owned(),
+        )
+    };
+    let invalid = (400, "INVALID_CUSTOM_TOKEN".to_owned());
+    let length = (
+        400,
+        "INVALID_IDENTIFIER : Invalid user ID length. Expect to have length between 1 and 128."
+            .to_owned(),
+    );
+    let ok = (200, String::new());
+    let format = (
+        400,
+        "INVALID_CUSTOM_TOKEN : Invalid assertion format. 3 dot separated segments required."
+            .to_owned(),
+    );
+    let signed = with("stripped", &[], &[]);
+    let stripped = format!("{}.", signed.rsplit_once('.').unwrap().0);
+    for (label, token, expected) in [
+        (
+            "wrong audience",
+            json!(with("aud", &[("aud", json!("https://example.com"))], &[])),
+            invalid.clone(),
+        ),
+        (
+            "iss not sub",
+            json!(with("iss", &[("sub", json!("someone@example.com"))], &[])),
+            invalid.clone(),
+        ),
+        (
+            "no exp",
+            json!(with("no-exp", &[], &["exp"])),
+            invalid.clone(),
+        ),
+        (
+            "no iat",
+            json!(with("no-iat", &[], &["iat"])),
+            invalid.clone(),
+        ),
+        (
+            "two hours",
+            json!(with("long", &[("exp", json!(now + 7200))], &[])),
+            invalid.clone(),
+        ),
+        (
+            "iat ahead",
+            json!(with(
+                "ahead",
+                &[("iat", json!(now + 600)), ("exp", json!(now + 4200))],
+                &[]
+            )),
+            invalid.clone(),
+        ),
+        ("empty uid", json!(with("", &[], &[])), length.clone()),
+        ("129", json!(with(&"u".repeat(129), &[], &[])), length),
+        ("128", json!(with(&"u".repeat(128), &[], &[])), ok.clone()),
+        (
+            "claims string",
+            json!(with("c1", &[("claims", json!("role=admin"))], &[])),
+            (400, "INVALID_CLAIMS".to_owned()),
+        ),
+        (
+            "claims array",
+            json!(with("c2", &[("claims", json!(["role"]))], &[])),
+            (400, "INVALID_CLAIMS".to_owned()),
+        ),
+        (
+            "reserved",
+            json!(with("c3", &[("claims", json!({"sub": "x"}))], &[])),
+            (400, "FORBIDDEN_CLAIM : sub".to_owned()),
+        ),
+        (
+            "1001 bytes",
+            json!(with(
+                "c4",
+                &[("claims", json!({"k": "x".repeat(993)}))],
+                &[]
+            )),
+            ok.clone(),
+        ),
+        (
+            "stripped",
+            json!(stripped),
+            (400, "INVALID_CUSTOM_TOKEN : Missing signature.".to_owned()),
+        ),
+        ("garbage", json!("not-a-jwt"), format.clone()),
+        ("empty", json!(""), format),
+    ] {
+        assert_eq!(sign_in(token), expected, "{label}");
+    }
+    let (status, missing) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(
+        (status, missing["error"]["message"].clone()),
+        (400, json!("MISSING_CUSTOM_TOKEN"))
+    );
+    // A custom sign-in into an account created otherwise marks it as custom-authenticated.
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": "made-by-admin", "email": "admin-made@example.com"})
+        )
+        .0,
+        200
+    );
+    assert_eq!(sign_in(json!(with("made-by-admin", &[], &[]))), ok);
+    let (_, account) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["made-by-admin"]}),
+    );
+    assert_eq!(account["users"][0]["customAuth"], true, "{account}");
+}
+
 #[test]
 fn configured_signers_admit_only_the_tokens_they_signed() {
     use fireemu_adapter_http::identity_toolkit::CustomTokenTrust;
@@ -8047,7 +8313,11 @@ fn configured_signers_admit_only_the_tokens_they_signed() {
     );
     assert_eq!(
         refused(r#"{"uid":"json-token"}"#.to_owned()),
-        (400, "INVALID_CUSTOM_TOKEN".to_owned()),
+        (
+            400,
+            "INVALID_CUSTOM_TOKEN : Invalid assertion format. 3 dot separated segments required."
+                .to_owned()
+        ),
         "the emulator's JSON fake token is not a signed token"
     );
 }
@@ -11722,7 +11992,7 @@ fn undeclared_api_keys_are_refused_as_the_api_front_end_does() {
     assert_eq!(status, 200, "{created}");
     let invalid = |service: &str| {
         let message = "API key not valid. Please pass a valid API key.";
-        json!({"error": {
+        let mut body = json!({"error": {
             "code": 400,
             "message": message,
             "status": "INVALID_ARGUMENT",
@@ -11739,7 +12009,13 @@ fn undeclared_api_keys_are_refused_as_the_api_front_end_does() {
                     "message": message,
                 },
             ],
-        }})
+        }});
+        // Identity Toolkit adds its `errors` list; Secure Token does not (2026-09-24).
+        if service == "identitytoolkit.googleapis.com" {
+            body["error"]["errors"] =
+                json!([{"message": message, "domain": "global", "reason": "badRequest"}]);
+        }
+        body
     };
     assert_eq!(
         post(

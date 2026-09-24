@@ -478,6 +478,7 @@ pub fn verify_legacy_token(
     token: &str,
     store: &AuthStore,
     now: LogicalInstant,
+    leeway_seconds: i64,
 ) -> Result<(TokenVerification, DecodedToken), JwtError> {
     let decoded = decode_token(token, store.signer())?;
     let iss = decoded.string("iss").ok_or(JwtError::Malformed)?;
@@ -496,7 +497,7 @@ pub fn verify_legacy_token(
     }
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
     let exp = decoded.exp().ok_or(JwtError::Malformed)?;
-    if now_secs >= exp {
+    if now_secs >= exp.saturating_add(leeway_seconds) {
         return Err(JwtError::Expired);
     }
     let issued_at = decoded
@@ -516,7 +517,7 @@ pub fn verify_legacy_token(
     if !store.token_is_valid(
         &user.local_id,
         LogicalInstant::from_unix_seconds(issued_at),
-        LogicalInstant::from_unix_seconds(exp),
+        LogicalInstant::from_unix_seconds(exp.saturating_add(leeway_seconds)),
         now,
     ) {
         return Err(JwtError::Revoked);
@@ -623,6 +624,21 @@ pub fn verify_id_token_decoded(
     store: &AuthStore,
     now: LogicalInstant,
 ) -> Result<(TokenVerification, DecodedToken), JwtError> {
+    verify_id_token_decoded_with_leeway(token, store, now, 0)
+}
+
+/// Identity Toolkit's allowance past a token's `exp`: production accepted an ID token and a
+/// custom token ten seconds after `exp` and refused them 330 seconds after (sandbox recording
+/// 2026-09-24); the conventional five-minute clock-skew allowance lies between.
+pub const IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS: i64 = 300;
+
+/// [`verify_id_token_decoded`] that still honours a token up to `leeway_seconds` past `exp`.
+pub fn verify_id_token_decoded_with_leeway(
+    token: &str,
+    store: &AuthStore,
+    now: LogicalInstant,
+    leeway_seconds: i64,
+) -> Result<(TokenVerification, DecodedToken), JwtError> {
     let decoded = decode_token(token, store.signer())?;
     let expected_iss = format!("https://securetoken.google.com/{}", store.project_id());
     let iss = decoded.string("iss").ok_or(JwtError::Malformed)?;
@@ -665,7 +681,7 @@ pub fn verify_id_token_decoded(
     }
     let exp = decoded.exp().ok_or(JwtError::Malformed)?;
     let now_secs = i64::try_from(now.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
-    if now_secs >= exp {
+    if now_secs >= exp.saturating_add(leeway_seconds) {
         return Err(JwtError::Expired);
     }
     // Firebase's ID-token contract requires both iat and auth_time not to be in

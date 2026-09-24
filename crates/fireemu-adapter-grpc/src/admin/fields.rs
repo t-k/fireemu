@@ -50,6 +50,16 @@ pub struct FieldPatch {
     pub start_time: LogicalInstant,
     /// The operation that applies it.
     pub operation: String,
+    /// The field's single-field modes before the patch (what its deltas are relative to).
+    pub before: Modes,
+}
+
+impl FieldPatch {
+    /// The collection group, as the readback names it.
+    #[must_use]
+    pub fn collection_group_id(&self) -> CollectionId {
+        self.group.clone()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -158,9 +168,17 @@ impl FieldRegistry {
         out
     }
 
-    /// Applies every applied index-configuration patch of a database to the planner's catalog,
-    /// in patch order.
-    pub fn overlay(&self, project: &str, database: &str, now: LogicalInstant, set: &mut IndexSet) {
+    /// Applies the index-configuration patches of a database to a catalog, in patch order:
+    /// only the applied ones for the planner, every one (`include_pending`) for a readback,
+    /// which production answers with the configuration a patch asks for.
+    pub fn overlay(
+        &self,
+        project: &str,
+        database: &str,
+        now: LogicalInstant,
+        set: &mut IndexSet,
+        include_pending: bool,
+    ) {
         let patches: Vec<FieldPatch> = self
             .lock()
             .patches
@@ -169,7 +187,7 @@ impl FieldRegistry {
             .cloned()
             .collect();
         for patch in patches {
-            if !self.applied(&patch, now) {
+            if !include_pending && !self.applied(&patch, now) {
                 continue;
             }
             if let FieldChange::IndexConfig(modes) = &patch.change {
@@ -207,6 +225,7 @@ mod tests {
             started: Instant::now(),
             start_time: LogicalInstant::from_nanos(at),
             operation: format!("op{at}"),
+            before: Vec::new(),
         }
     }
 
@@ -218,7 +237,7 @@ mod tests {
         let field = FieldPath::parse("nx").unwrap();
         registry.record(patch(FieldChange::IndexConfig(Some(Vec::new())), 0));
         let mut set = IndexSet::default();
-        registry.overlay("p", "d", LogicalInstant::from_nanos(0), &mut set);
+        registry.overlay("p", "d", LogicalInstant::from_nanos(0), &mut set, false);
         assert_eq!(
             set.single_field_modes(&group, &field).len(),
             3,
@@ -226,7 +245,7 @@ mod tests {
         );
         let later = LogicalInstant::from_nanos(60 * 1_000_000_000);
         let mut set = IndexSet::default();
-        registry.overlay("p", "d", later, &mut set);
+        registry.overlay("p", "d", later, &mut set, false);
         assert!(
             set.single_field_modes(&group, &field).is_empty(),
             "applied: exempt"
@@ -234,7 +253,7 @@ mod tests {
         registry.record(patch(FieldChange::IndexConfig(None), 60 * 1_000_000_000));
         let much_later = LogicalInstant::from_nanos(120 * 1_000_000_000);
         let mut set = IndexSet::default();
-        registry.overlay("p", "d", much_later, &mut set);
+        registry.overlay("p", "d", much_later, &mut set, false);
         assert_eq!(
             set.single_field_modes(&group, &field).len(),
             3,

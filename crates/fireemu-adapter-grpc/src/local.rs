@@ -2565,7 +2565,8 @@ impl LocalBackend {
     }
 
     /// The catalog a query or write of `parent`'s database is planned against: the configured
-    /// indexes (project-specific, else shared) plus every Admin-created index that is `READY`.
+    /// indexes (project-specific, else shared), every Admin-created index that is `READY` and
+    /// every applied Admin field patch.
     fn planning_indexes(
         &self,
         parent: &Parent,
@@ -2586,6 +2587,13 @@ impl LocalBackend {
             parent.database.as_str(),
             self.now(),
             &mut set,
+        );
+        self.admin.fields().overlay(
+            parent.project.as_str(),
+            parent.database.as_str(),
+            self.now(),
+            &mut set,
+            false,
         );
         Ok(set)
     }

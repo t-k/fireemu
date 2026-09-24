@@ -179,6 +179,7 @@ pub struct AdminCatalog {
     state: Mutex<CatalogState>,
     operations: super::operations::OperationStore,
     indexes: super::indexes::IndexRegistry,
+    fields: super::fields::FieldRegistry,
     managed_storage: std::sync::OnceLock<super::managed::SharedManagedStorage>,
     /// When the backend's configured databases came into being.
     created_at: LogicalInstant,
@@ -228,6 +229,7 @@ impl AdminCatalog {
             }),
             operations: super::operations::OperationStore::default(),
             indexes: super::indexes::IndexRegistry::default(),
+            fields: super::fields::FieldRegistry::default(),
             managed_storage: std::sync::OnceLock::new(),
             created_at,
         }
@@ -464,6 +466,7 @@ impl AdminCatalog {
         state.deleted.retain(|d| !owned(&d.record.project));
         drop(state);
         self.indexes.forget(|project, _| owned(project));
+        self.fields.forget(|project, _| owned(project));
         self.operations.reset(owned);
     }
 
@@ -476,6 +479,12 @@ impl AdminCatalog {
     #[must_use]
     pub fn managed_storage(&self) -> Option<&super::managed::SharedManagedStorage> {
         self.managed_storage.get()
+    }
+
+    /// The runtime field patches of every database.
+    #[must_use]
+    pub const fn fields(&self) -> &super::fields::FieldRegistry {
+        &self.fields
     }
 
     /// The Admin-created composite indexes of every database.

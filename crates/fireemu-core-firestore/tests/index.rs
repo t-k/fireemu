@@ -1823,3 +1823,14 @@ fn a_removed_composite_no_longer_serves_and_only_that_one_is_removed() {
         "a second removal finds nothing"
     );
 }
+
+#[test]
+fn a_cleared_single_field_override_inherits_again() {
+    let group = CollectionId::try_new("items").unwrap();
+    let mut set = IndexSet::default();
+    set.set_single_field_indexes(&group, &fp("nx"), Vec::new());
+    assert!(set.single_field_modes(&group, &fp("nx")).is_empty());
+    assert!(set.clear_single_field_override(&group, &fp("nx")));
+    assert_eq!(set.single_field_modes(&group, &fp("nx")).len(), 3);
+    assert!(!set.clear_single_field_override(&group, &fp("nx")));
+}

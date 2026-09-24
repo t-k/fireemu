@@ -361,3 +361,18 @@ test("rate limits, database operations and an applied exemption are recognized",
   assert.ok(!UNTIL.exempt({ indexConfig: { usesAncestorConfig: true, ancestorField: "x" } }));
   assert.ok(!UNTIL.exempt({}));
 });
+
+test("masking the export window leaves every other byte of a partition metadata file", async () => {
+  const { maskExportWindow } = await import("./exports.mjs");
+  // {1: {1: "all", 2: 1790224753568054, 3: 1790224800613000}, 2: {1: "__all__", 2: "output-0"}}
+  const bytes = Buffer.from(
+    "0a170a03616c6c10b6d284f4b2869703188885bc8ab386970312130a075f5f616c6c5f5f12086f75747075742d30",
+    "hex",
+  );
+  const masked = maskExportWindow(bytes);
+  assert.equal(
+    masked.toString("hex"),
+    "0a090a03616c6c1000180012130a075f5f616c6c5f5f12086f75747075742d30",
+  );
+  assert.deepEqual(maskExportWindow(masked), masked);
+});

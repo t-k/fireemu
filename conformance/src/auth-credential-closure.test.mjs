@@ -195,8 +195,8 @@ test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared conditio
       const currentComparison = readJson(
         "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-account-regression.json",
       );
-      const currentCredentialRun = currentComparison.execution.commands.find(
-        ({ argv }) => argv.join(" ") === "node src/auth-credential/run.mjs check",
+      const credentialComparison = readJson(
+        "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-comparison.json",
       );
       assert.equal(currentComparison.artifactSha256, condition.evidence.finalArtifactSha256);
       assert.equal(condition.evidence.execution.runId, currentComparison.execution.runId);
@@ -216,10 +216,22 @@ test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared conditio
         condition.evidence.execution.artifactSha256,
         currentComparison.artifactSha256,
       );
-      assert.equal(currentCredentialRun.rowCount, 222);
-      assert.equal(currentCredentialRun.selector.state, "unset");
+      assert.equal(credentialComparison.artifactSha256, condition.evidence.finalArtifactSha256);
+      assert.deepEqual(credentialComparison.summary, { MATCH: 222 });
+      assertBoundToFixture(credentialComparison, label);
+      assert.deepEqual(credentialComparison.execution.command, [
+        "node",
+        "src/auth-credential/run.mjs",
+        "check",
+      ]);
+      assert.equal(credentialComparison.execution.rowCount, 222);
+      assert.equal(credentialComparison.execution.selector.state, "unset");
       assert.equal(
-        currentCredentialRun.fixtureSha256,
+        condition.evidence.credentialExecution.runtimeInputMapSha256,
+        "dbe45128dc806dc439c70f1f09d7bd669868ce737e5272445bdc2df03c605e4",
+      );
+      assert.equal(
+        credentialComparison.fixtureSha256,
         createHash("sha256")
           .update(
             readFileSync(
@@ -232,12 +244,25 @@ test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared conditio
           .digest("hex"),
       );
       assert.equal(
-        condition.evidence.execution.credentialFixtureSha256,
-        currentCredentialRun.fixtureSha256,
+        condition.evidence.credentialExecution.fixtureSha256,
+        credentialComparison.fixtureSha256,
       );
       assert.equal(
-        condition.evidence.execution.credentialSanitizedExportSha256,
-        currentCredentialRun.sanitizedExportSha256,
+        condition.evidence.credentialExecution.sanitizedExportSha256,
+        credentialComparison.execution.sanitizedExportSha256,
+      );
+      assert.equal(condition.evidence.credentialExecution.runId, credentialComparison.execution.runId);
+      assert.equal(
+        condition.evidence.credentialExecution.receiptSha256,
+        credentialComparison.execution.receiptSha256,
+      );
+      assert.equal(
+        condition.evidence.credentialExecution.buildReceiptSha256,
+        credentialComparison.execution.buildReceiptSha256,
+      );
+      assert.equal(
+        condition.evidence.credentialExecution.artifactSha256,
+        credentialComparison.artifactSha256,
       );
       assert.deepEqual(condition.evidence.credentialRows, { MATCH: 222 });
       assert.deepEqual(condition.evidence.inheritedAccountRows, { MATCH: 631 });
@@ -270,7 +295,7 @@ test("scope decisions are recorded, not implied", () => {
   }
 });
 
-test("AUTH-CREDENTIAL final regression stays pending without a current 222-row comparison", () => {
+test("AUTH-CREDENTIAL final regression requires current 631-row and 222-row comparisons", () => {
   const closure = load();
   const regression = closure.conditions.find(
     ({ conditionId }) => conditionId === "AUTH-CREDENTIAL/final-artifact-regression",
@@ -281,7 +306,7 @@ test("AUTH-CREDENTIAL final regression stays pending without a current 222-row c
   const credentialComparison = readJson(
     "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-comparison.json",
   );
-  assert.equal(regression.status, "PENDING_REVIEW");
+  assert.equal(regression.status, "VERIFIED");
   assert.equal(closure.parentStatus, "IMPLEMENTING");
   assert.equal(
     regression.evidence.finalArtifactSha256,
@@ -291,24 +316,19 @@ test("AUTH-CREDENTIAL final regression stays pending without a current 222-row c
   assert.deepEqual(accountComparison.summary, { MATCH: 631 });
   assert.equal(accountComparison.artifactSha256, regression.evidence.finalArtifactSha256);
   assert.deepEqual(credentialComparison.summary, { MATCH: 222 });
-  assert.notEqual(credentialComparison.artifactSha256, regression.evidence.finalArtifactSha256);
-  assert.equal(
-    regression.evidence.pendingCredentialComparison.status,
-    "PENDING_REVIEW",
-  );
-  assert.equal(
-    regression.evidence.pendingCredentialComparison.currentlyBoundArtifactSha256,
-    credentialComparison.artifactSha256,
-  );
-  assert.equal(
-    regression.evidence.pendingCredentialComparison.requiredArtifactSha256,
-    regression.evidence.finalArtifactSha256,
-  );
-  assert.equal(
-    regression.evidence.pendingCredentialComparison.path,
+  assert.equal(credentialComparison.artifactSha256, regression.evidence.finalArtifactSha256);
+  assert.deepEqual(regression.evidence.comparisonPaths, [
+    "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-account-regression.json",
     "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-comparison.json",
-  );
-  assert.equal(regression.evidence.rows, undefined);
+  ]);
+  assert.deepEqual(regression.evidence.credentialRows, { MATCH: 222 });
+  assert.deepEqual(regression.evidence.inheritedAccountRows, { MATCH: 631 });
+  assert.deepEqual(regression.evidence.rows, { MATCH: 853 });
+  assert.equal(regression.evidence.pendingCredentialComparison, undefined);
+  for (const condition of closure.conditions.filter(({ status }) => status === "VERIFIED")) {
+    assert.equal(condition.evidence.finalArtifactSha256, regression.evidence.finalArtifactSha256);
+    assert.equal(condition.evidence.sourceCommit, regression.evidence.sourceCommit);
+  }
   assert.equal(
     closure.conditions.find(
       ({ conditionId }) => conditionId === "AUTH-CREDENTIAL/closure-review",

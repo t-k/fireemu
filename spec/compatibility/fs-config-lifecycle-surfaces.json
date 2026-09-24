@@ -12,7 +12,7 @@
       "field": "name",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:291"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:316"
         ],
         "status": "implemented"
       },
@@ -25,7 +25,7 @@
       "field": "type",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:296"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:321"
         ],
         "status": "partial"
       },
@@ -38,8 +38,8 @@
       "field": "databaseEdition",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:307",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:709",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:332",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:737",
           "crates/fireemu-core-types/src/edition.rs:12"
         ],
         "status": "implemented"
@@ -53,7 +53,7 @@
       "field": "concurrencyMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:297"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:322"
         ],
         "status": "partial"
       },
@@ -66,7 +66,7 @@
       "field": "versionRetentionPeriod",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:298"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:323"
         ],
         "status": "partial"
       },
@@ -79,7 +79,7 @@
       "field": "earliestVersionTime",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:299"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:324"
         ],
         "status": "implemented"
       },
@@ -92,7 +92,7 @@
       "field": "pointInTimeRecoveryEnablement",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:301"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:326"
         ],
         "status": "partial"
       },
@@ -105,7 +105,7 @@
       "field": "realtimeUpdatesMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:308"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:333"
         ],
         "status": "partial"
       },
@@ -140,7 +140,7 @@
       "field": "locationId",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:295"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:320"
         ],
         "status": "partial"
       },
@@ -153,7 +153,7 @@
       "field": "appEngineIntegrationMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:300"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:325"
         ],
         "status": "partial"
       },
@@ -166,7 +166,7 @@
       "field": "deleteProtectionState",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:302"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:327"
         ],
         "status": "partial"
       },
@@ -179,7 +179,7 @@
       "field": "uid",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:292"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:317"
         ],
         "status": "implemented"
       },
@@ -192,7 +192,7 @@
       "field": "etag",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:317"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:342"
         ],
         "status": "implemented"
       },
@@ -205,7 +205,7 @@
       "field": "freeTier",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:314"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:339"
         ],
         "status": "implemented"
       },
@@ -218,7 +218,7 @@
       "field": "createTime",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:293"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:318"
         ],
         "status": "implemented"
       },
@@ -231,7 +231,7 @@
       "field": "updateTime",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:294"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:319"
         ],
         "status": "implemented"
       },
@@ -310,7 +310,7 @@
       "field": "enhancedTextSearchQueryMode",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:309"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:334"
         ],
         "status": "partial"
       },
@@ -354,8 +354,8 @@
       "id": "emulator.clearFirestoreData",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:514",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:545"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:539",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:570"
         ],
         "status": "implemented"
       },
@@ -383,8 +383,8 @@
         "citations": [
           "crates/fireemu/src/control.rs:148",
           "crates/fireemu/src/control.rs:215",
-          "crates/fireemu-core-firestore/src/index.rs:133",
-          "crates/fireemu-core-firestore/src/index.rs:157"
+          "crates/fireemu-core-firestore/src/index.rs:134",
+          "crates/fireemu-core-firestore/src/index.rs:153"
         ],
         "status": "implemented"
       },
@@ -424,7 +424,7 @@
       "id": "runtime.lazyDatabaseCreation",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/local.rs:2629",
+          "crates/fireemu-adapter-grpc/src/local.rs:1687",
           "crates/fireemu-core-types/src/ids.rs:183"
         ],
         "status": "implemented"
@@ -500,8 +500,8 @@
       "dataPlaneConsequence": "The final post-state, absence of the deleted documents, is observable from the data plane; the local emulator wipe route is the local-safety counterpart.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:514",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:545"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:539",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:570"
         ],
         "status": "local-extension-only"
       },
@@ -563,9 +563,9 @@
       "dataPlaneConsequence": "A caller can read back the TTL policy and the single-field index configuration, so the expiry and refusal behavior each implies is observable locally.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:218",
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:314",
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:189",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:283",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:408",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:183",
           "crates/fireemu-core-firestore/src/ttl.rs:226"
         ],
         "status": "implemented"
@@ -578,9 +578,9 @@
       "dataPlaneConsequence": "Both documented filters are served and any other filter is refused, so an exemption set and a TTL policy set are each discoverable through a read path.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:441",
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:140",
-          "crates/fireemu-core-firestore/src/index.rs:239"
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:695",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:106",
+          "crates/fireemu-core-firestore/src/index.rs:254"
         ],
         "status": "implemented"
       },
@@ -589,61 +589,67 @@
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "The ttlConfig transition is driven at runtime and an expiry sweep applies it. The indexConfig transition is refused with UNIMPLEMENTED: the local runtime still accepts exemptions only from static configuration, so that half of the surface cannot be driven at runtime.",
+      "dataPlaneConsequence": "Both halves are driven at runtime: the ttlConfig transition, which an expiry sweep applies, and the indexConfig transition, which answers production's operation and readbacks and changes which queries the planner accepts once it is applied.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:345",
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
+          "crates/fireemu-adapter-grpc/src/admin/fields.rs:72",
           "crates/fireemu-core-firestore/src/ttl.rs:242",
-          "crates/fireemu-adapter-grpc/src/local.rs:2983",
-          "crates/fireemu/src/control.rs:148"
+          "crates/fireemu-adapter-grpc/src/local.rs:3143"
         ],
-        "status": "partial"
+        "status": "implemented"
       },
       "locator": "firestore.projects.databases.collectionGroups.fields.patch",
       "rationale": "Patching ttlConfig schedules server-side document deletion and patching indexConfig exempts a field from single-field indexing; both change what later reads and queries return."
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "Without this method an index can only be declared through configuration, so a caller cannot reach the accepted state a production query depends on.",
+      "dataPlaneConsequence": "An index created through the Admin API is CREATING, then READY and used by the planner; a query that needs it while it builds is refused as production refuses it.",
       "local": {
         "citations": [
-          "crates/fireemu/src/control.rs:48",
-          "crates/fireemu/src/control.rs:88"
+          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:252",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:175"
         ],
-        "status": "local-extension-only"
+        "status": "implemented"
       },
       "locator": "firestore.projects.databases.collectionGroups.indexes.create",
       "rationale": "Composite index existence decides whether a query is accepted or refused with FAILED_PRECONDITION, so index creation directly determines data-plane results."
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "Without deletion the refusal direction of the transition cannot be reached at runtime.",
+      "dataPlaneConsequence": "Deleting an index, including one the index file declares, withdraws it from the planner, so the refusal direction of the transition is reachable at runtime.",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:341",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:368"
+        ],
+        "status": "implemented"
       },
       "locator": "firestore.projects.databases.collectionGroups.indexes.delete",
       "rationale": "Deleting an index flips previously accepted queries back to refusal, which is a data-plane observable transition."
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "A missing readback leaves index-dependent query acceptance untestable against the same contract production exposes.",
+      "dataPlaneConsequence": "An index reads back CREATING then READY, as production reports it, so index-dependent query acceptance is testable against the same contract.",
       "local": {
-        "citations": [],
-        "status": "not-implemented"
+        "citations": [
+          "crates/fireemu-adapter-grpc/src/admin/index_rest.rs:252",
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:326"
+        ],
+        "status": "implemented"
       },
       "locator": "firestore.projects.databases.collectionGroups.indexes.get",
       "rationale": "Index state is how a caller learns that a query will now be accepted; the CREATING to READY transition is observable from the data plane."
     },
     {
       "class": "data-plane-contract",
-      "dataPlaneConsequence": "Local index selection is driven by configuration instead, so the two catalogs can diverge without any request revealing it.",
+      "dataPlaneConsequence": "The list names the index file's indexes and those the Admin API created, which are exactly the ones the planner uses.",
       "local": {
         "citations": [
-          "crates/fireemu-core-firestore/src/index.rs:949",
-          "crates/fireemu-core-firestore/src/index.rs:597"
+          "crates/fireemu-adapter-grpc/src/admin/indexes.rs:326",
+          "crates/fireemu-adapter-grpc/src/local.rs:2572"
         ],
-        "status": "local-extension-only"
+        "status": "implemented"
       },
       "locator": "firestore.projects.databases.collectionGroups.indexes.list",
       "rationale": "Enumeration is the denominator for index-merge and index-selection decisions that the query planner then makes on the data plane."
@@ -674,7 +680,7 @@
       "local": {
         "citations": [
           "crates/fireemu/src/import_export.rs:2870",
-          "crates/fireemu-core-export/src/firestore.rs:480",
+          "crates/fireemu-core-export/src/firestore.rs:518",
           "crates/fireemu-core-export/src/metadata.rs:142"
         ],
         "status": "local-extension-only"
@@ -687,9 +693,9 @@
       "dataPlaneConsequence": "A wrong concurrencyMode, databaseEdition or versionRetentionPeriod makes a caller choose transaction, edition and read-time behavior the local runtime will then refuse or accept differently from production.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:694",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:769",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:278"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:722",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:797",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:303"
         ],
         "status": "partial"
       },
@@ -715,9 +721,9 @@
       "dataPlaneConsequence": "A database absent in production but present locally lets a caller address a database that would return NOT_FOUND against the real service.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:694",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:758",
-          "crates/fireemu-adapter-grpc/src/rest/mod.rs:737"
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:722",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:786",
+          "crates/fireemu-adapter-grpc/src/rest/mod.rs:765"
         ],
         "status": "partial"
       },
@@ -749,9 +755,9 @@
       "dataPlaneConsequence": "A campaign that drives fields.patch can poll the operation it was handed, and it is always already done; every other long-running operation of the Admin API remains managed infrastructure the runtime does not hold. A campaign must still bound its own polling, which the collector contract handles.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:548",
-          "crates/fireemu-adapter-grpc/src/local.rs:2819",
-          "crates/fireemu-adapter-grpc/src/local.rs:2861"
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
+          "crates/fireemu-adapter-grpc/src/local.rs:2979",
+          "crates/fireemu-adapter-grpc/src/local.rs:3021"
         ],
         "status": "partial"
       },
@@ -763,8 +769,8 @@
       "dataPlaneConsequence": "Enumeration is how an interrupted campaign resumes its cleanup. Locally it enumerates the field-configuration operations alone, and the record is bounded, so a campaign must not treat it as the managed operation history.",
       "local": {
         "citations": [
-          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:548",
-          "crates/fireemu-adapter-grpc/src/local.rs:2873"
+          "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:809",
+          "crates/fireemu-adapter-grpc/src/local.rs:3033"
         ],
         "status": "partial"
       },
@@ -916,8 +922,8 @@
   "repairTickets": [
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/local.rs:1630",
-        "crates/fireemu-adapter-grpc/src/local.rs:1398",
+        "crates/fireemu-adapter-grpc/src/local.rs:1687",
+        "crates/fireemu-adapter-grpc/src/local.rs:1444",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "local-safety-extension",
@@ -932,9 +938,9 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:307",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:709",
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:295"
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:332",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:737",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:320"
       ],
       "class": "data-plane-contract",
       "fixApplied": false,
@@ -948,7 +954,7 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/mod.rs:278",
+        "crates/fireemu-adapter-grpc/src/rest/mod.rs:303",
         "tools/compat-broad/batch_contract.py:230",
         "tools/compat-broad/fixtures/database-settings-7be6cf08.json:1"
       ],
@@ -964,23 +970,23 @@
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:345",
+        "crates/fireemu-adapter-grpc/src/rest/admin_fields.rs:536",
         "crates/fireemu/src/control.rs:148",
-        "crates/fireemu-core-firestore/src/index.rs:216"
+        "crates/fireemu-core-firestore/src/index.rs:231"
       ],
       "class": "data-plane-contract",
-      "fixApplied": false,
-      "fixedAt": null,
+      "fixApplied": true,
+      "fixedAt": "74e9c8c31528a4696d3e17ae1ded280cbe1e2bb4",
       "id": "FS-CONFIG-RT-004",
       "reproduction": "Issue PATCH on projects/{project}/databases/(default)/collectionGroups/{group}/fields/{field} with updateMask=indexConfig and observe UNIMPLEMENTED, while production applies the exemption and reports usesAncestorConfig false on the next get.",
-      "resolution": null,
-      "status": "OPEN",
+      "resolution": "A patch of indexConfig is applied at runtime through an operation: it reads back the configuration it asks for while pending and changes which queries are refused once applied, matching production as recorded on 2026-09-24 (FS-CONFIG-LIFECYCLE field-index-config).",
+      "status": "FIXED",
       "summary": "The field configuration surface is served and the ttlConfig half is complete: the policy is stored per database, read back as ACTIVE, and an expiry sweep on the virtual clock deletes documents whose TTL field has elapsed. Patching indexConfig is refused with UNIMPLEMENTED, because single-field exemptions are still taken from the project's index configuration at startup and there is no runtime path that changes them.",
       "title": "The indexConfig half of fields.patch has no runtime transition"
     },
     {
       "citations": [
-        "crates/fireemu-adapter-grpc/src/decode.rs:107",
+        "crates/fireemu-adapter-grpc/src/decode.rs:169",
         "crates/fireemu-core-types/src/ids.rs:183"
       ],
       "class": "data-plane-contract",
@@ -1011,7 +1017,7 @@
       "data-plane-contract": 9,
       "managed-infrastructure": 33
     },
-    "openRepairTickets": 2,
+    "openRepairTickets": 1,
     "productionUnobservedConditionsReduced": 0,
     "repairTickets": 5
   }

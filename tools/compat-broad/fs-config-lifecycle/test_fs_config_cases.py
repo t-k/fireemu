@@ -193,20 +193,13 @@ def test_expected_local_results_cite_the_classification_not_an_observation() -> 
             assert row["local"]["status"] in {"not-implemented", "local-extension-only"}
 
 
-def test_the_index_config_patches_are_expected_to_be_refused_locally() -> None:
-    """OC-18 and OC-20 drive updateMask=indexConfig, which the local runtime refuses."""
-    refused = {
-        case["id"]
-        for case in compile_cases(NONCE)
-        if "refusalReason" in case["expectedLocal"]
-    }
-    assert refused == {"OC-18", "OC-20"}
+def test_every_field_patch_is_expected_to_be_served_locally() -> None:
+    """OC-18 and OC-20 drive updateMask=indexConfig, which fireemu applies at runtime since
+    FS-CONFIG-RT-004 was fixed; no case is expected to be refused."""
     for case in compile_cases(NONCE):
-        if case["id"] in refused:
-            assert case["expectedLocal"]["outcome"] == "not-served"
-            assert "UNIMPLEMENTED" in case["expectedLocal"]["refusalReason"]
-        if case["id"] in {"OC-14", "OC-16"}:
-            assert case["expectedLocal"]["outcome"] == "served"
+        assert "refusalReason" not in case["expectedLocal"], case["id"]
+        if case["id"] in {"OC-14", "OC-16", "OC-18", "OC-20"}:
+            assert case["expectedLocal"]["outcome"] == "served", case["id"]
 
 
 def test_production_outcomes_are_declared_expectations_not_recorded_results() -> None:

@@ -330,9 +330,11 @@ def test_a_dict_shaped_acquisition_or_an_unbound_one_is_refused(
     assert PRODUCTION_ORIGIN == lifecycle_remote_transport.ORIGIN
 
 
-def test_the_local_unimplemented_exemption_patch_is_an_expected_deviation(
+def test_a_local_refusal_of_an_exemption_patch_is_no_longer_an_expected_deviation(
     tmp_path: Path,
 ) -> None:
+    # fireemu applies indexConfig patches since FS-CONFIG-RT-004 was fixed, so refusing one
+    # locally is a regression, not the documented gap it once was.
     manifest = compile_manifest(NONCE)
     local = _collection(tmp_path, "local", refuse_apply={"OC-18"})
     production = _collection(tmp_path, "production")
@@ -344,13 +346,9 @@ def test_the_local_unimplemented_exemption_patch_is_an_expected_deviation(
         acquisition=_acquisition(production),
     )
     by_case = {row["case"]: row for row in result["rows"]}
-    assert by_case["OC-18"]["classification"] == EXPECTED_LOCAL_DEVIATION
-    assert "FS-CONFIG-RT-004" in by_case["OC-18"]["reason"]
-    # OC-19 and OC-20 were never reached locally, so they are indeterminate.
-    assert by_case["OC-19"]["classification"] == INDETERMINATE
-    assert by_case["OC-20"]["classification"] == INDETERMINATE
+    assert by_case["OC-18"]["classification"] != EXPECTED_LOCAL_DEVIATION
     assert by_case["OC-14"]["classification"] == MATCH
-    assert result["classification"] == INDETERMINATE
+    assert result["classification"] != MATCH
 
 
 def test_a_differing_status_or_shape_is_a_mismatch_naming_what_differs(

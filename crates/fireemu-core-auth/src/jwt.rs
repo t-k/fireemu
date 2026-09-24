@@ -436,6 +436,9 @@ pub struct LegacyToken<'a> {
     pub email: Option<(&'a str, bool)>,
     /// A custom token's developer claims (`extra_claims`), when it carried any.
     pub extra_claims: Option<&'a BTreeMap<String, ClaimValue>>,
+    /// The issuing store's session epoch, only while fireemu session isolation is active (the
+    /// same local-only marker ID tokens carry under `firebase`).
+    pub session_epoch: Option<&'a str>,
 }
 
 /// The claims of a legacy token issued at `iat` for `project`: no `sub`, `auth_time` or
@@ -468,6 +471,12 @@ pub fn legacy_token_payload(project: &str, iat: i64, token: &LegacyToken<'_>) ->
     if let Some(extra) = token.extra_claims.filter(|extra| !extra.is_empty()) {
         claims.insert("extra_claims".to_owned(), ClaimValue::Map(extra.clone()));
     }
+    if let Some(epoch) = token.session_epoch {
+        claims.insert(
+            "fireemu_session_epoch".to_owned(),
+            ClaimValue::String(epoch.to_owned()),
+        );
+    }
     crate::claims::canonical_map_json(&claims)
 }
 
@@ -482,11 +491,24 @@ pub fn verify_legacy_token(
 ) -> Result<(TokenVerification, DecodedToken), JwtError> {
     let decoded = decode_token(token, store.signer())?;
     let iss = decoded.string("iss").ok_or(JwtError::Malformed)?;
-    if iss != LEGACY_TOKEN_ISSUER {
+    // A store that never issued a legacy token (the emulator profile, a tenant) honours none.
+    if iss != LEGACY_TOKEN_ISSUER || !store.legacy_tokens_issued() {
         return Err(JwtError::WrongIssuer {
-            expected: LEGACY_TOKEN_ISSUER.to_owned(),
+            expected: format!("https://securetoken.google.com/{}", store.project_id()),
             actual: iss.to_owned(),
         });
+    }
+    if store.tenant_id().is_some() {
+        return Err(JwtError::WrongTenant {
+            expected: store.tenant_id().map(str::to_owned),
+            actual: None,
+        });
+    }
+    if let Some(expected) = store.lifecycle_epoch_claim() {
+        let actual = decoded.string("fireemu_session_epoch").map(str::to_owned);
+        if actual.as_deref() != Some(expected.as_str()) {
+            return Err(JwtError::WrongSessionEpoch { expected, actual });
+        }
     }
     let aud = decoded.string("aud").ok_or(JwtError::Malformed)?;
     if aud != store.project_id() {

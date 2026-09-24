@@ -137,8 +137,43 @@ pub fn percent_escapes_are_well_formed(value: &str) -> bool {
     true
 }
 
+/// The most bytes of client input a refusal text echoes. A refusal is produced before
+/// authorization and can travel in a `grpc-message` header, so a request must not grow its
+/// answer with the size of what it sent; production's own truncation is unobserved, so this
+/// is a local safety bound (`spec/compatibility/contract.json`).
+pub const MAX_ECHO_BYTES: usize = 1024;
+
+/// `text` as a refusal echoes it: whole when it is at most [`MAX_ECHO_BYTES`], else its first
+/// bytes up to a character boundary followed by `...`.
+#[must_use]
+pub fn echo(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.len() <= MAX_ECHO_BYTES {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut end = MAX_ECHO_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    std::borrow::Cow::Owned(format!("{}...", &text[..end]))
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn echo_keeps_short_text_and_cuts_long_text_at_a_character_boundary() {
+        assert_eq!(super::echo("abc"), "abc");
+        let exact = "x".repeat(super::MAX_ECHO_BYTES);
+        assert_eq!(super::echo(&exact), exact);
+        let long = "\u{e9}".repeat(super::MAX_ECHO_BYTES);
+        let echoed = super::echo(&long);
+        assert!(echoed.ends_with("..."));
+        assert!(echoed.len() <= super::MAX_ECHO_BYTES + 3);
+        assert!(echoed
+            .trim_end_matches("...")
+            .chars()
+            .all(|c| c == '\u{e9}'));
+    }
     use super::{
         json_escape_into, percent_decode, percent_decode_bytes, percent_escapes_are_well_formed,
         write_json_string, JsonControlEscape, PlusMode,

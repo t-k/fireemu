@@ -322,3 +322,46 @@ fn a_configured_database_creation_time_bounds_read_times() {
         "{stderr}"
     );
 }
+
+/// The resident memory of a process in KiB, from `ps`.
+fn resident_kib(pid: u32) -> u64 {
+    let output = Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap()
+}
+
+/// A refusal echoes at most 1 KiB of what it names, in both profiles: a 9 MiB property path of
+/// control characters, refused before authorization, answers in a few KiB and does not grow
+/// the daemon by many times its size (promotion review Security Should 1; the bound is local,
+/// see `spec/compatibility/contract.json`).
+#[test]
+fn a_refusal_does_not_echo_a_large_request() {
+    for profile in ["strict", "emulator"] {
+        let daemon = Daemon::start_with(&format!("echo-{profile}"), profile, "");
+        let port = daemon.firestore_port();
+        let path = format!("~{}", "\u{1}".repeat(9 << 20));
+        let body = format!(
+            r#"{{"structuredQuery": {{"from": [{{"collectionId": "c"}}], "orderBy": [{{"field": {{"fieldPath": "{path}"}}}}]}}}}"#
+        );
+        let before = resident_kib(daemon.child.id());
+        for _ in 0..3 {
+            let (status, answer) = http(
+                port,
+                "POST",
+                &format!("/v1/projects/demo-profile-echo-{profile}/databases/(default)/documents:runQuery"),
+                Some(&body),
+            );
+            assert_eq!(status, 400, "{profile}: {}", &answer[..answer.len().min(300)]);
+            assert!(answer.len() < 16 * 1024, "{profile}: {} bytes", answer.len());
+        }
+        let after = resident_kib(daemon.child.id());
+        eprintln!("{profile}: rss {before} KiB -> {after} KiB");
+        assert!(after < before + 160 * 1024, "{profile}: rss {before} KiB -> {after} KiB");
+        daemon.stop();
+    }
+}

@@ -927,7 +927,9 @@ fn aggregations_run_over_the_nearest_results() {
 fn without_production_refusals_a_zero_vector_is_left_out() {
     let mut state = vector_state();
     put_vector(&mut state, "zero", vec![0.0, 0.0], 1);
-    let mut query = nearest(DistanceMeasure::Cosine, 4).canonicalize_emulator().unwrap();
+    let mut query = nearest(DistanceMeasure::Cosine, 4)
+        .canonicalize_emulator()
+        .unwrap();
     assert!(!query.production_refusals);
     let ids: Vec<String> = state
         .run_query(&query, None)

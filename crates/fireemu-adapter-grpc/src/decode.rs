@@ -562,7 +562,8 @@ fn decode_find_nearest(find_nearest: &sq::FindNearest) -> Result<FindNearest, De
                 .or_else(|_| FieldPath::parse(name))
                 .map_err(|_| {
                     DecodeError::Refused(format!(
-                        "The distanceResultField.property.name \"{name}\" is reserved."
+                        "The distanceResultField.property.name \"{}\" is reserved.",
+                        fireemu_core_types::codec::echo(name)
                     ))
                 })?,
         )

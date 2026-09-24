@@ -68,9 +68,11 @@ impl AdminGrpc {
         }
         let error = &response.body["error"];
         let code = code_of(error["status"].as_str().unwrap_or("UNKNOWN"));
-        Err(Status::new(
+        // The google.rpc details REST carries travel in the status, as production sends them.
+        Err(crate::production_status::from_json_details(
             code,
-            error["message"].as_str().unwrap_or("").to_owned(),
+            error["message"].as_str().unwrap_or(""),
+            &error["details"],
         ))
     }
 }
@@ -596,6 +598,13 @@ fn database_body(d: &admin::Database) -> Value {
         if let Some(value) = value {
             body[key] = json!(value);
         }
+    }
+    // Sent as REST sends them, so the Admin core refuses them as it refuses REST's (C3).
+    if let Some(cmek) = &d.cmek_config {
+        body["cmekConfig"] = json!({ "kmsKeyName": cmek.kms_key_name });
+    }
+    if !d.tags.is_empty() {
+        body["tags"] = json!(d.tags);
     }
     body
 }

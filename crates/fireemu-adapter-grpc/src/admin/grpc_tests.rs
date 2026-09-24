@@ -11,6 +11,7 @@ use fireemu_proto_firestore::google::firestore::admin::v1 as admin;
 use fireemu_proto_firestore::google::firestore::admin::v1::firestore_admin_server::FirestoreAdmin;
 use fireemu_proto_firestore::google::longrunning as lro;
 use fireemu_proto_firestore::google::longrunning::operations_server::Operations;
+use prost::Message;
 use serde_json::{json, Value};
 use tonic::{Code, Request};
 
@@ -362,4 +363,71 @@ async fn a_resource_name_of_another_kind_is_refused_before_it_is_routed() {
         rest(&state, "GET", &format!("/v1/{DB}"), Value::Null).0,
         200
     );
+}
+
+#[tokio::test]
+async fn a_create_with_a_key_or_tags_is_refused_over_grpc_as_over_rest_with_its_details() {
+    let state = state();
+    let service = AdminGrpc::new(Arc::clone(&state));
+    let (status, over_rest) = rest(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=cmekdb",
+        json!({"locationId": "us-central1", "type": "FIRESTORE_NATIVE",
+               "cmekConfig": {"kmsKeyName": "projects/p/locations/us-central1/keyRings/r/cryptoKeys/k"}}),
+    );
+    assert_ne!(status, 200, "{over_rest}");
+    let refused = service
+        .create_database(owner(admin::CreateDatabaseRequest {
+            parent: "projects/p".to_owned(),
+            database_id: "cmekdb".to_owned(),
+            database: Some(admin::Database {
+                location_id: "us-central1".to_owned(),
+                r#type: admin::database::DatabaseType::FirestoreNative.into(),
+                cmek_config: Some(admin::database::CmekConfig {
+                    kms_key_name: "projects/p/locations/us-central1/keyRings/r/cryptoKeys/k"
+                        .to_owned(),
+                    active_key_version: Vec::new(),
+                }),
+                ..admin::Database::default()
+            }),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.message(), over_rest["error"]["message"]);
+    // The details REST carries travel in the gRPC status too.
+    let details = over_rest["error"]["details"].as_array().map_or(0, Vec::len);
+    assert!(details > 0, "{over_rest}");
+    let decoded = fireemu_proto_firestore::google::rpc::Status::decode(refused.details()).unwrap();
+    assert_eq!(decoded.details.len(), details);
+    assert!(decoded.details[0].type_url.ends_with(
+        over_rest["error"]["details"][0]["@type"]
+            .as_str()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+    ));
+    // Tags are refused as well.
+    let (status, tagged) = rest(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=tagdb",
+        json!({"locationId": "us-central1", "type": "FIRESTORE_NATIVE", "tags": {"env": "dev"}}),
+    );
+    assert_ne!(status, 200, "{tagged}");
+    let refused = service
+        .create_database(owner(admin::CreateDatabaseRequest {
+            parent: "projects/p".to_owned(),
+            database_id: "tagdb".to_owned(),
+            database: Some(admin::Database {
+                location_id: "us-central1".to_owned(),
+                r#type: admin::database::DatabaseType::FirestoreNative.into(),
+                tags: [("env".to_owned(), "dev".to_owned())].into_iter().collect(),
+                ..admin::Database::default()
+            }),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.message(), tagged["error"]["message"]);
 }

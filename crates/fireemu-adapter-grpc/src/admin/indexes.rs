@@ -64,8 +64,6 @@ struct RegistryState {
     /// Databases deleted through the Admin API: their index-file indexes went with them, and a
     /// database recreated under the id starts with none.
     dropped: std::collections::BTreeSet<(String, String)>,
-    /// What a deleted database's index list still answers (production keeps listing them).
-    tombstones: BTreeMap<(String, String), Vec<RuntimeIndex>>,
     seed: u64,
 }
 
@@ -292,7 +290,6 @@ impl IndexRegistry {
         state.deleted.retain(|(p, d), _| !owned(p, d));
         state.withdrawn.retain(|(p, d), _| !owned(p, d));
         state.dropped.retain(|(p, d)| !owned(p, d));
-        state.tombstones.retain(|(p, d), _| !owned(p, d));
     }
 
     /// The index-file indexes (`configured`, read from the current configuration) that are
@@ -379,14 +376,12 @@ impl IndexRegistry {
         state.withdrawn.get(&key).cloned().unwrap_or_default()
     }
 
-    /// Drops a deleted database's indexes: its index list keeps answering what it had, and a
-    /// database recreated under the id starts with none (production, 2026-09-24).
-    pub fn drop_database(&self, project: &str, database: &str, configured: &[IndexDefinition]) {
+    /// Drops a deleted database's indexes: a database recreated under the id starts with none
+    /// (production, 2026-09-24).
+    pub fn drop_database(&self, project: &str, database: &str) {
         let mut state = self.lock();
         let key = (project.to_owned(), database.to_owned());
-        let mut had = Self::configured_view(&state, &key, configured);
-        had.extend(state.live.remove(&key).unwrap_or_default());
-        state.tombstones.insert(key.clone(), had);
+        state.live.remove(&key);
         state.deleted.remove(&key);
         state.withdrawn.remove(&key);
         state.dropped.insert(key);
@@ -396,21 +391,7 @@ impl IndexRegistry {
     #[cfg(test)]
     pub(crate) fn entry_count(&self) -> usize {
         let state = self.lock();
-        state.live.len()
-            + state.deleted.len()
-            + state.withdrawn.len()
-            + state.dropped.len()
-            + state.tombstones.len()
-    }
-
-    /// What a deleted database's index list answers.
-    #[must_use]
-    pub fn tombstone(&self, project: &str, database: &str) -> Vec<RuntimeIndex> {
-        self.lock()
-            .tombstones
-            .get(&(project.to_owned(), database.to_owned()))
-            .cloned()
-            .unwrap_or_default()
+        state.live.len() + state.deleted.len() + state.withdrawn.len() + state.dropped.len()
     }
 }
 

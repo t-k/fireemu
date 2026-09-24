@@ -4,12 +4,11 @@ import { test } from "node:test";
 import { buildRequest, createContext } from "./auth-account/harness.mjs";
 import { PROGRAMS } from "./auth-action/corpus.mjs";
 import {
-  describeLink,
   guardActionRequest,
-  normalizeActionResponse,
   validateActionCorpus,
-} from "./auth-action/harness.mjs";
-import { validateVerificationLinks } from "./auth-action/corpus-rules.mjs";
+  validateVerificationLinks,
+} from "./auth-action/guard.mjs";
+import { describeLink, normalizeActionResponse } from "./auth-action/harness.mjs";
 import { createSession } from "./auth-action/session.mjs";
 
 const production = createContext({
@@ -504,4 +503,61 @@ test("each address gets at most one verification link", () => {
       { id: "p", steps: [verify("one", "EMAIL(a)"), verify("two", "EMAIL(b)")] },
     ]),
   );
+});
+
+test("the client route allows exactly the owner's two email changes", () => {
+  const change = (id, body) => ({ id, path: "v1/accounts:sendOobCode", auth: "key", body });
+  const ok = (id, name) =>
+    change(id, {
+      requestType: "VERIFY_AND_CHANGE_EMAIL",
+      idToken: "t",
+      newEmail: `EMAIL(lvc-${name})`,
+    });
+  const built = request(production, ok("a", "one"));
+  assert.doesNotThrow(() => guardActionRequest(built, production));
+  for (const body of [
+    { requestType: "VERIFY_AND_CHANGE_EMAIL", idToken: "t", newEmail: "EMAIL(a-new)" },
+    { requestType: "VERIFY_AND_CHANGE_EMAIL", newEmail: "EMAIL(lvc-x)" },
+    {
+      requestType: "VERIFY_AND_CHANGE_EMAIL",
+      idToken: "t",
+      newEmail: "EMAIL(lvc-x)",
+      email: "EMAIL(a)",
+    },
+    {
+      requestType: "VERIFY_AND_CHANGE_EMAIL",
+      idToken: "t",
+      newEmail: "EMAIL(lvc-x)",
+      returnOobLink: true,
+    },
+    { requestType: "VERIFY_EMAIL", idToken: "t" },
+  ]) {
+    assert.throws(
+      () => guardActionRequest(request(production, change("s", body)), production),
+      Error,
+      JSON.stringify(body),
+    );
+    assert.throws(
+      () => validateActionCorpus([{ id: "p", steps: [change("s", body)] }]),
+      Error,
+      JSON.stringify(body),
+    );
+  }
+  assert.doesNotThrow(() =>
+    validateActionCorpus([{ id: "p", steps: [ok("a", "one"), ok("b", "two")] }]),
+  );
+  assert.throws(
+    () =>
+      validateActionCorpus([
+        { id: "p", steps: [ok("a", "one"), ok("b", "two"), ok("c", "three")] },
+      ]),
+    /at most two/,
+  );
+  const create = {
+    id: "c",
+    path: "v1/projects/{project}/accounts",
+    auth: "admin",
+    body: { email: "EMAIL(lvc-one)" },
+  };
+  assert.throws(() => validateActionCorpus([{ id: "p", steps: [create] }]), /never belong/);
 });

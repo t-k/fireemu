@@ -13,7 +13,8 @@ import { buildRequest, isTransient, normalizeConfig } from "../auth-account/harn
 import { configMatches } from "../auth-account/session.mjs";
 import { materialize } from "../auth-credential/session.mjs";
 import { relate, tokenPath } from "../auth-credential/tokens.mjs";
-import { guardActionRequest, normalizeActionResponse } from "./harness.mjs";
+import { guardActionRequest } from "./guard.mjs";
+import { normalizeActionResponse } from "./harness.mjs";
 
 /** An error that must stop the whole run: the sandbox may no longer be in a known state. */
 const fatal = (message) => Object.assign(new Error(message), { fatal: true });

@@ -39,8 +39,7 @@ import {
 } from "../auth-account/harness.mjs";
 import { configMatches, createSession as createAccountSession } from "../auth-account/session.mjs";
 import { PROGRAMS } from "./corpus.mjs";
-import { validateVerificationLinks } from "./corpus-rules.mjs";
-import { validateActionCorpus } from "./harness.mjs";
+import { validateActionCorpus, validateVerificationLinks } from "./guard.mjs";
 import { runCorpus } from "./session.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -66,7 +65,10 @@ function selectedPrograms() {
 
 const programDigest = (program) => sha256(JSON.stringify(program));
 
-/** Normalization and request semantics a saved row depends on; a change makes it stale. */
+/**
+ * Normalization and request semantics a saved row depends on; a change makes it stale. The
+ * guard and corpus rules (guard.mjs) only refuse requests and are not part of it.
+ */
 async function harnessDigest() {
   const sources = await Promise.all(
     [

@@ -8,6 +8,7 @@ import {
   asc,
   count,
   cursor,
+  sum,
   dbl,
   f,
   field,
@@ -59,6 +60,27 @@ export const VECTOR_PROGRAMS = [
         nearest("EUCLIDEAN", { queryVector: vec(0, 0, -1), limit: 11 }),
       ),
       search("limit-covers-all", nearest("COSINE", { limit: 11, distanceResultField: "distance" })),
+      // Without a projection the distance result field is visible.
+      search(
+        "euclidean-distance-values",
+        nearest("EUCLIDEAN", { distanceResultField: "distance", limit: 11 }),
+        { select: undefined },
+      ),
+      search(
+        "dot-product-distance-values",
+        nearest("DOT_PRODUCT", { distanceResultField: "distance", limit: 11 }),
+        { select: undefined },
+      ),
+      search(
+        "distance-field-dotted-name",
+        nearest("EUCLIDEAN", { distanceResultField: "a.b", limit: 2 }),
+        { select: undefined },
+      ),
+      search(
+        "distance-field-replaces-existing",
+        nearest("EUCLIDEAN", { distanceResultField: "color", limit: 2 }),
+        { select: undefined },
+      ),
     ],
   },
   {
@@ -125,6 +147,14 @@ export const VECTOR_PROGRAMS = [
       aggregate("count-over-nearest", { from: from("qvec"), findNearest: nearest("EUCLIDEAN") }, [
         count("c"),
       ]),
+      aggregate("sum-over-nearest", { from: from("qvec"), findNearest: nearest("EUCLIDEAN") }, [
+        sum("n", "s"),
+      ]),
+      aggregate(
+        "count-over-nearest-with-limit",
+        { from: from("qvec"), findNearest: nearest("EUCLIDEAN"), limit: 2 },
+        [count("c")],
+      ),
     ],
   },
 ];

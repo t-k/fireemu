@@ -63,6 +63,9 @@ export const REQUEST_PROGRAMS = [
       raw("body-not-json", "not json"),
       raw("body-empty", ""),
       raw("body-array", "[]"),
+      raw("body-truncated", '{"structuredQuery":'),
+      raw("body-trailing-comma", '{"structuredQuery":{"from":[{"collectionId":"qn"}]},}'),
+      raw("body-string", '"text"'),
       raw(
         "unknown-top-level-field",
         '{"structuredQuery":{"from":[{"collectionId":"qn"}],"limit":1},"extra":1}',

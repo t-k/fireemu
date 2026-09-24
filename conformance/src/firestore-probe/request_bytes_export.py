@@ -16,21 +16,30 @@ ROOT = Path(__file__).resolve().parents[3]
 COMPILER = (
     ROOT / "tools/compat-broad/fs-request-bytes-boundary/request_bytes_compiler.py"
 )
+CATALOG_SAMPLES = (
+    ROOT / "tools/compat-broad/fs-request-bytes-boundary/request_bytes_catalog_samples.py"
+)
 PROJECT = "fireemu-oracle-sbx"
 DATABASE = "(default)"
 # Stable namespace component only; no admission nonce is used on the sandbox track.
 PATH_COMPONENT = "a" * 32
 
 
-def _compiler_module() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "request_bytes_sandbox_compiler", COMPILER
-    )
+def _load(name: str, path: Path) -> Any:
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
-        raise ValueError("request-byte compiler is unavailable")
+        raise ValueError(f"{path.name} is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _compiler_module() -> Any:
+    return _load("request_bytes_sandbox_compiler", COMPILER)
+
+
+def _catalog_samples_module() -> Any:
+    return _load("request_bytes_sandbox_catalog_samples", CATALOG_SAMPLES)
 
 
 def _program(recipe_id: str, probe: dict[str, Any]) -> dict[str, Any]:
@@ -62,7 +71,9 @@ def _program(recipe_id: str, probe: dict[str, Any]) -> dict[str, Any]:
 
 def build_programs() -> list[dict[str, Any]]:
     compiler = _compiler_module()
-    decoded = compiler.compile_request_bytes_plan(PROJECT, DATABASE, PATH_COMPONENT)
+    samples = _catalog_samples_module()
+    # The saved production samples stay at 10 MiB; the strict campaign is 11 MiB.
+    decoded = samples.compile_catalog_sample_plan(PROJECT, DATABASE, PATH_COMPONENT)
     sentinel = compiler.compile_request_bytes_sentinel_plan(
         PROJECT, DATABASE, PATH_COMPONENT
     )
@@ -79,7 +90,7 @@ def build_programs() -> list[dict[str, Any]]:
     for program in programs:
         body = program["steps"][0]["body"]
         size = len(json.dumps(body, separators=(",", ":")).encode())
-        if size not in (*compiler.REQUEST_TARGETS, compiler.RAW_16MIB_OVER_BYTES):
+        if size not in (*samples.CATALOG_SAMPLE_TARGETS, compiler.RAW_16MIB_OVER_BYTES):
             raise ValueError("request-byte compiler changed an exact wire size")
     return programs
 

@@ -23,7 +23,7 @@ const production = () =>
       kind: "production",
       token: "ya29.token",
       quotaProject: "fireemu-oracle-query",
-      projectNumber: "1049549757969",
+      projectNumber: "123456789012",
       bucket: "fireemu-oracle-query-cfg-1790223596",
     },
   });
@@ -197,7 +197,7 @@ test("normalization replaces every private or run-specific value with a stable s
       createTime: "2026-09-24T05:01:02.123456Z",
       old: "2020-01-01T00:00:00Z",
     },
-    note: "Please retry in 262 seconds. consumer projects/1049549757969",
+    note: "Please retry in 262 seconds. consumer projects/123456789012",
   };
   const recorded = normalizeRestResponse(200, JSON.stringify(body), ctx, program, symbols);
   assert.deepEqual(recorded.body, {

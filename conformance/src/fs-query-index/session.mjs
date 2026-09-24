@@ -1,4 +1,4 @@
-// Executes FS-QUERY-INDEX programs against one target and returns what it answered.
+// Executes FS-QUERY-INDEX and FS-DATA-WRITE-LIST programs against one target and returns what it answered.
 //
 // Every program starts and ends with a wipe of the whole `(default)` database, which the lane
 // owns in the sandbox project and fireemu owns locally. Seeds are written with :commit batches.
@@ -16,6 +16,7 @@ import {
   isTransient,
   normalizeStep,
   PRODUCTION_GRPC,
+  resolveQuery,
   resolveValue,
 } from "./harness.mjs";
 
@@ -92,10 +93,12 @@ export function createSession(
     claim(harness);
     const sent = {
       transport: "rest",
-      // Only parsed bodies can carry chained instants; raw bodies are fixed text.
+      // Only parsed bodies and query parameters can carry chained instants; raw bodies are
+      // fixed text.
       ...(step.rawBody === undefined && request.init.body !== undefined
         ? { request: JSON.parse(request.init.body) }
         : {}),
+      ...(step.query !== undefined ? { request: resolveQuery(step, ctx, raw) } : {}),
     };
     let response;
     try {

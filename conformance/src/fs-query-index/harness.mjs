@@ -1,4 +1,4 @@
-// Pure building blocks of the FS-QUERY-INDEX sandbox harness: request construction for REST and
+// Pure building blocks of the sandbox harness shared by FS-QUERY-INDEX and FS-DATA-WRITE-LIST: request construction for REST and
 // gRPC steps, the request guard, the projection of gRPC messages to their REST JSON shape,
 // response normalization and the comparison of two production recordings. Nothing here performs
 // I/O.
@@ -28,9 +28,30 @@ export const RPCS = {
     "executePipeline",
     "commit",
     "get",
+    "listDocuments",
+    "listCollectionIds",
   ]),
-  grpc: new Set(["runQuery", "runAggregationQuery", "partitionQuery", "executePipeline"]),
+  grpc: new Set([
+    "runQuery",
+    "runAggregationQuery",
+    "partitionQuery",
+    "executePipeline",
+    "listDocuments",
+    "listCollectionIds",
+  ]),
 };
+
+/** The query parameters a REST listDocuments step may send (its request message fields). */
+export const LIST_QUERY_KEYS = new Set([
+  "pageSize",
+  "pageToken",
+  "orderBy",
+  "mask.fieldPaths",
+  "showMissing",
+  "readTime",
+  "transaction",
+  "unknownParameter",
+]);
 
 /** gRPC method paths and whether they stream their responses. */
 export const GRPC_METHODS = {
@@ -38,6 +59,8 @@ export const GRPC_METHODS = {
   runAggregationQuery: { method: "RunAggregationQuery", stream: true },
   partitionQuery: { method: "PartitionQuery", stream: false },
   executePipeline: { method: "ExecutePipeline", stream: true },
+  listDocuments: { method: "ListDocuments", stream: false },
+  listCollectionIds: { method: "ListCollectionIds", stream: false },
 };
 
 /**
@@ -159,20 +182,34 @@ export function stepParent(step, ctx) {
   return parent ? `${documentsName(ctx)}/${parent}` : documentsName(ctx);
 }
 
+/**
+ * The resolved query parameters of a listDocuments step, in order: `step.query` is a list of
+ * `[key, value]` pairs so a key (`mask.fieldPaths`) can repeat.
+ */
+export function resolveQuery(step, ctx, raw) {
+  return (step.query ?? []).map(([key, value]) => [key, String(resolveValue(value, ctx, raw))]);
+}
+
 /** The URL and fetch init for one REST step against the context's target. */
 export function buildRestRequest(step, ctx, raw) {
   const origin = ctx.target.kind === "production" ? PRODUCTION_ORIGIN : ctx.target.origin;
   let path;
   if (step.path !== undefined) path = substitute(step.path, ctx);
   else if (step.rpc === "get") path = `v1/${stepParent(step, ctx)}`;
-  else if (step.rpc === "executePipeline" || step.rpc === "commit")
+  else if (step.rpc === "listDocuments") {
+    const query = resolveQuery(step, ctx, raw)
+      .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+      .join("&");
+    path = `v1/${stepParent(step, ctx)}/${encodeURIComponent(step.collectionId)}${query ? `?${query}` : ""}`;
+  } else if (step.rpc === "executePipeline" || step.rpc === "commit")
     path = `v1/${databaseName(ctx)}/documents:${step.rpc}`;
   else path = `v1/${stepParent(step, ctx)}:${step.rpc}`;
   const headers = {
     authorization: `Bearer ${ctx.target.kind === "production" ? ctx.target.token : "owner"}`,
   };
   if (ctx.target.kind === "production") headers["x-goog-user-project"] = ctx.target.quotaProject;
-  const init = { method: step.rpc === "get" ? "GET" : "POST", headers };
+  const get = step.rpc === "get" || step.rpc === "listDocuments";
+  const init = { method: get ? "GET" : "POST", headers };
   if (step.rawBody !== undefined) {
     headers["content-type"] = "application/json";
     init.body = substitute(step.rawBody, ctx);
@@ -330,14 +367,15 @@ export function projectGrpcMessage(value, key = "") {
  * Refuses a corpus that addresses anything but the sandbox database through a reviewed method,
  * or exceeds the request cap. Returns the number of recorded requests.
  */
-export function validateCorpus(programs) {
+export function validateCorpus(programs, lane = "fs-query-index") {
   let requests = 0;
   const programIds = new Set();
+  const programId = new RegExp(`^${lane}/[a-z0-9-]+/[a-z0-9-]+(/[a-z0-9-]+)*$`);
   for (const program of programs) {
     if (programIds.has(program.id)) throw new Error(`duplicate program ${program.id}`);
     programIds.add(program.id);
-    if (!/^fs-query-index\/[a-z0-9-]+\/[a-z0-9-]+(\/[a-z0-9-]+)*$/.test(program.id))
-      throw new Error(`${program.id}: program id must be fs-query-index/<area>/<case>`);
+    if (!programId.test(program.id))
+      throw new Error(`${program.id}: program id must be ${lane}/<area>/<case>`);
     for (const [name] of program.seed ?? []) assertRelativePath(name, `${program.id} seed`);
     const stepIds = new Set();
     for (const step of program.steps) {
@@ -354,6 +392,18 @@ export function validateCorpus(programs) {
         throw new Error(`${program.id}#${step.id}: gRPC steps take a body only`);
       if (transport === "grpc" && step.body && ("parent" in step.body || "database" in step.body))
         throw new Error(`${program.id}#${step.id}: a gRPC body must not set its own scope`);
+      if (step.query !== undefined && (transport !== "rest" || step.rpc !== "listDocuments"))
+        throw new Error(`${program.id}#${step.id}: only a REST listDocuments step takes a query`);
+      for (const [key] of step.query ?? []) {
+        if (!LIST_QUERY_KEYS.has(key))
+          throw new Error(`${program.id}#${step.id}: query parameter ${key} is not reviewed`);
+      }
+      if (
+        step.rpc === "listDocuments" &&
+        transport === "rest" &&
+        (typeof step.collectionId !== "string" || !/^[A-Za-z0-9_.~-]+$/.test(step.collectionId))
+      )
+        throw new Error(`${program.id}#${step.id}: a REST listDocuments step names one collection`);
     }
   }
   if (requests > REQUEST_CAP)
@@ -430,9 +480,18 @@ function assertOnlySandboxProject(value, ctx) {
  */
 export function guardRestRequest({ url, init }, ctx, { harness = false } = {}) {
   const parsed = new URL(url);
-  const raw = url.slice(parsed.origin.length);
-  if (/%2e|%2f|\/\.\.?(\/|$)|\?/i.test(raw))
+  const [raw, ...queries] = url.slice(parsed.origin.length).split("?");
+  if (/%2e|%2f|\/\.\.?(\/|$)|#/i.test(raw) || queries.length > 1)
     throw new Error(`request path is not canonical: ${raw}`);
+  if (queries.length) {
+    // Only a GET listDocuments carries parameters: reviewed keys, values naming no other project.
+    if (init.method !== "GET" || init.body !== undefined)
+      throw new Error("only a GET request may carry query parameters");
+    for (const [key, value] of parsed.searchParams) {
+      if (!LIST_QUERY_KEYS.has(key)) throw new Error(`query parameter ${key} is not reviewed`);
+      assertOnlySandboxProject(value, ctx);
+    }
+  }
   const expectedOrigin =
     ctx.target.kind === "production" ? PRODUCTION_ORIGIN : new URL(ctx.target.origin).origin;
   if (parsed.origin !== expectedOrigin) throw new Error("request left the target");

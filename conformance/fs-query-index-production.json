@@ -9,7 +9,7 @@
   "programs": {
     "fs-query-index/aggregation/aliases-and-refusals": {
       "corpusDigest": "6597e28e108afb07e543f22c5cfcdeba6400df6bfd6b6a28577f3497269ddabf",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -337,7 +337,7 @@
     },
     "fs-query-index/aggregation/options": {
       "corpusDigest": "f0b0cc7107ed4f98c8d569c7254a2b7d66e4bc1cc22450a8450c625a8bcc43bd",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -618,7 +618,7 @@
     },
     "fs-query-index/aggregation/semantics": {
       "corpusDigest": "ea725ce0d434cbc8b1990a566630081dd1e4f58fe984c910dee88444cb6b3b74",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -980,7 +980,7 @@
     },
     "fs-query-index/collection-group/queries": {
       "corpusDigest": "a359d59f46db2f8e9f3d01c219e3611d10596604fe1bb54d2241f90d038bd595",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -1638,7 +1638,7 @@
     },
     "fs-query-index/collection-group/scopes": {
       "corpusDigest": "fa310b545d31970fb8b4b88b2e4d7a02947ab67efa1409a41e0866c2a11f9071",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -2409,7 +2409,7 @@
     },
     "fs-query-index/composite-filters/all": {
       "corpusDigest": "10795627135043368751f6e954ab3bdf22735fd7fce528b1f70bb1a7b6e9cd98",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -3523,7 +3523,7 @@
     },
     "fs-query-index/cursors/names": {
       "corpusDigest": "f8615b89fc8d0b89c38c563d3349542c436b6e0714b2642649ff8dbbd67470c8",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -3897,7 +3897,7 @@
     },
     "fs-query-index/cursors/values": {
       "corpusDigest": "daedb98e8225459c4f10c087176d0212e41e225ee8897b1dcb15f67fc5536360",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -5384,7 +5384,7 @@
     },
     "fs-query-index/explain/aggregations": {
       "corpusDigest": "bbad31fa2345adc7e6778ee21c846463f62cdb96b01a8edcaa0c24016196e1b2",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -5725,7 +5725,7 @@
     },
     "fs-query-index/explain/merge-order": {
       "corpusDigest": "4484ca3b001c9914e7f592c1632c4ce058afe68b8d246687c2a6588381f0c641",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T02:59:40.983Z",
       "gitSha": "665e5e63afb571eaf5ed973c73d8571881924ab0",
       "steps": {
@@ -6149,7 +6149,7 @@
     },
     "fs-query-index/explain/queries": {
       "corpusDigest": "77d26b0b4905006000896f26da1d9a807e55f22c5513e7dfffafa85ea92f7097",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -8370,7 +8370,7 @@
     },
     "fs-query-index/explain/vector": {
       "corpusDigest": "fca3e46bc7830b5677dee9197e12e2d87bb702fc4a14bcf6337e81b8ae80451a",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -8539,7 +8539,7 @@
     },
     "fs-query-index/field-filters/array-and-membership": {
       "corpusDigest": "a53504c4bb08ecb32405e9df4e886dc337881b32bc54ede5a46d335f22e1aba9",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -11050,7 +11050,7 @@
     },
     "fs-query-index/field-filters/equality": {
       "corpusDigest": "7d215e90078e07b5cada583ca41cb6f1ed193b6fb3e9ec49e754fc4e9286c13f",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -13713,7 +13713,7 @@
     },
     "fs-query-index/field-filters/paths-and-names": {
       "corpusDigest": "6490d782f52fa9f23d8cef3a8402ef14e785b44a474421dd209ba027bed6c413",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -17115,7 +17115,7 @@
     },
     "fs-query-index/field-filters/range": {
       "corpusDigest": "1bd360613a2741e097cf82ae28f648f2e9cc524d1367d810ad5bd1a68fbde769",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -18036,7 +18036,7 @@
     },
     "fs-query-index/filter-validation/combinations": {
       "corpusDigest": "731100544f0047c9b4b193cd0cca04b3a1ecd9b4b852f24c9fa46f25fdce764d",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -18462,7 +18462,7 @@
     },
     "fs-query-index/filter-validation/operators-and-values": {
       "corpusDigest": "7f47f5daa954e56bdad7d2f5128c6dbc9a4414fe6210a37f89a017542a0ef9c8",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T01:46:37.110Z",
       "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
@@ -18912,7 +18912,7 @@
     },
     "fs-query-index/filter-validation/paths-and-names": {
       "corpusDigest": "e1c3326c4eac21f79f0e41d9f9679a127ba8aa8cc26e277d486e29b4cfc47701",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T01:46:37.110Z",
       "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
@@ -19242,7 +19242,7 @@
     },
     "fs-query-index/grpc/partitions": {
       "corpusDigest": "41fde3c88c2f0fb9e527ab747a0dbc6bffe1d713b4891e211e8db0ee17cb75ce",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -19316,7 +19316,7 @@
     },
     "fs-query-index/grpc/queries": {
       "corpusDigest": "8114cdc8ff3282b8f139b2016c39670076324021a95f81b7f7d729e19ba2683a",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -20082,7 +20082,7 @@
     },
     "fs-query-index/grpc/read-time": {
       "corpusDigest": "96d902d9056f9cb516fac596b32621a29c70c079a42a08eb92fce6838ca06f01",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -20137,7 +20137,7 @@
     },
     "fs-query-index/index-selection/automatic-and-merge": {
       "corpusDigest": "7d9d834974088d0b4e2ccb39c5d94ce0cffbeb83b3c8324424c7633525fc366d",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -20653,7 +20653,7 @@
     },
     "fs-query-index/index-selection/composites": {
       "corpusDigest": "1ad5f85677a17472cee798fde8a5cfeb5069576ea2731a4c29256b3e33db5ddc",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -21061,7 +21061,7 @@
     },
     "fs-query-index/index-selection/scopes-and-exemptions": {
       "corpusDigest": "e9a3e5a8c16ebe2cd7077514cd8f319dc893888255d3f8876677fa1c9b7d784b",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -21284,7 +21284,7 @@
     },
     "fs-query-index/offset-limit/all": {
       "corpusDigest": "dbfd53d57877036ad9fe38be6b69da7ac78de135a091325b05810bf395d284fd",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -22222,7 +22222,7 @@
     },
     "fs-query-index/order-by/basic": {
       "corpusDigest": "c07d7d73f4591e141dc8aa37142b300396f5518c1fda97330362b0cba013edf8",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -24311,7 +24311,7 @@
     },
     "fs-query-index/order-by/value-types": {
       "corpusDigest": "44a6af4e66bf1767b3b4b3d7a5ed3609bc11f5ded5060e5aa7b9385ca17b1688",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -25745,7 +25745,7 @@
     },
     "fs-query-index/order-by/with-filters": {
       "corpusDigest": "47486108f27d5f20691a01614bf574cc59ef9403d1ef260dd519b45efb40cb10",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -26707,7 +26707,7 @@
     },
     "fs-query-index/partition-query/large-group": {
       "corpusDigest": "a380c561e82fdd48575dce5be513c3cb92dd9af67656eb874f79806b833d8951",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -27166,7 +27166,7 @@
     },
     "fs-query-index/partition-query/refusals": {
       "corpusDigest": "461cb1dfd2ae743f9ea785e9f3f8dd5907850107b98d0ce7c228d664f3331a40",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -27328,7 +27328,7 @@
     },
     "fs-query-index/partition-query/small-group": {
       "corpusDigest": "bac2a8c3f86efbb6e466f1511de05e1f6d4ebe1b993b41c7a381f3b155e3f4b9",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -27370,7 +27370,7 @@
     },
     "fs-query-index/pipeline/standard-refusal": {
       "corpusDigest": "5b88d3f1bb4c902c97080b3a88ded6f073489b569405b8c8e07092582e799899",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -27484,7 +27484,7 @@
     },
     "fs-query-index/projection/all": {
       "corpusDigest": "15682834b6cc492df6f0329c0d56473e25f26df1dae9de93f8f35c1d063def80",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -28098,7 +28098,7 @@
     },
     "fs-query-index/query-limits/components": {
       "corpusDigest": "74bb264d19579a9037e0351cea3162a4b181aadd3665001886412391da830c32",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -28190,7 +28190,7 @@
     },
     "fs-query-index/query-limits/disjunctions": {
       "corpusDigest": "23ee70590e31098ad7f1d43a7c63683e95677406ef322134a6ea21e8860a5eeb",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -28592,7 +28592,7 @@
     },
     "fs-query-index/query-limits/not-in-and-inequalities": {
       "corpusDigest": "67ab8011bf6ac4f2d24c10879eb10048fd7cd1fd5367adfd2cd552dec2914ef7",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T01:46:37.110Z",
       "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
@@ -28704,7 +28704,7 @@
     },
     "fs-query-index/read-time/snapshots": {
       "corpusDigest": "81bb6cd77ddef0ad46e98e3420b83c9ef7f88610a6b0a4635dd79db9f883c605",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -28956,7 +28956,7 @@
     },
     "fs-query-index/request-shape/rest": {
       "corpusDigest": "612c79f1ca46624dc6d6f664aa0a81d29b392c27f6d9d858e879f2193408de8d",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T01:46:37.110Z",
       "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
@@ -31948,7 +31948,7 @@
     },
     "fs-query-index/unary-filters/all": {
       "corpusDigest": "e5078e3c1a39d5f79600d110ed901b57e7a6a155d3d142313064eb6b3f40a874",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -35494,7 +35494,7 @@
     },
     "fs-query-index/vector/measures": {
       "corpusDigest": "17877b78943671ef7b827a834b6c2e23879c3cbc1385ab2a02ceece91ecbba6b",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T01:46:37.110Z",
       "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {
@@ -37518,7 +37518,7 @@
     },
     "fs-query-index/vector/validation": {
       "corpusDigest": "49361b3ef62602f376f4c1fadda08befe62cb6425f332fa0fcef29c44d7a651f",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T00:54:33.874Z",
       "gitSha": "c66f4d8aeeea5baa2ca50b6f2e0863df51dadb46",
       "steps": {
@@ -37871,7 +37871,7 @@
     },
     "fs-query-index/vector/with-query-clauses": {
       "corpusDigest": "20e7e6a98c4aaac3375ea177a32283012096cd12915d8b373f22a32856bf57a4",
-      "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
+      "harnessDigest": "9e9ccdec549d5d2e375c0d36dc846aeac03dd5f7148f602b1c956017d3dd82cb",
       "recordedAt": "2026-09-24T01:46:37.110Z",
       "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
       "steps": {

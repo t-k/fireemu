@@ -65,10 +65,17 @@ def _invalid_collection_program(suffix: str, collection_id: str) -> dict[str, An
 
 
 def build_corpus() -> dict[str, Any]:
+    expansion = sandbox_expansion_programs()
+    index_sum_id = "writes/limits/index-entry-sum/adjacent"
+    index_sum_programs = [
+        program for program in expansion if program["id"] == index_sum_id
+    ]
+    if len(index_sum_programs) != 1:
+        raise ValueError("one adjacent index-sum program is required")
     programs = [
         *limits03_programs(),
         *request_byte_programs(),
-        *sandbox_expansion_programs(),
+        *(program for program in expansion if program["id"] != index_sum_id),
         _invalid_collection_program("slash", "bad/inside"),
         _invalid_collection_program("dot", "."),
         _invalid_collection_program("dot-dot", ".."),
@@ -88,6 +95,7 @@ def build_corpus() -> dict[str, Any]:
             }
             for size in (10_485_760, 10_485_761)
         ),
+        *index_sum_programs,
     ]
     stream_recipes = [
         {

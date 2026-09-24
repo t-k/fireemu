@@ -11641,6 +11641,26 @@ mod tests {
     use fireemu_core_auth::mfa::TotpPolicy;
     use fireemu_core_types::determinism::SplitMix64;
 
+    #[test]
+    fn an_absolute_uri_host_is_its_lower_cased_authority_host() {
+        for (uri, host) in [
+            ("https://Demo-App.firebaseapp.com/done?x=1", Some("demo-app.firebaseapp.com")),
+            ("http://localhost:5000/done", Some("localhost")),
+            ("https://user:pw@demo-app.web.app#frag", Some("demo-app.web.app")),
+            ("https://demo-app.web.app?x=@evil.example.com", Some("demo-app.web.app")),
+            ("http://[::1]:8080/x", Some("::1")),
+            ("myapp://callback", Some("callback")),
+            ("not a url", None),
+            ("", None),
+            ("/relative/path", None),
+            ("https://", None),
+            ("mailto:someone@example.com", None),
+            ("http://[::1/x", None),
+        ] {
+            assert_eq!(absolute_uri_host(uri).as_deref(), host, "{uri}");
+        }
+    }
+
     struct AllBlockingHooks;
     struct BeforeCreateOnlyHook;
     struct NoBlockingHooks;

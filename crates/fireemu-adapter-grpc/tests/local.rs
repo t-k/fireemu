@@ -1412,14 +1412,27 @@ async fn grpc_run_query_supports_standard_find_nearest() {
 }
 
 #[tokio::test]
-async fn grpc_find_nearest_refuses_query_limits_offsets_and_cursors() {
-    // Production refuses each (FS-QUERY-INDEX vector/with-query-clauses, 2026-09-24): a
-    // strict-profile refusal only. The emulator profile applies those stages before the
-    // nearest-neighbour ranking, as fireemu did before, and adds no rejection.
+async fn grpc_find_nearest_query_clauses_are_served_by_the_emulator_profile() {
+    // Production refuses a query limit, offset or cursor beside findNearest: a strict-profile
+    // refusal only. The emulator profile applies those stages before the nearest-neighbour
+    // ranking, as fireemu did before, and adds no rejection.
     let (mut emulator, _, emulator_handle) =
         start_with_write_time_and_policy(false, IndexValidationPolicy::Emulator).await;
-    let served = emulator
-        .run_query(pb::RunQueryRequest {
+    emulator
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![
+                update_write("items/near", &[("embedding", vector(&[1.0, 0.0]))]),
+                update_write("items/mid", &[("embedding", vector(&[1.0, 1.0]))]),
+                update_write("items/far", &[("embedding", vector(&[-1.0, 0.0]))]),
+            ],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let served = collect_docs(
+        &mut emulator,
+        pb::RunQueryRequest {
             parent: DOCS.to_owned(),
             query_type: Some(pb::run_query_request::QueryType::StructuredQuery(
                 pb::StructuredQuery {
@@ -1442,10 +1455,21 @@ async fn grpc_find_nearest_refuses_query_limits_offsets_and_cursors() {
                 },
             )),
             ..Default::default()
-        })
-        .await;
-    assert!(served.is_ok(), "{served:?}");
+        },
+    )
+    .await;
+    // Offset 1 and limit 2 by name (mid, near), then ranked; the whole stream is read.
+    let names: Vec<&str> = served
+        .iter()
+        .map(|document| document.name.rsplit('/').next().unwrap())
+        .collect();
+    assert_eq!(names, ["near", "mid"]);
     emulator_handle.abort();
+}
+
+#[tokio::test]
+async fn grpc_find_nearest_refuses_query_limits_offsets_and_cursors() {
+    // Production refuses each (FS-QUERY-INDEX vector/with-query-clauses, 2026-09-24).
     let (mut client, _, handle) =
         start_with_write_time_and_policy(false, IndexValidationPolicy::Production).await;
     let nearest = || sq::FindNearest {
@@ -8673,4 +8697,55 @@ fn a_count_capped_at_zero_is_authorized_before_it_answers() {
         )
         .unwrap();
     assert!(explained.explain_metrics.is_some());
+}
+
+/// `ExecutePipeline` on a Standard database: the strict profile answers with production's
+/// status, the emulator profile keeps the refusal fireemu always made, in fireemu's words
+/// (confirmation review 2026-09-24, Should Fix 2).
+#[tokio::test]
+async fn grpc_execute_pipeline_on_standard_keeps_each_profiles_words() {
+    let request = || pb::ExecutePipelineRequest {
+        database: DB.to_owned(),
+        pipeline_type: Some(
+            pb::execute_pipeline_request::PipelineType::StructuredPipeline(
+                pb::StructuredPipeline {
+                    pipeline: Some(pb::Pipeline {
+                        stages: vec![pb::pipeline::Stage {
+                            name: "collection".to_owned(),
+                            args: vec![pb::Value {
+                                value_type: Some(pb::value::ValueType::ReferenceValue(
+                                    "/items".to_owned(),
+                                )),
+                            }],
+                            options: std::collections::HashMap::new(),
+                        }],
+                    }),
+                    options: std::collections::HashMap::new(),
+                },
+            ),
+        ),
+        ..Default::default()
+    };
+    for (policy, message) in [
+        (
+            IndexValidationPolicy::Emulator,
+            "pipelines require firestore.edition = enterprise (Enterprise Native)",
+        ),
+        (
+            IndexValidationPolicy::Production,
+            fireemu_adapter_grpc::production_status::PIPELINE_REQUIRES_ENTERPRISE,
+        ),
+    ] {
+        let (mut client, _, handle) = start_with_write_time_and_policy(false, policy).await;
+        let status = match client.execute_pipeline(request()).await {
+            Ok(response) => {
+                let mut stream = response.into_inner();
+                stream.message().await.unwrap_err()
+            }
+            Err(status) => status,
+        };
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition, "{policy:?}");
+        assert_eq!(status.message(), message, "{policy:?}");
+        handle.abort();
+    }
 }

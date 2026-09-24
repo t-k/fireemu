@@ -1439,8 +1439,13 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
             .map(|a| {
                 let operator = if let Some(c) = a.get("count") {
                     Some(agg::Operator::Count(agg::Count {
-                        // `upTo` is an Int64Value (the transcoder spells it as a string).
-                        up_to: match c.get("upTo") {
+                        // `upTo` is an Int64Value (the transcoder spells it as a string). Its
+                        // wrapper message form, which the strict transcoder refuses first, is
+                        // read as fireemu read it before.
+                        up_to: match c.get("upTo").map(|v| match v {
+                            Value::Object(wrapper) => wrapper.get("value").unwrap_or(&Value::Null),
+                            v => v,
+                        }) {
                             None | Some(Value::Null) => None,
                             Some(Value::String(text)) => Some(
                                 text.parse::<i64>()

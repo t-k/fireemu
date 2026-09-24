@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -107,6 +108,17 @@ test("FS-CONFIG-LIFECYCLE closure inventory cannot silently omit a declared cond
     };
     const rows = comparison.rows.filter(({ row }) => covered(row));
     assert.ok(rows.length > 0, `${label}: has compared rows`);
+    // The comparison is of the committed fixture, and the condition's counts are its rows.
+    const fixture = readFileSync(fromRoot("conformance/fs-config-lifecycle-production.json"));
+    assert.equal(
+      comparison.fixtureSha256,
+      createHash("sha256").update(fixture).digest("hex"),
+      `${label}: the comparison is of the committed fixture`,
+    );
+    const counted = {};
+    for (const { status } of rows) counted[status] = (counted[status] ?? 0) + 1;
+    if (label !== "FS-CONFIG-LIFECYCLE/closure-review")
+      assert.deepEqual(condition.evidence.rows, counted, `${label}: row counts`);
     const divergences = condition.evidence.documentedDivergences ?? [];
     for (const divergence of divergences) {
       assert.equal(divergence.decidedBy, "owner", `${label}: ${divergence.row}`);

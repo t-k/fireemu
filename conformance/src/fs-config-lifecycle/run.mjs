@@ -26,6 +26,7 @@ import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { PROGRAMS } from "./corpus.mjs";
 import { programDigest } from "./digest.mjs";
+import { sameModuloIdNames } from "./relabel.mjs";
 import { scanFixture } from "./fixture-scan.mjs";
 import {
   BISECT_PROJECT,
@@ -520,7 +521,22 @@ export function classify({ stale, production, alternative, fireemu }) {
     saved?.trace ? traceAgrees(saved, fireemu) : sameRecording(saved, fireemu);
   if (agrees(production)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
   if (alternative && agrees(alternative)) return "MATCH_NONDETERMINISTIC";
+  // The same resources under differently numbered id symbols (see relabel.mjs): reported
+  // under its own status so the evidence shows which rows needed it.
+  const relabeled = (saved) => saved && !saved.trace && sameModuloIdNames(saved, fireemu);
+  if (relabeled(production) || relabeled(alternative)) return "MATCH_RELABELED";
   return "MISMATCH";
+}
+
+/** Which production recording a passing row agrees with: the first, or the second only. */
+export function matchedRecording({ production, alternative, fireemu }) {
+  const agrees = (saved) =>
+    saved?.trace
+      ? traceAgrees(saved, fireemu)
+      : sameRecording(saved, fireemu) || sameModuloIdNames(saved, fireemu);
+  if (production !== undefined && fireemu !== undefined && agrees(production)) return "first";
+  if (alternative !== undefined && fireemu !== undefined && agrees(alternative)) return "second";
+  return undefined;
 }
 
 async function check() {
@@ -554,6 +570,7 @@ async function check() {
       rows.push({
         row: `${program.id}#${step.id}`,
         status: classify({ stale, production, alternative, fireemu }),
+        ...(alternative ? { matched: matchedRecording({ production, alternative, fireemu }) } : {}),
         production,
         ...(alternative ? { alternative } : {}),
         fireemu,
@@ -569,7 +586,7 @@ async function check() {
     join(RUN_DIR, "comparison.json"),
     `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
-  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
+  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "MATCH_RELABELED"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
     console.log(`\n${row.status} ${row.row}`);
     console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 400)}`);
@@ -610,10 +627,10 @@ async function exportComparison(out) {
     artifactSha256: comparison.artifactSha256,
     fixtureSha256: sha256(await readFile(FIXTURE, "utf8")),
     summary: comparison.summary,
-    rows: comparison.rows.map(({ row, status, production, fireemu }) =>
+    rows: comparison.rows.map(({ row, status, matched, production, fireemu }) =>
       status === "MISMATCH"
         ? { row, status, differences: differencePaths(production, fireemu) }
-        : { row, status },
+        : { row, status, ...(matched ? { matched } : {}) },
     ),
   };
   await writeFile(out, `${JSON.stringify(evidence, null, 2)}\n`);

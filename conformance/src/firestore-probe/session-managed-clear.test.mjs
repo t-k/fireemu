@@ -13,6 +13,7 @@ import {
   validateShrinkBoundaryState,
   assertV3ProductionCleanupAllowed,
   isExactDeltaV3ProductionScope,
+  isExactPartialProductionScope,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -87,6 +88,36 @@ test("delta-v3 remote scope requires the dedicated journal binding and exact nam
   assert.equal(
     isExactDeltaV3ProductionScope({ ...scope, names: [...deltaNames, deltaNames[0]] }),
     false,
+  );
+});
+
+test("the partial production scope admits only the six adjacent boundary names", () => {
+  const scope = {
+    mode: true,
+    lockHeld: true,
+    deltaMode: false,
+    host: "firestore.googleapis.com",
+    scheme: "https",
+    project: "fireemu-oracle-sbx",
+    maxRequests: 800,
+    managedClearJournal: "/private/managed-clear.json",
+    names: corpusV3.slice(0, 6),
+  };
+  assert.equal(isExactPartialProductionScope(scope), true);
+  assert.equal(isExactPartialProductionScope({ ...scope, mode: false }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, lockHeld: false }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, deltaMode: true }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, host: "attacker.example" }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, scheme: "http" }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, project: "fireemu-35fe6" }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, maxRequests: 1001 }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, maxRequests: 0 }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, managedClearJournal: undefined }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, names: corpusV3 }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, names: corpusV3.slice(6) }), false);
+  assert.equal(isExactPartialProductionScope({ ...scope, names: legacy }), false);
+  assert.doesNotThrow(() =>
+    assertV3ProductionCleanupAllowed({ host: "firestore.googleapis.com", exactScope: true }),
   );
 });
 

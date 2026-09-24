@@ -57,8 +57,14 @@ const LIVE_SPECS = new Map([
   [TRAILERS_ID, { action: "invalid-empty-write-after-handshake", maxFrames: 2 }],
   [HALF_CLOSE_ID, { action: "half-close-after-handshake", maxFrames: 1 }],
   [RESPONSE_HALF_CLOSE_ID, { action: "empty-write-response-before-half-close", maxFrames: 2 }],
-  [UNARY_EXACT_ID, { action: "get-document-transaction-bytes", maxFrames: 1, wireBytes: 10_485_760 }],
-  [UNARY_OVER_ID, { action: "get-document-transaction-bytes", maxFrames: 1, wireBytes: 10_485_761 }],
+  [
+    UNARY_EXACT_ID,
+    { action: "get-document-transaction-bytes", maxFrames: 1, wireBytes: 10_485_760 },
+  ],
+  [
+    UNARY_OVER_ID,
+    { action: "get-document-transaction-bytes", maxFrames: 1, wireBytes: 10_485_761 },
+  ],
   [STREAM_EXACT_ID, { action: "write-stream-token-bytes", maxFrames: 1, wireBytes: 10_485_760 }],
   [STREAM_OVER_ID, { action: "write-stream-token-bytes", maxFrames: 1, wireBytes: 10_485_761 }],
 ]);

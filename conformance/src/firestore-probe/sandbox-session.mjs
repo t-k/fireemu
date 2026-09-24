@@ -47,6 +47,9 @@ const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
 const RECOVERY_MODE = process.env.FIRESTORE_PROBE_RECOVERY_MODE;
 const DELTA_V3_MODE = process.env.FIRESTORE_PROBE_DELTA_V3 === "1";
 const DELTA_LOCK_HELD = process.env.FIRESTORE_PROBE_DELTA_LOCK_HELD === "1";
+const PARTIAL_MODE = process.env.FIRESTORE_PROBE_PARTIAL === "1";
+const PARTIAL_LOCK_HELD = process.env.FIRESTORE_PROBE_PARTIAL_LOCK_HELD === "1";
+const PARTIAL_BOUNDARY_ID = "writes/limits/index-entry-sum/adjacent";
 const CORPUS_DIGEST = process.env.FIRESTORE_PROBE_CORPUS_DIGEST;
 const SOURCE_GIT_SHA = process.env.FIRESTORE_PROBE_SOURCE_GIT_SHA;
 const MANAGED_POLL_MS = /^127\.0\.0\.1:\d+$/.test(HOST ?? "")
@@ -141,12 +144,49 @@ export function createShrinkRequestCounter(limit, initial = 0) {
   };
 }
 
-export function assertV3ProductionCleanupAllowed({ host, exactDeltaV3 = false }) {
-  if (host && !/^127\.0\.0\.1:\d+$/.test(host) && !exactDeltaV3) {
+export function assertV3ProductionCleanupAllowed({
+  host,
+  exactDeltaV3 = false,
+  exactScope = false,
+}) {
+  if (host && !/^127\.0\.0\.1:\d+$/.test(host) && !exactDeltaV3 && !exactScope) {
     throw new Error(
       "v3 production cleanup is blocked: exact cleanup is over the fixed request caps and generic broad clear is disabled",
     );
   }
+}
+
+/** The partial corpus clears only the six adjacent boundary documents of corpus v3. */
+export function isExactPartialProductionScope({
+  mode,
+  lockHeld,
+  deltaMode,
+  host,
+  scheme,
+  project,
+  maxRequests,
+  managedClearJournal,
+  names,
+}) {
+  if (
+    mode !== true ||
+    lockHeld !== true ||
+    deltaMode === true ||
+    host !== "firestore.googleapis.com" ||
+    scheme !== "https" ||
+    project !== "fireemu-oracle-sbx" ||
+    !Number.isSafeInteger(maxRequests) ||
+    maxRequests < 1 ||
+    maxRequests > 1000 ||
+    typeof managedClearJournal !== "string" ||
+    managedClearJournal.length === 0 ||
+    !Array.isArray(names) ||
+    names.length !== 6
+  ) {
+    return false;
+  }
+  const expected = V3_SHRINK_NAMES.slice(0, 6);
+  return JSON.stringify(names.toSorted()) === JSON.stringify(expected.toSorted());
 }
 
 export function isExactDeltaV3ProductionScope({
@@ -2137,6 +2177,32 @@ function validateDeltaV3Corpus(programs, names) {
   }
 }
 
+function validatePartialCorpus(corpus, names) {
+  const programs = corpus?.restPrograms;
+  const reject = () => {
+    throw new Error("partial input differs from the reviewed partial corpus");
+  };
+  if (
+    DELTA_V3_MODE ||
+    corpus?.schemaVersion !== 1 ||
+    corpus.sourceCorpusSha256 !== CORPUS_DIGEST ||
+    !Array.isArray(programs) ||
+    programs.length === 0 ||
+    new Set(programs.map((program) => program.id)).size !== programs.length ||
+    corpus.restRequestCount !==
+      programs.reduce((total, program) => total + program.steps.length, 0) ||
+    programs.some((program) => deleteBoundaryLength(program) !== null) ||
+    programs.at(-1).id !== PARTIAL_BOUNDARY_ID
+  ) {
+    reject();
+  }
+  const boundaryNames = programs
+    .at(-1)
+    .steps.filter((write) => write.id.startsWith("write-"))
+    .map((write) => write.body?.writes?.[0]?.update?.name);
+  if (JSON.stringify(boundaryNames.toSorted()) !== JSON.stringify([...names].toSorted())) reject();
+}
+
 function provesDeleteTargetExists(program, stepSpec, document, recorded) {
   const expectedLength = deleteBoundaryLength(program);
   const expectedName = replaceRunMarker(
@@ -2276,7 +2342,22 @@ async function main() {
     managedClearJournal: MANAGED_CLEAR_JOURNAL,
     names: deltaNames,
   });
-  assertV3ProductionCleanupAllowed({ host: HOST, exactDeltaV3: deltaScope });
+  const partialScope = isExactPartialProductionScope({
+    mode: PARTIAL_MODE,
+    lockHeld: PARTIAL_LOCK_HELD,
+    deltaMode: DELTA_V3_MODE,
+    host: HOST,
+    scheme: SCHEME,
+    project: PROJECT,
+    maxRequests: Number(MAX_REQUESTS),
+    managedClearJournal: MANAGED_CLEAR_JOURNAL,
+    names: deltaNames,
+  });
+  assertV3ProductionCleanupAllowed({
+    host: HOST,
+    exactDeltaV3: deltaScope,
+    exactScope: partialScope,
+  });
   if (RECOVERY_MODE !== undefined) {
     if (!["recover-legacy", "recover-v3", "recover-delta-v3"].includes(RECOVERY_MODE)) {
       throw new Error("unsupported Firestore probe recovery mode");
@@ -2327,11 +2408,13 @@ async function main() {
         ["legacy", "v3"].includes(shrinkScope) &&
         names.length === 6
       ) &&
+      !(partialScope && shrinkScope === "v3") &&
       shrinkScope !== "delta-v3"
     ) {
       throw new Error("managed clear requires the exact frozen corpus-v3 names");
     }
     if (shrinkScope === "delta-v3") validateDeltaV3Corpus(corpusInput, names);
+    if (PARTIAL_MODE) validatePartialCorpus(corpusInput, names);
     managedClearScope(names, PROJECT, "(default)");
     managedClearState = {
       names,

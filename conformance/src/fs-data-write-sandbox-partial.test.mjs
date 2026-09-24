@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,7 @@ import {
   reserveProductionAttempt,
   selectDeltaV3Recipes,
   selectPartialRecipes,
+  selectSupplementComparisons,
 } from "./fs-data-write-sandbox-run.mjs";
 
 const run = promisify(execFile);
@@ -231,4 +233,67 @@ test("delta-v3 and partial selections both accept the real saved fixture and spl
     new Set(delta.pendingRestIds.filter((id) => corpus.restPrograms.some((p) => p.id === id))),
     new Set(partialRest),
   );
+});
+
+test("supplement fixtures cover only pending recipes whose recipe digest is unchanged", () => {
+  const digest = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const a = { id: "writes/a", steps: [{ id: "s", method: "GET", path: "/v1/a" }] };
+  const b = { id: "writes/b", steps: [{ id: "s", method: "GET", path: "/v1/b" }] };
+  const grpc = { id: "writes/g", transport: "grpc", action: "x", maxFrames: 1 };
+  const corpus = {
+    schemaVersion: 1,
+    restPrograms: [a, b],
+    streamRecipes: [grpc],
+    restRequestCount: 2,
+  };
+  const supplement = (programs, streams = {}) => ({
+    name: "partial-0123456789abcdef.json",
+    fixture: {
+      schemaVersion: 1,
+      evidence: { corpusSha256: "e".repeat(64) },
+      programs: Object.fromEntries(programs.map((program) => [program.id, { steps: { s: {} } }])),
+      streams: Object.fromEntries(Object.keys(streams).map((id) => [id, {}])),
+      recipeDigests: {
+        programs: Object.fromEntries(programs.map((program) => [program.id, digest(program)])),
+        streams,
+      },
+    },
+  });
+  const selected = selectSupplementComparisons(
+    [supplement([b], { [grpc.id]: digest(grpc) })],
+    corpus,
+    [b.id],
+    [grpc.id],
+  );
+  assert.equal(selected.comparisons.length, 1);
+  assert.deepEqual(selected.comparisons[0].matchedRestIds, [b.id]);
+  assert.deepEqual(selected.comparisons[0].matchedStreamIds, [grpc.id]);
+  assert.deepEqual(Object.keys(selected.comparisons[0].fixture.programs), [b.id]);
+  assert.deepEqual(selected.comparisons[0].corpus.restPrograms, [b]);
+  assert.deepEqual(selected.pendingRestIds, []);
+  assert.deepEqual(selected.pendingStreamIds, []);
+
+  // A changed recipe stays pending; a recipe the base fixture already covers is not re-compared.
+  const changed = supplement([{ ...b, steps: [] }]);
+  changed.fixture.programs = { [b.id]: { steps: {} } };
+  const stale = selectSupplementComparisons([changed], corpus, [b.id], []);
+  assert.deepEqual(stale.pendingRestIds, [b.id]);
+  assert.deepEqual(stale.comparisons, []);
+  const covered = selectSupplementComparisons([supplement([a])], corpus, [b.id], []);
+  assert.deepEqual(covered.comparisons, []);
+  assert.deepEqual(covered.pendingRestIds, [b.id]);
+
+  assert.throws(
+    () =>
+      selectSupplementComparisons(
+        [supplement([b]), { ...supplement([b]), name: "delta-v3-x.json" }],
+        corpus,
+        [b.id],
+        [],
+      ),
+    /more than one supplement/,
+  );
+  const unbound = supplement([b]);
+  unbound.fixture.recipeDigests.programs = {};
+  assert.throws(() => selectSupplementComparisons([unbound], corpus, [b.id], []), /recipe digests/);
 });

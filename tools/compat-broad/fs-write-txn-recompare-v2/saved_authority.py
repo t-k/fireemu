@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -39,7 +40,33 @@ def require_hash(raw, expected, label):
 
 
 def git(root, *args):
-    return subprocess.check_output(["git", "-C", str(root), *args])
+    git_path = shutil.which("git")
+    require(git_path is not None, "Git executable is unavailable")
+    git_executable = Path(git_path).resolve(strict=True)
+    env = {
+        "PATH": str(git_executable.parent),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ATTR_NOSYSTEM": "1",
+    }
+    return subprocess.check_output(
+        [
+            str(git_executable),
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.attributesFile=/dev/null",
+            "-C",
+            str(root),
+            *args,
+        ],
+        env=env,
+    )
 
 
 def source_checkout(path, commit):
@@ -47,7 +74,18 @@ def source_checkout(path, commit):
         git(path, "rev-parse", "HEAD").decode().strip() == commit,
         "source commit differs",
     )
-    require(not git(path, "diff", commit, "--", "tools"), "validator source differs")
+    require(
+        not git(
+            path,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            commit,
+            "--",
+            "tools",
+        ),
+        "validator source differs",
+    )
     require(
         not git(path, "ls-files", "--others", "--exclude-standard", "tools"),
         "untracked validator source",

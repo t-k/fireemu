@@ -1,0 +1,339 @@
+{
+  "schemaVersion": 1,
+  "parent": "AUTH-CONFIG-SDK",
+  "parentStatus": "IMPLEMENTING",
+  "oracleTrack": "disposable-sandbox",
+  "scopeDecisions": [
+    {
+      "id": "K1",
+      "decision": "The declared SDKs compared end to end are the Admin SDK for Node (firebase-admin 14.3.0) and the Web SDK (firebase 12.18.0) as far as it runs in Node. Browser and mobile SDKs are out of scope for this parent; browser paths are taken up with FS-LISTEN-SDK and the other browser-bound parents.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K2",
+      "decision": "reCAPTCHA is observed as the recaptchaConfig read, write and validation, and the results of requests while no provider enforces (OFF and AUDIT). ENFORCE and the verification of reCAPTCHA tokens are out of scope: a genuine token cannot be produced outside a browser.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K3",
+      "decision": "The configuration of a new project matches production exactly under the strict profile. Under the emulator profile fireemu keeps the fields the official emulator reports (signIn.allowDuplicateEmails false, emailPrivacyConfig.enableImprovedEmailPrivacy false, blockingFunctions {}) and, like both of them, reports no passwordPolicyConfig and no client.permissions switches.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K4",
+      "decision": "Sign-up quota (moved here by AUTH-ACCOUNT A7, AUTH-CREDENTIAL C8 and AUTH-ACTION E7) is observed as the quota.signUpQuotaConfig read, write and validation. Enforcement (production's per-IP limit of about 100 sign-ups per hour and a configured quota) is a known production refusal fireemu does not implement: observing it would stop the other lanes that share the sandbox and its egress address. Any HTTP 429 or quota refusal in this corpus is INDETERMINATE.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K5",
+      "decision": "SDK programs run against fireemu under the strict profile with auth.idTokenSigning unsigned-emulator, the configuration the Admin SDK needs for verifyIdToken while FIREBASE_AUTH_EMULATOR_HOST is set. Where the SDK's own emulator mode behaves unlike production (it verifies no signature, and it checks revocation and disabled users even when checkRevoked is false), the difference belongs to the SDK and is recorded as a documented divergence, not a fireemu mismatch. Because strict refuses unsigned custom tokens (AUTH-CREDENTIAL follow-up decision), the createCustomToken-to-sign-in program runs against the emulator profile.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K6",
+      "decision": "Production createCustomToken needs IAM signBlob. The owner user may hold a custom role with iam.serviceAccounts.signBlob only on firebase-adminsdk-fbsvc@fireemu-oracle-idp, bound with a time condition for the recording only and removed afterwards; every change goes into the sandbox change log and the owner ledger.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K7",
+      "decision": "If production refuses an AUDIT recaptchaConfig because the reCAPTCHA Enterprise API is disabled, the API may be enabled on the Identity Platform sandbox. ENFORCE is never set; AUDIT is restored to its prior state at the end of the program.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K8",
+      "decision": "notification (email and SMS templates, callbackUri, defaultLocale) is a configuration field: under strict its initial value is production's, and a PATCH is stored and read back. Nothing is mailed or rendered with it (AUTH-ACTION E1).",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K9",
+      "decision": "Project MFA configuration (mfa, and the Admin SDK multiFactorConfig beyond reading it) belongs to AUTH-MFA and is left out of this parent's comparison projection, because that lane changes it on the shared sandbox.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "movedTo": "AUTH-MFA"
+    },
+    {
+      "id": "K10",
+      "decision": "Multi-tenancy (multiTenant), tenant configuration and the tenant inheritance of project settings (moved here by AUTH-ACCOUNT A3), and blocking functions belong to AUTH-TENANT-BLOCKING and are left out of this parent's comparison projection.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25",
+      "movedTo": "AUTH-TENANT-BLOCKING"
+    },
+    {
+      "id": "K11",
+      "decision": "The effects of duplicate emails, email privacy, the password policy and client permissions on the account routes AUTH-ACCOUNT recorded are closed there (AUTH-ACCOUNT A3) and are not recorded again. This parent records the configuration itself, the policy projections to clients and SDKs, and the configuration-dependent results AUTH-ACCOUNT did not observe.",
+      "decidedBy": "lane (within the handoff's scope split)",
+      "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K12",
+      "decision": "Key material in the configuration (signIn.hashConfig.signerKey and saltSeparator, client.apiKey) is recorded as placeholders, and the harness never writes a read-only path whose change could alter it (signIn.hashConfig, client.apiKey). Read-only paths are exercised through name, subtype and defaultHostingSite only.",
+      "decidedBy": "lane (sandbox safety)",
+      "decidedOn": "2026-09-25"
+    }
+  ],
+  "conditions": [
+    {
+      "conditionId": "AUTH-CONFIG-SDK/config-read-shape",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/config/read"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The Admin GET config at the sandbox baseline, member for member (which unset members are absent, false switches omitted, the name with the project number, subtype, read-only members), and the client configuration reads at the same state: v1/projects, v2/passwordPolicy with no policy set, v2/recaptchaConfig with none set and without clientType, v1/recaptchaParams by shape."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/config-update-mask",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/config/mask"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "The PATCH answer and the read-back for a leaf mask, a parent mask, a masked path absent from the body (reset), a body member outside the mask (ignored), an omitted mask, an empty mask, an unknown path, a duplicate path, and a read-only path (name, subtype, defaultHostingSite)."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/config-validation",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/config/invalid"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Refusals (status, code and message) of invalid values outside the password policy: test phone numbers and codes, authorized domains, mobileLinksConfig, smsRegionConfig, wrong JSON types, unknown members, and a body that is not an object; and that a refused PATCH changes nothing."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/password-policy-config",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/password-policy/config"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "passwordPolicyConfig writes: accepted shapes and their read-back (schemaVersion, lastUpdateTime, forceUpgradeOnSignin omitted when false, the cleared state), and refusals of lengths out of range, a maximum below the minimum, fractional lengths, zero or two versions, an unspecified state, and ENFORCE without a version."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/password-policy-projection",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/password-policy/projection"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Client v2/passwordPolicy under no policy, OFF, and ENFORCE with a minimum only, a maximum only and every character class, with forceUpgradeOnSignin on and off."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/password-policy-existing-accounts",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/password-policy/existing"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "An account whose password does not meet a policy set after it was created: sign-in under ENFORCE with forceUpgradeOnSignin (refused or not) and without it (userNotifications), under OFF, a compliant password change, a reset through an Admin-generated code, and the Admin update route under the default policy."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/provider-switches",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/providers"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Results while email/password, anonymous or phone sign-in is disabled: client sign-up and sign-in, password reset, phone code requests and sign-in on test numbers, and the Admin routes, which the switches do not restrict."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/duplicate-email-switch",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/duplicate-email"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Switching signIn.allowDuplicateEmails off while accounts share an address, and what lookups and sign-in answer while they do."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/email-privacy-projection",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/email-privacy"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "createAuthUri (the fetchSignInMethodsForEmail source) for known, unknown and provider-mixed addresses with improved email privacy on and off."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/client-permissions-paths",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/client-permissions"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "disabledUserSignup on the account-creating routes AUTH-ACCOUNT did not observe (phone sign-in of a new number, email-link sign-in of a new address), and the same routes for an account that already exists. The client sign-up, anonymous sign-up and delete routes are closed in AUTH-ACCOUNT (K11)."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/recaptcha-config",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/recaptcha"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "recaptchaConfig writes and refusals (enforcement states, managed rules and their scores, the SMS flags), the client v2/recaptchaConfig projection per client type under OFF and AUDIT, and sign-up, sign-in and phone code requests without a reCAPTCHA token under AUDIT (K2)."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/quota-config",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/quota"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "quota.signUpQuotaConfig writes, read-back and refusals (quota, startTime, quotaDuration). Enforcement is K4."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/mobile-link-settings",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/mobile-links"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Moved from AUTH-ACTION E5: action links generated with iOSBundleId, androidPackageName, androidInstallApp, androidMinimumVersion (and the Web SDK's androidMinimumVersionCode), dynamicLinkDomain and linkDomain, their refusals, and mobileLinksConfig.domain."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/other-config-fields",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/other-fields"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Read and write of notification (K8), autodeleteAnonymousUsers, monitoring.requestLogging, smsRegionConfig and its effect on a test number, and authorizedDomains with the client v1/projects projection."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/admin-sdk-project-config",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/sdk/admin-config"
+      ],
+      "configProjections": [
+        "strict-unsigned-emulator"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Admin SDK projectConfigManager getProjectConfig and updateProjectConfig for its six members (passwordPolicyConfig, emailPrivacyConfig, recaptchaConfig, smsRegionConfig, mobileLinksConfig, multiFactorConfig read only), the SDK-side refusals and the server refusals it surfaces, and an empty update."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/admin-sdk-tokens",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/sdk/admin-tokens"
+      ],
+      "configProjections": [
+        "strict-unsigned-emulator"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Moved from AUTH-CREDENTIAL C2 and AUTH-ACTION E1: verifyIdToken with and without checkRevoked for a live, revoked, disabled and deleted account, createSessionCookie and verifySessionCookie, revokeRefreshTokens, getUser and the generate*Link calls with ActionCodeSettings. Differences caused by the SDK's emulator mode are K5 divergences."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/admin-sdk-custom-token",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/sdk/custom-token"
+      ],
+      "configProjections": [
+        "emulator"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "createCustomToken with and without developer claims, signInWithCustomToken in the Web SDK, and the decoded ID token through verifyIdToken (K5: the emulator profile; K6: production signs through signBlob)."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/web-sdk-password-policy",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/sdk/web-password-policy"
+      ],
+      "configProjections": [
+        "strict-unsigned-emulator"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Web SDK validatePassword under no policy, OFF and ENFORCE, the error codes of createUserWithEmailAndPassword and signInWithEmailAndPassword under ENFORCE, and the policy refresh after a server refusal."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/web-sdk-flows",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk/sdk/web-flows"
+      ],
+      "configProjections": [
+        "strict-unsigned-emulator"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Moved from AUTH-ACCOUNT A5 and AUTH-CREDENTIAL C2: Web SDK sign-up, sign-in, anonymous sign-in, forced token refresh and getIdTokenResult claims, updatePassword, reload, delete, fetchSignInMethodsForEmail, and the SDK error codes for disabled providers, client permissions and email privacy."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/final-artifact-regression",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk",
+        "auth-account",
+        "auth-credential",
+        "auth-action"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "Every AUTH-CONFIG-SDK row and the AUTH-ACCOUNT, AUTH-CREDENTIAL and AUTH-ACTION regressions on one artifact, with the workspace tests and clippy."
+    },
+    {
+      "conditionId": "AUTH-CONFIG-SDK/closure-review",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": [
+        "auth-config-sdk"
+      ],
+      "configProjections": [
+        "strict"
+      ],
+      "status": "PENDING_CORPUS",
+      "note": "An independent closure review and a safety review of the final artifact (no cargo-mutants in the reviews; the lane's own mutation evidence is checked)."
+    }
+  ]
+}

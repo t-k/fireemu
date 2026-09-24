@@ -1874,34 +1874,12 @@
       }
     },
     "fs-config/default-database/lifecycle": {
-      "corpusDigest": "eb2979a18449b2f2ac79e4a1a2c3d7722ba972f3f17f885168879c07c57a86e6",
-      "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T09:42:27.042Z",
-      "gitSha": "c2b8462904d0b0439bc0f71d20febb401406e8c7",
+      "corpusDigest": "d59f3df8629566bde00c98cb52e1960a0ad7d8c72adcf34829f94e245a4e5c77",
+      "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
+      "recordedAt": "2026-09-24T12:58:46.319Z",
+      "gitSha": "d9f063ce158e66bc440423c7178802c3619c07a3",
       "steps": {
-        "get-before": {
-          "status": 200,
-          "body": {
-            "appEngineIntegrationMode": "DISABLED",
-            "concurrencyMode": "PESSIMISTIC",
-            "createTime": "2026-09-23T22:33:49.072721Z",
-            "databaseEdition": "STANDARD",
-            "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-            "earliestVersionTime": "<t1>",
-            "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-            "etag": "<etag>",
-            "freeTier": true,
-            "locationId": "us-central1",
-            "name": "projects/demo-fs-config/databases/(default)",
-            "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-            "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-            "type": "FIRESTORE_NATIVE",
-            "uid": "<uid1>",
-            "updateTime": "2026-09-23T22:33:49.072721Z",
-            "versionRetentionPeriod": "3600s"
-          }
-        },
-        "delete": {
+        "prepare-delete": {
           "status": 200,
           "body": {
             "metadata": {
@@ -1912,7 +1890,7 @@
               "@type": "type.googleapis.com/google.firestore.admin.v1.Database",
               "appEngineIntegrationMode": "DISABLED",
               "concurrencyMode": "PESSIMISTIC",
-              "createTime": "2026-09-23T22:33:49.072721Z",
+              "createTime": "2026-09-24T09:53:06.426561Z",
               "databaseEdition": "STANDARD",
               "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
               "deleteTime": "<t1>",
@@ -1927,12 +1905,12 @@
               "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
               "type": "FIRESTORE_NATIVE",
               "uid": "<uid1>",
-              "updateTime": "2026-09-23T22:33:49.072721Z",
+              "updateTime": "2026-09-24T09:53:06.426561Z",
               "versionRetentionPeriod": "3600s"
             }
           }
         },
-        "absent": {
+        "prepare-absent": {
           "trace": [
             {
               "status": 404,
@@ -1956,252 +1934,7 @@
             }
           }
         },
-        "document-without-default": {
-          "status": 404,
-          "body": {
-            "error": {
-              "code": 404,
-              "message": "The database (default) does not exist for project demo-fs-config Please visit https://console.cloud.google.com/datastore/setup?project=demo-fs-config to add a Cloud Datastore or Cloud Firestore database. ",
-              "status": "NOT_FOUND"
-            }
-          }
-        },
-        "query-without-default": {
-          "status": 404,
-          "body": [
-            {
-              "error": {
-                "code": 404,
-                "message": "The database (default) does not exist for project demo-fs-config Please visit https://console.cloud.google.com/datastore/setup?project=demo-fs-config to add a Cloud Datastore or Cloud Firestore database. ",
-                "status": "NOT_FOUND"
-              }
-            }
-          ]
-        },
-        "list-without-default": {
-          "status": 200,
-          "body": {}
-        },
-        "indexes-without-default": {
-          "status": 200,
-          "body": {
-            "indexes": [
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "__name__",
-                    "order": "DESCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/ord/indexes/<index4>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "category",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "star_rating",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "ASCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/mrg/indexes/<index7>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "city",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "star_rating",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "ASCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/mrg/indexes/<index5>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "d",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "n",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "ASCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/agg/indexes/<index2>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "g",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "n",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "ASCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/cur/indexes/<index6>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "k",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "d",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "ASCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/agg/indexes/<index1>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "k",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "n",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "ASCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/agg/indexes/<index10>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "n",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "s",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "ASCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/flt/indexes/<index9>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "s",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "n",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "ASCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/flt/indexes/<index11>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "s",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "n",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "DESCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/flt/indexes/<index8>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              },
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "s",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "n",
-                    "order": "DESCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "DESCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/flt/indexes/<index3>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
-              }
-            ]
-          }
-        },
-        "recreate": {
+        "prepare-create": {
           "trace": [
             {
               "status": 400,
@@ -2275,7 +2008,7 @@
             }
           }
         },
-        "get-after": {
+        "get-before": {
           "status": 200,
           "body": {
             "appEngineIntegrationMode": "DISABLED",
@@ -2297,7 +2030,167 @@
             "versionRetentionPeriod": "3600s"
           }
         },
-        "document-after": {
+        "indexes-before": {
+          "status": 200,
+          "body": {}
+        },
+        "seed": {
+          "status": 200,
+          "body": {
+            "createTime": "<t1>",
+            "fields": {
+              "a": {
+                "integerValue": "1"
+              },
+              "b": {
+                "integerValue": "2"
+              }
+            },
+            "name": "projects/demo-fs-config/databases/(default)/documents/items/a",
+            "updateTime": "<t1>"
+          }
+        },
+        "create-index": {
+          "status": 200,
+          "body": {
+            "metadata": {
+              "@type": "type.googleapis.com/google.firestore.admin.v1.IndexOperationMetadata",
+              "index": "projects/demo-fs-config/databases/(default)/collectionGroups/items/indexes/<index1>",
+              "startTime": "<t1>",
+              "state": "INITIALIZING"
+            },
+            "name": "projects/demo-fs-config/databases/(default)/operations/<op3>"
+          }
+        },
+        "index-ready": {
+          "trace": [
+            {
+              "status": 200,
+              "body": {
+                "density": "SPARSE_ALL",
+                "fields": [
+                  {
+                    "fieldPath": "a",
+                    "order": "ASCENDING"
+                  },
+                  {
+                    "fieldPath": "b",
+                    "order": "DESCENDING"
+                  },
+                  {
+                    "fieldPath": "__name__",
+                    "order": "DESCENDING"
+                  }
+                ],
+                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/items/indexes/<index1>",
+                "queryScope": "COLLECTION",
+                "state": "CREATING"
+              }
+            },
+            {
+              "status": 200,
+              "body": {
+                "density": "SPARSE_ALL",
+                "fields": [
+                  {
+                    "fieldPath": "a",
+                    "order": "ASCENDING"
+                  },
+                  {
+                    "fieldPath": "b",
+                    "order": "DESCENDING"
+                  },
+                  {
+                    "fieldPath": "__name__",
+                    "order": "DESCENDING"
+                  }
+                ],
+                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/items/indexes/<index1>",
+                "queryScope": "COLLECTION",
+                "state": "READY"
+              }
+            }
+          ],
+          "settled": {
+            "status": 200,
+            "body": {
+              "density": "SPARSE_ALL",
+              "fields": [
+                {
+                  "fieldPath": "a",
+                  "order": "ASCENDING"
+                },
+                {
+                  "fieldPath": "b",
+                  "order": "DESCENDING"
+                },
+                {
+                  "fieldPath": "__name__",
+                  "order": "DESCENDING"
+                }
+              ],
+              "name": "projects/demo-fs-config/databases/(default)/collectionGroups/items/indexes/<index1>",
+              "queryScope": "COLLECTION",
+              "state": "READY"
+            }
+          }
+        },
+        "delete": {
+          "status": 200,
+          "body": {
+            "metadata": {
+              "@type": "type.googleapis.com/google.firestore.admin.v1.DeleteDatabaseMetadata"
+            },
+            "name": "projects/demo-fs-config/databases/(default)/operations/<op4>",
+            "response": {
+              "@type": "type.googleapis.com/google.firestore.admin.v1.Database",
+              "appEngineIntegrationMode": "DISABLED",
+              "concurrencyMode": "PESSIMISTIC",
+              "createTime": "<t1>",
+              "databaseEdition": "STANDARD",
+              "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+              "deleteTime": "<t2>",
+              "earliestVersionTime": "<t2>",
+              "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+              "etag": "<etag>",
+              "freeTier": false,
+              "locationId": "us-central1",
+              "name": "projects/demo-fs-config/databases/<uid2>",
+              "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+              "previousId": "(default)",
+              "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+              "type": "FIRESTORE_NATIVE",
+              "uid": "<uid2>",
+              "updateTime": "<t1>",
+              "versionRetentionPeriod": "3600s"
+            }
+          }
+        },
+        "absent": {
+          "trace": [
+            {
+              "status": 404,
+              "body": {
+                "error": {
+                  "code": 404,
+                  "message": "Requested database was not found.",
+                  "status": "NOT_FOUND"
+                }
+              }
+            }
+          ],
+          "settled": {
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Requested database was not found.",
+                "status": "NOT_FOUND"
+              }
+            }
+          }
+        },
+        "document-without-default": {
           "status": 404,
           "body": {
             "error": {
@@ -2306,10 +2199,134 @@
               "status": "NOT_FOUND"
             }
           }
-        }
-      },
-      "second": {
-        "get-before": {
+        },
+        "query-without-default": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "a": {
+                    "integerValue": "1"
+                  },
+                  "b": {
+                    "integerValue": "2"
+                  }
+                },
+                "name": "projects/demo-fs-config/databases/(default)/documents/items/a",
+                "updateTime": "<t1>"
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "list-without-default": {
+          "status": 200,
+          "body": {}
+        },
+        "indexes-without-default": {
+          "status": 200,
+          "body": {
+            "indexes": [
+              {
+                "density": "SPARSE_ALL",
+                "fields": [
+                  {
+                    "fieldPath": "a",
+                    "order": "ASCENDING"
+                  },
+                  {
+                    "fieldPath": "b",
+                    "order": "DESCENDING"
+                  },
+                  {
+                    "fieldPath": "__name__",
+                    "order": "DESCENDING"
+                  }
+                ],
+                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/items/indexes/<index1>",
+                "queryScope": "COLLECTION",
+                "state": "READY"
+              }
+            ]
+          }
+        },
+        "recreate": {
+          "trace": [
+            {
+              "status": 400,
+              "body": {
+                "error": {
+                  "code": 400,
+                  "message": "Database ID '(default)' is not available in project 'demo-fs-config'. Please retry in <n> seconds.",
+                  "status": "FAILED_PRECONDITION"
+                }
+              }
+            },
+            {
+              "status": 200,
+              "body": {
+                "done": true,
+                "metadata": {
+                  "@type": "type.googleapis.com/google.firestore.admin.v1.CreateDatabaseMetadata"
+                },
+                "name": "projects/demo-fs-config/databases/(default)/operations/<op5>",
+                "response": {
+                  "@type": "type.googleapis.com/google.firestore.admin.v1.Database",
+                  "appEngineIntegrationMode": "DISABLED",
+                  "concurrencyMode": "PESSIMISTIC",
+                  "createTime": "<t1>",
+                  "databaseEdition": "STANDARD",
+                  "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+                  "earliestVersionTime": "<t1>",
+                  "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+                  "etag": "<etag>",
+                  "freeTier": true,
+                  "locationId": "us-central1",
+                  "name": "projects/demo-fs-config/databases/(default)",
+                  "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+                  "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+                  "type": "FIRESTORE_NATIVE",
+                  "uid": "<uid3>",
+                  "updateTime": "<t1>",
+                  "versionRetentionPeriod": "3600s"
+                }
+              }
+            }
+          ],
+          "settled": {
+            "status": 200,
+            "body": {
+              "done": true,
+              "metadata": {
+                "@type": "type.googleapis.com/google.firestore.admin.v1.CreateDatabaseMetadata"
+              },
+              "name": "projects/demo-fs-config/databases/(default)/operations/<op5>",
+              "response": {
+                "@type": "type.googleapis.com/google.firestore.admin.v1.Database",
+                "appEngineIntegrationMode": "DISABLED",
+                "concurrencyMode": "PESSIMISTIC",
+                "createTime": "<t1>",
+                "databaseEdition": "STANDARD",
+                "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
+                "earliestVersionTime": "<t1>",
+                "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
+                "etag": "<etag>",
+                "freeTier": true,
+                "locationId": "us-central1",
+                "name": "projects/demo-fs-config/databases/(default)",
+                "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
+                "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
+                "type": "FIRESTORE_NATIVE",
+                "uid": "<uid3>",
+                "updateTime": "<t1>",
+                "versionRetentionPeriod": "3600s"
+              }
+            }
+          }
+        },
+        "get-after": {
           "status": 200,
           "body": {
             "appEngineIntegrationMode": "DISABLED",
@@ -2326,12 +2343,28 @@
             "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
             "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
             "type": "FIRESTORE_NATIVE",
-            "uid": "<uid1>",
+            "uid": "<uid3>",
             "updateTime": "<t1>",
             "versionRetentionPeriod": "3600s"
           }
         },
-        "delete": {
+        "indexes-after": {
+          "status": 200,
+          "body": {}
+        },
+        "document-after": {
+          "status": 404,
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "Document \"projects/demo-fs-config/databases/(default)/documents/items/a\" not found.",
+              "status": "NOT_FOUND"
+            }
+          }
+        }
+      },
+      "second": {
+        "prepare-delete": {
           "status": 200,
           "body": {
             "metadata": {
@@ -2361,28 +2394,6 @@
               "versionRetentionPeriod": "3600s"
             }
           }
-        },
-        "document-without-default": {
-          "status": 404,
-          "body": {
-            "error": {
-              "code": 404,
-              "message": "Document \"projects/demo-fs-config/databases/(default)/documents/c/d\" not found.",
-              "status": "NOT_FOUND"
-            }
-          }
-        },
-        "query-without-default": {
-          "status": 200,
-          "body": [
-            {
-              "readTime": "<t1>"
-            }
-          ]
-        },
-        "indexes-without-default": {
-          "status": 200,
-          "body": {}
         }
       }
     },

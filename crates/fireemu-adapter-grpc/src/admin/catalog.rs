@@ -182,7 +182,7 @@ pub struct AdminCatalog {
     fields: super::fields::FieldRegistry,
     managed_storage: std::sync::OnceLock<super::managed::SharedManagedStorage>,
     /// When the backend's configured databases came into being.
-    created_at: LogicalInstant,
+    created_at: Mutex<LogicalInstant>,
 }
 
 impl std::fmt::Debug for AdminCatalog {
@@ -231,8 +231,23 @@ impl AdminCatalog {
             indexes: super::indexes::IndexRegistry::default(),
             fields: super::fields::FieldRegistry::default(),
             managed_storage: std::sync::OnceLock::new(),
-            created_at,
+            created_at: Mutex::new(created_at),
         }
+    }
+
+    /// Sets when the configured databases came into being (`firestore.databaseCreateTime`).
+    pub fn set_created_at(&self, created_at: LogicalInstant) {
+        *self
+            .created_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = created_at;
+    }
+
+    fn created_at(&self) -> LogicalInstant {
+        *self
+            .created_at
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, CatalogState> {
@@ -251,8 +266,8 @@ impl AdminCatalog {
             project: project.to_owned(),
             database: database.to_owned(),
             uid: next_uid(&mut state.uid_seed),
-            create_time: self.created_at,
-            update_time: self.created_at,
+            create_time: self.created_at(),
+            update_time: self.created_at(),
             location_id: "us-central1".to_owned(),
             database_type: DatabaseType::FirestoreNative,
             edition: DatabaseEdition::Standard,

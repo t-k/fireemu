@@ -1598,11 +1598,9 @@ impl LocalBackend {
     /// When the databases came into being, instead of the clock at construction: the
     /// `createTime` they report and the instant before which a `read_time` is refused.
     #[must_use]
-    pub const fn with_created_at(
-        mut self,
-        created_at: fireemu_core_types::time::LogicalInstant,
-    ) -> Self {
+    pub fn with_created_at(mut self, created_at: fireemu_core_types::time::LogicalInstant) -> Self {
         self.created_at = created_at;
+        self.admin.set_created_at(created_at);
         self
     }
 

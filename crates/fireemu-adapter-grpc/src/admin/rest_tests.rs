@@ -916,3 +916,29 @@ fn deleting_a_database_resets_no_request_in_flight_elsewhere() {
     assert_eq!(status, 200, "{deleted}");
     assert!(barrier.admit_since(seen).is_ok());
 }
+
+#[test]
+fn the_default_database_reports_the_configured_create_time() {
+    // firestore.databaseCreateTime is when the daemon's databases came into being; the
+    // Admin resource of (default) reports it, like production reports when it was created.
+    let (state, _clock) = state();
+    let created = LogicalInstant::from_nanos(1_780_000_000_000_000_000);
+    let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::from_nanos(
+        1_790_000_000_000_000_000,
+    ))));
+    let state = RestState {
+        local: Arc::new(
+            LocalBackend::new((*state.gateway).clone(), clock, 7).with_created_at(created),
+        ),
+        ..state
+    };
+    let (status, database) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/(default)",
+        Value::Null,
+    );
+    assert_eq!(status, 200, "{database}");
+    assert_eq!(database["createTime"], "2026-05-28T20:26:40Z");
+    assert_eq!(database["updateTime"], "2026-05-28T20:26:40Z");
+}

@@ -606,3 +606,26 @@ test("a rate-limited MFA answer is indeterminate, never a behavior", async () =>
     assert.equal(isTransient({ status: 400, body: { error: { message } } }), true, message);
   assert.equal(isTransient({ status: 400, body: { error: { message: "INVALID_CODE" } } }), false);
 });
+
+test("a phone control start matches any answer production recorded for a control start", async () => {
+  const { classify, timingAlternatives } = await import("./auth-mfa/run.mjs");
+  const refusal = (message) => ({ status: 400, body: { error: { code: 400, message, status: "INVALID_ARGUMENT" } } });
+  const exists = refusal("SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account.");
+  const expired = refusal("TOKEN_EXPIRED");
+  const saved = {
+    steps: { "control-start-s450": expired, "control-start-s600": exists, "aged-session-s600": exists },
+    second: { "control-start-s600": expired },
+  };
+  const program = "auth-mfa/lifetime";
+  const known = timingAlternatives(program, "control-start-s450", saved);
+  assert.deepEqual(known, [expired, exists]);
+  const row = (fireemu) =>
+    classify({ production: expired, fireemu, timing: timingAlternatives(program, "control-start-s450", saved) });
+  assert.equal(row(expired), "MATCH");
+  assert.equal(row(exists), "MATCH_TIMING_DEPENDENT");
+  assert.equal(row(refusal("INVALID_ID_TOKEN")), "MISMATCH");
+  // Only the phone control starts of the lifetime program; nothing else borrows a sibling's answer.
+  assert.deepEqual(timingAlternatives(program, "aged-session-s600", saved), []);
+  assert.deepEqual(timingAlternatives("auth-mfa/sms", "control-start-s450", saved), []);
+  assert.deepEqual(timingAlternatives(program, "control-start-t450", saved), []);
+});

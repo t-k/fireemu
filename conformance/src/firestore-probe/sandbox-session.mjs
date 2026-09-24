@@ -1156,6 +1156,8 @@ async function pollDeltaV3BulkDelete() {
   const api = `${SCHEME}://${HOST}/v1`;
   const pollLimit = Math.min(100, 400 - managedClearState.shrinkRequestCounter.current());
   for (let attempt = 0; attempt < pollLimit; attempt += 1) {
+    // A production bulk delete runs for minutes; poll at the managed interval (60 s).
+    await new Promise((wake) => setTimeout(wake, MANAGED_POLL_MS));
     const response = await managedShrinkRequest(
       "delta-v3 bulk-delete poll",
       `${api}/${managedClearState.bulkDeleteOperation}`,
@@ -2402,11 +2404,15 @@ async function main() {
     });
   }
   const { delta: deltaScope, partial: partialScope } = productionScopeFromEnvironment(process.env);
-  assertV3ProductionCleanupAllowed({
-    host: HOST,
-    exactDeltaV3: deltaScope,
-    exactScope: partialScope,
-  });
+  // Recovery modes check their own exact journal and names before any request; the
+  // generic gate is for recordings.
+  if (RECOVERY_MODE === undefined) {
+    assertV3ProductionCleanupAllowed({
+      host: HOST,
+      exactDeltaV3: deltaScope,
+      exactScope: partialScope,
+    });
+  }
   if (RECOVERY_MODE !== undefined) {
     if (!["recover-legacy", "recover-v3", "recover-delta-v3"].includes(RECOVERY_MODE)) {
       throw new Error("unsupported Firestore probe recovery mode");
@@ -2585,6 +2591,9 @@ async function main() {
             }),
       };
     }
+    // Written before the final cleanup, so a slow or failed cleanup keeps the recording
+    // for recovery and review; the runner uses it only when the child exits cleanly.
+    await writeFile(OUT, `${JSON.stringify(results, null, 2)}\n`);
   } finally {
     try {
       if (!managedClearBlocked) {
@@ -2596,7 +2605,6 @@ async function main() {
       }
     }
   }
-  await writeFile(OUT, `${JSON.stringify(results, null, 2)}\n`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await main();

@@ -165,6 +165,9 @@ async function observeCollector({
   deltaV3 = false,
   deltaLockHeld = true,
   partial = false,
+  operationPendingPolls = 0,
+  pendingFromOperation = 1,
+  managedPollMs = "1",
   corpusDigest = "c".repeat(64),
   hostOverride,
 } = {}) {
@@ -191,6 +194,8 @@ async function observeCollector({
   else if (initialJournalStatus)
     await writeFile(journal, JSON.stringify({ status: initialJournalStatus }));
   const requests = [];
+  let operationPolls = 0;
+  let operationsStarted = 0;
   const journalAtDeleteRequests = [];
   const journalAtSeedRequests = [];
   const probeSeededNames = new Set();
@@ -235,7 +240,7 @@ async function observeCollector({
       request.on("data", (chunk) => (value += chunk));
       request.on("end", () => resolve(value));
     });
-    requests.push({ method: request.method, pathname, body });
+    requests.push({ method: request.method, pathname, body, at: Date.now() });
     if (pathname.endsWith("/documents:commit") || pathname.endsWith("/documents:batchWrite")) {
       const writes = JSON.parse(body).writes;
       if (
@@ -264,11 +269,16 @@ async function observeCollector({
       for (const record of records.values()) {
         if (requested.includes(record.collection)) record.deleted = true;
       }
+      operationsStarted += 1;
+      operationPolls = 0;
       send(200, { name: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test" });
     } else if (pathname.endsWith("/operations/delta-test")) {
+      operationPolls += 1;
       send(200, {
         name: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test",
-        done: true,
+        ...(operationsStarted < pendingFromOperation || operationPolls > operationPendingPolls
+          ? { done: true }
+          : {}),
       });
     } else if (pathname.endsWith("/documents:listCollectionIds")) {
       send(200, {
@@ -623,7 +633,7 @@ async function observeCollector({
         ...(partial
           ? { FIRESTORE_PROBE_PARTIAL: "1", FIRESTORE_PROBE_PARTIAL_LOCK_HELD: "1" }
           : {}),
-        FIRESTORE_PROBE_MANAGED_POLL_MS: "1",
+        FIRESTORE_PROBE_MANAGED_POLL_MS: managedPollMs,
         ...(recoveryMode || recoveryOnly
           ? { FIRESTORE_PROBE_RECOVERY_MODE: recoveryMode ?? "recover-legacy" }
           : {}),
@@ -1343,6 +1353,80 @@ test("delta-v3 loopback run uses only six source-bound names and a separate resu
   assert.equal(secondJournal.status, "complete");
   await rm(result.directory, { recursive: true, force: true });
   await rm(second.directory, { recursive: true, force: true });
+});
+
+test("delta-v3 cleanup waits between bulk-delete polls and keeps the recording if the operation outlives them", async () => {
+  const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const digest = createHash("sha256").update(JSON.stringify(corpus)).digest("hex");
+  const ids = new Set(
+    ["rest", "commit", "batch-write"].flatMap((route) =>
+      [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+    ),
+  );
+  const restPrograms = corpus.restPrograms.filter((program) => ids.has(program.id));
+  const packet = {
+    schemaVersion: 1,
+    sourceCorpusSha256: digest,
+    restPrograms,
+    streamRecipes: corpus.streamRecipes.filter(
+      (recipe) => recipe.id === "writes/write-stream-terminal/response-before-half-close",
+    ),
+    restRequestCount: 30,
+  };
+  const deltaNames = restPrograms.map((program) => program.steps[0].body.writes[0].update.name);
+  const counts = restPrograms.map((program) => Number(program.id.split("/").at(-1)));
+  const polls = (result) =>
+    result.requests.filter((request) => request.pathname.endsWith("/operations/delta-test"));
+
+  const paced = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: counts,
+    deltaV3: true,
+    corpusDigest: digest,
+    inputCorpus: packet,
+    operationPendingPolls: 3,
+    managedPollMs: "40",
+  });
+  try {
+    assert.equal(paced.failure, undefined);
+    // The initial clear and the final clear each start one bulk delete; each answers
+    // three pending polls before it is done.
+    const times = polls(paced).map((request) => request.at);
+    assert.equal(times.length, 8);
+    for (let index = 1; index < times.length; index += 1) {
+      assert.ok(times[index] - times[index - 1] >= 30, `poll ${index} was not paced`);
+    }
+  } finally {
+    await rm(paced.directory, { recursive: true, force: true });
+  }
+
+  const stuck = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: counts,
+    deltaV3: true,
+    corpusDigest: digest,
+    inputCorpus: packet,
+    operationPendingPolls: 100_000,
+    pendingFromOperation: 2,
+  });
+  try {
+    assert.match(String(stuck.failure?.stderr), /remains nonterminal/);
+    // The recording made before the cleanup is kept for recovery and review.
+    const recorded = JSON.parse(await readFile(stuck.output, "utf8"));
+    assert.deepEqual(Object.keys(recorded).toSorted(), [...ids].toSorted());
+    // The journal still names the unfinished operation, so recover-delta-v3 resumes it.
+    const journal = JSON.parse(await readFile(stuck.deltaJournal, "utf8"));
+    assert.notEqual(journal.status, "complete");
+    assert.equal(
+      journal.bulkDeleteOperation,
+      "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test",
+    );
+  } finally {
+    await rm(stuck.directory, { recursive: true, force: true });
+  }
 });
 
 test("delta-v3 recovery resolves a durable candidate DELETE intent by fresh typed reads without replay", async () => {

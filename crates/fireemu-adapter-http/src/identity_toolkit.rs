@@ -3466,7 +3466,14 @@ fn dispatch(
             handler == Handler::AdminUpdate,
         ),
         Handler::Delete => delete_account(store, body, at, false),
-        Handler::SendOobCode => send_oob_code(store, body, at, headers, false),
+        Handler::SendOobCode => send_oob_code(
+            store,
+            body,
+            at,
+            headers,
+            false,
+            !options.stateless_refresh_tokens,
+        ),
         Handler::ResetPassword => reset_password(store, body, at, options.stateless_refresh_tokens),
         Handler::SignInWithEmailLink => sign_in_with_email_link(store, body, at),
         Handler::SendVerificationCode => send_verification_code(store, body, at),
@@ -3524,7 +3531,14 @@ fn dispatch(
             }
             let mut with_link = body.clone();
             with_link["returnOobLink"] = json!(true);
-            send_oob_code(store, &with_link, at, headers, true)
+            send_oob_code(
+                store,
+                &with_link,
+                at,
+                headers,
+                true,
+                !options.stateless_refresh_tokens,
+            )
         }
         // Stateful refresh sessions mark the strict profile.
         Handler::AdminCreateSessionCookie => {
@@ -3947,6 +3961,7 @@ const SIGN_IN_PROVIDER_FIELDS: &[&str] = &[
     "signIn.phoneNumber",
     "signIn.phoneNumber.enabled",
     "signIn.phoneNumber.testPhoneNumbers",
+    "authorizedDomains",
 ];
 
 /// The sign-in configuration a masked Admin config PATCH produces from `current`, or `None`
@@ -3983,6 +3998,24 @@ fn sign_in_config_from_update(
             Some(_) => Err(invalid()),
         }
     };
+    // A masked replacement: an absent or null list clears it, anything but non-empty host
+    // strings is refused.
+    let domains = || -> Result<Vec<String>, JsonResponse> {
+        match body.get("authorizedDomains") {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(entries)) => entries
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_str()
+                        .filter(|domain| !domain.is_empty())
+                        .map(str::to_owned)
+                        .ok_or_else(invalid)
+                })
+                .collect(),
+            Some(_) => Err(invalid()),
+        }
+    };
     let mut next = current.clone();
     let mut changed = false;
     for field in fields {
@@ -4009,6 +4042,7 @@ fn sign_in_config_from_update(
             "signIn.anonymous.enabled" => next.anonymous_enabled = switch("anonymous", "enabled")?,
             "signIn.phoneNumber.enabled" => next.phone_enabled = switch("phoneNumber", "enabled")?,
             "signIn.phoneNumber.testPhoneNumbers" => next.test_phone_numbers = numbers()?,
+            "authorizedDomains" => next.authorized_domains = Some(domains()?),
             _ => continue,
         }
         changed = true;
@@ -4542,6 +4576,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 | "passwordPolicyConfig"
                 | "quota"
                 | "blockingFunctions"
+                | "authorizedDomains"
         ) {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
@@ -4770,6 +4805,7 @@ fn project_config_management(
             store.signup_quota().config(),
         );
         add_sign_in_config_json(&mut body, store.sign_in_config());
+        body["authorizedDomains"] = json!(store.authorized_domains());
         if let Some(blocking) = state
             .blocking
             .as_ref()
@@ -4828,6 +4864,12 @@ fn project_config_management(
                 .is_some_and(contains_non_null_value)
             {
                 fields.push("blockingFunctions".to_owned());
+            }
+            if body
+                .get("authorizedDomains")
+                .is_some_and(|value| !value.is_null())
+            {
+                fields.push("authorizedDomains".to_owned());
             }
             fields
         }
@@ -4979,6 +5021,7 @@ fn project_config_management(
                 store.signup_quota().config(),
             );
             add_sign_in_config_json(&mut body, store.sign_in_config());
+            body["authorizedDomains"] = json!(store.authorized_domains());
             if let Some(blocking) = state
                 .blocking
                 .as_ref()
@@ -9763,6 +9806,7 @@ fn send_oob_code(
     at: LogicalInstant,
     headers: &RequestHeaders,
     privileged: bool,
+    strict: bool,
 ) -> JsonResponse {
     let return_oob_link = match opt_bool(body, "returnOobLink") {
         Ok(Some(value)) => value,
@@ -9786,6 +9830,13 @@ fn send_oob_code(
             }
         },
     };
+    // Strict: the continue URL must name an authorized domain, as production checks before
+    // it looks at the account (sandbox exploration 2026-09-24). The official emulator does not.
+    if strict {
+        if let Some(response) = unauthorized_continue_url(store, body) {
+            return response;
+        }
+    }
     let (email, uid, new_email) = match request_type {
         OobRequestType::PasswordReset => {
             let Some(email) = str_field(body, "email").map(canonicalize_email) else {
@@ -9884,6 +9935,23 @@ fn send_oob_code(
         status: 200,
         body: response,
     }
+}
+
+/// The refusal of a continue URL whose host is not one of the project's authorized domains.
+fn unauthorized_continue_url(store: &AuthStore, body: &Value) -> Option<JsonResponse> {
+    let url = str_field(body, "continueUrl")?;
+    let host = absolute_uri_host(url)?;
+    if store
+        .authorized_domains()
+        .iter()
+        .any(|domain| domain.eq_ignore_ascii_case(&host))
+    {
+        return None;
+    }
+    Some(error(
+        400,
+        "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+    ))
 }
 
 /// `accounts:resetPassword`: verifies a `PASSWORD_RESET` code (`verifyPasswordResetCode`)
@@ -11090,6 +11158,23 @@ fn parse_idp_claims(token: &str) -> Option<Value> {
         return None;
     }
     Some(payload)
+}
+
+/// The lower-cased host of an absolute `scheme://authority` URI, without user info or port;
+/// `None` when the URI has no scheme or no authority.
+fn absolute_uri_host(uri: &str) -> Option<String> {
+    if !uri_is_absolute(uri) {
+        return None;
+    }
+    let (_, rest) = uri.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = if let Some(bracketed) = host_port.strip_prefix('[') {
+        bracketed.split_once(']').map(|(host, _)| host)?
+    } else {
+        host_port.split(':').next().unwrap_or_default()
+    };
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
 /// Whether `uri` is an absolute URI (has a scheme), the official `parseAbsoluteUri` guard.

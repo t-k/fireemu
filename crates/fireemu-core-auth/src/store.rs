@@ -647,6 +647,9 @@ pub struct SignInConfig {
     /// `signIn.phoneNumber.testPhoneNumbers`: E.164 number to its fixed six-digit code. No
     /// message is sent for these numbers and the code never changes.
     pub test_phone_numbers: BTreeMap<String, String>,
+    /// `authorizedDomains`: the hosts an action link's continue URL may name. `None` is the
+    /// list a new Firebase project starts with ([`AuthStore::authorized_domains`]).
+    pub authorized_domains: Option<Vec<String>>,
 }
 
 impl Default for SignInConfig {
@@ -657,6 +660,7 @@ impl Default for SignInConfig {
             anonymous_enabled: true,
             phone_enabled: true,
             test_phone_numbers: BTreeMap::new(),
+            authorized_domains: None,
         }
     }
 }
@@ -669,7 +673,10 @@ impl SignInConfig {
     /// count.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
+        self.authorized_domains
+            .as_ref()
+            .is_none_or(|domains| domains.iter().all(|domain| !domain.is_empty()))
+            && self.test_phone_numbers.len() <= Self::MAX_TEST_PHONE_NUMBERS
             && self.test_phone_numbers.iter().all(|(number, code)| {
                 AuthStore::validate_phone_number(number).is_ok()
                     && code.len() == 6
@@ -1935,6 +1942,19 @@ impl AuthStore {
     #[must_use]
     pub const fn sign_in_config(&self) -> &SignInConfig {
         &self.sign_in
+    }
+
+    /// The project's authorized domains: the configured list, or the one a new Firebase
+    /// project starts with (`localhost` and the project's two Firebase Hosting domains).
+    #[must_use]
+    pub fn authorized_domains(&self) -> Vec<String> {
+        self.sign_in.authorized_domains.clone().unwrap_or_else(|| {
+            vec![
+                "localhost".to_owned(),
+                format!("{}.firebaseapp.com", self.project_id),
+                format!("{}.web.app", self.project_id),
+            ]
+        })
     }
 
     /// Replaces the sign-in providers and test phone numbers; an invalid configuration is

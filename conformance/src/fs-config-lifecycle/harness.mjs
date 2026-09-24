@@ -31,9 +31,11 @@ export const GRPC_RPCS = new Set([
   "DeleteDatabase",
   "CreateIndex",
   "GetIndex",
+  "ListIndexes",
   "ExportDocuments",
   "ImportDocuments",
   "GetOperation",
+  "ListOperations",
 ]);
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
@@ -282,8 +284,25 @@ const TRANSIENT_STATUS = /^(RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED)$/;
  * 5xx other than the one production answers deterministically (the caller decides that by
  * comparing both recordings).
  */
+/**
+ * Production's refusal of a database change while another change of the same database is
+ * still being applied (seen deleting a database just created). A request that carries an etag
+ * gets the same words for a stale etag, which is behavior; without one it is a race that says
+ * nothing about the resource.
+ */
+export function isConcurrentChange(status, json, url) {
+  return (
+    status === 409 &&
+    json?.error?.status === "ABORTED" &&
+    String(json?.error?.message ?? "").startsWith("There are concurrent database changes") &&
+    !new URL(url).searchParams.has("etag")
+  );
+}
+
 export function isTransient(recorded) {
   if (!recorded) return false;
+  // A concurrent-change race the recording retried without clearing is not an observation.
+  if (recorded.transient) return true;
   if (recorded.trace) return recorded.trace.some(isTransient) || isTransient(recorded.settled);
   if (recorded.status === -1) return recorded.dependencyTransient === true;
   if (recorded.transport === "grpc") return [4, 8, 14].includes(recorded.code);

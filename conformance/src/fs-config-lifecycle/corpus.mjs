@@ -1024,6 +1024,17 @@ const PROGRAMS_RAW = [
         grpc: { rpc: "GetIndex", nameFrom: { $from: "create-index", path: "metadata.index" } },
       },
       {
+        id: "list-indexes",
+        grpc: {
+          rpc: "ListIndexes",
+          request: { parent: "{project}/databases/{db:a}/collectionGroups/items" },
+        },
+      },
+      {
+        id: "list-operations",
+        grpc: { rpc: "ListOperations", request: { name: "{project}/databases/{db:a}" } },
+      },
+      {
         id: "export",
         grpc: {
           rpc: "ExportDocuments",
@@ -1065,7 +1076,43 @@ const PROGRAMS_RAW = [
     defaultDatabase: true,
     databases: [],
     steps: [
+      // Every recording starts from the same state, which production-only steps make and the
+      // next rows check: a (default) created in this run, with no document and no index.
+      // fireemu's (default) starts that way too (it is created when the daemon starts).
+      { id: "prepare-delete", method: "DELETE", path: "v1/{project}/databases/(default)", onlyOn: "production" },
+      {
+        ...pollPath("prepare-absent", "v1/{project}/databases/(default)", "notFound", {
+          max: 20,
+          intervalMs: 5_000,
+        }),
+        onlyOn: "production",
+      },
+      {
+        ...pollPath("prepare-create", "v1/{project}/databases", "httpOk", {
+          max: 30,
+          intervalMs: 20_000,
+          method: "POST",
+          body: NATIVE,
+          query: { databaseId: "(default)" },
+        }),
+        onlyOn: "production",
+      },
       get("get-before", "v1/{project}/databases/(default)"),
+      get("indexes-before", "v1/{project}/databases/(default)/collectionGroups/-/indexes"),
+      {
+        id: "seed",
+        method: "POST",
+        path: "v1/{project}/databases/(default)/documents/items",
+        query: { documentId: "a" },
+        body: { fields: { a: integer(1), b: integer(2) } },
+      },
+      {
+        id: "create-index",
+        method: "POST",
+        path: "v1/{project}/databases/(default)/collectionGroups/items/indexes",
+        body: composite,
+      },
+      pollFrom("index-ready", "create-index", "ready", { path: "metadata.index" }),
       { id: "delete", method: "DELETE", path: "v1/{project}/databases/(default)" },
       pollPath("absent", "v1/{project}/databases/(default)", "notFound", {
         max: 20,
@@ -1088,7 +1135,8 @@ const PROGRAMS_RAW = [
         query: { databaseId: "(default)" },
       }),
       get("get-after", "v1/{project}/databases/(default)"),
-      get("document-after", "v1/{project}/databases/(default)/documents/c/d"),
+      get("indexes-after", "v1/{project}/databases/(default)/collectionGroups/-/indexes"),
+      get("document-after", "v1/{project}/databases/(default)/documents/items/a"),
     ],
   },
 ];

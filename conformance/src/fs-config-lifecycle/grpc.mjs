@@ -24,9 +24,11 @@ export const GRPC_METHODS = {
   DeleteDatabase: { service: ADMIN, routing: "name" },
   CreateIndex: { service: ADMIN, routing: "parent" },
   GetIndex: { service: ADMIN, routing: "name" },
+  ListIndexes: { service: ADMIN, routing: "parent" },
   ExportDocuments: { service: ADMIN, routing: "name" },
   ImportDocuments: { service: ADMIN, routing: "name" },
   GetOperation: { service: OPERATIONS, routing: "name" },
+  ListOperations: { service: OPERATIONS, routing: "name" },
 };
 
 function methodTypes(rpc) {

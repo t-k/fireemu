@@ -1228,7 +1228,7 @@ async function runV3RecoveryOnly() {
     await writeV3CleanupJournal("recovering", { recoveredFrom: journal.status });
     await preflightManagedShrinkScope();
     managedClearState.preflightDone = true;
-    for (const name of managedClearState.preflightUpdateTimes.keys()) {
+    for (const name of names) {
       const relative = name.split("/documents/")[1];
       const children = await listCollectionIds(base, relative, (input, init) =>
         managedShrinkRequest("v3 recovery child-collection preflight", input, init),

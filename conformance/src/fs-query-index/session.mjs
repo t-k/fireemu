@@ -17,6 +17,8 @@ import {
   normalizeGrpcResponse,
   normalizeRestResponse,
   PRODUCTION_GRPC,
+  registerRequestInstants,
+  resolveValue,
 } from "./harness.mjs";
 
 const require = createRequire(import.meta.url);
@@ -89,6 +91,8 @@ export function createSession(
   async function sendRest(step, raw, { harness = false, symbols = new Map() } = {}) {
     const request = buildRestRequest(step, ctx, raw);
     guardRestRequest(request, ctx, { harness });
+    if (!harness && step.rawBody === undefined && step.body !== undefined)
+      registerRequestInstants(JSON.parse(request.init.body), ctx, symbols);
     claim(harness);
     let response;
     try {
@@ -115,6 +119,7 @@ export function createSession(
   function sendGrpc(step, raw, symbols) {
     const built = buildGrpcRequest(step, ctx, raw);
     guardGrpcRequest(built, ctx);
+    registerRequestInstants(resolveValue(step.body ?? {}, ctx, raw), ctx, symbols);
     claim(false);
     const requestType = protos.google.firestore.v1[`${built.method}Request`];
     const responseType = protos.google.firestore.v1[`${built.method}Response`];

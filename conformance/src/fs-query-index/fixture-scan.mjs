@@ -4,7 +4,7 @@
 
 const TOKEN = /\bya29\.[A-Za-z0-9_-]{10,}/;
 /** A numeric project name, as ErrorInfo `consumer` and quota messages carry it. */
-const PROJECT_NUMBER = /projects\/\d{6,}/;
+const PROJECT_NUMBER = /projects\/\d{6,}|project_number\W{0,3}\d{6,}/;
 const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/;
 
 function encodings(secret) {

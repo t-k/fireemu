@@ -6,6 +6,7 @@ import { scanFixture } from "./fs-query-index/fixture-scan.mjs";
 import {
   RECORDED_PROJECT,
   decodeStatusDetail,
+  registerRequestInstants,
   shiftInstant,
   SANDBOX_PROJECT,
   buildGrpcRequest,
@@ -604,4 +605,63 @@ test("status details decode ErrorInfo and Help", () => {
 test("the cost estimate stays under the per-task budget", () => {
   const usd = estimatedUsd(PROGRAMS, 2);
   assert.ok(usd > 0.01 && usd < 10, `estimate ${usd}`);
+});
+
+test("answers echoing a requested read time share its symbol; embedded times are masked", () => {
+  const ctx = production();
+  const symbols = new Map();
+  registerRequestInstants({ readTime: "2026-09-23T23:00:00.000001Z" }, ctx, symbols);
+  const answer = normalizeRestResponse(
+    400,
+    JSON.stringify({ error: { message: "read at 2026-09-23T23:00:00.000001Z is too old" } }),
+    ctx,
+    symbols,
+  );
+  assert.equal(answer.body.error.message, "read at <t1> is too old");
+  const withNumber = createContext({
+    run: "1",
+    startedMs: started,
+    target: {
+      kind: "production",
+      token: "t",
+      quotaProject: SANDBOX_PROJECT,
+      projectNumber: "123456789012",
+    },
+  });
+  assert.equal(
+    normalizeRestResponse(429, '{"consumer":"projects/123456789012"}', withNumber).body.consumer,
+    "projects/<project-number>",
+  );
+  assert.throws(() => scanFixture("project_number: 123456789012", []), /numeric project name/);
+});
+
+test("guards refuse transforms of other databases and transactions", () => {
+  const ctx = production();
+  const commit = (body) => buildRestRequest({ id: "c", rpc: "commit", body }, ctx, new Map());
+  assert.throws(
+    () =>
+      guardRestRequest(
+        commit({
+          writes: [
+            {
+              transform: { document: `projects/${SANDBOX_PROJECT}/databases/cfg-x/documents/a/b` },
+            },
+          ],
+        }),
+        ctx,
+      ),
+    /outside the sandbox database/,
+  );
+  assert.throws(
+    () =>
+      guardRestRequest(
+        buildRestRequest(
+          { id: "q", rpc: "runQuery", body: { newTransaction: {} } },
+          ctx,
+          new Map(),
+        ),
+        ctx,
+      ),
+    /transaction/,
+  );
 });

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { PROGRAMS } from "./auth-account/corpus.mjs";
+import { PROGRAMS as CREDENTIAL_PROGRAMS } from "./auth-credential/corpus.mjs";
 
 const readJson = (relativePath) =>
   JSON.parse(readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8"));
@@ -75,4 +76,49 @@ test("current AUTH-ACCOUNT comparison and inherited regression cover the saved f
     ],
   );
   assert.equal(Object.keys(fixture.programs).length, new Set(PROGRAMS.map(({ id }) => id)).size);
+});
+
+test("current AUTH-CREDENTIAL comparison covers every saved credential fixture row", () => {
+  const fixtureText = readFileSync(
+    fileURLToPath(new URL("../auth-credential-production.json", import.meta.url)),
+    "utf8",
+  );
+  const expectedRows = CREDENTIAL_PROGRAMS.flatMap(({ id, steps }) =>
+    steps.map(({ id: step }) => `${id}#${step}`),
+  );
+  const comparison = readJson(
+    "../../spec/compatibility/closure/evidence/AUTH-CREDENTIAL-comparison.json",
+  );
+  const execution = comparison.execution;
+
+  assert.equal(comparison.kind, "auth-credential-comparison-v1");
+  assert.equal(
+    comparison.artifactSha256,
+    "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
+  );
+  assert.equal(comparison.fixtureSha256, createHash("sha256").update(fixtureText).digest("hex"));
+  assert.deepEqual(comparison.rows.map(({ row }) => row).toSorted(), expectedRows.toSorted());
+  assert.deepEqual(comparison.summary, { MATCH: 222 });
+  assert.ok(comparison.rows.every(({ status }) => status === "MATCH"));
+  assert.equal(execution.runId, "auth-credential-current-attested-20260924T125915Z");
+  assert.equal(
+    execution.receiptSha256,
+    "3d8b5919e47af2a86e79b956a4747c88cffcbc9723de7686a848c951b33d82c9",
+  );
+  assert.equal(
+    execution.buildReceiptSha256,
+    "45f3aece5f4303cf5ed4ea099872dab0e6e21ac9b8d2dbb5bb466777ad81c976",
+  );
+  assert.equal(execution.artifactSha256, comparison.artifactSha256);
+  assert.deepEqual(execution.command, ["node", "src/auth-credential/run.mjs", "check"]);
+  assert.deepEqual(execution.selector, {
+    environment: "AUTH_CREDENTIAL_PROGRAMS",
+    state: "unset",
+    meaning: "all corpus programs",
+  });
+  assert.equal(execution.rowCount, expectedRows.length);
+  assert.equal(
+    execution.sanitizedExportSha256,
+    "114089e4e0cb660ae8bdd2ac5d3b69c867aa8c164c34a79efc4e2e03301f3e5c",
+  );
 });

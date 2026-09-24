@@ -30,3 +30,21 @@ test("only a listing is compared modulo id numbering", () => {
   const single = (id) => ({ status: 200, body: index(id, "a") });
   assert.ok(!sameModuloIdNames(single("<index1>"), single("<index2>")));
 });
+
+test("instants in a listing are compared modulo their numbering, keeping which are equal", () => {
+  const db = (name, created, earliest) => ({ name, createTime: created, earliestVersionTime: earliest });
+  const production = {
+    status: 200,
+    body: { databases: [db("x/<db:a>", "<t1>", "<t1>"), db("x/(default)", "2026-01-01T00:00:00Z", "<t2>")] },
+  };
+  const fireemu = {
+    status: 200,
+    body: { databases: [db("x/<db:a>", "<t2>", "<t2>"), db("x/(default)", "2026-01-01T00:00:00Z", "<t1>")] },
+  };
+  assert.ok(sameModuloIdNames(production, fireemu));
+  const merged = {
+    status: 200,
+    body: { databases: [db("x/<db:a>", "<t1>", "<t1>"), db("x/(default)", "2026-01-01T00:00:00Z", "<t1>")] },
+  };
+  assert.ok(!sameModuloIdNames(production, merged), "two instants are not one");
+});

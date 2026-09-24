@@ -553,6 +553,19 @@ const legacyToken = program(
     check("change-link-by-legacy-token-check", "change-link-by-legacy-token"),
     apply("apply-change-by-legacy-token", "change-link-by-legacy-token"),
     adminLookup("admin-lookup-la", "la"),
+    // The client route reads the ID token (owner decision 2026-09-24): production mails a
+    // confirmation to the unused @example.com address, which has a null MX.
+    client("client-change-by-legacy-token", "sendOobCode", {
+      requestType: "VERIFY_AND_CHANGE_EMAIL",
+      idToken: from("legacy-sign-in-la:idToken"),
+      newEmail: "EMAIL(lvc-legacy)",
+    }),
+    signIn("sign-in-la", "la"),
+    client("client-change-by-secure-token", "sendOobCode", {
+      requestType: "VERIFY_AND_CHANGE_EMAIL",
+      idToken: from("sign-in-la:idToken"),
+      newEmail: "EMAIL(lvc-secure)",
+    }),
     adminCreate("create-lr", "lr"),
     legacySignIn("legacy-sign-in-lr", "lr"),
     signInLink("link-legacy", "lr-legacy"),

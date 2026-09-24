@@ -108,24 +108,6 @@ jobs:
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-disable-comparison-approval.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-readback-comparison-approval.py --check
           uv run --project tools/compat-inventory --locked --python 3.12 tools/auth-blocking-create-disable-comparison-approval.py --check
-      - name: Check broad local inventory and comparison safety
-        run: |
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_protobuf_denominator.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/protobuf_denominator.py --check
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_production_denominator.py -q
-          base_sha="${{ github.event.pull_request.base.sha || github.event.before }}"
-          if [ -n "$base_sha" ]; then
-            uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator.py --check --check-base "$base_sha"
-          else
-            uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator.py --check
-          fi
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_production_denominator_v2.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator_v2.py --check
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator_v2_auth_time.py --check
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-broad -q
-          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_mutation_cargo.py -q
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --check-catalog
-          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_adapter.py --manifest spec/compatibility/broad-batch-candidate.json
       - name: Check lifetime corpora and published candidates
         run: |
           uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/auth-pending-lifetime tools/auth-pending-lifetime-boundary tools/auth-pending-lifetime-window -q
@@ -153,3 +135,84 @@ jobs:
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/deleted_history.py --check
       - name: Check approved deletion recheck at its fixed pre-lookup-fix source
         run: uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-history/lookup_history.py --check
+
+  denominator-catalog-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install uv
+        run: python3 -m pip install uv==0.11.28
+      - name: Check protobuf and production denominators
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_protobuf_denominator.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/protobuf_denominator.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_production_denominator.py -q
+          if [ -n "$BASE_SHA" ]; then
+            uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator.py --check --check-base "$BASE_SHA"
+          else
+            uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator.py --check
+          fi
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_production_denominator_v2.py -q
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator_v2.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-inventory/production_denominator_v2_auth_time.py --check
+          uv run --project tools/compat-inventory --locked --python 3.12 -m pytest tools/compat-inventory/test_mutation_cargo.py -q
+      - name: Check broad catalog and batch adapter
+        run: |
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/broad.py --check-catalog
+          uv run --project tools/compat-inventory --locked --python 3.12 tools/compat-broad/batch_adapter.py --manifest spec/compatibility/broad-batch-candidate.json
+
+  compat-broad-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install uv
+        run: python3 -m pip install uv==0.11.28
+      - name: Run deterministic broad-test shard
+        env:
+          PYTEST_SHARD: ${{ matrix.shard }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import subprocess
+
+          shard = int(os.environ["PYTEST_SHARD"])
+          shard_count = 4
+          root = pathlib.Path("tools/compat-broad")
+          test_files = sorted(
+              str(path)
+              for path in root.rglob("*.py")
+              if path.name.startswith("test_") or path.name.endswith("_test.py")
+          )
+          selected = [path for index, path in enumerate(test_files) if index % shard_count == shard]
+          if not selected:
+              raise SystemExit(f"shard {shard} has no pytest files")
+          print(f"shard {shard}/{shard_count}: {len(selected)} of {len(test_files)} files")
+          command = [
+              "uv",
+              "run",
+              "--project",
+              "tools/compat-inventory",
+              "--locked",
+              "--python",
+              "3.12",
+              "-m",
+              "pytest",
+              *selected,
+              "-q",
+          ]
+          raise SystemExit(subprocess.call(command))
+          PY

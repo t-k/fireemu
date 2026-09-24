@@ -82,7 +82,8 @@ export function guardCredentialRequest({ url, init }, ctx, { harness = false } =
     api === "securetoken"
       ? [/^\/v1\/token$/]
       : [
-          /^\/v1\/accounts:(signUp|signInWithPassword|signInWithCustomToken|signInWithPhoneNumber|sendVerificationCode|lookup|update|delete)$/,
+          /^\/v1\/accounts:(signUp|signInWithPassword|signInWithCustomToken|signInWithPhoneNumber|sendVerificationCode|sendOobCode|lookup|update|delete)$/,
+          /^\/v2\/accounts\/mfaEnrollment:(start|withdraw)$/,
           new RegExp(`^/v1/projects/${project}:createSessionCookie$`),
           new RegExp(`^/v1/projects/${project}/accounts(:(lookup|update|delete))?$`),
           ...(harness
@@ -100,6 +101,7 @@ export function guardCredentialRequest({ url, init }, ctx, { harness = false } =
         : Object.fromEntries(new URLSearchParams(init.body)),
     );
   }
+  guardOobCode(path, inputs[1]);
   for (const input of inputs) {
     walkEntries(input, (key, value) => {
       if (PROJECT_KEYS.has(key) && value !== ctx.project)
@@ -111,6 +113,14 @@ export function guardCredentialRequest({ url, init }, ctx, { harness = false } =
           throw new Error(`${phone} is not a configured test phone`);
       }
     });
+  }
+}
+
+/** The runtime form of the corpus rule: a verification mail only for a token's own account. */
+function guardOobCode(path, input) {
+  if (!path.endsWith(":sendOobCode")) return;
+  if (input?.requestType !== "VERIFY_EMAIL" || !input?.idToken || input?.email !== undefined) {
+    throw new Error("sendOobCode is only VERIFY_EMAIL for the account behind a token");
   }
 }
 
@@ -130,6 +140,17 @@ export const harnessRequest = {
           "content-type": "application/json",
         },
         body: JSON.stringify({ payload: JSON.stringify(claims) }),
+      },
+    };
+  },
+  advanceClockTo(ctx, epochMillis) {
+    if (ctx.target.kind !== "local") throw new Error("the clock is fireemu-only");
+    const request = harnessRequest.advanceClock(ctx, 0);
+    return {
+      url: request.url.replace("clock:advance", "clock:advanceTo"),
+      init: {
+        ...request.init,
+        body: JSON.stringify({ instant: new Date(epochMillis).toISOString() }),
       },
     };
   },
@@ -188,7 +209,7 @@ export function validateCredentialCorpus(programs) {
         throw new Error(`${step.id}: unknown api`);
       // fireemu's clock stays where a wait put it until wall time catches up, so only the
       // last program may wait; its later steps then need no further time to pass.
-      if (step.waitSeconds && index !== programs.length - 1)
+      if ((step.waitSeconds || step.waitUntil) && index !== programs.length - 1)
         throw new Error(`${program.id}#${step.id}: only the last program may wait`);
       if (
         step.path.endsWith("accounts:sendVerificationCode") &&
@@ -196,8 +217,13 @@ export function validateCredentialCorpus(programs) {
       ) {
         throw new Error(`${step.id}: sendVerificationCode only to a configured test phone`);
       }
-      if (step.path.endsWith("accounts:sendOobCode"))
-        throw new Error(`${step.id}: credential programs send no out-of-band codes`);
+      // A verification mail only for the account behind a token, never to a named address:
+      // corpus accounts are example.com addresses, which accept no mail.
+      if (
+        step.path.endsWith("accounts:sendOobCode") &&
+        (step.body?.requestType !== "VERIFY_EMAIL" || !step.body?.idToken || step.body?.email)
+      )
+        throw new Error(`${step.id}: sendOobCode only VERIFY_EMAIL for a token's own account`);
       for (const text of walkStrings({ body: step.body, form: step.form, query: step.query }))
         assertOnlyExampleEmail(text, step.id);
     }

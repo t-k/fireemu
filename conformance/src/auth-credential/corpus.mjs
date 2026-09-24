@@ -162,6 +162,34 @@ const idTokenLegacy = program(
       idToken: from("password-sign-in:idToken"),
       displayName: "Legacy Name",
     }),
+    // Routes production has not yet been seen to honour the legacy token on.
+    client("send-verification-with-legacy-token", "sendOobCode", {
+      requestType: "VERIFY_EMAIL",
+      idToken: from("password-sign-in:idToken"),
+    }),
+    {
+      id: "mfa-start-with-legacy-token",
+      path: "v2/accounts/mfaEnrollment:start",
+      auth: "key",
+      body: { idToken: from("password-sign-in:idToken"), totpEnrollmentInfo: {} },
+    },
+    {
+      id: "mfa-withdraw-with-legacy-token",
+      path: "v2/accounts/mfaEnrollment:withdraw",
+      auth: "key",
+      body: { idToken: from("password-sign-in:idToken"), mfaEnrollmentId: "unknown" },
+    },
+    client("phone-send-code-for-link", "sendVerificationCode", { phoneNumber: "PHONE(4)" }),
+    client("phone-link-with-legacy-token", "signInWithPhoneNumber", {
+      idToken: from("password-sign-in:idToken"),
+      sessionInfo: from("phone-send-code-for-link:sessionInfo"),
+      code: TEST_PHONE_CODE,
+    }),
+    client("sign-up-upgrade-with-legacy-token", "signUp", {
+      idToken: from("custom-sign-in:idToken"),
+      email: "EMAIL(legacy-upgrade)",
+      password: "password123",
+    }),
     client("delete-with-legacy-custom-token", "delete", {
       idToken: from("custom-sign-in:idToken"),
     }),
@@ -301,7 +329,7 @@ const refreshRefusals = program("auth-credential/refresh/refusals", [
   {
     ...refreshWith("invalid-api-key", from("sign-up:refreshToken")),
     auth: "none",
-    query: { key: "AIzaSyD-fireemu-not-a-real-api-key-0000" },
+    query: { key: "fireemu-not-a-real-api-key" },
   },
   refreshWith("control-still-valid", from("sign-up:refreshToken")),
 ]);
@@ -519,7 +547,7 @@ const customValidation = program(
     {
       ...customSignIn("invalid-api-key", token("valid")),
       auth: "none",
-      query: { key: "AIzaSyD-fireemu-not-a-real-api-key-0000" },
+      query: { key: "fireemu-not-a-real-api-key" },
     },
     customSignIn("control-valid", token("valid")),
   ],
@@ -660,15 +688,34 @@ const expiry = program(
       relations: sessionRelations("id_token", "sign-up:idToken"),
     },
     lookupWith("lookup-refreshed", from("refresh-after-hour:id_token")),
-    // Five minutes further on, past any common skew allowance.
-    { ...lookupWith("lookup-expired-later", from("sign-up:idToken")), waitSeconds: 320 },
+    // The exact edge of the five-minute allowance, custom token first (it expires earlier).
+    {
+      ...customSignIn("custom-token-at-exp-plus-299", token("expiring")),
+      waitUntil: { of: "token:expiring:exp", plus: 299 },
+    },
+    {
+      ...customSignIn("custom-token-at-exp-plus-300", token("expiring")),
+      waitUntil: { of: "token:expiring:exp", plus: 300 },
+    },
+    {
+      ...lookupWith("lookup-at-exp-plus-299", from("sign-up:idToken")),
+      waitUntil: { of: "sign-up:idToken.exp", plus: 299 },
+    },
+    {
+      ...lookupWith("lookup-at-exp-plus-300", from("sign-up:idToken")),
+      waitUntil: { of: "sign-up:idToken.exp", plus: 300 },
+    },
+    // Further on, well past the allowance.
+    { ...lookupWith("lookup-expired-later", from("sign-up:idToken")), waitSeconds: 30 },
     cookie("cookie-from-expired-later", from("sign-up:idToken"), 3600),
     customSignIn("custom-token-expired-later", token("expiring")),
     // Deleting last keeps every earlier answer about a live account.
     client("delete-expired", "delete", { idToken: from("sign-up:idToken") }),
     adminLookup("admin-lookup-after-delete-attempt", from("sign-up:localId")),
   ],
-  { tokens: { expiring: { uid: "UID(expiring)" } } },
+  // Minted before the sign-up and five seconds shorter-lived, so its allowance ends first and
+  // every wait above moves forward.
+  { tokens: { expiring: { uid: "UID(expiring)", lifetime: 3595 } } },
 );
 
 export const PROGRAMS = [

@@ -2479,10 +2479,10 @@
       }
     },
     "fs-config/export/interop/fireemu-to-production": {
-      "corpusDigest": "6a3d00c8e197933e92727755bde598ed0b148a69d4e1c94421b58ed88e39a056",
+      "corpusDigest": "708b4ce83be704ecb3231703545d5da17f8299f4fa9b9642386d327439a141fa",
       "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "recordedAt": "2026-09-24T09:14:10.616Z",
+      "gitSha": "7419c955b72abfebd4819e696abce73df9853543",
       "steps": {
         "create-source-placeholder": {
           "status": 200,
@@ -2981,10 +2981,10 @@
       }
     },
     "fs-config/export/interop/production-to-fireemu": {
-      "corpusDigest": "27b242fd89e6391e419f5b4e6e6bfd817fe227f46beb8e44cb74ad9b3797d2c7",
+      "corpusDigest": "77c3a635c73c2d6ccc23baa72884be849607ef08866777ee122b16899bd430ae",
       "harnessDigest": "7a43226c56a081005d196db53d325df8c0beca6255fd90acc79f411931311ddb",
-      "recordedAt": "2026-09-24T08:26:12.514Z",
-      "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+      "recordedAt": "2026-09-24T09:14:10.616Z",
+      "gitSha": "7419c955b72abfebd4819e696abce73df9853543",
       "steps": {
         "create-source": {
           "status": 200,

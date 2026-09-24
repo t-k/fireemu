@@ -162,6 +162,17 @@ impl Schema {
                         .nested
                         .get_or_insert_with(Schema::default)
                         .observe(inner),
+                    // Written as a nested entity with a repeated double `__vector__`.
+                    Value::Vector(items) => {
+                        let vector = property
+                            .nested
+                            .get_or_insert_with(Schema::default)
+                            .property("__vector__");
+                        vector.repeated = true;
+                        if !items.is_empty() && !vector.codes.contains(&0) {
+                            vector.codes.push(0);
+                        }
+                    }
                     other => {
                         if let Some(code) = type_code(other) {
                             if !property.codes.contains(&code) {
@@ -557,6 +568,39 @@ mod tests {
             .unwrap()
             .1;
         assert_eq!(read_partition_outputs(metadata).unwrap(), ["output-1"]);
+    }
+
+    #[test]
+    fn a_vector_property_is_described_in_the_schema_as_production_describes_it() {
+        // Production (2026-09-24): a vector is a nested entity with a repeated double
+        // `__vector__` property, and the kind's schema says so.
+        let documents = vec![document(
+            &[("items", "a")],
+            &[("v", Value::Vector(vec![1.0, 2.0]))],
+        )];
+        let export =
+            write_managed_export("items", "d", &["items".to_owned()], &[], (1, 2), &documents)
+                .unwrap();
+        let metadata = &export
+            .files
+            .iter()
+            .find(|(n, _)| n.ends_with(".export_metadata"))
+            .unwrap()
+            .1;
+        let mut expected = vec![
+            0x12, 0x2b, 0x0a, 0x01, b'v', 0x12, 0x23, 0x1a, 0x21, 0x12, 0x1f,
+        ];
+        expected.extend([0x0a, 0x0a]);
+        expected.extend(b"__vector__");
+        expected.extend([0x12, 0x05, 0x08, 0x01, 0x12, 0x01, 0x00, 0x1a, 0x0a]);
+        expected.extend(b"__vector__");
+        expected.extend([0x1a, 0x01, b'v']);
+        assert!(
+            metadata
+                .windows(expected.len())
+                .any(|w| w == expected.as_slice()),
+            "{metadata:02x?}"
+        );
     }
 
     #[test]

@@ -551,6 +551,31 @@ test("a program's touched paths are restored and read back even when it fails", 
   );
 });
 
+test("a restore writes back only the paths that changed", async () => {
+  const sandbox = fakeSandbox({ failPatchOn: '"subject"' });
+  sandbox.state.config.notification = { defaultLocale: "en", subject: "S" };
+  const session = createSession(local(), { fetchImpl: sandbox.fetchImpl });
+  const program = {
+    id: "auth-config-sdk/t",
+    projection: "strict",
+    touches: ["emailPrivacyConfig.enableImprovedEmailPrivacy", "notification.defaultLocale"],
+    steps: [
+      {
+        id: "off",
+        path: "admin/v2/projects/{project}/config",
+        auth: "admin",
+        method: "PATCH",
+        query: { updateMask: "emailPrivacyConfig.enableImprovedEmailPrivacy" },
+        body: { emailPrivacyConfig: { enableImprovedEmailPrivacy: false } },
+      },
+    ],
+  };
+  await session.runProgram(program);
+  const patches = sandbox.calls.filter((call) => call.startsWith("PATCH"));
+  assert.equal(patches.length, 2, "the step and one restore of the changed path");
+  assert.equal(sandbox.state.config.emailPrivacyConfig.enableImprovedEmailPrivacy, true);
+});
+
 test("a restore that does not read back stops the run", async () => {
   const sandbox = fakeSandbox({ failPatchOn: '"enableImprovedEmailPrivacy":true' });
   const session = createSession(local(), { fetchImpl: sandbox.fetchImpl, settleAttempts: 2 });

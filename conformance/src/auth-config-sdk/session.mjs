@@ -338,7 +338,11 @@ export function createSession(
    * one path at a time, so one member it will not take back leaves no other member changed.
    */
   async function restore(snapshot) {
-    const paths = Object.keys(snapshot);
+    // Only what changed is written back: a member production refuses to write (the email
+    // templates, EMAIL_TEMPLATE_UPDATE_NOT_ALLOWED) never changed in the first place.
+    const now = await readConfig(Object.keys(snapshot), { cleanup: true });
+    const paths = Object.keys(snapshot).filter((path) => !configEquals(now[path], snapshot[path]));
+    if (paths.length === 0) return now;
     try {
       await writeBack(paths, snapshot);
     } catch (error) {
@@ -360,7 +364,9 @@ export function createSession(
       }
       if (refused.length) throw fatal(`restore refused for ${refused.join(", ")}`);
     }
-    return awaitConfig(snapshot, { cleanup: true });
+    return awaitConfig(Object.fromEntries(paths.map((path) => [path, snapshot[path]])), {
+      cleanup: true,
+    });
   }
 
   /**

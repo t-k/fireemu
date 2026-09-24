@@ -8,6 +8,7 @@ import {
   responseGatedDeadlineIsIndeterminate,
   terminalComplete,
   shouldHalfCloseAfterResponse,
+  validateLiveStreamSubset,
   validateStreamRecipes,
   validateStreamTarget,
 } from "./stream-session.mjs";
@@ -218,5 +219,26 @@ test("stream connection is fixed to the sandbox project and transport", () => {
         port: 8080,
       }),
     /loopback/,
+  );
+});
+
+test("a recording subset keeps each live recipe on its fixed specification", async () => {
+  const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const byId = new Map(corpus.streamRecipes.map((recipe) => [recipe.id, recipe]));
+  const halfClose = byId.get("writes/write-stream-terminal/response-before-half-close");
+  const unary = byId.get("writes/limits/grpc-unary-request-bytes/10485761");
+  assert.deepEqual(validateLiveStreamSubset([halfClose]), [halfClose]);
+  assert.deepEqual(validateLiveStreamSubset([unary, halfClose]), [unary, halfClose]);
+  assert.deepEqual(validateLiveStreamSubset(corpus.streamRecipes).length, 7);
+  assert.throws(() => validateLiveStreamSubset([]), /stream recipe subset/);
+  assert.throws(() => validateLiveStreamSubset([halfClose, halfClose]), /stream recipe subset/);
+  assert.throws(
+    () => validateLiveStreamSubset([{ ...halfClose, maxFrames: 3 }]),
+    /stream recipe subset/,
+  );
+  assert.throws(
+    () => validateLiveStreamSubset([{ ...unary, id: "writes/limits/unknown" }]),
+    /stream recipe subset/,
   );
 });

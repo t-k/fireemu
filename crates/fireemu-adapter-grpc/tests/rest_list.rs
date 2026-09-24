@@ -590,3 +590,36 @@ fn a_token_with_undecodable_order_values_is_refused() {
     );
     assert_eq!((status, message(&body)), (400, "invalid page token"));
 }
+
+/// Inside a transaction `showMissing` lists a missing document by name alone, in name order.
+#[test]
+fn show_missing_inside_a_transaction_lists_missing_documents_by_name() {
+    let (s, _) = seeded(true);
+    let (status, body) = call(
+        &s,
+        "PATCH",
+        &format!("{DOCS}/lst/d3a/sub/x"),
+        json!({"fields": {}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, begun) = call(
+        &s,
+        "POST",
+        &format!("{DOCS}:beginTransaction"),
+        json!({"options": {"readOnly": {}}}),
+    );
+    assert_eq!(status, 200, "{begun}");
+    let transaction = begun["transaction"]
+        .as_str()
+        .unwrap()
+        .replace('+', "%2B")
+        .replace('/', "%2F")
+        .replace('=', "%3D");
+    let (status, body) = list(&s, &format!("showMissing=true&transaction={transaction}"));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(ids(&body), ["d1", "d2", "d3", "d3a", "d4", "d5"]);
+    assert_eq!(
+        body["documents"][3],
+        json!({"name": "projects/demo-app/databases/(default)/documents/lst/d3a"})
+    );
+}

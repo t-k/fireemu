@@ -9112,3 +9112,162 @@ async fn grpc_list_without_a_collection_id_ignores_show_missing_under_the_emulat
     assert_eq!(names, ["sub/s1"]);
     handle.abort();
 }
+
+async fn list_in(
+    client: &mut FirestoreClient<tonic::transport::Channel>,
+    collection: &str,
+    order_by: &str,
+    page_token: String,
+    transaction: Option<Vec<u8>>,
+) -> pb::ListDocumentsResponse {
+    client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            collection_id: collection.to_owned(),
+            page_size: 2,
+            order_by: order_by.to_owned(),
+            page_token,
+            consistency_selector: transaction
+                .map(pb::list_documents_request::ConsistencySelector::Transaction),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+fn listed_ids(response: &pb::ListDocumentsResponse) -> Vec<String> {
+    response
+        .documents
+        .iter()
+        .map(|d| d.name.rsplit('/').next().unwrap().to_owned())
+        .collect()
+}
+
+/// A read-write transaction that pages an ordered listing continues a token issued outside
+/// it, holds the whole listing as its read set (an out-of-band write to a document it did not
+/// return is refused while it is open) and commits (FS-DATA-WRITE-LIST review, round 3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_write_transaction_holds_an_ordered_listing_it_pages() {
+    let (mut client, handle) =
+        start_with_contention_wait(std::time::Duration::from_millis(100)).await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: (1..=5)
+                .map(|n| update_write(&format!("o/d{n}"), &[("n", i(n))]))
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let outside = list_in(&mut client, "o", "n desc", String::new(), None).await;
+    assert_eq!(listed_ids(&outside), ["d5", "d4"]);
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let page = list_in(
+        &mut client,
+        "o",
+        "n desc",
+        outside.next_page_token,
+        Some(txn.clone()),
+    )
+    .await;
+    assert_eq!(listed_ids(&page), ["d3", "d2"]);
+    // `o/d1` was not returned, but the listing that reads it is the transaction's read set.
+    let refused = client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: vec![update_write("o/d1", &[("n", i(9))])],
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::Aborted);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            transaction: txn,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    handle.abort();
+}
+
+/// Inside a transaction a name-ordered page, and an ordered page whose token carries no order
+/// values (a value past the token bound), continue after the named document.
+#[tokio::test]
+async fn transaction_pages_without_order_values_continue_after_the_named_document() {
+    let (mut client, _clock, handle) = start().await;
+    let big = "x".repeat(2_000);
+    let mut writes: Vec<pb::Write> = (1..=4)
+        .map(|n| update_write(&format!("p/d{n}"), &[("n", i(n))]))
+        .collect();
+    writes.extend((1..=4).map(|n| {
+        update_write(
+            &format!("q/d{n}"),
+            &[(
+                "s",
+                pb::Value {
+                    value_type: Some(pb::value::ValueType::StringValue(format!("{big}{n}"))),
+                },
+            )],
+        )
+    }));
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let txn = client
+        .begin_transaction(pb::BeginTransactionRequest {
+            database: DB.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .transaction;
+    let first = list_in(&mut client, "p", "", String::new(), Some(txn.clone())).await;
+    assert_eq!(listed_ids(&first), ["d1", "d2"]);
+    let next = list_in(
+        &mut client,
+        "p",
+        "",
+        first.next_page_token,
+        Some(txn.clone()),
+    )
+    .await;
+    assert_eq!(listed_ids(&next), ["d3", "d4"]);
+    let first = list_in(&mut client, "q", "s", String::new(), Some(txn.clone())).await;
+    assert_eq!(listed_ids(&first), ["d1", "d2"]);
+    let next = list_in(
+        &mut client,
+        "q",
+        "s",
+        first.next_page_token,
+        Some(txn.clone()),
+    )
+    .await;
+    assert_eq!(listed_ids(&next), ["d3", "d4"]);
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            transaction: txn,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    handle.abort();
+}

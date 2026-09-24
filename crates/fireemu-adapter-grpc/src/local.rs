@@ -6289,6 +6289,10 @@ mod lock_tests {
                 )),
             ] {
                 let backend = backend();
+                let transaction_ids_before = backend.transaction_ids.lock().unwrap().clone();
+                let incarnations_before = backend
+                    .database_incarnations
+                    .load(std::sync::atomic::Ordering::SeqCst);
                 let registry = Arc::new(FaultRegistry::new());
                 registry.default_state().lock().unwrap().install(FaultPlan {
                     seed: 1,
@@ -6317,6 +6321,17 @@ mod lock_tests {
                 assert_eq!(error.code(), code, "{action:?} {read_time:?}");
                 assert!(
                     backend.snapshot_databases().is_empty(),
+                    "{action:?} {read_time:?}"
+                );
+                assert_eq!(
+                    *backend.transaction_ids.lock().unwrap(),
+                    transaction_ids_before
+                );
+                assert_eq!(
+                    backend
+                        .database_incarnations
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    incarnations_before,
                     "{action:?} {read_time:?}"
                 );
             }

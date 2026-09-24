@@ -101,6 +101,19 @@ test("array shrink accepts only the untouched frozen sequence or an empty docume
   }
 });
 
+test("empty ProtoJSON may omit repeated values only when emptiness is explicitly expected", () => {
+  const empty = {
+    name: corpusV3[0],
+    updateTime: "2026-09-24T00:00:00Z",
+    fields: { a: { arrayValue: {} } },
+  };
+  assert.throws(() => validateShrinkBoundaryState(empty, corpusV3[0], 19_999));
+  assert.deepEqual(
+    validateShrinkBoundaryState(empty, corpusV3[0], 19_999, { allowEmptyOmitted: true }),
+    [],
+  );
+});
+
 test("managed clear is limited to distinct root collections in the fixed sandbox", () => {
   assert.deepEqual(managedClearScope(names, "fireemu-oracle-sbx", "(default)"), [
     "g500a",

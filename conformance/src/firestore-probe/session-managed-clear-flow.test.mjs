@@ -36,25 +36,40 @@ async function observeCollector({
   failureMode,
   initialJournalStatus,
   scopeNames = names,
+  extraNames = [],
   visibleNames = [scopeNames[0]],
   arrayLength = [19_999, 20_000, 7_184, 7_185, 12_123, 12_124],
   suffixStarts = [],
   initialState,
+  programCount = 1,
+  omitEmptyValues = false,
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "fireemu-array-shrink-"));
   const input = join(directory, "programs.json");
   const output = join(directory, "results.json");
   const meta = join(directory, "meta.json");
   const journal = join(directory, "managed.json");
-  await writeFile(input, JSON.stringify([{ id: "empty", steps: [] }]));
+  await writeFile(
+    input,
+    JSON.stringify(
+      Array.from({ length: programCount }, (_, index) => ({ id: `empty-${index}`, steps: [] })),
+    ),
+  );
   if (initialJournalStatus)
     await writeFile(journal, JSON.stringify({ status: initialJournalStatus }));
   const requests = [];
+  const legacyLengths = [12_116, 12_121, 12_123, 7_179, 7_183, 7_184];
   const records = new Map(
-    scopeNames.map((name, index) => {
+    [...scopeNames, ...extraNames].map((name, index) => {
       const relative = name.split("/documents/")[1];
       const [collection, document] = relative.split("/");
-      const length = Array.isArray(arrayLength) ? arrayLength[index] : arrayLength;
+      const scopeIndex = scopeNames.indexOf(name);
+      const length =
+        scopeIndex >= 0
+          ? Array.isArray(arrayLength)
+            ? arrayLength[scopeIndex]
+            : arrayLength
+          : (legacyLengths[extraNames.indexOf(name)] ?? 0);
       return [
         name,
         {
@@ -130,7 +145,12 @@ async function observeCollector({
           : {
               name,
               updateTime: record.updateTime,
-              fields: { a: { arrayValue: { values: record.values } } },
+              fields: {
+                a: {
+                  arrayValue:
+                    omitEmptyValues && record.values.length === 0 ? {} : { values: record.values },
+                },
+              },
             },
       );
     } else if (pathname.endsWith("/documents:commit")) {
@@ -286,7 +306,9 @@ test("collector array-removes bounded chunks with updateTime CAS before exact de
     );
     assert.ok(result.requests.some((request) => request.pathname.endsWith("/documents:batchGet")));
     assert.ok(result.requests.some((request) => request.pathname.endsWith("/documents:runQuery")));
-    assert.deepEqual(JSON.parse(await readFile(result.output, "utf8")), { empty: { steps: {} } });
+    assert.deepEqual(JSON.parse(await readFile(result.output, "utf8")), {
+      "empty-0": { steps: {} },
+    });
   } finally {
     await rm(result.directory, { recursive: true, force: true });
   }
@@ -336,7 +358,11 @@ test("collector applies bounded shrink and verification to the six frozen legacy
 
 test("collector completes bounded shrink and exact cleanup for all six frozen corpus-v3 names", async () => {
   const lengths = [19_999, 20_000, 7_184, 7_185, 12_123, 12_124];
-  const result = await observeCollector({ arrayLength: lengths, visibleNames: names });
+  const result = await observeCollector({
+    arrayLength: lengths,
+    visibleNames: names,
+    omitEmptyValues: true,
+  });
   try {
     assert.equal(result.failure, undefined);
     const transforms = result.requests.filter((request) => {
@@ -359,7 +385,7 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
     );
     assert.equal(
       result.requests.filter((request) => request.pathname.endsWith("/documents:runQuery")).length,
-      30,
+      24,
     );
     assert.equal(
       result.requests.filter((request) => request.pathname.endsWith("/documents:commit")).length,
@@ -379,7 +405,7 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
       );
     }
     const meta = JSON.parse(await readFile(result.meta, "utf8"));
-    assert.equal(meta.requestCount, 162);
+    assert.equal(meta.requestCount, 156);
     const scopedRequestCount = result.requests.filter(
       (request) =>
         request.pathname.endsWith("/documents:commit") ||
@@ -388,9 +414,55 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
         (request.method === "GET" &&
           names.some((name) => request.pathname.endsWith(name.split("/documents/")[1]))),
     ).length;
-    assert.equal(scopedRequestCount, 147);
+    assert.equal(scopedRequestCount, 141);
     assert.ok(scopedRequestCount <= 160);
-    assert.deepEqual(JSON.parse(await readFile(result.output, "utf8")), { empty: { steps: {} } });
+    assert.deepEqual(JSON.parse(await readFile(result.output, "utf8")), {
+      "empty-0": { steps: {} },
+    });
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("68 empty programs avoid repeated shrink preflight requests and stay within the cap", async () => {
+  const result = await observeCollector({ programCount: 68, visibleNames: [] });
+  try {
+    assert.equal(result.failure, undefined);
+    assert.equal(
+      result.requests.filter((request) => request.pathname.endsWith("/documents:runQuery")).length,
+      6,
+    );
+    assert.equal(
+      result.requests.filter((request) => request.pathname.endsWith("/documents:batchGet")).length,
+      1,
+    );
+    assert.equal(JSON.parse(await readFile(result.meta, "utf8")).requestCount, 76);
+    const output = JSON.parse(await readFile(result.output, "utf8"));
+    assert.equal(Object.keys(output).length, 68);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("corpus-v3 refuses legacy residual collections before issuing writes", async () => {
+  const result = await observeCollector({
+    extraNames: legacyNames,
+    visibleNames: [...names, ...legacyNames],
+  });
+  try {
+    assert.ok(result.failure);
+    assert.match(
+      String(result.failure.stderr),
+      /legacy debris requires recorded owner attestation/,
+    );
+    assert.equal(
+      result.requests.some((request) => {
+        if (!request.pathname.endsWith("/documents:commit")) return false;
+        return JSON.parse(request.body).writes.some((write) => write.delete || write.transform);
+      }),
+      false,
+    );
+    await assert.rejects(readFile(result.output), /ENOENT/);
   } finally {
     await rm(result.directory, { recursive: true, force: true });
   }

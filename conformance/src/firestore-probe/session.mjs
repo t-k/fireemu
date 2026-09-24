@@ -163,15 +163,27 @@ export function validateShrinkBoundaryDocument(document, expectedName) {
   return values;
 }
 
-export function validateShrinkBoundaryState(document, expectedName, expectedLength) {
-  const values = document?.fields?.a?.arrayValue?.values;
+export function validateShrinkBoundaryState(
+  document,
+  expectedName,
+  expectedLength,
+  { allowEmptyOmitted = false } = {},
+) {
+  const arrayValue = document?.fields?.a?.arrayValue;
+  const omittedEmpty =
+    allowEmptyOmitted &&
+    arrayValue &&
+    !Object.hasOwn(arrayValue, "values") &&
+    Object.keys(arrayValue).length === 0;
+  const values = omittedEmpty ? [] : arrayValue?.values;
   if (
     document?.name !== expectedName ||
     typeof document.updateTime !== "string" ||
     !document.updateTime ||
     Object.keys(document.fields ?? {}).length !== 1 ||
     Object.keys(document.fields?.a ?? {}).length !== 1 ||
-    !document.fields?.a?.arrayValue ||
+    !arrayValue ||
+    Object.keys(arrayValue).some((key) => key !== "values") ||
     !Array.isArray(values) ||
     !Number.isSafeInteger(expectedLength) ||
     expectedLength < 0
@@ -268,7 +280,7 @@ async function clearThroughPublicApi(database, verifyManagedScope) {
   const shrinkScopeActive = managedClearState !== null && database === "(default)";
   if (shrinkScopeActive) {
     managedClearBlocked = true;
-    await preflightManagedShrinkScope();
+    managedClearState.preflightDone = false;
   }
   // Listing is paged and only eventually reflects deletes: loop until a full listing is empty.
   for (let round = 0; round < 8; round += 1) {
@@ -282,6 +294,27 @@ async function clearThroughPublicApi(database, verifyManagedScope) {
       if (shrinkScopeActive && verifyManagedScope) await verifyManagedShrinkScopeAbsent(base);
       managedClearBlocked = false;
       return;
+    }
+    if (shrinkScopeActive) {
+      if (
+        managedClearState.shrinkScope === "v3" &&
+        collectionIds.some((collectionId) =>
+          LEGACY_SHRINK_NAMES.some(
+            (name) => name.split("/documents/")[1].split("/")[0] === collectionId,
+          ),
+        )
+      ) {
+        throw new Error(
+          "legacy debris requires recorded owner attestation before corpus-v3 cleanup",
+        );
+      }
+      const shrinkCollectionIds = new Set(
+        managedClearState.names.map((name) => name.split("/documents/")[1].split("/")[0]),
+      );
+      if (collectionIds.some((collectionId) => shrinkCollectionIds.has(collectionId))) {
+        await preflightManagedShrinkScope();
+        managedClearState.preflightDone = true;
+      }
     }
     const managedFailures = [];
     for (const collectionId of collectionIds) {
@@ -351,6 +384,10 @@ async function deleteCollection(base, parentPath, collectionId) {
     : undefined;
   if (scopedName) {
     managedClearBlocked = true;
+    if (!managedClearState.preflightDone) {
+      await preflightManagedShrinkScope();
+      managedClearState.preflightDone = true;
+    }
     if (names.length !== 1 || names[0] !== scopedName || missing.length !== 0) {
       throw new Error("array shrink scope contains an unexpected document");
     }
@@ -468,7 +505,7 @@ async function preflightManagedShrinkScope() {
     const collectionId = name.split("/documents/")[1].split("/")[0];
     const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
     const document = await response.json();
-    validateShrinkBoundaryState(document, name, expectedLength);
+    validateShrinkBoundaryState(document, name, expectedLength, { allowEmptyOmitted: true });
     managedClearState.preflightUpdateTimes.set(name, document.updateTime);
   }
 }
@@ -487,7 +524,9 @@ async function shrinkBoundaryDocument(name) {
   }
   const collectionId = name.split("/documents/")[1].split("/")[0];
   const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
-  let values = validateShrinkBoundaryState(document, name, expectedLength);
+  let values = validateShrinkBoundaryState(document, name, expectedLength, {
+    allowEmptyOmitted: true,
+  });
   let updateTime = document.updateTime;
   while (values.length > 0) {
     const removed = values.slice(0, SHRINK_CHUNK_SIZE);
@@ -528,7 +567,9 @@ async function shrinkBoundaryDocument(name) {
   if (shrunkDocument.updateTime !== updateTime) {
     throw new Error("array shrink target changed during post-shrink verification");
   }
-  const shrunk = validateShrinkBoundaryState(shrunkDocument, name, expectedLength);
+  const shrunk = validateShrinkBoundaryState(shrunkDocument, name, expectedLength, {
+    allowEmptyOmitted: true,
+  });
   if (shrunk.length !== 0) throw new Error("array shrink left indexed array values behind");
   return shrunkDocument.updateTime;
 }

@@ -218,7 +218,8 @@ export function sandboxManagedClearNames(corpus) {
 export async function withSandboxExclusiveLock(privateDir, work) {
   const lockPath = join(privateDir, "fs-data-write-exclusive.lock");
   await mkdir(lockPath, { mode: 0o700 });
-  const result = await work();
+  const rows = await readLedger(join(privateDir, "sandbox-ledger.jsonl"));
+  const result = await work(rows);
   await rmdir(lockPath);
   return result;
 }
@@ -398,7 +399,8 @@ async function recordProduction() {
   await writeFile(corpusIn, JSON.stringify(corpus));
   await writeFile(restIn, JSON.stringify(corpus.restPrograms));
   // The lock spans both recordings and any managed-delete LRO. Failed work retains it.
-  await withSandboxExclusiveLock(privateDir, async () => {
+  await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+    remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD * 2);
     const first = await productionRecording({
       corpusIn,
       restIn,
@@ -408,7 +410,7 @@ async function recordProduction() {
       corpusDigest,
       restRequestCount,
       liveStreamCount,
-      rows,
+      rows: lockedRows,
       managedNames,
     });
     const second = await productionRecording({
@@ -420,7 +422,7 @@ async function recordProduction() {
       corpusDigest,
       restRequestCount,
       liveStreamCount,
-      rows,
+      rows: lockedRows,
       managedNames,
     });
     try {

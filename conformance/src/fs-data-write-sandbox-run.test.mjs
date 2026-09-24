@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -255,6 +255,27 @@ test("exclusive sandbox lock is released after successful work", async () => {
   try {
     assert.equal(await withSandboxExclusiveLock(directory, async () => "recorded"), "recorded");
     await assert.rejects(stat(join(directory, "fs-data-write-exclusive.lock")), /ENOENT/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("sandbox lock re-reads the task ledger before admitting a recording", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-sandbox-budget-lock-"));
+  const ledger = join(directory, "sandbox-ledger.jsonl");
+  const row = (estimatedUsd) =>
+    JSON.stringify({ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd }) + "\n";
+  try {
+    const staleRows = [JSON.parse(row(8.5))];
+    assert.equal(remainingSandboxBudget(staleRows, 1), 1.5);
+    await writeFile(ledger, row(9.5));
+    await assert.rejects(
+      withSandboxExclusiveLock(directory, async (lockedRows) => {
+        assert.equal(lockedRows?.[0]?.estimatedUsd, 9.5);
+        remainingSandboxBudget(lockedRows, 1);
+      }),
+      /budget exceeded/,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

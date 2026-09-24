@@ -214,6 +214,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn declared_default_keys_refuse_every_undeclared_key() {
+        let mut t = Tenancy::new("demo-a");
+        t.register("demo-b", &[], &["key-b".to_owned()]).unwrap();
+        // Without declared default keys any key is accepted.
+        assert!(!t.refuses_api_key("anything"));
+        assert!(!t.is_default_api_key("key-a"));
+        t.declare_default_api_keys(&["key-a".to_owned()]);
+        assert!(t.is_default_api_key("key-a"));
+        assert!(!t.is_default_api_key("key-b"));
+        assert!(!t.refuses_api_key("key-a"), "the default project's own key");
+        assert!(!t.refuses_api_key("key-b"), "a registered session's key");
+        assert!(t.refuses_api_key("anything"));
+        assert!(t.refuses_api_key(""));
+    }
+
+    #[test]
     fn buckets_and_keys_resolve_to_their_session() {
         let mut t = Tenancy::new("demo-a");
         t.register("demo-b", &["shared-b".to_owned()], &["key-b".to_owned()])

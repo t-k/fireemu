@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import request_bytes_preflight as preflight
 from broad_contract import digest
 
+TEST_PROJECT_NUMBER = "1" * 12
+
 
 def token_receipt(**changes):
     body = {
@@ -93,18 +95,24 @@ def test_incomplete_token_receipt_refused(key, value):
 def test_closed_routes():
     assert (
         preflight.metadata_url("project")
-        == "https://cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6"
+        == "https://cloudresourcemanager.googleapis.com/v1/projects/fireemu-oracle-sbx"
     )
     with pytest.raises(ValueError):
         preflight.metadata_url("https://example.com")
 
 
 def test_metadata_identity_and_digest():
-    body = {"projectId": "fireemu-35fe6", "projectNumber": "592603257417"}
-    assert preflight.verify_metadata("project", body, {})["bodyDigest"] == digest(body)
-    body["projectNumber"] = "1"
+    body = {"projectId": "fireemu-oracle-sbx", "projectNumber": TEST_PROJECT_NUMBER}
+    permission = {"projectNumber": TEST_PROJECT_NUMBER}
+    assert preflight.verify_metadata("project", body, permission)["bodyDigest"] == digest(body)
+    body["projectNumber"] = "2" * 12
+    with pytest.raises(ValueError):
+        preflight.verify_metadata("project", body, permission)
     with pytest.raises(ValueError):
         preflight.verify_metadata("project", body, {})
+    for invalid in (None, 12, "", "0", "<project-number>"):
+        with pytest.raises(ValueError):
+            preflight.validate_project_number(invalid)
     with pytest.raises(ValueError):
         preflight.verify_metadata(
             "auth", {}, {"authConfigDigest": digest({"setting": True})}
@@ -204,11 +212,16 @@ def test_matching_metadata_body_requires_complete_success_receipt(patch):
         "complete": True,
         "workerReaped": True,
         "bodyKind": "json",
-        "body": {"projectId": preflight.PROJECT, "projectNumber": preflight.NUMBER},
+        "body": {
+            "projectId": preflight.PROJECT,
+            "projectNumber": TEST_PROJECT_NUMBER,
+        },
     }
     receipt.update(patch)
     with pytest.raises(ValueError):
-        preflight.verify_metadata_receipt("project", receipt, {})
+        preflight.verify_metadata_receipt(
+            "project", receipt, {"projectNumber": TEST_PROJECT_NUMBER}
+        )
 
 
 def test_matching_metadata_success_receipt():
@@ -217,11 +230,42 @@ def test_matching_metadata_success_receipt():
         "complete": True,
         "workerReaped": True,
         "bodyKind": "json",
-        "body": {"projectId": preflight.PROJECT, "projectNumber": preflight.NUMBER},
+        "body": {
+            "projectId": preflight.PROJECT,
+            "projectNumber": TEST_PROJECT_NUMBER,
+        },
     }
     assert (
-        preflight.verify_metadata_receipt("project", receipt, {})["slot"] == "project"
+        preflight.verify_metadata_receipt(
+            "project", receipt, {"projectNumber": TEST_PROJECT_NUMBER}
+        )["slot"]
+        == "project"
     )
+
+
+def test_project_attestation_replays_against_the_permission_bound_number():
+    permission = {"projectNumber": TEST_PROJECT_NUMBER}
+    receipt = {
+        "status": 200,
+        "complete": True,
+        "workerReaped": True,
+        "bodyKind": "json",
+        "body": {
+            "projectId": preflight.PROJECT,
+            "projectNumber": TEST_PROJECT_NUMBER,
+        },
+    }
+    attestation = preflight.metadata_attestation("project", receipt, permission)
+    assert attestation["complete"] is True
+    assert attestation["body"]["projectNumberDigest"] == digest(
+        {"projectNumber": TEST_PROJECT_NUMBER}
+    )
+    preflight.validate_metadata_attestation("project", attestation, permission)
+
+    tampered = {**attestation, "body": dict(attestation["body"])}
+    tampered["body"].pop("projectNumberDigest")
+    with pytest.raises(ValueError, match="project metadata binding"):
+        preflight.validate_metadata_attestation("project", tampered, permission)
 
 
 def test_frozen_verified_email_identity():
@@ -275,7 +319,7 @@ def metadata_receipt(body):
 
 
 AUTH_BODY = {
-    "name": "projects/592603257417/config",
+    "name": "projects/<project-number>/config",
     "client": {"apiKey": "secret-looking-key"},
     "notification": {"sendEmail": {"smtp": {"host": "smtp.example.test"}}},
 }
@@ -297,7 +341,9 @@ def test_metadata_attestation_publishes_digest_not_raw_auth_config():
 
 
 def test_metadata_attestation_reports_drift_as_incomplete_not_raised():
-    permission = {"authConfigDigest": digest({"name": "projects/592603257417/config"})}
+    permission = {
+        "authConfigDigest": digest({"name": "projects/<project-number>/config"})
+    }
     public = preflight.metadata_attestation("auth", metadata_receipt(AUTH_BODY), permission)
     assert public["complete"] is False
     assert public["status"] == 200
@@ -355,7 +401,10 @@ def test_saved_management_requires_completed_2xx_gate_events(patch):
         "complete": True,
         "workerReaped": True,
     }
-    project = {"projectId": preflight.PROJECT, "projectNumber": preflight.NUMBER}
+    project = {
+        "projectId": preflight.PROJECT,
+        "projectNumber": TEST_PROJECT_NUMBER,
+    }
     database = {
         "name": preflight.DATABASE,
         "uid": "u",
@@ -364,6 +413,7 @@ def test_saved_management_requires_completed_2xx_gate_events(patch):
         "locationId": "us-central1",
     }
     permission = {
+        "projectNumber": TEST_PROJECT_NUMBER,
         "credentialPrincipal": principal_value,
         "wallSeconds": wall,
         "authConfigDigest": digest(AUTH_BODY),

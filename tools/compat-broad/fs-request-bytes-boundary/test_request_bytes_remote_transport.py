@@ -15,7 +15,7 @@ sys.path.insert(0, "tools/compat-broad/fs-request-bytes-boundary")
 
 import request_bytes_remote_transport
 from request_bytes_collector import collect_local
-from request_bytes_compiler import compile_request_bytes_plan
+from request_bytes_compiler import REQUEST_TARGETS, compile_request_bytes_plan
 from request_bytes_compiler import (
     RAW_16MIB_OVER_BYTES,
     compile_request_bytes_sentinel_plan,
@@ -479,7 +479,7 @@ def test_413_oversize_retains_status_and_observed_size():
 
 
 def test_request_byte_ceiling_is_approved_maximum():
-    assert MAX_REQUEST_BYTES == 10_485_761
+    assert MAX_REQUEST_BYTES == 11_534_337
     assert RESPONSE_BYTES == 2 * 1024 * 1024
 
 
@@ -626,7 +626,7 @@ def test_collector_accepts_incomplete_receipt_and_persists_bounded_sidecar(tmp_p
 
 # --- Boundary-size deadline coverage -----------------------------------------
 #
-# The production transport carries a 10,485,761-byte body through a single total
+# The production transport carries an 11,534,337-byte body through a single total
 # deadline. These tests exercise that path at boundary size: one through the
 # injected-exchange seam, one through the real process exchange and the real
 # worker logic with TLS replaced by loopback plaintext. No production request is
@@ -662,7 +662,7 @@ def test_boundary_body_reaches_the_exchange_intact_within_one_deadline():
     body = json.dumps(
         operation["body"], separators=(",", ":"), ensure_ascii=False
     ).encode()
-    assert len(body) == 10_485_759
+    assert len(body) == REQUEST_TARGETS[0]
     assert seen["bytes"] == len(body)
     assert seen["sha256"] == hashlib.sha256(body).hexdigest()
     assert receipt["requestBytes"] == len(body)
@@ -719,7 +719,7 @@ def _loopback_worker_source(host: str) -> bytes:
 
 
 def test_boundary_body_survives_the_real_process_exchange_and_worker(loopback_server):
-    """Push 10,485,761 bytes through the exchange and worker the campaign uses."""
+    """Push 11,534,337 bytes through the exchange and worker the campaign uses."""
     from request_bytes_process_exchange import _run_process_exchange
 
     host, received = loopback_server

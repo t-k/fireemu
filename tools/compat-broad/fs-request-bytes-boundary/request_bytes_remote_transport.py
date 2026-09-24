@@ -35,24 +35,25 @@ from request_bytes_compiler import (
 from request_bytes_process_exchange import _run_process_exchange
 
 ORIGIN = "https://firestore.googleapis.com"
-MAX_REQUEST_BYTES = 10_485_761
+MAX_REQUEST_BYTES = 11_534_337
 MAX_SENTINEL_REQUEST_BYTES = RAW_16MIB_OVER_BYTES
 RESPONSE_BYTES = 2 * 1024 * 1024
 # One total wire deadline covering connection setup, TLS, the upload, server
-# processing and the response. It is sized for the 10,485,761-byte boundary
+# processing and the response. It is sized for the 11,534,337-byte boundary
 # Commit, not for a kilobyte request.
 #
-#   upload            83,886,088 bits at a conservative 5 Mbit/s sustained   16.8 s
+#   upload            92,274,696 bits at a conservative 5 Mbit/s sustained   18.5 s
 #   DNS, TCP and TLS 1.3 setup                                                1.5 s
 #   server processing of one 17-document conditional-create Commit            8.0 s
 #   response read, bounded at 2 MiB                                           0.5 s
 #   ------------------------------------------------------------------------------
-#   derived requirement                                                      26.8 s
+#   derived requirement                                                      28.5 s
 #
 # 60 s is that requirement with roughly a 2x margin. At 60 s, reserving 10 s for
 # setup, processing and the response leaves 50 s for the body, so the slowest
-# link that can complete a boundary probe sustains about 1.7 Mbit/s upstream.
-# A slower link yields an incomplete receipt and an uncertain Commit; see
+# link that can complete a boundary probe sustains about 1.85 Mbit/s upstream.
+# At 60 s the slowest usable upstream rate is about 1.85 Mbit/s. A slower link
+# yields an incomplete receipt and an uncertain Commit; see
 # `request_bytes_campaign.TRANSPORT_DEADLINE` for the consequence that binds.
 TIMEOUT = 60.0
 SENTINEL_TIMEOUT = 80.0

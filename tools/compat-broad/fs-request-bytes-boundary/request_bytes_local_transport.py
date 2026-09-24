@@ -32,10 +32,10 @@ if _SPEC is None or _SPEC.loader is None:  # pragma: no cover - installation err
 _shared = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_shared)
 
-MAX_REQUEST_BYTES = 10_485_761
+MAX_REQUEST_BYTES = 11_534_337
 MAX_SENTINEL_REQUEST_BYTES = 16_777_217
 RESPONSE_BYTES = 2 * 1024 * 1024
-REQUEST_TARGETS = (10_485_759, 10_485_760, 10_485_761)
+REQUEST_TARGETS = (11_534_335, 11_534_336, 11_534_337)
 SENTINEL_PROBE = "raw-16mib-over"
 
 

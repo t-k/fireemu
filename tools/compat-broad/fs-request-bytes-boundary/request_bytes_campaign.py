@@ -1,4 +1,4 @@
-"""Offline campaign artifact for the 10 MiB API request-byte boundary.
+"""Offline campaign artifact for the 11 MiB strict REST Commit byte boundary.
 
 This module composes the already reviewed compiler plan into a bounded campaign
 description: boundary cases, the typed refusal expectation, the post-state
@@ -29,6 +29,7 @@ for _entry in (str(HERE), str(HERE.parent)):
 import shared_gate
 from request_bytes_compiler import (
     CAMPAIGN,
+    CATALOG_MAXIMUM,
     DOCUMENT_COUNT,
     REQUEST_LIMIT,
     REQUEST_TARGETS,
@@ -106,7 +107,7 @@ def sentinel_budget() -> dict[str, Any]:
 # the published precision. The uploaded volume is still recorded because it is
 # the quantity that makes this campaign unusual.
 EGRESS_NOTE = (
-    "About 30 MiB is uploaded across the three Commits and under 1 MiB is "
+    "About 33 MiB is uploaded across the three Commits and under 1 MiB is "
     "returned. Ingress is not billed and the returned volume is negligible, so "
     "the network component of this campaign is zero to the published precision."
 )
@@ -192,6 +193,10 @@ MANAGEMENT_OBSERVATION_IDS = (
 )
 MANAGEMENT_RECOVERY_IDS = ("project", "database", "auth")
 MANAGEMENT_REQUEST_COST_MICROUSD = 1
+ASSUMED_SUSTAINED_BITS_PER_SECOND = 5_000_000
+BOUNDARY_UPLOAD_SECONDS = round(
+    max(REQUEST_TARGETS) * 8 / ASSUMED_SUSTAINED_BITS_PER_SECOND, 3
+)
 
 
 #: The fields that make up a refusal shape. A classification claiming the shape
@@ -200,21 +205,15 @@ MANAGEMENT_REQUEST_COST_MICROUSD = 1
 BASELINE_COMPARISON_FIELDS = ("httpStatus", "errorCode", "errorStatus", "message")
 
 
-#: What the local fireemu runtime does today, as observed by the local shadow
-#: rather than assumed. The limits layer now implements this condition: every
-#: Firestore transport applies the same bound at its own decode boundary, and
-#: the strict profile answers one refusal shape everywhere.
-#:
-#: That shape agrees with what this campaign expects of production. The
-#: agreement is not confirmation: the expected production shape is itself
-#: documented rather than observed, which is exactly what the campaign exists to
-#: settle. Local agreement removes a known difference; it does not answer the
-#: question.
+#: Observed local behavior from the source-bound 11 MiB shadow and strict REST
+#: Commit tests. Other surfaces continue to use API_REQUEST_BYTES at 10 MiB.
+#: The saved production comparison covers only its concrete 11 MiB and 11 MiB
+#: plus one byte REST recipes.
 LOCAL_EXPECTATION: dict[str, Any] = {
-    "localEnforcement": "each transport's decode boundary, strict profile",
-    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, API_REQUEST_BYTES = 10 * 1024 * 1024, refused by api_request_too_large()",
+    "localEnforcement": "strict profile REST Commit decode boundary",
+    "enforcementSource": "crates/fireemu-adapter-grpc/src/serve.rs, MAX_STRICT_COMMIT_RAW_BYTES = 11 * 1024 * 1024 for REST :commit; API_REQUEST_BYTES = 10 * 1024 * 1024 remains in force on other surfaces",
     "catalogState": "implemented",
-    "catalogNote": "The limits catalog records FS-LIMIT-API-REQUEST-BYTES as implemented, enforced before the request is parsed on the REST body, the WebChannel form body and a gRPC message, unary or streamed. The refusal shape is documented, production observation pending.",
+    "catalogNote": "The 11 MiB boundary in this campaign is specific to strict REST :commit raw body bytes. API_REQUEST_BYTES remains 10 MiB on other surfaces. The source-bound local shadow confirms exact acceptance and typed plus-one refusal locally. The saved production comparison establishes those outcomes only for its concrete raw REST recipes; it does not establish preservation of a prior accepted document after refusal or a new observation on the sandbox target.",
     "observedProbeOutcomes": {
         "under": "accepted",
         "exact": "accepted",
@@ -224,7 +223,7 @@ LOCAL_EXPECTATION: dict[str, Any] = {
         "httpStatus": 400,
         "errorCode": 400,
         "errorStatus": "INVALID_ARGUMENT",
-        "message": "Request payload size exceeds the limit: 10485760 bytes.",
+        "message": "Request payload size exceeds the limit: 11534336 bytes.",
         "classification": "expected",
     },
     #: Per transport, because a reader comparing a future production receipt
@@ -236,8 +235,8 @@ LOCAL_EXPECTATION: dict[str, Any] = {
             "httpStatus": 400,
             "errorCode": 400,
             "errorStatus": "INVALID_ARGUMENT",
-            "message": "Request payload size exceeds the limit: 10485760 bytes.",
-            "observedBy": "this campaign's local shadow",
+            "message": "Request payload size exceeds the limit: 11534336 bytes.",
+            "observedBy": "source-bound 11 MiB local shadow and strict REST Commit implementation tests",
         },
         "grpc": {
             "transport": "gRPC unary, Write stream and WebChannel",
@@ -265,13 +264,13 @@ LOCAL_EXPECTATION: dict[str, Any] = {
         },
         "note": "What the local runtime answered before the limits layer implemented this condition. The strict profile is what the campaign compares against.",
     },
-    "differenceFromProductionExpectation": "None in shape or boundary. The local runtime answers the same status, code and message this campaign expects of production. That expectation is documented rather than observed, so the agreement removes a known difference and does not confirm the production shape; only a production receipt can do that.",
+    "differenceFromProductionExpectation": "None for the concrete strict REST Commit boundary cases: saved production evidence records a successful 11 MiB write with readback and a typed 400 INVALID_ARGUMENT refusal at 11 MiB plus one byte with the refused target absent. The evidence does not establish preservation of the previously accepted path after refusal, decoded request-byte behavior, or behavior on other transports.",
     "expectedCollectorFailures": [],
     "expectedCompleted": True,
     "expectedResourceAbsence": True,
     "classification": "local-shape-matches-production-expectation",
     "supersededBaseline": "Until the limits layer landed, the local runtime refused with HTTP 413 `request body too large` from a transport body cap, which the shadow classified as `local-boundary-enforced-shape-differs`. That classification is retained as a regression outcome: a strict-profile build answering 413 has lost the implemented shape.",
-    "note": "A local run in which the over probe is accepted means the bound was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
+    "note": "A local run in which the 11 MiB plus one byte probe is accepted means the strict REST Commit bound was removed or raised; the shadow reports that as `local-boundary-not-enforced` rather than passing.",
 }
 
 
@@ -288,12 +287,14 @@ TRANSPORT_DEADLINE: dict[str, Any] = {
     ],
     "derivation": {
         "uploadBits": max(REQUEST_TARGETS) * 8,
-        "assumedSustainedBitsPerSecond": 5_000_000,
-        "uploadSeconds": 16.8,
+        "assumedSustainedBitsPerSecond": ASSUMED_SUSTAINED_BITS_PER_SECOND,
+        "uploadSeconds": BOUNDARY_UPLOAD_SECONDS,
         "connectionSetupSeconds": 1.5,
         "serverProcessingSeconds": 8.0,
         "responseReadSeconds": 0.5,
-        "derivedRequirementSeconds": 26.8,
+        "derivedRequirementSeconds": round(
+            BOUNDARY_UPLOAD_SECONDS + 1.5 + 8.0 + 0.5, 3
+        ),
         "marginNote": "The published ceiling is that requirement with roughly a 2x margin.",
     },
     "nonUploadReserveSeconds": NON_UPLOAD_RESERVE_SECONDS,
@@ -429,7 +430,7 @@ def gate_charging_plan(plan: dict[str, Any]) -> dict[str, Any]:
     This is for charging only. The O8 descriptor owns the real allocation; this
     exists so the published windows are checked against the Gate's own
     arithmetic instead of a constant copied out of it, which is how the two came
-    to disagree. Every slot carries its own reservation: a 10 MiB upload and a
+    to disagree. Every slot carries its own reservation: an 11 MiB upload and a
     small cleanup read cannot share one honest bound.
     """
     entries = []
@@ -468,7 +469,7 @@ def _reservation_for(project: str, database: str, nonce: str) -> str:
     """The reservation for one campaign identity, compiled once.
 
     Validation needs the charge the Gate would apply, which is derived from the
-    compiled schedule. Compiling that schedule builds the three 10 MiB bodies,
+    compiled schedule. Compiling that schedule builds the three 11 MiB bodies,
     so doing it on every validate call cost more than the rest of the suite put
     together. The schedule is a pure function of these three inputs, so it is
     compiled once per identity. The result is returned as canonical JSON rather
@@ -631,7 +632,7 @@ def compile_request_bytes_campaign(
         "campaignId": CAMPAIGN,
         "catalogId": CAMPAIGN,
         "catalogSource": CATALOG_SOURCE,
-        "catalogMaximum": REQUEST_LIMIT,
+        "catalogMaximum": CATALOG_MAXIMUM,
         "condition": "FS-LIMIT-API-REQUEST-BYTES",
         "parent": "FS-DATA-WRITE",
         "protocol": "REST",
@@ -648,8 +649,15 @@ def compile_request_bytes_campaign(
         ],
         "boundary": {
             "limit": REQUEST_LIMIT,
+            "catalogMaximum": CATALOG_MAXIMUM,
             "acceptedBytes": [t for t in REQUEST_TARGETS if t <= REQUEST_LIMIT],
             "refusedBytes": [t for t in REQUEST_TARGETS if t > REQUEST_LIMIT],
+            "routeSpecificException": {
+                "operation": "REST Commit",
+                "limit": REQUEST_LIMIT,
+                "evidence": "saved-production-comparison",
+                "scopeNote": "Concrete strict REST Commit recipes only; this does not revise the general catalog maximum or establish decoded-byte behavior.",
+            },
             "metric": plan["metric"],
             "metricStatus": plan["metricStatus"],
         },
@@ -694,9 +702,9 @@ def compile_request_bytes_campaign(
             },
             "routes": {
                 "oauth-tokeninfo": "POST https://www.googleapis.com/oauth2/v1/tokeninfo",
-                "project": "GET https://cloudresourcemanager.googleapis.com/v1/projects/fireemu-35fe6",
-                "database": "GET https://firestore.googleapis.com/v1/projects/fireemu-35fe6/databases/(default)",
-                "auth": "GET https://identitytoolkit.googleapis.com/admin/v2/projects/fireemu-35fe6/config",
+                "project": f"GET https://cloudresourcemanager.googleapis.com/v1/projects/{project}",
+                "database": f"GET https://firestore.googleapis.com/v1/projects/{project}/databases/{database}",
+                "auth": f"GET https://identitytoolkit.googleapis.com/admin/v2/projects/{project}/config",
             },
             "localShadow": "local-only; never sufficient for O7 production admission",
         },
@@ -756,13 +764,13 @@ def compile_request_bytes_sentinel_campaign(
         "condition": CAMPAIGN,
         "caseMode": "single-exploratory-sentinel",
         "caseIds": [RAW_16MIB_OVER_CASE_ID],
-        "catalogMaximum": REQUEST_LIMIT,
+        "catalogMaximum": CATALOG_MAXIMUM,
         "protocol": "REST",
         "operations": ["Commit"],
         "boundary": {
-            "catalogMaximum": REQUEST_LIMIT,
+            "catalogMaximum": CATALOG_MAXIMUM,
             "inputBytes": RAW_16MIB_OVER_BYTES,
-            "relationToCatalog": RAW_16MIB_OVER_BYTES - REQUEST_LIMIT,
+        "relationToCatalog": RAW_16MIB_OVER_BYTES - CATALOG_MAXIMUM,
             "metric": plan["metric"],
             "metricStatus": plan["metricStatus"],
             "isCatalogBoundaryRevision": False,
@@ -851,7 +859,7 @@ def validate_request_bytes_sentinel_campaign(campaign: dict[str, Any]) -> None:
         "condition": CAMPAIGN,
         "caseMode": "single-exploratory-sentinel",
         "caseIds": [RAW_16MIB_OVER_CASE_ID],
-        "catalogMaximum": REQUEST_LIMIT,
+        "catalogMaximum": CATALOG_MAXIMUM,
         "protocol": "REST",
         "operations": ["Commit"],
         "authorizesProductionExecution": False,
@@ -862,9 +870,9 @@ def validate_request_bytes_sentinel_campaign(campaign: dict[str, Any]) -> None:
         raise ValueError("sentinel campaign contract drift")
     boundary = campaign.get("boundary")
     if boundary != {
-        "catalogMaximum": REQUEST_LIMIT,
+        "catalogMaximum": CATALOG_MAXIMUM,
         "inputBytes": RAW_16MIB_OVER_BYTES,
-        "relationToCatalog": RAW_16MIB_OVER_BYTES - REQUEST_LIMIT,
+            "relationToCatalog": RAW_16MIB_OVER_BYTES - CATALOG_MAXIMUM,
         "metric": "REST raw HTTP body UTF-8 bytes",
         "metricStatus": "observation hypothesis",
         "isCatalogBoundaryRevision": False,
@@ -950,7 +958,7 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
         ("schema", SCHEMA),
         ("campaignId", CAMPAIGN),
         ("catalogId", CAMPAIGN),
-        ("catalogMaximum", REQUEST_LIMIT),
+        ("catalogMaximum", CATALOG_MAXIMUM),
         ("protocol", "REST"),
         ("productionExecuted", False),
         ("formalCompatibilityClaim", False),
@@ -967,6 +975,18 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
     boundary = campaign.get("boundary")
     if not isinstance(boundary, dict):
         raise TypeError("missing boundary")
+    if boundary.get("catalogMaximum") != CATALOG_MAXIMUM:
+        raise ValueError("boundary must preserve the general catalog maximum")
+    exception = boundary.get("routeSpecificException")
+    if (
+        not isinstance(exception, dict)
+        or exception.get("operation") != "REST Commit"
+        or exception.get("limit") != REQUEST_LIMIT
+        or exception.get("evidence") != "saved-production-comparison"
+        or "does not revise the general catalog maximum"
+        not in exception.get("scopeNote", "")
+    ):
+        raise ValueError("strict REST Commit exception must remain separately scoped")
     accepted = boundary.get("acceptedBytes")
     refused = boundary.get("refusedBytes")
     if not isinstance(accepted, list) or not isinstance(refused, list):
@@ -1087,10 +1107,12 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
 
     if not local.get("differenceFromProductionExpectation"):
         raise ValueError("the local difference must be stated, not absorbed")
-    if "does not confirm" not in local["differenceFromProductionExpectation"]:
-        raise ValueError(
-            "local agreement with a documented expectation is not confirmation of it"
-        )
+    scope = local["differenceFromProductionExpectation"]
+    if (
+        "does not establish preservation" not in scope
+        or "other transports" not in scope
+    ):
+        raise ValueError("the saved production evidence scope must stay explicit")
     if not local.get("supersededBaseline"):
         raise ValueError("the superseded local baseline must stay on the record")
     if local.get("expectedCompleted") is not True:
@@ -1176,6 +1198,16 @@ def validate_request_bytes_campaign(campaign: dict[str, Any]) -> None:
         raise ValueError("production credential management schedule drifted")
     if preflight.get("localShadow") != "local-only; never sufficient for O7 production admission":
         raise ValueError("local shadow must remain production-ineligible")
+    project = campaign["owner"]["project"]
+    database = campaign["owner"]["database"]
+    expected_routes = {
+        "oauth-tokeninfo": "POST https://www.googleapis.com/oauth2/v1/tokeninfo",
+        "project": f"GET https://cloudresourcemanager.googleapis.com/v1/projects/{project}",
+        "database": f"GET https://firestore.googleapis.com/v1/projects/{project}/databases/{database}",
+        "auth": f"GET https://identitytoolkit.googleapis.com/admin/v2/projects/{project}/config",
+    }
+    if preflight.get("routes") != expected_routes:
+        raise ValueError("production metadata routes must bind to the campaign target")
     cost = campaign.get("cost")
     if not isinstance(cost, dict):
         raise TypeError("missing cost estimate")

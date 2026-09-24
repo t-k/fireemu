@@ -505,19 +505,27 @@ const emailLinkSignInProgram = program(
 );
 
 // ---- the session an email link opens (AUTH-CREDENTIAL scope decision C7) --------------------
+// Each refresh waits a second, so whether its iat is later than the sign-in's is behavior, not
+// latency (the first final recording differed there).
 
 const emailLinkSession = program(
   "auth-action/email-link/session",
   [
     signInLink("link-s", "s"),
     emailLinkSignIn("sign-in-s", "link-s", "s", fresh()),
-    refreshWith("refresh-s", "sign-in-s", sameSession("id_token", "sign-in-s:idToken")),
+    refreshWith("refresh-s", "sign-in-s", {
+      delayMs: 1100,
+      ...sameSession("id_token", "sign-in-s:idToken"),
+    }),
     lookupWith("lookup-s", "sign-in-s"),
     cookie("cookie-s", "sign-in-s"),
     adminCreate("create-p", "p"),
     signInLink("link-p", "p"),
     emailLinkSignIn("sign-in-p", "link-p", "p", fresh()),
-    refreshWith("refresh-p", "sign-in-p", sameSession("id_token", "sign-in-p:idToken")),
+    refreshWith("refresh-p", "sign-in-p", {
+      delayMs: 1100,
+      ...sameSession("id_token", "sign-in-p:idToken"),
+    }),
     cookie("cookie-p", "sign-in-p"),
     signIn("sign-in-p-password", "p", "password123", fresh()),
     client("anonymous-sign-up", "signUp", { returnSecureToken: true }),
@@ -528,11 +536,10 @@ const emailLinkSession = program(
       }),
       ...sameAccount("anonymous-sign-up"),
     },
-    refreshWith(
-      "refresh-anon-link",
-      "sign-in-anon-link",
-      sameSession("id_token", "sign-in-anon-link:idToken"),
-    ),
+    refreshWith("refresh-anon-link", "sign-in-anon-link", {
+      delayMs: 1100,
+      ...sameSession("id_token", "sign-in-anon-link:idToken"),
+    }),
     cookie("cookie-anon-link", "sign-in-anon-link"),
   ],
   EMAIL_LINK_ON,

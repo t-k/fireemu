@@ -22,6 +22,7 @@ import {
   UNCREATED_DATABASES,
   UNTIL,
   isDatabaseOperation,
+  isConcurrentChange,
   isRateLimited,
   sortListings,
 } from "./harness.mjs";
@@ -48,6 +49,8 @@ export function createSession(
     tokenMaxAgeMs = 40 * 60_000,
     databaseOperationsPerMinute = 40,
     rateLimitRetries = 5,
+    concurrentChangeDelayMs = 15_000,
+    concurrentChangeRetries = 6,
     rateLimitDelayMs = 65_000,
     log = () => {},
   } = {},
@@ -163,6 +166,16 @@ export function createSession(
         await sleep(rateLimitDelayMs);
         continue;
       }
+      // A database change racing an earlier one is retried once the earlier one has had time
+      // to apply; a race that never clears is kept, marked, and never counted as behavior.
+      if (
+        ctx.target.kind === "production" &&
+        isConcurrentChange(answer.status, answer.json, request.url)
+      ) {
+        if (attempt >= concurrentChangeRetries) return { ...answer, concurrentChange: true };
+        await sleep(concurrentChangeDelayMs);
+        continue;
+      }
       // An expired credential says nothing about the resource: refresh and retry once, and
       // never record it as behavior.
       if (answer.status !== 401 || ctx.target.kind !== "production") return answer;
@@ -253,7 +266,8 @@ export function createSession(
       };
     }
     if (answer.transportError) return { status: 0, transportError: answer.transportError };
-    return normalizeRestResponse(answer.status, answer.text, ctx, program, symbols, step);
+    const recorded = normalizeRestResponse(answer.status, answer.text, ctx, program, symbols, step);
+    return answer.concurrentChange ? { ...recorded, transient: "concurrent-change" } : recorded;
   }
 
   async function runStep(program, step, raw, symbols) {

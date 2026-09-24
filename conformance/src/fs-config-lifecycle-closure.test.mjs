@@ -145,6 +145,18 @@ test("FS-CONFIG-LIFECYCLE closure inventory cannot silently omit a declared cond
       );
     } else if (label === "FS-CONFIG-LIFECYCLE/final-artifact-regression") {
       assert.deepEqual(condition.evidence.fsConfig, comparison.summary, label);
+      // Every row that passes on one of production's two recordings is a variation production
+      // itself showed, named with its reason and the recording it matches; no other row may.
+      const variations = condition.evidence.productionVariations ?? [];
+      for (const variation of variations)
+        assert.ok(variation.reason, `${label}: ${variation.row} names why production varies`);
+      assert.deepEqual(
+        rows
+          .filter(({ status }) => status === "MATCH_NONDETERMINISTIC")
+          .map(({ row, matched }) => ({ row, matched })),
+        variations.map(({ row, matched }) => ({ row, matched })),
+        `${label}: production variations are listed with the recording they match`,
+      );
       // Every row that passes only modulo id numbering is named, so the rule stays visible.
       assert.deepEqual(
         rows.filter(({ status }) => status === "MATCH_RELABELED").map(({ row }) => row),

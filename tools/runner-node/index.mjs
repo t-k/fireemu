@@ -70,6 +70,9 @@ const localSecrets = (() => {
   return new Map(Object.entries(parsed).filter(([, value]) => typeof value === "string"));
 })();
 let functionEnvironmentQueue = Promise.resolve();
+const sharedFunctionInvocations = new Set();
+let activeSharedEnvironments = 0;
+let sharedSavedSecrets;
 let discoveredGlobalOptions = {};
 
 function inspectorPort() {
@@ -206,16 +209,17 @@ function setFunctionIdentity(spec) {
 }
 
 function withFunctionEnvironment(spec, task, invocationId) {
+  const shared = localSecrets.size > 0 && activeInspectorPort === undefined &&
+    !(spec?.platformOptions?.secrets || []).some(name => localSecrets.has(name));
   const run = async () => {
     if (finishingOutput || outputFailed) throw new Error("runner is shutting down");
     setFunctionIdentity(spec);
-    const saved = new Map();
-    for (const [name] of localSecrets) {
-      saved.set(
-        name,
-        Object.prototype.hasOwnProperty.call(process.env, name) ? process.env[name] : undefined,
-      );
-      delete process.env[name];
+    let saved;
+    if (shared) {
+      if (activeSharedEnvironments === 0) sharedSavedSecrets = hideLocalSecrets();
+      activeSharedEnvironments++;
+    } else {
+      saved = hideLocalSecrets();
     }
     for (const name of spec?.platformOptions?.secrets || []) {
       if (localSecrets.has(name)) process.env[name] = localSecrets.get(name);
@@ -223,16 +227,54 @@ function withFunctionEnvironment(spec, task, invocationId) {
     try {
       return await invocationLogger.run({ functionName: spec?.name, invocationId }, task);
     } finally {
-      for (const [name, value] of saved) {
-        if (value === undefined) delete process.env[name];
-        else process.env[name] = value;
+      if (shared) {
+        activeSharedEnvironments--;
+        if (activeSharedEnvironments === 0) {
+          restoreLocalSecrets(sharedSavedSecrets);
+          sharedSavedSecrets = undefined;
+        }
+      } else {
+        restoreLocalSecrets(saved);
       }
     }
   };
   if (localSecrets.size === 0 && activeInspectorPort === undefined) return run();
-  const result = functionEnvironmentQueue.then(run);
+  const previous = functionEnvironmentQueue;
+  if (shared) {
+    // Undeclared calls share one cleared environment; a queued declaring call
+    // closes this group before later calls can enter.
+    const result = previous.then(run);
+    sharedFunctionInvocations.add(result);
+    void result.then(
+      () => sharedFunctionInvocations.delete(result),
+      () => sharedFunctionInvocations.delete(result),
+    );
+    return result;
+  }
+  const pendingShared = [...sharedFunctionInvocations];
+  sharedFunctionInvocations.clear();
+  const result = Promise.allSettled([previous, ...pendingShared]).then(run);
   functionEnvironmentQueue = result.catch(() => {});
   return result;
+}
+
+function hideLocalSecrets() {
+  const saved = new Map();
+  for (const [name] of localSecrets) {
+    saved.set(
+      name,
+      Object.prototype.hasOwnProperty.call(process.env, name) ? process.env[name] : undefined,
+    );
+    delete process.env[name];
+  }
+  return saved;
+}
+
+function restoreLocalSecrets(saved) {
+  for (const [name, value] of saved) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 }
 
 async function loadCodebase() {

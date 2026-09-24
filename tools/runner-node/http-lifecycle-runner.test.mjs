@@ -51,6 +51,7 @@ async function http(req,res){
  res.json({tag,secret:process.env.ALPHA_SECRET||null,requestComplete:req.complete,requestDestroyed:req.destroyed});
 }
 http.__endpoint={platform:'gcfv2',httpsTrigger:{},secretEnvironmentVariables:[{key:'ALPHA_SECRET'}]};
+async function plain(req,res){return http(req,res)};plain.__endpoint={platform:'gcfv2',httpsTrigger:{}};
 async function task(req,res){return http(req,res)};task.__endpoint={platform:'gcfv2',taskQueueTrigger:{},secretEnvironmentVariables:[{key:'ALPHA_SECRET'}]};
 function blocking(){};blocking.__endpoint={platform:'gcfv2',blockingTrigger:{eventType:'beforeSignIn'},secretEnvironmentVariables:[{key:'ALPHA_SECRET'}]};
 blocking.run=async event=>{
@@ -62,7 +63,7 @@ blocking.run=async event=>{
 };
 const probe=async data=>{record({event:'probe',tag:data.tag,secret:process.env.ALPHA_SECRET||null});};
 probe.run=probe;probe.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 1 minutes'}};
-module.exports={http,task,blocking,probe};
+module.exports={http,plain,task,blocking,probe};
 `;
 async function start(t,{serialize=true}={}){
  const dir=await mkdtemp(join(tmpdir(),'fireemu-http-lifecycle-'));
@@ -145,6 +146,56 @@ test('without local secrets distinct requests still run concurrently',{timeout:8
  const f=await start(t,{serialize:false}),a=f.call('http',{tag:'a',mode:'hold'});await f.wait(()=>f.seen('started','a'),'a');
  const b=await f.call('http',{tag:'b'}).result;assert.equal(b.status,200);assert.equal(await f.seen('released','a'),false);
  await f.release('a');assert.equal((await a.result).status,200);
+});
+test('with local secrets, undeclared HTTP requests still run concurrently',{timeout:8000},async t=>{
+ const f=await start(t),held=f.call('plain',{tag:'plain-held',mode:'hold'});
+ try{
+  await f.wait(()=>f.seen('started','plain-held'),'held plain request');
+  const second=f.call('plain',{tag:'plain-second'});
+  await f.wait(()=>f.seen('started','plain-second'),'second plain request',600);
+  const reply=await second.result;
+  assert.equal(reply.status,200);
+  assert.equal(JSON.parse(reply.text).secret,null);
+  assert.equal(await f.seen('released','plain-held'),false);
+ }finally{await f.release('plain-held');await held.result;}
+ assert.equal((await f.events()).find(e=>e.event==='started'&&e.tag==='plain-held').secret,null);
+});
+test('an undeclared event runs beside an undeclared HTTP callback with local secrets configured',{timeout:8000},async t=>{
+ const f=await start(t),held=f.call('plain',{tag:'plain-event-held',mode:'hold'});
+ try{
+  await f.wait(()=>f.seen('started','plain-event-held'),'held plain request');
+  f.probe('parallel-event');
+  await f.wait(()=>f.messages.some(m=>m.type==='result'&&m.invocationId==='parallel-event'),'parallel event');
+  assert.equal((await f.events()).find(e=>e.event==='probe'&&e.tag==='parallel-event').secret,null);
+  assert.equal(await f.seen('released','plain-event-held'),false);
+ }finally{await f.release('plain-event-held');await held.result;}
+});
+test('eight undeclared requests overlap without exposing a declared secret',{timeout:8000},async t=>{
+ const f=await start(t),tags=Array.from({length:8},(_,i)=>'plain-'+i);
+ const held=tags.map(tag=>f.call('plain',{tag,mode:'hold'}));
+ try{
+  await f.wait(async()=>{const events=await f.events();return tags.every(tag=>events.some(e=>e.event==='started'&&e.tag===tag));},'all eight plain requests');
+  const declared=f.call('http',{tag:'declared'});
+  await f.wait(()=>f.seen('routed','declared'),'declared request routing');
+  const later=f.call('plain',{tag:'plain-later'});
+  await f.wait(()=>f.seen('routed','plain-later'),'later plain request routing');
+  await delay(80);
+  assert.equal(await f.seen('started','declared'),false);
+  assert.equal(await f.seen('started','plain-later'),false);
+  await Promise.all(tags.map(tag=>f.release(tag)));
+  assert.deepEqual((await Promise.all(held.map(call=>call.result))).map(reply=>reply.status),Array(8).fill(200));
+  const response=await declared.result;
+  assert.equal(response.status,200);
+  assert.equal(JSON.parse(response.text).secret,'only-alpha');
+  assert.equal((await later.result).status,200);
+  const events=await f.events();
+  assert.ok(events.findIndex(e=>e.event==='started'&&e.tag==='declared')<events.findIndex(e=>e.event==='started'&&e.tag==='plain-later'));
+  assert.equal(events.find(e=>e.event==='started'&&e.tag==='plain-later').secret,null);
+  for(const tag of tags){
+   assert.equal(events.find(e=>e.event==='started'&&e.tag===tag).secret,null);
+   assert.equal(events.find(e=>e.event==='released'&&e.tag===tag).secret,null);
+  }
+ }finally{await Promise.all(tags.map(tag=>f.release(tag)));}
 });
 test('invalid proxy secret does not start a callback',{timeout:8000},async t=>{
  const f=await start(t);assert.equal((await f.call('http',{tag:'forbidden'},{key:'wrong'}).result).status,403);assert.equal(await f.seen('started','forbidden'),false);

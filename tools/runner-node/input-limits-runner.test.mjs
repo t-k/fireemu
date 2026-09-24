@@ -22,7 +22,7 @@ const task=async data=>{
   if(data.action==='throw')throw new Error('expected fixture failure');
   if(data.sleep)await new Promise(resolve=>setTimeout(resolve,data.sleep));
 };
-task.run=task;task.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'}};
+task.run=task;task.__endpoint={platform:'gcfv2',scheduleTrigger:{schedule:'every 5 minutes'},secretEnvironmentVariables:[{key:'TEST_ONLY'}]};
 module.exports={task};
 `;
 function invoke(id,data={},extra={}) {

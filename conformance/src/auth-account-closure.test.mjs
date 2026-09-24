@@ -232,7 +232,10 @@ test("scope decisions are recorded, not implied", () => {
 
 test("parent promotion requires every condition and an approved closure review", () => {
   const closure = load();
-  const allVerified = closure.conditions.every(({ status }) => status === "VERIFIED");
+  const allVerified = closure.conditions.every(({ status, evidence }) => {
+    const resultCounts = { ...evidence?.rows, ...evidence?.authAccount };
+    return status === "VERIFIED" && !(resultCounts.MISMATCH > 0);
+  });
   assert.equal(
     closure.parentStatus === "COMPAT_VERIFIED",
     allVerified && closure.closureReview?.decision === "APPROVED",

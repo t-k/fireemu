@@ -355,7 +355,9 @@ test("rate limits, database operations and an applied exemption are recognized",
   assert.ok(!isDatabaseOperation(`${base}/x:exportDocuments`));
   assert.ok(UNTIL.exempt({ indexConfig: {} }));
   assert.ok(UNTIL.exempt({ indexConfig: { indexes: [] } }));
-  assert.ok(!UNTIL.exempt({ indexConfig: { ancestorField: "x" } }));
+  // What production answered for an applied exemption on 2026-09-24.
+  assert.ok(UNTIL.exempt({ indexConfig: { ancestorField: "x" } }));
+  assert.ok(!UNTIL.exempt({ indexConfig: { ancestorField: "x", indexes: [{ state: "READY" }] } }));
   assert.ok(!UNTIL.exempt({ indexConfig: { usesAncestorConfig: true, ancestorField: "x" } }));
   assert.ok(!UNTIL.exempt({}));
 });

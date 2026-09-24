@@ -299,12 +299,13 @@ export const UNTIL = {
   notFound: (_json, status) => status === 404,
   httpError: (_json, status) => status >= 400,
   httpOk: (_json, status) => status === 200,
-  // proto3 JSON leaves out a false usesAncestorConfig: an applied exemption is an index
-  // configuration that neither inherits nor names its ancestor.
+  // An applied exemption reads back as an index configuration that no longer inherits and
+  // lists no index: production keeps naming the ancestor field, and proto3 JSON leaves out the
+  // false usesAncestorConfig and the empty index list.
   exempt: (json) =>
     json?.indexConfig !== undefined &&
     json.indexConfig.usesAncestorConfig !== true &&
-    json.indexConfig.ancestorField === undefined,
+    (json.indexConfig.indexes ?? []).length === 0,
   inherits: (json) => json?.indexConfig?.usesAncestorConfig === true,
   ttlActive: (json) => json?.ttlConfig?.state === "ACTIVE",
   ttlGone: (json) => json?.ttlConfig === undefined,

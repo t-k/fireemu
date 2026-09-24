@@ -43,7 +43,7 @@ import {
 import { PROGRAMS } from "./corpus.mjs";
 import { SIGNER_ACCOUNT, guardHttp, validateConfigSdkCorpus } from "./guard.mjs";
 import { SDK_OPERATIONS, harnessFetch } from "./sdk.mjs";
-import { configEquals, createSession, runCorpus } from "./session.mjs";
+import { configDrift, configEquals, createSession, runCorpus } from "./session.mjs";
 
 const execFileAsync = promisify(execFile);
 const FIXTURE = join(CONFORMANCE_DIR, "auth-config-sdk-production.json");
@@ -427,13 +427,13 @@ export function otherLaneOnSandbox(ledgerText, now = Date.now()) {
   return recent ? `${taskOf(recent)} wrote a line at ${recent.ts}` : undefined;
 }
 
-/** Lines another task wrote on the sandbox at or after `since` (a race with our `started`). */
-export function linesSince(ledgerText, since) {
-  return ledgerEntries(ledgerText).filter(
-    (entry) =>
-      entry.project === SANDBOX_PROJECT &&
-      taskOf(entry) !== TASK_ID &&
-      !(Date.parse(entry.ts) < since),
+/**
+ * Lines another task wrote on the sandbox after the first `offset` characters of the ledger,
+ * which is what this run read before it decided to start (a race with its `started` line).
+ */
+export function linesAfter(ledgerText, offset) {
+  return ledgerEntries(ledgerText.slice(offset)).filter(
+    (entry) => entry.project === SANDBOX_PROJECT && taskOf(entry) !== TASK_ID,
   );
 }
 
@@ -474,14 +474,19 @@ async function appendLedger(ledger, entry) {
  * Whether the sandbox is back at its baseline after a run that did not end cleanly: every
  * baseline path reads back, MFA is off and no account is left. Never throws.
  */
-async function verifyBaseline(web) {
+async function verifyBaseline(web, startConfig) {
   try {
     const target = productionTarget(web);
     await target.refresh();
     const ctx = createContext({ run: String(Date.now()), project: SANDBOX_PROJECT, target });
     await prepareProject(ctx, { apply: false });
-    const session = createSession(ctx, { maxCleanupRequests: 2 });
-    return { atBaseline: (await session.accountCount()) === 0 };
+    const session = createSession(ctx, { maxHarnessRequests: 2, maxCleanupRequests: 2 });
+    if ((await session.accountCount()) !== 0) return { atBaseline: false, reason: "accounts left" };
+    // Also every member outside the baseline paths, against the run's first read.
+    const drift = configDrift(startConfig, await session.fullConfig());
+    return drift.length
+      ? { atBaseline: false, reason: `configuration changed at ${drift.join(", ")}` }
+      : { atBaseline: true };
   } catch (error) {
     return { atBaseline: false, reason: String(error.message ?? error) };
   }
@@ -546,6 +551,7 @@ async function recordLocked({ ledger, privateRoot, programs, corpusRequests, web
     corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
   };
   await assertSandboxKey(web);
+  let startConfig;
   if (programs.some((p) => p.steps.some((s) => s.sdk === "admin.createCustomToken")))
     await assertSignerReady(web);
   {
@@ -553,8 +559,12 @@ async function recordLocked({ ledger, privateRoot, programs, corpusRequests, web
     const target = productionTarget(web);
     await target.refresh();
     const ctx = createContext({ run: String(Date.now()), project: SANDBOX_PROJECT, target });
-    const count = await createSession(ctx, { maxCleanupRequests: 2 }).accountCount();
+    const session = createSession(ctx, { maxHarnessRequests: 2, maxCleanupRequests: 2 });
+    const count = await session.accountCount();
     if (count !== 0) throw new Error(`the sandbox holds ${count}+ accounts; it must start empty`);
+    // A drifted baseline is reported before anything is written to the ledger.
+    await prepareProject(ctx, { apply: false });
+    startConfig = await session.fullConfig();
   }
   const runDir = join(
     privateRoot,
@@ -576,7 +586,6 @@ async function recordLocked({ ledger, privateRoot, programs, corpusRequests, web
   const ignoreWriteError = () => {};
   process.stdout.on("error", ignoreWriteError);
   process.stderr.on("error", ignoreWriteError);
-  const checkedAt = Date.now();
   await appendLedger(ledger, {
     event: "started",
     taskId: TASK_ID,
@@ -585,7 +594,7 @@ async function recordLocked({ ledger, privateRoot, programs, corpusRequests, web
     programs: meta.programs,
   });
   // Another lane may have checked the ledger at the same moment; the later one yields.
-  const raced = linesSince(await readFile(ledger, "utf8"), checkedAt - 1000);
+  const raced = linesAfter(await readFile(ledger, "utf8"), ledgerText.length);
   if (raced.length) {
     await appendLedger(ledger, {
       event: "finished",
@@ -670,7 +679,7 @@ async function recordLocked({ ledger, privateRoot, programs, corpusRequests, web
     error = String(caught.message ?? caught);
   } finally {
     // After anything but a clean recording, read the sandbox back before handing it over.
-    if (outcome !== "recorded") baseline = await verifyBaseline(web);
+    if (outcome !== "recorded") baseline = await verifyBaseline(web, startConfig);
     await appendLedger(ledger, {
       event: "finished",
       project: SANDBOX_PROJECT,
@@ -979,7 +988,7 @@ async function restoreLocked(ledger) {
   let outcome = "restored-by-operator";
   let error;
   try {
-    const session = createSession(ctx, { maxHarnessRequests: 10, maxCleanupRequests: 80 });
+    const session = createSession(ctx, { maxHarnessRequests: 10, maxCleanupRequests: 120 });
     await session.restore(
       Object.fromEntries(
         Object.entries(SANDBOX_BASELINE).map(([p, v]) => [p, substituteProject(v, ctx.project)]),

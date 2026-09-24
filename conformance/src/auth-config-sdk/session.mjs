@@ -77,6 +77,26 @@ export function withTimes(value, now = Date.now()) {
   return value;
 }
 
+/** Members whose empty-object value is the setting itself (a oneof choice). */
+const ONEOF_PARENTS = new Set(["smsRegionConfig"]);
+
+/**
+ * The form in which two whole configurations are compared: settled, and an empty object read
+ * as absent (a cleared member may be left as `{}`), except the oneof choices of
+ * `ONEOF_PARENTS`, where `{}` is the setting.
+ */
+export function driftForm(value, key = "", parent = "") {
+  if (Array.isArray(value)) return value.map((v) => driftForm(v));
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value)
+      .map(([k, v]) => [k, driftForm(v, k, key)])
+      .filter(([, v]) => v !== undefined);
+    if (entries.length === 0 && !ONEOF_PARENTS.has(parent)) return undefined;
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
 /** The dotted paths at which two settled configurations differ. */
 export function configDrift(a, b, path = "") {
   if (sameRecording(a, b)) return [];
@@ -288,7 +308,22 @@ export function createSession(
       await writeBack(paths, snapshot);
     } catch (error) {
       if (paths.length === 1) throw error;
-      for (const path of paths) await writeBack([path], snapshot);
+      // Every path is tried, and the refused ones once more, before the run stops.
+      let refused = [];
+      for (const round of [0, 1]) {
+        const pending = round === 0 ? paths : refused;
+        refused = [];
+        for (const path of pending) {
+          try {
+            await writeBack([path], snapshot);
+          } catch (pathError) {
+            if (round === 1) log(`restore of ${path} refused: ${pathError.message}`);
+            refused.push(path);
+          }
+        }
+        if (refused.length === 0) break;
+      }
+      if (refused.length) throw fatal(`restore refused for ${refused.join(", ")}`);
     }
     return awaitConfig(snapshot, { cleanup: true });
   }
@@ -299,7 +334,7 @@ export function createSession(
    */
   async function fullConfig({ cleanup = false } = {}) {
     const config = await admin("GET", "admin/v2/projects/{project}/config", { cleanup });
-    return settledForm(withoutOtherLanes(config));
+    return driftForm(settledForm(withoutOtherLanes(config))) ?? {};
   }
 
   /** What a settling step waits for: its masked paths as its body sets them. */

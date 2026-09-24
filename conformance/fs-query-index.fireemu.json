@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "firestore": {
+    "edition": "standard",
+    "apiMode": "native",
+    "rules": "conformance/firestore-probe.rules",
+    "indexFile": "conformance/fs-query-index.indexes.json"
+  }
+}

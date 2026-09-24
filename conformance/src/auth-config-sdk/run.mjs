@@ -649,7 +649,13 @@ async function recordLocked({ ledger, privateRoot, programs, corpusRequests, web
           ? "aborted-fatal"
           : "aborted";
       error = String(caught.message ?? caught);
-      if (caught.partial) recordings.push(caught.partial);
+      if (caught.partial) {
+        recordings.push(caught.partial);
+        // Kept privately as design input; a partial recording is never a fixture.
+        await writeFile(join(runDir, "recording-partial.json"), JSON.stringify(caught.partial), {
+          mode: 0o600,
+        }).catch(() => {});
+      }
     }
     requests = recordings.reduce(
       (n, r) => n + r.requests + (r.sdkRequests ?? 0) + r.harnessRequests,

@@ -79,6 +79,18 @@
       "decidedBy": "lane agent, following the parent table and the AUTH-ACCOUNT precedent; confirmed at closure review",
       "decidedOn": "2026-09-24",
       "movedTo": "FS-RULES"
+    },
+    {
+      "id": "S4",
+      "decision": "Documented divergence: production lists a set of field paths in the order of an internal hash set, in the 'distinct inequality fields: [...]' refusal and in the member order of an index merge in Explain planSummary (which also sets the order the merge walks its members, and so index_entries_scanned). The order is stable across recordings but no standard container or hash reproduces it (about 45 families tested, linear hashes ruled out by proof). fireemu lists inequality fields in field-path order and merge members in planning order. The comparison treats these lists as unordered, and the merge entry count as masked, on the named rows only (conformance/src/fs-query-index/divergences.mjs); everything else in those rows is compared strictly and the raw recordings are unchanged.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "S5",
+      "decision": "Documented divergence: production chooses PartitionQuery cursors at keys sampled by an internal hash that could not be recovered (docs.local candidate tournament, GF(2) proof against linear and CRC families). fireemu reproduces the structure: about one key in 141 is a sample, partition_count cursors (every sample when there are fewer) nested across counts, in key order, without before, with production's paging, tokens and refusals; it samples with its own stable hash, so the keys differ. The comparison masks the cursor keys (their number and shape stay strict), accepts fewer cursors than requested as every sample on the count-64 row, and masks the four range counts while requiring that they add up to the same total on both sides, on the named rows only.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-24"
     }
   ],
   "conditions": [
@@ -125,7 +137,7 @@
         "fs-query-index/query-limits"
       ],
       "status": "PENDING_CORPUS",
-      "note": "Every query-plan limit as an accepted/refused pair one unit apart: 30 disjunctions (IN, ARRAY_CONTAINS_ANY, __name__ IN, OR and products), 10 NOT_IN values, 10 inequality fields, 100 components (root, subcollection, orders, disjunctions). The IN \u00d7 IN and IN \u00d7 ARRAY_CONTAINS_ANY product pairs (30/32, 30/33) cannot land on 31; the one-unit disjunction boundary is carried by the IN-29-or-one / IN-30-or-one and OR-30 / OR-31 pairs."
+      "note": "Every query-plan limit as an accepted/refused pair one unit apart: 30 disjunctions (IN, ARRAY_CONTAINS_ANY, __name__ IN, OR and products), 10 NOT_IN values, 10 inequality fields, 100 components (root, subcollection, orders, disjunctions). The IN × IN and IN × ARRAY_CONTAINS_ANY product pairs (30/32, 30/33) cannot land on 31; the one-unit disjunction boundary is carried by the IN-29-or-one / IN-30-or-one and OR-30 / OR-31 pairs."
     },
     {
       "conditionId": "FS-QUERY-INDEX/order-by",

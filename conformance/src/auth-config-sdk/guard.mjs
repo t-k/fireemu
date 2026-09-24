@@ -304,10 +304,19 @@ function guardConfigWrite(method, parsed, body, role, ctx) {
     if (!touched(leaf)) throw new Error(`config body member ${leaf} is not touched by the program`);
   }
   const recaptcha = body.recaptchaConfig ?? {};
-  // Only OFF and AUDIT, or the one unknown name the validation probes send (`SOMETIMES`), which
-  // production refuses; never ENFORCE or a numeric enum value (K2).
+  // Only OFF, AUDIT and unspecified (what a cleared config keeps), or the one unknown name the
+  // validation probes send (`SOMETIMES`), which production refuses; never ENFORCE or a numeric
+  // enum value (K2).
   const states = [recaptcha.emailPasswordEnforcementState, recaptcha.phoneEnforcementState];
-  if (states.some((state) => state !== undefined && !["OFF", "AUDIT", "SOMETIMES"].includes(state)))
+  if (
+    states.some(
+      (state) =>
+        state !== undefined &&
+        !["OFF", "AUDIT", "RECAPTCHA_PROVIDER_ENFORCEMENT_STATE_UNSPECIFIED", "SOMETIMES"].includes(
+          state,
+        ),
+    )
+  )
     throw new Error("reCAPTCHA is never enforced on the sandbox (K2)");
   for (const domain of body.authorizedDomains ?? []) {
     if (!allowedHosts(ctx.project).has(domain) && !INVALID_DOMAIN_PROBES.has(domain))

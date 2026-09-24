@@ -12,7 +12,14 @@ const digest = (text) => createHash("sha256").update(text).digest("hex").slice(0
 
 function body(rulesetId) {
   if (rulesetId === "named") {
-    return ["    match /fsr-named-only/{d} {", "      allow get: if true;", "    }"].join("\n");
+    return [
+      "    match /fsr-named-only/{d} {",
+      "      allow get: if true;",
+      "    }",
+      "    match /fsr-named-auth/{d} {",
+      "      allow get: if request.auth != null;",
+      "    }",
+    ].join("\n");
   }
   if (rulesetId !== "main" && rulesetId !== "alt") throw new Error(`unknown ruleset ${rulesetId}`);
   return FRAGMENTS.map((fragment) =>

@@ -23,6 +23,7 @@ import {
   UNTIL,
   isDatabaseOperation,
   isRateLimited,
+  sortListings,
 } from "./harness.mjs";
 import { capturePairs, maskExportWindow, normalizeCapture, restoreCapture } from "./exports.mjs";
 
@@ -248,7 +249,7 @@ export function createSession(
           ? { message: normalizeValue(answer.details, "", ctx, symbols, local) }
           : {}),
         ...(answer.errorDetails.length ? { errorDetails: answer.errorDetails } : {}),
-        ...(body ? { body: normalizeValue(body, "", ctx, symbols, local) } : {}),
+        ...(body ? { body: sortListings(normalizeValue(body, "", ctx, symbols, local)) } : {}),
       };
     }
     if (answer.transportError) return { status: 0, transportError: answer.transportError };

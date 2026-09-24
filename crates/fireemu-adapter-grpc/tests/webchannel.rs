@@ -1320,7 +1320,8 @@ async fn a_missing_index_on_the_opening_target_reaches_the_first_back_channel() 
         .as_str()
         .unwrap();
     assert!(
-        message.contains("The query requires an index.") && message.contains("updatedAt"),
+        message.starts_with("The query requires an index. You can create it here: ")
+            && message.contains("create_composite="),
         "the actionable diagnostic reaches the browser: {message}"
     );
     assert!(

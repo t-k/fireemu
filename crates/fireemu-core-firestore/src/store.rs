@@ -1242,7 +1242,9 @@ fn query_retained_bytes(query: &Query) -> u64 {
             parent,
             collection_id,
         } => (parent.as_ref(), Some(collection_id.as_str())),
-        QueryScope::KindlessAllDescendants { parent } => (parent.as_ref(), None),
+        QueryScope::KindlessAllDescendants { parent } | QueryScope::KindlessChildren { parent } => {
+            (parent.as_ref(), None)
+        }
     };
     if let Some(parent) = parent {
         total = total.saturating_add(document_path_retained_bytes(parent));
@@ -1564,7 +1566,8 @@ impl FirestoreState {
                     Box::new(paths.iter().map(AsRef::as_ref))
                 }
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if version.is_some() {
                     if let Some(parent) = parent {
                         Box::new(
@@ -1647,7 +1650,8 @@ impl FirestoreState {
                     Box::new(paths.iter().rev().map(AsRef::as_ref))
                 }
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if version.is_some() {
                     if let Some(parent) = parent {
                         let (lower, upper) = descendant_bounds(parent);
@@ -1729,7 +1733,8 @@ impl FirestoreState {
                     Box::new(paths)
                 }
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if version.is_some() {
                     if let Some(parent) = parent {
                         Box::new(
@@ -1822,7 +1827,8 @@ impl FirestoreState {
                         .map(AsRef::as_ref),
                 )
             }
-            QueryScope::KindlessAllDescendants { parent } => {
+            QueryScope::KindlessAllDescendants { parent }
+            | QueryScope::KindlessChildren { parent } => {
                 if let Some(parent) = parent {
                     if !is_strict_descendant(before, parent) {
                         return Box::new(core::iter::empty());
@@ -4170,6 +4176,17 @@ impl FirestoreState {
                 ));
             }
         }
+        // Production refuses a cosine search that meets a zero vector, the query's or a
+        // candidate's (FS-QUERY-INDEX vector/measures, recorded 2026-09-24); without
+        // production's refusals such a candidate is left out as a distance that is not finite.
+        let cosine =
+            find_nearest.distance_measure == DistanceMeasure::Cosine && query.production_refusals;
+        if cosine && find_nearest.query_vector.iter().all(|c| *c == 0.0) {
+            return Err(FirestoreError::FailedPrecondition(
+                COSINE_ZERO_VECTOR.into(),
+            ));
+        }
+        let zero_candidate = std::cell::Cell::new(false);
         let mut candidates = BinaryHeap::new();
         let nearest_limit = usize::try_from(find_nearest.limit).unwrap_or(usize::MAX);
         let nearest_peak_candidates = std::cell::Cell::new(0usize);
@@ -4185,6 +4202,10 @@ impl FirestoreState {
                 return;
             };
             if vector.len() != find_nearest.query_vector.len() {
+                return;
+            }
+            if cosine && vector.iter().all(|c| *c == 0.0) {
+                zero_candidate.set(true);
                 return;
             }
             let Some(distance) = vector_distance(
@@ -4221,6 +4242,11 @@ impl FirestoreState {
                 nearest_peak_candidates.set(nearest_peak_candidates.get().max(candidates.len()));
             }
         })?;
+        if zero_candidate.get() {
+            return Err(FirestoreError::FailedPrecondition(
+                COSINE_ZERO_VECTOR.into(),
+            ));
+        }
         stats.nearest_peak_candidates =
             u64::try_from(nearest_peak_candidates.get()).unwrap_or(u64::MAX);
         let mut out = Vec::new();
@@ -4509,6 +4535,22 @@ impl FirestoreState {
             .iter()
             .map(|_| Accumulator::default())
             .collect();
+        // An aggregation over a nearest-neighbour query folds its nearest documents
+        // (FS-QUERY-INDEX vector/with-query-clauses#count-over-nearest).
+        if query.find_nearest.is_some() {
+            let (documents, stats) = self.run_find_nearest_with_stats(query, version)?;
+            for document in &documents {
+                for (aggregation, accumulator) in aggregations.iter().zip(&mut accumulators) {
+                    accumulator.fold(aggregation, document);
+                }
+            }
+            let values = aggregations
+                .iter()
+                .zip(accumulators)
+                .map(|(aggregation, accumulator)| accumulator.finish(aggregation))
+                .collect();
+            return Ok((values, stats));
+        }
         let stats = self.select(
             query,
             version,
@@ -5468,6 +5510,10 @@ struct Candidate<'d, 'o> {
     order: &'o [OrderClause],
 }
 
+/// Production's refusal of a cosine search that meets a zero vector.
+const COSINE_ZERO_VECTOR: &str =
+    "Cannot compute cosine distance against a vector with a magnitude of zero.";
+
 /// One nearest-vector row retained by the bounded top-K heap. The heap root is the worst
 /// retained distance, allowing every admitted candidate to be considered without retaining the
 /// complete matching set.
@@ -5479,9 +5525,7 @@ struct NearestCandidate<'d> {
 
 impl PartialEq for NearestCandidate<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.distance
-            .partial_cmp(&other.distance)
-            .is_some_and(|ordering| ordering == Ordering::Equal)
+        self.cmp(other) == Ordering::Equal
     }
 }
 
@@ -5503,6 +5547,8 @@ impl Ord for NearestCandidate<'_> {
             DistanceMeasure::DotProduct => ordering.reverse(),
             DistanceMeasure::Euclidean | DistanceMeasure::Cosine => ordering,
         }
+        // Equal distances rank by document name, ascending (FS-QUERY-INDEX vector/measures).
+        .then_with(|| self.document.path.cmp(&other.document.path))
     }
 }
 
@@ -5580,7 +5626,9 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
                 UnaryOp::IsNull => matches!(v, Some(x) if x.is_null()),
                 UnaryOp::IsNotNull => matches!(v, Some(x) if !x.is_null()),
                 UnaryOp::IsNan => matches!(v, Some(x) if x.is_nan()),
-                UnaryOp::IsNotNan => matches!(v, Some(x) if !x.is_nan()),
+                // Production's IS_NOT_NAN excludes null as well as NaN (FS-QUERY-INDEX
+                // unary-filters#is-not-nan).
+                UnaryOp::IsNotNan => matches!(v, Some(x) if !x.is_nan() && !x.is_null()),
             }
         }
         FilterExpr::Field { field, op, value } => {
@@ -5602,7 +5650,12 @@ fn eval_filter(filter: &FilterExpr, doc: &Document) -> Result<bool, FirestoreErr
                 | FieldOp::LessThanOrEqual
                 | FieldOp::GreaterThan
                 | FieldOp::GreaterThanOrEqual => {
-                    if !same_type_as(v, value) || v.is_nan() {
+                    // A range against NaN matches nothing, whichever side holds it
+                    // (FS-QUERY-INDEX field-filters/range#gt-nan).
+                    if !same_type_as(v, value)
+                        || v.is_nan()
+                        || matches!(value, Value::Double(d) if d.is_nan())
+                    {
                         return Ok(false);
                     }
                     let ord = v.cmp_value(value);

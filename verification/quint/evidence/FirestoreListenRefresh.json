@@ -55,10 +55,10 @@
   ],
   "digests": {
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
-    "crates/fireemu-adapter-grpc/src/local.rs": "8cfc6c626bcddc103122bd920f3e117d337eb6d33e2c387c3df8672b6981d111",
+    "crates/fireemu-adapter-grpc/src/local.rs": "c3a621f95cb3354db4b65f05acf8583bdc738357d8141d02a8fe31df137d6470",
     "crates/fireemu-adapter-grpc/src/streams.rs": "23f378ee05b3ff5b729f9411057068b15ed1c543370e7e30f22be20ca2a676ef",
-    "crates/fireemu-core-firestore/src/query.rs": "ca62a9a7c2bd0707b91f0205ee79bfbb916196248d16a58200895807f1916052",
-    "crates/fireemu-core-firestore/src/store.rs": "1fbdc25fa15254c727ebddc0cce9042995c6d2c0e6aa07cd1d7b9a50a1b72db1",
+    "crates/fireemu-core-firestore/src/query.rs": "10f36a0082ffe98d3a267928b20ab23510b775f12dcbaf4d7f8eb1802d88d59e",
+    "crates/fireemu-core-firestore/src/store.rs": "d3410fa97909db3b6e1312344842826825de5bfb0f4927edd083d073c59bef74",
     "crates/fireemu-core-firestore/src/value.rs": "f8630eacab922b0c90467fe37b44dc4e80af30cfb0e942e21b6e05abce0b2c07",
     "rust-toolchain.toml": "689fafb1dd9b80ee9a2a9b5e2bbb31e8f7ea4adad403717777689b35d4f861b2",
     "verification/quint/apalache.lock.json": "16cff85b68117df35e66c575244c297215a7c442bfde6e64ecb97822062c7ad3",

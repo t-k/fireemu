@@ -1217,6 +1217,8 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
         ),
         IndexDecision::MissingRequired { .. }
     ));
+    // An array-contains joins the merge through its automatic contains index (FS-QUERY-INDEX
+    // index-selection/automatic-and-merge#equality-and-array-contains-merge).
     assert!(matches!(
         decide(
             &tasks().with_filter(FilterExpr::And(vec![
@@ -1230,7 +1232,7 @@ fn firebase_policy_index_merge_stops_at_ordering_arrays_and_inequalities() {
             &IndexSet::default(),
             standard(),
         ),
-        IndexDecision::MissingRequired { .. }
+        IndexDecision::MergeIndexes { .. }
     ));
     assert!(matches!(
         decide(
@@ -1380,7 +1382,9 @@ fn collection_group_scope_is_not_ignored() {
 }
 
 #[test]
-fn collection_group_index_does_not_serve_collection_query() {
+fn collection_group_index_serves_a_collection_query() {
+    // Production serves a collection query from a collection-group composite (FS-QUERY-INDEX
+    // index-selection/scopes-and-exemptions#group-scope-composite-for-collection).
     let q = tasks().with_filter(FilterExpr::And(vec![
         field("done", FieldOp::Equal, Value::Boolean(false)),
         field("owner", FieldOp::Equal, Value::String("u".to_owned())),
@@ -1396,7 +1400,7 @@ fn collection_group_index_does_not_serve_collection_query() {
 
     assert!(matches!(
         decide(&q, &group, standard()),
-        IndexDecision::MissingRequired { .. }
+        IndexDecision::UseIndex { .. }
     ));
 }
 
@@ -1410,7 +1414,11 @@ fn array_mode_is_not_ignored() {
         ),
         field("owner", FieldOp::Equal, Value::String("u".to_owned())),
     ]));
+    // Without the automatic single-field indexes (which production would merge), only a
+    // composite serves, and only one whose array field is CONTAINS.
+    let tasks_id = CollectionId::try_new("tasks").unwrap();
     let mut asc = IndexSet::default();
+    asc.set_default_single_field_indexes(&tasks_id, vec![]);
     asc.add_composite(composite(&[
         ("owner", IndexFieldMode::Ascending),
         ("tags", IndexFieldMode::Ascending),
@@ -1420,6 +1428,7 @@ fn array_mode_is_not_ignored() {
         IndexDecision::MissingRequired { .. }
     ));
     let mut contains = IndexSet::default();
+    contains.set_default_single_field_indexes(&tasks_id, vec![]);
     contains.add_composite(composite(&[
         ("owner", IndexFieldMode::Ascending),
         ("tags", IndexFieldMode::Contains),
@@ -1797,5 +1806,115 @@ fn document_name_equality_is_served_without_field_indexes() {
     assert!(matches!(
         decide(&name_and_two, &explicit, standard()),
         IndexDecision::UseIndex { .. }
+    ));
+}
+
+/// The Explain plan lists the scans of each DNF disjunct in `dnf()` order: the automatic
+/// index, a composite, the merge members, or the vector index (FS-QUERY-INDEX explain).
+#[test]
+fn plan_scans_name_the_index_of_each_disjunct() {
+    use fireemu_core_firestore::index::{plan_scans, PlannedScan};
+    let plan = |q: &Query, indexes: &IndexSet| {
+        plan_scans(&q.canonicalize().unwrap(), &[], indexes, &standard())
+    };
+    let auto = |path: &str, mode: IndexFieldMode, name: IndexFieldMode| {
+        PlannedScan::Index(composite(&[(path, mode), ("__name__", name)]))
+    };
+    let none = IndexSet::default();
+    assert_eq!(
+        plan(&tasks(), &none),
+        Some(vec![PlannedScan::Index(composite(&[(
+            "__name__",
+            IndexFieldMode::Ascending
+        )]))])
+    );
+    let mut or = tasks();
+    or.filter = Some(FilterExpr::Or(vec![
+        field("g", FieldOp::Equal, Value::Integer(1)),
+        field("h", FieldOp::Equal, Value::Integer(0)),
+    ]));
+    assert_eq!(
+        plan(&or, &none),
+        Some(vec![
+            auto("g", IndexFieldMode::Ascending, IndexFieldMode::Ascending),
+            auto("h", IndexFieldMode::Ascending, IndexFieldMode::Ascending),
+        ])
+    );
+    let mut composed = tasks();
+    composed.filter = Some(FilterExpr::And(vec![
+        field("g", FieldOp::Equal, Value::Integer(1)),
+        field("n", FieldOp::GreaterThan, Value::Integer(3)),
+    ]));
+    assert_eq!(plan(&composed, &none), None, "the composite is missing");
+    let mut indexes = IndexSet::default();
+    let g_n = composite(&[
+        ("g", IndexFieldMode::Ascending),
+        ("n", IndexFieldMode::Ascending),
+    ]);
+    indexes.add_composite(g_n.clone());
+    assert_eq!(
+        plan(&composed, &indexes),
+        Some(vec![PlannedScan::Index(g_n)])
+    );
+    let mut merged = tasks();
+    merged.filter = Some(FilterExpr::And(vec![
+        field("c", FieldOp::Equal, Value::Integer(1)),
+        field("d", FieldOp::Equal, Value::Integer(4)),
+    ]));
+    match plan(&merged, &none).as_deref() {
+        Some([PlannedScan::Merge(members)]) => {
+            assert_eq!(members.len(), 2);
+            for path in ["c", "d"] {
+                assert!(members.contains(&composite(&[
+                    (path, IndexFieldMode::Ascending),
+                    ("__name__", IndexFieldMode::Ascending)
+                ])));
+            }
+        }
+        other => panic!("two equalities merge their automatic indexes: {other:?}"),
+    }
+    // An assumed index stands for itself under the emulator policy.
+    let emulator = PlanningContext {
+        policy: IndexValidationPolicy::Emulator,
+        ..standard()
+    };
+    assert_eq!(
+        plan_scans(&composed.canonicalize().unwrap(), &[], &none, &emulator)
+            .map(|scans| scans.len()),
+        Some(1)
+    );
+    // A kindless query has no index plan.
+    assert_eq!(
+        plan(
+            &Query::new(QueryScope::kindless_all_descendants(None)),
+            &none
+        ),
+        None
+    );
+}
+
+/// An explicit order on an equality field stops production merging automatic indexes
+/// (query-limits/components#equalities-99-and-order needs a composite); without the order
+/// the same equalities merge (index-selection/automatic-and-merge#two-equalities-merge).
+#[test]
+fn an_order_on_an_equality_field_disables_the_merge() {
+    let equalities = || {
+        tasks().with_filter(FilterExpr::And(vec![
+            field("a", FieldOp::Equal, Value::Integer(1)),
+            field("b", FieldOp::Equal, Value::Integer(1)),
+        ]))
+    };
+    let none = IndexSet::default();
+    assert!(matches!(
+        decide(&equalities(), &none, standard()),
+        IndexDecision::MergeIndexes { .. }
+    ));
+    let ordered = equalities().with_order(OrderClause {
+        field: fp("a"),
+        direction: Direction::Ascending,
+    });
+    assert!(matches!(
+        decide(&ordered, &none, standard()),
+        IndexDecision::MissingRequired { .. }
     ));
 }

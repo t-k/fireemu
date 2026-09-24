@@ -1344,6 +1344,14 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // terminates the process without running a destructor.
         let signals = ShutdownSignals::install();
         let clock = Arc::new(Mutex::new(VirtualClock::new(cfg.clock_start)));
+        let created_at = cfg.database_create_time.unwrap_or(cfg.clock_start);
+        if created_at > cfg.clock_start {
+            return Err(format!(
+                "firestore.databaseCreateTime {} is after the clock start {}",
+                created_at.to_rfc3339().unwrap_or_default(),
+                cfg.clock_start.to_rfc3339().unwrap_or_default()
+            ));
+        }
         let gateway = Gateway {
             enforce_limits: cfg.enforce_limits,
             ctx: PlanningContext {
@@ -1369,6 +1377,7 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
         // or a snapshot restore) materializes it.
         .with_declared_databases(cfg.firestore_databases.keys().cloned())
         .with_ttl_sweep_interval(cfg.ttl_sweep_interval)
+        .with_created_at(created_at)
         .with_implicit_database_creation(cfg.implicit_database_creation));
         for (database, files) in &cfg.firestore_databases {
             if database != fireemu_core_types::ids::DatabaseId::DEFAULT {

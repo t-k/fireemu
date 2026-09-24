@@ -7429,7 +7429,7 @@ fn self_service_password_change_invalidates_an_existing_session_cookie() {
 /// Session-cookie creation as production answers it (sandbox recording 2026-09-24,
 /// auth-credential/session-cookie): a zero duration is refused, a duration that is not an
 /// int64 is a proto decoding error, an API key cannot stand in for the owner credential, and a
-/// deleted account's token is USER_NOT_FOUND.
+/// deleted account's token is `USER_NOT_FOUND`.
 #[test]
 fn session_cookie_requests_are_decoded_and_authorized_as_production_does() {
     let s = strict_state();
@@ -8071,6 +8071,7 @@ fn signed_payload(key: &rsa::RsaPrivateKey, payload: &Value) -> String {
 /// The claim rules production applies to a verified custom token (sandbox recording
 /// 2026-09-24, auth-credential/custom-token/sign-in and validation).
 #[test]
+#[allow(clippy::too_many_lines)]
 fn signed_custom_tokens_follow_production_claim_rules() {
     use fireemu_adapter_http::identity_toolkit::{CustomTokenTrust, CUSTOM_TOKEN_AUDIENCE};
     use fireemu_core_auth::jwt::base64url_encode;

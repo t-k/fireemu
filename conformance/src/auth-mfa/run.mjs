@@ -31,6 +31,7 @@ import { scanFixture } from "../auth-account/fixture-scan.mjs";
 import {
   RECORDED_PROJECT,
   SANDBOX_PROJECT,
+  buildRequest,
   createContext,
   diffRecordings,
   isTransient,
@@ -39,7 +40,7 @@ import {
 import { configMatches, createSession as createAccountSession } from "../auth-account/session.mjs";
 import { SIGNER_ACCOUNTS } from "../auth-credential/harness.mjs";
 import { PROGRAMS } from "./corpus.mjs";
-import { MFA_CONFIGS, validateMfaCorpus } from "./guard.mjs";
+import { MFA_CONFIGS, guardMfaRequest, validateMfaCorpus } from "./guard.mjs";
 import { ALIGN_WINDOW, runCorpus } from "./session.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -191,6 +192,30 @@ async function prepareProject(ctx, { apply }) {
   return account.counts().harnessRequests;
 }
 
+/**
+ * Refuses to start while the sandbox holds any project-level account: every program wipes the
+ * project, so an account here belongs to a lane that is still recording.
+ */
+async function assertNoAccounts(ctx) {
+  const request = buildRequest(
+    {
+      id: "preflight",
+      method: "GET",
+      path: "v1/projects/{project}/accounts:batchGet",
+      auth: "admin",
+      query: { maxResults: 1 },
+    },
+    ctx,
+    new Map(),
+  );
+  guardMfaRequest(request, ctx, { harness: true });
+  const response = await fetch(request.url, { ...request.init, redirect: "error" });
+  const body = await response.json().catch(() => null);
+  if (response.status !== 200) throw new Error(`account preflight: HTTP ${response.status}`);
+  if ((body?.users ?? []).length)
+    throw new Error("the sandbox holds accounts: another lane may be recording");
+}
+
 async function recordOnce(programs, run, web) {
   let token = await adminToken();
   let fetchedAt = Date.now();
@@ -208,6 +233,7 @@ async function recordOnce(programs, run, web) {
     },
   };
   const ctx = createContext({ run, project: SANDBOX_PROJECT, target });
+  await assertNoAccounts(ctx);
   const preparation = await prepareProject(ctx, { apply: false });
   const out = await runCorpus(programs, ctx, {
     ...ceilings(programs),
@@ -285,6 +311,32 @@ export function recentAbort(ledgerText, now = Date.now()) {
   return age < 3_600_000 ? last : undefined;
 }
 
+/**
+ * Another lane recording on the Identity Platform sandbox: a task whose last line there is a
+ * `started` event, or any other task's line there within the last 30 minutes (agreed with the
+ * FS-RULES lane, 2026-09-25). Harness programs wipe every project-level account, so two
+ * recordings must never overlap.
+ */
+export function otherLaneOnSandbox(ledgerText, now = Date.now()) {
+  const lines = ledgerText
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((entry) => entry?.project === SANDBOX_PROJECT && entry.taskId !== TASK_ID);
+  const last = new Map();
+  for (const entry of lines) last.set(entry.taskId, entry);
+  const open = [...last.values()].find((entry) => entry.event === "started");
+  if (open) return `${open.taskId} started at ${open.ts} and has not finished`;
+  const recent = lines.find((entry) => now - Date.parse(entry.ts) < 30 * 60_000);
+  return recent ? `${recent.taskId} wrote a line at ${recent.ts}` : undefined;
+}
+
 async function recordProduction() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
   const privateRoot = process.env.FIREEMU_AUTH_MFA_PRIVATE_DIR;
@@ -295,6 +347,8 @@ async function recordProduction() {
   const aborted = existsSync(ledger) ? recentAbort(await readFile(ledger, "utf8")) : undefined;
   if (aborted)
     throw new Error(`the last run aborted at ${aborted.ts}; wait an hour before retrying`);
+  const busy = existsSync(ledger) ? otherLaneOnSandbox(await readFile(ledger, "utf8")) : undefined;
+  if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
   const programs = selectedPrograms();
   const corpusRequests = validateMfaCorpus(programs);
   const meta = {
@@ -308,6 +362,10 @@ async function recordProduction() {
   await assertIgnored(privateRoot);
   const runDir = join(privateRoot, `auth-mfa-production-${meta.startedAt.replaceAll(":", "")}`);
   await mkdir(runDir, { recursive: true, mode: 0o700 });
+  await appendFile(
+    ledger,
+    `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: meta.programs })}\n`,
+  );
   const recordings = [];
   const secrets = [];
   let outcome = "recorded";

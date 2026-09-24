@@ -156,9 +156,11 @@ async function observeCollector({
   childCollectionNames = [],
   extraChildPageCollections = [],
   recoveryOnly = false,
+  recoveryMode,
   deleteAckShape = "production",
   deleteReadbackMode,
   deleteRunId = defaultDeleteRunId,
+  programs,
 } = {}) {
   const runtimeName = (name) => name.replaceAll("DELETE_RUN_ID", deleteRunId);
   scopeNames = scopeNames.map(runtimeName);
@@ -172,7 +174,8 @@ async function observeCollector({
   await writeFile(
     input,
     JSON.stringify(
-      Array.from({ length: programCount }, (_, index) => ({ id: `empty-${index}`, steps: [] })),
+      programs ??
+        Array.from({ length: programCount }, (_, index) => ({ id: `empty-${index}`, steps: [] })),
     ),
   );
   if (initialJournal) await writeFile(journal, JSON.stringify(initialJournal));
@@ -180,6 +183,11 @@ async function observeCollector({
     await writeFile(journal, JSON.stringify({ status: initialJournalStatus }));
   const requests = [];
   const journalAtDeleteRequests = [];
+  const probeSeededNames = new Set();
+  const injectedPreDeleteFailures = new Set();
+  const probeCandidateDeletedNames = new Set();
+  const injectedCandidatePostFailures = new Set();
+  const injectedCandidateGroupFailures = new Set();
   const legacyLengths = [12_116, 12_121, 12_123, 7_179, 7_183, 7_184];
   const records = new Map(
     [...scopeNames, ...extraNames].map((name, index) => {
@@ -281,24 +289,59 @@ async function observeCollector({
       const [name, record] = [...records].find(([, item]) =>
         pathname.endsWith(`/${item.collection}/${item.document}`),
       );
-      send(
-        record.deleted ? 404 : 200,
-        record.deleted
-          ? { error: { status: "NOT_FOUND" } }
-          : {
-              name,
-              updateTime: record.updateTime,
-              fields: {
-                a: {
-                  arrayValue:
-                    omitEmptyValues && record.values.length === 0 ? {} : { values: record.values },
+      if (request.method === "DELETE") {
+        if (failureMode === "candidate-refused") {
+          send(400, { error: { status: "INVALID_ARGUMENT", message: "Transaction too big." } });
+        } else {
+          record.deleted = true;
+          probeCandidateDeletedNames.add(name);
+          send(200, {});
+        }
+      } else if (
+        ["pre-delete-malformed", "pre-delete-404", "pre-delete-wrong-length"].includes(
+          failureMode,
+        ) &&
+        probeSeededNames.has(name) &&
+        !injectedPreDeleteFailures.has(name) &&
+        !record.deleted
+      ) {
+        injectedPreDeleteFailures.add(name);
+        if (failureMode === "pre-delete-404") send(404, { error: { status: "NOT_FOUND" } });
+        else if (failureMode === "pre-delete-wrong-length") {
+          send(200, {
+            name,
+            updateTime: record.updateTime,
+            fields: { a: { arrayValue: { values: record.values.slice(1) } } },
+          });
+        } else send(200, { name: `${name}-unexpected`, updateTime: record.updateTime, fields: {} });
+      } else
+        send(
+          record.deleted ? 404 : 200,
+          record.deleted
+            ? { error: { status: "NOT_FOUND" } }
+            : {
+                name,
+                updateTime: record.updateTime,
+                fields: {
+                  a: {
+                    arrayValue:
+                      omitEmptyValues && record.values.length === 0
+                        ? {}
+                        : { values: record.values },
+                  },
                 },
               },
-            },
-      );
+        );
     } else if (pathname.endsWith("/documents:commit")) {
       const writes = JSON.parse(body).writes;
-      if (writes[0].transform) {
+      if (writes[0].update) {
+        const record = records.get(writes[0].update.name);
+        assert.ok(record, `seed must address managed test resource ${writes[0].update.name}`);
+        record.values = writes[0].update.fields.a.arrayValue.values;
+        record.deleted = false;
+        probeSeededNames.add(writes[0].update.name);
+        send(200, { writeResults: [{}] });
+      } else if (writes[0].transform) {
         const name = writes[0].transform.document;
         const record = records.get(name);
         if (failureMode === "cas") {
@@ -405,6 +448,17 @@ async function observeCollector({
       ) {
         matching.push(`${prefix}${queriedCollection}/unexpected`);
       }
+      const candidateName = [...probeCandidateDeletedNames].find(
+        (name) => records.get(name)?.collection === queriedCollection,
+      );
+      if (
+        failureMode === "candidate-group-nonempty" &&
+        candidateName &&
+        !injectedCandidateGroupFailures.has(queriedCollection)
+      ) {
+        injectedCandidateGroupFailures.add(queriedCollection);
+        matching.push(candidateName);
+      }
       if (
         failureMode === "group" &&
         records.get(scopeNames[0]).deleted &&
@@ -421,6 +475,15 @@ async function observeCollector({
         200,
         requestedNames.map((name) => {
           const record = records.get(name);
+          if (
+            failureMode === "candidate-post-untyped" &&
+            probeCandidateDeletedNames.has(name) &&
+            record?.deleted &&
+            !injectedCandidatePostFailures.has(name)
+          ) {
+            injectedCandidatePostFailures.add(name);
+            return { unexpected: true };
+          }
           if (deleteReadbackMode === "present" && requestedNames.length === 1 && record?.deleted) {
             return {
               found: {
@@ -483,9 +546,13 @@ async function observeCollector({
         FIRESTORE_PROBE_MAX_REQUESTS: "1000",
         FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(scopeNames),
         FIRESTORE_PROBE_DELETE_RUN_ID: deleteRunId,
+        FIRESTORE_PROBE_CORPUS_DIGEST: "c".repeat(64),
+        FIRESTORE_PROBE_SOURCE_GIT_SHA: "d".repeat(40),
         FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: journal,
         FIRESTORE_PROBE_MANAGED_POLL_MS: "1",
-        ...(recoveryOnly ? { FIRESTORE_PROBE_RECOVERY_MODE: "recover-legacy" } : {}),
+        ...(recoveryMode || recoveryOnly
+          ? { FIRESTORE_PROBE_RECOVERY_MODE: recoveryMode ?? "recover-legacy" }
+          : {}),
       },
       timeout: 10_000,
     });
@@ -1033,6 +1100,9 @@ test("two corpus-v3 recordings write each twelve-name cleanup intent before dele
       for (const name of newNames) assert.equal(result.snapshot.get(name).deleted, true);
       const finalJournal = JSON.parse(await readFile(result.journal, "utf8"));
       assert.equal(finalJournal.status, "complete");
+      assert.equal(finalJournal.runId, runId);
+      assert.equal(finalJournal.corpusDigest, "c".repeat(64));
+      assert.equal(finalJournal.sourceGitSha, "d".repeat(40));
       assert.deepEqual(
         finalJournal.verifiedAbsentNames,
         allV3Names.map((name) => name.replaceAll("DELETE_RUN_ID", runId)),
@@ -1048,6 +1118,314 @@ test("two corpus-v3 recordings write each twelve-name cleanup intent before dele
     [...runtimeScopes[0]].some((collection) => runtimeScopes[1].has(collection)),
     false,
   );
+});
+
+test("a failed, wrong-name or wrong-length pre-delete read blocks candidate DELETE but not cleanup", async () => {
+  const name = allV3Names[6];
+  const seedValues = Array.from({ length: 12_112 }, (_, index) => ({
+    integerValue: String(index),
+  }));
+  const program = {
+    id: "writes/limits/near-limit-delete-refusal/rest/12112",
+    seed: [],
+    steps: [
+      {
+        id: "seed",
+        method: "POST",
+        path: "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        body: {
+          writes: [{ update: { name, fields: { a: { arrayValue: { values: seedValues } } } } }],
+        },
+      },
+      {
+        id: "before-delete",
+        method: "GET",
+        path: `/v1/${name}`,
+      },
+      { id: "delete", method: "DELETE", path: `/v1/${name}` },
+      { id: "after-delete", method: "GET", path: `/v1/${name}` },
+      {
+        id: "group-after-delete",
+        method: "POST",
+        path: "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+        body: {
+          structuredQuery: {
+            from: [
+              { collectionId: name.split("/documents/")[1].split("/")[0], allDescendants: true },
+            ],
+            select: { fields: [{ fieldPath: "__name__" }] },
+            limit: 2,
+          },
+        },
+      },
+    ],
+  };
+  for (const failureMode of ["pre-delete-malformed", "pre-delete-404", "pre-delete-wrong-length"]) {
+    const result = await observeCollector({
+      scopeNames: allV3Names,
+      visibleNames: allV3Names,
+      failureMode,
+      programs: [program],
+    });
+    try {
+      assert.equal(result.failure, undefined);
+      assert.equal(
+        result.requests.some((request) => request.method === "DELETE"),
+        false,
+      );
+      const output = JSON.parse(await readFile(result.output, "utf8"))[program.id];
+      assert.equal(output.steps.delete.code, "indeterminate");
+      assert.equal(output.steps["after-delete"].code, "not-run");
+      assert.equal(output.conditionEvidence, "indeterminate");
+      assert.ok(result.requests.some((request) => request.pathname.endsWith("/documents:commit")));
+      assert.equal(
+        result.snapshot.get(name.replaceAll("DELETE_RUN_ID", defaultDeleteRunId)).deleted,
+        true,
+      );
+    } finally {
+      await rm(result.directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("candidate DELETE condition evidence requires fresh typed absence and an empty group", async () => {
+  const name = allV3Names[6];
+  const values = Array.from({ length: 12_112 }, (_, index) => ({ integerValue: String(index) }));
+  const collectionId = name.split("/documents/")[1].split("/")[0];
+  const program = {
+    id: "writes/limits/near-limit-delete-refusal/rest/12112",
+    steps: [
+      {
+        id: "seed",
+        method: "POST",
+        path: "/v1/projects/PROJECT/databases/(default)/documents:commit",
+        body: { writes: [{ update: { name, fields: { a: { arrayValue: { values } } } } }] },
+      },
+      { id: "before-delete", method: "GET", path: `/v1/${name}` },
+      { id: "delete", method: "DELETE", path: `/v1/${name}` },
+      {
+        id: "after-delete",
+        method: "POST",
+        path: "/v1/projects/PROJECT/databases/(default)/documents:batchGet",
+        body: { documents: [name] },
+      },
+      {
+        id: "group-after-delete",
+        method: "POST",
+        path: "/v1/projects/PROJECT/databases/(default)/documents:runQuery",
+        body: {
+          structuredQuery: {
+            from: [{ collectionId, allDescendants: true }],
+            select: { fields: [{ fieldPath: "__name__" }] },
+            limit: 2,
+          },
+        },
+      },
+    ],
+  };
+  for (const failureMode of [undefined, "candidate-refused"]) {
+    const result = await observeCollector({
+      scopeNames: allV3Names,
+      visibleNames: allV3Names,
+      failureMode,
+      programs: [program],
+    });
+    try {
+      assert.equal(result.failure, undefined);
+      const output = JSON.parse(await readFile(result.output, "utf8"))[program.id];
+      assert.equal(output.conditionEvidence, "complete");
+    } finally {
+      await rm(result.directory, { recursive: true, force: true });
+    }
+  }
+  for (const failureMode of ["candidate-post-untyped", "candidate-group-nonempty"]) {
+    const result = await observeCollector({
+      scopeNames: allV3Names,
+      visibleNames: allV3Names,
+      failureMode,
+      programs: [program],
+    });
+    try {
+      assert.equal(result.failure, undefined);
+      const output = JSON.parse(await readFile(result.output, "utf8"))[program.id];
+      assert.equal(output.conditionEvidence, "indeterminate");
+      assert.equal(JSON.parse(await readFile(result.journal, "utf8")).status, "complete");
+      assert.equal(
+        result.snapshot.get(name.replaceAll("DELETE_RUN_ID", defaultDeleteRunId)).deleted,
+        true,
+      );
+    } finally {
+      await rm(result.directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("corpus-v3 recovery resumes only the journaled twelve names without replaying recipes", async () => {
+  const runId = "e".repeat(32);
+  const runtimeNames = allV3Names.map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-corpus-v3",
+    status: "deleting",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    names: runtimeNames,
+    deletedNames: [],
+    deleteIntent: {
+      action: "delete attempt",
+      name: runtimeNames[0],
+      updateTime: "t0",
+      priorDeletedNames: [],
+    },
+  };
+  const result = await observeCollector({
+    scopeNames: allV3Names,
+    visibleNames: allV3Names,
+    deleteRunId: runId,
+    initialJournal: journal,
+    recoveryMode: "recover-v3",
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    const finalJournal = JSON.parse(await readFile(result.journal, "utf8"));
+    assert.equal(finalJournal.status, "complete");
+    assert.equal(finalJournal.runId, runId);
+    assert.deepEqual(finalJournal.names, runtimeNames);
+    assert.deepEqual(finalJournal.verifiedAbsentNames, runtimeNames);
+    for (const name of runtimeNames) assert.equal(result.snapshot.get(name).deleted, true);
+    assert.equal(
+      result.requests.some((request) => request.method === "DELETE"),
+      false,
+    );
+    assert.ok(result.requests.every((request) => !request.pathname.includes("emulator/v1")));
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("corpus-v3 recovery resolves a write-ahead intent when the target is already absent", async () => {
+  const runId = "f".repeat(32);
+  const runtimeNames = allV3Names.map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-corpus-v3",
+    status: "deleting",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    names: runtimeNames,
+    deletedNames: [],
+    deleteIntent: {
+      action: "delete attempt",
+      name: runtimeNames[0],
+      updateTime: "t0",
+      priorDeletedNames: [],
+    },
+  };
+  const result = await observeCollector({
+    scopeNames: allV3Names,
+    visibleNames: runtimeNames.slice(1),
+    initialState: new Map([[runtimeNames[0], { deleted: true }]]),
+    deleteRunId: runId,
+    initialJournal: journal,
+    recoveryMode: "recover-v3",
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    const finalJournal = JSON.parse(await readFile(result.journal, "utf8"));
+    assert.equal(finalJournal.status, "complete");
+    assert.ok(finalJournal.deletedNames.includes(runtimeNames[0]));
+    for (const request of result.requests.filter((entry) =>
+      entry.pathname.endsWith("/documents:commit"),
+    )) {
+      const writes = JSON.parse(request.body).writes;
+      assert.ok(
+        writes.every((write) => (write.delete ?? write.transform?.document) !== runtimeNames[0]),
+      );
+    }
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("corpus-v3 recovery stops on a foreign group member before any mutation", async () => {
+  const runId = "9".repeat(32);
+  const runtimeNames = allV3Names.map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-corpus-v3",
+    status: "prepared",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    names: runtimeNames,
+    deletedNames: [],
+    deleteIntent: null,
+  };
+  const result = await observeCollector({
+    scopeNames: allV3Names,
+    visibleNames: allV3Names,
+    failureMode: "preflight-second",
+    deleteRunId: runId,
+    initialJournal: journal,
+    recoveryMode: "recover-v3",
+  });
+  try {
+    assert.match(String(result.failure), /unexpected collection-group document/);
+    assert.equal(
+      result.requests.some((request) => {
+        if (!request.pathname.endsWith("/documents:commit")) return false;
+        return JSON.parse(request.body).writes.some((write) => write.delete || write.transform);
+      }),
+      false,
+    );
+    assert.notEqual(JSON.parse(await readFile(result.journal, "utf8")).status, "complete");
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("corpus-v3 recovery refuses nested child collections before any mutation", async () => {
+  const runId = "a".repeat(32);
+  const runtimeNames = allV3Names.map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-corpus-v3",
+    status: "prepared",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    names: runtimeNames,
+    deletedNames: [],
+    deleteIntent: null,
+  };
+  const result = await observeCollector({
+    scopeNames: allV3Names,
+    visibleNames: allV3Names,
+    childCollectionNames: [runtimeNames[0].split("/documents/")[1].split("/")[0]],
+    deleteRunId: runId,
+    initialJournal: journal,
+    recoveryMode: "recover-v3",
+  });
+  try {
+    assert.match(String(result.failure), /child collection/);
+    assert.equal(
+      result.requests.some((request) => request.pathname.endsWith("/documents:commit")),
+      false,
+    );
+    assert.equal(JSON.parse(await readFile(result.journal, "utf8")).status, "recovering");
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
 });
 
 test("68 empty programs avoid repeated shrink preflight requests and stay within the cap", async () => {

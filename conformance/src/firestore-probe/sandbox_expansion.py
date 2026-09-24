@@ -126,7 +126,12 @@ def _near_limit_delete_program(route: str, count: int) -> dict[str, Any]:
             },
             {"id": "before-delete", "method": "GET", "path": f"/v1/{name}"},
             delete,
-            {"id": "after-delete", "method": "GET", "path": f"/v1/{name}"},
+            {
+                "id": "after-delete",
+                "method": "POST",
+                "path": f"/v1/{DOCS}:batchGet",
+                "body": {"documents": [name]},
+            },
             {
                 "id": "group-after-delete",
                 "method": "POST",

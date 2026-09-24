@@ -290,7 +290,12 @@ test("DELETE is accepted only for bounded near-limit REST route recipes", () => 
               path: `${base}:${route === "commit" ? "commit" : "batchWrite"}`,
               body: { writes: [{ delete: resource }] },
             },
-        { id: "after-delete", method: "GET", path: `/v1/${resource}` },
+        {
+          id: "after-delete",
+          method: "POST",
+          path: `${base}:batchGet`,
+          body: { documents: [resource] },
+        },
         {
           id: "group-after-delete",
           method: "POST",

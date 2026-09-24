@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   appendFile,
+  open,
   lstat,
   mkdir,
   mkdtemp,
@@ -29,7 +30,7 @@ const require = createRequire(import.meta.url);
 const ROOT = resolve(CONFORMANCE_DIR, "..");
 const TASK_ID = "FS-DATA-WRITE-SANDBOX";
 // Owner-approved exception for the stable FS-DATA-WRITE-SANDBOX task (addendum 4).
-const TASK_LIMIT_USD = 20;
+const TASK_LIMIT_USD = 30;
 const SANDBOX_PROJECT = "fireemu-oracle-sbx";
 const RECORDED_PROJECT = "demo-firestore-probe";
 // The declared REST observation steps need pre/final clears; the 100-level document chain adds
@@ -37,6 +38,8 @@ const RECORDED_PROJECT = "demo-firestore-probe";
 // Leave headroom, but reject attempt 1001 before the network send.
 const REST_CAP = 1000;
 const ATTEMPT_ESTIMATE_USD = 0.5;
+const HISTORICAL_UNKNOWN_HOLD_USD = 9.24;
+const HISTORICAL_UNKNOWN_HOLD_ID = "FS-DATA-WRITE-SANDBOX-2026-09-24-HISTORICAL-UNKNOWN";
 export const MAX_STREAM_FRAMES = 9;
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -147,17 +150,43 @@ export function remainingSandboxBudget(rows, nextEstimateUsd = 0) {
   if (!Array.isArray(rows) || !Number.isFinite(nextEstimateUsd) || nextEstimateUsd < 0) {
     throw new Error("invalid sandbox budget input");
   }
-  const spent = rows.reduce((total, row) => {
-    if (row.taskId !== TASK_ID) return total;
+  let unlinkedSpent = 0;
+  const attempts = new Map();
+  for (const row of rows) {
+    if (row.taskId !== TASK_ID) continue;
     if (!Number.isFinite(row.estimatedUsd) || row.estimatedUsd < 0) {
       throw new Error("invalid sandbox ledger cost");
     }
-    return total + row.estimatedUsd;
-  }, 0);
+    if (typeof row.attemptId === "string" && row.attemptId.length > 0)
+      attempts.set(row.attemptId, row);
+    else unlinkedSpent += row.estimatedUsd;
+  }
+  const spent =
+    unlinkedSpent + [...attempts.values()].reduce((total, row) => total + row.estimatedUsd, 0);
   if (spent + nextEstimateUsd > TASK_LIMIT_USD + Number.EPSILON) {
     throw new Error("sandbox observation task budget exceeded");
   }
   return TASK_LIMIT_USD - spent;
+}
+
+export function requireHistoricalUnknownHold(rows) {
+  const holds = rows.filter(
+    (row) => row.taskId === TASK_ID && row.outcome === "historical-unknown-hold",
+  );
+  if (
+    holds.length !== 1 ||
+    holds[0].project !== SANDBOX_PROJECT ||
+    holds[0].database !== "(default)" ||
+    holds[0].estimatedUsd !== HISTORICAL_UNKNOWN_HOLD_USD ||
+    holds[0].requests !== null ||
+    holds[0].holdId !== HISTORICAL_UNKNOWN_HOLD_ID ||
+    !Number.isFinite(Date.parse(holds[0].ts ?? "")) ||
+    holds[0].runDir !== undefined ||
+    holds[0].attemptId !== undefined
+  ) {
+    throw new Error("the distinct $9.24 historical unknown hold must be present before admission");
+  }
+  return holds[0];
 }
 
 export function sandboxLedgerEntry({
@@ -167,6 +196,7 @@ export function sandboxLedgerEntry({
   outcome,
   runDir,
   estimatedUsd = ATTEMPT_ESTIMATE_USD,
+  attemptId,
 }) {
   if (
     requests !== null &&
@@ -185,7 +215,32 @@ export function sandboxLedgerEntry({
     outcome,
     taskId: TASK_ID,
     runDir,
+    ...(attemptId === undefined ? {} : { attemptId }),
   };
+}
+
+export async function reserveProductionAttempt({ ledgerPath, rows, gitSha, corpusDigest, runDir }) {
+  requireHistoricalUnknownHold(rows);
+  remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD);
+  const attemptId = randomUUID().replaceAll("-", "");
+  const reservation = sandboxLedgerEntry({
+    gitSha,
+    corpusDigest,
+    requests: null,
+    outcome: "reserved",
+    runDir,
+    estimatedUsd: ATTEMPT_ESTIMATE_USD,
+    attemptId,
+  });
+  const handle = await open(ledgerPath, "a", 0o600);
+  try {
+    await handle.writeFile(`${JSON.stringify(reservation)}\n`);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  rows.push(reservation);
+  return reservation;
 }
 
 export function legacyRecoveryEnvironment({
@@ -221,6 +276,231 @@ export function legacyRecoveryEnvironment({
     FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(names),
     FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: journal,
   };
+}
+
+export function v3RecoveryEnvironment({
+  token,
+  meta,
+  journal,
+  names,
+  runId,
+  corpusDigest,
+  sourceGitSha,
+}) {
+  if (
+    typeof token !== "string" ||
+    !token ||
+    typeof meta !== "string" ||
+    !meta ||
+    typeof journal !== "string" ||
+    !journal ||
+    !Array.isArray(names) ||
+    names.length !== 12 ||
+    !/^[a-f0-9]{32}$/.test(runId ?? "") ||
+    !/^[a-f0-9]{64}$/.test(corpusDigest ?? "") ||
+    !/^[a-f0-9]{40}$/.test(sourceGitSha ?? "")
+  )
+    throw new Error("corpus-v3 recovery requires exact private provenance");
+  managedClearScope(
+    names.map((name) => name.replaceAll("DELETE_RUN_ID", runId)),
+    SANDBOX_PROJECT,
+    "(default)",
+  );
+  return {
+    FIRESTORE_PROBE_TARGET: "production",
+    FIRESTORE_PROBE_RECOVERY_MODE: "recover-v3",
+    FIRESTORE_PROBE_SCHEME: "https",
+    FIRESTORE_PROBE_HOST: "firestore.googleapis.com",
+    FIRESTORE_PROBE_TOKEN: token,
+    FIRESTORE_PROBE_PROJECT: SANDBOX_PROJECT,
+    FIRESTORE_PROBE_RECORD_PROJECT: RECORDED_PROJECT,
+    FIRESTORE_PROBE_META_OUT: meta,
+    FIRESTORE_PROBE_MAX_REQUESTS: String(REST_CAP),
+    FIRESTORE_PROBE_TIMEOUT_MS: "180000",
+    FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(names),
+    FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: journal,
+    FIRESTORE_PROBE_DELETE_RUN_ID: runId,
+    FIRESTORE_PROBE_CORPUS_DIGEST: corpusDigest,
+    FIRESTORE_PROBE_SOURCE_GIT_SHA: sourceGitSha,
+  };
+}
+
+export async function findV3RecoveryResume(privateDir, expectedNames) {
+  if (
+    typeof privateDir !== "string" ||
+    !privateDir.startsWith("/") ||
+    !Array.isArray(expectedNames) ||
+    expectedNames.length !== 12
+  ) {
+    throw new Error("corpus-v3 recovery requires its exact private scope");
+  }
+  managedClearScope(
+    expectedNames.map((name) => name.replaceAll("DELETE_RUN_ID", "a".repeat(32))),
+    SANDBOX_PROJECT,
+    "(default)",
+  );
+  const privateRoot = resolve(privateDir);
+  const prefix = join(privateRoot, "fs-data-write-production-");
+  const rows = await readLedger(join(privateRoot, "sandbox-ledger.jsonl"));
+  const runDirs = new Set(
+    rows
+      .filter(
+        (row) =>
+          row.taskId === TASK_ID &&
+          row.outcome === "reserved" &&
+          typeof row.runDir === "string" &&
+          row.runDir.startsWith(prefix),
+      )
+      .map((row) => row.runDir),
+  );
+  const candidates = [];
+  for (const runDir of runDirs) {
+    if (
+      typeof runDir !== "string" ||
+      resolve(runDir) !== runDir ||
+      dirname(runDir) !== privateRoot ||
+      !runDir.startsWith(prefix)
+    ) {
+      throw new Error("corpus-v3 recovery ledger path escaped its private directory");
+    }
+    const directory = await lstat(runDir);
+    if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o077) !== 0) {
+      throw new Error("corpus-v3 recovery run directory is not private");
+    }
+    const journalPath = join(runDir, "managed-clear.json");
+    let journalInfo;
+    try {
+      journalInfo = await lstat(journalPath);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    if (!journalInfo.isFile() || journalInfo.isSymbolicLink() || (journalInfo.mode & 0o077) !== 0) {
+      throw new Error("corpus-v3 recovery journal is not a private regular file");
+    }
+    let journal;
+    try {
+      journal = JSON.parse(await readFile(journalPath, "utf8"));
+    } catch (error) {
+      throw new Error("corpus-v3 recovery journal is malformed", { cause: error });
+    }
+    const reservation = rows.find(
+      (row) => row.taskId === TASK_ID && row.outcome === "reserved" && row.runDir === runDir,
+    );
+    if (
+      !reservation ||
+      !/^[a-f0-9]{40}$/.test(reservation.gitSha ?? "") ||
+      !/^[a-f0-9]{64}$/.test(reservation.corpusDigest ?? "") ||
+      journal?.schemaVersion !== 1 ||
+      journal.mode !== "cleanup-corpus-v3" ||
+      journal.project !== SANDBOX_PROJECT ||
+      journal.database !== "(default)" ||
+      journal.sourceGitSha !== reservation.gitSha ||
+      journal.corpusDigest !== reservation.corpusDigest ||
+      !/^[a-f0-9]{32}$/.test(journal.runId ?? "") ||
+      JSON.stringify(journal.names) !==
+        JSON.stringify(expectedNames.map((name) => name.replaceAll("DELETE_RUN_ID", journal.runId)))
+    ) {
+      throw new Error("corpus-v3 recovery journal does not match its reserved frozen scope");
+    }
+    if (journal.status !== "complete")
+      candidates.push({ runDir, journalPath, journal, sourceGitSha: reservation.gitSha });
+  }
+  if (candidates.length > 1)
+    throw new Error("multiple incomplete corpus-v3 journals require operator resolution");
+  return candidates[0] ?? null;
+}
+
+async function recoverV3() {
+  const gitCommonDir = (
+    await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: ROOT,
+    })
+  ).stdout.trim();
+  const ledgerPath = sandboxLedgerPath(gitCommonDir);
+  const privateDir = dirname(ledgerPath);
+  await mkdir(privateDir, { recursive: true, mode: 0o700 });
+  const { corpus } = await prepareSandboxCorpus();
+  const names = sandboxManagedClearNames(corpus);
+  const currentGitSha = (
+    await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })
+  ).stdout.trim();
+  const result = await withSandboxExclusiveLock(privateDir, async (rows) => {
+    const resume = await findV3RecoveryResume(privateDir, names);
+    if (!resume) throw new Error("no incomplete exact-scope corpus-v3 cleanup journal exists");
+    const reservation = await reserveProductionAttempt({
+      ledgerPath,
+      rows,
+      gitSha: resume.journal.sourceGitSha,
+      corpusDigest: resume.journal.corpusDigest,
+      runDir: resume.runDir,
+    });
+    const meta = join(resume.runDir, `recovery-${randomUUID()}.meta.json`);
+    const token = (
+      process.env.FIREEMU_PRODUCTION_TOKEN ??
+      (
+        await execFileAsync("gcloud", ["auth", "application-default", "print-access-token"], {
+          maxBuffer: 4096,
+        })
+      ).stdout
+    ).trim();
+    if (!token) throw new Error("production OAuth bearer is missing");
+    let requestCount = null;
+    let outcome = "recovery-failed";
+    try {
+      await runNode(
+        "corpus-v3 exact cleanup recovery",
+        "firestore-probe/sandbox-session.mjs",
+        v3RecoveryEnvironment({
+          token,
+          meta,
+          journal: resume.journalPath,
+          names,
+          runId: resume.journal.runId,
+          corpusDigest: resume.journal.corpusDigest,
+          sourceGitSha: resume.journal.sourceGitSha,
+        }),
+        1_200_000,
+      );
+      const recovered = JSON.parse(await readFile(resume.journalPath, "utf8"));
+      if (recovered.status !== "complete" || recovered.mode !== "cleanup-corpus-v3") {
+        throw new Error("corpus-v3 recovery did not verify exact typed absence");
+      }
+      outcome = "recovered";
+    } finally {
+      try {
+        requestCount = sessionRequestCount(JSON.parse(await readFile(meta, "utf8")));
+      } catch {
+        // The reservation remains charged if recovery stops before writing metadata.
+      }
+      const entry = sandboxLedgerEntry({
+        gitSha: resume.journal.sourceGitSha,
+        corpusDigest: resume.journal.corpusDigest,
+        requests: requestCount,
+        outcome,
+        runDir: resume.runDir,
+        estimatedUsd: ATTEMPT_ESTIMATE_USD,
+        attemptId: reservation.attemptId,
+      });
+      const handle = await open(ledgerPath, "a", 0o600);
+      try {
+        await handle.writeFile(`${JSON.stringify(entry)}\n`);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      rows.push(entry);
+    }
+    return {
+      outcome,
+      requestCount,
+      runDir: resume.runDir,
+      journal: resume.journalPath,
+      sourceGitSha: resume.sourceGitSha,
+      recoveryStartedFrom: resume.journal.status,
+    };
+  });
+  process.stdout.write(`${JSON.stringify({ ...result, invocationGitSha: currentGitSha })}\n`);
 }
 
 export async function findLegacyRecoveryResume(
@@ -351,6 +631,7 @@ export async function prepareLegacyRecoveryRun(privateDir, corpusDigest, names) 
 
 export async function withLegacyRecoveryReservation(privateDir, reservation, work) {
   return withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+    requireHistoricalUnknownHold(lockedRows);
     remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD);
     const selected =
       typeof reservation === "function" ? await reservation(lockedRows) : reservation;
@@ -428,20 +709,47 @@ export function sandboxManagedClearNames(corpus) {
 
 export async function withSandboxExclusiveLock(privateDir, work) {
   const lockPath = join(privateDir, "fs-data-write-exclusive.lock");
-  await mkdir(lockPath, { mode: 0o700 });
+  try {
+    await mkdir(lockPath, { mode: 0o700 });
+  } catch (error) {
+    if (error?.code === "EEXIST") {
+      throw new Error(
+        "sandbox lock remains: verify no recording or recovery process is active, preserve its journal and reservation, then remove only the exact lock directory before retrying recovery",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   const rows = await readLedger(join(privateDir, "sandbox-ledger.jsonl"));
   const result = await work(rows);
   await rmdir(lockPath);
   return result;
 }
 
-export function productionRestEnvironment({ input, output, meta, token, managedNames, journal }) {
+export function productionRestEnvironment({
+  input,
+  output,
+  meta,
+  token,
+  managedNames,
+  journal,
+  runId,
+  corpusDigest,
+  sourceGitSha,
+}) {
   if (
     ![input, output, meta, token, journal].every(
       (value) => typeof value === "string" && value.length > 0,
     )
   ) {
     throw new Error("production REST session inputs are required");
+  }
+  if (
+    !/^[a-f0-9]{32}$/.test(runId ?? "") ||
+    !/^[a-f0-9]{64}$/.test(corpusDigest ?? "") ||
+    !/^[a-f0-9]{40}$/.test(sourceGitSha ?? "")
+  ) {
+    throw new Error("production REST cleanup provenance is required");
   }
   if (!Array.isArray(managedNames) || managedNames.length !== 12) {
     throw new Error("production managed-clear names are required");
@@ -461,6 +769,9 @@ export function productionRestEnvironment({ input, output, meta, token, managedN
     FIRESTORE_PROBE_TIMEOUT_MS: "180000",
     FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(managedNames),
     FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: journal,
+    FIRESTORE_PROBE_DELETE_RUN_ID: runId,
+    FIRESTORE_PROBE_CORPUS_DIGEST: corpusDigest,
+    FIRESTORE_PROBE_SOURCE_GIT_SHA: sourceGitSha,
   };
 }
 
@@ -508,8 +819,17 @@ async function productionRecording({
   rows,
   managedNames,
 }) {
-  remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD);
   const runDir = await mkdtemp(join(privateDir, "fs-data-write-production-"));
+  const runId = randomUUID().replaceAll("-", "");
+  const journal = join(runDir, "managed-clear.json");
+  const ledgerPath = join(privateDir, "sandbox-ledger.jsonl");
+  const reservation = await reserveProductionAttempt({
+    ledgerPath,
+    rows,
+    gitSha,
+    corpusDigest,
+    runDir,
+  });
   const restOut = join(runDir, "rest-results.json");
   const metaOut = join(runDir, "rest-meta.json");
   const streamOut = join(runDir, "stream-results.json");
@@ -526,7 +846,10 @@ async function productionRecording({
         meta: metaOut,
         token,
         managedNames,
-        journal: join(privateDir, "fs-data-write-managed-clear.json"),
+        journal,
+        runId,
+        corpusDigest,
+        sourceGitSha: gitSha,
       }),
       25_200_000,
     );
@@ -558,7 +881,7 @@ async function productionRecording({
     }
     requestCount += streamFrames;
     outcome = "recorded";
-    return { rest, stream, startedAt, runDir, requestCount };
+    return { rest, stream, startedAt, runDir, journal, requestCount };
   } finally {
     if (requestCount === null) {
       try {
@@ -573,8 +896,16 @@ async function productionRecording({
       requests: requestCount,
       outcome,
       runDir,
+      estimatedUsd: ATTEMPT_ESTIMATE_USD,
+      attemptId: reservation.attemptId,
     });
-    await appendFile(join(privateDir, "sandbox-ledger.jsonl"), `${JSON.stringify(entry)}\n`);
+    const handle = await open(ledgerPath, "a", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(entry)}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     rows.push(entry);
   }
 }
@@ -592,6 +923,7 @@ async function recordProduction() {
   const corpusDigest = sha256(JSON.stringify(corpus));
   const gitSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
   const rows = await readLedger(ledgerPath);
+  requireHistoricalUnknownHold(rows);
   remainingSandboxBudget(rows, ATTEMPT_ESTIMATE_USD * 2);
   const token = (
     process.env.FIREEMU_PRODUCTION_TOKEN ??
@@ -611,6 +943,7 @@ async function recordProduction() {
   await writeFile(restIn, JSON.stringify(corpus.restPrograms));
   // The lock spans both recordings and any managed-delete LRO. Failed work retains it.
   await withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+    requireHistoricalUnknownHold(lockedRows);
     remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD * 2);
     const first = await productionRecording({
       corpusIn,
@@ -636,15 +969,11 @@ async function recordProduction() {
       rows: lockedRows,
       managedNames,
     });
-    try {
-      const state = JSON.parse(
-        await readFile(join(privateDir, "fs-data-write-managed-clear.json"), "utf8"),
-      );
-      if (state.status !== "complete") {
+    for (const recording of [first, second]) {
+      const state = JSON.parse(await readFile(recording.journal, "utf8"));
+      if (state.status !== "complete" || state.mode !== "cleanup-corpus-v3") {
         throw new Error("managed clear operation is not verified complete");
       }
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
     }
     const sdkVersions = {
       firebase: require("firebase/package.json").version,
@@ -839,6 +1168,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     await recordProduction();
   } else if (process.argv[2] === "recover-legacy") {
     await recoverLegacy();
+  } else if (process.argv[2] === "recover-v3") {
+    await recoverV3();
   } else if (process.argv[2] === "prepare") {
     const prepared = await prepareSandboxCorpus();
     process.stdout.write(
@@ -846,7 +1177,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     );
   } else {
     throw new Error(
-      "expected prepare, local-child, compare-local, record-production or recover-legacy",
+      "expected prepare, local-child, compare-local, record-production, recover-legacy or recover-v3",
     );
   }
 }

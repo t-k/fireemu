@@ -113,8 +113,9 @@ function validateDeleteBoundaryProgram(program) {
     (route !== "rest" &&
       JSON.stringify(deletion.body) !== JSON.stringify({ writes: [{ delete: documentName }] })) ||
     after?.id !== "after-delete" ||
-    after.method !== "GET" ||
-    after.path !== `/v1/${documentName}` ||
+    after.method !== "POST" ||
+    after.path !== `${SANDBOX_DOCUMENTS}:batchGet` ||
+    JSON.stringify(after.body) !== JSON.stringify({ documents: [documentName] }) ||
     group?.id !== "group-after-delete" ||
     group.method !== "POST" ||
     group.path !== `${SANDBOX_DOCUMENTS}:runQuery` ||

@@ -43,6 +43,8 @@ const TOKEN = process.env.FIRESTORE_PROBE_TOKEN ?? "owner";
 const USER_TOKEN = process.env.FIRESTORE_PROBE_USER_TOKEN;
 const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
 const RECOVERY_MODE = process.env.FIRESTORE_PROBE_RECOVERY_MODE;
+const CORPUS_DIGEST = process.env.FIRESTORE_PROBE_CORPUS_DIGEST;
+const SOURCE_GIT_SHA = process.env.FIRESTORE_PROBE_SOURCE_GIT_SHA;
 const MANAGED_POLL_MS = /^127\.0\.0\.1:\d+$/.test(HOST ?? "")
   ? Number(process.env.FIRESTORE_PROBE_MANAGED_POLL_MS ?? 60_000)
   : 60_000;
@@ -831,6 +833,9 @@ async function writeV3CleanupJournal(status, extra = {}) {
     status,
     project: PROJECT,
     database: "(default)",
+    runId: deleteRunId,
+    corpusDigest: CORPUS_DIGEST,
+    sourceGitSha: SOURCE_GIT_SHA,
     names: managedClearState.names,
     deletedNames: [...managedClearState.cleanupDeletedNames],
     deleteIntent: managedClearState.cleanupDeleteIntent,
@@ -1152,6 +1157,117 @@ async function runLegacyRecoveryOnly() {
   }
 }
 
+async function runV3RecoveryOnly() {
+  if (
+    !PRODUCTION ||
+    PROJECT !== "fireemu-oracle-sbx" ||
+    !HOST ||
+    !META_OUT ||
+    !MANAGED_CLEAR_JOURNAL
+  ) {
+    throw new Error("corpus-v3 recovery requires the fixed production sandbox and private journal");
+  }
+  if (!requestBudget || MAX_REQUESTS !== "1000") {
+    throw new Error("corpus-v3 recovery requires the fixed 1000-request cap");
+  }
+  let journal;
+  try {
+    journal = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));
+  } catch (error) {
+    throw new Error("corpus-v3 recovery journal is unreadable", { cause: error });
+  }
+  const staticNames = JSON.parse(MANAGED_CLEAR_NAMES ?? "null");
+  if (
+    !/^[a-f0-9]{32}$/.test(journal?.runId ?? "") ||
+    !/^[a-f0-9]{64}$/.test(journal?.corpusDigest ?? "") ||
+    !/^[a-f0-9]{40}$/.test(journal?.sourceGitSha ?? "") ||
+    journal.schemaVersion !== 1 ||
+    journal.mode !== "cleanup-corpus-v3" ||
+    journal.project !== PROJECT ||
+    journal.database !== "(default)" ||
+    !Array.isArray(staticNames) ||
+    JSON.stringify(staticNames.map((name) => name.replaceAll(DELETE_RUN_MARKER, journal.runId))) !==
+      JSON.stringify(journal.names) ||
+    !Array.isArray(journal.deletedNames) ||
+    journal.deletedNames.some((name) => !journal.names.includes(name)) ||
+    new Set(journal.deletedNames).size !== journal.deletedNames.length ||
+    !["prepared", "active", "deleting", "shrinking", "complete", "recovering"].includes(
+      journal.status,
+    ) ||
+    (journal.deleteIntent !== null &&
+      (!journal.names.includes(journal.deleteIntent?.name) ||
+        !["delete attempt", "delete retry"].includes(journal.deleteIntent?.action) ||
+        typeof journal.deleteIntent.updateTime !== "string" ||
+        !journal.deleteIntent.updateTime ||
+        !Array.isArray(journal.deleteIntent.priorDeletedNames) ||
+        JSON.stringify(journal.deleteIntent.priorDeletedNames) !==
+          JSON.stringify(journal.deletedNames)))
+  ) {
+    throw new Error("corpus-v3 recovery journal escaped its exact frozen scope");
+  }
+  deleteRunId = journal.runId;
+  const names = journal.names;
+  managedClearScope(names, PROJECT, "(default)");
+  managedClearState = {
+    names,
+    shrinkScope: "v3",
+    recoveryOnly: true,
+    preflightUpdateTimes: new Map(),
+    shrinkRequestCounter: createShrinkRequestCounter(SHRINK_REQUEST_CAPS.v3),
+    legacyDebrisAudited: true,
+    cleanupDeletedNames: [...journal.deletedNames],
+    cleanupDeleteIntent: journal.deleteIntent,
+    preflightDone: false,
+  };
+  if (journal.status === "complete") {
+    throw new Error("corpus-v3 recovery journal is already complete");
+  }
+  const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
+  managedClearBlocked = true;
+  try {
+    await writeV3CleanupJournal("recovering", { recoveredFrom: journal.status });
+    await preflightManagedShrinkScope();
+    managedClearState.preflightDone = true;
+    for (const name of managedClearState.preflightUpdateTimes.keys()) {
+      const relative = name.split("/documents/")[1];
+      const children = await listCollectionIds(base, relative, (input, init) =>
+        managedShrinkRequest("v3 recovery child-collection preflight", input, init),
+      );
+      if (children === null || children.length !== 0) {
+        throw new Error("corpus-v3 recovery found an unexpected child collection");
+      }
+    }
+    const intent = managedClearState.cleanupDeleteIntent;
+    if (intent && !managedClearState.preflightUpdateTimes.has(intent.name)) {
+      managedClearState.cleanupDeletedNames.push(intent.name);
+      managedClearState.cleanupDeleteIntent = null;
+      await writeV3CleanupJournal("deleting");
+    }
+    for (const name of names) {
+      const present = managedClearState.preflightUpdateTimes.has(name);
+      if (managedClearState.cleanupDeletedNames.includes(name)) {
+        if (present)
+          throw new Error("corpus-v3 recovery found a previously deleted name present again");
+        continue;
+      }
+      if (!present) {
+        managedClearState.cleanupDeletedNames.push(name);
+        await writeV3CleanupJournal("deleting");
+        continue;
+      }
+      const collectionId = name.split("/documents/")[1].split("/")[0];
+      const failures = await deleteCollection(base, "", collectionId);
+      if (failures.length !== 0)
+        throw new Error("corpus-v3 recovery left an exact-scope delete failure");
+    }
+    await verifyManagedShrinkScopeAbsent(base);
+    await writeV3CleanupJournal("complete", { verifiedAbsentNames: [...names] });
+    managedClearBlocked = false;
+  } finally {
+    await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`, { mode: 0o600 });
+  }
+}
+
 function urlForDocument(name) {
   const prefix = `projects/${PROJECT}/databases/(default)/documents/`;
   if (!name.startsWith(prefix)) throw new Error("array shrink document escaped the sandbox");
@@ -1443,15 +1559,92 @@ async function step(spec, raw) {
   };
 }
 
+function deleteBoundaryLength(program) {
+  const match =
+    /^writes\/limits\/near-limit-delete-refusal\/(?:rest|commit|batch-write)\/(12112|12113)$/.exec(
+      program.id,
+    );
+  return match ? Number(match[1]) : null;
+}
+
+function provesDeleteTargetExists(program, stepSpec, document, recorded) {
+  const expectedLength = deleteBoundaryLength(program);
+  const expectedName = replaceRunMarker(
+    stepSpec.path.replaceAll("PROJECT", PROJECT).replace(/^\/v1\//, ""),
+  );
+  const values = document?.fields?.a?.arrayValue?.values;
+  return (
+    expectedLength !== null &&
+    recorded?.status === 200 &&
+    recorded.code === "OK" &&
+    document?.name === expectedName &&
+    typeof document?.updateTime === "string" &&
+    document.updateTime.length > 0 &&
+    Object.keys(document.fields ?? {}).length === 1 &&
+    Object.keys(document.fields?.a ?? {}).length === 1 &&
+    Array.isArray(values) &&
+    values.length === expectedLength &&
+    values.every(
+      (value, index) =>
+        Object.keys(value ?? {}).length === 1 && value.integerValue === String(index),
+    )
+  );
+}
+
+function provesDeleteOutcome(program, steps, raw) {
+  const deletion = steps.delete;
+  const afterDelete = steps["after-delete"];
+  const group = steps["group-after-delete"];
+  if (
+    !deletion ||
+    deletion.status < 200 ||
+    deletion.status >= 500 ||
+    afterDelete?.status !== 200 ||
+    afterDelete.code !== "OK" ||
+    group?.status !== 200 ||
+    group.code !== "OK"
+  )
+    return false;
+  const afterRaw = raw.get("after-delete");
+  const groupRaw = raw.get("group-after-delete");
+  const count = deleteBoundaryLength(program);
+  const beforeSpec = program.steps.find((candidate) => candidate.id === "before-delete");
+  const name = replaceRunMarker(
+    beforeSpec.path.replaceAll("PROJECT", PROJECT).replace(/^\/v1\//, ""),
+  );
+  if (deletion.status >= 200 && deletion.status < 300) {
+    return (
+      Array.isArray(afterRaw) &&
+      afterRaw.length === 1 &&
+      afterRaw[0]?.missing === name &&
+      Array.isArray(groupRaw) &&
+      groupRaw.length === 0
+    );
+  }
+  const found = Array.isArray(afterRaw) && afterRaw.length === 1 ? afterRaw[0]?.found : null;
+  const foundValues = found?.fields?.a?.arrayValue?.values;
+  return (
+    found?.name === name &&
+    typeof found.updateTime === "string" &&
+    Array.isArray(foundValues) &&
+    foundValues.length === count &&
+    foundValues.every((value, index) => value?.integerValue === String(index)) &&
+    Array.isArray(groupRaw) &&
+    groupRaw.length === 1 &&
+    groupRaw[0]?.document?.name === name
+  );
+}
+
 async function main() {
   if (RECOVERY_MODE !== undefined) {
-    if (RECOVERY_MODE !== "recover-legacy") {
+    if (!["recover-legacy", "recover-v3"].includes(RECOVERY_MODE)) {
       throw new Error("unsupported Firestore probe recovery mode");
     }
     if (!PRODUCTION || PROJECT !== "fireemu-oracle-sbx" || !HOST || !TOKEN) {
       throw new Error("legacy recovery requires the fixed sandbox production target");
     }
-    await runLegacyRecoveryOnly();
+    if (RECOVERY_MODE === "recover-v3") await runV3RecoveryOnly();
+    else await runLegacyRecoveryOnly();
     return;
   }
   if (!HOST || !IN || !OUT) {
@@ -1462,7 +1655,7 @@ async function main() {
   const programs = JSON.parse(await readFile(IN, "utf8"));
   const fixedLocalRunId = process.env.FIRESTORE_PROBE_DELETE_RUN_ID;
   deleteRunId =
-    /^127\.0\.0\.1:\d+$/.test(HOST) && /^[a-f0-9]{32}$/.test(fixedLocalRunId ?? "")
+    /^[a-f0-9]{32}$/.test(fixedLocalRunId ?? "") && (/^127\.0\.0\.1:\d+$/.test(HOST) || PRODUCTION)
       ? fixedLocalRunId
       : randomUUID().replaceAll("-", "");
   if (PRODUCTION && (MANAGED_CLEAR_NAMES || MANAGED_CLEAR_JOURNAL)) {
@@ -1501,6 +1694,15 @@ async function main() {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
+    if (
+      PRODUCTION &&
+      (!/^[a-f0-9]{32}$/.test(deleteRunId) ||
+        !/^[a-f0-9]{64}$/.test(CORPUS_DIGEST ?? "") ||
+        !/^[a-f0-9]{40}$/.test(SOURCE_GIT_SHA ?? ""))
+    ) {
+      throw new Error("production managed cleanup provenance is incomplete");
+    }
+    if (shrinkScope === "v3") await writeV3CleanupJournal("prepared");
   }
   const results = {};
   const touchedDatabases = new Set(["(default)"]);
@@ -1519,7 +1721,37 @@ async function main() {
       }
       const raw = new Map();
       const steps = {};
+      let candidateDeleteBlocked = false;
       for (const spec of program.steps) {
+        if (candidateDeleteBlocked) {
+          steps[spec.id] = { status: 0, code: "not-run", message: "indeterminate prerequisite" };
+          raw.set(spec.id, null);
+          continue;
+        }
+        if (spec.id === "delete" && deleteBoundaryLength(program) !== null) {
+          const beforeDelete = raw.get("before-delete");
+          const beforeDeleteSpec = program.steps.find(
+            (candidate) => candidate.id === "before-delete",
+          );
+          if (
+            !beforeDeleteSpec ||
+            !provesDeleteTargetExists(
+              program,
+              beforeDeleteSpec,
+              beforeDelete,
+              steps["before-delete"],
+            )
+          ) {
+            candidateDeleteBlocked = true;
+            steps[spec.id] = {
+              status: 0,
+              code: "indeterminate",
+              message: "fresh typed pre-delete read did not prove the exact seeded document exists",
+            };
+            raw.set(spec.id, null);
+            continue;
+          }
+        }
         let outcome;
         try {
           outcome = await step(spec, raw);
@@ -1537,7 +1769,17 @@ async function main() {
             : { credential: credentialMetadata({ kind: spec.credential }) }),
         };
       }
-      results[program.id] = { steps };
+      results[program.id] = {
+        steps,
+        ...(deleteBoundaryLength(program) === null
+          ? {}
+          : {
+              conditionEvidence:
+                !candidateDeleteBlocked && provesDeleteOutcome(program, steps, raw)
+                  ? "complete"
+                  : "indeterminate",
+            }),
+      };
     }
   } finally {
     try {

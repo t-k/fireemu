@@ -1132,7 +1132,13 @@ const PROGRAMS_RAW = [
         body: query("(default)"),
       }),
       get("list-without-default", "v1/{project}/databases", { filterDatabases: true }),
-      get("indexes-without-default", "v1/{project}/databases/(default)/collectionGroups/-/indexes"),
+      // Its index list is served for a while too, then refused (C10): read until it is.
+      pollPath(
+        "indexes-without-default",
+        "v1/{project}/databases/(default)/collectionGroups/-/indexes",
+        "httpError",
+        { max: 40, intervalMs: 15_000 },
+      ),
       pollPath("recreate", "v1/{project}/databases", "httpOk", {
         max: 30,
         intervalMs: 20_000,

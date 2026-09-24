@@ -21,6 +21,8 @@ import {
   collapseTrace,
   UNCREATED_DATABASES,
   UNTIL,
+  isDatabaseOperation,
+  isRateLimited,
 } from "./harness.mjs";
 import { capturePairs, normalizeCapture, restoreCapture } from "./exports.mjs";
 
@@ -43,9 +45,28 @@ export function createSession(
     // token is older than `tokenMaxAgeMs`, and before every cleanup.
     refreshToken,
     tokenMaxAgeMs = 40 * 60_000,
+    databaseOperationsPerMinute = 40,
+    rateLimitRetries = 5,
+    rateLimitDelayMs = 65_000,
     log = () => {},
   } = {},
 ) {
+  // Production allows 60 database operations per minute per project; the run keeps well
+  // under it, across its concurrent programs.
+  const databaseOperations = [];
+  async function throttle(url) {
+    if (ctx.target.kind !== "production" || !isDatabaseOperation(url)) return;
+    for (;;) {
+      const now = Date.now();
+      while (databaseOperations.length && now - databaseOperations[0] > 60_000)
+        databaseOperations.shift();
+      if (databaseOperations.length < databaseOperationsPerMinute) {
+        databaseOperations.push(now);
+        return;
+      }
+      await sleep(60_000 - (now - databaseOperations[0]) + 50);
+    }
+  }
   let tokenAt = Date.now();
   /** An ADC access token lives about an hour; one older than this is not trusted. */
   const TOKEN_LIFETIME_MS = 55 * 60_000;
@@ -111,6 +132,7 @@ export function createSession(
       guardRestRequest(request, ctx, program, { harness: harness || cleanup });
       claim(harness, cleanup);
       let answer;
+      await throttle(request.url);
       try {
         const response = await fetch(request.url, {
           ...request.init,
@@ -132,6 +154,14 @@ export function createSession(
           transportError: error?.cause?.code ?? error?.name,
         };
       }
+      // A rate limit says nothing about the resource: wait for the next minute and retry,
+      // and never record it as behavior.
+      if (ctx.target.kind === "production" && isRateLimited(answer.status, answer.json)) {
+        if (attempt >= rateLimitRetries)
+          throw fatal(`rate limited ${attempt + 1} times: ${step.id}`);
+        await sleep(rateLimitDelayMs);
+        continue;
+      }
       // An expired credential says nothing about the resource: refresh and retry once, and
       // never record it as behavior.
       if (answer.status !== 401 || ctx.target.kind !== "production") return answer;
@@ -145,6 +175,20 @@ export function createSession(
     await ensureToken();
     for (let attempt = 0; ; attempt += 1) {
       const answer = await sendGrpcOnce(step, program, raw);
+      // RESOURCE_EXHAUSTED with a rate-limit reason is not behavior either.
+      if (
+        ctx.target.kind === "production" &&
+        answer.code === 8 &&
+        answer.errorDetails.some(
+          (d) => d["@type"] === "type.googleapis.com/google.rpc.ErrorInfo",
+        ) &&
+        /quota|rate/i.test(answer.details)
+      ) {
+        if (attempt >= rateLimitRetries)
+          throw fatal(`rate limited ${attempt + 1} times: ${step.id}`);
+        await sleep(rateLimitDelayMs);
+        continue;
+      }
       // UNAUTHENTICATED is an expired credential, not behavior: refresh and retry once.
       if (answer.code !== 16 || ctx.target.kind !== "production") return answer;
       if (attempt > 0) throw fatal(`gRPC UNAUTHENTICATED after a token refresh: ${step.id}`);
@@ -152,8 +196,9 @@ export function createSession(
     }
   }
 
-  function sendGrpcOnce(step, program, raw) {
+  async function sendGrpcOnce(step, program, raw) {
     const built = buildGrpcRequest(step, ctx, program, raw);
+    if (/Database/.test(built.rpc)) await throttle(`/v1/projects/${ctx.project}/databases`);
     guardGrpcRequest(built, ctx, program, UNCREATED_DATABASES);
     claim(false);
     const metadata = new grpc.Metadata();
@@ -167,7 +212,7 @@ export function createSession(
         "x-goog-request-params",
         `${built.routing}=${encodeURIComponent(built.routingValue)}`,
       );
-    return new Promise((resolve) => {
+    return await new Promise((resolve) => {
       grpcClient.makeUnaryRequest(
         built.path,
         built.serialize,

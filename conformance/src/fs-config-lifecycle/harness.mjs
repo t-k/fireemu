@@ -299,12 +299,38 @@ export const UNTIL = {
   notFound: (_json, status) => status === 404,
   httpError: (_json, status) => status >= 400,
   httpOk: (_json, status) => status === 200,
-  exempt: (json) => json?.indexConfig?.usesAncestorConfig === false,
+  // proto3 JSON leaves out a false usesAncestorConfig: an applied exemption is an index
+  // configuration that neither inherits nor names its ancestor.
+  exempt: (json) =>
+    json?.indexConfig !== undefined &&
+    json.indexConfig.usesAncestorConfig !== true &&
+    json.indexConfig.ancestorField === undefined,
   inherits: (json) => json?.indexConfig?.usesAncestorConfig === true,
   ttlActive: (json) => json?.ttlConfig?.state === "ACTIVE",
   ttlGone: (json) => json?.ttlConfig === undefined,
   never: () => false,
 };
+
+/**
+ * A quota refusal that says nothing about the resource: production's per-minute rate limits
+ * (ErrorInfo reason RATE_LIMIT_EXCEEDED). Any other 429 (a TTL policy limit, a customer-managed
+ * key quota) is behavior and is recorded.
+ */
+export function isRateLimited(status, json) {
+  if (status !== 429) return false;
+  const details =
+    json?.error?.details ?? (Array.isArray(json) ? json[0]?.error?.details : undefined);
+  return (details ?? []).some((d) => d?.reason === "RATE_LIMIT_EXCEEDED");
+}
+
+/**
+ * Whether a request is a database operation production counts against its per-minute
+ * database operation quota: any request on a database resource itself (create, get, list,
+ * patch, delete), as opposed to one below it.
+ */
+export function isDatabaseOperation(url) {
+  return /\/v1\/projects\/[^/]+\/databases(\/[^/:?]+)?(\?|$)/.test(url);
+}
 
 const INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
 const EMBEDDED_INSTANT = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g;

@@ -154,3 +154,63 @@ test("a 401 is retried once with a fresh token and never recorded", async () => 
     globalThis.fetch = original;
   }
 });
+
+test("a rate-limited answer is retried and never recorded; another 429 is behavior", async () => {
+  const ctx = createContext({
+    run: "1790000000",
+    target: {
+      kind: "production",
+      token: "t",
+      quotaProject: "fireemu-oracle-query",
+      bucket: "fireemu-oracle-query-cfg-1790000000",
+    },
+  });
+  let calls = 0;
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const path = decodeURIComponent(new URL(url).pathname);
+    if (path.endsWith("/databases"))
+      return new Response(JSON.stringify({ databases: [] }), { status: 200 });
+    if (path.endsWith("/locations")) {
+      calls += 1;
+      if (calls === 1)
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 429,
+              status: "RESOURCE_EXHAUSTED",
+              details: [{ reason: "RATE_LIMIT_EXCEEDED" }],
+            },
+          }),
+          { status: 429 },
+        );
+      return new Response("{}", { status: 200 });
+    }
+    return new Response(
+      JSON.stringify({
+        error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "at most '1' field(s)" },
+      }),
+      { status: 429 },
+    );
+  };
+  const readProgram = {
+    ...program,
+    databases: [],
+    steps: [
+      { id: "limited", path: "v1/{project}/locations" },
+      { id: "quota", path: "v1/{project}/locations/x" },
+    ],
+  };
+  try {
+    const out = await runCorpus([readProgram], ctx, {
+      bucket: false,
+      pollScale: 0,
+      rateLimitDelayMs: 0,
+    });
+    assert.equal(calls, 2);
+    assert.equal(out.results[readProgram.id].steps.limited.status, 200);
+    assert.equal(out.results[readProgram.id].steps.quota.status, 429);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

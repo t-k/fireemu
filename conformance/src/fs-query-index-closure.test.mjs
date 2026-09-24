@@ -196,6 +196,9 @@ test("the local configuration uses the lane indexes under the strict profile", (
   assert.equal(config.firestore.edition, "standard");
   assert.equal(config.firestore.indexFile, "conformance/fs-query-index.indexes.json");
   assert.equal(config.daemon?.clockStart, undefined, "run-window masking needs the wall clock");
+  // The sandbox database's createTime (gcloud firestore databases describe), so read times
+  // within the retention hour but before the daemon started behave as they do there.
+  assert.equal(config.firestore.databaseCreateTime, "2026-09-23T23:01:49.496838Z");
   // The lane file is a superset of the shared file other campaigns bind (scope decision Q2).
   const shared = readRepo("conformance/firestore.indexes.json");
   const lane = readRepo("conformance/fs-query-index.indexes.json");

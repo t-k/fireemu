@@ -7747,7 +7747,9 @@ fn refresh_custom_token(state: &AuthState, body: &Value, tenant: &str) -> Value 
         &json!({"grant_type": "refresh_token", "refresh_token": body["refreshToken"], "tenantId": tenant}),
     );
     assert_eq!(status, 200, "{refreshed}");
-    assert_refreshed_claims(&refreshed, tenant, body["localId"].as_str().unwrap());
+    // The custom-token answer names its account only inside the token.
+    let uid = token_parts(&body["idToken"]).1["sub"].clone();
+    assert_refreshed_claims(&refreshed, tenant, uid.as_str().unwrap());
     refreshed
 }
 
@@ -7960,6 +7962,161 @@ fn configured_signers_admit_only_the_tokens_they_signed() {
     );
 }
 
+fn token_parts(token: &Value) -> (Value, Value) {
+    let mut parts = token.as_str().unwrap().split('.');
+    let mut part = || {
+        serde_json::from_slice::<Value>(
+            &fireemu_core_auth::jwt::base64url_decode(parts.next().unwrap()).unwrap(),
+        )
+        .unwrap()
+    };
+    (part(), part())
+}
+
+fn keys(body: &Value) -> Vec<&str> {
+    let mut keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    keys
+}
+
+/// Without `returnSecureToken`, password and custom-token sign-in answer with the legacy
+/// Identity Toolkit token and no refresh token; account lookup honours it and session-cookie
+/// creation refuses it. Custom-token answers never carry `localId` (sandbox recording
+/// 2026-09-24, auth-credential/id-token/without-return-secure-token and methods).
+#[test]
+fn sign_in_without_secure_tokens_answers_with_the_legacy_identity_toolkit_token() {
+    let s = strict_state();
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "legacy@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    for request in [
+        json!({"email": "legacy@example.com", "password": "password1"}),
+        json!({"email": "legacy@example.com", "password": "password1", "returnSecureToken": false}),
+    ] {
+        let (status, body) = post(&s, &format!("{V1}/accounts:signInWithPassword"), &request);
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            keys(&body),
+            [
+                "displayName",
+                "email",
+                "idToken",
+                "kind",
+                "localId",
+                "registered"
+            ]
+        );
+        let (header, claims) = token_parts(&body["idToken"]);
+        assert_eq!(header, json!({"alg": "none"}));
+        assert_eq!(claims["iss"], "https://identitytoolkit.google.com/");
+        assert_eq!(claims["aud"], "demo-app");
+        assert_eq!(claims["user_id"], created["localId"]);
+        assert_eq!(claims["email"], "legacy@example.com");
+        assert_eq!(claims["verified"], false);
+        assert_eq!(claims["sign_in_provider"], "password");
+        assert_eq!(
+            claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+            1_209_600
+        );
+        for absent in ["sub", "auth_time", "firebase", "email_verified"] {
+            assert!(claims.get(absent).is_none(), "{absent}: {claims}");
+        }
+        let (status, looked_up) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": body["idToken"]}),
+        );
+        assert_eq!(status, 200, "{looked_up}");
+        assert_eq!(looked_up["users"][0]["localId"], created["localId"]);
+        let (status, refused) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:createSessionCookie"),
+            &json!({"idToken": body["idToken"], "validDuration": 3600}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN");
+    }
+    let now = 1_788_004_860;
+    let (status, legacy) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": custom_token("legacy-custom", &json!({"role": "r"}), now + 3600)}),
+    );
+    assert_eq!(status, 200, "{legacy}");
+    assert_eq!(keys(&legacy), ["idToken", "isNewUser", "kind"]);
+    let (header, claims) = token_parts(&legacy["idToken"]);
+    assert_eq!(header, json!({"alg": "none"}));
+    assert_eq!(claims["sign_in_provider"], "custom");
+    assert_eq!(claims["user_id"], "legacy-custom");
+    assert_eq!(claims["extra_claims"], json!({"role": "r"}));
+    assert!(claims.get("role").is_none());
+    let (_, account) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["legacy-custom"]}),
+    );
+    let user = &account["users"][0];
+    assert_eq!(user["customAuth"], true, "{account}");
+    assert!(user.get("validSince").is_some(), "{user}");
+    assert!(user.get("lastRefreshAt").is_none(), "{user}");
+    assert!(user.get("disabled").is_none(), "{user}");
+    let (status, secure) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({
+            "token": custom_token("legacy-custom", &json!({}), now + 3600),
+            "returnSecureToken": true,
+        }),
+    );
+    assert_eq!(status, 200, "{secure}");
+    assert_eq!(
+        keys(&secure),
+        ["expiresIn", "idToken", "isNewUser", "kind", "refreshToken"]
+    );
+}
+
+/// An Admin update answers `emailVerified` only for an account with an address (sandbox
+/// recording 2026-09-24, auth-credential/revocation/valid-since#custom-valid-since-after).
+#[test]
+fn admin_update_reports_email_verified_only_with_an_address() {
+    let s = strict_state();
+    for (id, email) in [
+        ("no-address", None),
+        ("with-address", Some("with-address@example.com")),
+    ] {
+        let mut create = json!({"localId": id});
+        if let Some(email) = email {
+            create["email"] = json!(email);
+        }
+        assert_eq!(
+            admin(&s, "POST", &format!("{ADMIN}/accounts"), &create).0,
+            200
+        );
+        let (status, updated) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": id, "validSince": "1788004000"}),
+        );
+        assert_eq!(status, 200, "{updated}");
+        assert_eq!(
+            updated.get("emailVerified").is_some(),
+            email.is_some(),
+            "{updated}"
+        );
+    }
+}
+
 #[test]
 fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
     let s = state();
@@ -7972,7 +8129,8 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
     );
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["isNewUser"], true);
-    assert_eq!(body["localId"], "custom-1");
+    // Production's answer names the account only inside the token.
+    assert!(body.get("localId").is_none(), "{body}");
     let id_token = body["idToken"].as_str().unwrap();
     let decoded = fireemu_core_auth::jwt::decode_unsigned(id_token).unwrap();
     assert_eq!(
@@ -8238,7 +8396,8 @@ fn legacy_v3_custom_token_exchange_matches_v1() {
     );
 
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["localId"], "legacy-custom");
+    assert!(body.get("localId").is_none(), "{body}");
+    assert_eq!(token_parts(&body["idToken"]).1["sub"], "legacy-custom");
     assert_eq!(body["isNewUser"], true);
     let decoded =
         fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap()).unwrap();
@@ -8254,7 +8413,7 @@ fn legacy_v3_custom_token_exchange_matches_v1() {
         &json!({"token": expired}),
     );
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["localId"], "legacy-expired");
+    assert_eq!(token_parts(&body["idToken"]).1["sub"], "legacy-expired");
 
     for invalid in [
         "not-a-token".to_owned(),
@@ -8285,7 +8444,7 @@ fn legacy_v3_custom_token_exchange_matches_v1() {
         &json!({"token": other_issuer}),
     );
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["localId"], "legacy-other-issuer");
+    assert_eq!(token_parts(&body["idToken"]).1["sub"], "legacy-other-issuer");
 }
 
 #[test]
@@ -12023,7 +12182,10 @@ fn query_tenant_binds_custom_token_namespace_before_auth_work() {
         }),
     );
     assert_eq!(status, 200, "{accepted}");
-    assert_eq!(accepted["localId"], "query-custom-user");
+    assert_eq!(
+        token_parts(&accepted["idToken"]).1["sub"],
+        "query-custom-user"
+    );
     assert_eq!(
         registry
             .tenant_store("worker-alpha", "customer-b")

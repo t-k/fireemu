@@ -423,7 +423,7 @@ async function runLocal(programs) {
       schemaVersion: 1,
       profile: "strict",
       daemon: { authProjectNumbers: { [SANDBOX_PROJECT]: LOCAL_PROJECT_NUMBER } },
-      auth: { idTokenSigning: "session-rsa", customTokenSigners: trust },
+      auth: { idTokenSigning: "session-rsa", apiKeys: ["fake-api-key"], customTokenSigners: trust },
     }),
   );
   await writeFile(inPath, JSON.stringify(programs));

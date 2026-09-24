@@ -330,9 +330,10 @@ fn not_in_combination_rules() {
         field("a", FieldOp::NotIn, arr(2)),
         field("b", FieldOp::NotIn, arr(2)),
     ]);
+    // Production answers the negation rule first (FS-QUERY-INDEX filter-validation).
     assert_eq!(
         base().with_filter(two).canonicalize().unwrap_err(),
-        QueryError::MultipleNotIn
+        QueryError::MultipleNegations
     );
     let with_in = FilterExpr::And(vec![
         field("a", FieldOp::NotIn, arr(2)),
@@ -482,13 +483,16 @@ fn a_cursor_value_in_the_document_name_slot_must_be_a_document_reference() {
 }
 
 #[test]
-fn the_implicit_document_name_order_type_checks_its_cursor_value_too() {
-    // No explicit order: the effective order is `__name__` alone, so the single cursor
-    // value stands in the `__name__` position.
+fn a_cursor_without_an_explicit_order_has_too_many_values() {
+    // Production positions a cursor against the explicit order only; the implicit
+    // `__name__` order takes no value (FS-QUERY-INDEX cursors, recorded 2026-09-24).
     let query = starting_at(Query::new(cursor_scope()), vec![Value::Integer(3)]);
     assert_eq!(
-        cursor_error(&query),
-        QueryError::CursorNameValue { position: 0 }
+        query.canonicalize().unwrap_err(),
+        QueryError::CursorArityMismatch {
+            cursor: 1,
+            order_by: 0
+        }
     );
 }
 
@@ -498,6 +502,8 @@ fn a_cursor_value_in_the_document_name_slot_must_be_a_full_resource_name() {
         Query::new(cursor_scope()).with_order(name_order()),
         vec![Value::Reference("cur/c3".to_owned())],
     );
+    // Not a resource name at all, so not production's collection-reference refusal
+    // (cursors/names#name-collection-reference); it positions nothing.
     assert_eq!(
         cursor_error(&query),
         QueryError::CursorNameValue { position: 0 }
@@ -505,44 +511,37 @@ fn a_cursor_value_in_the_document_name_slot_must_be_a_full_resource_name() {
 }
 
 #[test]
-fn a_cursor_reference_in_a_sibling_collection_is_refused() {
-    let query = starting_at(
+fn a_cursor_reference_in_a_sibling_collection_is_accepted() {
+    // Production positions by any document of the database, inside the query's scope or
+    // not (FS-QUERY-INDEX cursors/names, recorded 2026-09-24).
+    cursor_accepted(&starting_at(
         Query::new(cursor_scope()).with_order(name_order()),
         vec![reference("root/r1/other/absent")],
-    );
-    assert_eq!(
-        cursor_error(&query),
-        QueryError::CursorReferenceScope { position: 0 }
-    );
+    ));
 }
 
 #[test]
-fn a_cursor_reference_under_another_parent_document_is_refused() {
-    let query = starting_at(
+fn a_cursor_reference_under_another_parent_document_is_accepted() {
+    // Production positions by any document of the database, inside the query's scope or
+    // not (FS-QUERY-INDEX cursors/names, recorded 2026-09-24).
+    cursor_accepted(&starting_at(
         Query::new(cursor_scope()).with_order(name_order()),
         vec![reference("root/r2/cur/c3")],
-    );
-    assert_eq!(
-        cursor_error(&query),
-        QueryError::CursorReferenceScope { position: 0 }
-    );
+    ));
 }
 
 #[test]
-fn a_cursor_reference_in_a_deeper_collection_of_the_same_name_is_refused() {
-    // A single-collection query selects one collection, not the group.
-    let query = starting_at(
+fn a_cursor_reference_in_a_deeper_collection_of_the_same_name_is_accepted() {
+    // Production positions by any document of the database, inside the query's scope or
+    // not (FS-QUERY-INDEX cursors/names, recorded 2026-09-24).
+    cursor_accepted(&starting_at(
         Query::new(cursor_scope()).with_order(name_order()),
         vec![reference("root/r1/cur/c3/cur/c9")],
-    );
-    assert_eq!(
-        cursor_error(&query),
-        QueryError::CursorReferenceScope { position: 0 }
-    );
+    ));
 }
 
 #[test]
-fn a_collection_group_cursor_must_name_a_document_of_the_group() {
+fn a_collection_group_cursor_may_name_any_document() {
     let scope = QueryScope::collection_group_under(
         Some(document("root/r1")),
         CollectionId::try_new("cur").unwrap(),
@@ -551,50 +550,43 @@ fn a_collection_group_cursor_must_name_a_document_of_the_group() {
         Query::new(scope.clone()).with_order(name_order()),
         vec![reference("root/r1/sub/s1/cur/c3")],
     ));
-    let foreign = starting_at(
+    cursor_accepted(&starting_at(
         Query::new(scope).with_order(name_order()),
         vec![reference("root/r1/other/x1")],
-    );
-    assert_eq!(
-        cursor_error(&foreign),
-        QueryError::CursorReferenceScope { position: 0 }
-    );
+    ));
 }
 
 #[test]
-fn a_cursor_reference_in_another_database_is_refused() {
-    let query = starting_at(
+fn a_cursor_reference_in_another_database_is_left_to_the_request_check() {
+    // The request decoder refuses a cursor key outside the request's database (it knows the
+    // database; a root-level scope does not), so the query itself accepts it.
+    cursor_accepted(&starting_at(
         Query::new(cursor_scope()).with_order(name_order()),
         vec![Value::Reference(
             "projects/demo-app/databases/other/documents/root/r1/cur/c3".to_owned(),
         )],
-    );
-    assert_eq!(
-        cursor_error(&query),
-        QueryError::CursorReferenceScope { position: 0 }
-    );
+    ));
 }
 
 #[test]
-fn a_cursor_reference_in_another_project_is_refused() {
-    let query = starting_at(
+fn a_cursor_reference_in_another_project_is_left_to_the_request_check() {
+    // The request decoder refuses a cursor key outside the request's database (it knows the
+    // database; a root-level scope does not), so the query itself accepts it.
+    cursor_accepted(&starting_at(
         Query::new(cursor_scope()).with_order(name_order()),
         vec![Value::Reference(
             "projects/other-app/databases/(default)/documents/root/r1/cur/c3".to_owned(),
         )],
-    );
-    assert_eq!(
-        cursor_error(&query),
-        QueryError::CursorReferenceScope { position: 0 }
-    );
+    ));
 }
 
 #[test]
 fn the_document_name_slot_is_checked_after_an_explicit_field_order() {
-    // `ORDER BY n ASC` becomes `ORDER BY n ASC, __name__ ASC`, so the second cursor value
-    // stands in the `__name__` position.
+    // `ORDER BY n ASC, __name__ ASC`: the second cursor value stands in the `__name__` slot.
     let query = starting_at(
-        Query::new(cursor_scope()).with_order(order("n")),
+        Query::new(cursor_scope())
+            .with_order(order("n"))
+            .with_order(name_order()),
         vec![Value::Integer(3), Value::String("c3".to_owned())],
     );
     assert_eq!(
@@ -607,20 +599,20 @@ fn the_document_name_slot_is_checked_after_an_explicit_field_order() {
 fn an_end_cursor_is_validated_like_a_start_cursor() {
     let query = Query {
         end_at: Some(Cursor {
-            values: vec![reference("root/r1/other/absent")],
+            values: vec![Value::Integer(7)],
             before: false,
         }),
         ..Query::new(cursor_scope()).with_order(name_order())
     };
     assert_eq!(
         cursor_error(&query),
-        QueryError::CursorReferenceScope { position: 0 }
+        QueryError::CursorNameValue { position: 0 }
     );
 }
 
 #[test]
 fn more_cursor_values_than_order_fields_stay_refused() {
-    // `ORDER BY n ASC` normalizes to two fields, so three values exceed the order.
+    // `ORDER BY n ASC` is one explicit field, so three values exceed the order.
     let query = starting_at(
         Query::new(cursor_scope()).with_order(order("n")),
         vec![
@@ -633,7 +625,7 @@ fn more_cursor_values_than_order_fields_stay_refused() {
         query.canonicalize().unwrap_err(),
         QueryError::CursorArityMismatch {
             cursor: 3,
-            order_by: 2
+            order_by: 1
         }
     );
 }
@@ -651,9 +643,11 @@ fn well_formed_document_and_value_cursors_stay_accepted() {
         Query::new(cursor_scope()).with_order(order("n")),
         vec![Value::String("c3".to_owned())],
     ));
-    // The full normalized ordering, both slots filled correctly.
+    // An explicit field and `__name__` ordering, both slots filled correctly.
     cursor_accepted(&starting_at(
-        Query::new(cursor_scope()).with_order(order("n")),
+        Query::new(cursor_scope())
+            .with_order(order("n"))
+            .with_order(name_order()),
         vec![Value::Integer(3), reference("root/r1/cur/c3")],
     ));
     // The `limitToLast(3)` shape: a descending order with a document cursor.
@@ -683,17 +677,211 @@ fn well_formed_document_and_value_cursors_stay_accepted() {
 }
 
 #[test]
-fn a_root_collection_cursor_reference_must_still_be_a_member() {
-    let query = starting_at(
+fn a_root_collection_cursor_reference_may_name_another_collection() {
+    cursor_accepted(&starting_at(
         Query::new(QueryScope::collection(
             None,
             CollectionId::try_new("tasks").unwrap(),
         ))
         .with_order(name_order()),
         vec![reference("other/o1")],
-    );
+    ));
+}
+
+/// The refusals production makes and the official emulator does not are strict-profile
+/// refusals only: the emulator profile may add no rejection
+/// (`spec/compatibility/contract.json`). Each text is production's (FS-QUERY-INDEX rows named
+/// per case).
+#[test]
+fn production_only_refusals_apply_to_the_strict_canonicalization_only() {
+    use fireemu_core_firestore::query::{Cursor, UnaryOp};
+    let reference =
+        || Value::Reference("projects/p/databases/(default)/documents/tasks/a".to_owned());
+    let kindless = || Query::new(QueryScope::kindless_all_descendants(None));
+    let asc = |path: &str| OrderClause {
+        field: fp(path),
+        direction: Direction::Ascending,
+    };
+    let cases: Vec<(&str, Query, &str)> = vec![
+        (
+            // collection-group/scopes#kindless-with-filter
+            "kindless filter",
+            kindless().with_filter(field("n", FieldOp::Equal, Value::Integer(1))),
+            "kind is required for filter: n",
+        ),
+        (
+            // collection-group/scopes#kindless-name-descending
+            "kindless order",
+            kindless().with_order(OrderClause {
+                field: FieldPath::document_name(),
+                direction: Direction::Descending,
+            }),
+            "kind is required for all orders except __key__ ascending",
+        ),
+        (
+            // order-by/basic#duplicate-field
+            "duplicate order field",
+            base()
+                .with_order(asc("a"))
+                .with_order(asc("b"))
+                .with_order(asc("a")),
+            "order by clause cannot contain duplicate fields a",
+        ),
+        (
+            // filter-validation/operators-and-values#or-empty
+            "empty or",
+            base().with_filter(FilterExpr::Or(Vec::new())),
+            "Composite filter must have at least one sub-filter.",
+        ),
+        (
+            // filter-validation/paths-and-names#name-array-contains
+            "name array-contains",
+            base().with_filter(field("__name__", FieldOp::ArrayContains, reference())),
+            "the name __key__ is reserved",
+        ),
+        (
+            // unary-filters/all#is-null-name
+            "name unary",
+            base().with_filter(FilterExpr::Unary {
+                field: FieldPath::document_name(),
+                op: UnaryOp::IsNull,
+            }),
+            "__key__ filter value must be a Key",
+        ),
+        (
+            // cursors/values: a cursor longer than the explicit order
+            "cursor past the explicit order",
+            {
+                let mut q = base().with_filter(field("n", FieldOp::GreaterThan, Value::Integer(0)));
+                q.start_at = Some(Cursor {
+                    values: vec![Value::Integer(1)],
+                    before: true,
+                });
+                q
+            },
+            "Cursor has too many values.",
+        ),
+    ];
+    for (name, query, text) in cases {
+        let error = query.canonicalize().expect_err(name);
+        assert_eq!(error.to_string(), text, "{name}");
+        assert!(
+            query.canonicalize_emulator().is_ok(),
+            "{name} under the emulator profile"
+        );
+    }
+    // What both refuse: a cursor longer than the whole implied order, an empty in list.
+    let mut long = base();
+    long.start_at = Some(Cursor {
+        values: vec![Value::Integer(1), Value::Integer(2)],
+        before: true,
+    });
+    assert!(long.canonicalize().is_err());
+    assert!(long.canonicalize_emulator().is_err());
+    let empty_in = base().with_filter(field("n", FieldOp::In, Value::Array(Vec::new())));
     assert_eq!(
-        cursor_error(&query),
-        QueryError::CursorReferenceScope { position: 0 }
+        empty_in.canonicalize().unwrap_err().to_string(),
+        empty_in.canonicalize_emulator().unwrap_err().to_string()
     );
+}
+
+/// Duplicate order fields are found in one pass over a long order-by.
+#[test]
+fn a_long_order_by_is_checked_without_quadratic_work() {
+    let mut query = base();
+    for i in 0..200_000 {
+        query = query.with_order(OrderClause {
+            field: fp(&format!("f{i}")),
+            direction: Direction::Ascending,
+        });
+    }
+    let started = std::time::Instant::now();
+    assert!(query.canonicalize().is_ok());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// A cursor reference that names a collection is refused in production's words
+/// (cursors/names#name-collection-reference); another malformed reference is no document
+/// reference either, but that text is not production's, so it is not reused.
+#[test]
+fn cursor_references_to_collections_and_malformed_names_are_told_apart() {
+    use fireemu_core_firestore::query::Cursor;
+    let at = |name: &str| {
+        let mut q = base().with_order(OrderClause {
+            field: FieldPath::document_name(),
+            direction: Direction::Ascending,
+        });
+        q.start_at = Some(Cursor {
+            values: vec![Value::Reference(name.to_owned())],
+            before: true,
+        });
+        q.canonicalize()
+            .unwrap()
+            .check_production_cursor_constraints()
+            .unwrap_err()
+            .to_string()
+    };
+    let collection = "projects/p/databases/(default)/documents/qn";
+    assert_eq!(
+        at(collection),
+        format!("Document parent name \"{collection}\" lacks \"/\" at index 43.")
+    );
+    for malformed in [
+        "projects/p/databases/(default)/documents/qn//d",
+        "projects/p/databases/(default)/documents/qn/d/",
+        "projects/p/databases/(default)/documents",
+    ] {
+        assert_eq!(
+            at(malformed),
+            "Cursor __key__ value is not a document reference.",
+            "{malformed}"
+        );
+    }
+}
+
+/// Production reports a value count before the other limits, in its words
+/// (query-limits/not-in-and-inequalities#not-in-11, #inequality-fields-11); the later checks
+/// still run, so the official emulator's own refusal of two array-contains filters is kept
+/// (core review note).
+#[test]
+fn value_counts_come_first_and_do_not_hide_later_limits() {
+    let values = |count: i64| Value::Array((0..count).map(Value::Integer).collect());
+    let query = base().with_filter(FilterExpr::And(vec![
+        field("n", FieldOp::NotIn, values(11)),
+        field("t1", FieldOp::ArrayContains, Value::Integer(1)),
+        field("t2", FieldOp::ArrayContains, Value::Integer(2)),
+    ]));
+    let violations = query
+        .canonicalize()
+        .unwrap()
+        .check_standard_limits()
+        .unwrap_err();
+    assert_eq!(
+        violations[0].message,
+        "'NOT_IN' supports up to 10 comparison values."
+    );
+    assert!(
+        violations.len() > 1,
+        "the array-contains limit is still checked: {violations:?}"
+    );
+    let inequalities = base().with_filter(FilterExpr::And(
+        (0..11)
+            .map(|i| field(&format!("f{i}"), FieldOp::GreaterThan, Value::Integer(0)))
+            .collect(),
+    ));
+    let violations = inequalities
+        .canonicalize()
+        .unwrap()
+        .check_standard_limits()
+        .unwrap_err();
+    assert!(violations[0]
+        .message
+        .starts_with("The query contains 11 distinct inequality fields: ["));
+    assert!(violations[0]
+        .message
+        .ends_with("]. A query may not have more than 10 distinct inequality fields."));
 }

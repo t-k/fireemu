@@ -134,11 +134,11 @@ async function gitSha() {
 }
 
 async function adminToken() {
-  const { stdout } = await execFileAsync("gcloud", [
-    "auth",
-    "application-default",
-    "print-access-token",
-  ]);
+  const { stdout } = await execFileAsync(
+    "gcloud",
+    ["auth", "application-default", "print-access-token"],
+    { timeout: 60_000 },
+  );
   return stdout.trim();
 }
 

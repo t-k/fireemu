@@ -143,6 +143,16 @@ export function createSession(
   /** Sends one gRPC step; the answer is projected to proto3 JSON before it is recorded. */
   async function sendGrpc(step, program, raw) {
     await ensureToken();
+    for (let attempt = 0; ; attempt += 1) {
+      const answer = await sendGrpcOnce(step, program, raw);
+      // UNAUTHENTICATED is an expired credential, not behavior: refresh and retry once.
+      if (answer.code !== 16 || ctx.target.kind !== "production") return answer;
+      if (attempt > 0) throw fatal(`gRPC UNAUTHENTICATED after a token refresh: ${step.id}`);
+      await ensureToken(true);
+    }
+  }
+
+  function sendGrpcOnce(step, program, raw) {
     const built = buildGrpcRequest(step, ctx, program, raw);
     guardGrpcRequest(built, ctx, program, UNCREATED_DATABASES);
     claim(false);

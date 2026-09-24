@@ -151,6 +151,8 @@ export function assertV3ProductionCleanupAllowed({ host, exactDeltaV3 = false })
 export function isExactDeltaV3ProductionScope({
   mode,
   lockHeld,
+  host,
+  scheme,
   project,
   maxRequests,
   deltaJournal,
@@ -160,6 +162,8 @@ export function isExactDeltaV3ProductionScope({
   if (
     mode === true &&
     lockHeld === true &&
+    host === "firestore.googleapis.com" &&
+    scheme === "https" &&
     project === "fireemu-oracle-sbx" &&
     Number.isSafeInteger(maxRequests) &&
     maxRequests >= 1 &&
@@ -2227,6 +2231,8 @@ async function main() {
   const deltaScope = isExactDeltaV3ProductionScope({
     mode: DELTA_V3_MODE,
     lockHeld: DELTA_LOCK_HELD,
+    host: HOST,
+    scheme: SCHEME,
     project: PROJECT,
     maxRequests: Number(MAX_REQUESTS),
     deltaJournal: process.env.FIRESTORE_PROBE_DELTA_JOURNAL,

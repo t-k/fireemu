@@ -1036,8 +1036,9 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
 
 fn jwt_error(e: &JwtError) -> JsonResponse {
     match e {
-        // Production has no detail for a revoked token either (sandbox recording 2026-09-23).
-        JwtError::Expired | JwtError::Revoked => error(400, "TOKEN_EXPIRED"),
+        // Production has no detail for a revoked token either (sandbox recording 2026-09-23),
+        // and answers a token past its expiry allowance as invalid, not expired (2026-09-24).
+        JwtError::Revoked => error(400, "TOKEN_EXPIRED"),
         JwtError::UserDisabled => error(400, "USER_DISABLED"),
         _ => error(400, "INVALID_ID_TOKEN"),
     }
@@ -1214,15 +1215,18 @@ fn verify_session_with_error(
     };
     // Account routes also honour the legacy Identity Toolkit token (sandbox recording
     // 2026-09-24); session-cookie creation verifies ID tokens only and keeps refusing it.
-    let (v, decoded) = match fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at) {
-        Err(fireemu_core_auth::jwt::JwtError::WrongIssuer { actual, .. })
-            if actual == fireemu_core_auth::jwt::LEGACY_TOKEN_ISSUER =>
+    let leeway = fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS;
+    let (v, decoded) =
+        match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(token, store, at, leeway)
         {
-            fireemu_core_auth::jwt::verify_legacy_token(token, store, at)
+            Err(fireemu_core_auth::jwt::JwtError::WrongIssuer { actual, .. })
+                if actual == fireemu_core_auth::jwt::LEGACY_TOKEN_ISSUER =>
+            {
+                fireemu_core_auth::jwt::verify_legacy_token(token, store, at, leeway)
+            }
+            verified => verified,
         }
-        verified => verified,
-    }
-    .map_err(|e| map_error(&e))?;
+        .map_err(|e| map_error(&e))?;
     let legacy = decoded.payload.get("iss").and_then(JsonValue::as_str)
         == Some(fireemu_core_auth::jwt::LEGACY_TOKEN_ISSUER);
     let provider = if legacy {
@@ -6839,13 +6843,20 @@ fn sign_in_with_custom_token(
     }
     let uid = uid.as_str();
     let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    // Past the expiry allowance production refuses the token as invalid (sandbox recording
+    // 2026-09-24, auth-credential/expiry/one-hour#custom-token-expired-later).
     if reject_expired
         && payload
             .get("exp")
             .and_then(JsonValue::as_i64)
-            .is_some_and(|exp| now_secs >= exp)
+            .is_some_and(|exp| {
+                now_secs
+                    >= exp.saturating_add(
+                        fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
+                    )
+            })
     {
-        return error(400, "TOKEN_EXPIRED");
+        return error(400, "INVALID_CUSTOM_TOKEN");
     }
     let mut extra = CustomClaims::default();
     if let Some(claims) = payload.get("claims") {
@@ -8642,7 +8653,12 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
     if !(SESSION_COOKIE_MIN_SECONDS..=SESSION_COOKIE_MAX_SECONDS).contains(&valid_duration) {
         return error(400, "INVALID_DURATION");
     }
-    let (_, decoded) = match fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at) {
+    let (_, decoded) = match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(
+        token,
+        store,
+        at,
+        fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS,
+    ) {
         Ok(v) => v,
         Err(e) => return jwt_error(&e),
     };

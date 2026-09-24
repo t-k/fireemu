@@ -1225,7 +1225,9 @@ fn secure_token_refresh_preserves_authentication_time() {
 
 #[test]
 fn strict_profile_token_expiration_matrix_preserves_account_state() {
-    for elapsed in [0, 3_600, 3_601] {
+    // Identity Toolkit honours a token for five minutes past `exp` and then refuses it as
+    // invalid (sandbox recording 2026-09-24, auth-credential/expiry/one-hour).
+    for elapsed in [0, 3_600, 3_899, 3_900, 3_901] {
         let s = strict_state();
         let (status, signed) = post(
             &s,
@@ -1257,11 +1259,11 @@ fn strict_profile_token_expiration_matrix_preserves_account_state() {
             &format!("{V1}/accounts:lookup"),
             &json!({"idToken": id_token}),
         );
-        if elapsed < 3_600 {
+        if elapsed < 3_900 {
             assert_eq!(lookup_status, 200, "elapsed={elapsed}: {lookup_response}");
         } else {
             assert_eq!(lookup_status, 400, "elapsed={elapsed}: {lookup_response}");
-            assert_eq!(lookup_response["error"]["message"], "TOKEN_EXPIRED");
+            assert_eq!(lookup_response["error"]["message"], "INVALID_ID_TOKEN");
             let (status, after) = account();
             assert_eq!(status, 200, "elapsed={elapsed}: {after}");
             assert_eq!(
@@ -1404,6 +1406,60 @@ fn a_client_update_cannot_move_valid_since() {
     );
     assert_eq!(status, 200, "{updated}");
     assert_eq!(read(), before);
+}
+
+/// Identity Toolkit honours an ID token and a custom token for a while past `exp` and then
+/// refuses them as invalid, not as expired: ten seconds past was accepted and 330 seconds past
+/// refused (sandbox recording 2026-09-24, auth-credential/expiry/one-hour).
+#[test]
+fn expired_tokens_have_a_skew_allowance_and_are_then_invalid() {
+    let s = strict_state();
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "expiry@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let now = 1_788_004_860;
+    let custom = custom_token("expiring-custom", &json!({}), now + 3600);
+    let attempt = || {
+        let code = |(status, body): (u16, Value)| {
+            (
+                status,
+                body["error"]["message"].as_str().unwrap_or("").to_owned(),
+            )
+        };
+        (
+            code(post(
+                &s,
+                &format!("{V1}/accounts:lookup"),
+                &json!({"idToken": signed_in["idToken"]}),
+            )),
+            code(admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}:createSessionCookie"),
+                &json!({"idToken": signed_in["idToken"], "validDuration": 3600}),
+            )),
+            code(post(
+                &s,
+                &format!("{V1}/accounts:signInWithCustomToken"),
+                &json!({"token": custom, "returnSecureToken": true}),
+            )),
+        )
+    };
+    advance(&s, 3610);
+    let ok = (200, String::new());
+    assert_eq!(attempt(), (ok.clone(), ok.clone(), ok));
+    advance(&s, 320);
+    assert_eq!(
+        attempt(),
+        (
+            (400, "INVALID_ID_TOKEN".to_owned()),
+            (400, "INVALID_ID_TOKEN".to_owned()),
+            (400, "INVALID_CUSTOM_TOKEN".to_owned()),
+        )
+    );
 }
 
 #[test]
@@ -5381,14 +5437,15 @@ fn deleted_account_credentials_are_distinct_from_unknown_inputs() {
     );
     assert_eq!(status, 400);
     assert_eq!(response["error"]["message"], "INVALID_ID_TOKEN");
-    advance(&s, 3601);
+    // Past the five-minute allowance an expired token is invalid (sandbox recording 2026-09-24).
+    advance(&s, 3901);
     let (status, response) = post(
         &s,
         &format!("{V1}/accounts:lookup"),
         &json!({"idToken": accounts[0]["idToken"]}),
     );
     assert_eq!(status, 400);
-    assert_eq!(response["error"]["message"], "TOKEN_EXPIRED");
+    assert_eq!(response["error"]["message"], "INVALID_ID_TOKEN");
 }
 
 #[test]
@@ -6594,7 +6651,8 @@ fn end_user_update_session_failure_precedes_admin_field_authorization() {
 
         // Expired: the token outlives its one-hour lifetime before the update.
         let (expired_uid, expired_token) = fresh("expired-field@example.com");
-        advance(&s, 3601);
+        // Past the five-minute allowance (sandbox recording 2026-09-24).
+        advance(&s, 3901);
         // Revoked: a fresh token, then a privileged password change advances validSince.
         let (revoked_uid, revoked_token) = fresh("revoked-field@example.com");
         advance(&s, 2);
@@ -6629,7 +6687,7 @@ fn end_user_update_session_failure_precedes_admin_field_authorization() {
                 "expired",
                 &expired_token,
                 Some(&expired_uid),
-                "TOKEN_EXPIRED",
+                "INVALID_ID_TOKEN",
             ),
             (
                 "revoked",
@@ -7383,7 +7441,8 @@ fn session_cookie_rejects_invalid_expired_revoked_deleted_and_disabled_id_tokens
         match transition {
             "invalid" => token = json!("not-a-token"),
             "expired" => {
-                advance(&s, 3600);
+                // Past the five-minute allowance (sandbox recording 2026-09-24).
+                advance(&s, 3900);
             }
             "revoked" => {
                 advance(&s, 1);
@@ -8484,14 +8543,16 @@ fn legacy_v3_custom_token_exchange_matches_v1() {
 #[test]
 fn strict_profile_rejects_an_expired_custom_token() {
     let s = strict_state();
-    let expired = custom_token("strict-expired", &json!({}), 1_788_004_859);
+    // Past the five-minute allowance production refuses it as invalid (sandbox recording
+    // 2026-09-24, auth-credential/expiry/one-hour#custom-token-expired-later).
+    let expired = custom_token("strict-expired", &json!({}), 1_788_004_860 - 300);
     let (status, body) = post(
         &s,
         "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken?key=demo-key",
         &json!({"token": expired}),
     );
     assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["message"], "TOKEN_EXPIRED");
+    assert_eq!(body["error"]["message"], "INVALID_CUSTOM_TOKEN");
 }
 
 #[test]
@@ -11571,7 +11632,8 @@ fn sign_up_link_authenticates_before_password_policy_and_preserves_state() {
 
     for (label, expected_error) in [
         ("invalid", "INVALID_ID_TOKEN"),
-        ("expired", "TOKEN_EXPIRED"),
+        // Past the five-minute allowance an expired token is invalid (2026-09-24).
+        ("expired", "INVALID_ID_TOKEN"),
         ("mismatched-audience", "INVALID_ID_TOKEN"),
     ] {
         let s = state();
@@ -11581,7 +11643,7 @@ fn sign_up_link_authenticates_before_password_policy_and_preserves_state() {
         let token = match label {
             "invalid" => "not-a-token".to_owned(),
             "expired" => {
-                advance(&s, 3_601);
+                advance(&s, 3_901);
                 valid_token
             }
             "mismatched-audience" => {

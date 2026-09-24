@@ -8089,8 +8089,9 @@ fn broad_client_update_failed_credentials_never_apply_regular_attributes() {
             s.clock
                 .lock()
                 .unwrap()
+                // Past the five-minute allowance (sandbox recording 2026-09-24).
                 .advance(fireemu_core_types::time::LogicalDuration::from_seconds(
-                    3601,
+                    3901,
                 ))
                 .unwrap();
         } else if failure == "disabled" {

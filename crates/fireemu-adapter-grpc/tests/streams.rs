@@ -1906,11 +1906,77 @@ async fn resumed_targets_replay_only_what_changed_since_the_token() {
     handle.abort();
 }
 
+/// The first `count` names `name(i)` the partition sampler picks, so a small test group splits
+/// the way a large production group does.
+fn sampled_names(count: usize, name: impl Fn(usize) -> String) -> Vec<String> {
+    let project = fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap();
+    let database = fireemu_core_types::ids::DatabaseId::try_new("(default)").unwrap();
+    (0..)
+        .map(name)
+        .filter(|relative| {
+            fireemu_adapter_grpc::partition::is_sample(
+                &fireemu_core_firestore::path::DocumentPath::parse(&project, &database, relative)
+                    .unwrap(),
+            )
+        })
+        .take(count)
+        .collect()
+}
+
+fn partition_request(
+    collection: &str,
+    count: i64,
+    page_size: i32,
+    page_token: &str,
+) -> pb::PartitionQueryRequest {
+    pb::PartitionQueryRequest {
+        parent: DOCS.to_owned(),
+        partition_count: count,
+        page_size,
+        page_token: page_token.to_owned(),
+        query_type: Some(pb::partition_query_request::QueryType::StructuredQuery(
+            pb::StructuredQuery {
+                from: vec![sq::CollectionSelector {
+                    collection_id: collection.to_owned(),
+                    all_descendants: true,
+                }],
+                order_by: vec![sq::Order {
+                    field: Some(sq::FieldReference {
+                        field_path: "__name__".to_owned(),
+                    }),
+                    direction: sq::Direction::Ascending as i32,
+                }],
+                ..Default::default()
+            },
+        )),
+        ..Default::default()
+    }
+}
+
+fn cursor_name(cursor: &pb::Cursor) -> String {
+    match &cursor.values[0].value_type {
+        Some(pb::value::ValueType::ReferenceValue(r)) => {
+            r.strip_prefix(&format!("{DOCS}/")).unwrap_or(r).to_owned()
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Production splits a collection group at sampled keys: `partition_count` cursors (all the
+/// samples when there are fewer), nested across counts, in key order, without `before`
+/// (FS-QUERY-INDEX partition-query/large-group).
 #[tokio::test]
-async fn partition_query_splits_a_collection_group_by_name() {
+async fn partition_query_splits_a_collection_group_at_sampled_keys() {
     let (mut client, handle) = start(false).await;
-    let writes: Vec<pb::Write> = (0..10)
-        .map(|i| set_write(&format!("owners/o{i}/items/i{i}"), &[("v", s("x"))]))
+    let samples = sampled_names(5, |i| format!("owners/o{i}/items/i{i}"));
+    let others: Vec<String> = (0..5)
+        .map(|i| format!("owners/x{i}/items/j{i}"))
+        .filter(|name| !sampled_names(64, |i| format!("owners/x{i}/items/j{i}")).contains(name))
+        .collect();
+    let writes: Vec<pb::Write> = samples
+        .iter()
+        .chain(&others)
+        .map(|name| set_write(name, &[("v", s("x"))]))
         .collect();
     client
         .commit(pb::CommitRequest {
@@ -1920,76 +1986,83 @@ async fn partition_query_splits_a_collection_group_by_name() {
         })
         .await
         .unwrap();
-    let request = |count: i64, page_size: i32, page_token: &str| pb::PartitionQueryRequest {
-        parent: DOCS.to_owned(),
-        partition_count: count,
-        page_size,
-        page_token: page_token.to_owned(),
-        query_type: Some(pb::partition_query_request::QueryType::StructuredQuery(
-            pb::StructuredQuery {
-                from: vec![sq::CollectionSelector {
-                    collection_id: "items".to_owned(),
-                    all_descendants: true,
-                }],
-                ..Default::default()
-            },
-        )),
-        ..Default::default()
+    let names = |response: &pb::PartitionQueryResponse| {
+        response
+            .partitions
+            .iter()
+            .map(cursor_name)
+            .collect::<Vec<_>>()
     };
-    let name_of = |c: &pb::Cursor| match &c.values[0].value_type {
-        Some(pb::value::ValueType::ReferenceValue(r)) => r.rsplit('/').next().unwrap().to_owned(),
-        other => panic!("{other:?}"),
-    };
-    let r = client
-        .partition_query(request(4, 0, ""))
+    let four = client
+        .partition_query(partition_request("items", 4, 0, ""))
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(r.partitions.len(), 4);
-    assert!(r.partitions.iter().all(|c| c.before));
-    assert_eq!(
-        r.partitions.iter().map(name_of).collect::<Vec<_>>(),
-        ["i2", "i4", "i6", "i8"]
+    assert_eq!(four.partitions.len(), 4);
+    assert!(four.partitions.iter().all(|c| !c.before));
+    assert!(names(&four).iter().all(|name| samples.contains(name)));
+    let mut sorted = names(&four);
+    sorted.sort_by(|a, b| a.split('/').cmp(b.split('/')));
+    assert_eq!(names(&four), sorted, "key order");
+    assert!(four.next_page_token.is_empty());
+    let two = client
+        .partition_query(partition_request("items", 2, 0, ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        names(&two).iter().all(|name| names(&four).contains(name)),
+        "nested"
     );
-    assert!(r.next_page_token.is_empty());
+    // More partitions than samples: every sample.
+    let all = client
+        .partition_query(partition_request("items", 100, 0, ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(all.partitions.len(), samples.len());
     // Paged.
     let first = client
-        .partition_query(request(4, 3, ""))
+        .partition_query(partition_request("items", 4, 3, ""))
         .await
         .unwrap()
         .into_inner();
     assert_eq!(first.partitions.len(), 3);
-    assert!(
-        first.next_page_token.ends_with(":3"),
-        "{}",
-        first.next_page_token
-    );
+    assert!(!first.next_page_token.is_empty());
     let second = client
-        .partition_query(request(4, 3, &first.next_page_token))
+        .partition_query(partition_request("items", 4, 3, &first.next_page_token))
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(
-        second.partitions.iter().map(name_of).collect::<Vec<_>>(),
-        ["i8"]
-    );
+    assert_eq!([names(&first), names(&second)].concat(), names(&four));
     assert!(second.next_page_token.is_empty());
-    // More partitions than documents: at most n - 1 cut points.
-    let r = client
-        .partition_query(request(100, 0, ""))
+    // Without an explicit order production does not split at all.
+    let mut unordered = partition_request("items", 4, 0, "");
+    if let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) =
+        &mut unordered.query_type
+    {
+        sq.order_by.clear();
+    }
+    assert!(client
+        .partition_query(unordered)
         .await
         .unwrap()
-        .into_inner();
-    assert_eq!(r.partitions.len(), 9);
+        .into_inner()
+        .partitions
+        .is_empty());
     // A plain collection query is refused.
-    let mut plain = request(2, 0, "");
+    let mut plain = partition_request("items", 2, 0, "");
     if let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) = &mut plain.query_type
     {
         sq.from[0].all_descendants = false;
     }
+    let refused = client.partition_query(plain).await.unwrap_err();
     assert_eq!(
-        client.partition_query(plain).await.unwrap_err().code(),
-        tonic::Code::InvalidArgument
+        (refused.code(), refused.message()),
+        (
+            tonic::Code::InvalidArgument,
+            "Query must select all descendant collections."
+        )
     );
     handle.abort();
 }
@@ -2175,8 +2248,10 @@ async fn project_restore_replays_a_same_version_document_with_new_fields() {
 #[tokio::test]
 async fn partition_pages_stay_consistent_while_documents_change() {
     let (mut client, handle) = start(false).await;
-    let writes: Vec<pb::Write> = (0..8)
-        .map(|i| set_write(&format!("owners/o{i}/parts/p{i}"), &[("v", s("x"))]))
+    let original = sampled_names(3, |i| format!("owners/o{i}/parts/p{i}"));
+    let writes: Vec<pb::Write> = original
+        .iter()
+        .map(|name| set_write(name, &[("v", s("x"))]))
         .collect();
     client
         .commit(pb::CommitRequest {
@@ -2186,44 +2261,31 @@ async fn partition_pages_stay_consistent_while_documents_change() {
         })
         .await
         .unwrap();
-    let request = |count: i64, page_size: i32, page_token: &str| pb::PartitionQueryRequest {
-        parent: DOCS.to_owned(),
-        partition_count: count,
-        page_size,
-        page_token: page_token.to_owned(),
-        query_type: Some(pb::partition_query_request::QueryType::StructuredQuery(
-            pb::StructuredQuery {
-                from: vec![sq::CollectionSelector {
-                    collection_id: "parts".to_owned(),
-                    all_descendants: true,
-                }],
-                order_by: vec![sq::Order {
-                    field: Some(sq::FieldReference {
-                        field_path: "__name__".to_owned(),
-                    }),
-                    direction: sq::Direction::Ascending as i32,
-                }],
-                ..Default::default()
-            },
-        )),
-        ..Default::default()
+    let names = |response: &pb::PartitionQueryResponse| {
+        response
+            .partitions
+            .iter()
+            .map(cursor_name)
+            .collect::<Vec<_>>()
     };
-    let name_of = |c: &pb::Cursor| match &c.values[0].value_type {
-        Some(pb::value::ValueType::ReferenceValue(r)) => r.rsplit('/').next().unwrap().to_owned(),
-        other => panic!("{other:?}"),
-    };
-    let first = client
-        .partition_query(request(3, 2, ""))
+    let whole = client
+        .partition_query(partition_request("parts", 3, 0, ""))
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(
-        first.partitions.iter().map(name_of).collect::<Vec<_>>(),
-        ["p2", "p4"]
-    );
-    // Documents inserted before the next page do not shift the cuts of this partitioning.
-    let writes: Vec<pb::Write> = (0..8)
-        .map(|i| set_write(&format!("owners/n{i}/parts/a{i}"), &[("v", s("y"))]))
+    assert_eq!(whole.partitions.len(), 3);
+    let first = client
+        .partition_query(partition_request("parts", 3, 2, ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(names(&first), names(&whole)[..2]);
+    // Documents inserted before the next page, sampled ones too, do not shift the cuts of
+    // this partitioning.
+    let added = sampled_names(3, |i| format!("owners/n{i}/parts/a{i}"));
+    let writes: Vec<pb::Write> = added
+        .iter()
+        .map(|name| set_write(name, &[("v", s("y"))]))
         .collect();
     client
         .commit(pb::CommitRequest {
@@ -2234,39 +2296,37 @@ async fn partition_pages_stay_consistent_while_documents_change() {
         .await
         .unwrap();
     let second = client
-        .partition_query(request(3, 2, &first.next_page_token))
+        .partition_query(partition_request("parts", 3, 2, &first.next_page_token))
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(
-        second.partitions.iter().map(name_of).collect::<Vec<_>>(),
-        ["p6"]
-    );
-    // A fresh partitioning sees the new documents; a token for another count is refused.
+    assert_eq!(names(&second), names(&whole)[2..]);
+    // A fresh partitioning sees the new documents; a token for another count, and a
+    // negative page size, are refused in production's words.
     let fresh = client
-        .partition_query(request(3, 0, ""))
+        .partition_query(partition_request("parts", 100, 0, ""))
         .await
         .unwrap()
         .into_inner();
+    assert_eq!(fresh.partitions.len(), 6);
+    let foreign = client
+        .partition_query(partition_request("parts", 4, 2, &first.next_page_token))
+        .await
+        .unwrap_err();
     assert_eq!(
-        fresh.partitions.iter().map(name_of).collect::<Vec<_>>(),
-        ["a4", "p0", "p4"]
+        (foreign.code(), foreign.message()),
+        (tonic::Code::InvalidArgument, "Invalid page token.")
     );
+    let negative = client
+        .partition_query(partition_request("parts", 3, -1, ""))
+        .await
+        .unwrap_err();
     assert_eq!(
-        client
-            .partition_query(request(4, 2, &first.next_page_token))
-            .await
-            .unwrap_err()
-            .code(),
-        tonic::Code::InvalidArgument
-    );
-    assert_eq!(
-        client
-            .partition_query(request(3, -1, ""))
-            .await
-            .unwrap_err()
-            .code(),
-        tonic::Code::InvalidArgument
+        (negative.code(), negative.message()),
+        (
+            tonic::Code::InvalidArgument,
+            "Page size must be nonnegative."
+        )
     );
     handle.abort();
 }

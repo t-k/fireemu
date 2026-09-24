@@ -521,10 +521,22 @@ mod tests {
         let collection = IndexQueryScope::Collection;
         let cases = [
             (index(collection, &[("__name__", A)]), "(__name__ ASC)"),
-            (index(collection, &[("g", A), ("__name__", A)]), "(g ASC, __name__ ASC)"),
-            (index(collection, &[("a", D), ("__name__", D)]), "(a DESC, __name__ DESC)"),
-            (index(collection, &[("g", A), ("n", A)]), "(g ASC, n ASC, __name__ ASC)"),
-            (index(collection, &[("g", A), ("n", D)]), "(g ASC, n DESC, __name__ DESC)"),
+            (
+                index(collection, &[("g", A), ("__name__", A)]),
+                "(g ASC, __name__ ASC)",
+            ),
+            (
+                index(collection, &[("a", D), ("__name__", D)]),
+                "(a DESC, __name__ DESC)",
+            ),
+            (
+                index(collection, &[("g", A), ("n", A)]),
+                "(g ASC, n ASC, __name__ ASC)",
+            ),
+            (
+                index(collection, &[("g", A), ("n", D)]),
+                "(g ASC, n DESC, __name__ DESC)",
+            ),
             (
                 index(collection, &[("n", A), ("__name__", D)]),
                 "(n ASC, __name__ DESC)",
@@ -534,13 +546,19 @@ mod tests {
                 "(tags ARRAY_CONTAINS, __name__ ASC)",
             ),
             (
-                index(collection, &[("emb", IndexFieldMode::Vector { dimension: 3 })]),
+                index(
+                    collection,
+                    &[("emb", IndexFieldMode::Vector { dimension: 3 })],
+                ),
                 "(__name__ ASC, emb VECTOR<3>)",
             ),
             (
                 index(
                     collection,
-                    &[("color", A), ("emb", IndexFieldMode::Vector { dimension: 3 })],
+                    &[
+                        ("color", A),
+                        ("emb", IndexFieldMode::Vector { dimension: 3 }),
+                    ],
                 ),
                 "(color ASC, __name__ ASC, emb VECTOR<3>)",
             ),
@@ -570,8 +588,14 @@ mod tests {
         assert_eq!(scan_count(&[]), 1);
         assert_eq!(scan_count(&[field(FieldOp::Equal, FsValue::Integer(1))]), 1);
         assert_eq!(scan_count(&[field(FieldOp::In, three.clone())]), 3);
-        assert_eq!(scan_count(&[field(FieldOp::ArrayContainsAny, three.clone())]), 3);
-        assert_eq!(scan_count(&[field(FieldOp::NotEqual, FsValue::Integer(4))]), 2);
+        assert_eq!(
+            scan_count(&[field(FieldOp::ArrayContainsAny, three.clone())]),
+            3
+        );
+        assert_eq!(
+            scan_count(&[field(FieldOp::NotEqual, FsValue::Integer(4))]),
+            2
+        );
         assert_eq!(scan_count(&[field(FieldOp::NotIn, three.clone())]), 4);
         assert_eq!(
             scan_count(&[

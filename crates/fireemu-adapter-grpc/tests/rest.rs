@@ -1417,14 +1417,25 @@ fn batch_write_rest_refuses_a_repeated_document_as_a_whole_with_production_wordi
 fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() {
     let s = state(None);
     let mut read_time = String::new();
-    for index in 0..12 {
+    // Twelve documents, and four more the partition sampler picks so the group splits.
+    let project = fireemu_core_types::ids::ProjectId::try_new("demo-app").unwrap();
+    let database = fireemu_core_types::ids::DatabaseId::try_new("(default)").unwrap();
+    let name = |index: usize| format!("owners/{}/items/i{index:02}", ["a", "a-", "b"][index % 3]);
+    let sampled = (12..)
+        .map(name)
+        .filter(|relative| {
+            fireemu_adapter_grpc::partition::is_sample(
+                &fireemu_core_firestore::path::DocumentPath::parse(&project, &database, relative)
+                    .unwrap(),
+            )
+        })
+        .take(4);
+    let documents: Vec<String> = (0..12).map(name).chain(sampled).collect();
+    for (index, relative) in documents.iter().enumerate() {
         let (status, document) = call(
             &s,
             "PATCH",
-            &format!(
-                "{DOCS}/owners/{}/items/i{index:02}",
-                ["a", "a-", "b"][index % 3]
-            ),
+            &format!("{DOCS}/{relative}"),
             json!({"fields": {"value": {"integerValue": index.to_string()}}}),
         );
         assert_eq!(status, 200, "{document}");
@@ -1446,7 +1457,7 @@ fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() 
             json!({"structuredQuery": query, "partitionCount": "4", "pageSize": 2, "pageToken": token, "readTime": read_time}),
         );
         assert_eq!(status, 200, "{page}");
-        let points = page["partitions"].as_array().unwrap();
+        let points = page["partitions"].as_array().cloned().unwrap_or_default();
         assert!(points.len() <= 2);
         cuts.extend(points.iter().cloned());
         token = page["nextPageToken"]
@@ -1486,7 +1497,7 @@ fn partition_ranges_reconstruct_the_same_snapshot_without_boundary_duplicates() 
     );
     assert_eq!(status, 200, "{all}");
     let expected = names(&all);
-    assert_eq!(expected.len(), 12);
+    assert_eq!(expected.len(), documents.len());
     let mut actual = Vec::new();
     for index in 0..=cuts.len() {
         let mut range = query.clone();

@@ -1,6 +1,6 @@
 {
   "kind": "fs-data-write-list-comparison-v1",
-  "artifactSha256": "fdab62aae216863c7795bb355fa6ec1833084b9d4fefa204f41712e09ff51dda",
+  "artifactSha256": "1774dff6bdc8b168aaa4e8b566c9d033743a9f64aad0e49ae62115f9f2b0db19",
   "fixtureSha256": "1d70589d2ffc50b837dc92574ea0daf502677f08804d6227a4b5cbe4641f87f4",
   "summary": {
     "MATCH": 200,

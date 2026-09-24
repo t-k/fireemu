@@ -1428,6 +1428,44 @@ test("corpus-v3 recovery refuses nested child collections before any mutation", 
   }
 });
 
+test("corpus-v3 recovery detects a child collection under an absent frozen parent before mutation", async () => {
+  const runId = "b".repeat(32);
+  const runtimeNames = allV3Names.map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const orphanedName = runtimeNames[0];
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-corpus-v3",
+    status: "deleting",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    names: runtimeNames,
+    deletedNames: [orphanedName],
+    deleteIntent: null,
+  };
+  const result = await observeCollector({
+    scopeNames: allV3Names,
+    visibleNames: runtimeNames.slice(1),
+    initialState: new Map([[orphanedName, { deleted: true }]]),
+    childCollectionNames: [orphanedName.split("/documents/")[1].split("/")[0]],
+    deleteRunId: runId,
+    initialJournal: journal,
+    recoveryMode: "recover-v3",
+  });
+  try {
+    assert.match(String(result.failure), /child collection/);
+    assert.equal(
+      result.requests.some((request) => request.pathname.endsWith("/documents:commit")),
+      false,
+    );
+    assert.equal(JSON.parse(await readFile(result.journal, "utf8")).status, "recovering");
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
 test("68 empty programs avoid repeated shrink preflight requests and stay within the cap", async () => {
   const result = await observeCollector({ programCount: 68, visibleNames: [] });
   try {

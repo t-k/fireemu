@@ -362,22 +362,34 @@ def build_programs() -> list[dict[str, Any]]:
                 [name],
             )
         )
-    for length, count in (
-        (500, 19999),
-        (500, 20000),
-        (2000, 7184),
-        (2000, 7185),
-        (1000, 12123),
-        (1000, 12124),
+    index_sum_steps: list[dict[str, Any]] = []
+    for index, (length, count) in enumerate(
+        (
+            (500, 19999),
+            (500, 20000),
+            (2000, 7184),
+            (2000, 7185),
+            (1000, 12123),
+            (1000, 12124),
+        )
     ):
-        name = f"{DOCS}/{index_sum_name_of_length(length, f'g{length}')}"
+        tag = f"g{length}{'a' if index % 2 == 0 else 'b'}"
+        name = f"{DOCS}/{index_sum_name_of_length(length, tag)}"
         values = [{"integerValue": str(index)} for index in range(count)]
         write = _field_update(name, {"a": {"arrayValue": {"values": values}}})
-        programs.append(
-            _commit_program(
-                f"writes/limits/index-entry-sum/{length}-{count}", [write], [name]
-            )
+        pair = _commit_program(
+            f"writes/limits/index-entry-sum/{length}-{count}", [write], [name]
         )
+        pair["steps"][0]["id"] = f"write-{length}-{count}"
+        pair["steps"][1]["id"] = f"readback-{length}-{count}"
+        index_sum_steps.extend(pair["steps"])
+    programs.append(
+        {
+            "id": "writes/limits/index-entry-sum/adjacent",
+            "area": "writes",
+            "steps": index_sum_steps,
+        }
+    )
     names = [f"{DOCS}/decoded11/item{index}" for index in range(11)]
     writes = [
         _field_update(name, {"s": {"stringValue": "x" * 1_040_000}}) for name in names

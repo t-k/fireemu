@@ -463,6 +463,7 @@ export function createSession(
         },
       );
       await waitOperation(json);
+      await databaseReadsBack(id, 200);
     }
   }
 
@@ -477,16 +478,39 @@ export function createSession(
         { expect: [200, 404] },
       );
       if (status === 200) await waitOperation(json);
+      await databaseReadsBack(id, 404);
     });
   }
 
+  /**
+   * Waits for a database operation. Production has answered a finished delete with a
+   * `response` and no `done` field, so either one ends the wait; an `error` is a failure.
+   */
   async function waitOperation(operation) {
+    const finished = (op) =>
+      op?.done === true || op?.response !== undefined || op?.error !== undefined;
     let current = operation;
-    for (let i = 0; i < 60 && current?.done !== true; i += 1) {
+    for (let i = 0; i < 60 && !finished(current); i += 1) {
       await sleep(2000);
       ({ json: current } = await admin("GET", "firestore", `v1/${operation.name}`));
     }
-    if (current?.done !== true || current.error) throw fatal(`operation ${operation?.name} failed`);
+    if (!finished(current) || current.error) throw fatal(`operation ${operation?.name} failed`);
+  }
+
+  /** Reads a database back until it answers `status` (200: created, 404: deleted). */
+  async function databaseReadsBack(id, status) {
+    for (let i = 0; i < 30; i += 1) {
+      const { status: got } = await admin(
+        "GET",
+        "firestore",
+        `v1/projects/${ctx.project}/databases/${id}`,
+        undefined,
+        { expect: [200, 404] },
+      );
+      if (got === status) return;
+      await sleep(2000);
+    }
+    throw fatal(`database ${id} did not read back as ${status === 200 ? "created" : "deleted"}`);
   }
 
   // ---- documents -----------------------------------------------------------------------------

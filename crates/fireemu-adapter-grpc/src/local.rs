@@ -3623,6 +3623,21 @@ impl LocalBackend {
         outcome
     }
 
+    /// The index entries an Explain plan reads over the latest state of `parent`'s database
+    /// (the gRPC stream counts them once its pages are done).
+    pub(crate) fn explain_index_entries(
+        &self,
+        parent: &Parent,
+        query: &Query,
+        aggregations: Option<&[Aggregation]>,
+        scans: &[fireemu_core_firestore::index::PlannedScan],
+    ) -> Result<u64, Status> {
+        self.read_db(parent, |db| {
+            crate::service::index_entries(db, None, query, aggregations, scans)
+                .map_err(|error| status_from_error(&error))
+        })
+    }
+
     fn read_db<T>(
         &self,
         parent: &Parent,
@@ -4935,6 +4950,7 @@ impl LocalBackend {
                     response.explain_metrics = Some(crate::service::explain_metrics(
                         &authorization.query,
                         None,
+                        accepted.scans.as_deref(),
                         None,
                     ));
                 }
@@ -5023,14 +5039,30 @@ impl LocalBackend {
                 .as_ref()
                 .is_some_and(|options| options.analyze)
             {
+                let index_entries = accepted
+                    .scans
+                    .as_deref()
+                    .map(|scans| {
+                        crate::service::index_entries(
+                            access.db(),
+                            version,
+                            &accepted.query,
+                            None,
+                            scans,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| status_from_error(&error))?;
                 let metrics = crate::service::explain_metrics(
                     &authorization.query,
                     None,
+                    accepted.scans.as_deref(),
                     Some(crate::service::ExplainExecution {
                         results_returned: i64::try_from(docs.len()).unwrap_or(i64::MAX),
                         entries: u64::try_from(docs.len())
                             .unwrap_or(u64::MAX)
                             .saturating_add(u64::try_from(skipped).unwrap_or(0)),
+                        index_entries,
                         duration: explain_started.elapsed(),
                     }),
                 );
@@ -5125,6 +5157,7 @@ impl LocalBackend {
                         explain_metrics: Some(crate::service::explain_metrics(
                             &accepted.query,
                             Some(&aggregations),
+                            accepted.scans.as_deref(),
                             None,
                         )),
                         ..Default::default()
@@ -5137,6 +5170,25 @@ impl LocalBackend {
             // to record the query.
             let (values, stats) = access.run_aggregation(&accepted.query, &aggregations)?;
             let read_time = access.read_time(now)?;
+            let analyze = req
+                .explain_options
+                .as_ref()
+                .is_some_and(|options| options.analyze);
+            let index_entries = accepted
+                .scans
+                .as_deref()
+                .filter(|_| analyze)
+                .map(|scans| {
+                    crate::service::index_entries(
+                        access.db(),
+                        version,
+                        &accepted.query,
+                        Some(&aggregations),
+                        scans,
+                    )
+                })
+                .transpose()
+                .map_err(|error| status_from_error(&error))?;
             let aggregate_fields: HashMap<String, pb::Value> = aliases
                 .into_iter()
                 .zip(values.iter().map(encode_value))
@@ -5151,6 +5203,7 @@ impl LocalBackend {
                             crate::service::explain_metrics(
                                 &accepted.query,
                                 Some(&aggregations),
+                                accepted.scans.as_deref(),
                                 Some(crate::service::ExplainExecution {
                                     results_returned: 1,
                                     entries: accepted.query.limit.map_or(stats.matched, |limit| {
@@ -5159,6 +5212,7 @@ impl LocalBackend {
                                                 .saturating_add(u64::from(accepted.query.offset)),
                                         )
                                     }),
+                                    index_entries,
                                     duration: explain_started.elapsed(),
                                 }),
                             )

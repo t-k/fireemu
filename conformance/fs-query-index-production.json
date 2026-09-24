@@ -5724,10 +5724,10 @@
       }
     },
     "fs-query-index/explain/merge-order": {
-      "corpusDigest": "55983bd623f54705c3da04bc2fd0ec31d5e1f1d7d033f7821ef9b0247deaa15f",
+      "corpusDigest": "4484ca3b001c9914e7f592c1632c4ce058afe68b8d246687c2a6588381f0c641",
       "harnessDigest": "d20b1c6d101ee06ee6539d766ab3163a0d82d70980d47ae63fb0ad1c87fbf346",
-      "recordedAt": "2026-09-24T01:46:37.110Z",
-      "gitSha": "faa6d4e06ebe5c96e43948f26f6bfd99c527845e",
+      "recordedAt": "2026-09-24T02:59:40.983Z",
+      "gitSha": "665e5e63afb571eaf5ed973c73d8571881924ab0",
       "steps": {
         "larger-later-field-plan": {
           "status": 200,
@@ -5856,6 +5856,286 @@
                     },
                     {
                       "properties": "(a ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "filters-reversed-plan": {
+          "status": 200,
+          "body": [
+            {
+              "explainMetrics": {
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(b ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(a ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "filters-reversed-analyze": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "c": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qx/x1",
+                "updateTime": "<t1>"
+              },
+              "explainMetrics": {
+                "executionStats": {
+                  "debugStats": {
+                    "billing_details": {
+                      "documents_billable": "1",
+                      "index_entries_billable": "0",
+                      "min_query_cost": "0",
+                      "small_ops": "0"
+                    },
+                    "documents_scanned": "1",
+                    "index_entries_scanned": "6"
+                  },
+                  "executionDuration": "<duration>",
+                  "readOperations": "1",
+                  "resultsReturned": "1"
+                },
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(b ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(a ASC, c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "automatic-members-plan": {
+          "status": 200,
+          "body": [
+            {
+              "explainMetrics": {
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(d ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "automatic-members-analyze": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "c": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qx/x1",
+                "updateTime": "<t1>"
+              },
+              "explainMetrics": {
+                "executionStats": {
+                  "debugStats": {
+                    "billing_details": {
+                      "documents_billable": "1",
+                      "index_entries_billable": "0",
+                      "min_query_cost": "0",
+                      "small_ops": "0"
+                    },
+                    "documents_scanned": "1",
+                    "index_entries_scanned": "2"
+                  },
+                  "executionDuration": "<duration>",
+                  "readOperations": "1",
+                  "resultsReturned": "1"
+                },
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(d ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "automatic-members-reversed-plan": {
+          "status": 200,
+          "body": [
+            {
+              "explainMetrics": {
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(d ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "automatic-members-reversed-analyze": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "c": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qx/x1",
+                "updateTime": "<t1>"
+              },
+              "explainMetrics": {
+                "executionStats": {
+                  "debugStats": {
+                    "billing_details": {
+                      "documents_billable": "1",
+                      "index_entries_billable": "0",
+                      "min_query_cost": "0",
+                      "small_ops": "0"
+                    },
+                    "documents_scanned": "1",
+                    "index_entries_scanned": "2"
+                  },
+                  "executionDuration": "<duration>",
+                  "readOperations": "1",
+                  "resultsReturned": "1"
+                },
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(d ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              },
+              "readTime": "<t2>"
+            }
+          ]
+        },
+        "three-automatic-members-plan": {
+          "status": 200,
+          "body": [
+            {
+              "explainMetrics": {
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(d ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(s ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "three-automatic-members-analyze": {
+          "status": 200,
+          "body": [
+            {
+              "document": {
+                "createTime": "<t1>",
+                "fields": {
+                  "c": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-fs-query-index/databases/(default)/documents/qx/x1",
+                "updateTime": "<t1>"
+              },
+              "explainMetrics": {
+                "executionStats": {
+                  "debugStats": {
+                    "billing_details": {
+                      "documents_billable": "1",
+                      "index_entries_billable": "0",
+                      "min_query_cost": "0",
+                      "small_ops": "0"
+                    },
+                    "documents_scanned": "1",
+                    "index_entries_scanned": "3"
+                  },
+                  "executionDuration": "<duration>",
+                  "readOperations": "1",
+                  "resultsReturned": "1"
+                },
+                "planSummary": {
+                  "indexesUsed": [
+                    {
+                      "properties": "(d ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(c ASC, __name__ ASC)",
+                      "query_scope": "Collection"
+                    },
+                    {
+                      "properties": "(s ASC, __name__ ASC)",
                       "query_scope": "Collection"
                     }
                   ]

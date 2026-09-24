@@ -1686,3 +1686,84 @@ fn document_name_equality_is_served_without_field_indexes() {
         IndexDecision::UseIndex { .. }
     ));
 }
+
+/// The Explain plan lists the scans of each DNF disjunct in `dnf()` order: the automatic
+/// index, a composite, the merge members, or the vector index (FS-QUERY-INDEX explain).
+#[test]
+fn plan_scans_name_the_index_of_each_disjunct() {
+    use fireemu_core_firestore::index::{plan_scans, PlannedScan};
+    let plan = |q: &Query, indexes: &IndexSet| {
+        plan_scans(&q.canonicalize().unwrap(), &[], indexes, &standard())
+    };
+    let auto = |path: &str, mode: IndexFieldMode, name: IndexFieldMode| {
+        PlannedScan::Index(composite(&[(path, mode), ("__name__", name)]))
+    };
+    let none = IndexSet::default();
+    assert_eq!(
+        plan(&tasks(), &none),
+        Some(vec![PlannedScan::Index(composite(&[(
+            "__name__",
+            IndexFieldMode::Ascending
+        )]))])
+    );
+    let mut or = tasks();
+    or.filter = Some(FilterExpr::Or(vec![
+        field("g", FieldOp::Equal, Value::Integer(1)),
+        field("h", FieldOp::Equal, Value::Integer(0)),
+    ]));
+    assert_eq!(
+        plan(&or, &none),
+        Some(vec![
+            auto("g", IndexFieldMode::Ascending, IndexFieldMode::Ascending),
+            auto("h", IndexFieldMode::Ascending, IndexFieldMode::Ascending),
+        ])
+    );
+    let mut composed = tasks();
+    composed.filter = Some(FilterExpr::And(vec![
+        field("g", FieldOp::Equal, Value::Integer(1)),
+        field("n", FieldOp::GreaterThan, Value::Integer(3)),
+    ]));
+    assert_eq!(plan(&composed, &none), None, "the composite is missing");
+    let mut indexes = IndexSet::default();
+    let g_n = composite(&[
+        ("g", IndexFieldMode::Ascending),
+        ("n", IndexFieldMode::Ascending),
+    ]);
+    indexes.add_composite(g_n.clone());
+    assert_eq!(
+        plan(&composed, &indexes),
+        Some(vec![PlannedScan::Index(g_n)])
+    );
+    let mut merged = tasks();
+    merged.filter = Some(FilterExpr::And(vec![
+        field("c", FieldOp::Equal, Value::Integer(1)),
+        field("d", FieldOp::Equal, Value::Integer(4)),
+    ]));
+    match plan(&merged, &none).as_deref() {
+        Some([PlannedScan::Merge(members)]) => {
+            assert_eq!(members.len(), 2);
+            for path in ["c", "d"] {
+                assert!(members.contains(&composite(&[
+                    (path, IndexFieldMode::Ascending),
+                    ("__name__", IndexFieldMode::Ascending)
+                ])));
+            }
+        }
+        other => panic!("two equalities merge their automatic indexes: {other:?}"),
+    }
+    // An assumed index stands for itself under the emulator policy.
+    let emulator = PlanningContext {
+        policy: IndexValidationPolicy::Emulator,
+        ..standard()
+    };
+    assert_eq!(
+        plan_scans(&composed.canonicalize().unwrap(), &[], &none, &emulator)
+            .map(|scans| scans.len()),
+        Some(1)
+    );
+    // A kindless query has no index plan.
+    assert_eq!(
+        plan(&Query::new(QueryScope::kindless_all_descendants(None)), &none),
+        None
+    );
+}

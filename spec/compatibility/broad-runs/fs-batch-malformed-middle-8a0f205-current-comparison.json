@@ -1,0 +1,933 @@
+{
+  "schemaVersion": 1,
+  "conditionId": "FS-WRITE-LIMITS-03/batch-malformed-middle",
+  "sourceCommit": "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8",
+  "savedComparison": {
+    "path": "spec/compatibility/broad-runs/fs-batch-malformed-middle-3d7ceabb8-saved-comparison.json",
+    "sha256": "6b32bcb51093a023273de67aedef843ef09b0f4de6074fb397d6a35164602de2"
+  },
+  "productionFixtureSha256": "69ddfa897d2f22f76bece8c0b243e45912f0ba3ca10eb790a59f9cd6c1468b42",
+  "recordedCorpusSha256": "6acc62c900269ad812686dbc650d5dd29ebc176091e11622e11509d1845c95bf",
+  "recipeManifestSha256": "5af66c701f3b69c78f9159b75f43dab3192ba73a127199bf2b68cd78d19b96d5",
+  "productionRecordingTimes": [
+    "2026-09-23T14:36:34.641Z",
+    "2026-09-23T14:46:18.932Z"
+  ],
+  "productionRecordingDigests": [
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9",
+    "7c794af67119e745072ceae3d742bd463df28c0aa804998c2155b1333b1625d9"
+  ],
+  "recordingDigestNote": "The two production captures have distinct recordedAt timestamps but identical normalized recording digests; digest equality alone does not establish capture identity.",
+  "localRunPath": "conformance/.runs/fs-data-write-local-DbrwFE",
+  "command": "pnpm -C conformance fs-data-write:check",
+  "verificationCommand": "pnpm -C conformance install --frozen-lockfile && uv run --project tools/compat-inventory --locked --python 3.12 -m pytest -q -p no:cacheprovider tools/compat-inventory/tests/test_fs_batch_malformed_middle_current_rebind.py",
+  "comparisonCommand": "node conformance/src/fs-data-write-sandbox-run.mjs compare-local conformance/.runs/fs-data-write-local-DbrwFE",
+  "localExecutableSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
+  "localRunBinding": {
+    "sourceHead": "8a0f20599bab98bb094a74e00d6b2df9f6cd60e8",
+    "executablePath": "target/debug/fireemu",
+    "executableSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
+    "executableSha256After": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
+    "config": "conformance/fs-data-write-sandbox.fireemu.json",
+    "configSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
+    "runtimeInputs": {
+      "Cargo.toml": "ae1c67986785f5d1184e3f6b0fc5aa3894d9d0bb8154e7be436df943ff1d7b41",
+      "Cargo.lock": "73190978b490482697e92912754dd372bebf1c491256d67f692e5a4be2085450",
+      "conformance/src/fs-data-write-sandbox-run.mjs": "da799bfd05616b19b45bff1b827c38967657bd73e3895635e92142cd4cce73e8",
+      "conformance/src/firestore-probe/sandbox-session.mjs": "b7e0fea3c3b97db3621602456a2651c356a7199f7dd033da5311006c955231fb"
+    },
+    "commandVersions": {
+      "cargo": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+      "node": "v24.14.0",
+      "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)"
+    }
+  },
+  "localRunBindingSha256": "73b823461ad2933db06acd5fd9d5bf6f933ba4fb713e63042ab27a21b5d3f15a",
+  "localSelectedResultsSha256": "fbbd93c12ccab2f9beaa45c1e9d3a5e6b6862525e5b0302b5f86c8402f89f3a8",
+  "comparisonRuntimeInput": {
+    "path": "conformance/src/fs-data-write-sandbox.mjs",
+    "sha256": "43525e5d81abb6c73203be0c56a05ab5c6f48532999a377800c42616312b696d"
+  },
+  "localConfigSha256": "0f15f02dbfef3f0ee5cd6302684e8bb547b8c49dea5a825deeb57b2938545f0b",
+  "localIndexConfigSha256": "62d5387f860555c8a966d115ea95c2619c907c498b75e4c2e7a465503b452ec7",
+  "localRuntimeInputs": {
+    "Cargo.toml": "ae1c67986785f5d1184e3f6b0fc5aa3894d9d0bb8154e7be436df943ff1d7b41",
+    "Cargo.lock": "73190978b490482697e92912754dd372bebf1c491256d67f692e5a4be2085450",
+    "conformance/src/fs-data-write-sandbox-run.mjs": "da799bfd05616b19b45bff1b827c38967657bd73e3895635e92142cd4cce73e8",
+    "conformance/src/firestore-probe/sandbox-session.mjs": "b7e0fea3c3b97db3621602456a2651c356a7199f7dd033da5311006c955231fb"
+  },
+  "localCorpusSha256": "407099fc6bb3137fdf2ca5294f0b8ef347e819bead6ab3085e804842bdb20450",
+  "localRestResultsSha256": "2b725247fe1d8ca35526307dad233fcf89fe3acbc6a3fef9ab4e70b403f1740d",
+  "recipeIds": [
+    "writes/batch-write-malformed/missing-operation",
+    "writes/batch-write-malformed/no-operation",
+    "writes/batch-write-malformed/collection-name",
+    "writes/batch-write-malformed/empty-field-name",
+    "writes/batch-write-malformed/reserved-field-name",
+    "writes/batch-write-malformed/bad-mask-path",
+    "writes/batch-write-malformed/exists-precondition-fails"
+  ],
+  "recipeDigests": {
+    "writes/batch-write-malformed/missing-operation": "313e3a6f604be037edfba380c50122f51620c7e37572fb3eb6ae6a84efab6007",
+    "writes/batch-write-malformed/no-operation": "e1c5018a52d92164c0ad17e191148c3302281736638ecbb424af1f3b3b32186c",
+    "writes/batch-write-malformed/collection-name": "3eee2fec49f63ef2f7a2be065a6b8fccaaa697c1f0be010db84ebe8c426a01d3",
+    "writes/batch-write-malformed/empty-field-name": "5ca2849f97f0d3edef19d754233e009d28e8838032246cfb953d8ddbd4b8c994",
+    "writes/batch-write-malformed/reserved-field-name": "73dcc41652ad3cd9e70e71126fdf87ace826e1714cd52056e0e92251c287dd46",
+    "writes/batch-write-malformed/bad-mask-path": "8aebef06c6a5389df32c8e0d3207c536b839566425b9fd9b9558e452bed724bd",
+    "writes/batch-write-malformed/exists-precondition-fails": "676321def400ddd032b8976dba930ba72c74cc9d2502706498f88f6968c67572"
+  },
+  "recipes": [
+    {
+      "id": "writes/batch-write-malformed/missing-operation",
+      "area": "writes",
+      "steps": [
+        {
+          "id": "observation-0",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchWrite",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-0",
+                  "fields": {
+                    "v": {
+                      "integerValue": "0"
+                    }
+                  }
+                },
+                "currentDocument": {
+                  "exists": false
+                }
+              },
+              {},
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-2",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                },
+                "currentDocument": {
+                  "exists": false
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "observation-1",
+          "method": "GET",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-0"
+        },
+        {
+          "id": "observation-2",
+          "method": "GET",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-2"
+        }
+      ]
+    },
+    {
+      "id": "writes/batch-write-malformed/no-operation",
+      "area": "writes",
+      "steps": [
+        {
+          "id": "batch-write",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchWrite",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/no-operation-first",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              },
+              {
+                "currentDocument": {
+                  "exists": false
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/no-operation-last",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "readback",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchGet",
+          "body": {
+            "documents": [
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/no-operation-first",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/no-operation-middle",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/no-operation-last"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "writes/batch-write-malformed/collection-name",
+      "area": "writes",
+      "steps": [
+        {
+          "id": "batch-write",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchWrite",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/collection-name-first",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/collection-name-last",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "readback",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchGet",
+          "body": {
+            "documents": [
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/collection-name-first",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/collection-name-middle",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/collection-name-last"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "writes/batch-write-malformed/empty-field-name",
+      "area": "writes",
+      "steps": [
+        {
+          "id": "batch-write",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchWrite",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/empty-field-name-first",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/empty-field-name-middle",
+                  "fields": {
+                    "": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/empty-field-name-last",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "readback",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchGet",
+          "body": {
+            "documents": [
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/empty-field-name-first",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/empty-field-name-middle",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/empty-field-name-last"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "writes/batch-write-malformed/reserved-field-name",
+      "area": "writes",
+      "steps": [
+        {
+          "id": "batch-write",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchWrite",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/reserved-field-name-first",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/reserved-field-name-middle",
+                  "fields": {
+                    "__bad__": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/reserved-field-name-last",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "readback",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchGet",
+          "body": {
+            "documents": [
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/reserved-field-name-first",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/reserved-field-name-middle",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/reserved-field-name-last"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "writes/batch-write-malformed/bad-mask-path",
+      "area": "writes",
+      "steps": [
+        {
+          "id": "batch-write",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchWrite",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/bad-mask-path-first",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/bad-mask-path-middle",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                },
+                "updateMask": {
+                  "fieldPaths": [
+                    "a..b"
+                  ]
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/bad-mask-path-last",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "readback",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchGet",
+          "body": {
+            "documents": [
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/bad-mask-path-first",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/bad-mask-path-middle",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/bad-mask-path-last"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "writes/batch-write-malformed/exists-precondition-fails",
+      "area": "writes",
+      "steps": [
+        {
+          "id": "batch-write",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchWrite",
+          "body": {
+            "writes": [
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/exists-precondition-fails-first",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                },
+                "currentDocument": {
+                  "exists": true
+                }
+              },
+              {
+                "update": {
+                  "name": "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/exists-precondition-fails-last",
+                  "fields": {
+                    "v": {
+                      "integerValue": "1"
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "readback",
+          "method": "POST",
+          "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchGet",
+          "body": {
+            "documents": [
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/exists-precondition-fails-first",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle",
+              "projects/fireemu-oracle-sbx/databases/(default)/documents/batchInvalid/exists-precondition-fails-last"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "productionPrograms": {
+    "writes/batch-write-malformed/missing-operation": {
+      "steps": {
+        "observation-0": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "empty write operation"
+        },
+        "observation-1": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-0\" not found."
+        },
+        "observation-2": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-2\" not found."
+        }
+      }
+    },
+    "writes/batch-write-malformed/no-operation": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "empty write operation"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-last",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/collection-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/batchInvalid\" lacks \"/\" at index 72."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-first",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/empty-field-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "The property.name is the empty string."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-first",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/reserved-field-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "field name __bad__ is reserved"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-first",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/bad-mask-path": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-middle",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-first",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/exists-precondition-fails": {
+      "steps": {
+        "batch-write": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "status": [
+              {},
+              {
+                "code": 5,
+                "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle"
+              },
+              {}
+            ],
+            "writeResults": [
+              {
+                "updateTime": "<now>"
+              },
+              {},
+              {
+                "updateTime": "<now>"
+              }
+            ]
+          }
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-first",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            },
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-last",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "localPrograms": {
+    "writes/batch-write-malformed/missing-operation": {
+      "steps": {
+        "observation-0": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "empty write operation"
+        },
+        "observation-1": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-0\" not found."
+        },
+        "observation-2": {
+          "status": 404,
+          "code": "NOT_FOUND",
+          "message": "Document \"projects/demo-firestore-probe/databases/(default)/documents/oracle/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/limits-03/bw-a-2\" not found."
+        }
+      }
+    },
+    "writes/batch-write-malformed/no-operation": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "empty write operation"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/no-operation-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/collection-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Document name \"projects/demo-firestore-probe/databases/(default)/documents/batchInvalid\" lacks \"/\" at index 72."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/collection-name-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/empty-field-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "The property.name is the empty string."
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/empty-field-name-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/reserved-field-name": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "field name __bad__ is reserved"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/reserved-field-name-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/bad-mask-path": {
+      "steps": {
+        "batch-write": {
+          "status": 400,
+          "code": "INVALID_ARGUMENT",
+          "message": "Invalid property path \"a..b\". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\\\]|(?:\\\\.))+`)"
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-first",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-last",
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/bad-mask-path-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    },
+    "writes/batch-write-malformed/exists-precondition-fails": {
+      "steps": {
+        "batch-write": {
+          "status": 200,
+          "code": "OK",
+          "body": {
+            "status": [
+              {},
+              {
+                "code": 5,
+                "message": "No document to update: projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle"
+              },
+              {}
+            ],
+            "writeResults": [
+              {
+                "updateTime": "<now>"
+              },
+              {},
+              {
+                "updateTime": "<now>"
+              }
+            ]
+          }
+        },
+        "readback": {
+          "status": 200,
+          "code": "OK",
+          "body": [
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-first",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            },
+            {
+              "found": {
+                "createTime": "<now>",
+                "fields": {
+                  "v": {
+                    "integerValue": "1"
+                  }
+                },
+                "name": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-last",
+                "updateTime": "<now>"
+              },
+              "readTime": "<now>"
+            },
+            {
+              "missing": "projects/demo-firestore-probe/databases/(default)/documents/batchInvalid/exists-precondition-fails-middle",
+              "readTime": "<now>"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "result": {
+    "comparableRecipes": 7,
+    "mismatchedRecipes": 0,
+    "pendingRelatedConditions": [
+      "FS-WRITE-LIMITS-03/batch-undecodable-value"
+    ],
+    "fullRun": {
+      "comparedPrograms": 39,
+      "comparedStreams": 2,
+      "pendingRestRecipes": 39,
+      "pendingStreamRecipes": 5,
+      "knownMismatchRows": 9
+    },
+    "fullRunExitCode": 1
+  },
+  "comparisonMode": "existing-sandbox-comparator; BatchGet response arrays are sorted by document name for comparison only",
+  "closurePromotion": "none"
+}

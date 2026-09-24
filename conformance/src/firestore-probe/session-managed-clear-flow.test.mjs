@@ -44,6 +44,7 @@ async function observeCollector({
   programCount = 1,
   omitEmptyValues = false,
   childCollectionNames = [],
+  extraChildPageCollections = [],
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "fireemu-array-shrink-"));
   const input = join(directory, "programs.json");
@@ -133,8 +134,12 @@ async function observeCollector({
       const record = [...records.values()].find((item) =>
         pathname.endsWith(`/${item.collection}/${item.document}:listCollectionIds`),
       );
+      const pageToken = new URL(request.url, "http://127.0.0.1").searchParams.get("pageToken");
       send(200, {
         collectionIds: childCollectionNames.includes(record.collection) ? ["nested"] : [],
+        ...(extraChildPageCollections.includes(record.collection) && !pageToken
+          ? { nextPageToken: "second-page" }
+          : {}),
       });
     } else if (
       [...records.values()].some((record) =>
@@ -644,6 +649,32 @@ test("corpus-v3 rejects a non-suffix legacy array before any write", async () =>
           JSON.parse(request.body).writes.some((write) => write.delete || write.transform),
       ),
       false,
+    );
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy audit request cap stops before any v3 write", async () => {
+  const result = await observeCollector({
+    extraNames: legacyNames,
+    visibleNames: [...names, ...legacyNames],
+    extraChildPageCollections: [legacyNames[0].split("/documents/")[1].split("/")[0]],
+  });
+  try {
+    assert.ok(result.failure);
+    assert.match(String(result.failure.stderr), /cap reached before network send/);
+    assert.equal(
+      result.requests.some(
+        (request) =>
+          request.pathname.endsWith("/documents:commit") &&
+          JSON.parse(request.body).writes.some((write) => write.delete || write.transform),
+      ),
+      false,
+    );
+    assert.equal(
+      result.requests.filter((request) => request.pathname.endsWith("/documents:runQuery")).length,
+      6,
     );
   } finally {
     await rm(result.directory, { recursive: true, force: true });

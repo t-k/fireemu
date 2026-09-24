@@ -336,7 +336,7 @@ export function isDatabaseOperation(url) {
 const INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
 const EMBEDDED_INSTANT = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g;
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
-const OPERATION = /(\/operations\/)([A-Za-z0-9_-]+)/g;
+const OPERATION = /(databases\/)([^/]+)(\/operations\/)([A-Za-z0-9_-]+)/g;
 const INDEX = /(\/indexes\/|index ID = )([A-Za-z0-9_-]{6,})/g;
 const INDEX_LINK = /(create_(?:composite|exemption))=([A-Za-z0-9_-]+)/g;
 const RETRY = /Please retry in \d+ seconds/g;
@@ -349,7 +349,8 @@ const OPAQUE_KEYS = new Map([
 /**
  * The symbols of one program: database ids, uids, operation ids and index ids are numbered by
  * first appearance across the whole program (a later step that names the same resource shows
- * that it does); instants are numbered within each step.
+ * that it does); instants are numbered within each step. Operation ids are numbered per
+ * database, so a step only production runs in one database cannot shift another's numbers.
  */
 export function programSymbols(ctx, program) {
   const databases = new Map();
@@ -384,12 +385,16 @@ function instantSymbol(text, local) {
 /**
  * The console link production puts in a missing-index message carries the index or field
  * name, and so the project and database ids, as base64url protobuf. The recorded form decodes
- * it and replaces those ids, so both sides stay comparable byte for byte.
+ * it and replaces the project, database and index ids, so both sides stay comparable.
  */
 function normalizeIndexLink(text, ctx, symbols) {
   return text.replaceAll(INDEX_LINK, (_, kind, blob) => {
     let bytes = Buffer.from(blob, "base64url").toString("latin1");
     bytes = bytes.replaceAll(ctx.project, RECORDED_PROJECT);
+    // The index a link names (a building or deleted one) is a server id like any other.
+    bytes = bytes.replace(/(\/indexes\/)([A-Za-z0-9_-]{6,})/, (_, head, id) =>
+      `${head}${numbered(symbols.indexes, id, "index")}`,
+    );
     for (const [id, symbol] of symbols.databases) bytes = bytes.replaceAll(id, symbol);
     return `${kind}=${Buffer.from(bytes, "latin1").toString("base64url")}`;
   });
@@ -400,7 +405,10 @@ function normalizeString(text, ctx, symbols, local) {
   let out = normalizeIndexLink(text, ctx, symbols)
     .replaceAll(EMBEDDED_INSTANT, (i) => (inRunWindow(i, ctx) ? instantSymbol(i, local) : i))
     .replaceAll(UUID, (uid) => numbered(symbols.uids, uid, "uid"))
-    .replaceAll(OPERATION, (_, head, id) => `${head}${numbered(symbols.operations, id, "op")}`)
+    .replaceAll(OPERATION, (_, head, database, tail, id) => {
+      if (!symbols.operations.has(database)) symbols.operations.set(database, new Map());
+      return `${head}${database}${tail}${numbered(symbols.operations.get(database), id, "op")}`;
+    })
     .replaceAll(INDEX, (_, head, id) => `${head}${numbered(symbols.indexes, id, "index")}`)
     .replaceAll(RETRY, "Please retry in <n> seconds")
     .replaceAll(ctx.bucket, "<bucket>")

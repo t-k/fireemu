@@ -212,6 +212,7 @@ const PROGRAMS_RAW = [
     steps: [
       create("create", "a"),
       { id: "delete", method: "DELETE", path: dbPath("a") },
+      get("get-deleted", dbPath("a")),
       create("recreate", "a", NATIVE, { delayMs: 3_000 }),
       get("get-after", dbPath("a")),
     ],
@@ -230,7 +231,7 @@ const PROGRAMS_RAW = [
         filterDatabases: true,
       }),
       get("list-after", "v1/{project}/databases", { filterDatabases: true }),
-      get("document-after", `v1/${docs("a")}/items/a`),
+      pollPath("document-after", `v1/${docs("a")}/items/a`, "notFound"),
       { id: "delete-again", method: "DELETE", path: dbPath("a") },
       { id: "delete-missing", method: "DELETE", path: "v1/{project}/databases/{db:z}" },
     ],
@@ -262,7 +263,7 @@ const PROGRAMS_RAW = [
   },
   {
     id: "fs-config/database/patch/fields",
-    databases: ["a"],
+    databases: ["a", "b"],
     steps: [
       create("create", "a"),
       {
@@ -326,6 +327,16 @@ const PROGRAMS_RAW = [
         path: "v1/{project}/databases/{db:z}",
         query: { updateMask: "deleteProtectionState" },
         body: { deleteProtectionState: "DELETE_PROTECTION_DISABLED" },
+      },
+      // The type change production accepts on an empty database, tried on one with data.
+      create("create-nonempty", "b"),
+      commit("seed-nonempty", "b", [["items/a", { a: integer(1) }]]),
+      {
+        id: "type-nonempty",
+        method: "PATCH",
+        path: dbPath("b"),
+        query: { updateMask: "type" },
+        body: { type: "DATASTORE_MODE" },
       },
     ],
   },
@@ -606,6 +617,14 @@ const PROGRAMS_RAW = [
         query: { updateMask: "ttlConfig" },
         body: { ttlConfig: {} },
       },
+      // Production's sweep may already have deleted the expired document (C8: when is not a
+      // contract); deleting it here makes the disable's document count the same on both sides.
+      {
+        id: "delete-expired",
+        method: "POST",
+        path: `v1/${docs("a")}:commit`,
+        body: { writes: [{ delete: `${docs("a")}/items/a` }] },
+      },
       {
         id: "disable",
         method: "PATCH",
@@ -642,7 +661,9 @@ const PROGRAMS_RAW = [
         suffix: ":cancel",
         body: {},
       },
-      pollFrom("cancelled", "create-index", "done", { max: 20 }),
+      { id: "delete-running", method: "DELETE", pathFrom: { $from: "create-index", path: "name" } },
+      // An index operation stays PROCESSING for minutes after its index is READY (C10).
+      pollFrom("cancelled", "create-index", "done", { max: 80 }),
       get("index-after-cancel", "", {
         pathFrom: { $from: "create-index", path: "metadata.index" },
       }),

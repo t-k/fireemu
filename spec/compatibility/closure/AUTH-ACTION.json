@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "parent": "AUTH-ACTION",
-  "parentStatus": "IMPLEMENTING",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "scopeDecisions": [
     {
@@ -74,7 +74,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "Admin sendOobCode with returnOobLink for every request type: answer members, link parameters, continueUrl on authorized, unauthorized, malformed and empty values, canHandleCodeInApp, unknown, disabled and mixed-case addresses, missing and unknown request types, missing and invalid addresses, the new address of an email change (missing, taken, the same, invalid), email-link generation while password sign-in is required, and codes selected by an ID token instead of an address.",
+      "note": "Admin sendOobCode with returnOobLink for every request type: answer members, link parameters, continueUrl on authorized, unauthorized, malformed and empty values, canHandleCodeInApp, unknown, disabled and mixed-case addresses, missing and unknown request types, missing and invalid addresses, the new address of an email change (missing, taken, the same, invalid), email-link generation while password sign-in is required, and codes selected by an ID token instead of an address. The Admin email-change generator reads only the address (MISSING_EMAIL for an ID token alone), so the inspection row after it records only that dependency.",
       "evidence": {
         "productionRecordings": [
           {
@@ -224,7 +224,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "Email-link sign-in: generation (continueUrl and canHandleCodeInApp), inspection, a mismatched, missing or mixed-case address, missing and unknown codes, a new and an existing account, reuse, a newer link and the older one, disabled and deleted accounts, linking the address to an anonymous session, to a session whose address differs, and an address another account owns, codes of the other types on the email-link route and the email-link code on the other routes, and a password reset of an account that only ever signed in by link.",
+      "note": "Email-link sign-in: generation (continueUrl and canHandleCodeInApp), inspection, a mismatched, missing or mixed-case address, missing and unknown codes, a new and an existing account, reuse, a newer link and the older one, a link refused for a disabled account (so its sign-in row records only that dependency) and a deleted account, linking the address to an anonymous session, to a session whose address differs, and an address another account owns, codes of the other types on the email-link route and the email-link code on the other routes, and a password reset of an account that only ever signed in by link.",
       "evidence": {
         "productionRecordings": [
           {
@@ -469,7 +469,7 @@
       "configProjections": [
         "default"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "note": "Independent clean-context closure and security review of the final artifact and evidence.",
       "evidence": {
         "productionRecordings": [
@@ -496,5 +496,14 @@
         }
       }
     }
-  ]
+  ],
+  "closureReview": {
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-24",
+    "reviewer": "independent clean-context closure review and security review of artifact bf3c6b12, and a clean-context confirmation review of their follow-ups (39d0b675b, 329900786, b50c3f529) on the rebuilt artifact",
+    "reviewedCommit": "b50c3f529",
+    "finalArtifactSha256": "06bbbf6f1b9d05c353e1836f9bb191299903ae4dacef133e1b268b047533d3a6",
+    "report": "docs.local/reviews/2026-09-24-auth-action-confirmation-review.md (private; the earlier reviews are -closure-review.md and -security-review.md)",
+    "followUps": "Non-blocking and tracked privately (docs.local/issues/open/auth-action-unobserved-edges.md): code lifetimes beyond one hour, VERIFY_EMAIL supersession (unobservable under production's per-address limit), sessions after an email link removes a password, a client sign-in link for a disabled account, a link sign-in of a disabled account, and a closure-test count of rows whose dependency returned nothing."
+  }
 }

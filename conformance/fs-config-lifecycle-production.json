@@ -1874,10 +1874,10 @@
       }
     },
     "fs-config/default-database/lifecycle": {
-      "corpusDigest": "590dea50517b575f273e06dda787694523e7126b8515dd8d415ab5553dc54457",
+      "corpusDigest": "315dd7dafdd6b864c012b8f1a5c116dcb5ff6b1f08557206476792859d5e16d6",
       "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
-      "recordedAt": "2026-09-24T13:33:05.827Z",
-      "gitSha": "75593effa8e5bca85f74161a230097781f066e74",
+      "recordedAt": "2026-09-24T14:20:05.351Z",
+      "gitSha": "5c9970184ce6186c56467ab436caa4a1b4a70562",
       "steps": {
         "prepare-delete": {
           "status": 200,
@@ -2263,30 +2263,27 @@
           "body": {}
         },
         "indexes-without-default": {
-          "status": 200,
-          "body": {
-            "indexes": [
-              {
-                "density": "SPARSE_ALL",
-                "fields": [
-                  {
-                    "fieldPath": "a",
-                    "order": "ASCENDING"
-                  },
-                  {
-                    "fieldPath": "b",
-                    "order": "DESCENDING"
-                  },
-                  {
-                    "fieldPath": "__name__",
-                    "order": "DESCENDING"
-                  }
-                ],
-                "name": "projects/demo-fs-config/databases/(default)/collectionGroups/items/indexes/<index1>",
-                "queryScope": "COLLECTION",
-                "state": "READY"
+          "trace": [
+            {
+              "status": 404,
+              "body": {
+                "error": {
+                  "code": 404,
+                  "message": "Project 'demo-fs-config' or database '(default)' does not exist.",
+                  "status": "NOT_FOUND"
+                }
               }
-            ]
+            }
+          ],
+          "settled": {
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "Project 'demo-fs-config' or database '(default)' does not exist.",
+                "status": "NOT_FOUND"
+              }
+            }
           }
         },
         "recreate": {
@@ -2402,12 +2399,53 @@
       },
       "second": {
         "indexes-without-default": {
-          "status": 404,
-          "body": {
-            "error": {
-              "code": 404,
-              "message": "The database 'demo-fs-config' does not exist.",
-              "status": "NOT_FOUND"
+          "trace": [
+            {
+              "status": 200,
+              "body": {
+                "indexes": [
+                  {
+                    "density": "SPARSE_ALL",
+                    "fields": [
+                      {
+                        "fieldPath": "a",
+                        "order": "ASCENDING"
+                      },
+                      {
+                        "fieldPath": "b",
+                        "order": "DESCENDING"
+                      },
+                      {
+                        "fieldPath": "__name__",
+                        "order": "DESCENDING"
+                      }
+                    ],
+                    "name": "projects/demo-fs-config/databases/(default)/collectionGroups/items/indexes/<index1>",
+                    "queryScope": "COLLECTION",
+                    "state": "READY"
+                  }
+                ]
+              }
+            },
+            {
+              "status": 404,
+              "body": {
+                "error": {
+                  "code": 404,
+                  "message": "The database 'demo-fs-config' does not exist.",
+                  "status": "NOT_FOUND"
+                }
+              }
+            }
+          ],
+          "settled": {
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "The database 'demo-fs-config' does not exist.",
+                "status": "NOT_FOUND"
+              }
             }
           }
         }

@@ -1019,6 +1019,8 @@ pub enum AuthError {
     EmailNotFound,
     /// Unknown, consumed or mismatched action code.
     InvalidOobCode,
+    /// An action code past its lifetime (production lifetimes only).
+    ExpiredOobCode,
     /// Unknown phone verification session.
     InvalidSessionInfo,
     /// Wrong phone verification code.
@@ -1060,6 +1062,7 @@ impl fmt::Display for AuthError {
             Self::InvalidPhoneNumber => f.write_str("invalid phone number"),
             Self::EmailNotFound => f.write_str("email not found"),
             Self::InvalidOobCode => f.write_str("invalid action code"),
+            Self::ExpiredOobCode => f.write_str("expired action code"),
             Self::InvalidSessionInfo => f.write_str("invalid verification session"),
             Self::InvalidVerificationCode => f.write_str("invalid verification code"),
             Self::ControlCharacterInText(field) => {
@@ -1188,6 +1191,10 @@ pub struct AuthStore {
     /// Whether this store has issued a legacy Identity Toolkit token. Only then does it honour
     /// one, so a store that never issues them (the emulator profile) refuses a forged one.
     legacy_tokens_issued: bool,
+    /// Whether action codes follow production's lifetimes: a password reset code lives an
+    /// hour, the other kinds longer, and an expired code is refused as expired. Otherwise every
+    /// code lives an hour and then disappears (the emulator profile's local policy).
+    production_oob_lifetimes: bool,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
     /// Outstanding phone `temporaryProof`s: proof to the verified number and its issue time.
@@ -1320,6 +1327,13 @@ impl CredentialNotice {
 
 /// Email action codes expire after an hour of virtual time.
 pub const OOB_CODE_TTL_SECONDS: i64 = 3_600;
+/// Under production lifetimes, a verification, email-change or sign-in code outlives the hour
+/// a password reset code has: production answered all three after an hour (sandbox recording
+/// 2026-09-24, auth-action/expiry). Their full lifetime is unobserved; three days is inferred.
+pub const LONG_OOB_CODE_TTL_SECONDS: i64 = 259_200;
+/// Under production lifetimes an expired code is kept this long after its lifetime, so it is
+/// refused as expired rather than as unknown.
+pub const EXPIRED_OOB_CODE_RETENTION_SECONDS: i64 = 86_400;
 /// Phone verification codes expire after ten minutes of virtual time.
 pub const SMS_CODE_TTL_SECONDS: i64 = 600;
 /// A pending second-factor sign-in (`mfaPendingCredential`) expires after an hour of virtual
@@ -1481,6 +1495,7 @@ impl AuthStore {
             credential_epoch: None,
             lifecycle_epoch: None,
             legacy_tokens_issued: false,
+            production_oob_lifetimes: false,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             temporary_proofs: BTreeMap::new(),
@@ -1797,10 +1812,16 @@ impl AuthStore {
         if self
             .oob_codes
             .values()
-            .any(|code| Self::expired(code.created_at, OOB_CODE_TTL_SECONDS, now))
+            .any(|code| self.oob_code_swept(code, now))
         {
-            Arc::make_mut(&mut self.oob_codes)
-                .retain(|_, code| !Self::expired(code.created_at, OOB_CODE_TTL_SECONDS, now));
+            let production = self.production_oob_lifetimes;
+            Arc::make_mut(&mut self.oob_codes).retain(|_, code| {
+                !Self::expired(
+                    code.created_at,
+                    Self::oob_retention(production, code.request_type),
+                    now,
+                )
+            });
         }
         if self
             .verification_codes
@@ -3096,6 +3117,46 @@ impl AuthStore {
         }
     }
 
+    /// Switches action codes to production's lifetimes (see `production_oob_lifetimes`).
+    pub fn set_production_oob_lifetimes(&mut self, production: bool) {
+        self.production_oob_lifetimes = production;
+    }
+
+    const fn oob_ttl(production: bool, request_type: OobRequestType) -> i64 {
+        match request_type {
+            OobRequestType::PasswordReset => OOB_CODE_TTL_SECONDS,
+            _ if production => LONG_OOB_CODE_TTL_SECONDS,
+            _ => OOB_CODE_TTL_SECONDS,
+        }
+    }
+
+    const fn oob_retention(production: bool, request_type: OobRequestType) -> i64 {
+        let ttl = Self::oob_ttl(production, request_type);
+        if production {
+            ttl + EXPIRED_OOB_CODE_RETENTION_SECONDS
+        } else {
+            ttl
+        }
+    }
+
+    fn oob_code_swept(&self, code: &OobCode, now: LogicalInstant) -> bool {
+        Self::expired(
+            code.created_at,
+            Self::oob_retention(self.production_oob_lifetimes, code.request_type),
+            now,
+        )
+    }
+
+    /// Whether an outstanding code is past its lifetime at `now`.
+    #[must_use]
+    pub fn oob_code_expired(&self, code: &OobCode, now: LogicalInstant) -> bool {
+        Self::expired(
+            code.created_at,
+            Self::oob_ttl(self.production_oob_lifetimes, code.request_type),
+            now,
+        )
+    }
+
     /// Outstanding email action codes, oldest first.
     #[must_use]
     pub fn oob_codes(&self) -> Vec<&OobCode> {
@@ -3127,10 +3188,14 @@ impl AuthStore {
         if self
             .oob_codes
             .get(code)
-            .is_some_and(|c| Self::expired(c.created_at, OOB_CODE_TTL_SECONDS, now))
+            .is_some_and(|c| self.oob_code_expired(c, now))
         {
             Arc::make_mut(&mut self.oob_codes).remove(code);
-            return Err(AuthError::InvalidOobCode);
+            return Err(if self.production_oob_lifetimes {
+                AuthError::ExpiredOobCode
+            } else {
+                AuthError::InvalidOobCode
+            });
         }
         Arc::make_mut(&mut self.oob_codes)
             .remove(code)

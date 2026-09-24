@@ -16571,3 +16571,45 @@ fn strict_the_action_page_treats_an_expired_code_as_gone() {
         r.body
     );
 }
+
+// ---- AUTH-MFA: the project's `mfa` config (conformance/auth-mfa-production.json) ----
+
+/// The Admin config API reads back a new project's MFA as disabled, replaces it with a masked
+/// PATCH, and changes nothing on a refused value (sandbox exploration 2026-09-24).
+#[test]
+fn the_project_mfa_config_is_read_back_and_replaced_whole() {
+    for s in [strict_state(), state()] {
+        let read = |s: &AuthState| admin(s, "GET", PROJECT_CONFIG, &Value::Null).1["mfa"].clone();
+        assert_eq!(read(&s), json!({"state": "DISABLED"}));
+        let enabled = json!({
+            "state": "ENABLED",
+            "enabledProviders": ["PHONE_SMS"],
+            "providerConfigs": [{"state": "ENABLED", "totpProviderConfig": {"adjacentIntervals": 5}}],
+        });
+        let (status, body) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({"mfa": enabled}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["mfa"], enabled);
+        assert_eq!(read(&s), enabled);
+        let (status, _) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({"mfa": {"state": "NOT_A_STATE"}}),
+        );
+        assert_eq!(status, 400);
+        assert_eq!(read(&s), enabled, "a refused value changes nothing");
+        let (status, body) = admin(
+            &s,
+            "PATCH",
+            &format!("{PROJECT_CONFIG}?updateMask=mfa"),
+            &json!({"mfa": {"state": "DISABLED"}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(read(&s), json!({"state": "DISABLED"}));
+    }
+}

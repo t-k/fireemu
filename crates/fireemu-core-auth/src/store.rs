@@ -1228,6 +1228,8 @@ pub struct AuthStore {
     config: ProjectAuthConfig,
     /// The project's sign-in providers and test phone numbers.
     sign_in: SignInConfig,
+    /// The project's multi-factor configuration (Admin v2 `Config.mfa`).
+    mfa_config: crate::mfa_config::MfaProjectConfig,
     /// Deterministic, local-only sign-up quota state. Admin/import paths do not use it unless
     /// their caller explicitly requests a reservation through the typed API.
     signup_quota: SignupQuota,
@@ -1510,6 +1512,7 @@ impl AuthStore {
             credential_notices: Vec::new(),
             config: ProjectAuthConfig::default(),
             sign_in: SignInConfig::default(),
+            mfa_config: crate::mfa_config::MfaProjectConfig::default(),
             signup_quota: SignupQuota::default(),
             oidc_configs: BTreeMap::new(),
             oidc_order: Vec::new(),
@@ -1967,6 +1970,17 @@ impl AuthStore {
     #[must_use]
     pub const fn sign_in_config(&self) -> &SignInConfig {
         &self.sign_in
+    }
+
+    /// The project's multi-factor configuration.
+    #[must_use]
+    pub const fn mfa_config(&self) -> &crate::mfa_config::MfaProjectConfig {
+        &self.mfa_config
+    }
+
+    /// Replaces the project's multi-factor configuration (the adapter validates it).
+    pub fn set_mfa_config(&mut self, config: crate::mfa_config::MfaProjectConfig) {
+        self.mfa_config = config;
     }
 
     /// The project's authorized domains: the configured list, or the one a new Firebase
@@ -6996,6 +7010,21 @@ impl AuthRegistry {
         })
         .ok()
         .flatten()
+    }
+
+    /// Replaces a project's multi-factor configuration under the project's operation gate;
+    /// `None` when the project has no store.
+    pub fn update_project_mfa_config(
+        &self,
+        project: &str,
+        config: crate::mfa_config::MfaProjectConfig,
+    ) -> Option<crate::mfa_config::MfaProjectConfig> {
+        let gate = self.operation_gate(project, None)?;
+        let _operation = gate.lock().ok()?;
+        let parent = self.project_store(project)?;
+        let mut parent = parent.lock().ok()?;
+        parent.set_mfa_config(config.clone());
+        Some(config)
     }
 
     /// Replaces a project's sign-in configuration under the project's operation gate.

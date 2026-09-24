@@ -67,6 +67,7 @@ const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 mod custom_token;
 pub use custom_token::{CustomTokenRefusal, CustomTokenTrust};
 mod password_hash;
+mod project_mfa;
 pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
 pub mod widget;
@@ -3660,6 +3661,8 @@ fn apply_project_config_fields(
                     &["client", "permissions", "disabledUserDeletion"],
                 )?);
             }
+            // Decoded whole by `project_mfa`, like the sign-in providers.
+            "mfa" => {}
             field
                 if field == "passwordPolicyConfig"
                     || field.starts_with("passwordPolicyConfig.")
@@ -3935,7 +3938,8 @@ fn apply_project_config_parent_path(
 fn valid_project_config_field(field: &str) -> bool {
     matches!(
         field,
-        "signIn"
+        "mfa"
+            | "signIn"
             | "signIn.allowDuplicateEmails"
             | "emailPrivacyConfig"
             | "emailPrivacyConfig.enableImprovedEmailPrivacy"
@@ -4590,6 +4594,7 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
                 | "quota"
                 | "blockingFunctions"
                 | "authorizedDomains"
+                | "mfa"
         ) {
             return Err(error(400, "INVALID_ARGUMENT"));
         }
@@ -4818,6 +4823,7 @@ fn project_config_management(
             store.signup_quota().config(),
         );
         add_sign_in_config_json(&mut body, store.sign_in_config());
+        body["mfa"] = project_mfa::mfa_config_json(store.mfa_config());
         body["authorizedDomains"] = json!(store.authorized_domains());
         if let Some(blocking) = state
             .blocking
@@ -4884,6 +4890,9 @@ fn project_config_management(
             {
                 fields.push("authorizedDomains".to_owned());
             }
+            if body.get("mfa").is_some_and(|value| !value.is_null()) {
+                fields.push("mfa".to_owned());
+            }
             fields
         }
         Err(response) => return response,
@@ -4902,6 +4911,15 @@ fn project_config_management(
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
+    // The masked `mfa` member replaces the project's whole multi-factor configuration.
+    let mfa_update = if fields.iter().any(|field| field == "mfa") {
+        match project_mfa::mfa_config_from_json(body.get("mfa").unwrap_or(&Value::Null)) {
+            Ok(config) => Some(config),
+            Err(()) => return error(400, "INVALID_ARGUMENT"),
+        }
+    } else {
+        None
+    };
     // Decode the sign-in providers before anything changes; they are applied after the rest.
     let updates_sign_in = match sign_in_config_from_update(&SignInConfig::default(), body, &fields)
     {
@@ -4957,6 +4975,11 @@ fn project_config_management(
             },
         ) {
             Ok(Some(config)) => {
+                if let Some(mfa) = mfa_update.clone() {
+                    if registry.update_project_mfa_config(project, mfa).is_none() {
+                        return rollback_blocking(error(500, "INTERNAL"));
+                    }
+                }
                 if updates_sign_in {
                     match registry.update_project_sign_in_config(project, |current| {
                         sign_in_config_from_update(current, body, &fields)
@@ -4995,6 +5018,10 @@ fn project_config_management(
         let has_policy = password_policy.is_some();
         let has_quota = signup_quota.is_some();
         let has_sign_in = sign_in.is_some();
+        let has_mfa = mfa_update.is_some();
+        if let Some(mfa) = mfa_update {
+            store.set_mfa_config(mfa);
+        }
         let config = patch.apply_to(store.config());
         if !patch.is_empty() {
             store.set_config(config);
@@ -5013,7 +5040,7 @@ fn project_config_management(
             }
         }
         drop(store);
-        if !patch.is_empty() || has_policy || has_quota || has_sign_in {
+        if !patch.is_empty() || has_policy || has_quota || has_sign_in || has_mfa {
             if let Some(project) = pending_project {
                 if let Err(response) = install_routed_candidate(state, project, selected_store) {
                     return rollback_blocking(response);
@@ -5034,6 +5061,7 @@ fn project_config_management(
                 store.signup_quota().config(),
             );
             add_sign_in_config_json(&mut body, store.sign_in_config());
+            body["mfa"] = project_mfa::mfa_config_json(store.mfa_config());
             body["authorizedDomains"] = json!(store.authorized_domains());
             if let Some(blocking) = state
                 .blocking

@@ -589,11 +589,12 @@ const expiry = program(
   [
     adminCreate("create-a", "a"),
     adminCreate("create-b", "b"),
-    resetLink("reset-link-a", "a"),
-    resetLink("reset-link-b", "b"),
     verifyLink("verify-link-a", "a"),
     changeLink("change-link-b", "b", "b-new"),
     signInLink("link-n", "n"),
+    resetLink("reset-link-b", "b"),
+    // Generated last, so the wait starts right after it.
+    resetLink("reset-link-a", "a"),
     { ...check("check-reset-before-hour", "reset-link-a"), waitSeconds: WAIT_BEFORE },
     { ...check("check-reset-across-hour", "reset-link-a"), waitSeconds: WAIT_ACROSS },
     reset("reset-after-hour", "reset-link-a"),

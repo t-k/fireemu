@@ -458,3 +458,28 @@ test("a taken or unchanged new address may come back without a link, nothing els
   );
   assert.throws(() => validateActionCorpus([{ id: "p", steps: [change("EMAIL(fresh)")] }]));
 });
+
+test("an address is no longer taken once any account was deleted or updated", () => {
+  const create = {
+    id: "c",
+    path: "v1/projects/{project}/accounts",
+    auth: "admin",
+    body: { email: "EMAIL(d)" },
+  };
+  const remove = {
+    id: "r",
+    path: "v1/projects/{project}/accounts:delete",
+    auth: "admin",
+    body: { localId: "UID(d)" },
+  };
+  const change = {
+    ...adminOob({
+      requestType: "VERIFY_AND_CHANGE_EMAIL",
+      email: "EMAIL(a)",
+      newEmail: "EMAIL(d)",
+      returnOobLink: true,
+    }),
+    noLinkExpected: true,
+  };
+  assert.throws(() => validateActionCorpus([{ id: "p", steps: [create, remove, change] }]));
+});

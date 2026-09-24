@@ -486,13 +486,16 @@ const ID_ORDERED_LISTINGS = ["indexes", "databases", "operations", "fields"];
 /**
  * Sorts the entries of an id-ordered listing by their normalized content. Production lists
  * indexes, databases and operations in the order of ids it draws at random (fireemu draws its
- * own), so the order says nothing about behavior; every entry is still compared.
+ * own), so the order says nothing about behavior; every entry is still compared. Only a
+ * listing of named resources is sorted: an index's own `fields` are its columns, in order.
  */
 export function sortListings(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
   const out = { ...body };
+  const named = (list) =>
+    Array.isArray(list) && list.every((entry) => typeof entry?.name === "string");
   for (const key of ID_ORDERED_LISTINGS) {
-    if (Array.isArray(out[key]))
+    if (named(out[key]))
       out[key] = out[key].toSorted((a, b) =>
         JSON.stringify(canonical(a)).localeCompare(JSON.stringify(canonical(b))),
       );

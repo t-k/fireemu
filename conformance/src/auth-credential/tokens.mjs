@@ -101,10 +101,16 @@ function identityRelations(claims, localId) {
   if (typeof claims.sub === "string" && typeof localId === "string") {
     out.subIsLocalId = claims.sub === localId;
   }
+  // A legacy token names its account only as user_id.
+  if (typeof claims.user_id === "string" && typeof localId === "string") {
+    out.userIdIsLocalId = claims.user_id === localId;
+  }
   return out;
 }
 
 function decodeTokens(value, key, ctx, localId) {
+  // A TOTP enrollment secret is a credential and is never recorded.
+  if (key === "sharedSecretKey" && typeof value === "string") return "<sharedSecretKey>";
   if (JWT_KEYS.has(key) && typeof value === "string") {
     const described = describeJwt(value);
     // A token that does not decode is never recorded raw.

@@ -9,6 +9,7 @@ import { guardHttp, validateConfigSdkCorpus } from "./auth-config-sdk/guard.mjs"
 import { normalizeHttp, normalizeSdk } from "./auth-config-sdk/harness.mjs";
 import { SDK_OPERATIONS } from "./auth-config-sdk/sdk.mjs";
 import {
+  configCovers,
   configDrift,
   configEquals,
   createSession,
@@ -450,6 +451,28 @@ test("config equality reads false and absent alike but keeps oneof members apart
       { passwordPolicyEnforcementState: "ENFORCE" },
     ),
   );
+});
+
+test("a settle reads back what was written and allows what the server adds", () => {
+  assert.ok(
+    configCovers(
+      {
+        passwordPolicyEnforcementState: "ENFORCE",
+        passwordPolicyVersions: [
+          { customStrengthOptions: { maxPasswordLength: 16, minPasswordLength: 6 } },
+        ],
+      },
+      {
+        passwordPolicyEnforcementState: "ENFORCE",
+        passwordPolicyVersions: [{ customStrengthOptions: { maxPasswordLength: 16 } }],
+      },
+    ),
+  );
+  assert.ok(!configCovers({ a: 1 }, { a: 2 }));
+  assert.ok(!configCovers({ a: 1 }, undefined), "unset must read back unset");
+  assert.ok(configCovers({}, undefined));
+  assert.ok(configCovers(undefined, false));
+  assert.ok(!configCovers({ allowlistOnly: {} }, { allowByDefault: {} }));
 });
 
 test("relative times resolve to whole seconds", () => {

@@ -99,6 +99,8 @@ const APPLIED_LOCALLY = [
   "signIn.phoneNumber.enabled",
   "signIn.phoneNumber.testPhoneNumbers",
   "authorizedDomains",
+  // The sandbox allows SMS to every region; a new project allows none.
+  "smsRegionConfig",
 ];
 
 function selectedPrograms() {
@@ -745,7 +747,11 @@ async function sessionLocal() {
     },
   });
   const preparation = await prepareProject(ctx, { apply: true });
-  const out = await runCorpus(programs, ctx, { ...ceilings(programs), settleDelayMs: 0 });
+  const out = await runCorpus(programs, ctx, {
+    ...ceilings(programs),
+    settleDelayMs: 0,
+    log: process.env.AUTH_CONFIG_SDK_VERBOSE === "1" ? (line) => console.error(line) : () => {},
+  });
   await writeFile(
     process.env.AUTH_CONFIG_SDK_OUT,
     JSON.stringify({ ...out, harnessRequests: out.harnessRequests + preparation }),

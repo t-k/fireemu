@@ -30,11 +30,12 @@ COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 V1_PATH = Path("tools/compat-broad/fs-write-txn/stream_comparison.mjs")
 V2_DIR = Path("tools/compat-broad/fs-write-txn-recompare-v2")
 BOUND_RUNTIME_SOURCES = (
-    Path("tools/compat-broad/fs-write-txn/broad_contract.py"),
+    Path("tools/compat-broad/broad_contract.py"),
     Path("tools/compat-broad/fs-write-txn/credential_prep.py"),
     Path("tools/compat-broad/fs-write-txn/stream_bridge.py"),
     Path("tools/compat-broad/fs-write-txn/stream_production.py"),
     Path("tools/compat-broad/fs-write-txn/stream_shadow.py"),
+    Path("tools/sdk-smoke/package-lock.json"),
 )
 
 
@@ -165,7 +166,9 @@ def validate_manifest(
     }
 
 
-def validate_local_receipt(root: Path, receipt: dict, artifact_sha: str) -> None:
+def validate_local_receipt(
+    root: Path, input_root: Path, receipt: dict, artifact_sha: str
+) -> None:
     require(
         receipt.get("kind") == "stream-prepared-execution-v1",
         "local receipt kind differs",
@@ -187,16 +190,30 @@ def validate_local_receipt(root: Path, receipt: dict, artifact_sha: str) -> None
     require(receipt.get("failures") == [], "local receipt contains failures")
     gate = receipt.get("gate")
     require(isinstance(gate, dict), "local gate is missing")
-    sys.path.insert(0, str(root / "tools/compat-broad/fs-write-txn"))
+    sys.path[:0] = [
+        str(root / "tools/compat-broad"),
+        str(root / "tools/compat-broad/fs-write-txn"),
+    ]
     import stream_bridge
     import stream_production
     import stream_shadow
     from broad_contract import digest
 
     require(
-        Path(stream_shadow.__file__).resolve() == root / BOUND_RUNTIME_SOURCES[-1],
+        Path(stream_shadow.__file__).resolve()
+        == root / "tools/compat-broad/fs-write-txn/stream_shadow.py",
         "unexpected receipt validator",
     )
+    lock_bytes = (root / "tools/sdk-smoke/package-lock.json").read_bytes()
+    lock = json.loads(lock_bytes)
+    sdk_version = lock["packages"]["node_modules/@google-cloud/firestore"]["version"]
+    require(sdk_version == "8.7.1", "c1 pricing SDK lock version differs")
+    stream_production.pricing_sdk_binding = lambda directory=None: {
+        "version": sdk_version,
+        "clientSha256": stream_production.SDK_CLIENT_SHA256,
+        "lockSha256": sha(lock_bytes),
+        "encodedReceiveCeilingMiB": 17,
+    }
     stream_shadow.validate_owned_receipt(receipt, artifact_sha)
     plan = gate.get("plan")
     require(
@@ -276,7 +293,10 @@ def compare(
     comparator = root / V1_PATH
     v2_paths = sorted((root / V2_DIR).glob("*.mjs"))
     sources = {path.name: path.read_text() for path in v2_paths}
-    sys.path.insert(0, str(root / "tools/compat-broad/fs-write-txn"))
+    sys.path[:0] = [
+        str(root / "tools/compat-broad"),
+        str(root / "tools/compat-broad/fs-write-txn"),
+    ]
     import stream_production
 
     expected = stream_production.comparison_contract(production["gate"]["plan"])
@@ -402,7 +422,7 @@ def run(args: argparse.Namespace) -> dict:
     production = json.loads(production_bytes)
     closure_before = authority_sources(root, args.authority_commit)
     manifest_binding = validate_manifest(manifest, root, artifact_sha)
-    validate_local_receipt(root, local, artifact_sha)
+    validate_local_receipt(root, inputs, local, artifact_sha)
     require(
         local.get("ownedArtifact", {}).get("executionCommit") == RUNTIME_COMMIT,
         "local execution commit differs",

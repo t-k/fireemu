@@ -8,8 +8,14 @@ import { PROGRAMS } from "./auth-config-sdk/corpus.mjs";
 import { guardHttp, validateConfigSdkCorpus } from "./auth-config-sdk/guard.mjs";
 import { normalizeHttp, normalizeSdk } from "./auth-config-sdk/harness.mjs";
 import { SDK_OPERATIONS } from "./auth-config-sdk/sdk.mjs";
-import { configEquals, createSession, withTimes } from "./auth-config-sdk/session.mjs";
-import { linesSince, otherLaneOnSandbox, recentAbort, restoreDue } from "./auth-config-sdk/run.mjs";
+import {
+  configDrift,
+  configEquals,
+  createSession,
+  driftForm,
+  withTimes,
+} from "./auth-config-sdk/session.mjs";
+import { linesAfter, otherLaneOnSandbox, recentAbort, restoreDue } from "./auth-config-sdk/run.mjs";
 import { buildRequest } from "./auth-account/harness.mjs";
 import { materialize } from "./auth-credential/session.mjs";
 
@@ -404,6 +410,20 @@ test("SDK outcomes are recorded as values or error codes with generated ids mask
   assert.deepEqual(normalizeSdk({ value: undefined }, ctx), { sdk: "ok" });
 });
 
+test("whole-config drift ignores emptied members but not oneof choices", () => {
+  assert.equal(driftForm({ quota: {}, recaptchaConfig: {} }), undefined);
+  assert.deepEqual(driftForm({ smsRegionConfig: { allowByDefault: {} } }), {
+    smsRegionConfig: { allowByDefault: {} },
+  });
+  assert.deepEqual(
+    configDrift(
+      driftForm({ smsRegionConfig: { allowByDefault: {} } }),
+      driftForm({ smsRegionConfig: { allowlistOnly: {} } }),
+    ),
+    ["smsRegionConfig.allowByDefault", "smsRegionConfig.allowlistOnly"],
+  );
+});
+
 test("config equality reads false and absent alike but keeps oneof members apart", () => {
   assert.ok(configEquals(undefined, false));
   assert.ok(configEquals({}, undefined));
@@ -576,9 +596,22 @@ test("the ledger rules keep lanes apart and hold retries after a failed run", ()
     otherLaneOnSandbox(line({ ts: "2026-09-25T18:00:00Z", event: "started", task: "OLD" }), now),
     /OLD started/,
   );
+  const read = `${open}\n`;
   assert.deepEqual(
-    linesSince(recent, Date.parse("2026-09-25T19:00:00Z")).map((e) => e.ts),
-    ["2026-09-25T19:45:00Z"],
+    linesAfter(
+      `${read}${line({ ts: "2026-09-25T20:00:01Z", event: "started", taskId: "AUTH-CONFIG-SDK-SANDBOX" })}\n`,
+      read.length,
+    ),
+    [],
+    "our own line is no race",
+  );
+  assert.deepEqual(
+    linesAfter(
+      `${read}${line({ ts: "2026-09-25T19:00:00Z", event: "started", taskId: "FS-RULES-SANDBOX" })}\n`,
+      read.length,
+    ).map((e) => e.taskId),
+    ["FS-RULES-SANDBOX"],
+    "a line appended after our read is a race whatever its time",
   );
 });
 

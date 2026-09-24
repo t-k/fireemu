@@ -6,6 +6,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rmdir,
   stat,
@@ -144,6 +145,86 @@ export function selectComparableSandboxRecipes(fixture, manifest, currentCorpus,
     pendingRestIds,
     matchedStreamIds,
     pendingStreamIds,
+  };
+}
+
+/**
+ * Compare pending recipes against later recording sets. Each supplement pins the digest of
+ * every recipe it recorded; only a recipe whose current digest is unchanged is compared.
+ */
+export function selectSupplementComparisons(
+  supplements,
+  currentCorpus,
+  pendingRestIds,
+  pendingStreamIds,
+) {
+  const programs = new Map(
+    (currentCorpus.restPrograms ?? []).map((program) => [program.id, program]),
+  );
+  const streams = new Map(
+    (currentCorpus.streamRecipes ?? [])
+      .filter((recipe) => recipe.transport === "grpc")
+      .map((recipe) => [recipe.id, recipe]),
+  );
+  const coveredBy = new Map();
+  const comparisons = [];
+  for (const { name, fixture } of supplements) {
+    const digests = fixture?.recipeDigests;
+    const recordedRest = Object.keys(fixture?.programs ?? {}).toSorted();
+    const recordedStreams = Object.keys(fixture?.streams ?? {}).toSorted();
+    if (
+      fixture?.schemaVersion !== 1 ||
+      JSON.stringify(recordedRest) !==
+        JSON.stringify(Object.keys(digests?.programs ?? {}).toSorted()) ||
+      JSON.stringify(recordedStreams) !==
+        JSON.stringify(Object.keys(digests?.streams ?? {}).toSorted())
+    ) {
+      throw new Error(`supplement ${name} does not pin the recipe digests of its rows`);
+    }
+    const matchedRestIds = recordedRest.filter(
+      (id) =>
+        pendingRestIds.includes(id) &&
+        programs.has(id) &&
+        digests.programs[id] === sha256(JSON.stringify(programs.get(id))),
+    );
+    const matchedStreamIds = recordedStreams.filter(
+      (id) =>
+        pendingStreamIds.includes(id) &&
+        streams.has(id) &&
+        digests.streams[id] === sha256(JSON.stringify(streams.get(id))),
+    );
+    for (const id of [...matchedRestIds, ...matchedStreamIds]) {
+      if (coveredBy.has(id)) {
+        throw new Error(
+          `${id} is recorded by more than one supplement (${coveredBy.get(id)}, ${name})`,
+        );
+      }
+      coveredBy.set(id, name);
+    }
+    if (matchedRestIds.length === 0 && matchedStreamIds.length === 0) continue;
+    const keep = (entries, ids) => Object.fromEntries(ids.map((id) => [id, entries[id]]));
+    const restPrograms = matchedRestIds.map((id) => programs.get(id));
+    comparisons.push({
+      name,
+      fixture: {
+        ...fixture,
+        programs: keep(fixture.programs, matchedRestIds),
+        streams: keep(fixture.streams ?? {}, matchedStreamIds),
+      },
+      corpus: {
+        ...currentCorpus,
+        restPrograms,
+        streamRecipes: matchedStreamIds.map((id) => streams.get(id)),
+        restRequestCount: restPrograms.reduce((total, program) => total + program.steps.length, 0),
+      },
+      matchedRestIds,
+      matchedStreamIds,
+    });
+  }
+  return {
+    comparisons,
+    pendingRestIds: pendingRestIds.filter((id) => !coveredBy.has(id)),
+    pendingStreamIds: pendingStreamIds.filter((id) => !coveredBy.has(id)),
   };
 }
 
@@ -1939,8 +2020,36 @@ export async function recordDeltaV3Production(admissionArgs) {
     };
     const output = join(generatedDir, "delta-v3-recordings.json");
     await writeFile(output, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
+    // Freeze the rows as a supplement only when both recordings are complete and identical;
+    // otherwise the private summary above is the only record and the route stays pending.
+    try {
+      const frozen = freezeSandboxFixture({
+        corpus: recordingCorpus,
+        first: recordings[0].rest,
+        second: recordings[1].rest,
+        firstStream: recordings[0].stream,
+        secondStream: recordings[1].stream,
+        recordedAt: recordings.map((recording) => recording.startedAt),
+        harnessRevision: gitSha,
+        sdkVersions: recordingSdkVersions(),
+        credentialToken: recordings[0].token,
+      });
+      if (JSON.stringify(frozen).includes(recordings[1].token)) {
+        throw new Error("recorded response contains a credential token");
+      }
+      await mkdir(SUPPLEMENTS_DIR, { recursive: true });
+      await writeFile(
+        join(SUPPLEMENTS_DIR, `delta-v3-${admission.nonce}.json`),
+        `${JSON.stringify({ ...frozen, mode: "delta-v3", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
+        { flag: "wx" },
+      );
+      summary.supplement = `delta-v3-${admission.nonce}.json`;
+    } catch (error) {
+      summary.supplementError = String(error.message ?? error).slice(0, 400);
+    }
+    await writeFile(output, `${JSON.stringify(summary, null, 2)}\n`, { mode: 0o600 });
     process.stdout.write(
-      `${JSON.stringify({ output, routeTasks, resultsIdentical: summary.resultsIdentical, bounds: bound })}\n`,
+      `${JSON.stringify({ output, routeTasks, resultsIdentical: summary.resultsIdentical, supplement: summary.supplement ?? null, supplementError: summary.supplementError ?? null, bounds: bound })}\n`,
     );
   });
 }
@@ -2044,6 +2153,15 @@ async function reserveAdmission(mode, args) {
   process.stdout.write(`${JSON.stringify({ packetId: row.packetId, planSha256 })}\n`);
 }
 
+function recordingSdkVersions() {
+  return {
+    firebase: require("firebase/package.json").version,
+    firebaseAdmin: require("firebase-admin").SDK_VERSION,
+    firestore: require("@google-cloud/firestore/package.json").version,
+    grpc: require("@grpc/grpc-js/package.json").version,
+  };
+}
+
 function supplementRecipeDigests(recordingCorpus) {
   return {
     programs: Object.fromEntries(
@@ -2137,20 +2255,14 @@ export async function recordPartialProduction(admissionArgs) {
       secondStream: recordings[1].stream,
       recordedAt: recordings.map((recording) => recording.startedAt),
       harnessRevision: gitSha,
-      sdkVersions: {
-        firebase: require("firebase/package.json").version,
-        firebaseAdmin: require("firebase-admin").SDK_VERSION,
-        firestore: require("@google-cloud/firestore/package.json").version,
-        grpc: require("@grpc/grpc-js/package.json").version,
-      },
+      sdkVersions: recordingSdkVersions(),
       credentialToken: recordings[0].token,
     });
     if (JSON.stringify(fixture).includes(recordings[1].token)) {
       throw new Error("recorded response contains a credential token");
     }
-    const directory = join(CONFORMANCE_DIR, "fs-data-write-production-supplements");
-    await mkdir(directory, { recursive: true });
-    const output = join(directory, `partial-${admission.nonce}.json`);
+    await mkdir(SUPPLEMENTS_DIR, { recursive: true });
+    const output = join(SUPPLEMENTS_DIR, `partial-${admission.nonce}.json`);
     await writeFile(
       output,
       `${JSON.stringify({ ...fixture, mode: "partial", recipeDigests: supplementRecipeDigests(recordingCorpus) }, null, 2)}\n`,
@@ -2284,6 +2396,24 @@ async function localChild() {
   );
 }
 
+const SUPPLEMENTS_DIR = join(CONFORMANCE_DIR, "fs-data-write-production-supplements");
+
+async function readSupplements() {
+  let names;
+  try {
+    names = (await readdir(SUPPLEMENTS_DIR)).filter((name) => name.endsWith(".json")).toSorted();
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+  return Promise.all(
+    names.map(async (name) => ({
+      name,
+      fixture: JSON.parse(await readFile(join(SUPPLEMENTS_DIR, name), "utf8")),
+    })),
+  );
+}
+
 async function compareLocal(runDir) {
   if (typeof runDir !== "string" || !runDir) throw new Error("local run directory is required");
   const { corpus } = await prepareSandboxCorpus();
@@ -2323,6 +2453,26 @@ async function compareLocal(runDir) {
     comparedStreams,
     comparison.corpus,
   );
+  const supplemental = selectSupplementComparisons(
+    await readSupplements(),
+    corpus,
+    comparison.pendingRestIds,
+    comparison.pendingStreamIds,
+  );
+  for (const supplement of supplemental.comparisons) {
+    differences.push(
+      ...compareSandboxArtifact(
+        supplement.fixture,
+        Object.fromEntries(supplement.matchedRestIds.map((id) => [id, rest[id]])),
+        Object.fromEntries(supplement.matchedStreamIds.map((id) => [id, stream[id]])),
+        supplement.corpus,
+      ),
+    );
+    comparison.matchedRestIds.push(...supplement.matchedRestIds);
+    comparison.matchedStreamIds.push(...supplement.matchedStreamIds);
+  }
+  comparison.pendingRestIds = supplemental.pendingRestIds;
+  comparison.pendingStreamIds = supplemental.pendingStreamIds;
   process.stdout.write(
     `${JSON.stringify({ corpusDigest, recordedCorpusDigest: fixture.evidence.corpusSha256, comparedPrograms: comparison.matchedRestIds.length, comparedStreams: comparison.matchedStreamIds.length, pendingRestIds: comparison.pendingRestIds, pendingStreamIds: comparison.pendingStreamIds, mismatches: differences.length, differences })}\n`,
   );

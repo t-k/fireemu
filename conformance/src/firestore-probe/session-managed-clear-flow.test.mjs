@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { sendDeleteAfterWriteAhead, writePrivateJsonDurably } from "./session.mjs";
+import { sendDeleteAfterWriteAhead, writePrivateJsonDurably } from "./sandbox-session.mjs";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -445,7 +445,7 @@ async function observeCollector({
   const port = server.address().port;
   let failure;
   try {
-    await execFileAsync("node", [new URL("./session.mjs", import.meta.url).pathname], {
+    await execFileAsync("node", [new URL("./sandbox-session.mjs", import.meta.url).pathname], {
       env: {
         ...process.env,
         FIRESTORE_PROBE_TARGET: "production",

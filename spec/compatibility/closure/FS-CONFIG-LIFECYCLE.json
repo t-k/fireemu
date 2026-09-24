@@ -1,12 +1,16 @@
 {
   "schemaVersion": 1,
   "parent": "FS-CONFIG-LIFECYCLE",
-  "parentStatus": "PENDING_CLOSURE_REVIEW",
+  "parentStatus": "COMPAT_VERIFIED",
   "oracleTrack": "disposable-sandbox",
   "closureReview": {
-    "decision": "PENDING",
-    "reviewer": null,
-    "note": "The 2026-09-24 promotion (255274d76) was sent back by an independent promotion review: see the follow-up directive of 2026-09-24. Re-promotion follows the fixes, the re-recordings, the evidence rebinding and a confirmation review."
+    "decision": "APPROVED",
+    "decidedOn": "2026-09-24",
+    "reviewer": "independent clean-context confirmation review (round 2) of the promotion review's fixes, after pre-run reviews rounds 7-9 and the owner's follow-up directive",
+    "reviewedCommit": "998fee820",
+    "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+    "history": "First promoted at 255274d76 and sent back by the 2026-09-24 promotion review (single valid observations in two programs, ten gRPC Admin methods unimplemented, owner decisions not in the ledger, bisection project not an evidence project); fixed per the owner's follow-up directive and re-recorded.",
+    "followUps": "Non-blocking notes are tracked outside the closure: gRPC ListIndexes/ListOperations beyond the representative observations rest on REST parity tests; the concurrent-change retry covers REST only; production's wording for a bucket of another project and for a malformed gRPC resource name is unobserved."
   },
   "scopeDecisions": [
     {
@@ -626,7 +630,7 @@
           {
             "row": "fs-config/database/create/id-reuse#get-after",
             "matched": "second",
-            "reason": "The same GET of a database deleted seconds earlier (after a refused recreate) answered 'Requested database was not found.' in one recording and 'Project ... or database ... does not exist.' in the other; the recordings show no elapsed-time pattern, so which wording a deleted id gets is production-internal. fireemu gives the first, which every other post-delete row shows in both recordings.",
+            "reason": "The same GET of a database deleted seconds earlier (after a refused recreate) answered 'Project ... or database ... does not exist.' in the first recording and 'Requested database was not found.' in the second; the recordings show no elapsed-time pattern, so which wording a deleted id gets is production-internal. fireemu answers 'Requested database was not found.' (it matches the second recording), the wording every other post-delete row shows in both recordings.",
             "approvedBy": "owner (t-k), 2026-09-24, owner decision ledger"
           },
           {
@@ -656,41 +660,29 @@
         "FS-CONFIG-LIFECYCLE",
         "fs-config"
       ],
-      "status": "PENDING_REVIEW",
+      "status": "VERIFIED",
       "evidence": {
         "productionRecordings": [
           {
-            "recordedAt": "2026-09-24T08:26:12.514Z",
-            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordedAt": "2026-09-24T12:14:29.389Z",
+            "gitSha": "5b641c87336cd5c63e3f38312e1536ed33e986e7",
             "recordings": 2,
             "project": "fireemu-oracle-query"
           },
           {
-            "recordedAt": "2026-09-24T09:14:10.616Z",
-            "gitSha": "7419c955b72abfebd4819e696abce73df9853543",
-            "recordings": 2,
-            "project": "fireemu-oracle-query"
-          },
-          {
-            "recordedAt": "2026-09-24T09:17:20.017Z",
-            "gitSha": "f9f86461ade51f266f20b28f6bf45b28888b5a40",
-            "recordings": 2,
-            "project": "fireemu-oracle-query"
-          },
-          {
-            "recordedAt": "2026-09-24T09:42:27.042Z",
-            "gitSha": "c2b8462904d0b0439bc0f71d20febb401406e8c7",
+            "recordedAt": "2026-09-24T14:20:05.351Z",
+            "gitSha": "5c9970184ce6186c56467ab436caa4a1b4a70562",
             "recordings": 2,
             "project": "fireemu-fs-bisect-0924a"
           }
         ],
-        "finalArtifactSha256": "6869c8325226d16d1f467bfc565d5052c5ce218a0bd7444b8d6753cb0a9876b4",
-        "sourceCommit": "8d35c61bd131f0ee401f78213aa1e2f86583c10f",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
-          "MATCH": 247,
-          "MATCH_NONDETERMINISTIC": 15,
-          "MATCH_RELABELED": 1
+          "MATCH": 264,
+          "MATCH_RELABELED": 3,
+          "MATCH_NONDETERMINISTIC": 3
         }
       }
     }

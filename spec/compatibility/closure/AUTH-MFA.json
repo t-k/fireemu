@@ -45,7 +45,7 @@
     },
     {
       "id": "M7",
-      "decision": "How rows are compared: TOTP codes are computed by the harness from the secret the enrollment start returned (RFC 6238) at the target's own clock, and a code-sensitive block first moves to the middle of a 30-second step; the TOTP window is exercised with adjacentIntervals 5 at both edges (the config program records which other values production accepts). Secrets, session infos, pending credentials, codes and refresh tokens are never recorded. Second factors are named per program by first appearance and shape; factor instants by their fraction precision; an enrollment deadline by its distance from the send time, rounded to ten seconds.",
+      "decision": "How rows are compared: TOTP codes are computed by the harness from the secret the enrollment start returned (RFC 6238) at the target's own clock, and a code-sensitive block first moves to the middle of a 30-second step; the TOTP window is exercised with adjacentIntervals 5 at both edges (the config program records which other values production accepts). Secrets, session infos, pending credentials, codes and refresh tokens are never recorded. Second factors are named per program by first appearance and shape; factor instants by their fraction precision; an enrollment deadline by its distance from the send time, rounded to ten seconds. Production may notify an account's @example.com address of a new or withdrawn second factor; nothing is delivered (null MX) and delivery is out of scope, as under AUTH-ACTION E1 and M3. Aged rows wait three seconds past their age and the achieved ages, like the clock skew estimated from each enrollment deadline, are kept with the private recordings; the window rows are not sent while the skew exceeds two seconds.",
       "decidedBy": "agent (recorded, not an owner decision)",
       "decidedOn": "2026-09-25"
     }
@@ -54,112 +54,173 @@
     {
       "conditionId": "AUTH-MFA/disabled-project",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["auth-mfa/disabled"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/disabled"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "With the project's MFA switched off: TOTP and SMS enrollment starts, a phone factor written by the Admin API, and the first- and second-factor sign-in of that account."
     },
     {
       "conditionId": "AUTH-MFA/project-config",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["auth-mfa/config"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/config"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "The Admin config API's mfa member: the read-back of the applied value, and which values production accepts or refuses (adjacentIntervals 0, 10, 11 and -1, a TOTP provider without its config or disabled, ENABLED without providers, DISABLED with providers, MANDATORY, an unknown provider and an unknown state)."
     },
     {
       "conditionId": "AUTH-MFA/totp-enrollment",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["auth-mfa/totp/enroll"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/totp/enroll"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
-      "note": "mfaEnrollment:start and :finalize for TOTP: the start answer and its deadline, missing and unknown session info, missing, wrong and repeated wrong codes, the accepted code and its tokens, a finalized session offered again, the factor read back by the client and the Admin API, the first-factor session's token and refresh after enrollment, a second TOTP factor, and the code window at enrollment (5 and 6 steps either side)."
+      "note": "mfaEnrollment:start and :finalize for TOTP: the start answer and its deadline, missing and unknown session info, missing, wrong and repeated wrong codes, the accepted code and its tokens, a finalized session offered again, the factor read back by the client and the Admin API, the first-factor session's token and refresh after enrollment, the start of a second TOTP enrollment, and the code window at enrollment (5 and 6 steps either side)."
     },
     {
       "conditionId": "AUTH-MFA/totp-sign-in",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["auth-mfa/totp/sign-in"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/totp/sign-in"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "The first-factor answer that asks for a second factor, mfaSignIn:start for a TOTP factor, mfaSignIn:finalize with missing and unknown pending credentials, codes and factors, wrong codes, the code window at sign-in, the accepted code, the pending credential offered again after success, a code already used at sign-in or at enrollment, an unused code older than the last accepted one, the factor id left out, and phone verification offered for a TOTP factor."
     },
     {
       "conditionId": "AUTH-MFA/withdrawal-and-revocation",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["auth-mfa/totp/withdraw"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/totp/withdraw"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "mfaEnrollment:withdraw with a missing, unknown and repeated factor and without a token, the answer to a withdrawal, what it does to the tokens and refresh tokens issued before it and to validSince, the read-back and the sign-in afterwards, and a withdrawal with a first-factor token that predates the factor. SMS withdrawal is in AUTH-MFA/sms."
     },
     {
       "conditionId": "AUTH-MFA/sms",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["auth-mfa/sms"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/sms"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "SMS enrollment, sign-in and withdrawal with configured test numbers (owner decision M3): missing and invalid numbers, missing and wrong codes, a finalized session offered again, the factor read back, mfaSignIn:start without phone info and with an unknown factor, sign-in finalize, a session offered again, a second phone factor, the same number twice, and a withdrawal with its effect on validSince."
     },
     {
       "conditionId": "AUTH-MFA/interactions",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
-      "recipeIds": ["auth-mfa/interactions"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/interactions"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "Who may enroll (an unverified address, an anonymous and a phone first factor, a missing and a garbage ID token, both kinds at once), TOTP beside a phone factor, the factor limit (five and six factors written by the Admin API, and client enrollment at the limit), and a pending credential across account changes (disabled and enabled again, a password change, factors cleared, the account deleted, another account's factor)."
     },
     {
       "conditionId": "AUTH-MFA/admin-factors",
       "source": "spec/compatibility/closure/AUTH-ACCOUNT.json#A10",
-      "recipeIds": ["auth-mfa/admin-factors"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/admin-factors"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "Factors in imported accounts (AUTH-ACCOUNT scope decision A10): accounts:batchCreate with phone factors (with and without an id and an enrollment time), a TOTP factor and an invalid phone; factors replaced, set to TOTP, set to an invalid phone and cleared by the Admin accounts:update; sign-in with an imported factor; and a client TOTP enrollment beside an Admin-written phone factor."
     },
     {
       "conditionId": "AUTH-MFA/other-first-factors",
       "source": "spec/compatibility/closure/AUTH-MFA.json#M5",
-      "recipeIds": ["auth-mfa/first-factor"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/first-factor"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "A second factor after an email-link sign-in (a password account, and an account that only ever signed in by link) and after a custom-token sign-in (owner decision M5)."
     },
     {
       "conditionId": "AUTH-MFA/second-factor-claims",
       "source": "spec/compatibility/closure/AUTH-CREDENTIAL.json#C7",
-      "recipeIds": ["auth-mfa/totp/sign-in", "auth-mfa/sms", "auth-mfa/first-factor"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/totp/sign-in",
+        "auth-mfa/sms",
+        "auth-mfa/first-factor"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "firebase.sign_in_second_factor and firebase.second_factor_identifier in the ID token after TOTP and SMS enrollment and sign-in, kept by a refresh, carried by a session cookie, and after email-link and custom-token first factors (AUTH-CREDENTIAL scope decision C7)."
     },
     {
       "conditionId": "AUTH-MFA/pending-credential-lifetime",
       "source": "docs/compatibility/auth-mfa-next-campaign-preparation.md",
-      "recipeIds": ["auth-mfa/lifetime"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/lifetime"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "A pending credential offered at 300, 450, 600 and 1800 seconds, each followed at once by a same-account control with a credential acquired then (owner decision M4)."
     },
     {
       "conditionId": "AUTH-MFA/enrollment-session-lifetime",
       "source": "docs/compatibility/auth-mfa-next-campaign-preparation.md",
-      "recipeIds": ["auth-mfa/lifetime"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa/lifetime"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
-      "note": "A TOTP enrollment session finalized at 300, 450, 600, 870, 930 and 1800 seconds (either side of the 900 seconds its deadline announces) and an SMS enrollment session at 300, 450, 600 and 1800 seconds, each followed by a same-account control with a session started then."
+      "note": "A TOTP enrollment session finalized at 300, 450, 600, 870, 930 and 1800 seconds (either side of the 900 seconds its deadline announces) and an SMS enrollment session at 300, 450, 600 and 1800 seconds, each with the token of a sign-in made just before (so only the session is old) and followed by a same-account control with a session started then; and whether an enrollment start needs a recent sign-in (a token 1800 seconds old, then a new one)."
     },
     {
       "conditionId": "AUTH-MFA/final-artifact-regression",
       "source": "docs.local/instructions/2026-09-23-fs-data-write-sandbox-directive.md#4",
-      "recipeIds": ["auth-mfa", "auth-action", "auth-credential", "auth-account"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa",
+        "auth-action",
+        "auth-credential",
+        "auth-account"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "The final artifact compared with every AUTH-MFA row and, as regressions, every AUTH-ACTION, AUTH-CREDENTIAL and AUTH-ACCOUNT row."
     },
     {
       "conditionId": "AUTH-MFA/closure-review",
       "source": "docs.local/instructions/2026-09-23-fs-data-write-sandbox-directive.md#4",
-      "recipeIds": ["auth-mfa"],
-      "configProjections": ["default"],
+      "recipeIds": [
+        "auth-mfa"
+      ],
+      "configProjections": [
+        "default"
+      ],
       "status": "PENDING_CORPUS",
       "note": "An independent closure review and a separate safety review of the final artifact."
     }

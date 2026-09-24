@@ -238,24 +238,44 @@ test("every aged row is followed at once by a same-account control (owner decisi
   const { PROGRAMS } = await import("./auth-mfa/corpus.mjs");
   const lifetime = PROGRAMS.at(-1);
   assert.equal(lifetime.id, "auth-mfa/lifetime");
-  const agedRows = lifetime.steps.filter(({ age }) => age);
+  const steps = lifetime.steps;
+  const agedRows = steps.filter(({ id }) => id.startsWith("aged-"));
+  // The wait is on the aged row itself, or on the fresh sign-in right before it.
+  const waitOf = (row) => {
+    const index = steps.indexOf(row);
+    return row.age
+      ? row
+      : steps[index - 1]?.id.startsWith("fresh-sign-in-")
+        ? steps[index - 1]
+        : undefined;
+  };
   const pendingAges = agedRows
     .filter(({ id }) => id.startsWith("aged-pending-"))
-    .map(({ age }) => age.seconds);
+    .map((row) => waitOf(row).age.seconds);
   assert.deepEqual(pendingAges, [300, 450, 600, 1800]);
   for (const row of agedRows) {
-    const index = lifetime.steps.indexOf(row);
-    const name = row.id.replace(/^aged-(pending|session)-/, "");
-    const [control, finalize] = lifetime.steps.slice(index + 1, index + 3);
-    assert.match(control.id, new RegExp(`^control-(pending|start)-${name}$`), row.id);
-    assert.match(finalize.id, new RegExp(`^control-(finalize|session)-${name}$`), row.id);
+    const waiting = waitOf(row);
+    assert.ok(waiting?.age, `${row.id} waits for its age`);
+    const index = steps.indexOf(row);
+    const name = row.id.replace(/^aged-(pending|session|token-start)-/, "");
+    const [control, finalize] = steps.slice(index + 1, index + 3);
+    assert.match(control.id, new RegExp(`^control-(pending|start|sign-in)-${name}$`), row.id);
+    assert.match(finalize.id, new RegExp(`^control-(finalize|session|start)-${name}$`), row.id);
+    // An enrollment session is finalized with a token of a sign-in made after the wait.
+    if (row.id.startsWith("aged-session-")) {
+      assert.equal(row.body.idToken.$from, `fresh-sign-in-${name}:idToken`, row.id);
+      assert.equal(control.body.idToken.$from, `fresh-sign-in-${name}:idToken`, row.id);
+    }
   }
   // Every aged resource is acquired before the first wait.
-  const firstAged = lifetime.steps.indexOf(agedRows[0]);
-  for (const { age } of agedRows) {
+  const waits = steps.filter((step) => step.age);
+  const firstWait = steps.indexOf(waits[0]);
+  for (const {
+    age: { from },
+  } of waits) {
     assert.ok(
-      lifetime.steps.findIndex(({ id }) => id === age.from) < firstAged,
-      `${age.from} is acquired before the first wait`,
+      steps.findIndex(({ id }) => id === from) < firstWait,
+      `${from} is acquired before the first wait`,
     );
   }
 });

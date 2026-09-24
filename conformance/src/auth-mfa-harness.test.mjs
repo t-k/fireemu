@@ -425,3 +425,86 @@ test("a recording waits while another lane is on the sandbox", async () => {
   });
   assert.equal(otherLaneOnSandbox(`${own}\n${elsewhere}\nnot json`, now), undefined);
 });
+
+test("no request names a tenant (owner decision M2)", () => {
+  for (const body of [
+    { email: "EMAIL(a)", password: "x", tenantId: "t1" },
+    { users: [{ localId: "UID(a)", tenantId: "t1" }] },
+  ]) {
+    const step = { id: "s", path: "v1/accounts:signInWithPassword", auth: "key", body };
+    assert.throws(() => guardMfaRequest(request(production, step), production), /tenant/);
+    assert.throws(() => guardMfaRequest(request(local, step), local), /tenant/);
+  }
+});
+
+test("a stop request ends a wait at once and the program still restores MFA", async () => {
+  const { runCorpus } = await import("./auth-mfa/session.mjs");
+  let mfa = { state: "DISABLED" };
+  const calls = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    calls.push(`${init.method ?? "GET"} ${pathname}`);
+    const reply = (body) => new Response(JSON.stringify(body), { status: 200 });
+    if (pathname.endsWith("/config")) {
+      if (init.method === "PATCH") mfa = JSON.parse(init.body).mfa;
+      return reply({ mfa, signIn: { hashConfig: { signerKey: "secret" } } });
+    }
+    if (pathname.endsWith(":batchGet")) return reply({ users: [] });
+    return reply({ idToken: "x", mfaPendingCredential: "pending-credential-value" });
+  };
+  const controller = new AbortController();
+  const program = {
+    id: "auth-mfa/lifetime",
+    config: { mfa: MFA_CONFIGS.enabled },
+    steps: [
+      { id: "acquire", path: "v1/accounts:signInWithPassword", auth: "key", body: {} },
+      {
+        id: "aged",
+        path: "v1/accounts:signInWithPassword",
+        auth: "key",
+        body: {},
+        age: { from: "acquire", seconds: 1800 },
+      },
+    ],
+  };
+  try {
+    const started = Date.now();
+    setTimeout(() => controller.abort(), 50);
+    await assert.rejects(
+      runCorpus([program], production, { signal: controller.signal, configSettleMs: 0 }),
+      (error) => error.fatal && /stopped by a signal/.test(error.message),
+    );
+    assert.ok(Date.now() - started < 5000, "the 1800 s wait ended at once");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.deepEqual(mfa, MFA_CONFIGS.disabled, "MFA is switched off again");
+  assert.ok(
+    !calls
+      .slice(calls.lastIndexOf("PATCH /admin/v2/projects/fireemu-oracle-idp/config"))
+      .includes("POST /v1/accounts:signInWithPassword"),
+  );
+  assert.equal(calls.filter((c) => c.startsWith("PATCH")).length, 2, "applied, then restored");
+});
+
+test("a run within an hour of anything but a clean recording is refused", async () => {
+  const { recentAbort } = await import("./auth-mfa/run.mjs");
+  const now = Date.parse("2026-09-25T12:00:00Z");
+  const line = (outcome, ts = "2026-09-25T11:30:00Z") =>
+    JSON.stringify({ ts, taskId: "AUTH-MFA-SANDBOX", outcome });
+  for (const outcome of ["aborted-signal", "recorded-with-program-failures", "restored-by-hand"])
+    assert.ok(recentAbort(line(outcome), now), outcome);
+  assert.equal(recentAbort(line("recorded"), now), undefined);
+  assert.equal(recentAbort(line("exploration (not evidence): probe"), now), undefined);
+  assert.equal(recentAbort(line("aborted-fatal", "2026-09-25T10:30:00Z"), now), undefined);
+  const started = JSON.stringify({
+    ts: "2026-09-25T11:50:00Z",
+    event: "started",
+    taskId: "AUTH-MFA-SANDBOX",
+  });
+  assert.ok(
+    recentAbort(`${line("aborted-fatal")}\n${started}`, now),
+    "a started line is not an outcome",
+  );
+});

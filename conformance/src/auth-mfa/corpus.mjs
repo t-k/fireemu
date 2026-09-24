@@ -816,6 +816,9 @@ function lifetimeSteps() {
       ],
     });
   });
+  // A session is finalized with a token of a sign-in made just before, so only the session is
+  // old: a requirement of a recent sign-in would otherwise refuse the aged row and its control
+  // alike (pre-send review MF-2). The wait is on that sign-in; the aged row follows it at once.
   TOTP_SESSION_AGES.forEach((age) => {
     const n = `t${age}`;
     setup.push(adminCreate(`create-${n}`, n), signIn(`sign-in-${n}`, n));
@@ -823,15 +826,17 @@ function lifetimeSteps() {
     rows.push({
       age,
       steps: [
-        aged(
-          totpFinalize(`aged-session-${n}`, `sign-in-${n}`, `start-${n}`, totp(`start-${n}`, 0)),
+        aged(signIn(`fresh-sign-in-${n}`, n), `start-${n}`, age),
+        totpFinalize(
+          `aged-session-${n}`,
+          `fresh-sign-in-${n}`,
           `start-${n}`,
-          age,
+          totp(`start-${n}`, 0),
         ),
-        totpStart(`control-start-${n}`, `sign-in-${n}`),
+        totpStart(`control-start-${n}`, `fresh-sign-in-${n}`),
         totpFinalize(
           `control-session-${n}`,
-          `sign-in-${n}`,
+          `fresh-sign-in-${n}`,
           `control-start-${n}`,
           totp(`control-start-${n}`, 0),
         ),
@@ -845,11 +850,24 @@ function lifetimeSteps() {
     rows.push({
       age,
       steps: [
-        aged(phoneFinalize(`aged-session-${n}`, `sign-in-${n}`, `start-${n}`), `start-${n}`, age),
-        phoneStart(`control-start-${n}`, `sign-in-${n}`, index),
-        phoneFinalize(`control-session-${n}`, `sign-in-${n}`, `control-start-${n}`),
+        aged(signIn(`fresh-sign-in-${n}`, n), `start-${n}`, age),
+        phoneFinalize(`aged-session-${n}`, `fresh-sign-in-${n}`, `start-${n}`),
+        phoneStart(`control-start-${n}`, `fresh-sign-in-${n}`, index),
+        phoneFinalize(`control-session-${n}`, `fresh-sign-in-${n}`, `control-start-${n}`),
       ],
     });
+  });
+  // Whether enrollment needs a recent sign-in: a start with a token 1800 seconds old, and a
+  // start with a new one at once.
+  setup.push(adminCreate("create-o1800", "o1800"));
+  acquire.push(signIn("sign-in-o1800", "o1800"));
+  rows.push({
+    age: 1800,
+    steps: [
+      aged(totpStart("aged-token-start-o1800", "sign-in-o1800"), "sign-in-o1800", 1800),
+      signIn("control-sign-in-o1800", "o1800"),
+      totpStart("control-start-o1800", "control-sign-in-o1800"),
+    ],
   });
   // Longest-lived resources are acquired first, so the rows due soonest drift least.
   const order = (step) => -Number(/\d+$/.exec(step.id)?.[0] ?? 0);

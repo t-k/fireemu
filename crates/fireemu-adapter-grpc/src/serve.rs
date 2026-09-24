@@ -467,20 +467,9 @@ async fn rest_call(
             ));
         }
     };
-    let body = if bytes.is_empty() {
-        serde_json::Value::Object(serde_json::Map::new())
-    } else {
-        match serde_json::from_slice(&bytes) {
-            Ok(v) => v,
-            Err(e) => {
-                return Ok(json_response(
-                    &crate::rest::error_response(&Status::invalid_argument(format!(
-                        "invalid JSON body: {e}"
-                    ))),
-                    origin.as_deref(),
-                ))
-            }
-        }
+    let body = match request_body(&bytes, &path, state.gateway.production_refusals()) {
+        Ok(body) => body,
+        Err(response) => return Ok(json_response(&response, origin.as_deref())),
     };
     drop(bytes);
     let request = RestEnvelope {
@@ -676,6 +665,39 @@ fn is_prost_recursion(status: &Status) -> bool {
 /// recursion guard; `tests/request_bytes.rs` asserts both the raw and the rewritten wording,
 /// so a tonic upgrade that changes it fails there rather than silently passing the raw status
 /// through.
+/// A REST request body as production's front end reads it: an empty body is the empty
+/// message, and a body that is not JSON is refused in the front end's words, inside the result
+/// array for a streaming method. Without `production_refusals` (the emulator profile) a body
+/// that grammar refuses but standard JSON admits (one nested deeper than its limit) is read as
+/// standard JSON, as fireemu read every body before, so the profile adds no rejection.
+fn request_body(
+    bytes: &[u8],
+    path: &str,
+    production_refusals: bool,
+) -> Result<serde_json::Value, crate::rest::RestResponse> {
+    if bytes.is_empty() {
+        return Ok(serde_json::Value::Object(serde_json::Map::new()));
+    }
+    crate::rest::transcode::parse_body(bytes)
+        .or_else(|error| {
+            if !production_refusals {
+                if let Ok(value) = serde_json::from_slice(bytes) {
+                    return Ok(value);
+                }
+            }
+            Err(error)
+        })
+        .map_err(|error| {
+            let mut response = crate::rest::error_response(&Status::invalid_argument(
+                crate::rest::transcode::syntax_error_message(bytes, &error),
+            ));
+            if crate::rest::transcode::is_streaming_method(path) {
+                response.body = serde_json::Value::Array(vec![response.body]);
+            }
+            response
+        })
+}
+
 fn is_decoded_message_too_large(status: &Status) -> bool {
     status.code() == tonic::Code::OutOfRange
         && status
@@ -684,6 +706,7 @@ fn is_decoded_message_too_large(status: &Status) -> bool {
 }
 
 fn normalize_transport_status(headers: &mut HeaderMap, enforce_limits: bool) {
+    crate::production_status::respec_grpc_message(headers);
     let Some(status) = Status::from_header_map(headers) else {
         return;
     };
@@ -869,6 +892,47 @@ where
 
 #[cfg(test)]
 mod tests {
+
+    /// FS-QUERY-INDEX request-shape/rest: a trailing comma is accepted, a truncated body and a
+    /// bare word are refused in the front end's words, inside the result array of a streaming
+    /// method and bare otherwise, and an empty body is the empty message.
+    #[test]
+    fn request_bodies_are_read_as_production_reads_them() {
+        use serde_json::json;
+        let query = "/v1/projects/p/databases/(default)/documents:runQuery";
+        let commit = "/v1/projects/p/databases/(default)/documents:commit";
+        assert_eq!(
+            super::request_body(br#"{"structuredQuery": {"limit": 1,},}"#, query, true).unwrap(),
+            json!({"structuredQuery": {"limit": 1}})
+        );
+        assert_eq!(super::request_body(b"", commit, true).unwrap(), json!({}));
+        let truncated = super::request_body(br#"{"structuredQuery":"#, query, true).unwrap_err();
+        assert_eq!(truncated.status, 400);
+        assert_eq!(
+            truncated.body[0]["error"]["message"],
+            "Invalid JSON payload received. Unexpected end of string. Expected a value.\n\n^"
+        );
+        let bare = super::request_body(b"not json", commit, true).unwrap_err();
+        assert_eq!(
+            bare.body["error"]["message"],
+            "Invalid JSON payload received. Unexpected token.\nnot json\n^"
+        );
+        // Nesting past production's limit: refused under strict, read as standard JSON under
+        // the emulator profile; what neither grammar admits keeps production's words.
+        let deep = format!("{}{}", "[".repeat(110), "]".repeat(110));
+        let refused = super::request_body(deep.as_bytes(), commit, true).unwrap_err();
+        assert!(refused.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Message too deep"));
+        let read = super::request_body(deep.as_bytes(), commit, false).unwrap();
+        assert!(read.is_array());
+        let bare = super::request_body(b"not json", commit, false).unwrap_err();
+        assert_eq!(
+            bare.body["error"]["message"],
+            "Invalid JSON payload received. Unexpected token.\nnot json\n^"
+        );
+    }
     use std::sync::Arc;
 
     #[tokio::test]

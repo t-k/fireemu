@@ -58,7 +58,8 @@ fn reference_filter(filter: &FilterExpr, doc: &Document) -> bool {
                 (UnaryOp::IsNull, Some(v)) => v == Value::Null,
                 (UnaryOp::IsNotNull, Some(v)) => v != Value::Null,
                 (UnaryOp::IsNan, Some(v)) => is_nan(&v),
-                (UnaryOp::IsNotNan, Some(v)) => !is_nan(&v),
+                // Production excludes null too (FS-QUERY-INDEX unary-filters#is-not-nan).
+                (UnaryOp::IsNotNan, Some(v)) => !is_nan(&v) && v != Value::Null,
                 (_, None) => false,
             }
         }
@@ -77,7 +78,9 @@ fn reference_filter(filter: &FilterExpr, doc: &Document) -> bool {
                 | FieldOp::LessThanOrEqual
                 | FieldOp::GreaterThan
                 | FieldOp::GreaterThanOrEqual => {
-                    if !reference_comparable(&v, value) || is_nan {
+                    // A range against NaN matches nothing (FS-QUERY-INDEX range#gt-nan).
+                    let operand_nan = matches!(value, Value::Double(d) if d.is_nan());
+                    if !reference_comparable(&v, value) || is_nan || operand_nan {
                         return false;
                     }
                     match (op, v.canonical_cmp(value)) {
@@ -196,6 +199,12 @@ fn reference_run(corpus: &[Document], query: &Query) -> Vec<Document> {
             QueryScope::KindlessAllDescendants { parent } => parent.as_ref().is_none_or(|p| {
                 doc.path.pairs().len() > parent_len && doc.path.pairs()[..parent_len] == *p.pairs()
             }),
+            QueryScope::KindlessChildren { parent } => {
+                doc.path.pairs().len() == parent_len + 1
+                    && parent
+                        .as_ref()
+                        .is_none_or(|p| doc.path.pairs()[..parent_len] == *p.pairs())
+            }
         };
         if !in_scope {
             continue;
@@ -400,10 +409,12 @@ impl Gen {
     }
 
     fn query(&mut self, corpus: &[Document]) -> Query {
-        let scope = match self.below(4) {
+        let scope = match self.below(6) {
             0 => QueryScope::collection(Some(path("items/d01")), collection("sub")),
             1 => QueryScope::collection_group(collection("sub")),
             2 => QueryScope::collection(None, collection("other")),
+            3 => QueryScope::kindless_children(None),
+            4 => QueryScope::kindless_children(Some(path("items/d01"))),
             _ => QueryScope::collection(None, collection("items")),
         };
         let mut q = Query::new(scope);

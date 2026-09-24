@@ -1463,6 +1463,16 @@ pub fn placeholder_paths(parent: &Parent, query: &Query) -> Result<Vec<DocumentP
         QueryScope::KindlessAllDescendants { parent: None } => {
             format!("{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}/{ABSTRACT_PREFIX}/{ABSTRACT_SEGMENT}")
         }
+        // Any collection directly under the parent: the collection id is undetermined too.
+        QueryScope::KindlessChildren {
+            parent: Some(parent),
+        } => format!(
+            "{}/{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}",
+            parent.relative()
+        ),
+        QueryScope::KindlessChildren { parent: None } => {
+            format!("{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}")
+        }
     };
     let path = DocumentPath::parse(&parent.project, &parent.database, &relative)
         .map_err(|e| Status::invalid_argument(e.to_string()))?;
@@ -1532,6 +1542,9 @@ fn query_scope_contains(
         QueryScope::KindlessAllDescendants { parent } => parent
             .as_ref()
             .is_none_or(|ancestor| path_is_below(path, ancestor)),
+        QueryScope::KindlessChildren { parent } => {
+            path.parent_document().as_ref() == parent.as_ref()
+        }
     }
 }
 
@@ -1678,5 +1691,38 @@ mod tests {
             RulesValue::Map(values)
                 if values.get("score") == Some(&RulesValue::Int(6))
         ));
+    }
+
+    #[test]
+    fn a_kindless_children_query_stands_for_any_direct_child_of_its_parent() {
+        use super::{placeholder_paths, query_scope_contains};
+        use crate::decode::Parent;
+        use fireemu_core_firestore::path::DocumentPath;
+        use fireemu_core_firestore::query::{Query, QueryScope};
+        use fireemu_core_rules::eval::ABSTRACT_SEGMENT;
+        use fireemu_core_types::ids::{DatabaseId, ProjectId};
+        let project = ProjectId::try_new("p").unwrap();
+        let database = DatabaseId::try_new("(default)").unwrap();
+        let doc = |relative: &str| DocumentPath::parse(&project, &database, relative).unwrap();
+        let parent = Parent {
+            project: project.clone(),
+            database: database.clone(),
+            document: None,
+        };
+        let root = Query::new(QueryScope::kindless_children(None));
+        assert_eq!(
+            placeholder_paths(&parent, &root).unwrap(),
+            vec![doc(&format!("{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}"))]
+        );
+        let nested = Query::new(QueryScope::kindless_children(Some(doc("a/b"))));
+        assert_eq!(
+            placeholder_paths(&parent, &nested).unwrap(),
+            vec![doc(&format!("a/b/{ABSTRACT_SEGMENT}/{ABSTRACT_SEGMENT}"))]
+        );
+        assert!(query_scope_contains(&root.scope, &doc("x/1")));
+        assert!(!query_scope_contains(&root.scope, &doc("x/1/y/2")));
+        assert!(query_scope_contains(&nested.scope, &doc("a/b/c/d")));
+        assert!(!query_scope_contains(&nested.scope, &doc("a/b/c/d/e/f")));
+        assert!(!query_scope_contains(&nested.scope, &doc("a/c/c/d")));
     }
 }

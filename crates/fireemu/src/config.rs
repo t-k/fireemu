@@ -956,6 +956,11 @@ pub struct RuntimeConfig {
     /// typically within 24 hours and within 72 hours at worst, so the default is 24 hours
     /// and the accepted range ends at the documented outer bound.
     pub ttl_sweep_interval: LogicalDuration,
+    /// When the daemon's databases were created (`firestore.databaseCreateTime`): the
+    /// `createTime` they report and the instant before which a `read_time` is refused. Unset,
+    /// it is the daemon's start; a run compared with a production database names that
+    /// database's creation time.
+    pub database_create_time: Option<LogicalInstant>,
     /// Only `demo-` project IDs are accepted.
     pub require_demo_prefix: bool,
     /// Initial virtual clock instant.
@@ -1278,6 +1283,7 @@ impl Default for RuntimeConfig {
             implicit_database_creation: profile.implicit_database_creation(),
             refuse_without_ruleset: profile.refuse_without_ruleset(),
             ttl_sweep_interval: fireemu_core_firestore::ttl::DEFAULT_SWEEP_INTERVAL,
+            database_create_time: None,
             require_demo_prefix: true,
             clock_start: LogicalInstant::from_unix_seconds(1_788_004_860),
             clock_start_pinned: false,
@@ -3176,6 +3182,17 @@ impl RuntimeConfig {
             if let Some(b) = fs.get("enforceLimits").and_then(Value::as_bool) {
                 cfg.enforce_limits = b;
             }
+            if let Some(value) = fs.get("databaseCreateTime") {
+                let text = value.as_str().ok_or_else(|| {
+                    ConfigError(
+                        "firestore.databaseCreateTime must be an RFC 3339 string".to_owned(),
+                    )
+                })?;
+                cfg.database_create_time = Some(
+                    LogicalInstant::parse_rfc3339(text)
+                        .map_err(|e| ConfigError(format!("firestore.databaseCreateTime: {e}")))?,
+                );
+            }
             if let Some(value) = fs.get("ttlSweepIntervalSeconds") {
                 let seconds = value.as_u64().ok_or_else(|| {
                     ConfigError(
@@ -3547,6 +3564,31 @@ mod tests {
             base.insert(k, v);
         }
         RuntimeConfig::from_json(&json)
+    }
+
+    #[test]
+    fn the_database_creation_time_is_configurable_and_defaults_to_the_daemon_start() {
+        let parse = |firestore: Value| {
+            RuntimeConfig::from_json(&json!({"schemaVersion": 1, "firestore": firestore}))
+        };
+        assert_eq!(
+            parse(json!({})).unwrap().database_create_time,
+            None,
+            "unset: the databases come into being when the daemon starts"
+        );
+        assert_eq!(
+            parse(json!({"databaseCreateTime": "2026-09-23T23:01:49.496838Z"}))
+                .unwrap()
+                .database_create_time,
+            Some(LogicalInstant::parse_rfc3339("2026-09-23T23:01:49.496838Z").unwrap())
+        );
+        for bad in [json!("yesterday"), json!(1_788_000_000), json!(null)] {
+            let error = parse(json!({"databaseCreateTime": bad})).unwrap_err();
+            assert!(
+                error.0.starts_with("firestore.databaseCreateTime"),
+                "{bad}: {error:?}"
+            );
+        }
     }
 
     #[test]

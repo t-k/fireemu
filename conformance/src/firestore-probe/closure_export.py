@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -156,6 +157,35 @@ def build_corpus() -> dict[str, Any]:
         "schemaVersion": 1,
         "restPrograms": programs,
         "streamRecipes": stream_recipes,
+        "restRequestCount": sum(len(program["steps"]) for program in programs),
+    }
+
+
+def build_delta_corpus() -> dict[str, Any]:
+    """Return only the pending DELETE-boundary and response-before-half-close probes."""
+    corpus = build_corpus()
+    delete_prefix = "writes/limits/near-limit-delete-refusal/"
+    delete_ids = {
+        f"{delete_prefix}{route}/{count}"
+        for route in ("rest", "commit", "batch-write")
+        for count in (12112, 12113)
+    }
+    programs = [
+        program for program in corpus["restPrograms"] if program["id"] in delete_ids
+    ]
+    if {program["id"] for program in programs} != delete_ids or len(programs) != 6:
+        raise ValueError("delta-v3 requires the exact six route-specific DELETE recipes")
+    stream_id = "writes/write-stream-terminal/response-before-half-close"
+    streams = [recipe for recipe in corpus["streamRecipes"] if recipe["id"] == stream_id]
+    if len(streams) != 1 or streams[0]["transport"] != "grpc" or streams[0]["maxFrames"] != 2:
+        raise ValueError("delta-v3 requires the single response-before-half-close stream recipe")
+    return {
+        "schemaVersion": 1,
+        "sourceCorpusSha256": hashlib.sha256(
+            json.dumps(corpus, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "restPrograms": programs,
+        "streamRecipes": streams,
         "restRequestCount": sum(len(program["steps"]) for program in programs),
     }
 

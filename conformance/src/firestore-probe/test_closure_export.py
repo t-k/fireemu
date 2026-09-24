@@ -18,6 +18,40 @@ def _corpus() -> dict:
     return module.build_corpus()
 
 
+def _delta_corpus() -> dict:
+    spec = importlib.util.spec_from_file_location("closure_export_delta", MODULE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.build_delta_corpus()
+
+
+def test_delta_v3_contains_only_six_delete_recipes_and_one_stream_recipe() -> None:
+    delta = _delta_corpus()
+    programs = delta["restPrograms"]
+    expected_ids = {
+        f"writes/limits/near-limit-delete-refusal/{route}/{count}"
+        for route in ("rest", "commit", "batch-write")
+        for count in (12112, 12113)
+    }
+    assert {program["id"] for program in programs} == expected_ids
+    assert len(programs) == 6
+    assert len(delta["sourceCorpusSha256"]) == 64
+    assert delta["restRequestCount"] == sum(len(program["steps"]) for program in programs) == 30
+    assert {
+        recipe["id"] for recipe in delta["streamRecipes"]
+    } == {"writes/write-stream-terminal/response-before-half-close"}
+    assert delta["streamRecipes"][0]["maxFrames"] == 2
+    for program in programs:
+        assert [step["id"] for step in program["steps"]] == [
+            "seed",
+            "before-delete",
+            "delete",
+            "after-delete",
+            "group-after-delete",
+        ]
+
+
 def test_sandbox_corpus_covers_the_frozen_closure_recipes() -> None:
     corpus = _corpus()
     programs = corpus["restPrograms"]

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -18,15 +19,13 @@ const v3Specs = [
   ["g1000a", 998, 1],
   ["g1000b", 998, 1],
 ];
-const deleteSpecs = [
-  ...["rest", "commit", "batch-write"].flatMap((route) =>
-    [12_112, 12_113].map((length) => [
-      `del${route.replaceAll("-", "")}${length}DELETE_RUN_ID`,
-      979,
-      1,
-    ]),
-  ),
-];
+const deleteSpecs = ["rest", "commit", "batch-write"].flatMap((route) =>
+  [12_112, 12_113].map((length) => [
+    `del${route.replaceAll("-", "")}${length}DELETE_RUN_ID`,
+    979,
+    1,
+  ]),
+);
 const resourceNames = (specs) =>
   specs.map(
     ([tag, collectionLength, documentLength]) =>
@@ -143,6 +142,7 @@ async function observeCollector({
   failureMode,
   initialJournalStatus,
   initialJournal,
+  initialDeltaJournal,
   scopeNames = names,
   extraNames = [],
   visibleNames = [scopeNames[0]],
@@ -161,6 +161,10 @@ async function observeCollector({
   deleteReadbackMode,
   deleteRunId = defaultDeleteRunId,
   programs,
+  inputCorpus,
+  deltaV3 = false,
+  deltaLockHeld = true,
+  corpusDigest = "c".repeat(64),
   hostOverride,
 } = {}) {
   const runtimeName = (name) => name.replaceAll("DELETE_RUN_ID", deleteRunId);
@@ -172,14 +176,17 @@ async function observeCollector({
   const output = join(directory, "results.json");
   const meta = join(directory, "meta.json");
   const journal = join(directory, "managed.json");
+  const deltaJournal = join(directory, "delta-cleanup.json");
   await writeFile(
     input,
     JSON.stringify(
-      programs ??
+      inputCorpus ??
+        programs ??
         Array.from({ length: programCount }, (_, index) => ({ id: `empty-${index}`, steps: [] })),
     ),
   );
   if (initialJournal) await writeFile(journal, JSON.stringify(initialJournal));
+  if (initialDeltaJournal) await writeFile(deltaJournal, JSON.stringify(initialDeltaJournal));
   else if (initialJournalStatus)
     await writeFile(journal, JSON.stringify({ status: initialJournalStatus }));
   const requests = [];
@@ -227,7 +234,7 @@ async function observeCollector({
       request.on("end", () => resolve(value));
     });
     requests.push({ method: request.method, pathname, body });
-    if (pathname.endsWith("/documents:commit")) {
+    if (pathname.endsWith("/documents:commit") || pathname.endsWith("/documents:batchWrite")) {
       const writes = JSON.parse(body).writes;
       if (
         writes.some((write) => write.delete) &&
@@ -236,14 +243,32 @@ async function observeCollector({
             (write) => scopeNames.includes(write.delete) && !legacyNames.includes(write.delete),
           ))
       ) {
-        journalAtDeleteRequests.push(JSON.parse(await readFile(journal, "utf8")));
+        journalAtDeleteRequests.push(
+          JSON.parse(await readFile(deltaV3 ? deltaJournal : journal, "utf8")),
+        );
       }
     }
     const send = (status, value) => {
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(value));
     };
-    if (pathname.endsWith("/documents:listCollectionIds")) {
+    if (pathname.endsWith("):bulkDeleteDocuments")) {
+      const requested = JSON.parse(body).collectionIds;
+      assert.ok(
+        requested.every((collection) =>
+          scopeNames.some((name) => name.split("/documents/")[1].split("/")[0] === collection),
+        ),
+      );
+      for (const record of records.values()) {
+        if (requested.includes(record.collection)) record.deleted = true;
+      }
+      send(200, { name: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test" });
+    } else if (pathname.endsWith("/operations/delta-test")) {
+      send(200, {
+        name: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test",
+        done: true,
+      });
+    } else if (pathname.endsWith("/documents:listCollectionIds")) {
       send(200, {
         collectionIds: [
           ...new Set(
@@ -292,7 +317,14 @@ async function observeCollector({
       );
       if (request.method === "DELETE") {
         if (failureMode === "candidate-refused") {
-          send(400, { error: { status: "INVALID_ARGUMENT", message: "Transaction too big." } });
+          send(400, {
+            error: {
+              status: "INVALID_ARGUMENT",
+              message: "Transaction too big. Decrease transaction size.",
+            },
+          });
+        } else if (failureMode === "candidate-wrong-refusal") {
+          send(403, { error: { status: "PERMISSION_DENIED", message: "forbidden" } });
         } else {
           record.deleted = true;
           probeCandidateDeletedNames.add(name);
@@ -315,6 +347,8 @@ async function observeCollector({
             fields: { a: { arrayValue: { values: record.values.slice(1) } } },
           });
         } else send(200, { name: `${name}-unexpected`, updateTime: record.updateTime, fields: {} });
+      } else if (!visible.has(name) && !probeSeededNames.has(name)) {
+        send(404, { error: { status: "NOT_FOUND" } });
       } else
         send(
           record.deleted ? 404 : 200,
@@ -333,7 +367,10 @@ async function observeCollector({
                 },
               },
         );
-    } else if (pathname.endsWith("/documents:commit")) {
+    } else if (
+      pathname.endsWith("/documents:commit") ||
+      pathname.endsWith("/documents:batchWrite")
+    ) {
       const writes = JSON.parse(body).writes;
       if (writes[0].update) {
         const record = records.get(writes[0].update.name);
@@ -547,9 +584,22 @@ async function observeCollector({
         FIRESTORE_PROBE_MAX_REQUESTS: "1000",
         FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(scopeNames),
         FIRESTORE_PROBE_DELETE_RUN_ID: deleteRunId,
-        FIRESTORE_PROBE_CORPUS_DIGEST: "c".repeat(64),
+        FIRESTORE_PROBE_CORPUS_DIGEST: corpusDigest,
         FIRESTORE_PROBE_SOURCE_GIT_SHA: "d".repeat(40),
         FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: journal,
+        ...(deltaV3
+          ? {
+              FIRESTORE_PROBE_DELTA_V3: "1",
+              ...(deltaLockHeld ? { FIRESTORE_PROBE_DELTA_LOCK_HELD: "1" } : {}),
+              FIRESTORE_PROBE_DELTA_JOURNAL: deltaJournal,
+              FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: undefined,
+              FIRESTORE_PROBE_MAX_REQUESTS: String(
+                recoveryMode === "recover-delta-v3" && initialDeltaJournal
+                  ? 430 - initialDeltaJournal.httpRequestCount
+                  : 430,
+              ),
+            }
+          : {}),
         FIRESTORE_PROBE_MANAGED_POLL_MS: "1",
         ...(recoveryMode || recoveryOnly
           ? { FIRESTORE_PROBE_RECOVERY_MODE: recoveryMode ?? "recover-legacy" }
@@ -1068,6 +1118,454 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
   }
 });
 
+test("delta-v3 loopback run uses only six source-bound names and a separate resumable bulk-delete journal", async () => {
+  const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const digest = createHash("sha256").update(JSON.stringify(corpus)).digest("hex");
+  const routes = ["rest", "commit", "batch-write"];
+  const ids = new Set(
+    routes.flatMap((route) =>
+      [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+    ),
+  );
+  const restPrograms = corpus.restPrograms.filter((program) => ids.has(program.id));
+  const streamRecipes = corpus.streamRecipes.filter(
+    (recipe) => recipe.id === "writes/write-stream-terminal/response-before-half-close",
+  );
+  const deltaNames = restPrograms.map((program) => program.steps[0].body.writes[0].update.name);
+  const counts = restPrograms.map((program) => Number(program.id.split("/").at(-1)));
+  const packet = {
+    schemaVersion: 1,
+    sourceCorpusSha256: digest,
+    restPrograms,
+    streamRecipes,
+    restRequestCount: 30,
+  };
+  const lockDenied = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: counts,
+    deltaV3: true,
+    deltaLockHeld: false,
+    corpusDigest: digest,
+    inputCorpus: packet,
+  });
+  assert.match(lockDenied.failure?.stderr ?? "", /delta-v3 requires its separate journal/);
+  assert.equal(lockDenied.requests.length, 0);
+  const foreignName = deltaNames[0]
+    .replace("DELETE_RUN_ID", defaultDeleteRunId)
+    .replace(/\/d$/, "/foreign");
+  const foreign = await observeCollector({
+    scopeNames: deltaNames,
+    extraNames: [foreignName],
+    visibleNames: [...deltaNames, foreignName],
+    arrayLength: counts,
+    deltaV3: true,
+    corpusDigest: digest,
+    inputCorpus: packet,
+  });
+  assert.ok(foreign.failure);
+  assert.equal(
+    foreign.requests.some((request) => request.pathname.endsWith("):bulkDeleteDocuments")),
+    false,
+  );
+  const child = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: counts,
+    childCollectionNames: [
+      deltaNames[2]
+        .replaceAll("DELETE_RUN_ID", defaultDeleteRunId)
+        .split("/documents/")[1]
+        .split("/")[0],
+    ],
+    deltaV3: true,
+    corpusDigest: digest,
+    inputCorpus: packet,
+  });
+  assert.ok(child.failure);
+  assert.equal(
+    child.requests.some((request) => request.pathname.endsWith("):bulkDeleteDocuments")),
+    false,
+  );
+  const result = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: counts,
+    deltaV3: true,
+    corpusDigest: digest,
+    inputCorpus: packet,
+  });
+  assert.ifError(result.failure);
+  const journal = JSON.parse(await readFile(join(result.directory, "delta-cleanup.json"), "utf8"));
+  assert.equal(journal.mode, "cleanup-delta-v3");
+  assert.equal(journal.status, "complete");
+  assert.equal(
+    journal.writerExclusivity,
+    "task-lock-held; run-specific six collection groups have no external writer",
+  );
+  assert.deepEqual(
+    journal.names,
+    deltaNames.map((name) => name.replaceAll("DELETE_RUN_ID", defaultDeleteRunId)),
+  );
+  assert.ok(journal.httpRequestCount <= 430);
+  assert.ok(journal.managedRequestCount <= 400);
+  assert.equal(
+    JSON.parse(await readFile(result.meta, "utf8")).requestCount,
+    result.requests.length,
+  );
+  assert.equal(
+    result.requests.filter(
+      (request) =>
+        request.pathname ===
+        "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:listCollectionIds",
+    ).length,
+    0,
+  );
+  const bulkDeleteRequests = result.requests.filter((request) =>
+    request.pathname.endsWith("):bulkDeleteDocuments"),
+  );
+  assert.ok(bulkDeleteRequests.length <= 2);
+  for (const request of bulkDeleteRequests) {
+    const collectionIds = JSON.parse(request.body).collectionIds;
+    assert.ok(collectionIds.length > 0 && collectionIds.length <= 6);
+    assert.ok(
+      collectionIds.every((id) =>
+        deltaNames.some(
+          (name) =>
+            name
+              .replaceAll("DELETE_RUN_ID", defaultDeleteRunId)
+              .split("/documents/")[1]
+              .split("/")[0] === id,
+        ),
+      ),
+    );
+  }
+  assert.ok(
+    result.requests.every(
+      (request) =>
+        request.pathname !==
+        "/emulator/v1/projects/fireemu-oracle-sbx/databases/(default)/documents",
+    ),
+  );
+  const outcome = JSON.parse(await readFile(result.output, "utf8"));
+  assert.ok(Object.values(outcome).every((entry) => entry.conditionEvidence === "complete"));
+  const second = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: counts,
+    deltaV3: true,
+    deleteRunId: "f".repeat(32),
+    corpusDigest: digest,
+    inputCorpus: packet,
+  });
+  assert.ifError(second.failure);
+  const secondJournal = JSON.parse(
+    await readFile(join(second.directory, "delta-cleanup.json"), "utf8"),
+  );
+  assert.notEqual(journal.runId, secondJournal.runId);
+  assert.notDeepEqual(journal.names, secondJournal.names);
+  assert.equal(secondJournal.status, "complete");
+  await rm(result.directory, { recursive: true, force: true });
+  await rm(second.directory, { recursive: true, force: true });
+});
+
+test("delta-v3 recovery resolves a durable candidate DELETE intent by fresh typed reads without replay", async () => {
+  const runId = "e".repeat(32);
+  const deltaNames = allV3Names.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const sourceCorpusDigest = "c".repeat(64);
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-delta-v3",
+    status: "write-ahead-mutation",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: sourceCorpusDigest,
+    sourceGitSha: "d".repeat(40),
+    writerExclusivity: "task-lock-held; run-specific six collection groups have no external writer",
+    names: deltaNames,
+    httpRequestCount: 30,
+    managedRequestCount: 0,
+    bulkDeleteIntent: null,
+    bulkDeleteOperation: null,
+    pendingMutation: {
+      name: deltaNames[0],
+      method: "DELETE",
+      stepId: "delete",
+      url: `https://firestore.googleapis.com/v1/${deltaNames[0]}`,
+      bodySha256: createHash("sha256").update("").digest("hex"),
+    },
+  };
+  const present = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: sourceCorpusDigest,
+  });
+  try {
+    assert.ifError(present.failure);
+    assert.equal(
+      present.requests.some(
+        (request) => request.pathname === `/v1/${deltaNames[0]}` && request.method === "DELETE",
+      ),
+      false,
+    );
+    const recovered = JSON.parse(
+      await readFile(join(present.directory, "delta-cleanup.json"), "utf8"),
+    );
+    assert.equal(recovered.status, "complete");
+    assert.equal(recovered.pendingMutation, null);
+    assert.equal(recovered.lastMutation.recoveredOutcome, "target-present");
+  } finally {
+    await rm(present.directory, { recursive: true, force: true });
+  }
+
+  const absent = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames.slice(1),
+    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: sourceCorpusDigest,
+  });
+  try {
+    assert.ifError(absent.failure);
+    assert.equal(
+      absent.requests.some(
+        (request) => request.pathname === `/v1/${deltaNames[0]}` && request.method === "DELETE",
+      ),
+      false,
+    );
+    const recovered = JSON.parse(
+      await readFile(join(absent.directory, "delta-cleanup.json"), "utf8"),
+    );
+    assert.equal(recovered.status, "complete");
+    assert.equal(recovered.lastMutation.recoveredOutcome, "target-absent");
+  } finally {
+    await rm(absent.directory, { recursive: true, force: true });
+  }
+
+  for (const route of ["commit", "batch-write"]) {
+    const target = deltaNames.find((candidate) =>
+      candidate.split("/documents/")[1].startsWith(`del${route.replaceAll("-", "")}`),
+    );
+    const path = `/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:${route === "commit" ? "commit" : "batchWrite"}`;
+    const method = "POST";
+    const routeJournal = {
+      ...journal,
+      pendingMutation: {
+        name: target,
+        method,
+        stepId: "delete",
+        url: `https://firestore.googleapis.com${path}`,
+        bodySha256: createHash("sha256")
+          .update(JSON.stringify({ writes: [{ delete: target }] }))
+          .digest("hex"),
+      },
+    };
+    const routeResult = await observeCollector({
+      scopeNames: deltaNames,
+      visibleNames: deltaNames,
+      arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+      deleteRunId: runId,
+      deltaV3: true,
+      recoveryMode: "recover-delta-v3",
+      initialDeltaJournal: routeJournal,
+      corpusDigest: sourceCorpusDigest,
+    });
+    try {
+      assert.ifError(routeResult.failure);
+      assert.equal(
+        routeResult.requests.some((request) => request.pathname === path),
+        false,
+      );
+      const recovered = JSON.parse(
+        await readFile(join(routeResult.directory, "delta-cleanup.json"), "utf8"),
+      );
+      assert.equal(recovered.status, "complete");
+      assert.equal(recovered.lastMutation.recoveredOutcome, "target-present");
+    } finally {
+      await rm(routeResult.directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test("delta-v3 recovery refuses an uncertain bulk-delete start without resending", async () => {
+  const runId = "e".repeat(32);
+  const deltaNames = allV3Names.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-delta-v3",
+    status: "bulk-delete-intent",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    writerExclusivity: "task-lock-held; run-specific six collection groups have no external writer",
+    names: deltaNames,
+    httpRequestCount: 30,
+    managedRequestCount: 1,
+    bulkDeleteIntent: {
+      collectionIds: deltaNames.map((name) => name.split("/documents/")[1].split("/")[0]),
+      names: deltaNames,
+    },
+    bulkDeleteOperation: null,
+    pendingMutation: null,
+  };
+  const result = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: journal.corpusDigest,
+  });
+  try {
+    assert.match(result.failure?.stderr ?? "", /uncertain.*do not resend/);
+    assert.equal(result.requests.length, 0);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("delta-v3 recovery re-entry polls the journaled LRO without starting another delete", async () => {
+  const runId = "e".repeat(32);
+  const deltaNames = allV3Names.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const collectionIds = deltaNames.map((name) => name.split("/documents/")[1].split("/")[0]);
+  const journal = {
+    schemaVersion: 1,
+    mode: "cleanup-delta-v3",
+    status: "bulk-delete-active",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    writerExclusivity: "task-lock-held; run-specific six collection groups have no external writer",
+    names: deltaNames,
+    httpRequestCount: 31,
+    managedRequestCount: 2,
+    bulkDeleteIntent: { collectionIds, names: deltaNames },
+    bulkDeleteOperation: "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test",
+    pendingMutation: null,
+  };
+  const result = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: [],
+    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: journal.corpusDigest,
+  });
+  try {
+    assert.ifError(result.failure);
+    assert.equal(
+      result.requests.filter((request) => request.pathname.endsWith(":bulkDeleteDocuments")).length,
+      0,
+    );
+    assert.equal(
+      result.requests.filter((request) => request.pathname.endsWith("/operations/delta-test"))
+        .length,
+      1,
+    );
+    const recovered = JSON.parse(
+      await readFile(join(result.directory, "delta-cleanup.json"), "utf8"),
+    );
+    assert.equal(recovered.status, "complete");
+    assert.equal(recovered.bulkDeleteOperation, null);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("delta-v3 recovery resolves a real commit seed intent after either crash window without replay", async () => {
+  const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const seed = corpus.restPrograms.find(
+    (program) => program.id === "writes/limits/near-limit-delete-refusal/rest/12112",
+  ).steps[0];
+  const runId = "e".repeat(32);
+  const deltaNames = allV3Names.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const name = deltaNames[0];
+  const update = structuredClone(seed.body.writes[0].update);
+  update.name = update.name
+    .replaceAll("DELETE_RUN_ID", runId)
+    .replaceAll("PROJECT", "fireemu-oracle-sbx");
+  const seedBody = JSON.stringify({ writes: [{ update }] });
+  const journal = (bodySha256) => ({
+    schemaVersion: 1,
+    mode: "cleanup-delta-v3",
+    status: "write-ahead-mutation",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    runId,
+    corpusDigest: "c".repeat(64),
+    sourceGitSha: "d".repeat(40),
+    writerExclusivity: "task-lock-held; run-specific six collection groups have no external writer",
+    names: deltaNames,
+    httpRequestCount: 30,
+    managedRequestCount: 0,
+    bulkDeleteIntent: null,
+    bulkDeleteOperation: null,
+    pendingMutation: {
+      name,
+      method: "POST",
+      stepId: "seed",
+      url: "https://firestore.googleapis.com/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:commit",
+      bodySha256,
+    },
+  });
+  for (const [outcome, visibleNames] of [
+    ["target-present", deltaNames],
+    ["target-absent", deltaNames.slice(1)],
+  ]) {
+    const initialJournal = journal(createHash("sha256").update(seedBody).digest("hex"));
+    const result = await observeCollector({
+      scopeNames: deltaNames,
+      visibleNames,
+      arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+      deleteRunId: runId,
+      deltaV3: true,
+      recoveryMode: "recover-delta-v3",
+      initialDeltaJournal: initialJournal,
+      corpusDigest: initialJournal.corpusDigest,
+    });
+    try {
+      assert.ifError(result.failure);
+      assert.equal(
+        result.requests.some((request) => {
+          if (request.method !== "POST" || !request.pathname.endsWith("/documents:commit"))
+            return false;
+          const writes = JSON.parse(request.body).writes;
+          return writes.some(
+            (write) => write.update?.name === name && write.update.fields?.a?.arrayValue,
+          );
+        }),
+        false,
+      );
+      const recovered = JSON.parse(
+        await readFile(join(result.directory, "delta-cleanup.json"), "utf8"),
+      );
+      assert.equal(recovered.status, "complete");
+      assert.equal(recovered.lastMutation.recoveredOutcome, outcome);
+    } finally {
+      await rm(result.directory, { recursive: true, force: true });
+    }
+  }
+});
+
 test("two corpus-v3 recordings write each twelve-name cleanup intent before deleting", async () => {
   const runtimeScopes = [];
   for (const runId of ["a".repeat(32), "b".repeat(32)]) {
@@ -1239,7 +1737,11 @@ test("candidate DELETE condition evidence requires fresh typed absence and an em
       await rm(result.directory, { recursive: true, force: true });
     }
   }
-  for (const failureMode of ["candidate-post-untyped", "candidate-group-nonempty"]) {
+  for (const failureMode of [
+    "candidate-post-untyped",
+    "candidate-group-nonempty",
+    "candidate-wrong-refusal",
+  ]) {
     const result = await observeCollector({
       scopeNames: allV3Names,
       visibleNames: allV3Names,

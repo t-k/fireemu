@@ -12,6 +12,7 @@ import {
   validateShrinkBoundaryDocument,
   validateShrinkBoundaryState,
   assertV3ProductionCleanupAllowed,
+  isExactDeltaV3ProductionScope,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -53,6 +54,40 @@ test("v3 production cleanup refuses the generic broad-clear path before network"
   );
   assert.equal(networkCalls, 0);
   assert.doesNotThrow(() => assertV3ProductionCleanupAllowed({ host: "127.0.0.1:8080" }));
+  assert.doesNotThrow(() =>
+    assertV3ProductionCleanupAllowed({ host: "firestore.googleapis.com", exactDeltaV3: true }),
+  );
+});
+
+test("delta-v3 remote scope requires the dedicated journal binding and exact names", () => {
+  const runId = "a".repeat(32);
+  const deltaNames = corpusV3.slice(6).map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const scope = {
+    mode: true,
+    lockHeld: true,
+    host: "firestore.googleapis.com",
+    scheme: "https",
+    project: "fireemu-oracle-sbx",
+    maxRequests: 430,
+    deltaJournal: "/private/delta.json",
+    managedClearJournal: "/private/delta.json",
+    names: deltaNames,
+  };
+  assert.equal(isExactDeltaV3ProductionScope(scope), true);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, host: "attacker.example" }), false);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, scheme: "http" }), false);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, host: "127.0.0.1:8080" }), false);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, managedClearJournal: undefined }), false);
+  assert.equal(
+    isExactDeltaV3ProductionScope({ ...scope, managedClearJournal: "/private/legacy.json" }),
+    false,
+  );
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, lockHeld: false }), false);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, maxRequests: 431 }), false);
+  assert.equal(
+    isExactDeltaV3ProductionScope({ ...scope, names: [...deltaNames, deltaNames[0]] }),
+    false,
+  );
 });
 
 test("shrink request counter cannot reset between cleanup phases", () => {
@@ -213,6 +248,14 @@ test("array shrink is restricted to frozen legacy or corpus-v3 root document nam
     assert.throws(() => managedShrinkScope(invalid, "fireemu-oracle-sbx", "(default)"));
   }
   assert.throws(() => managedShrinkScope(corpusV3, "another-project", "(default)"));
+});
+
+test("delta-v3 cleanup has a distinct exact six-name shrink scope", () => {
+  const deltaNames = corpusV3.slice(6);
+  assert.equal(managedShrinkScope(deltaNames, "fireemu-oracle-sbx", "(default)"), "delta-v3");
+  assert.throws(() =>
+    managedShrinkScope([...deltaNames.slice(0, 5), corpusV3[0]], "fireemu-oracle-sbx", "(default)"),
+  );
 });
 
 test("array shrink accepts only the exact generated integer sequence field", () => {

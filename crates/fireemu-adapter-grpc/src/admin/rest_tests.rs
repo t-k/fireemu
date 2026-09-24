@@ -942,3 +942,83 @@ fn the_default_database_reports_the_configured_create_time() {
     assert_eq!(database["createTime"], "2026-05-28T20:26:40Z");
     assert_eq!(database["updateTime"], "2026-05-28T20:26:40Z");
 }
+
+#[test]
+fn operations_list_filter_cancel_and_delete_follow_production() {
+    // Production (2026-09-24): a database create is not listed; `done=true` filters; a bare
+    // term is refused; an index build cannot be cancelled; a running one cannot be deleted.
+    let (state, _clock) = state();
+    state
+        .local
+        .admin()
+        .indexes()
+        .set_build_duration(std::time::Duration::from_secs(3600));
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=opsdb",
+        native(),
+    );
+    let operations = "/v1/projects/p/databases/opsdb/operations";
+    assert_eq!(
+        call(&state, "GET", operations, Value::Null),
+        (200, json!({}))
+    );
+    let index = json!({"queryScope": "COLLECTION", "fields": [
+        {"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "DESCENDING"}]});
+    let (status, created) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/opsdb/collectionGroups/items/indexes",
+        index,
+    );
+    assert_eq!(status, 200, "{created}");
+    let name = created["name"].as_str().unwrap().to_owned();
+    let (_, listed) = call(&state, "GET", operations, Value::Null);
+    assert_eq!(
+        listed["operations"].as_array().unwrap().len(),
+        1,
+        "{listed}"
+    );
+    assert_eq!(listed["operations"][0]["name"], name);
+    let filtered = |filter: &str| {
+        call(
+            &state,
+            "GET",
+            &format!("{operations}?filter={filter}"),
+            Value::Null,
+        )
+    };
+    assert_eq!(filtered("done=true"), (200, json!({})));
+    assert_eq!(filtered("done=false").1["operations"][0]["name"], name);
+    assert_eq!(
+        filtered("nope"),
+        (
+            400,
+            json!({"error": {"code": 400, "status": "INVALID_ARGUMENT",
+                "message": "Error evaluating filter: Filtering does not support GLOBAL comparator nope."}})
+        )
+    );
+    let cancel = call(&state, "POST", &format!("/v1/{name}:cancel"), json!({}));
+    assert_eq!(
+        cancel,
+        (
+            400,
+            json!({"error": {"code": 400, "status": "INVALID_ARGUMENT",
+                "message": "CancelOperation is not supported for operation type BUILD_INDEX."}})
+        )
+    );
+    let delete = call(&state, "DELETE", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(
+        delete,
+        (
+            400,
+            json!({"error": {"code": 400, "status": "FAILED_PRECONDITION",
+                "message": "Precondition check failed."}})
+        )
+    );
+    assert_eq!(
+        call(&state, "GET", &format!("/v1/{name}"), Value::Null).0,
+        200
+    );
+}

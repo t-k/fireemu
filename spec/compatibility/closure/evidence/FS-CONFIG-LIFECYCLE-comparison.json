@@ -1,0 +1,1063 @@
+{
+  "kind": "fs-config-lifecycle-comparison-v1",
+  "artifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+  "fixtureSha256": "7b11d27d6291d88cb4336e9b3aa4063992785823933c087d3b87b8a89da76941",
+  "summary": {
+    "MATCH": 247,
+    "MATCH_NONDETERMINISTIC": 16
+  },
+  "rows": [
+    {
+      "row": "fs-config/database/projection/default-and-named#get-default",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/projection/default-and-named#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/projection/default-and-named#get-named",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/projection/default-and-named#list",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/projection/default-and-named#list-show-deleted-false",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/projection/default-and-named#get-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/basic#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/basic#operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/basic#get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/basic#duplicate",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/variants#datastore-mode",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/variants#enterprise",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/variants#multi-region-optimistic-protected",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/variants#get-datastore-mode",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/variants#get-enterprise",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/variants#get-multi-region",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#bad-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#too-short",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#too-long",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#leading-dash",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#no-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#no-location",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#no-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#unknown-location",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#unknown-edition",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#unknown-type",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#customer-managed-key",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/refusals#unknown-concurrency",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/id-reuse#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/id-reuse#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/id-reuse#get-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/id-reuse#recreate",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/create/id-reuse#get-after",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/delete/basic#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/delete/basic#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/delete/basic#delete",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/delete/basic#operation",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/delete/basic#get-after",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/delete/basic#list-show-deleted",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/delete/basic#list-after",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/delete/basic#document-after",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/delete/basic#delete-again",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/database/delete/basic#delete-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/delete/protection-and-etag#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/delete/protection-and-etag#delete-protected",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/delete/protection-and-etag#get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/delete/protection-and-etag#unprotect",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/delete/protection-and-etag#delete-stale-etag",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/delete/protection-and-etag#delete-malformed-etag",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/delete/protection-and-etag#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#protect",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#unprotect-and-optimistic",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#no-mask",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#location",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#type",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#edition",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#unknown-mask",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#create-nonempty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#seed-nonempty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/patch/fields#type-nonempty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/datastore-and-enterprise#create-datastore",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/datastore-and-enterprise#create-enterprise",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/datastore-and-enterprise#datastore-get-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/datastore-and-enterprise#datastore-commit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/datastore-and-enterprise#datastore-query",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/datastore-and-enterprise#enterprise-get-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/datastore-and-enterprise#enterprise-commit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/datastore-and-enterprise#datastore-list-indexes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/datastore-and-enterprise#enterprise-list-indexes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/enterprise-only-apis#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/enterprise-only-apis#change-streams-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/enterprise-only-apis#change-streams-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/enterprise-only-apis#change-streams-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/enterprise-only-apis#user-creds-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/enterprise-only-apis#user-creds-get",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/database/mode-gating/enterprise-only-apis#user-creds-create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/project-boundary/foreign-and-missing#foreign-list-databases",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/project-boundary/foreign-and-missing#foreign-get-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/project-boundary/foreign-and-missing#foreign-get-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/project-boundary/foreign-and-missing#foreign-list-locations",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/project-boundary/foreign-and-missing#missing-database-get-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/project-boundary/foreign-and-missing#invalid-database-get-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/project-boundary/foreign-and-missing#missing-database-list-indexes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/project-boundary/foreign-and-missing#missing-database-operations",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/locations/catalog#list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/locations/catalog#get-region",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/locations/catalog#get-multi-region",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/locations/catalog#get-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/locations/catalog#list-page",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#create-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#duplicate",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#single-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#no-scope",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#two-modes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#collection-group-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#vector",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#get-creating",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#list-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#list-every-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#ready",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#ready-vector",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#ready-collection-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#list-ready",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#get-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#delete-again",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#get-malformed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/lifecycle/composite#list-after-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/query-effect/composite#create-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/query-effect/composite#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/query-effect/composite#query-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/query-effect/composite#create",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/query-effect/composite#query-building",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/index/query-effect/composite#ready",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/query-effect/composite#query-ready",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/query-effect/composite#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/index/query-effect/composite#query-after-delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#create-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#get-inherited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#get-wildcard",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#get-wildcard-in-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#list-without-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#list-bad-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#exempt",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#exempt-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#exempted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#list-overrides",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#query-exempt-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#collection-group-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#collection-group-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#get-collection-group-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#revert",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#revert-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#reverted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#bad-mask",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/index-config/exemption#bad-field-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#create-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#enable",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#get-creating",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#expired-document-readable",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#enable-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#active",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#list-ttl",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#second-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#delete-expired",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#disable",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#disable-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/field/ttl/policy#removed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#create-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#list-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#create-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#get-running",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#list-filter-done",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#list-bad-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#cancel-running",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#delete-running",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#cancelled",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#index-after-cancel",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#cancel-finished",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#delete",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#get-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#get-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/operations/lifecycle#cancel-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#create-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#all",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#collections",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#namespace",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#no-prefix",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#bad-scheme",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#missing-bucket",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#missing-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#all-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#collections-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#namespace-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/documents#objects",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#create-source",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#create-target",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#export-all",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#export-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#export-all-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#export-other-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#import-all",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#import-all-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#imported-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#imported-subcollection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#import-filter-from-unfiltered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#import-filtered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#import-filtered-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#import-absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/import/documents#import-no-prefix",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/bulk-delete/collections#create-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/bulk-delete/collections#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/bulk-delete/collections#empty-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/bulk-delete/collections#collections",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/bulk-delete/collections#operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/bulk-delete/collections#deleted-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/bulk-delete/collections#kept-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/bulk-delete/collections#missing-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#create-source",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#create-target",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#create-filtered-target",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#import-all",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#import-all-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#imported-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#imported-subcollection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#imported-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#import-items",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#import-items-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#filtered-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/production-to-fireemu#filtered-excluded",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-source#reproduces-all",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-source#reproduces-items",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#create-source-placeholder",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#create-target",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#create-filtered-target",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#import-all",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#import-all-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#imported-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#imported-subcollection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#imported-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#import-items",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#import-items-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#filtered-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/export/interop/fireemu-to-production#filtered-excluded",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#list-databases",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#create-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#create-target",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#create-bad-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#get-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#get-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#get-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#seed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#create-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#get-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#export",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#export-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#import",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#import-operation",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#imported-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#delete-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/grpc/admin#get-deleted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#get-before",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#delete",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#absent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#document-without-default",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#query-without-default",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#list-without-default",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#indexes-without-default",
+      "status": "MATCH_NONDETERMINISTIC"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#recreate",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#get-after",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-config/default-database/lifecycle#document-after",
+      "status": "MATCH"
+    }
+  ]
+}

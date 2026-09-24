@@ -83,8 +83,25 @@
       "recipeIds": [
         "fs-config/database/projection"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "databases.get and databases.list for (default) (read only) and for named databases: every field and value, freeTier, locationId as created, showDeleted."
+      "status": "VERIFIED",
+      "note": "databases.get and databases.list for (default) (read only) and for named databases: every field and value, freeTier, locationId as created, showDeleted.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 4,
+          "MATCH_NONDETERMINISTIC": 2
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/database-create",
@@ -92,8 +109,25 @@
       "recipeIds": [
         "fs-config/database/create"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The create operation shape and every accepted variant (location, concurrency mode, delete protection, Datastore mode, Enterprise edition) and refusal (id syntax and length, missing location or type, unknown location or edition, duplicate id, id reuse after delete, customer-managed key, tags)."
+      "status": "VERIFIED",
+      "note": "The create operation shape and every accepted variant (location, concurrency mode, delete protection, Datastore mode, Enterprise edition) and refusal (id syntax and length, missing location or type, unknown location or edition, duplicate id, id reuse after delete, customer-managed key, tags).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 27,
+          "MATCH_NONDETERMINISTIC": 1
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/database-delete",
@@ -101,8 +135,25 @@
       "recipeIds": [
         "fs-config/database/delete"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The delete operation shape, delete protection, etag, missing database, and what get, list, showDeleted and the data plane answer afterwards."
+      "status": "VERIFIED",
+      "note": "The delete operation shape, delete protection, etag, missing database, and what get, list, showDeleted and the data plane answer afterwards.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 10,
+          "MATCH_NONDETERMINISTIC": 7
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/database-patch",
@@ -110,8 +161,24 @@
       "recipeIds": [
         "fs-config/database/patch"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "deleteProtectionState and concurrencyMode updates, an absent mask, immutable fields."
+      "status": "VERIFIED",
+      "note": "deleteProtectionState and concurrencyMode updates, an absent mask, immutable fields.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 13
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/database-mode-gating",
@@ -119,8 +186,24 @@
       "recipeIds": [
         "fs-config/database/mode-gating"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The data plane of a Datastore-mode and of an Enterprise-edition database, and changeStreams and userCreds on a Standard database (C4)."
+      "status": "VERIFIED",
+      "note": "The data plane of a Datastore-mode and of an Enterprise-edition database, and changeStreams and userCreds on a Standard database (C4).",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/default-database-lifecycle",
@@ -128,8 +211,25 @@
       "recipeIds": [
         "fs-config/default-database"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "C9: creating and deleting (default) and a project without it, observed in fireemu-fs-bisect-0924a."
+      "status": "VERIFIED",
+      "note": "C9: creating and deleting (default) and a project without it, observed in fireemu-fs-bisect-0924a.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T09:42:27.042Z",
+            "gitSha": "c2b8462904d0b0439bc0f71d20febb401406e8c7",
+            "recordings": 2,
+            "project": "fireemu-fs-bisect-0924a"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH_NONDETERMINISTIC": 5,
+          "MATCH": 5
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/project-boundary",
@@ -137,8 +237,24 @@
       "recipeIds": [
         "fs-config/project-boundary"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "Admin and data-plane requests naming a project the credential cannot use, and a database the project does not have."
+      "status": "VERIFIED",
+      "note": "Admin and data-plane requests naming a project the credential cannot use, and a database the project does not have.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 8
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/locations",
@@ -146,8 +262,24 @@
       "recipeIds": [
         "fs-config/locations"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "C3: locations.list and locations.get, including an unknown location."
+      "status": "VERIFIED",
+      "note": "C3: locations.list and locations.get, including an unknown location.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 5
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/index-lifecycle",
@@ -155,8 +287,24 @@
       "recipeIds": [
         "fs-config/index/lifecycle"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "collectionGroups.indexes create, get, list (one group and every group), delete; duplicate and invalid definitions; the index operation's states."
+      "status": "VERIFIED",
+      "note": "collectionGroups.indexes create, get, list (one group and every group), delete; duplicate and invalid definitions; the index operation's states.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 22
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/index-query-effect",
@@ -164,8 +312,25 @@
       "recipeIds": [
         "fs-config/index/query-effect"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A query needing the index before it exists, while it builds, once it is READY, and after it is deleted."
+      "status": "VERIFIED",
+      "note": "A query needing the index before it exists, while it builds, once it is READY, and after it is deleted.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 8,
+          "MATCH_NONDETERMINISTIC": 1
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/field-index-config",
@@ -173,8 +338,24 @@
       "recipeIds": [
         "fs-config/field/index-config"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "collectionGroups.fields get (a field, the wildcard default), list and its required filter, patch of indexConfig (FS-CONFIG-RT-004), masks, and the exemption's effect on a query."
+      "status": "VERIFIED",
+      "note": "collectionGroups.fields get (a field, the wildcard default), list and its required filter, patch of indexConfig (FS-CONFIG-RT-004), masks, and the exemption's effect on a query.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 20
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/ttl-config",
@@ -182,8 +363,24 @@
       "recipeIds": [
         "fs-config/field/ttl"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "C8: the ttlConfig policy states, removal, the ttlConfig list filter, and an expired document before deletion."
+      "status": "VERIFIED",
+      "note": "C8: the ttlConfig policy states, removal, the ttlConfig list filter, and an expired document before deletion.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T09:17:20.017Z",
+            "gitSha": "f9f86461ade51f266f20b28f6bf45b28888b5a40",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 13
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/operations",
@@ -191,8 +388,24 @@
       "recipeIds": [
         "fs-config/operations"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "operations get, list, list filter, cancel of a running and of a finished operation, delete, a missing operation; each operation kind's metadata."
+      "status": "VERIFIED",
+      "note": "operations get, list, list filter, cancel of a running and of a finished operation, delete, a missing operation; each operation kind's metadata.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/export",
@@ -200,8 +413,30 @@
       "recipeIds": [
         "fs-config/export"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "exportDocuments: the operation, collectionIds and namespaceIds, validation (missing prefix, scheme, missing bucket, missing database), the written object layout."
+      "status": "VERIFIED",
+      "note": "exportDocuments: the operation, collectionIds and namespaceIds, validation (missing prefix, scheme, missing bucket, missing database), the written object layout.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T09:14:10.616Z",
+            "gitSha": "7419c955b72abfebd4819e696abce73df9853543",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 39
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/import",
@@ -209,8 +444,24 @@
       "recipeIds": [
         "fs-config/import"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "importDocuments: the operation, collectionIds against filtered and unfiltered exports, validation (missing prefix, absent export), the imported documents."
+      "status": "VERIFIED",
+      "note": "importDocuments: the operation, collectionIds against filtered and unfiltered exports, validation (missing prefix, absent export), the imported documents.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 16
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/export-format-interop",
@@ -218,8 +469,24 @@
       "recipeIds": [
         "fs-config/export/interop"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "A production export imports into fireemu, and a fireemu export imports into production, for an unfiltered and a collection-filtered export, with every value type."
+      "status": "VERIFIED",
+      "note": "A production export imports into fireemu, and a fireemu export imports into production, for an unfiltered and a collection-filtered export, with every value type.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T09:14:10.616Z",
+            "gitSha": "7419c955b72abfebd4819e696abce73df9853543",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 26
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/bulk-delete",
@@ -227,8 +494,24 @@
       "recipeIds": [
         "fs-config/bulk-delete"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "bulkDeleteDocuments: the empty-filter refusal, collectionIds, the operation, the post-state."
+      "status": "VERIFIED",
+      "note": "bulkDeleteDocuments: the empty-filter refusal, collectionIds, the operation, the post-state.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 8
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/grpc-admin-transport",
@@ -236,8 +519,24 @@
       "recipeIds": [
         "fs-config/grpc"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "C7: representative Admin cases over gRPC google.firestore.admin.v1."
+      "status": "VERIFIED",
+      "note": "C7: representative Admin cases over gRPC google.firestore.admin.v1.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 17
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/final-artifact-regression",
@@ -247,8 +546,53 @@
         "fs-config-lifecycle/local-evidence",
         "cargo:fireemu-adapter-grpc+fireemu"
       ],
-      "status": "PENDING_CORPUS",
-      "note": "The whole corpus against one retained artifact, plus the local multi-partition import, named-database export and projection evidence the parent row already cites."
+      "status": "VERIFIED",
+      "note": "The whole corpus against one retained artifact, plus the local multi-partition import, named-database export and projection evidence the parent row already cites.",
+      "evidence": {
+        "productionRecordings": [
+          {
+            "recordedAt": "2026-09-24T08:26:12.514Z",
+            "gitSha": "556b0fadea4931969e0b6e5efa80ebcc40ed753d",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T09:14:10.616Z",
+            "gitSha": "7419c955b72abfebd4819e696abce73df9853543",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T09:17:20.017Z",
+            "gitSha": "f9f86461ade51f266f20b28f6bf45b28888b5a40",
+            "recordings": 2,
+            "project": "fireemu-oracle-query"
+          },
+          {
+            "recordedAt": "2026-09-24T09:42:27.042Z",
+            "gitSha": "c2b8462904d0b0439bc0f71d20febb401406e8c7",
+            "recordings": 2,
+            "project": "fireemu-fs-bisect-0924a"
+          }
+        ],
+        "finalArtifactSha256": "bd0209efc20a69925053049d9502aac7e7b590a9c7f55276dad9d815b2616a56",
+        "sourceCommit": "0d78c5e512bcd3f306efd3bd0ba6f2e7ad91d0c4",
+        "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
+        "rows": {
+          "MATCH": 247,
+          "MATCH_NONDETERMINISTIC": 16
+        },
+        "fsConfig": {
+          "MATCH": 247,
+          "MATCH_NONDETERMINISTIC": 16
+        },
+        "workspaceTests": {
+          "command": "cargo nextest run --workspace --profile pr",
+          "passed": 3360,
+          "failed": 0,
+          "skipped": 85
+        }
+      }
     },
     {
       "conditionId": "FS-CONFIG-LIFECYCLE/closure-review",

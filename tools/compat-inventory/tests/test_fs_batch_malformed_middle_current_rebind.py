@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,12 @@ SAVED_PATH = (
 PRODUCTION_FIXTURE_PATH = REPOSITORY / "conformance/fs-data-write-production-matrix.json"
 RECIPE_MANIFEST_PATH = REPOSITORY / "conformance/fs-data-write-recipe-digests.json"
 COMPARATOR_PATH = REPOSITORY / "conformance/src/fs-data-write-sandbox.mjs"
+REQUIRED_RUNTIME_INPUTS = {
+    "Cargo.toml",
+    "Cargo.lock",
+    "conformance/src/fs-data-write-sandbox-run.mjs",
+    "conformance/src/firestore-probe/sandbox-session.mjs",
+}
 
 
 def read_json(path: Path) -> dict:
@@ -24,6 +31,16 @@ def read_json(path: Path) -> dict:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def source_blob_sha256(commit: str, path: str) -> str:
+    result = subprocess.run(
+        ["git", "show", f"{commit}:{path}"],
+        cwd=REPOSITORY,
+        check=True,
+        capture_output=True,
+    )
+    return hashlib.sha256(result.stdout).hexdigest()
 
 
 def test_current_rebind_is_source_bound_and_keeps_saved_recording_provenance():
@@ -57,18 +74,45 @@ def test_current_rebind_is_source_bound_and_keeps_saved_recording_provenance():
     )
     assert artifact["localRunPath"] == "conformance/.runs/fs-data-write-local-DbrwFE"
     assert not Path(artifact["localRunPath"]).is_absolute()
+    subprocess.run(
+        ["git", "merge-base", "--is-ancestor", artifact["sourceCommit"], "HEAD"],
+        cwd=REPOSITORY,
+        check=True,
+    )
+
+    binding = artifact["localRunBinding"]
+    assert binding["sourceHead"] == artifact["sourceCommit"]
+    assert binding["executablePath"] == "target/debug/fireemu"
+    assert binding["executableSha256"] == artifact["localExecutableSha256"]
+    assert binding["executableSha256After"] == artifact["localExecutableSha256"]
+    assert binding["config"] == "conformance/fs-data-write-sandbox.fireemu.json"
+    assert binding["configSha256"] == artifact["localConfigSha256"]
+    assert binding["runtimeInputs"] == artifact["localRuntimeInputs"]
+    assert set(artifact["localRuntimeInputs"]) == REQUIRED_RUNTIME_INPUTS
+    assert set(binding["commandVersions"]) == {"cargo", "node", "rustc"}
+    assert re.fullmatch(r"[0-9a-f]{64}", artifact["localRunBindingSha256"])
+    assert re.fullmatch(r"[0-9a-f]{64}", artifact["localExecutableSha256"])
+    assert source_blob_sha256(
+        artifact["sourceCommit"], artifact["comparisonRuntimeInput"]["path"]
+    ) == artifact["comparisonRuntimeInput"]["sha256"]
+    assert source_blob_sha256(artifact["sourceCommit"], binding["config"]) == binding[
+        "configSha256"
+    ]
+    assert source_blob_sha256(artifact["sourceCommit"], "conformance/firestore.indexes.json") == artifact[
+        "localIndexConfigSha256"
+    ]
+    for path, expected_sha in artifact["localRuntimeInputs"].items():
+        assert source_blob_sha256(artifact["sourceCommit"], path) == expected_sha
 
     local_run = REPOSITORY / artifact["localRunPath"]
     if local_run.exists():
-        binding = read_json(local_run / "local-run-binding.json")
+        disk_binding = read_json(local_run / "local-run-binding.json")
         current_corpus = read_json(local_run / "corpus.json")
         current_results = read_json(local_run / "rest-results.json")
         recipe_ids = set(artifact["recipeIds"])
-        assert binding["sourceHead"] == artifact["sourceCommit"]
-        assert binding["executableSha256"] == artifact["localExecutableSha256"]
+        assert disk_binding == binding
+        assert sha256(local_run / "local-run-binding.json") == artifact["localRunBindingSha256"]
         assert sha256(REPOSITORY / binding["executablePath"]) == artifact["localExecutableSha256"]
-        assert binding["configSha256"] == artifact["localConfigSha256"]
-        assert binding["runtimeInputs"] == artifact["localRuntimeInputs"]
         assert sha256(REPOSITORY / "conformance/firestore.indexes.json") == artifact[
             "localIndexConfigSha256"
         ]
@@ -97,6 +141,12 @@ const recipeIds = artifact.recipeIds.toSorted();
 assert.deepEqual(Object.keys(artifact.productionPrograms).toSorted(), recipeIds);
 assert.deepEqual(Object.keys(artifact.localPrograms).toSorted(), recipeIds);
 assert.deepEqual(artifact.recipes.map(({ id }) => id).toSorted(), recipeIds);
+assert.equal(
+  createHash('sha256')
+    .update(`${JSON.stringify(artifact.localRunBinding, null, 2)}\n`)
+    .digest('hex'),
+  artifact.localRunBindingSha256,
+);
 for (const recipe of artifact.recipes) {
   const digest = createHash('sha256').update(JSON.stringify(recipe)).digest('hex');
   assert.equal(artifact.recipeDigests[recipe.id], digest);
@@ -108,6 +158,10 @@ const differences = compareSandboxArtifact(
   { restPrograms: artifact.recipes },
 );
 assert.deepEqual(differences, []);
+assert.equal(
+  createHash('sha256').update(JSON.stringify(artifact.localPrograms)).digest('hex'),
+  artifact.localSelectedResultsSha256,
+);
 assert.equal(artifact.result.comparableRecipes, 7);
 assert.equal(artifact.result.mismatchedRecipes, 0);
 assert.deepEqual(artifact.result.pendingRelatedConditions, [

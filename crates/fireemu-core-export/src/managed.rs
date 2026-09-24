@@ -198,6 +198,7 @@ impl Schema {
 fn partition_metadata(
     name: &str,
     partition: &Partition,
+    output_name: &str,
     start_micros: u64,
     end_micros: u64,
     documents: &[&ExportDocument],
@@ -211,7 +212,7 @@ fn partition_metadata(
     });
     w.write_message(2, |o| {
         o.write_string(1, partition.kind_name());
-        o.write_string(2, "output-0");
+        o.write_string(2, output_name);
         o.write_message(3, |schema| {
             schema.write_string(1, partition.kind_name());
             if let Partition::Kind(_) = partition {
@@ -278,7 +279,12 @@ pub fn write_managed_export(
     let mut files = Vec::new();
     let mut overall = vec![vec![0x33_u8]];
     let (mut total_documents, mut total_bytes) = (0_u64, 0_u64);
-    for partition in partitions(collection_ids, namespace_ids) {
+    // Production numbers the output files across the partitions of one export.
+    for (ordinal, partition) in partitions(collection_ids, namespace_ids)
+        .into_iter()
+        .enumerate()
+    {
+        let output_name = format!("output-{ordinal}");
         let selected: Vec<&ExportDocument> = documents
             .iter()
             .filter(|d| match &partition {
@@ -303,13 +309,14 @@ pub fn write_managed_export(
             partition_metadata(
                 name,
                 &partition,
+                &output_name,
                 start_micros,
                 end_micros,
                 &selected,
                 &output,
             ),
         ));
-        files.push((format!("{}/output-0", partition.directory()), output));
+        files.push((format!("{}/{output_name}", partition.directory()), output));
         overall.push(overall_entry(&partition, count, bytes));
         total_documents += count;
         total_bytes += bytes;
@@ -511,6 +518,40 @@ mod tests {
         assert_eq!(overall[0].partition, Partition::Kind("items".into()));
         let entities = read_managed_output(&export.files[2].1).unwrap();
         assert_eq!(entities[0].database, "(default)");
+    }
+
+    #[test]
+    fn outputs_are_numbered_across_the_partitions_of_one_export() {
+        // Production (2026-09-24) names the second kind's output output-1, not output-0.
+        let documents = vec![
+            document(&[("items", "a")], &[]),
+            document(&[("items", "a"), ("sub", "x")], &[]),
+        ];
+        let export = write_managed_export(
+            "items",
+            "d",
+            &["items".to_owned(), "sub".to_owned()],
+            &[],
+            (1, 2),
+            &documents,
+        )
+        .unwrap();
+        let names: Vec<&str> = export.files.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            names.contains(&"all_namespaces/kind_items/output-0"),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"all_namespaces/kind_sub/output-1"),
+            "{names:?}"
+        );
+        let metadata = &export
+            .files
+            .iter()
+            .find(|(n, _)| n.ends_with("kind_sub.export_metadata"))
+            .unwrap()
+            .1;
+        assert_eq!(read_partition_outputs(metadata).unwrap(), ["output-1"]);
     }
 
     #[test]

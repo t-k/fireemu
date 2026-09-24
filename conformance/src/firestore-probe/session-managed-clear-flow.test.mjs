@@ -517,9 +517,15 @@ async function observeCollector({
         queriedCollection === records.get(scopeNames[0]).collection
       )
         matching.push(scopeNames[0]);
+      // Production answers an empty query with one row that carries only readTime.
       send(
         200,
-        matching.map((name) => ({ document: { name } })),
+        matching.length === 0
+          ? [{ readTime: "2026-09-25T00:00:00.000000Z" }]
+          : matching.map((name) => ({
+              document: { name },
+              readTime: "2026-09-25T00:00:00.000000Z",
+            })),
       );
     } else if (pathname.endsWith("/documents:batchGet")) {
       const requestedNames = JSON.parse(body).documents;

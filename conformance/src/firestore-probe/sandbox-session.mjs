@@ -240,7 +240,7 @@ export function isExactDeltaV3ProductionScope({
   return false;
 }
 export function isLoopbackHost(host) {
-  return /^(?:127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(host ?? "");
+  return /^(?:127\.0\.0\.1|localhost|\[::1\]|::1):\d+$/.test(host ?? "");
 }
 
 let requestCount = 0;
@@ -2237,6 +2237,29 @@ function provesDeleteTargetExists(program, stepSpec, document, recorded) {
   );
 }
 
+/**
+ * Document names in a runQuery answer. Production answers an empty query with one row
+ * that holds only `readTime`, so only rows carrying a document count. Any other row
+ * shape (an error, a skipped count, a document without a name) is not a proof.
+ */
+export function queryDocumentNames(rows) {
+  if (!Array.isArray(rows)) return null;
+  const names = [];
+  for (const row of rows) {
+    if (row && typeof row === "object" && Object.hasOwn(row, "document")) {
+      if (typeof row.document?.name !== "string") return null;
+      names.push(row.document.name);
+    } else if (
+      !row ||
+      typeof row !== "object" ||
+      Object.keys(row).some((key) => key !== "readTime")
+    ) {
+      return null;
+    }
+  }
+  return names;
+}
+
 function provesDeleteOutcome(program, steps, raw) {
   const deletion = steps.delete;
   const afterDelete = steps["after-delete"];
@@ -2261,7 +2284,7 @@ function provesDeleteOutcome(program, steps, raw) {
     return false;
   }
   const afterRaw = raw.get("after-delete");
-  const groupRaw = raw.get("group-after-delete");
+  const groupNames = queryDocumentNames(raw.get("group-after-delete"));
   const count = deleteBoundaryLength(program);
   const beforeSpec = program.steps.find((candidate) => candidate.id === "before-delete");
   const name = replaceRunMarker(
@@ -2272,8 +2295,8 @@ function provesDeleteOutcome(program, steps, raw) {
       Array.isArray(afterRaw) &&
       afterRaw.length === 1 &&
       afterRaw[0]?.missing === name &&
-      Array.isArray(groupRaw) &&
-      groupRaw.length === 0
+      groupNames !== null &&
+      groupNames.length === 0
     );
   }
   const found = Array.isArray(afterRaw) && afterRaw.length === 1 ? afterRaw[0]?.found : null;
@@ -2284,9 +2307,9 @@ function provesDeleteOutcome(program, steps, raw) {
     Array.isArray(foundValues) &&
     foundValues.length === count &&
     foundValues.every((value, index) => value?.integerValue === String(index)) &&
-    Array.isArray(groupRaw) &&
-    groupRaw.length === 1 &&
-    groupRaw[0]?.document?.name === name
+    groupNames !== null &&
+    groupNames.length === 1 &&
+    groupNames[0] === name
   );
 }
 
@@ -2302,7 +2325,7 @@ function deleteBoundaryProof(program, steps, raw, blocked) {
     provesDeleteTargetExists(program, beforeSpec, raw.get("before-delete"), steps["before-delete"]);
   const outcomeProven = targetExists && provesDeleteOutcome(program, steps, raw);
   const after = raw.get("after-delete");
-  const group = raw.get("group-after-delete");
+  const groupNames = queryDocumentNames(raw.get("group-after-delete"));
   const accepted =
     steps.delete?.status >= 200 && steps.delete.status < 300 && steps.delete.code === "OK";
   const refused =
@@ -2316,11 +2339,11 @@ function deleteBoundaryProof(program, steps, raw, blocked) {
     outcome: accepted ? "accepted" : refused ? "refused" : "unknown",
     postDeleteAbsent:
       accepted && Array.isArray(after) && after.length === 1 && after[0]?.missing === name,
-    groupEmpty: accepted && Array.isArray(group) && group.length === 0,
+    groupEmpty: accepted && groupNames !== null && groupNames.length === 0,
     postDeletePresent:
       refused && Array.isArray(after) && after.length === 1 && after[0]?.found?.name === name,
     groupContainsTarget:
-      refused && Array.isArray(group) && group.length === 1 && group[0]?.document?.name === name,
+      refused && groupNames !== null && groupNames.length === 1 && groupNames[0] === name,
   };
 }
 
@@ -2329,7 +2352,8 @@ async function main() {
   // Recovery modes only delete this task's own journaled names and keep their own checks.
   if (RECOVERY_MODE === undefined) {
     requireChildProductionAdmission({
-      production: PRODUCTION && !isLoopbackHost(HOST),
+      // Any non-loopback host counts, whatever FIRESTORE_PROBE_TARGET says.
+      production: HOST !== undefined && !isLoopbackHost(HOST),
       env: process.env,
       runId: process.env.FIRESTORE_PROBE_DELETE_RUN_ID,
     });

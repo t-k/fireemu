@@ -231,6 +231,24 @@ test("hand-launched REST and stream children with production variables stop at a
       }),
       (error) => /runner's admission/.test(error.stderr),
     );
+    // Leaving out the production target must not skip the gate for a remote host.
+    await assert.rejects(
+      run("node", [new URL("./firestore-probe/sandbox-session.mjs", import.meta.url).pathname], {
+        env: {
+          ...clean,
+          FIRESTORE_PROBE_TARGET: "",
+          FIRESTORE_PROBE_SCHEME: "https",
+          FIRESTORE_PROBE_HOST: "192.0.2.1:443",
+          FIRESTORE_PROBE_PROJECT: "fireemu-oracle-sbx",
+          FIRESTORE_PROBE_IN: corpus,
+          FIRESTORE_PROBE_OUT: join(directory, "out-untargeted.json"),
+          FIRESTORE_PROBE_TOKEN: "test-only",
+          FIRESTORE_PROBE_TIMEOUT_MS: "500",
+          FIRESTORE_PROBE_DELETE_RUN_ID: "c".repeat(32),
+        },
+      }),
+      (error) => /runner's admission/.test(error.stderr),
+    );
     await assert.rejects(
       run("node", [new URL("./firestore-probe/stream-session.mjs", import.meta.url).pathname], {
         env: {

@@ -5459,18 +5459,32 @@ impl LocalBackend {
             } else {
                 let mut docs = match (&txn, ordered) {
                     (Some(_), _) => {
-                        // Inside a transaction too, a page continues after the recorded
-                        // values; the whole query stays the observed read set.
-                        let mut executed = accepted.query.clone();
-                        if let Some(values) = token_values.clone() {
-                            executed.start_at = Some(fireemu_core_firestore::query::Cursor {
-                                values,
-                                before: false,
-                            });
+                        // The whole query is read and recorded as the transaction's read set
+                        // (a commit re-runs it to detect a conflict); a page then continues
+                        // after the values the token recorded.
+                        let all = access
+                            .run_query_with_stats(&accepted.query, &accepted.query, false)?
+                            .0;
+                        match token_values.clone() {
+                            Some(values) => {
+                                let mut continued = accepted.query.clone();
+                                continued.start_at = Some(fireemu_core_firestore::query::Cursor {
+                                    values,
+                                    before: false,
+                                });
+                                let after: std::collections::BTreeSet<String> = access
+                                    .db()
+                                    .run_query(&continued, version)
+                                    .map_err(|e| status_from_error(&e))?
+                                    .iter()
+                                    .map(|d| d.path.resource_name())
+                                    .collect();
+                                all.into_iter()
+                                    .filter(|d| after.contains(&d.path.resource_name()))
+                                    .collect()
+                            }
+                            None => all,
                         }
-                        access
-                            .run_query_with_stats(&executed, &accepted.query, false)?
-                            .0
                     }
                     (None, true) => access
                         .db()
@@ -6246,50 +6260,67 @@ mod lock_tests {
         request
     }
 
-    /// A listDocuments at a read time that a fault fails leaves an absent database absent: the
-    /// fault comes before the read time is resolved (FS-DATA-WRITE-LIST review).
+    /// A listDocuments that a fault fails leaves an absent database absent, with or without a
+    /// read time: the fault comes before the read time is resolved (FS-DATA-WRITE-LIST review).
     #[test]
-    fn list_documents_fault_at_a_read_time_does_not_create_database() {
-        use fireemu_core_session::fault::{FaultMatch, FaultPlan, FaultRegistry, FaultRule};
+    fn list_documents_faults_do_not_create_the_database() {
+        use fireemu_core_session::fault::{
+            FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+        };
 
-        let backend = backend();
-        assert!(backend.snapshot_databases().is_empty());
-        let registry = Arc::new(FaultRegistry::new());
-        registry.default_state().lock().unwrap().install(FaultPlan {
-            seed: 1,
-            rules: vec![FaultRule {
-                matches: FaultMatch {
-                    operation: "firestore.read".into(),
-                    nth: None,
-                    function: None,
-                    event_type: None,
-                },
-                action: fireemu_core_session::fault::FaultAction::ReturnError {
+        for (action, code) in [
+            (
+                FaultAction::ReturnError {
                     code: "UNAVAILABLE".into(),
                 },
-            }],
-        });
-        backend.set_faults(registry);
-        let error = backend
-            .list_documents(
-                &pb::ListDocumentsRequest {
-                    parent: "projects/demo-app/databases/rtdb/documents".to_owned(),
-                    collection_id: "c".to_owned(),
-                    consistency_selector: Some(
-                        pb::list_documents_request::ConsistencySelector::ReadTime(
-                            prost_types::Timestamp {
-                                seconds: 1_788_004_860,
-                                nanos: 0,
-                            },
-                        ),
-                    ),
-                    ..Default::default()
-                },
-                &crate::rules::allow_all_reads,
-            )
-            .unwrap_err();
-        assert_eq!(error.code(), tonic::Code::Unavailable);
-        assert!(backend.snapshot_databases().is_empty());
+                tonic::Code::Unavailable,
+            ),
+            (FaultAction::Timeout, tonic::Code::DeadlineExceeded),
+            (FaultAction::TransactionConflict, tonic::Code::Aborted),
+            (FaultAction::DropConnection, tonic::Code::Unavailable),
+        ] {
+            for read_time in [
+                None,
+                Some(pb::list_documents_request::ConsistencySelector::ReadTime(
+                    prost_types::Timestamp {
+                        seconds: 1_788_004_860,
+                        nanos: 0,
+                    },
+                )),
+            ] {
+                let backend = backend();
+                let registry = Arc::new(FaultRegistry::new());
+                registry.default_state().lock().unwrap().install(FaultPlan {
+                    seed: 1,
+                    rules: vec![FaultRule {
+                        matches: FaultMatch {
+                            operation: "firestore.read".into(),
+                            nth: None,
+                            function: None,
+                            event_type: None,
+                        },
+                        action: action.clone(),
+                    }],
+                });
+                backend.set_faults(registry);
+                let error = backend
+                    .list_documents(
+                        &pb::ListDocumentsRequest {
+                            parent: "projects/demo-app/databases/rtdb/documents".to_owned(),
+                            collection_id: "c".to_owned(),
+                            consistency_selector: read_time.clone(),
+                            ..Default::default()
+                        },
+                        &crate::rules::allow_all_reads,
+                    )
+                    .unwrap_err();
+                assert_eq!(error.code(), code, "{action:?} {read_time:?}");
+                assert!(
+                    backend.snapshot_databases().is_empty(),
+                    "{action:?} {read_time:?}"
+                );
+            }
+        }
     }
 
     #[test]

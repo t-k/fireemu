@@ -422,6 +422,7 @@ export async function withRecordingLock(ledger, lane, record) {
     const holder = await readFile(lock, "utf8").catch(() => "unknown");
     throw new Error(
       `another recording holds ${lock} (${holder.trim()}); both lanes wipe (default)`,
+      { cause: error },
     );
   }
   try {

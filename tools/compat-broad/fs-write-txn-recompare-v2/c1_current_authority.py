@@ -41,6 +41,15 @@ SAVED_AUTHORITY_PATH = Path(
 BUILD_COMMAND = ["cargo", "build", "--locked", "-p", "fireemu", "--message-format=json"]
 RUNTIME_INPUT_COUNT = 434
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+GIT_SAFETY_OVERRIDES = (
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.attributesFile=/dev/null",
+)
+FILTER_ATTRIBUTE_RE = re.compile(rb"(?:^|[\s;])filter\s*=")
 V1_PATH = Path("tools/compat-broad/fs-write-txn/stream_comparison.mjs")
 V2_DIR = Path("tools/compat-broad/fs-write-txn-recompare-v2")
 BOUND_RUNTIME_SOURCES = (
@@ -190,18 +199,69 @@ def read(path: Path, expected: str, snapshots: dict[Path, bytes]) -> bytes:
     return value
 
 
-def git(root: Path, *args: str) -> str:
-    return subprocess.check_output(
-        ["git", "-C", str(root), *args],
+def git_command(root: Path, *args: str) -> list[str]:
+    return ["git", *GIT_SAFETY_OVERRIDES, "-C", str(root), *args]
+
+
+def run_git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        git_command(root, *args),
         text=True,
+        capture_output=True,
+        check=True,
         env=offline_subprocess_environment(),
-    ).strip()
+    )
+
+
+def git(root: Path, *args: str) -> str:
+    return run_git(root, *args).stdout.strip()
 
 
 def git_bytes(root: Path, *args: str) -> bytes:
     return subprocess.check_output(
-        ["git", "-C", str(root), *args], env=offline_subprocess_environment()
+        git_command(root, *args), env=offline_subprocess_environment()
     )
+
+
+def refuse_checkout_filters(root: Path, commits: tuple[str, ...]) -> None:
+    filters = subprocess.run(
+        git_command(
+            root,
+            "config",
+            "--show-origin",
+            "--name-only",
+            "--get-regexp",
+            r"^filter\.",
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=offline_subprocess_environment(),
+    )
+    require(filters.returncode in (0, 1), "checkout filter inventory failed")
+    require(not filters.stdout.strip(), "checkout filter configuration refused")
+
+    info_attributes = Path(git(root, "rev-parse", "--git-path", "info/attributes"))
+    if not info_attributes.is_absolute():
+        info_attributes = root / info_attributes
+    if os.path.lexists(info_attributes):
+        regular(info_attributes)
+        require(
+            FILTER_ATTRIBUTE_RE.search(info_attributes.read_bytes()) is None,
+            "checkout filter attributes refused",
+        )
+
+    for commit in commits:
+        require(COMMIT_RE.fullmatch(commit) is not None, "invalid checkout source commit")
+        paths = git(root, "ls-tree", "-r", "--name-only", commit).splitlines()
+        for name in paths:
+            if Path(name).name != ".gitattributes":
+                continue
+            attributes = git_bytes(root, "show", f"{commit}:{name}")
+            require(
+                FILTER_ATTRIBUTE_RE.search(attributes) is None,
+                "checkout filter attributes refused",
+            )
 
 
 def authority_sources(root: Path, authority_commit: str) -> dict[str, str]:
@@ -621,9 +681,14 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
     )
     for path in (frozen_path, repaired_path):
         require(not os.path.lexists(path), "historical authority worktree path exists")
+    commits = (
+        "dee737c14e68eb4f546b7ca4c827871fc48a2503",
+        "567565bdd654cab00dbb84101edcc7bdc628e230",
+    )
+    refuse_checkout_filters(input_root, commits)
     base_env = offline_subprocess_environment()
     registered = subprocess.check_output(
-        ["git", "-C", str(input_root), "worktree", "list", "--porcelain"],
+        git_command(input_root, "worktree", "list", "--porcelain"),
         text=True,
         env=base_env,
     )
@@ -649,7 +714,7 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
 
     def run_git(*args: str) -> None:
         subprocess.run(
-            ["git", "-C", str(input_root), *args],
+            git_command(input_root, *args),
             text=True,
             capture_output=True,
             check=True,
@@ -657,10 +722,7 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
         )
 
     try:
-        for path, commit in (
-            (frozen_path, "dee737c14e68eb4f546b7ca4c827871fc48a2503"),
-            (repaired_path, "567565bdd654cab00dbb84101edcc7bdc628e230"),
-        ):
+        for path, commit in zip((frozen_path, repaired_path), commits, strict=True):
             run_git("worktree", "add", "--detach", str(path), commit)
             created.append(path)
             alias = path / "tools/sdk-smoke/node_modules/@google-cloud/firestore"
@@ -741,14 +803,7 @@ def validate_saved_production_authority(root: Path, input_root: Path) -> str:
                 continue
             try:
                 dirty = subprocess.check_output(
-                    [
-                        "git",
-                        "-C",
-                        str(path),
-                        "status",
-                        "--porcelain",
-                        "--untracked-files=all",
-                    ],
+                    git_command(path, "status", "--porcelain", "--untracked-files=all"),
                     text=True,
                     env=child_env,
                 ).strip()
@@ -794,6 +849,11 @@ def compare(
         },
     }
     script = """
+const ambient = ['GOOGLE_APPLICATION_CREDENTIALS', 'FIREBASE_CONFIG', 'FIREBASE_TOKEN',
+  'AWS_SECRET_ACCESS_KEY', 'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS'];
+if (ambient.some((key) => process.env[key] !== undefined)) {
+  throw new Error('ambient child environment refused');
+}
 import { compareStreamReceipts } from './stream_comparison.mjs';
 import { compareStreamReceiptsV2, v2Digest, v2TextDigest } from '../fs-write-txn-recompare-v2/stream_recompare_v2.mjs';
 let input = ''; for await (const chunk of process.stdin) input += chunk;

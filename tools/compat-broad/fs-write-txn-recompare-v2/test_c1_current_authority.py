@@ -26,6 +26,17 @@ PRIVATE = os.environ.get("FIREEMU_C1_AUTHORITY_PRIVATE_TESTS") == "1"
 def run_authority(
     root: Path, input_root: Path, output: Path, *extra: str
 ) -> subprocess.CompletedProcess[str]:
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/nonexistent/c1-canary-credentials.json",
+        "FIREBASE_CONFIG": '{"c1Canary":true}',
+        "FIREBASE_TOKEN": "c1-canary-token",
+        "AWS_SECRET_ACCESS_KEY": "c1-canary-secret",
+        "NODE_OPTIONS": "--require=/nonexistent/c1-canary-node-options.js",
+        "NODE_EXTRA_CA_CERTS": "/nonexistent/c1-canary-ca.pem",
+    }
     return subprocess.run(
         [
             sys.executable,
@@ -44,6 +55,7 @@ def run_authority(
         text=True,
         capture_output=True,
         check=False,
+        env=env,
     )
 
 
@@ -141,6 +153,67 @@ def test_historical_worktree_parent_accepts_the_real_repository_parent() -> None
     assert authority.historical_worktree_parent(WORKTREE_ROOT) == (
         WORKTREE_ROOT / ".worktree"
     )
+
+
+def git_setup(root: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+
+def test_safe_git_worktree_operations_do_not_run_hooks_or_fsmonitor(
+    tmp_path: Path,
+) -> None:
+    authority = load_authority()
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    git_setup(repository, "init", "-q")
+    git_setup(repository, "config", "user.email", "test@example.invalid")
+    git_setup(repository, "config", "user.name", "Test")
+    (repository / "tracked.txt").write_text("safe\n")
+    git_setup(repository, "add", "tracked.txt")
+    git_setup(repository, "commit", "-qm", "base")
+
+    marker = tmp_path / "executed"
+    hook = repository / ".git/hooks/post-checkout"
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    hook.chmod(0o700)
+    fsmonitor = tmp_path / "fsmonitor"
+    fsmonitor.write_text(f"#!/bin/sh\ntouch {marker}\n")
+    fsmonitor.chmod(0o700)
+    git_setup(repository, "config", "core.fsmonitor", str(fsmonitor))
+
+    checkout = tmp_path / "checkout"
+    authority.run_git(repository, "worktree", "add", "--detach", str(checkout), "HEAD")
+    authority.run_git(checkout, "status", "--porcelain")
+    authority.run_git(repository, "worktree", "remove", str(checkout))
+    assert not marker.exists()
+    assert not checkout.exists()
+
+
+def test_checkout_filter_inventory_refuses_before_smudge_execution(
+    tmp_path: Path,
+) -> None:
+    authority = load_authority()
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    git_setup(repository, "init", "-q")
+    git_setup(repository, "config", "user.email", "test@example.invalid")
+    git_setup(repository, "config", "user.name", "Test")
+    (repository / ".gitattributes").write_text("*.txt filter=canary\n")
+    (repository / "tracked.txt").write_text("safe\n")
+    git_setup(repository, "add", ".gitattributes", "tracked.txt")
+    git_setup(repository, "commit", "-qm", "filtered")
+
+    marker = tmp_path / "smudge-executed"
+    git_setup(
+        repository,
+        "config",
+        "filter.canary.smudge",
+        f"sh -c 'touch {marker}; cat'",
+    )
+    with pytest.raises(ValueError, match="checkout filter configuration refused"):
+        authority.refuse_checkout_filters(repository, ("HEAD",))
+    assert not marker.exists()
+    assert not (tmp_path / "checkout").exists()
 
 
 def test_missing_roots_refuse_without_output(tmp_path: Path) -> None:

@@ -1825,8 +1825,8 @@ fn strict_refuses_unsigned_custom_tokens_without_configured_signers() {
 
 /// Production honours a legacy token on account lookup, update and delete, a verification
 /// mail, phone linking, a sign-up upgrade and MFA enrollment (sandbox recording 2026-09-24,
-/// id-token/without-return-secure-token). Email-link and identity-provider linking, not yet observed, keep
-/// refusing it (they verify their own credential first, so no request isolates that here).
+/// id-token/without-return-secure-token). Email-link and identity-provider linking, not yet
+/// observed, keep refusing it; separate tests pin both.
 #[test]
 fn legacy_tokens_are_honoured_where_production_honours_them() {
     let s = strict_state_with_signer();
@@ -1991,6 +1991,56 @@ fn an_email_link_refuses_a_legacy_token() {
         (status, refused["error"]["message"].clone()),
         (400, json!("INVALID_ID_TOKEN"))
     );
+}
+
+/// Linking an identity provider refuses a legacy token (not yet observed with one in
+/// production) where a secure token of the same account links.
+#[test]
+fn an_identity_provider_link_refuses_a_legacy_token() {
+    let s = strict_state_with_signer();
+    let (status, secure) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "legacy-idp@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{secure}");
+    let (status, legacy) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "legacy-idp@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{legacy}");
+    let link = |token: &Value, subject: &str| {
+        let assertion =
+            json!({"sub": subject, "email": format!("{subject}@example.com")}).to_string();
+        let encoded: String = assertion
+            .bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() {
+                    (b as char).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect();
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithIdp"),
+            &json!({
+                "idToken": token,
+                "postBody": format!("id_token={encoded}&providerId=google.com"),
+                "requestUri": "http://localhost",
+                "returnSecureToken": true,
+            }),
+        )
+    };
+    let (status, refused) = link(&legacy["idToken"], "g-legacy");
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_ID_TOKEN"))
+    );
+    let (status, linked) = link(&secure["idToken"], "g-secure");
+    assert_eq!(status, 200, "{linked}");
 }
 
 /// Configured signers bring production's custom-token rules to the emulator profile too.

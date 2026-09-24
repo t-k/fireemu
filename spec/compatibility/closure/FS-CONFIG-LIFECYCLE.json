@@ -127,8 +127,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 4,
@@ -153,8 +153,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 27,
@@ -179,8 +179,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 16,
@@ -205,8 +205,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 13
@@ -230,8 +230,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 16
@@ -245,18 +245,18 @@
         "fs-config/default-database"
       ],
       "status": "VERIFIED",
-      "note": "C9/C12: observed in fireemu-fs-bisect-0924a. Each recording first recreates (default) (preparation steps both sides run and check does not compare), so both recordings and fireemu start from an empty (default) of the run; the program then seeds a document and builds an index before deleting (default). Every compared row agrees between the two recordings except indexes-without-default, a timing variation listed in productionVariations.",
+      "note": "C9/C12: observed in fireemu-fs-bisect-0924a. Each recording first recreates (default) (preparation steps both sides run and check does not compare), so both recordings and fireemu start from an empty (default) of the run; the program then seeds a document and builds an index before deleting (default), and polls the deleted (default)'s document, query and index list until production refuses them. Every compared row agrees between the two recordings except indexes-without-default, an owner-approved timing variation listed in productionVariations.",
       "evidence": {
         "productionRecordings": [
           {
-            "recordedAt": "2026-09-24T13:33:05.827Z",
-            "gitSha": "75593effa8e5bca85f74161a230097781f066e74",
+            "recordedAt": "2026-09-24T14:20:05.351Z",
+            "gitSha": "5c9970184ce6186c56467ab436caa4a1b4a70562",
             "recordings": 2,
             "project": "fireemu-fs-bisect-0924a"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 14,
@@ -281,8 +281,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 8
@@ -306,8 +306,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 5
@@ -331,8 +331,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 22
@@ -356,8 +356,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 9
@@ -381,8 +381,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 20
@@ -406,8 +406,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 13
@@ -431,8 +431,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 16
@@ -456,8 +456,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 39
@@ -481,8 +481,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 15,
@@ -507,8 +507,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 26
@@ -532,8 +532,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 8
@@ -557,8 +557,8 @@
             "project": "fireemu-oracle-query"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 19
@@ -584,14 +584,14 @@
             "project": "fireemu-oracle-query"
           },
           {
-            "recordedAt": "2026-09-24T13:33:05.827Z",
-            "gitSha": "75593effa8e5bca85f74161a230097781f066e74",
+            "recordedAt": "2026-09-24T14:20:05.351Z",
+            "gitSha": "5c9970184ce6186c56467ab436caa4a1b4a70562",
             "recordings": 2,
             "project": "fireemu-fs-bisect-0924a"
           }
         ],
-        "finalArtifactSha256": "f62dcc90c7b684ae4d66b6a6db837eebfd5a4dd29bf285e9e13baecd9df014cf",
-        "sourceCommit": "0bc13357f09cc7c2a54d40a222c43e9ea3e0060e",
+        "finalArtifactSha256": "62fcb9aaf5ae0c17402cc114fdbf8850653f44463cb083bab5b79d2ef207d8ed",
+        "sourceCommit": "4987c64378d541512089be9b4a5455cb97e6abd8",
         "comparisonPath": "spec/compatibility/closure/evidence/FS-CONFIG-LIFECYCLE-comparison.json",
         "rows": {
           "MATCH": 264,
@@ -612,31 +612,34 @@
         },
         "workspaceTests": {
           "command": "cargo nextest run --workspace --profile pr",
-          "passed": 3395,
+          "passed": 3396,
           "failed": 0,
           "skipped": 85
         },
         "clippy": "cargo clippy --workspace --all-targets -- -D warnings: clean",
         "build": {
           "gitStatusPorcelain": "empty (clean tree)",
-          "record": "docs.local/runs/fs-config-final-artifact/build-0bc13357f.porcelain (private)"
+          "record": "docs.local/runs/fs-config-final-artifact/build-4987c6437.porcelain (private)"
         },
         "comparisonRules": "MATCH_NONDETERMINISTIC rows agree with one of production's two recordings of the same starting state; each is listed in productionVariations with why production varied and which recording it matches. MATCH_RELABELED rows are listings equal under a one-to-one renaming of opaque id and instant symbols, whose numbering follows the order the server listed entries.",
         "productionVariations": [
           {
             "row": "fs-config/database/create/id-reuse#get-after",
             "matched": "second",
-            "reason": "A GET of a database deleted moments earlier answers 'Requested database was not found.' while the deletion settles and 'Project ... or database ... does not exist.' once it has; which one a recording sees depends on timing."
+            "reason": "The same GET of a database deleted seconds earlier (after a refused recreate) answered 'Requested database was not found.' in one recording and 'Project ... or database ... does not exist.' in the other; the recordings show no elapsed-time pattern, so which wording a deleted id gets is production-internal. fireemu gives the first, which every other post-delete row shows in both recordings.",
+            "approvedBy": "owner (t-k), 2026-09-24, owner decision ledger"
           },
           {
             "row": "fs-config/import/documents#export-all-operation",
             "matched": "first",
-            "reason": "How many of an export operation's transitional states a poll sees depends on timing (one recording saw PROCESSING before SUCCESSFUL); the states and their order agree (C10)."
+            "reason": "How many of an export operation's transitional states a poll sees depends on timing (one recording saw PROCESSING before SUCCESSFUL); the states and their order agree (C10).",
+            "approvedBy": "owner (t-k), 2026-09-24, owner decision ledger"
           },
           {
             "row": "fs-config/default-database/lifecycle#indexes-without-default",
             "matched": "first",
-            "reason": "Right after (default) is deleted production still lists its indexes for a while, then answers NOT_FOUND; one recording listed them, the other was already refused."
+            "reason": "After (default) is deleted, production lists its indexes for a while, then answers an in-between NOT_FOUND ('The database '<project>' does not exist.'), then the lasting 'Project ... or database ... does not exist.'; one recording's poll saw the listing and the in-between refusal, the other the lasting refusal at once. fireemu answers the lasting state (C10).",
+            "approvedBy": "owner (t-k), 2026-09-24, owner decision ledger"
           }
         ],
         "relabeledRows": [

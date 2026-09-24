@@ -39,6 +39,15 @@ All scenarios below are in `crates/fireemu-adapter-http/tests/auth_oidc_assertio
 | Populated refusal state | `signed_oidc_bad_signature_preserves_populated_sessions_transients_and_allocation` | A bad signature with otherwise current claims leaves user/profile/sign-in timestamps, a refresh session, pending MFA, expired-but-unswept OOB/SMS entries and event/notice observations unchanged. Six transient registries stay shared with a pre-request clone; subsequent UID, refresh and SMS allocations match the clone. Moving sweeping before validation kills this test. |
 | Existing fixture behavior | `auth_flows` integration suite | Separate emulator fixture regressions; this evidence does not prove signed SAML or production compatibility. |
 
+## Token claims moved from AUTH-CREDENTIAL
+
+AUTH-CREDENTIAL scope decision C7 (owner, 2026-09-24) moves these token-claim conditions here; they are required conditions of this parent and are not verified anywhere else:
+
+- The ID token of an IdP sign-in (`accounts:signInWithIdp`) carries `firebase.identities` for the provider, `firebase.sign_in_provider` and, for SAML, `firebase.sign_in_attributes`, as production issues them.
+- A refresh of that session and a session cookie made from it keep those claims.
+
+AUTH-CREDENTIAL's harness (`conformance/src/auth-credential/`) records a token as its header shape and every claim, and can be reused for these rows.
+
 ## Evidence limits and parent scope
 
 The finite local policy requires RS256, a matching key ID, RSA keys of 2048–8192 bits, a token at most 64 KiB, integral numeric timestamps, no clock skew, and `iat <= now < exp` with `exp > iat`. Multiple audiences require a matching `azp`; an explicitly supplied `azp` must always match. These are stated local bounds, not measured Firebase error precedence or tolerance claims.

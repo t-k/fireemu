@@ -248,6 +248,91 @@ test("sandbox corpus refuses a route, method, or header outside its bounded proj
   );
 });
 
+test("DELETE is accepted only for bounded near-limit REST route recipes", () => {
+  const base = "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents";
+  const routeProgram = (route) => {
+    const count = 12_112;
+    const collection = `del${route.replaceAll("-", "")}${count}DELETE_RUN_ID`.padEnd(979, "c");
+    const resource = `projects/fireemu-oracle-sbx/databases/(default)/documents/${collection}/d`;
+    return {
+      id: `writes/limits/near-limit-delete-refusal/${route}/${count}`,
+      area: "writes",
+      steps: [
+        {
+          id: "seed",
+          method: "POST",
+          path: `${base}:commit`,
+          body: {
+            writes: [
+              {
+                update: {
+                  name: resource,
+                  fields: {
+                    a: {
+                      arrayValue: {
+                        values: Array.from({ length: count }, (_, index) => ({
+                          integerValue: String(index),
+                        })),
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        { id: "before-delete", method: "GET", path: `/v1/${resource}` },
+        route === "rest"
+          ? { id: "delete", method: "DELETE", path: `/v1/${resource}` }
+          : {
+              id: "delete",
+              method: "POST",
+              path: `${base}:${route === "commit" ? "commit" : "batchWrite"}`,
+              body: { writes: [{ delete: resource }] },
+            },
+        {
+          id: "after-delete",
+          method: "POST",
+          path: `${base}:batchGet`,
+          body: { documents: [resource] },
+        },
+        {
+          id: "group-after-delete",
+          method: "POST",
+          path: `${base}:runQuery`,
+          body: {
+            structuredQuery: {
+              from: [
+                {
+                  collectionId: resource.split("/documents/")[1].split("/")[0],
+                  allDescendants: true,
+                },
+              ],
+              select: { fields: [{ fieldPath: "__name__" }] },
+              limit: 2,
+            },
+          },
+        },
+      ],
+    };
+  };
+  const corpusFor = (route) => {
+    const program = routeProgram(route);
+    return { ...corpus, restPrograms: [program], restRequestCount: program.steps.length };
+  };
+  for (const route of ["rest", "commit", "batch-write"]) {
+    assert.equal(validateSandboxCorpus(corpusFor(route)).requestCount, 5);
+  }
+  assert.throws(
+    () =>
+      validateSandboxCorpus({
+        ...corpusFor("rest"),
+        restPrograms: [{ ...routeProgram("rest"), id: "writes/unbounded-delete" }],
+      }),
+    /unsupported sandbox method/,
+  );
+});
+
 test("WebChannel byte probes are limited to the fixed sandbox unknown-session route", () => {
   const channel = {
     id: "writes/limits/webchannel-request-bytes/10485760",

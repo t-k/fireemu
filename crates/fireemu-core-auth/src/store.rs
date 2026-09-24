@@ -1363,6 +1363,11 @@ pub const OBSERVED_LONG_OOB_CODE_SECONDS: i64 = 3_900;
 pub const EXPIRED_OOB_CODE_RETENTION_SECONDS: i64 = 86_400;
 /// Phone verification codes expire after ten minutes of virtual time.
 pub const SMS_CODE_TTL_SECONDS: i64 = 600;
+/// Under production's second-factor rules a phone enrollment session outlives ten minutes:
+/// production enrolled with sessions about 1803 seconds old (sandbox recording 2026-09-24,
+/// `auth-mfa/lifetime#aged-session-s1800`, both recordings; the run waits 1800 seconds and a
+/// 3-second margin). A longer lifetime is unobserved, so an older session is still refused.
+pub const OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS: i64 = 1_805;
 /// A pending second-factor sign-in (`mfaPendingCredential`) expires after an hour of virtual
 /// time. The official emulator's credential is stateless and never expires; this is a local
 /// lifecycle policy, not a claimed production value.
@@ -1881,13 +1886,14 @@ impl AuthStore {
             Arc::make_mut(&mut self.oob_codes)
                 .retain(|_, code| !Self::oob_code_swept(production, code, now));
         }
+        let production = self.second_factor_rules_are_production();
         if self
             .verification_codes
             .values()
-            .any(|code| Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now))
+            .any(|code| Self::phone_code_expired(production, code, now))
         {
             Arc::make_mut(&mut self.verification_codes)
-                .retain(|_, code| !Self::expired(code.created_at, SMS_CODE_TTL_SECONDS, now));
+                .retain(|_, code| !Self::phone_code_expired(production, code, now));
         }
         self.temporary_proofs
             .retain(|_, (_, issued)| !Self::expired(*issued, TEMPORARY_PROOF_TTL_SECONDS, now));
@@ -3342,6 +3348,19 @@ impl AuthStore {
         now.as_nanos() - created_at.as_nanos() > i128::from(ttl_seconds) * 1_000_000_000
     }
 
+    /// Whether a phone code is past its lifetime: [`OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS`] for
+    /// a phone enrollment under production's second-factor rules, else
+    /// [`SMS_CODE_TTL_SECONDS`].
+    fn phone_code_expired(production: bool, code: &VerificationCode, now: LogicalInstant) -> bool {
+        let ttl = match code.purpose {
+            VerificationPurpose::Enrollment { .. } if production => {
+                OBSERVED_MFA_PHONE_ENROLLMENT_SECONDS
+            }
+            _ => SMS_CODE_TTL_SECONDS,
+        };
+        Self::expired(code.created_at, ttl, now)
+    }
+
     /// Creates a phone verification code for `phone` (a deterministic six-digit code).
     /// Expired codes are swept first; at [`MAX_OUTSTANDING_CODES`] outstanding codes the
     /// request is refused and creates nothing.
@@ -3436,7 +3455,7 @@ impl AuthStore {
             .verification_codes
             .get(session_info)
             .ok_or(AuthError::InvalidSessionInfo)?;
-        if Self::expired(entry.created_at, SMS_CODE_TTL_SECONDS, now) {
+        if Self::phone_code_expired(self.second_factor_rules_are_production(), entry, now) {
             return Err(AuthError::InvalidSessionInfo);
         }
         if entry.code != code {

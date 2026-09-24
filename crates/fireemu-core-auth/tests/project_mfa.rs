@@ -245,3 +245,52 @@ fn an_emulator_enrollment_session_is_gone_once_finalized() {
         Err(MfaError::EnrollmentSessionUnknown)
     );
 }
+
+// ---- phone enrollment sessions (sandbox recording 2026-09-24, auth-mfa/lifetime) -----------------
+
+/// A phone enrollment session's code checked `age` seconds after the session was sent.
+fn phone_enrollment_at(
+    production: bool,
+    age: i64,
+) -> Result<(), fireemu_core_auth::store::AuthError> {
+    use fireemu_core_auth::store::VerificationPurpose;
+    let mut s = AuthStore::new("demo-app", SplitMix64::new(3), TotpPolicy::default());
+    s.set_production_mfa(production);
+    s.set_mfa_config(enabled(Some(5)));
+    let uid = s
+        .create_user_with_id(NewUser::email("a@example.com"), Some("a"), t0())
+        .unwrap();
+    let sent = s
+        .send_verification_code(
+            "+16505550101",
+            VerificationPurpose::Enrollment { uid },
+            t0(),
+        )
+        .unwrap();
+    s.sweep_transient_credentials(seconds(age));
+    s.check_phone_code(&sent.session_info, &sent.code, seconds(age))
+        .map(|_| ())
+}
+
+/// Production still enrolled with a session about 1803 seconds old (`#aged-session-s1800`, both
+/// recordings); longer is unobserved, so it stays refused.
+#[test]
+fn a_production_phone_enrollment_session_lives_as_long_as_observed() {
+    for age in [603, 1_803, 1_805] {
+        assert!(phone_enrollment_at(true, age).is_ok(), "{age}");
+    }
+    assert_eq!(
+        phone_enrollment_at(true, 1_806),
+        Err(fireemu_core_auth::store::AuthError::InvalidSessionInfo)
+    );
+}
+
+/// The emulator profile keeps the ten minutes of every phone code.
+#[test]
+fn an_emulator_phone_enrollment_session_lives_ten_minutes() {
+    assert!(phone_enrollment_at(false, 600).is_ok());
+    assert_eq!(
+        phone_enrollment_at(false, 601),
+        Err(fireemu_core_auth::store::AuthError::InvalidSessionInfo)
+    );
+}

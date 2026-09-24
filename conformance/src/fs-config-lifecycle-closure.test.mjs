@@ -84,9 +84,11 @@ test("FS-CONFIG-LIFECYCLE closure inventory cannot silently omit a declared cond
     assert.ok(runs.length > 0, `${label}: names its production runs`);
     for (const run of runs) {
       assert.equal(run.recordings, 2, `${label}: every production run is recorded twice`);
-      // The whole-corpus regression spans both projects; every other condition names one.
+      // The whole-corpus regression and its review span both projects; every other condition
+      // names one.
       const allowed =
-        label === "FS-CONFIG-LIFECYCLE/final-artifact-regression"
+        label === "FS-CONFIG-LIFECYCLE/final-artifact-regression" ||
+        label === "FS-CONFIG-LIFECYCLE/closure-review"
           ? [defaultProject, ...Object.values(projects)]
           : [projects[label] ?? defaultProject];
       assert.ok(allowed.includes(run.project), `${label}: ${run.project}`);

@@ -39,7 +39,7 @@ use fireemu_core_types::resources::{
 use fireemu_proto_firestore::google::firestore::v1 as pb;
 use tonic::Status;
 
-use crate::decode::{decode_structured_query, parse_parent, DecodeError, Parent};
+use crate::decode::{decode_structured_query_in, parse_parent, DecodeError, Parent};
 use crate::encode::{
     decode_document_name, decode_fields, decode_mask, decode_precondition, decode_transaction,
     decode_write, encode_document, encode_instant, encode_transaction, encode_value,
@@ -1395,6 +1395,47 @@ mod tests {
     }
 
     #[test]
+    fn a_configured_creation_time_bounds_read_times_instead_of_the_start() {
+        use fireemu_core_types::time::LogicalInstant;
+        let now = LogicalInstant::from_unix_seconds(1_788_004_860);
+        let at = |seconds_before: i64| prost_types::Timestamp {
+            seconds: 1_788_004_860 - seconds_before,
+            nanos: 0,
+        };
+        let started = admission_backend();
+        assert_eq!(started.created_at(), now);
+        assert_eq!(
+            started
+                .read_time_selector(&at(60), now, now)
+                .unwrap_err()
+                .message(),
+            "The requested 'read_time' cannot be before database creation time."
+        );
+        let created = LogicalInstant::from_unix_seconds(1_788_004_860 - 7200);
+        let backend = admission_backend().with_created_at(created);
+        assert_eq!(backend.created_at(), created);
+        assert_eq!(
+            backend.read_time_selector(&at(3540), now, now).unwrap(),
+            LogicalInstant::from_unix_seconds(1_788_004_860 - 3540)
+        );
+        let too_old = backend.read_time_selector(&at(3660), now, now).unwrap_err();
+        assert_eq!(
+            (too_old.code(), too_old.message()),
+            (
+                tonic::Code::FailedPrecondition,
+                "The requested 'read_time' is too old."
+            )
+        );
+        assert_eq!(
+            backend
+                .read_time_selector(&at(7201), now, now)
+                .unwrap_err()
+                .message(),
+            "The requested 'read_time' cannot be before database creation time."
+        );
+    }
+
+    #[test]
     fn a_database_nothing_created_is_refused_and_is_not_materialized_by_the_refusal() {
         let backend = admission_backend();
         let error = backend
@@ -1549,6 +1590,17 @@ impl LocalBackend {
             change_admission: Mutex::new(None),
             barrier: Arc::new(AdmissionBarrier::new()),
         }
+    }
+
+    /// When the databases came into being, instead of the clock at construction: the
+    /// `createTime` they report and the instant before which a `read_time` is refused.
+    #[must_use]
+    pub const fn with_created_at(
+        mut self,
+        created_at: fireemu_core_types::time::LogicalInstant,
+    ) -> Self {
+        self.created_at = created_at;
+        self
     }
 
     /// How long a commit outside a transaction waits for the locks an active read-write
@@ -2494,7 +2546,8 @@ impl LocalBackend {
         parent: &Parent,
         sq: &pb::StructuredQuery,
     ) -> Result<AcceptedQuery, Status> {
-        let query = decode_structured_query(parent, sq).map_err(status)?;
+        let query = decode_structured_query_in(parent, sq, self.gateway.production_refusals())
+            .map_err(status)?;
         let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
         let empty = fireemu_core_firestore::index::IndexSet::default();
         let project_key = (
@@ -2508,7 +2561,7 @@ impl LocalBackend {
             .unwrap_or(&empty);
         self.gateway
             .validate_query_with_indexes(&query, database_indexes)
-            .map_err(|rejection| rejection.to_status())
+            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
     }
 
     /// Decodes and validates a structured aggregation query through the strict gateway.
@@ -2518,7 +2571,8 @@ impl LocalBackend {
         sq: &pb::StructuredQuery,
         aggregations: &[Aggregation],
     ) -> Result<AcceptedQuery, Status> {
-        let query = decode_structured_query(parent, sq).map_err(status)?;
+        let query = decode_structured_query_in(parent, sq, self.gateway.production_refusals())
+            .map_err(status)?;
         let indexes = self.indexes.read().map_err(|_| lock_poisoned())?;
         let empty = fireemu_core_firestore::index::IndexSet::default();
         let project_key = (
@@ -2532,7 +2586,7 @@ impl LocalBackend {
             .unwrap_or(&empty);
         self.gateway
             .validate_aggregation_query_with_indexes(&query, aggregations, database_indexes)
-            .map_err(|rejection| rejection.to_status())
+            .map_err(|rejection| rejection.to_status_in(&crate::gateway::database_name(parent)))
     }
 
     /// Atomically replaces the index catalog used by subsequent query plans.
@@ -3225,9 +3279,10 @@ impl LocalBackend {
         })
     }
 
-    /// `PartitionQuery`: cursor points that split a collection-group query (ordered by
-    /// `__name__`, without filters, other orderings, limits or cursors) into up to
-    /// `partition_count + 1` ranges of similar size, paged by `page_size` / `page_token`.
+    /// `PartitionQuery`: up to `partition_count` cursor points that split a collection-group
+    /// query (ordered by `__name__`, without filters, other orderings, limits or cursors) at
+    /// sampled keys as production does (see [`crate::partition`]), paged by `page_size` /
+    /// `page_token`.
     /// The cuts are computed at one version (the `read_time` selector's, else the version
     /// current at the first page) that the page token carries, so later pages see the same
     /// partitioning whatever was written in between; the token is bound to the query.
@@ -3238,37 +3293,39 @@ impl LocalBackend {
     ) -> Result<pb::PartitionQueryResponse, Status> {
         let parent = parse_parent(&req.parent).map_err(status)?;
         if parent.document.is_some() {
-            return Err(Status::invalid_argument(
-                "PartitionQuery parent must be the database (projects/{p}/databases/{d}/documents)",
-            ));
+            return Err(Status::invalid_argument(crate::partition::ANCESTOR_QUERY));
         }
         let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) = &req.query_type
         else {
             return Err(Status::invalid_argument(
-                "PartitionQuery requires a structured_query",
+                crate::query_messages::PARTITION_WITHOUT_QUERY,
             ));
         };
         self.fault(parent.project.as_str(), "firestore.read")?;
+        if req.partition_count <= 0 {
+            return Err(Status::invalid_argument(
+                crate::partition::COUNT_NOT_POSITIVE,
+            ));
+        }
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument(
+                crate::partition::PAGE_SIZE_NEGATIVE,
+            ));
+        }
         let query = self.accepted_query(&parent, sq)?.query;
         if query.find_nearest.is_some() {
             return Err(Status::unimplemented(
                 "PartitionQuery does not support findNearest",
             ));
         }
+        // Production answers a kindless query, or one without an explicit order, with no
+        // partition at all.
+        let split = crate::partition::check_query(&query).map_err(Status::invalid_argument)?;
         let name_ascending_only = query.order_by.iter().all(|o| {
             o.field.is_document_name()
                 && o.direction == fireemu_core_firestore::query::Direction::Ascending
         });
-        if !matches!(
-            query.scope,
-            fireemu_core_firestore::query::QueryScope::CollectionGroup { .. }
-        ) || query.filter.is_some()
-            || !name_ascending_only
-            || query.limit.is_some()
-            || query.offset != 0
-            || query.start_at.is_some()
-            || query.end_at.is_some()
-        {
+        if split && (query.filter.is_some() || !name_ascending_only) {
             return Err(Status::invalid_argument(
                 "PartitionQuery requires a collection group query ordered by __name__ only (no filters, order bys, limits, offsets or cursors)",
             ));
@@ -3276,16 +3333,11 @@ impl LocalBackend {
         let partition_count = usize::try_from(req.partition_count)
             .ok()
             .filter(|n| *n > 0)
-            .ok_or_else(|| Status::invalid_argument("partition_count must be positive"))?;
+            .ok_or_else(|| Status::invalid_argument(crate::partition::COUNT_NOT_POSITIVE))?;
         let collection_id = query
             .scope
             .collection_id()
-            .expect("collection-group checked above")
-            .as_str()
-            .to_owned();
-        if req.page_size < 0 {
-            return Err(Status::invalid_argument("page_size must not be negative"));
-        }
+            .map_or_else(String::new, |id| id.as_str().to_owned());
         let read_time = req.consistency_selector.as_ref().map(
             |pb::partition_query_request::ConsistencySelector::ReadTime(t)| {
                 crate::encode::decode_instant(t)
@@ -3308,7 +3360,14 @@ impl LocalBackend {
                 (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
             })
         };
-        // The page token: `<version>:<fingerprint>:<index>`.
+        // The fingerprint covers the version too, so a token cannot be edited to read an
+        // older snapshot than the one it was issued for.
+        let bound = |version: u64| {
+            version.to_be_bytes().iter().fold(fingerprint, |h, b| {
+                (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+            })
+        };
+        // The page token: `<version>:<fingerprint of the request and version>:<index>`.
         let (token_version, start) = if req.page_token.is_empty() {
             (None, 0usize)
         } else {
@@ -3318,16 +3377,16 @@ impl LocalBackend {
                     .parse::<u64>()
                     .ok()
                     .zip(f.parse::<u64>().ok())
-                    .zip(i.parse::<usize>().ok())
-                    .filter(|((_, f), _)| *f == fingerprint)
-                    .map(|((v, _), i)| (v, i)),
+                    .zip(i.parse::<usize>().ok()),
                 _ => None,
             };
-            let (v, i) = parsed.ok_or_else(|| {
-                Status::invalid_argument(
-                    "invalid page_token (not issued for this query, count and read time, or the session was reset)",
-                )
-            })?;
+            // Production: a token it cannot read, and one issued for another request (another
+            // query, count or read time, or before a reset), in its own words.
+            let ((v, f), i) = parsed
+                .ok_or_else(|| Status::invalid_argument(crate::partition::TOKEN_UNREADABLE))?;
+            if f != bound(v) {
+                return Err(Status::invalid_argument(crate::partition::TOKEN_FOREIGN));
+            }
             (Some(CommitVersion::from_value(v)), i)
         };
         let (paths, version): (Vec<DocumentPath>, CommitVersion) = self.read_db(&parent, |db| {
@@ -3337,15 +3396,16 @@ impl LocalBackend {
                 (None, None) => db.current_version(),
             };
             if version > db.current_version() {
-                return Err(Status::invalid_argument("invalid page_token"));
+                return Err(Status::invalid_argument(crate::partition::TOKEN_FOREIGN));
             }
+            if !split {
+                return Ok((Vec::new(), version));
+            }
+            let (group, _) = db
+                .run_query_paths_with_stats(&query, Some(version))
+                .map_err(|error| status_from_error(&error))?;
             Ok((
-                db.collection_group_partition_paths_at(
-                    query.scope.parent(),
-                    &collection_id,
-                    version,
-                    partition_count,
-                ),
+                crate::partition::partition_cursors(&group, partition_count),
                 version,
             ))
         })?;
@@ -3355,7 +3415,7 @@ impl LocalBackend {
                 values: vec![pb::Value {
                     value_type: Some(pb::value::ValueType::ReferenceValue(path.resource_name())),
                 }],
-                before: true,
+                before: false,
             })
             .collect();
         if start > cursors.len() {
@@ -3369,7 +3429,7 @@ impl LocalBackend {
         Ok(pb::PartitionQueryResponse {
             partitions: cursors[start..end].to_vec(),
             next_page_token: if end < cursors.len() {
-                format!("{}:{fingerprint}:{end}", version.value())
+                format!("{}:{}:{end}", version.value(), bound(version.value()))
             } else {
                 String::new()
             },
@@ -3571,6 +3631,24 @@ impl LocalBackend {
         outcome
     }
 
+    /// The index entries an Explain plan reads in `parent`'s database at the snapshot of
+    /// `read_time` (the latest state without one); the gRPC stream counts them once its pages
+    /// are done.
+    pub(crate) fn explain_index_entries(
+        &self,
+        parent: &Parent,
+        query: &Query,
+        aggregations: Option<&[Aggregation]>,
+        scans: &[fireemu_core_firestore::index::PlannedScan],
+        read_time: Option<&prost_types::Timestamp>,
+    ) -> Result<u64, Status> {
+        self.read_db(parent, |db| {
+            let version = read_time.map(|time| db.version_at(crate::encode::decode_instant(time)));
+            crate::service::index_entries(db, version, query, aggregations, scans)
+                .map_err(|error| status_from_error(&error))
+        })
+    }
+
     fn read_db<T>(
         &self,
         parent: &Parent,
@@ -3704,20 +3782,22 @@ impl LocalBackend {
         if !(0..1_000_000_000).contains(&ts.nanos) {
             return Err(Status::invalid_argument("read_time: nanos out of range"));
         }
+        // Production's texts (FS-QUERY-INDEX read-time, recorded 2026-09-24).
         if ts.nanos % 1000 != 0 {
             return Err(Status::invalid_argument(
-                "read_time must be a microsecond precision timestamp",
+                "timestamp cannot have more than microseconds precision",
             ));
         }
         let at = crate::encode::decode_instant(ts);
         if at.as_nanos() > horizon.max(now).as_nanos() {
             return Err(Status::invalid_argument(
-                "read_time must not be in the future",
+                "The requested 'read_time' cannot be in the future.",
             ));
         }
         // Production answers a read_time before the database existed with INVALID_ARGUMENT and
         // one inside the database's life but outside the retention window with
         // FAILED_PRECONDITION, in these words (conformance/firestore-production-matrix.json).
+        // Both profiles refuse it: fireemu did before the strict profile existed.
         if at < self.created_at {
             return Err(Status::invalid_argument(
                 "The requested 'read_time' cannot be before database creation time.",
@@ -4810,14 +4890,16 @@ impl LocalBackend {
         execution: Option<QueryExecutionContext>,
         selection: Option<Arc<QuerySelection>>,
     ) -> Result<AuthorizedQueryPage, Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
-                "RunQuery requires a structured_query",
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
-        let accepted = self.accepted_query(&parent, sq)?;
+        let accepted = self
+            .accepted_query(&parent, sq)
+            .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
         let authorization_parent = parse_parent(&authorization_req.parent).map_err(status)?;
         if authorization_parent.project != parent.project
             || authorization_parent.database != parent.database
@@ -4831,10 +4913,12 @@ impl LocalBackend {
             &authorization_req.query_type
         else {
             return Err(Status::invalid_argument(
-                "RunQuery requires a structured_query",
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
-        let authorization = self.accepted_query(&authorization_parent, authorization_query)?;
+        let authorization = self
+            .accepted_query(&authorization_parent, authorization_query)
+            .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -4878,6 +4962,7 @@ impl LocalBackend {
                     response.explain_metrics = Some(crate::service::explain_metrics(
                         &authorization.query,
                         None,
+                        accepted.scans.as_deref(),
                         None,
                     ));
                 }
@@ -4966,14 +5051,30 @@ impl LocalBackend {
                 .as_ref()
                 .is_some_and(|options| options.analyze)
             {
+                let index_entries = accepted
+                    .scans
+                    .as_deref()
+                    .map(|scans| {
+                        crate::service::index_entries(
+                            access.db(),
+                            version,
+                            &accepted.query,
+                            None,
+                            scans,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|error| status_from_error(&error))?;
                 let metrics = crate::service::explain_metrics(
                     &authorization.query,
                     None,
+                    accepted.scans.as_deref(),
                     Some(crate::service::ExplainExecution {
                         results_returned: i64::try_from(docs.len()).unwrap_or(i64::MAX),
                         entries: u64::try_from(docs.len())
                             .unwrap_or(u64::MAX)
                             .saturating_add(u64::try_from(skipped).unwrap_or(0)),
+                        index_entries,
                         duration: explain_started.elapsed(),
                     }),
                 );
@@ -4995,29 +5096,27 @@ impl LocalBackend {
             .map(|(response, _)| response)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn run_aggregation_query_with_stats(
         &self,
         req: &pb::RunAggregationQueryRequest,
         guard: ReadGuard<'_>,
     ) -> Result<(pb::RunAggregationQueryResponse, QueryStats), Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(saq)) =
             &req.query_type
         else {
             return Err(Status::invalid_argument(
-                "RunAggregationQuery requires a structured_aggregation_query",
+                crate::query_messages::AGGREGATION_WITHOUT_QUERY,
             ));
         };
-        let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) =
-            &saq.query_type
-        else {
-            return Err(Status::invalid_argument(
-                "aggregation query requires a structured_query",
-            ));
-        };
-        let (aliases, aggregations) = decode_aggregations(saq)?;
-        let accepted = self.accepted_aggregation_query(&parent, sq, &aggregations)?;
+        let sq = crate::query_messages::aggregation_structured_query(saq);
+        let sq = sq.as_ref();
+        let (aliases, aggregations) = decode_aggregations(saq, self.gateway.production_refusals())?;
+        let accepted = self
+            .accepted_aggregation_query(&parent, sq, &aggregations)
+            .map_err(|s| crate::index_messages::for_explain(req.explain_options.as_ref(), s))?;
         let plan_only = req
             .explain_options
             .as_ref()
@@ -5050,6 +5149,15 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
+            // Only once the database exists and the caller may read the query: a count
+            // capped at zero reads nothing and answers at the instant before the epoch.
+            if let Some(response) = crate::query_messages::zero_capped_count(
+                &aliases,
+                &aggregations,
+                req.explain_options.is_some() || req.consistency_selector.is_some(),
+            ) {
+                return Ok((response, QueryStats::default()));
+            }
             let explain_started = std::time::Instant::now();
             if plan_only {
                 return Ok((
@@ -5058,6 +5166,7 @@ impl LocalBackend {
                         explain_metrics: Some(crate::service::explain_metrics(
                             &accepted.query,
                             Some(&aggregations),
+                            accepted.scans.as_deref(),
                             None,
                         )),
                         ..Default::default()
@@ -5070,6 +5179,25 @@ impl LocalBackend {
             // to record the query.
             let (values, stats) = access.run_aggregation(&accepted.query, &aggregations)?;
             let read_time = access.read_time(now)?;
+            let analyze = req
+                .explain_options
+                .as_ref()
+                .is_some_and(|options| options.analyze);
+            let index_entries = accepted
+                .scans
+                .as_deref()
+                .filter(|_| analyze)
+                .map(|scans| {
+                    crate::service::index_entries(
+                        access.db(),
+                        version,
+                        &accepted.query,
+                        Some(&aggregations),
+                        scans,
+                    )
+                })
+                .transpose()
+                .map_err(|error| status_from_error(&error))?;
             let aggregate_fields: HashMap<String, pb::Value> = aliases
                 .into_iter()
                 .zip(values.iter().map(encode_value))
@@ -5084,6 +5212,7 @@ impl LocalBackend {
                             crate::service::explain_metrics(
                                 &accepted.query,
                                 Some(&aggregations),
+                                accepted.scans.as_deref(),
                                 Some(crate::service::ExplainExecution {
                                     results_returned: 1,
                                     entries: accepted.query.limit.map_or(stats.matched, |limit| {
@@ -5092,6 +5221,7 @@ impl LocalBackend {
                                                 .saturating_add(u64::from(accepted.query.offset)),
                                         )
                                     }),
+                                    index_entries,
                                     duration: explain_started.elapsed(),
                                 }),
                             )
@@ -5111,12 +5241,67 @@ impl LocalBackend {
         req: &pb::ListDocumentsRequest,
         guard: ReadGuard<'_>,
     ) -> Result<pb::ListDocumentsResponse, Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        // Production's texts (FS-DATA-WRITE-LIST, recorded 2026-09-24).
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument("Page size must be nonnegative."));
+        }
         if req.show_missing && !req.order_by.is_empty() {
             return Err(Status::invalid_argument(
-                "show_missing cannot be used with order_by",
+                "cannot specify an order when show_missing is true",
             ));
         }
+        // Without a collection id production refuses `show_missing`; the emulator profile, which
+        // may add no rejection, lists without the missing documents instead.
+        if req.show_missing && req.collection_id.is_empty() && self.gateway.production_refusals() {
+            return Err(Status::invalid_argument(
+                "collection id must be set when show_missing is true",
+            ));
+        }
+        let show_missing = req.show_missing && !req.collection_id.is_empty();
+        check_list_mask(req.mask.as_ref())?;
+        // Page tokens carry the resource name of the last document of the previous page, the
+        // order values it had when the page was issued (an ordered listing continues after
+        // those, as production's does), and the identity of the listing they continue:
+        // parent, collection, result-shaping options and session generation. The snapshot is
+        // not part of it: production continues a token issued at a read time without one,
+        // and the other way round (read-time#paged-at-write-1-next-without-read-time).
+        let identity = format!(
+            "{}|{}|{}|{}|{}|{}|{}",
+            req.parent,
+            req.collection_id,
+            req.mask
+                .as_ref()
+                .map(|m| m.field_paths.join(","))
+                .unwrap_or_default(),
+            req.order_by,
+            show_missing,
+            self.epoch(),
+            self.database_generation(&parent),
+        );
+        let after_cursor = list_page_cursor(&req.page_token, &identity)?;
+        let after = after_cursor.as_ref().map(|cursor| cursor.name.clone());
+        // The order values the previous page ended on, when the token carries them.
+        let token_values = after_cursor
+            .as_ref()
+            .and_then(|cursor| cursor.values.clone());
+        let after_path = after
+            .as_deref()
+            .map(decode_document_name)
+            .transpose()
+            .map_err(status)?;
+        if after_path.as_ref().is_some_and(|path| {
+            path.project() != &parent.project
+                || path.database() != &parent.database
+                || path.parent_document().as_ref() != parent.document.as_ref()
+                || (!req.collection_id.is_empty()
+                    && path.collection_id().as_str() != req.collection_id)
+        }) {
+            return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
+        }
+        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
+        // Faults apply to requests that validated, before anything (a read time) can create
+        // the database.
         self.fault(parent.project.as_str(), "firestore.read")?;
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
@@ -5138,58 +5323,20 @@ impl LocalBackend {
             }
             None => SnapshotSelector::Latest,
         };
-        // Page tokens carry the resource name of the last document of the previous page
-        // (documents are listed by name) and the identity of the listing they continue:
-        // parent, collection, result-shaping options, session generation, and the snapshot
-        // (live, read_time or transaction).
-        let identity = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}",
-            req.parent,
-            req.collection_id,
-            req.mask
-                .as_ref()
-                .map(|m| m.field_paths.join(","))
-                .unwrap_or_default(),
-            req.order_by,
-            req.show_missing,
-            self.epoch(),
-            self.database_generation(&parent),
-            match (&txn, read_at) {
-                (Some(t), _) => format!(
-                    "txn:{}",
-                    crate::rest::json::base64_encode(&encode_transaction(t))
-                ),
-                (None, Some(at)) => format!("rt:{}", at.as_nanos()),
-                (None, None) => "live".to_owned(),
-            }
-        );
-        let after = list_page_cursor(&req.page_token, &identity)?;
-        let after_path = after
-            .as_deref()
-            .map(decode_document_name)
-            .transpose()
-            .map_err(status)?;
-        if after_path.as_ref().is_some_and(|path| {
-            path.project() != &parent.project
-                || path.database() != &parent.database
-                || path.parent_document().as_ref() != parent.document.as_ref()
-                || path.collection_id().as_str() != req.collection_id
-        }) {
-            return Err(Status::invalid_argument(
-                "page_token cursor is outside the requested collection",
-            ));
-        }
-        let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
-        if req.page_size < 0 {
-            return Err(Status::invalid_argument("page_size must not be negative"));
-        }
         let accepted = self.accepted_query(&parent, &list_query(req)?)?;
         let ordered = !accepted.query.order_by.is_empty();
+        // Without a collection id the listing is every document directly below the parent,
+        // in name order (gRPC only; grpc/list-documents#every-collection-of-document): read
+        // through the query engine like an ordered listing.
+        let name_scan = !ordered && !req.collection_id.is_empty();
         // The rules see the page size as `request.query.limit` (the number of documents the
         // request can return); the scan itself stays unlimited so the page cursor applies
-        // before truncation.
+        // before truncation. Production serves at most 300 documents a page
+        // (large#page-size-1000).
         let page_size = if req.page_size > 0 {
-            usize::try_from(req.page_size).unwrap_or(usize::MAX)
+            usize::try_from(req.page_size)
+                .unwrap_or(usize::MAX)
+                .min(MAX_LIST_PAGE_SIZE)
         } else {
             DEFAULT_LIST_PAGE_SIZE
         };
@@ -5197,8 +5344,8 @@ impl LocalBackend {
         let scan_size = page_size.saturating_add(1);
         let mut proof_query = accepted.query.clone();
         proof_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
-        let bounded_name_page = txn.is_none() && !ordered;
-        let bounded_ordered_page = txn.is_none() && ordered;
+        let bounded_name_page = txn.is_none() && name_scan;
+        let bounded_ordered_page = txn.is_none() && !name_scan;
         self.with_selected_snapshot(&parent, selector, now, |access| {
             let version = access.version()?;
             guard(
@@ -5211,7 +5358,7 @@ impl LocalBackend {
             )?;
             // Inside a transaction the scan is recorded like a query, so a concurrent
             // change to the collection aborts the commit.
-            let mut documents = if bounded_name_page && req.show_missing {
+            let mut documents = if bounded_name_page && show_missing {
                 access
                     .db()
                     .list_documents_with_missing_page_at(
@@ -5239,16 +5386,23 @@ impl LocalBackend {
             } else if bounded_ordered_page {
                 let mut page_query = accepted.query.clone();
                 page_query.limit = Some(u32::try_from(scan_size).unwrap_or(u32::MAX));
-                let cursor = after_path
-                    .as_ref()
-                    .map(|path| {
-                        access
-                            .db()
-                            .cursor_after_document(&accepted.query, version, path)
-                    })
-                    .transpose()
-                    .map_err(|e| status_from_error(&e))?
-                    .flatten();
+                // After the values the page ended on, as the token recorded them.
+                let cursor = match token_values.clone() {
+                    Some(values) => Some(fireemu_core_firestore::query::Cursor {
+                        values,
+                        before: false,
+                    }),
+                    None => after_path
+                        .as_ref()
+                        .map(|path| {
+                            access
+                                .db()
+                                .cursor_after_document(&accepted.query, version, path)
+                        })
+                        .transpose()
+                        .map_err(|e| status_from_error(&e))?
+                        .flatten(),
+                };
                 let cursor_matches_document = cursor.is_some();
                 page_query.start_at = cursor;
                 let mut docs = access
@@ -5264,7 +5418,7 @@ impl LocalBackend {
                         encode_document(document)
                     })
                     .collect::<Vec<_>>();
-                if req.show_missing {
+                if show_missing {
                     let mut missing = Vec::new();
                     let mut continued_missing_suffix = false;
                     if !cursor_matches_document {
@@ -5305,9 +5459,32 @@ impl LocalBackend {
             } else {
                 let mut docs = match (&txn, ordered) {
                     (Some(_), _) => {
-                        access
+                        // The whole query is read and recorded as the transaction's read set
+                        // (a commit re-runs it to detect a conflict); a page then continues
+                        // after the values the token recorded.
+                        let all = access
                             .run_query_with_stats(&accepted.query, &accepted.query, false)?
-                            .0
+                            .0;
+                        match token_values.clone() {
+                            Some(values) => {
+                                let mut continued = accepted.query.clone();
+                                continued.start_at = Some(fireemu_core_firestore::query::Cursor {
+                                    values,
+                                    before: false,
+                                });
+                                let after: std::collections::BTreeSet<String> = access
+                                    .db()
+                                    .run_query(&continued, version)
+                                    .map_err(|e| status_from_error(&e))?
+                                    .iter()
+                                    .map(|d| d.path.resource_name())
+                                    .collect();
+                                all.into_iter()
+                                    .filter(|d| after.contains(&d.path.resource_name()))
+                                    .collect()
+                            }
+                            None => all,
+                        }
                     }
                     (None, true) => access
                         .db()
@@ -5335,7 +5512,7 @@ impl LocalBackend {
                         encode_document(d)
                     })
                     .collect();
-                if req.show_missing {
+                if show_missing {
                     // A path that holds no document but has descendants is listed by name
                     // alone, as the backend lists it. Under an explicit order the missing
                     // parents (which have no fields to order on) follow the ordered documents.
@@ -5354,7 +5531,7 @@ impl LocalBackend {
                 }
                 documents
             };
-            if !bounded_name_page && !bounded_ordered_page {
+            if !bounded_name_page && !bounded_ordered_page && token_values.is_none() {
                 if let Some(after) = &after {
                     if ordered {
                         // The page continues after the named document at its position in the
@@ -5372,12 +5549,28 @@ impl LocalBackend {
             // for every full page and then an empty page).
             let full = documents.len() > page_size;
             documents.truncate(page_size);
-            let next_page_token = if full {
-                documents.last().map_or(String::new(), |d| {
-                    crate::rest::json::base64_encode(format!("{}\n{identity}", d.name).as_bytes())
-                })
-            } else {
-                String::new()
+            let next_page_token = match documents.last() {
+                Some(last) if full => {
+                    // An ordered listing also records the order values of its last document
+                    // in this snapshot.
+                    let values = if name_scan {
+                        None
+                    } else {
+                        decode_document_name(&last.name)
+                            .ok()
+                            .map(|path| {
+                                access
+                                    .db()
+                                    .cursor_after_document(&accepted.query, version, &path)
+                            })
+                            .transpose()
+                            .map_err(|e| status_from_error(&e))?
+                            .flatten()
+                            .map(|cursor| cursor.values)
+                    };
+                    list_page_token(&last.name, &identity, values.as_deref())
+                }
+                _ => String::new(),
             };
             Ok(pb::ListDocumentsResponse {
                 documents,
@@ -5391,9 +5584,11 @@ impl LocalBackend {
         &self,
         req: &pb::ListCollectionIdsRequest,
     ) -> Result<pb::ListCollectionIdsResponse, Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
         if req.page_size < 0 {
-            return Err(Status::invalid_argument("page_size must not be negative"));
+            return Err(Status::invalid_argument(
+                "page_size must be greater than or equal to zero.",
+            ));
         }
         let now = self.write_time();
         let read_at = match &req.consistency_selector {
@@ -5421,27 +5616,21 @@ impl LocalBackend {
             match existing {
                 Some(handle) => Some(handle),
                 None if !req.page_token.is_empty() => {
-                    return Err(Status::invalid_argument(
-                        "page_token was issued for a different listing",
-                    ));
+                    return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
                 }
                 None => None,
             }
         };
+        // A token is a cursor of collection ids within one database session: production
+        // continues it under another parent or read time (list-collection-ids/rest
+        // #page-token-from-other-parent, read-time#collection-ids-paged-at-write-1-next-without-
+        // read-time).
         let identity = |handle: &DatabaseHandle| {
             format!(
-                "{}|{}|{}|{}|{}|{}",
-                req.parent,
+                "{}|{}|{}",
                 self.epoch(),
                 self.database_generation(&parent),
                 handle.0.incarnation,
-                match read_at {
-                    Some(at) => format!("rt:{}", at.as_nanos()),
-                    None => "live".to_owned(),
-                },
-                req.request_options
-                    .as_ref()
-                    .map_or_else(String::new, |options| format!("{options:?}")),
             )
         };
         if let Some(handle) = &handle {
@@ -5609,58 +5798,13 @@ pub fn encode_commit(result: &CommitResult) -> pb::CommitResponse {
     }
 }
 
-/// Firestore accepts at most this many aggregations in one query.
-const MAX_AGGREGATIONS_PER_QUERY: usize = 5;
-
-/// Decodes and validates the aggregation list: 1..=5 entries, positive `count.up_to`,
-/// unique aliases.
+/// Decodes and validates the aggregation list in production's terms
+/// (`crate::query_messages::decode_aggregations`).
 pub(crate) fn decode_aggregations(
     saq: &pb::StructuredAggregationQuery,
+    production_refusals: bool,
 ) -> Result<(Vec<String>, Vec<Aggregation>), Status> {
-    if saq.aggregations.is_empty() || saq.aggregations.len() > MAX_AGGREGATIONS_PER_QUERY {
-        return Err(Status::invalid_argument(format!(
-            "an aggregation query needs 1..={MAX_AGGREGATIONS_PER_QUERY} aggregations"
-        )));
-    }
-    let mut aliases: Vec<String> = Vec::with_capacity(saq.aggregations.len());
-    let mut aggregations = Vec::with_capacity(saq.aggregations.len());
-    for (i, a) in saq.aggregations.iter().enumerate() {
-        use pb::structured_aggregation_query::aggregation::Operator as O;
-        let field =
-            |f: &Option<pb::structured_query::FieldReference>| -> Result<FieldPath, Status> {
-                let r = f
-                    .as_ref()
-                    .ok_or_else(|| Status::invalid_argument("aggregation without field"))?;
-                FieldPath::parse(&r.field_path).map_err(|e| Status::invalid_argument(e.to_string()))
-            };
-        let agg = match &a.operator {
-            Some(O::Count(c)) => Aggregation::Count {
-                up_to: match c.up_to {
-                    None => None,
-                    Some(n) if n > 0 => Some(u64::try_from(n).unwrap_or(u64::MAX)),
-                    Some(_) => {
-                        return Err(Status::invalid_argument("count.up_to must be positive"))
-                    }
-                },
-            },
-            Some(O::Sum(s)) => Aggregation::Sum(field(&s.field)?),
-            Some(O::Avg(v)) => Aggregation::Avg(field(&v.field)?),
-            None => return Err(Status::invalid_argument("aggregation without operator")),
-        };
-        let alias = if a.alias.is_empty() {
-            format!("field_{}", i + 1)
-        } else {
-            a.alias.clone()
-        };
-        if aliases.contains(&alias) {
-            return Err(Status::invalid_argument(format!(
-                "duplicate aggregation alias {alias:?}"
-            )));
-        }
-        aliases.push(alias);
-        aggregations.push(agg);
-    }
-    Ok((aliases, aggregations))
+    crate::query_messages::decode_aggregations(saq, production_refusals)
 }
 
 /// Catalog key of a database.
@@ -5740,7 +5884,14 @@ pub fn list_query(req: &pb::ListDocumentsRequest) -> Result<pb::StructuredQuery,
 
 /// `ListDocuments.order_by`: a comma-separated list of `field [asc|desc]` clauses.
 fn list_order_by(order_by: &str) -> Result<Vec<pb::structured_query::Order>, Status> {
-    let invalid = || Status::invalid_argument(format!("Invalid order by clause \"{order_by}\"."));
+    // Any clause production cannot read, its field path included, is refused as the whole
+    // clause (order-and-mask#order-by-invalid-path).
+    let invalid = || {
+        Status::invalid_argument(format!(
+            "Invalid order by clause \"{}\".",
+            fireemu_core_types::codec::echo(order_by)
+        ))
+    };
     if order_by.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -5749,6 +5900,7 @@ fn list_order_by(order_by: &str) -> Result<Vec<pb::structured_query::Order>, Sta
         .map(|clause| {
             let mut words = clause.split_whitespace();
             let field = words.next().ok_or_else(invalid)?;
+            FieldPath::parse(field).map_err(|_| invalid())?;
             let direction = match words.next().map(str::to_ascii_lowercase).as_deref() {
                 None | Some("asc") => pb::structured_query::Direction::Ascending,
                 Some("desc") => pb::structured_query::Direction::Descending,
@@ -5767,24 +5919,122 @@ fn list_order_by(order_by: &str) -> Result<Vec<pb::structured_query::Order>, Sta
         .collect()
 }
 
-/// The document name a `ListDocuments` page token continues after; the token must have been
-/// issued for the same listing (`identity`).
-fn list_page_cursor(page_token: &str, identity: &str) -> Result<Option<String>, Status> {
+/// Production's refusal of a page token that is not one it issued.
+const LIST_TOKEN_MALFORMED: &str = "invalid page token";
+/// Production's refusal of a page token issued for another listing (another collection,
+/// order, mask or `show_missing`).
+const LIST_TOKEN_FOREIGN: &str = "Invalid page token.";
+/// The most bytes of order values a `ListDocuments` page token carries.
+const MAX_TOKEN_CURSOR_BYTES: usize = 1536;
+/// The most documents a `ListDocuments` page holds (large#page-size-1000).
+pub const MAX_LIST_PAGE_SIZE: usize = 300;
+
+/// Where a `ListDocuments` page token continues: after the named document, and in an ordered
+/// listing after the order values that document had when the token was issued.
+struct ListCursor {
+    name: String,
+    values: Option<Vec<fireemu_core_firestore::value::Value>>,
+}
+
+fn list_page_token(
+    name: &str,
+    identity: &str,
+    values: Option<&[fireemu_core_firestore::value::Value]>,
+) -> String {
+    use crate::rest::json::base64_encode;
+    use prost::Message as _;
+    // Values past the bound are left out, so a token stays small whatever the listing is
+    // ordered on (production cuts its index entries at 1500 bytes); such a page continues
+    // after its last document's current values, as fireemu's tokens did before.
+    let values = values
+        .map(|values| {
+            pb::Cursor {
+                values: values.iter().map(encode_value).collect(),
+                before: false,
+            }
+            .encode_to_vec()
+        })
+        .filter(|bytes| bytes.len() <= MAX_TOKEN_CURSOR_BYTES)
+        .map_or_else(String::new, |bytes| base64_encode(&bytes));
+    base64_encode(
+        format!(
+            "{}\n{}\n{values}",
+            base64_encode(name.as_bytes()),
+            base64_encode(identity.as_bytes())
+        )
+        .as_bytes(),
+    )
+}
+
+/// The cursor a `ListDocuments` page token continues after; the token must have been issued
+/// for the same listing (`identity`).
+fn list_page_cursor(page_token: &str, identity: &str) -> Result<Option<ListCursor>, Status> {
+    use crate::rest::json::base64_decode;
+    use prost::Message as _;
     if page_token.is_empty() {
         return Ok(None);
     }
-    let malformed = || Status::invalid_argument("malformed page_token");
-    let token =
-        String::from_utf8(crate::rest::json::base64_decode(page_token).map_err(|_| malformed())?)
-            .map_err(|_| malformed())?;
-    let (name, token_identity) = token.split_once('\n').ok_or_else(malformed)?;
-    if token_identity != identity {
-        return Err(Status::invalid_argument(
-            "page_token was issued for a different listing",
-        ));
+    let malformed = || Status::invalid_argument(LIST_TOKEN_MALFORMED);
+    let text = |part: &str| {
+        base64_decode(part)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .ok_or_else(malformed)
+    };
+    let token = text(page_token)?;
+    let mut parts = token.split('\n');
+    let (Some(name), Some(token_identity), Some(values), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(malformed());
+    };
+    let name = text(name)?;
+    decode_document_name(&name).map_err(|_| malformed())?;
+    if text(token_identity)? != identity {
+        return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
     }
-    decode_document_name(name).map_err(|_| malformed())?;
-    Ok(Some(name.to_owned()))
+    let values = if values.is_empty() {
+        None
+    } else {
+        let cursor = base64_decode(values)
+            .ok()
+            .and_then(|bytes| pb::Cursor::decode(bytes.as_slice()).ok())
+            .ok_or_else(malformed)?;
+        Some(
+            cursor
+                .values
+                .iter()
+                .map(crate::decode::decode_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| malformed())?,
+        )
+    };
+    Ok(Some(ListCursor { name, values }))
+}
+
+/// A `ListDocuments` mask in production's words: an empty path and a path that does not parse
+/// are refused as a query's property paths are (order-and-mask#mask-empty,
+/// #mask-comma-separated); the length limits stay with the shared mask decoder.
+fn check_list_mask(mask: Option<&pb::DocumentMask>) -> Result<(), Status> {
+    use fireemu_core_firestore::field_path::FieldPathError;
+    for path in mask.map_or(&[][..], |mask| mask.field_paths.as_slice()) {
+        match FieldPath::parse(path) {
+            Ok(_)
+            | Err(FieldPathError::PathTooLong { .. } | FieldPathError::SegmentTooLong { .. }) => {}
+            Err(FieldPathError::Empty) => {
+                return Err(Status::invalid_argument(
+                    crate::query_messages::EMPTY_PROPERTY_PATH,
+                ));
+            }
+            Err(_) => {
+                return Err(Status::invalid_argument(format!(
+                    r#"Invalid property path "{}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#,
+                    fireemu_core_types::codec::echo(path)
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn list_collection_ids_page_cursor(
@@ -5794,15 +6044,16 @@ fn list_collection_ids_page_cursor(
     if page_token.is_empty() {
         return Ok(None);
     }
-    let malformed = || Status::invalid_argument("malformed page_token");
+    let malformed = || Status::invalid_argument(LIST_TOKEN_MALFORMED);
     let token =
         String::from_utf8(crate::rest::json::base64_decode(page_token).map_err(|_| malformed())?)
             .map_err(|_| malformed())?;
     let (id, token_identity) = token.split_once('\n').ok_or_else(malformed)?;
-    if token_identity != identity || id.is_empty() {
-        return Err(Status::invalid_argument(
-            "page_token was issued for a different listing",
-        ));
+    if id.is_empty() {
+        return Err(malformed());
+    }
+    if token_identity != identity {
+        return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
     }
     CollectionId::try_new(id).map_err(|_| malformed())?;
     Ok(Some(id.to_owned()))
@@ -5856,11 +6107,8 @@ fn query_responses(
             );
         }
     }
-    if let Some(last) = responses.last_mut() {
-        // The last response says so, so a client can tell the end of the results from a
-        // stream that stalled.
-        last.continuation_selector = Some(pb::run_query_response::ContinuationSelector::Done(true));
-    }
+    // Production marks no response `done` (FS-QUERY-INDEX gRPC recordings, 2026-09-24): the
+    // end of the stream is the end of the results.
     if !new_transaction.is_empty() {
         // A new transaction is announced in a dedicated first response that carries nothing
         // else (RunQueryResponse contract).
@@ -6010,6 +6258,84 @@ mod lock_tests {
             .next_page_token;
         assert!(!request.page_token.is_empty());
         request
+    }
+
+    /// A listDocuments that a fault fails leaves an absent database absent, with or without a
+    /// read time: the fault comes before the read time is resolved (FS-DATA-WRITE-LIST review).
+    #[test]
+    fn list_documents_faults_do_not_create_the_database() {
+        use fireemu_core_session::fault::{
+            FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
+        };
+
+        for (action, code) in [
+            (
+                FaultAction::ReturnError {
+                    code: "UNAVAILABLE".into(),
+                },
+                tonic::Code::Unavailable,
+            ),
+            (FaultAction::Timeout, tonic::Code::DeadlineExceeded),
+            (FaultAction::TransactionConflict, tonic::Code::Aborted),
+            (FaultAction::DropConnection, tonic::Code::Unavailable),
+        ] {
+            for read_time in [
+                None,
+                Some(pb::list_documents_request::ConsistencySelector::ReadTime(
+                    prost_types::Timestamp {
+                        seconds: 1_788_004_860,
+                        nanos: 0,
+                    },
+                )),
+            ] {
+                let backend = backend();
+                let transaction_ids_before = backend.transaction_ids.lock().unwrap().clone();
+                let incarnations_before = backend
+                    .database_incarnations
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                let registry = Arc::new(FaultRegistry::new());
+                registry.default_state().lock().unwrap().install(FaultPlan {
+                    seed: 1,
+                    rules: vec![FaultRule {
+                        matches: FaultMatch {
+                            operation: "firestore.read".into(),
+                            nth: None,
+                            function: None,
+                            event_type: None,
+                        },
+                        action: action.clone(),
+                    }],
+                });
+                backend.set_faults(registry);
+                let error = backend
+                    .list_documents(
+                        &pb::ListDocumentsRequest {
+                            parent: "projects/demo-app/databases/rtdb/documents".to_owned(),
+                            collection_id: "c".to_owned(),
+                            consistency_selector: read_time.clone(),
+                            ..Default::default()
+                        },
+                        &crate::rules::allow_all_reads,
+                    )
+                    .unwrap_err();
+                assert_eq!(error.code(), code, "{action:?} {read_time:?}");
+                assert!(
+                    backend.snapshot_databases().is_empty(),
+                    "{action:?} {read_time:?}"
+                );
+                assert_eq!(
+                    *backend.transaction_ids.lock().unwrap(),
+                    transaction_ids_before
+                );
+                assert_eq!(
+                    backend
+                        .database_incarnations
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    incarnations_before,
+                    "{action:?} {read_time:?}"
+                );
+            }
+        }
     }
 
     #[test]

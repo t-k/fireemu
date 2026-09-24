@@ -8,6 +8,8 @@
 
 pub mod coverage;
 pub mod json;
+pub mod json_syntax;
+pub mod transcode;
 
 pub mod admin_fields;
 #[cfg(test)]
@@ -136,6 +138,9 @@ pub fn error_response(status: &Status) -> RestResponse {
         status.message(),
         status_name(code),
     );
+    if let Some(details) = crate::production_status::details_to_json(status.details()) {
+        body["error"]["details"] = Value::Array(details);
+    }
     if status
         .metadata()
         .contains_key(crate::local::DROP_CONNECTION_KEY)
@@ -154,6 +159,25 @@ pub fn error_response(status: &Status) -> RestResponse {
 #[must_use]
 pub fn drops_connection(response: &RestResponse) -> bool {
     response.body["error"]["ftdDropConnection"] == json!(true)
+}
+
+/// Production answers an error of a streaming REST method (`runQuery`, `runAggregationQuery`,
+/// `executePipeline`) inside the JSON array that would have carried its results. A fault that
+/// drops the connection keeps its own path.
+fn stream_errors(result: Result<RestResponse, Status>) -> Result<RestResponse, Status> {
+    result.or_else(|status| {
+        if status
+            .metadata()
+            .contains_key(crate::local::DROP_CONNECTION_KEY)
+        {
+            return Err(status);
+        }
+        let response = error_response(&status);
+        Ok(RestResponse {
+            status: response.status,
+            body: json!([response.body]),
+        })
+    })
 }
 
 fn ok(body: Value) -> RestResponse {
@@ -332,6 +356,134 @@ fn single<'a>(
         )));
     }
     Ok(values.first().map(String::as_str))
+}
+
+/// The system parameters of Google's front end, which bind to no request field.
+const SYSTEM_PARAMETERS: &[&str] = &[
+    "$.xgafv",
+    "access_token",
+    "alt",
+    "callback",
+    "fields",
+    "key",
+    "oauth_token",
+    "prettyPrint",
+    "quotaUser",
+    "uploadType",
+    "upload_protocol",
+];
+
+/// The query parameters of a REST `ListDocuments`, bound to the request fields as production's
+/// front end binds them (FS-DATA-WRITE-LIST, recorded 2026-09-24): by JSON or proto name, the
+/// last value of a repeated scalar winning, values refused in the transcoder's words.
+#[derive(Debug, Default)]
+struct ListParameters {
+    page_size: i32,
+    page_token: String,
+    order_by: String,
+    mask: Vec<String>,
+    show_missing: bool,
+    transaction: Option<String>,
+    read_time: Option<String>,
+}
+
+/// A query parameter the front end cannot read as the field's type.
+fn parameter_refusal(field: &str, kind: &str, value: &str) -> Status {
+    crate::production_status::bad_request(&[(
+        field.to_owned(),
+        format!(
+            "Invalid value at '{field}' ({kind}), \"{}\"",
+            fireemu_core_types::codec::echo(value)
+        ),
+    )])
+}
+
+/// A boolean as the front end reads a query parameter (`absl::SimpleAtob`: `true`, `t`, `yes`,
+/// `y`, `1` and their negations, in any case). Production takes `True`, `yes` and `1`
+/// (show-missing#show-missing-capitalized, -not-a-bool, -number) and refuses `""`.
+fn parameter_bool(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "t" | "yes" | "y" | "1" => Some(true),
+        "false" | "f" | "no" | "n" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn bind_list_parameters(
+    params: &BTreeMap<String, Vec<String>>,
+    production_refusals: bool,
+) -> Result<ListParameters, Status> {
+    let mut bound = ListParameters::default();
+    let mut page_size = None;
+    let mut show_missing = None;
+    for (name, values) in params {
+        let Some(last) = values.last() else { continue };
+        // Production binds the proto names too; the emulator profile ignores them as fireemu
+        // did before, so a bad value under such a name adds no rejection there.
+        let name = match name.as_str() {
+            "page_size" if production_refusals => "pageSize",
+            "page_token" if production_refusals => "pageToken",
+            "order_by" if production_refusals => "orderBy",
+            "mask.field_paths" if production_refusals => "mask.fieldPaths",
+            "show_missing" if production_refusals => "showMissing",
+            "read_time" if production_refusals => "readTime",
+            name => name,
+        };
+        match name {
+            "pageSize" => page_size = Some(last.as_str()),
+            "pageToken" => bound.page_token.clone_from(last),
+            "orderBy" => bound.order_by.clone_from(last),
+            "mask.fieldPaths" => bound.mask.extend(values.iter().cloned()),
+            "showMissing" => show_missing = Some(last.as_str()),
+            "transaction" => bound.transaction = Some(last.clone()),
+            "readTime" => bound.read_time = Some(last.clone()),
+            // A field of the request with no local effect (tags are for production's logs).
+            "requestOptions.requestTags" | "request_options.request_tags" => {}
+            other if SYSTEM_PARAMETERS.contains(&other) => {}
+            // Production refuses a name that binds to nothing; the emulator profile, which may
+            // add no rejection, ignores it as fireemu did before.
+            other if production_refusals => {
+                return Err(crate::production_status::bad_request(&[(
+                    String::new(),
+                    format!(
+                        "Invalid JSON payload received. Unknown name \"{0}\": Cannot bind query parameter. Field '{0}' could not be found in request message.",
+                        fireemu_core_types::codec::echo(other)
+                    ),
+                )]));
+            }
+            _ => {}
+        }
+    }
+    if let Some(value) = page_size {
+        bound.page_size = value
+            .parse::<i32>()
+            .map_err(|_| parameter_refusal("page_size", "TYPE_INT32", value))?;
+    }
+    if let Some(value) = show_missing {
+        bound.show_missing = parameter_bool(value)
+            .ok_or_else(|| parameter_refusal("show_missing", "TYPE_BOOL", value))?;
+    }
+    // The transcoder's timestamp check is production's (strict); the emulator profile reads the
+    // value as fireemu did before (it accepts a lower-case `z`, for one).
+    if let Some(value) = bound.read_time.as_ref().filter(|_| production_refusals) {
+        if let Some(problem) = transcode::timestamp_problem(value) {
+            return Err(crate::production_status::bad_request(&[(
+                "read_time".to_owned(),
+                format!(
+                    "Invalid value at 'read_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'read_time', {problem}"
+                ),
+            )]));
+        }
+    }
+    // Both members of the consistency oneof: the front end names the one it could not set.
+    if bound.transaction.is_some() && bound.read_time.is_some() {
+        return Err(crate::production_status::bad_request(&[(
+            String::new(),
+            "Invalid value (oneof), oneof field 'consistency_selector' is already set. Cannot set 'transaction'"
+                .to_owned(),
+        )]));
+    }
+    Ok(bound)
 }
 
 /// What a REST path names.
@@ -785,6 +937,18 @@ impl RestState {
             }
         }
         let (raw_resource, action) = match req.path.rsplit_once(':') {
+            // The query methods' templates need a document below `documents`; with one
+            // segment there, production's front end matches the create template instead, with
+            // the method in the collection id (FS-QUERY-INDEX parent-is-collection). The
+            // emulator profile keeps the query route, which refuses the collection parent, so
+            // a mistaken query never creates a document there.
+            Some((r, a))
+                if QUERY_METHODS.contains(&a)
+                    && names_a_root_collection(r)
+                    && self.gateway.production_refusals() =>
+            {
+                (req.path.as_str(), None)
+            }
             Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
             // A colon in the last segment is routing syntax (a document ID carries it
             // percent-encoded), so an unknown method is a route that does not exist -- never
@@ -922,48 +1086,19 @@ impl RestState {
         collection_id: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
-        let page_size = single(params, "pageSize")?.map_or(Ok(0), |value| {
-            value
-                .parse::<i32>()
-                .map_err(|_| Status::invalid_argument("pageSize must be an int32"))
-        })?;
-        if page_size < 0 {
-            return Err(Status::invalid_argument("pageSize must not be negative"));
-        }
-        let show_missing = match single(params, "showMissing")? {
-            None | Some("false") => false,
-            Some("true") => true,
-            Some(_) => {
-                return Err(Status::invalid_argument(
-                    "showMissing must be true or false",
-                ))
-            }
-        };
-        let order_by = single(params, "orderBy")?.unwrap_or("");
-        let transaction = single(params, "transaction")?;
-        let read_time = single(params, "readTime")?;
-        if show_missing && !order_by.is_empty() {
-            return Err(Status::invalid_argument(
-                "showMissing cannot be used with orderBy",
-            ));
-        }
+        let bound = bind_list_parameters(params, self.gateway.production_refusals())?;
         let req = pb::ListDocumentsRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
-            page_size,
-            page_token: single(params, "pageToken")?.unwrap_or("").to_owned(),
-            order_by: order_by.to_owned(),
-            mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
-            show_missing,
-            consistency_selector: match (transaction, read_time) {
-                (Some(_), Some(_)) => {
-                    return Err(Status::invalid_argument(
-                        "transaction and readTime are mutually exclusive",
-                    ))
-                }
+            page_size: bound.page_size,
+            page_token: bound.page_token,
+            order_by: bound.order_by,
+            mask: mask_from_paths(&bound.mask),
+            show_missing: bound.show_missing,
+            consistency_selector: match (bound.transaction, bound.read_time) {
                 (Some(t), None) => Some(
                     pb::list_documents_request::ConsistencySelector::Transaction(
-                        base64_decode_field("transaction", t).map_err(|e| bad(&e))?,
+                        base64_decode_field("transaction", &t).map_err(|e| bad(&e))?,
                     ),
                 ),
                 (None, Some(rt)) => {
@@ -973,7 +1108,7 @@ impl RestState {
                             .unwrap_or_default(),
                     ))
                 }
-                (None, None) => None,
+                _ => None,
             },
             request_options: None,
         };
@@ -997,6 +1132,9 @@ impl RestState {
         let document_id = first(params, "documentId").unwrap_or("");
         let document_resource =
             (!document_id.is_empty()).then(|| format!("{parent}/{collection_id}/{document_id}"));
+        if self.gateway.production_refusals() {
+            transcode::check_document_keys(body, "document")?;
+        }
         let req = pb::CreateDocumentRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
@@ -1115,56 +1253,117 @@ impl RestState {
                 })?;
                 Ok(ok(json!({})))
             }
-            "runQuery" => self.run_query(principal, resource, body),
-            "runAggregationQuery" => self.run_aggregation_query(principal, resource, body),
-            "partitionQuery" => self.partition_query(principal, resource, body),
-            "listCollectionIds" => {
-                json::strict_keys(
-                    body,
-                    &["pageSize", "pageToken", "readTime", "requestOptions"],
-                )
-                .map_err(|e| bad(&e))?;
-                if let Some(rules) = &self.rules {
-                    rules.require_owner(principal, "listCollectionIds")?;
+            // The streaming methods answer an error as a one-element array, like their results.
+            "runQuery" => stream_errors(
+                self.transcoded(action, body)
+                    .and_then(|body| self.run_query(principal, resource, &body)),
+            ),
+            "runAggregationQuery" => stream_errors(
+                self.transcoded(action, body)
+                    .and_then(|body| self.run_aggregation_query(principal, resource, &body)),
+            ),
+            // The template is `{database=projects/*/databases/*}/documents:executePipeline`;
+            // any other resource names no route.
+            // Only the strict profile has this route: before it the emulator profile named no
+            // REST pipeline route, and it may add no rejection.
+            "executePipeline" => {
+                if self.gateway.production_refusals()
+                    && matches!(
+                        resource.split('/').collect::<Vec<_>>().as_slice(),
+                        ["projects", _, "databases", _, "documents"]
+                    )
+                {
+                    stream_errors(self.execute_pipeline(principal))
+                } else {
+                    Ok(not_found_text())
                 }
-                let read_time = body
-                    .get("readTime")
-                    .map(|value| json::read_time_from_json(&json!({"readTime": value})))
-                    .transpose()
-                    .map_err(|e| bad(&e))?
-                    .flatten();
-                let request_options =
-                    request_options_from_json(body.get("requestOptions")).map_err(|e| bad(&e))?;
-                let response = self
-                    .local
-                    .list_collection_ids(&pb::ListCollectionIdsRequest {
-                        parent: resource.to_owned(),
-                        page_size: json::int32(body.get("pageSize"), "pageSize")
-                            .map_err(|e| bad(&e))?
-                            .unwrap_or(0),
-                        page_token: body
-                            .get("pageToken")
-                            .filter(|value| !value.is_null())
-                            .map(|value| {
-                                value.as_str().ok_or_else(|| {
-                                    bad(&json::JsonError("pageToken must be a string".into()))
-                                })
-                            })
-                            .transpose()?
-                            .unwrap_or_default()
-                            .to_owned(),
-                        request_options,
-                        consistency_selector: read_time
-                            .map(pb::list_collection_ids_request::ConsistencySelector::ReadTime),
-                    })?;
-                let mut out = json!({"collectionIds": response.collection_ids});
-                if !response.next_page_token.is_empty() {
-                    out["nextPageToken"] = Value::String(response.next_page_token);
-                }
-                Ok(ok(out))
             }
+            "partitionQuery" => self
+                .transcoded(action, body)
+                .and_then(|body| self.partition_query(principal, resource, &body)),
+            "listCollectionIds" => self.list_collection_ids(principal, resource, body),
             _ => Ok(not_found_text()),
         }
+    }
+
+    /// `:listCollectionIds`, its body after production's transcoder (strict).
+    fn list_collection_ids(
+        &self,
+        principal: &Caller,
+        resource: &str,
+        body: &Value,
+    ) -> Result<RestResponse, Status> {
+        let body = &self.transcoded("listCollectionIds", body)?;
+        json::strict_keys(
+            body,
+            &["pageSize", "pageToken", "readTime", "requestOptions"],
+        )
+        .map_err(|e| bad(&e))?;
+        if let Some(rules) = &self.rules {
+            rules.require_owner(principal, "listCollectionIds")?;
+        }
+        let read_time = body
+            .get("readTime")
+            .map(|value| json::read_time_from_json(&json!({"readTime": value})))
+            .transpose()
+            .map_err(|e| bad(&e))?
+            .flatten();
+        let request_options =
+            request_options_from_json(body.get("requestOptions")).map_err(|e| bad(&e))?;
+        let response = self
+            .local
+            .list_collection_ids(&pb::ListCollectionIdsRequest {
+                parent: resource.to_owned(),
+                page_size: json::int32(body.get("pageSize"), "pageSize")
+                    .map_err(|e| bad(&e))?
+                    .unwrap_or(0),
+                page_token: body
+                    .get("pageToken")
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        value.as_str().ok_or_else(|| {
+                            bad(&json::JsonError("pageToken must be a string".into()))
+                        })
+                    })
+                    .transpose()?
+                    .unwrap_or_default()
+                    .to_owned(),
+                request_options,
+                consistency_selector: read_time
+                    .map(pb::list_collection_ids_request::ConsistencySelector::ReadTime),
+            })?;
+        // proto3 JSON: an empty list and an empty token are left out.
+        let mut out = json!({});
+        if !response.collection_ids.is_empty() {
+            out["collectionIds"] = json!(response.collection_ids);
+        }
+        if !response.next_page_token.is_empty() {
+            out["nextPageToken"] = Value::String(response.next_page_token);
+        }
+        Ok(ok(out))
+    }
+
+    /// A custom method's body after production's transcoder: checked and normalized under the
+    /// strict profile, as sent under the emulator profile (which may add no rejection).
+    fn transcoded(&self, action: &str, body: &Value) -> Result<Value, Status> {
+        if self.gateway.production_refusals() {
+            transcode::check_body(action, body)
+        } else {
+            Ok(body.clone())
+        }
+    }
+
+    /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does;
+    /// an Enterprise database has no REST pipeline route here.
+    fn execute_pipeline(&self, principal: &Caller) -> Result<RestResponse, Status> {
+        // Owner first, as over gRPC.
+        if let Some(rules) = &self.rules {
+            rules.require_owner(principal, "ExecutePipeline")?;
+        }
+        if self.gateway.ctx.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise {
+            return Ok(not_found_text());
+        }
+        Err(crate::production_status::pipeline_requires_enterprise())
     }
 
     /// `:partitionQuery`, which the official emulator answers `UNIMPLEMENTED` (a documented
@@ -1190,7 +1389,9 @@ impl RestState {
             rules.require_owner(principal, "partitionQuery")?;
         }
         let Some(sq) = body.get("structuredQuery") else {
-            return Err(Status::invalid_argument("structuredQuery is required"));
+            return Err(Status::invalid_argument(
+                crate::query_messages::PARTITION_WITHOUT_QUERY,
+            ));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
         let partition_count = match body.get("partitionCount") {
@@ -1232,12 +1433,22 @@ impl RestState {
                 .map(pb::partition_query_request::ConsistencySelector::ReadTime),
             request_options: None,
         })?;
-        let mut out = json!({
-            "partitions": response.partitions.iter().map(|c| json!({
-                "values": c.values.iter().map(value_to_json).collect::<Vec<_>>(),
-                "before": c.before,
-            })).collect::<Vec<_>>(),
-        });
+        // proto3 JSON: an empty list and a false `before` are left out, as production does.
+        let mut out = json!({});
+        if !response.partitions.is_empty() {
+            out["partitions"] = response
+                .partitions
+                .iter()
+                .map(|c| {
+                    let mut cursor =
+                        json!({"values": c.values.iter().map(value_to_json).collect::<Vec<_>>()});
+                    if c.before {
+                        cursor["before"] = json!(true);
+                    }
+                    cursor
+                })
+                .collect();
+        }
         if !response.next_page_token.is_empty() {
             out["nextPageToken"] = Value::String(response.next_page_token);
         }
@@ -1388,9 +1599,15 @@ impl RestState {
         )
         .map_err(|e| bad(&e))?;
         let Some(sq) = body.get("structuredQuery") else {
-            return Err(Status::invalid_argument("structuredQuery is required"));
+            return Err(Status::invalid_argument(
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
+            ));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
+        crate::query_messages::check_find_nearest_request(
+            &structured,
+            self.gateway.production_refusals(),
+        )?;
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         exclusive_selectors(body)?;
@@ -1420,22 +1637,7 @@ impl RestState {
             consistency_selector,
         };
         let guard = self.read_guard(principal);
-        let (responses, _warnings) = match self.local.run_query(&req, &*guard) {
-            Ok(result) => result,
-            // Observed production negative-limit error is a stream element. Keep
-            // other validation/authentication errors on their existing paths.
-            Err(status)
-                if status.code() == Code::InvalidArgument
-                    && status.message() == "invalid query: negative limit" =>
-            {
-                let response = error_response(&status);
-                return Ok(RestResponse {
-                    status: response.status,
-                    body: json!([response.body]),
-                });
-            }
-            Err(status) => return Err(status),
-        };
+        let (responses, _warnings) = self.local.run_query(&req, &*guard)?;
         let out: Vec<Value> = responses
             .iter()
             .map(|r| {
@@ -1482,19 +1684,29 @@ impl RestState {
         .map_err(|e| bad(&e))?;
         let Some(saq) = body.get("structuredAggregationQuery") else {
             return Err(Status::invalid_argument(
-                "structuredAggregationQuery is required",
+                crate::query_messages::AGGREGATION_WITHOUT_QUERY,
             ));
         };
         let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;
+        if let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(query)) =
+            &aggregation.query_type
+        {
+            crate::query_messages::check_find_nearest_request(
+                query,
+                self.gateway.production_refusals(),
+            )?;
+        }
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
-        if !matches!(
-            aggregation.query_type,
-            Some(pb::structured_aggregation_query::QueryType::StructuredQuery(_))
-        ) {
-            return Err(Status::invalid_argument(
-                "aggregation query requires a structuredQuery",
-            ));
+        // Production aggregates an absent query as the empty one: every document under the
+        // parent (FS-QUERY-INDEX request-shape#aggregation-without-structured-query).
+        let mut aggregation = aggregation;
+        if aggregation.query_type.is_none() {
+            aggregation.query_type = Some(
+                pb::structured_aggregation_query::QueryType::StructuredQuery(
+                    pb::StructuredQuery::default(),
+                ),
+            );
         }
         exclusive_selectors(body)?;
         let consistency_selector =
@@ -1631,6 +1843,18 @@ fn observed_create_collection_slash_error(
     ))
 }
 
+/// Custom methods whose REST templates are `{parent=projects/*/databases/*/documents}:method`
+/// and `{parent=projects/*/databases/*/documents/*/**}:method`.
+const QUERY_METHODS: &[&str] = &["runQuery", "runAggregationQuery", "partitionQuery"];
+
+/// Whether a raw REST resource is `/v1/projects/*/databases/*/documents/<one segment>`.
+fn names_a_root_collection(raw_resource: &str) -> bool {
+    matches!(
+        raw_resource.split('/').collect::<Vec<_>>().as_slice(),
+        ["", "v1", "projects", _, "databases", _, "documents", collection] if !collection.is_empty()
+    )
+}
+
 /// Custom methods of the REST surface (`resource:method`).
 const CUSTOM_METHODS: &[&str] = &[
     "commit",
@@ -1642,6 +1866,7 @@ const CUSTOM_METHODS: &[&str] = &[
     "runAggregationQuery",
     "listCollectionIds",
     "partitionQuery",
+    "executePipeline",
 ];
 
 fn database_of(resource: &str) -> Result<String, Status> {

@@ -290,10 +290,16 @@ async fn explain_grpc_rejects_invalid_query_parent_and_snapshot() {
                             )
                         }
                     });
+            // An aggregation over an absent query aggregates the empty one, as production does
+            // (request-shape/rest#aggregation-without-structured-query), so that case is valid.
+            let aggregation_query_absent = request.query_type.is_none();
             let Err(error) = Firestore::run_query(&service, Request::new(request)).await else {
                 panic!("invalid query accepted")
             };
             assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            if aggregation_query_absent {
+                continue;
+            }
             let Err(error) =
                 Firestore::run_aggregation_query(&service, Request::new(aggregate)).await
             else {
@@ -608,7 +614,10 @@ async fn explain_count_up_to_caps_billable_index_entries() {
 }
 
 #[tokio::test]
-async fn explain_unmodeled_aggregations_do_not_claim_count_index_or_billing() {
+/// Every aggregation reports the index its plan reads and bills its entries, as production's
+/// count and sum rows do (FS-QUERY-INDEX explain/aggregations): a sum or average reads the
+/// automatic index of its field.
+async fn explain_aggregations_report_their_index_and_billing() {
     use pb::structured_aggregation_query::aggregation::{Avg, Operator, Sum};
     let backend = test_backend();
     let service = GatewayService::local(test_gateway(), backend.clone());
@@ -627,11 +636,11 @@ async fn explain_unmodeled_aggregations_do_not_claim_count_index_or_billing() {
         }),
     });
     let count = Operator::Count(pb::structured_aggregation_query::aggregation::Count::default());
-    for operators in [
-        vec![sum.clone()],
-        vec![avg],
-        vec![count.clone(), sum],
-        vec![count.clone(), count],
+    for (operators, index) in [
+        (vec![sum.clone()], "(rank ASC, __name__ ASC)"),
+        (vec![avg], "(rank ASC, __name__ ASC)"),
+        (vec![count.clone(), sum], "(rank ASC, __name__ ASC)"),
+        (vec![count.clone(), count], "(__name__ ASC)"),
     ] {
         for analyze in [false, true] {
             let mut request = request.clone();
@@ -667,16 +676,145 @@ async fn explain_unmodeled_aggregations_do_not_claim_count_index_or_billing() {
                 .unwrap()
                 .unwrap();
             let metrics = response.explain_metrics.unwrap();
-            assert!(metrics.plan_summary.unwrap().indexes_used.is_empty());
+            let used = metrics.plan_summary.unwrap().indexes_used;
+            assert_eq!(used.len(), 1, "{operators:?}");
+            assert_eq!(
+                used[0].fields["properties"].kind,
+                Some(prost_types::value::Kind::StringValue(index.to_owned())),
+                "{operators:?}"
+            );
             if analyze {
                 let stats = metrics.execution_stats.unwrap();
                 assert_eq!(stats.results_returned, 1);
                 assert!(stats.execution_duration.is_some());
-                assert_eq!(stats.read_operations, 0);
-                assert!(stats.debug_stats.is_none());
+                assert_eq!(stats.read_operations, 1);
+                let debug = stats.debug_stats.unwrap();
+                assert_eq!(
+                    debug.fields["index_entries_scanned"].kind,
+                    Some(prost_types::value::Kind::StringValue("3".to_owned())),
+                    "{operators:?}"
+                );
+                assert_eq!(
+                    debug.fields["documents_scanned"].kind,
+                    Some(prost_types::value::Kind::StringValue("0".to_owned()))
+                );
             } else {
                 assert!(metrics.execution_stats.is_none());
             }
         }
     }
+}
+
+/// gRPC Explain counts index entries at the snapshot the query read (its read time), not the
+/// latest state (closure review F7 / safety review S1).
+#[tokio::test]
+async fn explain_analyze_counts_entries_at_the_query_read_time() {
+    let backend = test_backend();
+    let service = GatewayService::local(test_gateway(), backend.clone());
+    let request = super::query_transaction_tests::seeded_query(&backend, 5, false);
+    let read_time = Firestore::run_query(&service, Request::new(request.clone()))
+        .await
+        .unwrap()
+        .into_inner()
+        .map(Result::unwrap)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .find_map(|response| response.read_time)
+        .unwrap();
+    backend
+        .commit(&pb::CommitRequest {
+            database: database_name_from_query_parent(&request.parent),
+            writes: (5..8)
+                .map(|index| pb::Write {
+                    operation: Some(pb::write::Operation::Update(pb::Document {
+                        name: format!("{}/items/{index:03}", request.parent),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .unwrap();
+    let entries = |mut request: pb::RunQueryRequest| {
+        let service = &service;
+        async move {
+            request.explain_options = Some(pb::ExplainOptions { analyze: true });
+            let responses: Vec<_> = Firestore::run_query(service, Request::new(request))
+                .await
+                .unwrap()
+                .into_inner()
+                .map(Result::unwrap)
+                .collect()
+                .await;
+            let metrics = responses
+                .iter()
+                .find_map(|response| response.explain_metrics.clone())
+                .unwrap();
+            metrics.execution_stats.unwrap().debug_stats.unwrap().fields["index_entries_scanned"]
+                .kind
+                .clone()
+        }
+    };
+    let mut at_read_time = request.clone();
+    at_read_time.consistency_selector = Some(pb::run_query_request::ConsistencySelector::ReadTime(
+        read_time,
+    ));
+    assert_eq!(
+        entries(at_read_time).await,
+        Some(prost_types::value::Kind::StringValue("5".to_owned()))
+    );
+    assert_eq!(
+        entries(request).await,
+        Some(prost_types::value::Kind::StringValue("8".to_owned()))
+    );
+}
+
+/// gRPC aggregates an absent query as the empty one and refuses a missing one in production's
+/// words, as REST does (closure review F5).
+#[tokio::test]
+async fn grpc_aggregation_and_query_without_a_query_answer_as_rest_does() {
+    let backend = test_backend();
+    let service = GatewayService::local(test_gateway(), backend.clone());
+    let request = super::query_transaction_tests::seeded_query(&backend, 3, false);
+    let mut counted = aggregation(request.clone());
+    if let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
+        aggregation,
+    )) = &mut counted.query_type
+    {
+        aggregation.query_type = None;
+    }
+    let response = Firestore::run_aggregation_query(&service, Request::new(counted))
+        .await
+        .unwrap()
+        .into_inner()
+        .next()
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        response.result.unwrap().aggregate_fields["count"].value_type,
+        Some(pb::value::ValueType::IntegerValue(3))
+    );
+    let mut bare = request.clone();
+    bare.query_type = None;
+    let refused = Firestore::run_query(&service, Request::new(bare))
+        .await
+        .err()
+        .expect("a query is required");
+    assert_eq!(
+        refused.message(),
+        crate::query_messages::RUN_QUERY_WITHOUT_QUERY
+    );
+    let mut no_aggregation = aggregation(request);
+    no_aggregation.query_type = None;
+    let refused = Firestore::run_aggregation_query(&service, Request::new(no_aggregation))
+        .await
+        .err()
+        .expect("an aggregation query is required");
+    assert_eq!(
+        refused.message(),
+        crate::query_messages::AGGREGATION_WITHOUT_QUERY
+    );
 }

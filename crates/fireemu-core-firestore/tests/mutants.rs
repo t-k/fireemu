@@ -318,20 +318,21 @@ fn query_operator_names_cursor_arity_and_limit_boundaries() {
     assert_eq!(FieldOp::Equal.name(), "EQUAL");
     assert_eq!(FieldOp::ArrayContainsAny.name(), "ARRAY_CONTAINS_ANY");
     assert_eq!(FieldOp::NotIn.name(), "NOT_IN");
-    // Cursor values may not exceed the effective order-by arity (one field + __name__).
+    // Cursor values may not exceed the explicit order-by: production gives the implicit
+    // `__name__` tiebreak no value (FS-QUERY-INDEX cursors, 2026-09-24).
     let ordered = tasks().with_order(order("priority", Direction::Ascending));
-    let mut two = ordered.clone();
+    let mut one_value = ordered.clone();
+    one_value.start_at = Some(Cursor {
+        values: vec![Value::Integer(1)],
+        before: true,
+    });
+    assert!(one_value.canonicalize().is_ok());
+    let mut two = ordered;
     two.start_at = Some(Cursor {
         values: vec![Value::Integer(1), Value::String("t1".into())],
         before: true,
     });
-    assert!(two.canonicalize().is_ok());
-    let mut three = ordered;
-    three.start_at = Some(Cursor {
-        values: vec![Value::Integer(1), Value::String("t1".into()), Value::Null],
-        before: true,
-    });
-    assert!(three.canonicalize().is_err());
+    assert!(two.canonicalize().is_err());
     // One array-contains without array-contains-any is fine.
     let one = tasks()
         .with_filter(field(

@@ -313,7 +313,7 @@ pub fn decode_transaction(bytes: &[u8]) -> Result<TransactionId, DecodeError> {
 pub fn status_from_error(e: &FirestoreError) -> tonic::Status {
     let mut status = match e {
         FirestoreError::InvalidArgument(m) => tonic::Status::invalid_argument(m.clone()),
-        FirestoreError::FailedPrecondition(m) => tonic::Status::failed_precondition(m.clone()),
+        FirestoreError::FailedPrecondition(m) => crate::production_status::failed_precondition(m),
         FirestoreError::AlreadyExists(p) => {
             tonic::Status::already_exists(format!("Document already exists: {}", p.resource_name()))
         }

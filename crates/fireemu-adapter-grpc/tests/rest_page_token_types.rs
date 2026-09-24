@@ -82,12 +82,13 @@ fn invalid_tokens() -> Vec<Value> {
 }
 
 fn assert_type_error(response: &RestResponse) {
+    assert_refused(response, "pageToken must be a string");
+}
+
+fn assert_refused(response: &RestResponse, message: &str) {
     assert_eq!(response.status, 400, "{}", response.body);
     assert_eq!(response.body["error"]["status"], "INVALID_ARGUMENT");
-    assert_eq!(
-        response.body["error"]["message"],
-        "pageToken must be a string"
-    );
+    assert_eq!(response.body["error"]["message"], message);
 }
 
 fn seed_collections(state: &RestState) {
@@ -111,8 +112,18 @@ fn partition_query_rejects_non_string_page_tokens_instead_of_restarting() {
         assert_eq!(control.status, 200, "{}", control.body);
         for token in invalid_tokens() {
             let mut body = partition_body();
-            body["pageToken"] = token;
-            assert_type_error(&call(&state, "POST", &path, body));
+            body["pageToken"] = token.clone();
+            // Production's transcoder refuses a non-string page token before the method runs
+            // (strict); the emulator profile keeps fireemu's own refusal.
+            let response = call(&state, "POST", &path, body);
+            if strict {
+                assert_refused(
+                    &response,
+                    &format!("Invalid value at 'page_token' (TYPE_STRING), {token}"),
+                );
+            } else {
+                assert_type_error(&response);
+            }
         }
     }
 }
@@ -156,17 +167,29 @@ fn list_collection_ids_treats_null_as_an_unset_token() {
 
 #[test]
 fn list_collection_ids_still_rejects_non_string_non_null_tokens() {
-    let state = state(true);
-    seed_collections(&state);
-    let path = format!("{DOCS}:listCollectionIds");
-    let before = call(&state, "POST", &path, json!({}));
-    assert_eq!(before.status, 200, "{}", before.body);
-    for token in invalid_tokens() {
-        assert_type_error(&call(&state, "POST", &path, json!({"pageToken": token})));
+    for strict in [true, false] {
+        let state = state(strict);
+        seed_collections(&state);
+        let path = format!("{DOCS}:listCollectionIds");
+        let before = call(&state, "POST", &path, json!({}));
+        assert_eq!(before.status, 200, "{}", before.body);
+        for token in invalid_tokens() {
+            // Production's transcoder refuses a non-string page token before the method runs
+            // (strict); the emulator profile keeps fireemu's own refusal.
+            let response = call(&state, "POST", &path, json!({"pageToken": token}));
+            if strict {
+                assert_refused(
+                    &response,
+                    &format!("Invalid value at 'page_token' (TYPE_STRING), {token}"),
+                );
+            } else {
+                assert_type_error(&response);
+            }
+        }
+        let after = call(&state, "POST", &path, json!({}));
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.body["collectionIds"], before.body["collectionIds"]);
     }
-    let after = call(&state, "POST", &path, json!({}));
-    assert_eq!(after.status, before.status);
-    assert_eq!(after.body["collectionIds"], before.body["collectionIds"]);
 }
 
 #[test]

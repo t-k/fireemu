@@ -1085,34 +1085,43 @@ fn field_reference(v: Option<&Value>) -> Result<Option<sq::FieldReference>, Json
 
 fn field_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     use sq::field_filter::Operator as O;
-    let value = value.ok_or_else(|| JsonError("fieldFilter.op is required".into()))?;
+    // An absent operator is the proto default. An unknown enum number passes through as it
+    // does on the wire: the query decoder refuses both as production does.
+    let Some(value) = value else {
+        return Ok(O::Unspecified as i32);
+    };
     let operator = match value {
-        Value::String(name) => O::from_str_name(name),
+        Value::String(name) => O::from_str_name(name).map(|operator| operator as i32),
         Value::Number(number) => number
             .as_i64()
-            .and_then(|number| i32::try_from(number).ok())
-            .and_then(|number| O::try_from(number).ok()),
+            .and_then(|number| i32::try_from(number).ok()),
         _ => return err("fieldFilter.op must be a string or enum number"),
     };
-    operator
-        .map(|operator| operator as i32)
-        .ok_or_else(|| JsonError("unknown field filter operator".into()))
+    operator.ok_or_else(|| JsonError("unknown field filter operator".into()))
+}
+
+/// An enum given by number passes through as it does on the wire; the query decoder refuses an
+/// unknown one in production's words, for REST and gRPC alike.
+fn enum_number(number: &serde_json::Number, what: &str) -> Result<i32, JsonError> {
+    number
+        .as_i64()
+        .and_then(|number| i32::try_from(number).ok())
+        .ok_or_else(|| JsonError(format!("{what} must be a string or enum number")))
 }
 
 fn unary_operator(value: Option<&Value>) -> Result<i32, JsonError> {
     use sq::unary_filter::Operator as O;
-    let value = value.ok_or_else(|| JsonError("unaryFilter.op is required".into()))?;
-    let operator = match value {
-        Value::String(name) => O::from_str_name(name),
-        Value::Number(number) => number
-            .as_i64()
-            .and_then(|number| i32::try_from(number).ok())
-            .and_then(|number| O::try_from(number).ok()),
-        _ => return err("unaryFilter.op must be a string or enum number"),
+    // An absent operator is the proto default; the query decoder refuses it as production does.
+    let Some(value) = value else {
+        return Ok(O::Unspecified as i32);
     };
-    operator
-        .map(|operator| operator as i32)
-        .ok_or_else(|| JsonError("unknown unary filter operator".into()))
+    match value {
+        Value::String(name) => O::from_str_name(name)
+            .map(|operator| operator as i32)
+            .ok_or_else(|| JsonError("unknown unary filter operator".into())),
+        Value::Number(number) => enum_number(number, "unaryFilter.op"),
+        _ => err("unaryFilter.op must be a string or enum number"),
+    }
 }
 
 fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
@@ -1122,22 +1131,14 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
         }
         let op = match c.get("op") {
             Some(Value::String(name)) => sq::composite_filter::Operator::from_str_name(name)
-                .ok_or_else(|| JsonError("unknown composite filter operator".into()))?,
-            Some(Value::Number(number)) => {
-                let number = number
-                    .as_i64()
-                    .and_then(|number| i32::try_from(number).ok())
-                    .ok_or_else(|| {
-                        JsonError("compositeFilter.op must be a string or enum number".into())
-                    })?;
-                sq::composite_filter::Operator::try_from(number)
-                    .map_err(|_| JsonError("unknown composite filter operator".into()))?
-            }
+                .ok_or_else(|| JsonError("unknown composite filter operator".into()))?
+                as i32,
+            Some(Value::Number(number)) => enum_number(number, "compositeFilter.op")?,
             Some(_) => return err("compositeFilter.op must be a string or enum number"),
-            None => return err("compositeFilter.op is required"),
+            None => sq::composite_filter::Operator::Unspecified as i32,
         };
         sq::filter::FilterType::CompositeFilter(sq::CompositeFilter {
-            op: op as i32,
+            op,
             filters: match c.get("filters") {
                 None | Some(Value::Null) => Vec::new(),
                 Some(filters) => filters
@@ -1161,7 +1162,8 @@ fn filter_from_json(v: &Value) -> Result<sq::Filter, JsonError> {
                 .map(sq::unary_filter::OperandType::Field),
         })
     } else {
-        return err("filter must be compositeFilter, fieldFilter or unaryFilter");
+        // No filter type set: the query decoder refuses it as production does.
+        return Ok(sq::Filter { filter_type: None });
     };
     Ok(sq::Filter {
         filter_type: Some(filter_type),
@@ -1250,30 +1252,18 @@ fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNeare
             "distanceThreshold",
         ],
     )?;
-    let vector_field = field_reference(raw.get("vectorField"))?
-        .ok_or_else(|| JsonError("findNearest.vectorField is required".into()))?;
-    let query_vector = value_from_json(
-        raw.get("queryVector")
-            .ok_or_else(|| JsonError("findNearest.queryVector is required".into()))?,
-    )?;
+    // Absent members are proto defaults; the query decoder refuses them as production does.
+    let vector_field = field_reference(raw.get("vectorField"))?;
+    let query_vector = raw.get("queryVector").map(value_from_json).transpose()?;
     let distance_measure = match raw.get("distanceMeasure") {
         Some(Value::String(name)) => sq::find_nearest::DistanceMeasure::from_str_name(name)
-            .ok_or_else(|| JsonError("unknown distance measure".into()))?,
-        Some(Value::Number(number)) => {
-            let number = number
-                .as_i64()
-                .and_then(|number| i32::try_from(number).ok())
-                .ok_or_else(|| {
-                    JsonError("findNearest.distanceMeasure must be a string or enum number".into())
-                })?;
-            sq::find_nearest::DistanceMeasure::try_from(number)
-                .map_err(|_| JsonError("unknown distance measure".into()))?
-        }
-        None => return err("findNearest.distanceMeasure is required"),
+            .ok_or_else(|| JsonError("unknown distance measure".into()))?
+            as i32,
+        Some(Value::Number(number)) => enum_number(number, "findNearest.distanceMeasure")?,
+        None => sq::find_nearest::DistanceMeasure::Unspecified as i32,
         Some(_) => return err("findNearest.distanceMeasure must be a string or enum number"),
     };
-    let limit = int32(raw.get("limit"), "findNearest.limit")?
-        .ok_or_else(|| JsonError("findNearest.limit is required".into()))?;
+    let limit = int32(raw.get("limit"), "findNearest.limit")?;
     let distance_result_field = raw
         .get("distanceResultField")
         .map(|value| {
@@ -1287,16 +1277,24 @@ fn find_nearest_from_json(raw: &Value) -> Result<pb::structured_query::FindNeare
     let distance_threshold = raw
         .get("distanceThreshold")
         .map(|value| {
-            value
-                .as_f64()
-                .ok_or_else(|| JsonError("findNearest.distanceThreshold must be a number".into()))
+            // proto3 JSON spells non-finite doubles as strings.
+            match value {
+                Value::String(text) => match text.as_str() {
+                    "NaN" => Some(f64::NAN),
+                    "Infinity" => Some(f64::INFINITY),
+                    "-Infinity" => Some(f64::NEG_INFINITY),
+                    other => other.parse::<f64>().ok(),
+                },
+                other => other.as_f64(),
+            }
+            .ok_or_else(|| JsonError("findNearest.distanceThreshold must be a number".into()))
         })
         .transpose()?;
     Ok(pb::structured_query::FindNearest {
-        vector_field: Some(vector_field),
-        query_vector: Some(query_vector),
+        vector_field,
+        query_vector,
         distance_measure: distance_measure as i32,
-        limit: Some(limit),
+        limit,
         distance_result_field,
         distance_threshold,
     })
@@ -1431,6 +1429,15 @@ pub fn structured_query_from_json(v: &Value) -> Result<pb::StructuredQuery, Json
     })
 }
 
+/// A wrapper message's value as fireemu read it before (`int32`): `{"value": ...}` unwrapped at
+/// any depth, an empty wrapper as null.
+fn unwrap_wrapper(mut value: &Value) -> &Value {
+    while let Value::Object(wrapper) = value {
+        value = wrapper.get("value").unwrap_or(&Value::Null);
+    }
+    value
+}
+
 /// JSON → aggregation query.
 pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregationQuery, JsonError> {
     use pb::structured_aggregation_query::aggregation as agg;
@@ -1440,19 +1447,35 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
             .iter()
             .map(|a| {
                 let operator = if let Some(c) = a.get("count") {
-                    agg::Operator::Count(agg::Count {
-                        up_to: int32(c.get("upTo"), "count.upTo")?.map(i64::from),
-                    })
+                    Some(agg::Operator::Count(agg::Count {
+                        // `upTo` is an Int64Value (the transcoder spells it as a string). Its
+                        // wrapper message form is read as fireemu read it before:
+                        // `{"value": ...}` at any depth, and an empty wrapper as no cap. The
+                        // strict transcoder admits only the plain `{"value": n}` form.
+                        up_to: match c.get("upTo").map(unwrap_wrapper) {
+                            None | Some(Value::Null) => None,
+                            Some(Value::String(text)) => Some(
+                                text.parse::<i64>()
+                                    .map_err(|_| JsonError("count.upTo must be an int64".into()))?,
+                            ),
+                            Some(value) => {
+                                Some(value.as_i64().ok_or_else(|| {
+                                    JsonError("count.upTo must be an int64".into())
+                                })?)
+                            }
+                        },
+                    }))
                 } else if let Some(s) = a.get("sum") {
-                    agg::Operator::Sum(agg::Sum {
+                    Some(agg::Operator::Sum(agg::Sum {
                         field: field_reference(s.get("field"))?,
-                    })
+                    }))
                 } else if let Some(s) = a.get("avg") {
-                    agg::Operator::Avg(agg::Avg {
+                    Some(agg::Operator::Avg(agg::Avg {
                         field: field_reference(s.get("field"))?,
-                    })
+                    }))
                 } else {
-                    return err("aggregation must be count, sum or avg");
+                    // No operator: the aggregation decoder refuses it as production does.
+                    None
                 };
                 Ok(pb::structured_aggregation_query::Aggregation {
                     alias: a
@@ -1460,7 +1483,7 @@ pub fn aggregation_query_from_json(v: &Value) -> Result<pb::StructuredAggregatio
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_owned(),
-                    operator: Some(operator),
+                    operator,
                 })
             })
             .collect::<Result<Vec<_>, JsonError>>(),

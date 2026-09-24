@@ -1,0 +1,3049 @@
+{
+  "kind": "fs-query-index-comparison-v1",
+  "artifactSha256": "9efb81bb90334471d66c347f24c8dd0aee273969274ea4d969f70b05f573439c",
+  "fixtureSha256": "8df55045119be7c30e63e9109ad614dae2be0cbc3a644b54c60f98cc962110d3",
+  "summary": {
+    "MATCH": 675,
+    "DIVERGENCE_APPROVED": 35
+  },
+  "rangeTotals": {
+    "production": "2000",
+    "fireemu": "2000"
+  },
+  "rows": [
+    {
+      "row": "fs-query-index/field-filters/equality#eq-full-documents",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-true",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-int-one",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-double-one",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-double-zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-negative-zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-int-beyond-double",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-double-two-53",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-min-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-infinity",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-timestamp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-timestamp-micro",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-string-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-string-upper",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-string-unicode",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-bytes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-bytes-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-reference",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-geo",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-array-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-map-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-vector",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#eq-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#not-equal-int-one",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#not-equal-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#not-equal-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/equality#not-equal-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gt-int-zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gte-double-negative-infinity",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#lt-int-one",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#lte-double-half",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gt-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gt-timestamp",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gte-string-a",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#lt-string-b",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gt-bytes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gt-reference",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gt-geo",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gt-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#lt-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gte-vector",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gt-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#lt-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/range#gt-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-double-for-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-array-operand",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-tag",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-any-tags",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-any-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#array-contains-any-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#in-mixed-types",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#in-double-for-int",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#in-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#in-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#in-array-candidate",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#in-duplicate-values",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#not-in-mixed-types",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#not-in-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#not-in-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/array-and-membership#not-in-null-and-value",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#nested-map-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#nested-map-deep",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#quoted-dotted-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#quoted-space-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#unquoted-dotted-is-nested",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#missing-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#name-equal",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#name-greater-than",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#name-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#name-not-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#name-not-equal",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#name-other-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#name-subcollection-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/field-filters/paths-and-names#name-quoted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-not-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-not-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-null-missing-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-not-null-missing-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-nan-nested",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-not-nan-nested",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-null-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-not-null-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-not-null-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/unary-filters/all#is-not-nan-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#and-two-equalities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#and-equality-and-range",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#and-two-ranges-same-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#and-contradiction",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#and-duplicate-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#and-single-child",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#and-with-unary",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-two-fields",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-overlapping",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-single-child",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-with-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-ranges-different-fields",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-with-not-equal",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-with-array-contains",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#and-of-or",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-of-and",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#nested-three-levels",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-ordered",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/composite-filters/all#or-limited",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#operator-unspecified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#operator-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#operator-unknown-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#unary-operator-unspecified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#field-filter-without-value",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#field-filter-without-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#unary-filter-without-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#filter-without-kind",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#value-unknown-kind",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#value-two-kinds",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#integer-out-of-range",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#timestamp-out-of-range",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#in-non-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#in-empty-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#not-in-non-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#not-in-empty-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#array-contains-any-non-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#array-contains-any-empty-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#composite-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#composite-operator-unspecified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#composite-without-operator",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/operators-and-values#or-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#two-not-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#not-in-and-not-equal",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#not-in-and-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#not-in-and-array-contains-any",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#not-in-inside-or",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#two-not-equal-different-fields",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#two-not-equal-same-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#not-equal-and-is-not-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#is-not-null-and-is-not-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#two-is-not-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#not-equal-and-range-same-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#two-array-contains",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#array-contains-and-any",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#two-array-contains-any",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#array-contains-per-disjunct",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#array-contains-any-and-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#in-and-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/combinations#in-and-equal-same-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-double-dot",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-trailing-dot",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-unterminated-quote",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-reserved",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-nested-reserved",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-bracket",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-quoted-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-hyphen",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-leading-digit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-space",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-tilde",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-star",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-slash",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-quoted-escaped-backtick",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#field-path-quoted-literal-backslash",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-with-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-range-with-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-in-with-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-in-with-mixed",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-array-contains",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-collection-reference",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-other-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-null",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-equal-with-other-inequality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-equal-with-name-inequality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/filter-validation/paths-and-names#name-in-with-other-inequality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#in-30",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#in-31",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#array-contains-any-30",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#array-contains-any-31",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#name-in-30",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#name-in-31",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#or-30",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#or-31",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#in-29-or-one",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#in-30-or-one",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#in-15-and-in-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#in-16-and-in-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#in-10-and-any-3",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/disjunctions#in-11-and-any-3",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#not-in-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#not-in-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#name-not-in-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#name-not-in-11",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-10",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-11-letters",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.error.message"
+      ]
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-12-reversed",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.error.message"
+      ]
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-11",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.error.message"
+      ]
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-9-and-not-equal",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-10-and-not-equal",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.error.message"
+      ]
+    },
+    {
+      "row": "fs-query-index/query-limits/components#equalities-100",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/components#equalities-101",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/components#equalities-99-and-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/components#equalities-100-and-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/components#subcollection-equalities-99",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/components#subcollection-equalities-100",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/components#or-components-100",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/query-limits/components#or-components-101",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#default-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#ascending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#direction-unspecified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#direction-omitted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#direction-unknown",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#missing-field-excludes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#nested-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#string-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#double-field-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#array-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#map-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#two-fields",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#two-fields-both-ascending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#name-ascending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#field-then-name-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#field-then-name-ascending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#field-after-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#duplicate-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#duplicate-field-opposite",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#empty-field-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/basic#order-without-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#range-implies-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#range-then-other-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#range-with-explicit-order-first",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#range-with-explicit-order-second",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#range-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#two-ranges-implied-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#two-ranges-explicit-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#equality-then-order-same-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#equality-then-order-other",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#in-then-order-same-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#not-equal-implies-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#not-in-implies-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#is-not-null-implies-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#name-range-implies-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/with-filters#name-range-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/value-types#all-types-ascending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/value-types#all-types-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/order-by/value-types#nested-quoted-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#start-at",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#start-after",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#start-before-omitted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#end-at",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#end-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#end-before-omitted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#start-and-end",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#start-past-end",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#descending-start-at",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#descending-end-before",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#double-cursor-on-int-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#string-cursor-on-int-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#null-cursor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#prefix-cursor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#full-cursor-two-fields",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#cursor-with-name-tiebreak",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#cursor-empty-values",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#cursor-too-many-values",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#cursor-too-many-without-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#cursor-with-range-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#end-cursor-with-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#cursor-with-offset",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/values#cursor-value-without-values-key",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-order-reference",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#implicit-name-order-reference",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-descending-reference",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-reference-absent-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-string-value",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-string-full-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-integer-value",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-foreign-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-subcollection-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-collection-reference",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#name-other-database",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/cursors/names#field-then-name-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#limit-3",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#limit-0",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#limit-negative",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#limit-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#limit-wrapper-object",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#limit-int32-max",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#limit-int32-overflow",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#limit-fraction",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-0",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-negative",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-past-end",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-equals-size",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-and-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-and-limit-0",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-int32-max",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-with-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-with-descending-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#limit-to-last-wire-form",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/offset-limit/all#offset-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#one-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#two-fields",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#nested-leaf",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#nested-map",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#parent-and-child",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#missing-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#partly-missing-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#empty-list",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#empty-select",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#name-only",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#name-and-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#duplicate-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#invalid-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#reserved-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#order-by-unselected",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#filter-on-unselected",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/projection/all#quoted-segment",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#root-all-descendants",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#parent-all-descendants",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#missing-parent-all-descendants",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#absent-parent-all-descendants",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#deep-parent-all-descendants",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#root-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#parent-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#missing-parent-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#nested-same-id-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#group-absent-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#kindless-root",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#kindless-parent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#kindless-without-descendants",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#kindless-with-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#kindless-name-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/scopes#kindless-name-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#filter-with-group-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#order-with-group-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#name-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#name-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#name-range-prefix",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#name-equality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#name-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#name-equality-other-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#full-reference-cursor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#short-reference-cursor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#limit-and-offset",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#parent-name-range",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#parent-collection-name-range",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#parent-collection-foreign-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#count-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/collection-group/queries#count-group-under-parent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#count-all",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#count-with-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#count-empty-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#count-missing-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#sum-integers",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#sum-doubles-with-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#sum-mixed-types",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#sum-overflow",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#sum-infinities",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#sum-missing-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#sum-empty-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#avg-integers",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#avg-doubles-with-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#avg-mixed-types",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#avg-overflow-input",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#avg-empty-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#avg-missing-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#count-sum-avg",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#count-beside-sum-over-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#count-beside-avg-over-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#sum-and-avg-different-fields",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#sum-nested-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/semantics#same-aggregation-twice",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-up-to",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-up-to-above-size",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-up-to-one",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-up-to-zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-up-to-negative",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-up-to-int64-max",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-with-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-with-offset",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-with-offset-and-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-up-to-with-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-with-cursor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-with-order-on-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#sum-with-order-on-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#sum-with-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#sum-with-limit-and-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#avg-with-offset",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#sum-with-range-on-other-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#count-with-select",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/options#cursor-too-many-values",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#default-aliases",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#default-aliases-around-named",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#named-collides-with-default",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#named-field-2-with-one-default",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#duplicate-alias",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#alias-with-space",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#alias-with-dot",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#alias-reserved",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#alias-backquoted",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#alias-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#alias-1500-bytes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#alias-1501-bytes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#five-aggregations",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#six-aggregations",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#no-aggregations",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#aggregation-without-operator",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#sum-on-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#avg-on-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#sum-without-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#sum-invalid-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#sum-reserved-path",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/aggregation/aliases-and-refusals#alias-equal-to-field-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#euclidean",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#cosine",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#dot-product",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#euclidean-full-documents",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#euclidean-distance-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#cosine-distance-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#dot-product-distance-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#distance-field-existing-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#distance-field-nested",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#euclidean-threshold",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#cosine-threshold",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#dot-product-threshold",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#query-vector-other-direction",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#limit-covers-all",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#euclidean-distance-values",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#dot-product-distance-values",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#distance-field-dotted-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/measures#distance-field-replaces-existing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#limit-1000",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#limit-1001",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#limit-zero",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#limit-negative",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#limit-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#measure-unspecified",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#measure-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#vector-field-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#query-vector-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#query-vector-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#query-vector-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#query-vector-two-dimensions",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#query-vector-four-dimensions",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#vector-field-without-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#vector-field-name",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#distance-field-invalid",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#distance-field-reserved",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/validation#threshold-nan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#prefilter-equality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#prefilter-equality-without-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#prefilter-range",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#prefilter-in",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#with-query-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#with-offset",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#with-order-by",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#with-cursor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#select-vector-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#collection-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#count-over-nearest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#sum-over-nearest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/vector/with-query-clauses#count-over-nearest-with-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/small-group#count-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/small-group#count-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/small-group#count-64",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/small-group#count-2-page-size-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/small-group#without-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/small-group#document-parent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/small-group#absent-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#count-0",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#count-negative",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#count-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#page-size-negative",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#page-token-garbage",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#not-collection-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#with-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#with-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#with-offset",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#with-select",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#order-by-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#order-by-name-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#with-start-cursor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#with-find-nearest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#kindless",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/refusals#structured-query-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-1",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-2",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue",
+        "body.partitions.1.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-3",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue",
+        "body.partitions.1.values.0.referenceValue",
+        "body.partitions.2.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-8",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue",
+        "body.partitions.1.values.0.referenceValue",
+        "body.partitions.2.values.0.referenceValue",
+        "body.partitions.3.values.0.referenceValue",
+        "body.partitions.4.values.0.referenceValue",
+        "body.partitions.5.values.0.referenceValue",
+        "body.partitions.6.values.0.referenceValue",
+        "body.partitions.7.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-64",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue",
+        "body.partitions.1.values.0.referenceValue",
+        "body.partitions.2.values.0.referenceValue",
+        "body.partitions.3.values.0.referenceValue",
+        "body.partitions.4.values.0.referenceValue",
+        "body.partitions.5.values.0.referenceValue",
+        "body.partitions.6.values.0.referenceValue",
+        "body.partitions.7.values.0.referenceValue",
+        "body.partitions.8.values.0.referenceValue",
+        "body.partitions.9.values.0.referenceValue",
+        "body.partitions.10.values.0.referenceValue",
+        "body.partitions.11.values.0.referenceValue",
+        "body.partitions.12.values.0.referenceValue",
+        "body.partitions.13.values.0.referenceValue",
+        "body.partitions.14",
+        "body.partitions.15",
+        "body.partitions.16",
+        "body.partitions.17",
+        "body.partitions.18",
+        "body.partitions.19"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-8-repeat",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue",
+        "body.partitions.1.values.0.referenceValue",
+        "body.partitions.2.values.0.referenceValue",
+        "body.partitions.3.values.0.referenceValue",
+        "body.partitions.4.values.0.referenceValue",
+        "body.partitions.5.values.0.referenceValue",
+        "body.partitions.6.values.0.referenceValue",
+        "body.partitions.7.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-4-page-1",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-4-page-2",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-4-page-size-3",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue",
+        "body.partitions.1.values.0.referenceValue",
+        "body.partitions.2.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#count-4-page-size-3-next",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.partitions.0.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#token-with-other-count",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#without-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#document-parent",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#range-0",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.0.result.aggregateFields.c.integerValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#range-1",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.0.result.aggregateFields.c.integerValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#range-2",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.0.result.aggregateFields.c.integerValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/partition-query/large-group#range-3",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "body.0.result.aggregateFields.c.integerValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/queries#full-scan-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#full-scan-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#equality-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#equality-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#range-descending-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#range-descending-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#composite-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#composite-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#merge-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#merge-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#merge-with-order-plan",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/queries#merge-with-order-analyze",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/queries#or-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#or-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#in-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#in-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#not-equal-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#not-equal-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#array-contains-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#array-contains-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#empty-result-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#empty-result-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#limit-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#limit-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#limit-zero-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#limit-zero-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#offset-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#offset-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#cursor-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#cursor-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#name-descending-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#name-descending-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#collection-group-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#collection-group-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#collection-group-composite-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#collection-group-composite-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#missing-index-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#missing-index-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#invalid-query-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#invalid-query-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#analyze-false",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#analyze-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#options-unknown-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/queries#full-documents-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#count-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#count-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#count-filtered-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#count-filtered-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#count-up-to-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#count-up-to-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#sum-avg-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#sum-avg-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#sum-composite-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#sum-composite-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#count-empty-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#count-empty-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#sum-missing-index-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/aggregations#sum-missing-index-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#larger-later-field-plan",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#larger-later-field-analyze",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#larger-earlier-field-plan",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#larger-earlier-field-analyze",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.executionStats.debugStats.index_entries_scanned",
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#filters-reversed-plan",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#filters-reversed-analyze",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#automatic-members-plan",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#automatic-members-analyze",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#automatic-members-reversed-plan",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#automatic-members-reversed-analyze",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#three-automatic-members-plan",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/merge-order#three-automatic-members-analyze",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S4",
+      "differences": [
+        "body.0.explainMetrics.planSummary.indexesUsed.0.properties",
+        "body.0.explainMetrics.planSummary.indexesUsed.1.properties"
+      ]
+    },
+    {
+      "row": "fs-query-index/explain/vector#nearest-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/vector#nearest-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/vector#nearest-prefiltered-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/explain/vector#nearest-prefiltered-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#single-equality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#single-range-and-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#single-order-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#array-contains-alone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#two-equalities-merge",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#three-equalities-merge",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#equality-and-array-contains-merge",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#equalities-with-order-merged",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#equality-and-name-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#equality-and-name-ascending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#name-descending-alone",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#name-descending-with-own-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#name-range-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#in-merge",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/automatic-and-merge#or-of-single-fields",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#equality-then-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#equality-then-order-descending-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#two-ranges",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#two-ranges-order-reversed-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#two-orders",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#two-orders-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#array-contains-and-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#array-contains-and-order-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#equalities-with-order-one-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#equality-range-missing",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#equality-and-name-range",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#range-and-name-order-descending",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#or-needing-composite",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#sum-with-composite",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#sum-missing-composite",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/composites#count-missing-composite",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#exempted-field-equality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#exempted-field-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#wildcard-exempt-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#group-field-without-group-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#group-order-without-group-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#group-order-descending-without-group-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#group-array-contains-without-group-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#group-scope-composite-for-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#group-scope-composite-for-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#collection-scope-composite-for-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#group-only-override-group-equality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#group-only-override-collection-equality",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/index-selection/scopes-and-exemptions#group-only-override-group-order",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#write-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#current",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#at-write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#at-write-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#count-at-write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#count-current",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#partition-at-write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#one-microsecond-before-write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#nanosecond-after-write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#59-minutes-before-write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#61-minutes-before-write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#future",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#distant-past",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#not-a-time",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/read-time/snapshots#aggregation-future",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#body-empty-object",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#body-not-json",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#body-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#body-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#body-truncated",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#body-trailing-comma",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#body-string",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#unknown-top-level-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#unknown-structured-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#operator-lowercase",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#operator-as-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#integer-value-as-number",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#structured-query-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#from-empty-array",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#from-empty-collection-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#from-slash-collection-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#from-reserved-collection-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#from-dot-collection-id",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#from-collection-id-1500-bytes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#from-collection-id-1501-bytes",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#from-two-selectors",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#absent-parent-document",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#parent-is-collection",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#parent-odd-depth",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#aggregation-without-query",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#aggregation-without-structured-query",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#aggregation-unknown-field",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/request-shape/rest#where-with-order-only-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/pipeline/standard-refusal#collection-stage",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/pipeline/standard-refusal#empty-body",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/pipeline/standard-refusal#unknown-stage",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/pipeline/standard-refusal#collection-stage-grpc",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#full-documents",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#or-filter",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#descending-cursor",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#offset-and-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#offset-past-end",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#empty-result",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#projection-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#collection-group",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#negative-limit",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#in-31",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#in-empty",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#cursor-too-many-values",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#missing-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#group-missing-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#merge",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#explain-plan",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#explain-analyze",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#explain-missing-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#nearest",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#nearest-limit-1001",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#count-sum-avg",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#default-aliases",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#duplicate-alias",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#count-up-to",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#explain-analyze-count",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/queries#sum-missing-index",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/read-time#write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/read-time#write-2",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/read-time#at-write-1",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/read-time#future",
+      "status": "MATCH"
+    },
+    {
+      "row": "fs-query-index/grpc/partitions#count-2",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "messages.0.partitions.0.values.0.referenceValue",
+        "messages.0.partitions.1.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/grpc/partitions#count-4-page-1",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "messages.0.partitions.0.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/grpc/partitions#count-4-page-2",
+      "status": "DIVERGENCE_APPROVED",
+      "decision": "S5",
+      "differences": [
+        "messages.0.partitions.0.values.0.referenceValue"
+      ]
+    },
+    {
+      "row": "fs-query-index/grpc/partitions#count-0",
+      "status": "MATCH"
+    }
+  ]
+}

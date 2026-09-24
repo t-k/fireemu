@@ -9,8 +9,12 @@
 pub mod decode;
 pub mod encode;
 pub mod gateway;
+pub mod index_messages;
 pub mod local;
+pub mod partition;
 pub mod pipeline;
+pub mod production_status;
+pub mod query_messages;
 pub mod rest;
 pub mod rules;
 pub mod serve;

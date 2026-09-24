@@ -576,6 +576,37 @@ test("a restore writes back only the paths that changed", async () => {
   assert.equal(sandbox.state.config.emailPrivacyConfig.enableImprovedEmailPrivacy, true);
 });
 
+test("a refused path another path's restore brought back counts as restored", async () => {
+  // The locale localizes the template; the template itself may not be written.
+  const sandbox = fakeSandbox({ failPatchOn: '"subject"' });
+  const localized = { en: "Reset", ja: "Reset (ja)" };
+  sandbox.state.config.notification = { defaultLocale: "en", subject: localized.en };
+  const fetchImpl = async (url, init) => {
+    const response = await sandbox.fetchImpl(url, init);
+    const n = sandbox.state.config.notification;
+    n.subject = localized[n.defaultLocale];
+    return response;
+  };
+  const session = createSession(local(), { fetchImpl });
+  const program = {
+    id: "auth-config-sdk/t",
+    projection: "strict",
+    touches: ["notification.defaultLocale", "notification.subject"],
+    steps: [
+      {
+        id: "ja",
+        path: "admin/v2/projects/{project}/config",
+        auth: "admin",
+        method: "PATCH",
+        query: { updateMask: "notification.defaultLocale" },
+        body: { notification: { defaultLocale: "ja" } },
+      },
+    ],
+  };
+  await session.runProgram(program);
+  assert.deepEqual(sandbox.state.config.notification, { defaultLocale: "en", subject: "Reset" });
+});
+
 test("a restore that does not read back stops the run", async () => {
   const sandbox = fakeSandbox({ failPatchOn: '"enableImprovedEmailPrivacy":true' });
   const session = createSession(local(), { fetchImpl: sandbox.fetchImpl, settleAttempts: 2 });

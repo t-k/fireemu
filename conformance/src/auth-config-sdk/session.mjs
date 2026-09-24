@@ -362,6 +362,12 @@ export function createSession(
         }
         if (refused.length === 0) break;
       }
+      // A refused path another path's restore already brought back (a localized template
+      // follows `notification.defaultLocale`) is restored.
+      if (refused.length) {
+        const after = await readConfig(refused, { cleanup: true });
+        refused = refused.filter((path) => !configEquals(after[path], snapshot[path]));
+      }
       if (refused.length) throw fatal(`restore refused for ${refused.join(", ")}`);
     }
     return awaitConfig(Object.fromEntries(paths.map((path) => [path, snapshot[path]])), {

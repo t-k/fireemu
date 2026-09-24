@@ -4754,6 +4754,18 @@ impl AuthStore {
         LogicalInstant::from_nanos(now.as_nanos().div_euclid(unit) * unit)
     }
 
+    /// The id and time of a factor an admin imports without them (`batchCreate`): under
+    /// production's rules a version-4 UUID and `now` in milliseconds (sandbox recording
+    /// 2026-09-24, `auth-mfa/admin-factors#admin-lookup-imported`); `None` keeps the caller's
+    /// own defaults.
+    pub fn imported_factor_defaults(
+        &mut self,
+        now: LogicalInstant,
+    ) -> Option<(String, LogicalInstant)> {
+        self.second_factor_rules_are_production()
+            .then(|| (self.new_enrollment_id(), self.factor_time(now, true)))
+    }
+
     /// A new factor's enrollment id: a version-4 UUID under production's rules (production
     /// issues them, sandbox recording 2026-09-24), else the 28-character id of the official
     /// shape. It names a factor and is not a secret, so it follows the seeded stream.

@@ -9182,12 +9182,16 @@ fn validate_batch_row_shapes(row: &Value) -> Result<(), JsonResponse> {
 /// The second factors of a `batchCreate` row: phone factors as the official emulator
 /// imports them, and TOTP factors in fireemu's own export shape
 /// (`totpInfo.sharedSecretKey`), which the official emulator has no equivalent for.
+///
+/// Under production's second-factor rules every TOTP factor is refused with production's words
+/// and a factor without an id or a time takes [`AuthStore::imported_factor_defaults`].
 fn batch_row_factors(
     row: &Value,
     local_id: &str,
     has_email: bool,
     email_verified: bool,
     at: LogicalInstant,
+    store: &mut AuthStore,
 ) -> Result<
     (
         Vec<fireemu_core_auth::mfa::TotpFactor>,
@@ -9216,13 +9220,21 @@ fn batch_row_factors(
         }
     }
     for (index, item) in items.iter().enumerate() {
+        if store.second_factor_rules_are_production()
+            && item.get("totpInfo").is_some_and(|v| !v.is_null())
+        {
+            return Err(error(400, "Importing TOTP MFA is not supported."));
+        }
+        let (default_id, default_at) = store
+            .imported_factor_defaults(at)
+            .unwrap_or_else(|| (format!("{local_id}-mfa-{index}"), at));
         let enrollment_id = opt_str(item, "mfaEnrollmentId")?
             .filter(|id| !id.is_empty())
-            .map_or_else(|| format!("{local_id}-mfa-{index}"), str::to_owned);
+            .map_or(default_id, str::to_owned);
         let display_name = opt_str(item, "displayName")?.map(str::to_owned);
         let enrolled_at = opt_str(item, "enrolledAt")?
             .and_then(|t| LogicalInstant::parse_rfc3339(t).ok())
-            .unwrap_or(at);
+            .unwrap_or(default_at);
         if let Some(phone) = opt_str(item, "phoneInfo")? {
             AuthStore::validate_phone_number(phone)
                 .map_err(|_| error(400, "Phone number format is invalid"))?;
@@ -9258,6 +9270,7 @@ fn batch_row_user(
     row: &Value,
     at: LogicalInstant,
     hash_spec: Option<&password_hash::HashSpec>,
+    store: &mut AuthStore,
 ) -> Result<fireemu_core_auth::store::ImportedUser, JsonResponse> {
     use fireemu_core_auth::store::{ImportedUser, Provider};
     validate_batch_row_shapes(row)?;
@@ -9304,7 +9317,7 @@ fn batch_row_user(
     }
     let email_verified = opt_bool(row, "emailVerified")?.unwrap_or(false);
     let (totp_factors, phone_factors) =
-        batch_row_factors(row, local_id, email.is_some(), email_verified, at)?;
+        batch_row_factors(row, local_id, email.is_some(), email_verified, at, store)?;
     let password = batch_row_password(row)?;
     let imported_password = if password.is_none() {
         batch_row_imported_hash(row, hash_spec)?
@@ -9463,7 +9476,7 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
     let mut errors = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let refused = |message: String| json!({"index": index, "message": message});
-        let user = match batch_row_user(row, at, hash_spec.as_ref()) {
+        let user = match batch_row_user(row, at, hash_spec.as_ref(), store) {
             Ok(u) => u,
             Err(r) => {
                 let message = r.body["error"]["message"]
@@ -11976,8 +11989,10 @@ fn mfa_enrollment_withdraw_production(
     let Some(id) = str_field(body, "mfaEnrollmentId").filter(|id| !id.is_empty()) else {
         return error(400, "MFA_ENROLLMENT_NOT_FOUND");
     };
+    // The token was verified above; read its claims with the store's own signer.
+    let signer = store.signer_arc();
     let kept = str_field(body, "idToken")
-        .and_then(|token| fireemu_core_auth::jwt::decode_unsigned(token).ok())
+        .and_then(|token| fireemu_core_auth::jwt::decode_token(token, signer.as_deref()).ok())
         .and_then(|decoded| serde_json::from_str::<Value>(&decoded.payload_json).ok())
         .and_then(|claims| {
             let firebase = claims.get("firebase")?;

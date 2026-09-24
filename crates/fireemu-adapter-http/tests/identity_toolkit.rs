@@ -17552,14 +17552,22 @@ fn strict_an_sms_sign_in_to_a_test_number_can_be_repeated() {
 
 // ---- AUTH-MFA strict: withdrawal and what it revokes (auth-mfa/totp/withdraw, sms) ----
 
+/// The `firebase` claims of a token, whatever signs it (the payload segment, unverified).
 fn second_factor_claims(token: &str) -> Value {
-    let decoded = fireemu_core_auth::jwt::decode_unsigned(token).unwrap();
-    serde_json::from_str::<Value>(&decoded.payload_json).unwrap()["firebase"].clone()
+    let payload = token.split('.').nth(1).unwrap();
+    let payload = fireemu_core_auth::jwt::base64url_decode(payload).unwrap();
+    serde_json::from_slice::<Value>(&payload).unwrap()["firebase"].clone()
 }
 
+/// Under RS256 (session-rsa, as `fireemu` runs strict) too: the kept factor is read from the
+/// signed token (sandbox recording, `auth-mfa/sms#withdraw-first-phone`).
 #[test]
 fn strict_a_withdrawal_revokes_earlier_sessions_and_keeps_the_other_factor() {
     let s = strict_mfa_state();
+    s.store
+        .lock()
+        .unwrap()
+        .set_signer(RsaSigner::from_seed(45).unwrap());
     let (status, body) = patch_sign_in(
         &s,
         "signIn.phoneNumber.testPhoneNumbers",
@@ -17648,4 +17656,79 @@ fn strict_a_withdrawal_revokes_earlier_sessions_and_keeps_the_other_factor() {
     assert!(second_factor_claims(body["idToken"].as_str().unwrap())
         .get("sign_in_second_factor")
         .is_none());
+}
+
+// ---- AUTH-MFA strict: second factors imported by batchCreate (auth-mfa/admin-factors) ----
+
+fn import_factors(s: &AuthState) -> Value {
+    let (status, body) = admin(
+        s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [
+            {"localId": "ia", "email": "ia@example.com", "emailVerified": true,
+             "mfaInfo": [{"phoneInfo": "+16505550101", "displayName": "Imported", "enrolledAt": "2020-01-02T03:04:05Z"}]},
+            {"localId": "ib", "email": "ib@example.com", "emailVerified": true,
+             "mfaInfo": [{"phoneInfo": "+16505550102", "displayName": "Imported with id", "mfaEnrollmentId": "imported-factor-1"}]},
+            {"localId": "it", "email": "it@example.com", "emailVerified": true,
+             "mfaInfo": [{"totpInfo": {}, "displayName": "Imported TOTP"}]},
+            {"localId": "iu", "email": "iu@example.com", "emailVerified": true,
+             "mfaInfo": [{"totpInfo": {"sharedSecretKey": "JBSWY3DPEHPK3PXP"}, "displayName": "Imported TOTP"}]},
+        ]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body
+}
+
+fn imported_factor(s: &AuthState, local_id: &str) -> Value {
+    let (status, body) = admin(
+        s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [local_id]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    body["users"][0]["mfaInfo"][0].clone()
+}
+
+/// Production refuses every imported TOTP factor, names a factor without an id with a UUID and
+/// stamps one without a time with the import time in milliseconds (sandbox recording
+/// 2026-09-24, `#batch-create` and `#admin-lookup-imported`).
+#[test]
+fn strict_batch_create_imports_phone_factors_as_production_does() {
+    let s = strict_mfa_state();
+    s.clock
+        .lock()
+        .unwrap()
+        .advance(LogicalDuration::from_nanos(123_456_789))
+        .unwrap();
+    let body = import_factors(&s);
+    assert_eq!(
+        body["error"],
+        json!([
+            {"index": 2, "message": "Importing TOTP MFA is not supported."},
+            {"index": 3, "message": "Importing TOTP MFA is not supported."},
+        ])
+    );
+    let ia = imported_factor(&s, "ia");
+    let id = ia["mfaEnrollmentId"].as_str().unwrap();
+    assert_eq!((id.len(), &id[14..15]), (36, "4"), "a version-4 UUID: {id}");
+    assert_eq!(ia["enrolledAt"], "2020-01-02T03:04:05Z");
+    let ib = imported_factor(&s, "ib");
+    assert_eq!(ib["mfaEnrollmentId"], "imported-factor-1");
+    let at = ib["enrolledAt"].as_str().unwrap();
+    assert_eq!(at.rsplit('.').next(), Some("123Z"), "milliseconds: {at}");
+}
+
+/// The emulator profile keeps its ids, times and the TOTP export shape.
+#[test]
+fn emulator_batch_create_keeps_its_own_factor_import() {
+    let s = state();
+    let body = import_factors(&s);
+    assert_eq!(
+        body["error"],
+        json!([{"index": 2, "message": "Second factor not supported."}])
+    );
+    assert_eq!(imported_factor(&s, "ia")["mfaEnrollmentId"], "ia-mfa-0");
+    assert_eq!(imported_factor(&s, "iu")["mfaEnrollmentId"], "iu-mfa-0");
 }

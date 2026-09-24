@@ -38,17 +38,11 @@ export const GRPC_RPCS = new Set([
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /**
- * Database ids the corpus may name without creating them: ids production refuses as invalid,
- * and ids no program ever creates. Production answers these before any resource exists, and
- * a create that names one is expected to be refused (the harness deletes it if it is not).
+ * Database ids production refuses as invalid, which the corpus names to observe that refusal.
+ * They can never exist, so the guard admits reads of them and a create that names them;
+ * nothing else. A missing but valid database is a program's own never-created letter `z`.
  */
-export const UNCREATED_DATABASES = new Set([
-  "Bad_Id",
-  "ab",
-  "a".repeat(64),
-  "nonexist-cfg",
-  "-leading-dash",
-]);
+export const UNCREATED_DATABASES = new Set(["Bad_Id", "ab", "a".repeat(64), "-leading-dash"]);
 
 /**
  * Binds a run id and one target. The run id is the recording's start in whole seconds, which
@@ -67,6 +61,8 @@ export function createContext({ run, target, startedMs = Date.now(), project = S
     const url = new URL(target.origin);
     if (url.protocol !== "http:" || !LOOPBACK.has(url.hostname))
       throw new Error("local target must be a loopback http origin");
+    if (!LOOPBACK.has(new URL(target.storageOrigin ?? target.origin).hostname))
+      throw new Error("local Storage target must be a loopback origin");
     if (!LOOPBACK.has(String(target.grpcHost)) || !Number.isInteger(target.grpcPort))
       throw new Error("local gRPC target must be a loopback host and port");
   } else {
@@ -177,21 +173,24 @@ export function guardRestRequest({ url, init }, ctx, program, { harness = false 
     throw new Error(`${program.id} runs only against ${program.project ?? SANDBOX_PROJECT}`);
   const parsed = new URL(url);
   const raw = url.slice(parsed.origin.length).split("?")[0];
-  if (/%2e|%2f|\/\.\.?(\/|$)/i.test(raw)) throw new Error(`request path is not canonical: ${raw}`);
   const own = programDatabases(ctx, program);
   const firestoreOrigin =
     ctx.target.kind === "production" ? PRODUCTION_ORIGIN : new URL(ctx.target.origin).origin;
   const storageOrigin =
     ctx.target.kind === "production" ? STORAGE_ORIGIN : new URL(ctx.target.storageOrigin).origin;
-  const path = decodeURIComponent(parsed.pathname);
-  if (
-    parsed.origin === storageOrigin &&
-    (path.startsWith("/storage/") || path.startsWith("/upload/") || path.startsWith("/download/"))
-  ) {
-    const bucketPath = /^\/(?:upload\/|download\/)?storage\/v1\/b(?:\/([^/]+))?(\/.*)?$/.exec(path);
-    if (!bucketPath) throw new Error(`storage request outside the JSON API: ${path}`);
+  if (parsed.origin === storageOrigin && /^\/(upload\/|download\/)?storage\//.test(raw)) {
+    // Checked on the raw path: an object name is one percent-encoded segment (its slashes are
+    // %2F), while the bucket segment must be a plain bucket name.
+    const bucketPath =
+      /^\/(?:upload\/|download\/)?storage\/v1\/b(?:\/([a-z0-9._-]+))?(?:\/o(?:\/([^/]+))?)?$/.exec(
+        raw,
+      );
+    if (!bucketPath) throw new Error(`storage request outside the JSON API: ${raw}`);
+    const object = bucketPath[2] === undefined ? undefined : decodeURIComponent(bucketPath[2]);
+    if (object !== undefined && object.split("/").some((s) => s === "" || s === "." || s === ".."))
+      throw new Error(`object name is not canonical: ${object}`);
     if (bucketPath[1] === undefined) {
-      // Only the harness creates the run bucket, and only under the sandbox project.
+      // Only the harness creates the run bucket, and only under the run's project.
       if (!harness || init.method !== "POST" || parsed.searchParams.get("project") !== ctx.project)
         throw new Error("only the harness may create a bucket");
     } else if (bucketPath[1] !== ctx.bucket) {
@@ -199,6 +198,8 @@ export function guardRestRequest({ url, init }, ctx, program, { harness = false 
     }
     return;
   }
+  if (/%2e|%2f|\/\.\.?(\/|$)/i.test(raw)) throw new Error(`request path is not canonical: ${raw}`);
+  const path = decodeURIComponent(parsed.pathname);
   if (parsed.origin !== firestoreOrigin)
     throw new Error(`request left the target: ${parsed.origin}`);
   const match = /^\/v1\/projects\/([^/]+)(\/.*)?$/.exec(path);
@@ -216,7 +217,10 @@ export function guardRestRequest({ url, init }, ctx, program, { harness = false 
       const ownsDefault = program.defaultDatabase === true && ctx.project === BISECT_PROJECT;
       if (!ownsDefault && !(init.method === "GET" && rest === "/databases/(default)"))
         throw new Error("(default) may only be read as a database resource");
-    } else if (!own.has(database) && !UNCREATED_DATABASES.has(database)) {
+    } else if (UNCREATED_DATABASES.has(database)) {
+      if (init.method !== "GET")
+        throw new Error(`an invalid database id is only read: ${database}`);
+    } else if (!own.has(database)) {
       throw new Error(`request names a database this program does not own: ${database}`);
     }
   } else if (rest === "/databases" && init.method === "POST") {
@@ -234,6 +238,13 @@ export function guardRestRequest({ url, init }, ctx, program, { harness = false 
   if (rest === "/databases:restore" || rest === "/databases:clone")
     throw new Error("restore and clone are out of scope (C1)");
   if (/\/backupSchedules|\/backups/.test(rest)) throw new Error("backups are out of scope (C1)");
+  // C1: point-in-time recovery is never enabled or configured.
+  const mask = parsed.searchParams.get("updateMask") ?? "";
+  if (
+    /pointInTimeRecovery|versionRetentionPeriod/i.test(mask) ||
+    /pointInTimeRecovery|versionRetentionPeriod/i.test(String(init.body ?? ""))
+  )
+    throw new Error("point-in-time recovery is out of scope (C1)");
   if (typeof init.body === "string") assertBodyScope(JSON.parse(init.body), ctx, own);
 }
 
@@ -277,6 +288,21 @@ export function isTransient(recorded) {
   return TRANSIENT_STATUS.test(String(recorded.body?.error?.status ?? ""));
 }
 
+// Poll predicates, by name, evaluated on the raw answer (see session.mjs). They are part of
+// the harness digest: a changed predicate makes every saved poll row stale.
+export const UNTIL = {
+  done: (json) => json?.done === true,
+  ready: (json) => json?.state === "READY",
+  notFound: (_json, status) => status === 404,
+  httpError: (_json, status) => status >= 400,
+  httpOk: (_json, status) => status === 200,
+  exempt: (json) => json?.indexConfig?.usesAncestorConfig === false,
+  inherits: (json) => json?.indexConfig?.usesAncestorConfig === true,
+  ttlActive: (json) => json?.ttlConfig?.state === "ACTIVE",
+  ttlGone: (json) => json?.ttlConfig === undefined,
+  never: () => false,
+};
+
 const INSTANT = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$/;
 const EMBEDDED_INSTANT = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g;
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g;
@@ -288,13 +314,6 @@ const RETRY = /Please retry in \d+ seconds/g;
 const OPAQUE_KEYS = new Map([
   ["etag", "<etag>"],
   ["nextPageToken", "<page-token>"],
-  ["generation", "<generation>"],
-  ["metageneration", "<generation>"],
-  ["md5Hash", "<md5>"],
-  ["crc32c", "<crc32c>"],
-  ["mediaLink", "<link>"],
-  ["selfLink", "<link>"],
-  ["id", "<object-id>"],
 ]);
 
 /**

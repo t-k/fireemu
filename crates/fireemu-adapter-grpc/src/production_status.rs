@@ -59,6 +59,118 @@ struct Help {
     links: Vec<Link>,
 }
 
+/// `google.rpc.LocalizedMessage`.
+#[derive(Clone, PartialEq, Message)]
+struct LocalizedMessage {
+    #[prost(string, tag = "1")]
+    locale: String,
+    #[prost(string, tag = "2")]
+    message: String,
+}
+
+/// `google.rpc.QuotaFailure.Violation`.
+#[derive(Clone, PartialEq, Message)]
+struct QuotaViolation {
+    #[prost(string, tag = "1")]
+    subject: String,
+    #[prost(string, tag = "2")]
+    description: String,
+}
+
+/// `google.rpc.QuotaFailure`.
+#[derive(Clone, PartialEq, Message)]
+struct QuotaFailure {
+    #[prost(message, repeated, tag = "1")]
+    violations: Vec<QuotaViolation>,
+}
+
+/// A status carrying the `google.rpc` details of a REST error envelope (`details`): the types
+/// fireemu renders (`ErrorInfo`, `LocalizedMessage`, `Help`, `BadRequest`, `QuotaFailure`) are encoded;
+/// any other is left out. Without details the status is plain.
+#[must_use]
+pub fn from_json_details(code: Code, message: &str, details: &Value) -> Status {
+    let text = |v: &Value, key: &str| v[key].as_str().unwrap_or_default().to_owned();
+    let encoded: Vec<prost_types::Any> = details
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|detail| {
+            let type_url = detail["@type"].as_str()?;
+            let name = type_url.rsplit('/').next()?;
+            Some(match name {
+                "google.rpc.ErrorInfo" => any(
+                    type_url,
+                    &ErrorInfo {
+                        reason: text(detail, "reason"),
+                        domain: text(detail, "domain"),
+                        metadata: detail["metadata"]
+                            .as_object()
+                            .into_iter()
+                            .flatten()
+                            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_owned()))
+                            .collect(),
+                    },
+                ),
+                "google.rpc.LocalizedMessage" => any(
+                    type_url,
+                    &LocalizedMessage {
+                        locale: text(detail, "locale"),
+                        message: text(detail, "message"),
+                    },
+                ),
+                "google.rpc.Help" => any(
+                    type_url,
+                    &Help {
+                        links: detail["links"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|l| Link {
+                                description: text(l, "description"),
+                                url: text(l, "url"),
+                            })
+                            .collect(),
+                    },
+                ),
+                "google.rpc.BadRequest" => any(
+                    type_url,
+                    &BadRequest {
+                        field_violations: detail["fieldViolations"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|v| FieldViolation {
+                                field: text(v, "field"),
+                                description: text(v, "description"),
+                            })
+                            .collect(),
+                    },
+                ),
+                "google.rpc.QuotaFailure" => any(
+                    type_url,
+                    &QuotaFailure {
+                        violations: detail["violations"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|v| QuotaViolation {
+                                subject: text(v, "subject"),
+                                description: text(v, "description"),
+                            })
+                            .collect(),
+                    },
+                ),
+                _ => return None,
+            })
+        })
+        .collect();
+    if encoded.is_empty() {
+        Status::new(code, message)
+    } else {
+        with_details(code, message, encoded)
+    }
+}
+
 fn any(type_url: &str, message: &impl Message) -> prost_types::Any {
     prost_types::Any {
         type_url: type_url.to_owned(),

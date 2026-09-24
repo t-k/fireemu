@@ -415,12 +415,18 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
             Ok(()) => {
                 super::index_rest::route(state, project, database, group, method, rest, &req.body)
             }
-            // Production still lists the indexes of a database it just deleted
+            // Production lists a deleted database's indexes for a while, then refuses: fireemu
+            // answers the settled refusal (C10), which for (default) names the project
             // (fireemu-fs-bisect-0924a, 2026-09-24).
             Err(_)
-                if method == "GET" && rest.is_empty() && was_deleted(state, project, database) =>
+                if *database == fireemu_core_types::ids::DatabaseId::DEFAULT
+                    && was_deleted(state, project, database) =>
             {
-                super::index_rest::deleted_database_list(state, project, database, group)
+                error(
+                    tonic::Code::NotFound,
+                    &format!("The database '{project}' does not exist."),
+                    None,
+                )
             }
             Err(response) => response,
         },
@@ -870,10 +876,7 @@ fn delete_database(
     match admin.delete(project, database, unprompted, now) {
         Ok(tombstone) => {
             state.local.delete_database(project, database);
-            let configured = state.local.configured_composites(project, database);
-            admin
-                .indexes()
-                .drop_database(project, database, &configured);
+            admin.indexes().drop_database(project, database);
             admin.fields().forget(|p, d| p == project && d == database);
             let resource = database_json(&tombstone.record, now, Some(tombstone.delete_time));
             let operation = operations::record(

@@ -1336,7 +1336,12 @@ fn a_deleted_default_database_lists_nothing_and_can_be_recreated_after_the_coold
             "/v1/projects/p/databases/(default)/collectionGroups/-/indexes",
             Value::Null
         ),
-        (200, json!({}))
+        (
+            404,
+            json!({"error": {"code": 404, "status": "NOT_FOUND",
+                "message": "The database 'p' does not exist."}})
+        ),
+        "production's settled answer: it names the project (fireemu-fs-bisect-0924a, 2026-09-24)"
     );
     let (status, created) = call(
         &state,
@@ -1458,8 +1463,10 @@ fn indexes_declared_in_the_index_file_are_listed_deleted_and_dropped_with_their_
         "/v1/projects/p/databases/(default)",
         Value::Null,
     );
-    let (status, after_delete) = call(&state, "GET", list, Value::Null);
-    assert_eq!((status, &after_delete["indexes"][0]), (200, index));
+    // Production lists them for a while, then answers NOT_FOUND; fireemu answers the settled
+    // state (C10).
+    let (status, _) = call(&state, "GET", list, Value::Null);
+    assert_eq!(status, 404);
     let (status, _) = call(
         &state,
         "POST",

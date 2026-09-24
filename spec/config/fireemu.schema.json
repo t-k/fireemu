@@ -87,6 +87,13 @@
           "format": "date-time",
           "description": "When the daemon's databases were created: the createTime they report and the instant before which a read_time is refused with INVALID_ARGUMENT. Defaults to the daemon's start; a run compared with a production database names that database's createTime. It must not be after the clock start."
         },
+        "deletedDatabaseIdCooldownSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300,
+          "default": 300,
+          "description": "How long the id of a deleted database stays unavailable to databases.create. Production's is 300 seconds; a comparison run may shorten it, because how long a transitional state lasts is not compared (FS-CONFIG-LIFECYCLE scope decision C10)."
+        },
         "ttlSweepIntervalSeconds": {
           "type": "integer",
           "minimum": 1,

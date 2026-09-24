@@ -183,6 +183,8 @@ pub struct AdminCatalog {
     managed_storage: std::sync::OnceLock<super::managed::SharedManagedStorage>,
     /// When the backend's configured databases came into being.
     created_at: Mutex<LogicalInstant>,
+    /// How long a deleted database id stays unavailable ([`DELETED_ID_COOLDOWN_SECONDS`]).
+    cooldown_seconds: std::sync::atomic::AtomicI64,
 }
 
 impl std::fmt::Debug for AdminCatalog {
@@ -232,7 +234,16 @@ impl AdminCatalog {
             fields: super::fields::FieldRegistry::default(),
             managed_storage: std::sync::OnceLock::new(),
             created_at: Mutex::new(created_at),
+            cooldown_seconds: std::sync::atomic::AtomicI64::new(DELETED_ID_COOLDOWN_SECONDS),
         }
+    }
+
+    /// Sets how long a deleted database id stays unavailable. Production's is
+    /// [`DELETED_ID_COOLDOWN_SECONDS`]; a comparison run shortens it, as it shortens index
+    /// builds, because how long a transitional state lasts is not compared (scope decision C10).
+    pub fn set_deleted_id_cooldown(&self, seconds: i64) {
+        self.cooldown_seconds
+            .store(seconds.max(0), std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Sets when the configured databases came into being (`firestore.databaseCreateTime`).
@@ -351,7 +362,10 @@ impl AdminCatalog {
         if state.live.contains_key(&key) || (exists_unprompted && !deleted) {
             return Err(CatalogRefusal::AlreadyExists);
         }
-        let cooldown_nanos = i128::from(DELETED_ID_COOLDOWN_SECONDS) * 1_000_000_000;
+        let cooldown_seconds = self
+            .cooldown_seconds
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let cooldown_nanos = i128::from(cooldown_seconds) * 1_000_000_000;
         if let Some(last) = state
             .deleted
             .iter()
@@ -364,7 +378,7 @@ impl AdminCatalog {
             let left = last.as_nanos() + cooldown_nanos - now.as_nanos();
             if left > 0 {
                 return Err(CatalogRefusal::CoolingDown(
-                    i64::try_from(left / 1_000_000_000).unwrap_or(DELETED_ID_COOLDOWN_SECONDS),
+                    i64::try_from(left / 1_000_000_000).unwrap_or(cooldown_seconds),
                 ));
             }
         }
@@ -382,7 +396,8 @@ impl AdminCatalog {
                 DatabaseEdition::Enterprise => ConcurrencyMode::Optimistic,
             }),
             delete_protection: request.delete_protection,
-            free_tier: false,
+            // A recreated (default) is the project's free-tier database again (2026-09-24).
+            free_tier: request.database == fireemu_core_types::ids::DatabaseId::DEFAULT,
             project: request.project,
             database: request.database,
         };

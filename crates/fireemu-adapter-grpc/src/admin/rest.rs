@@ -103,7 +103,10 @@ pub(crate) fn database_json(
         resource.insert("previousId".into(), json!(record.database));
     }
     resource.insert("databaseEdition".into(), json!(record.edition.as_str()));
-    resource.insert("freeTier".into(), json!(record.free_tier));
+    resource.insert(
+        "freeTier".into(),
+        json!(record.free_tier && deleted.is_none()),
+    );
     resource.insert(
         "realtimeUpdatesMode".into(),
         json!(if native {
@@ -401,6 +404,13 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
             Ok(()) => {
                 super::index_rest::route(state, project, database, group, method, rest, &req.body)
             }
+            // Production still lists the indexes of a database it just deleted
+            // (fireemu-fs-bisect-0924a, 2026-09-24); fireemu forgot them with the database.
+            Err(_)
+                if method == "GET" && rest.is_empty() && was_deleted(state, project, database) =>
+            {
+                ok(json!({}))
+            }
             Err(response) => response,
         },
         (
@@ -481,6 +491,10 @@ fn list_databases(
                  delete_time,
              }| { database_json(record, now, Some(*delete_time)) },
         ));
+    }
+    if databases.is_empty() {
+        // Proto3 JSON leaves out an empty list: production answers {} once (default) is gone.
+        return ok(json!({}));
     }
     ok(json!({ "databases": databases }))
 }
@@ -871,6 +885,16 @@ fn base64_ok(text: &str) -> bool {
 }
 
 /// Whether a database exists for the Admin surfaces below it (fields, indexes).
+/// Whether `database` is a deleted database of `project` (listed with `showDeleted`).
+fn was_deleted(state: &RestState, project: &str, database: &str) -> bool {
+    state
+        .local
+        .admin()
+        .deleted(project)
+        .iter()
+        .any(|d| d.record.database == database)
+}
+
 pub(crate) fn database_exists(state: &RestState, project: &str, database: &str) -> bool {
     state
         .local

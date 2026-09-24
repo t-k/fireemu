@@ -1294,3 +1294,69 @@ fn a_finished_index_build_over_no_documents_still_reports_its_progress() {
     assert_eq!(done["done"], true, "{done}");
     assert_eq!(done["metadata"]["progressDocuments"], json!({}), "{done}");
 }
+
+#[test]
+fn a_deleted_default_database_lists_nothing_and_can_be_recreated_after_the_cooldown() {
+    // Production (fireemu-fs-bisect-0924a, 2026-09-24): after (default) is deleted the list is
+    // {} and its index list is still served; it can be created again once the id is free.
+    let (state, _clock) = state();
+    state.local.admin().set_deleted_id_cooldown(0);
+    let (_, before) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/(default)",
+        Value::Null,
+    );
+    assert_eq!(before["freeTier"], true);
+    let (status, deleted) = call(
+        &state,
+        "DELETE",
+        "/v1/projects/p/databases/(default)",
+        Value::Null,
+    );
+    assert_eq!(status, 200);
+    // The deleted database no longer holds the free tier.
+    assert_eq!(deleted["response"]["freeTier"], false, "{deleted}");
+    assert_eq!(
+        call(&state, "GET", "/v1/projects/p/databases", Value::Null),
+        (200, json!({}))
+    );
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            "/v1/projects/p/databases/(default)/collectionGroups/-/indexes",
+            Value::Null
+        ),
+        (200, json!({}))
+    );
+    let (status, created) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=(default)",
+        native(),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(
+        created["response"]["freeTier"], true,
+        "a recreated (default) is free tier"
+    );
+    let (status, _) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/(default)",
+        Value::Null,
+    );
+    assert_eq!(status, 200);
+    let (status, missing) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/(default)/documents/c/d",
+        Value::Null,
+    );
+    assert_eq!(status, 404);
+    assert_eq!(
+        missing["error"]["message"],
+        "Document \"projects/p/databases/(default)/documents/c/d\" not found."
+    );
+}

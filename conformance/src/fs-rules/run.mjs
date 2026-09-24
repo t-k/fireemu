@@ -209,19 +209,27 @@ export async function preflight(target, ledgerText = "", now = Date.now()) {
       "GET",
       `${itk}/v2/projects/${SANDBOX_PROJECT}/tenants?pageSize=100`,
     ),
+    // The IAM API is not enabled on the sandbox, so the grant is tested by signing a payload
+    // that is no token (no audience, issuer or expiry) and is discarded.
     signJwt: await ownerFetch(
       target,
       "POST",
-      `https://iam.googleapis.com/v1/projects/-/serviceAccounts/${SIGNER_ACCOUNTS.project}:testIamPermissions`,
-      { permissions: ["iam.serviceAccounts.signJwt"] },
+      `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${SIGNER_ACCOUNTS.project}:signJwt`,
+      { payload: JSON.stringify({ purpose: "fs-rules-preflight" }) },
     ),
   };
+  // Without multi-tenancy, listing tenants answers 400 INVALID_PROJECT_ID: there are none.
+  const tenantsOff =
+    reads.config.json?.multiTenant?.allowTenants !== true &&
+    reads.tenants.status === 400 &&
+    reads.tenants.json?.error?.message === "INVALID_PROJECT_ID";
+  if (tenantsOff) reads.tenants = { status: 200, json: { tenants: [] } };
   const report = {
     failedReads: Object.entries(reads)
-      .filter(([, { status }]) => status !== 200)
+      .filter(([name, { status }]) => status !== 200 && name !== "signJwt")
       .map(([name, { status }]) => `${name} (HTTP ${status})`),
     projectAccounts: Number(reads.accounts.json?.recordsCount ?? -1),
-    signJwt: (reads.signJwt.json?.permissions ?? []).includes("iam.serviceAccounts.signJwt"),
+    signJwt: typeof reads.signJwt.json?.signedJwt === "string",
     allowTenants: reads.config.json?.multiTenant?.allowTenants === true,
     tenants: (reads.tenants.json?.tenants ?? []).length,
     rulesets: (reads.rulesets.json?.rulesets ?? []).length,

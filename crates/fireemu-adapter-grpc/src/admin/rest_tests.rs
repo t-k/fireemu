@@ -1177,6 +1177,33 @@ fn an_empty_native_database_can_become_a_datastore_mode_database() {
         Value::Null,
     );
     assert_ne!(status, 200);
+
+    // A database with a document keeps its type (production, 2026-09-24).
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=keeper",
+        native(),
+    );
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/keeper/documents/items?documentId=a",
+        json!({"fields": {"a": {"integerValue": "1"}}}),
+    );
+    assert_eq!(
+        call(
+            &state,
+            "PATCH",
+            "/v1/projects/p/databases/keeper?updateMask=type",
+            json!({"type": "DATASTORE_MODE"}),
+        ),
+        (
+            400,
+            json!({"error": {"code": 400, "status": "FAILED_PRECONDITION",
+                "message": "A document with key '/items/a' exists in the database. The database must be empty to make this change. Delete this document and try again."}})
+        )
+    );
 }
 
 #[test]
@@ -1232,4 +1259,38 @@ fn a_bounded_backend_refuses_other_projects_as_production_refuses_a_foreign_one(
     }
     let (status, _) = call(&bounded, "GET", "/v1/projects/p/databases", Value::Null);
     assert_eq!(status, 200);
+}
+
+#[test]
+fn a_finished_index_build_over_no_documents_still_reports_its_progress() {
+    // Production (2026-09-24): the done operation carries progressDocuments {} when the
+    // collection group is empty (proto3 JSON leaves out only the zero counts).
+    let (state, _clock) = state();
+    state
+        .local
+        .admin()
+        .indexes()
+        .set_build_duration(std::time::Duration::ZERO);
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=emptyidx",
+        native(),
+    );
+    let index = json!({"queryScope": "COLLECTION", "fields": [
+        {"fieldPath": "a", "order": "ASCENDING"}, {"fieldPath": "b", "order": "DESCENDING"}]});
+    let (_, created) = call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases/emptyidx/collectionGroups/items/indexes",
+        index,
+    );
+    let (_, done) = call(
+        &state,
+        "GET",
+        &format!("/v1/{}", created["name"].as_str().unwrap()),
+        Value::Null,
+    );
+    assert_eq!(done["done"], true, "{done}");
+    assert_eq!(done["metadata"]["progressDocuments"], json!({}), "{done}");
 }

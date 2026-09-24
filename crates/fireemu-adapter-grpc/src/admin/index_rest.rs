@@ -92,12 +92,15 @@ pub(crate) fn operation_json(
                 "index": name,
                 "state": "SUCCESSFUL",
             });
-            if documents > 0 {
-                metadata["progressDocuments"] = json!({
+            // Present even over no documents, where proto3 JSON leaves out the zero counts.
+            metadata["progressDocuments"] = if documents > 0 {
+                json!({
                     "estimatedWork": documents.to_string(),
                     "completedWork": documents.to_string(),
-                });
-            }
+                })
+            } else {
+                json!({})
+            };
             json!({
                 "name": operation_name,
                 "metadata": metadata,

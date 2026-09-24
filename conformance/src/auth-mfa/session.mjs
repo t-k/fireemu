@@ -20,6 +20,7 @@ import {
   normalizeConfig,
   sameRecording,
 } from "../auth-account/harness.mjs";
+import { configMatches } from "../auth-account/session.mjs";
 import { isDeepStrictEqual } from "node:util";
 
 import { harnessRequest, substituteText } from "../auth-credential/harness.mjs";
@@ -176,7 +177,8 @@ export function createSession(
     const { origin, headers } = localControl();
     const response = await fetch(`${origin}/v1/sessions/default`, { headers });
     if (response.status !== 200) throw fatal(`clock read: HTTP ${response.status}`);
-    const { clock } = await response.json();
+    // `{clock: {clock: "<rfc3339>", backwardsSets}}` (control.rs `clock_json`).
+    const clock = (await response.json())?.clock?.clock;
     // Date.parse keeps milliseconds; a longer fraction is cut to them.
     const millis = Date.parse(String(clock).replace(/(\.\d{3})\d+/, "$1"));
     if (!Number.isFinite(millis)) throw fatal(`clock read: ${clock}`);
@@ -331,8 +333,12 @@ export function createSession(
     });
     for (let attempt = 0; attempt < 30; attempt += 1) {
       const now = await readConfig(mask, { cleanup });
-      // Exactly: a provider left behind by a partial match would change later programs.
-      if (mask.every((path) => sameRecording(now[path], values[path]))) {
+      // `mfa` exactly: a provider left behind by a partial match would change later programs.
+      const matches = (path) =>
+        path === "mfa"
+          ? sameRecording(now[path], values[path])
+          : configMatches(now[path], values[path]);
+      if (mask.every(matches)) {
         if (ctx.target.kind === "production") await sleep(CONFIG_SETTLE_MS);
         return now;
       }
@@ -353,7 +359,9 @@ export function createSession(
     const agedFrom = new Set(program.steps.map((step) => step.age?.from).filter(Boolean));
     const acquired = new Map();
     for (const step of program.steps) {
-      if (step.delayMs) await sleep(step.delayMs);
+      // fireemu's clock follows the wall clock only forward: once an alignment or an age moved
+      // it ahead, a real sleep would not move it, so it moves the clock instead.
+      if (step.delayMs) await wait(step.delayMs / 1000);
       if (step.waitSeconds >= 600) assertNothingSilent(steps, step);
       if (step.waitSeconds) await wait(step.waitSeconds);
       if (step.age) {

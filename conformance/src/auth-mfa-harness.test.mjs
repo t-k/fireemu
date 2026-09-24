@@ -404,3 +404,24 @@ test("the corpus validator refuses what the guard cannot see coming", () => {
       JSON.stringify(programs).slice(0, 200),
     );
 });
+
+test("a recording waits while another lane is on the sandbox", async () => {
+  const { otherLaneOnSandbox } = await import("./auth-mfa/run.mjs");
+  const now = Date.parse("2026-09-25T12:00:00Z");
+  const line = (fields) => JSON.stringify({ project: "fireemu-oracle-idp", ...fields });
+  const started = line({ ts: "2026-09-25T09:00:00Z", event: "started", taskId: "FS-RULES" });
+  const finished = line({ ts: "2026-09-25T11:00:00Z", taskId: "FS-RULES", outcome: "recorded" });
+  assert.match(otherLaneOnSandbox(started, now), /FS-RULES started/);
+  assert.equal(otherLaneOnSandbox(`${started}\n${finished}`, now), undefined);
+  const recent = line({ ts: "2026-09-25T11:45:00Z", taskId: "FS-RULES", outcome: "recorded" });
+  assert.match(otherLaneOnSandbox(`${started}\n${recent}`, now), /wrote a line/);
+  // This lane's own lines and other projects never block it.
+  const own = line({ ts: "2026-09-25T11:59:00Z", event: "started", taskId: "AUTH-MFA-SANDBOX" });
+  const elsewhere = JSON.stringify({
+    ts: "2026-09-25T11:59:00Z",
+    event: "started",
+    taskId: "FS-DATA-WRITE-SANDBOX",
+    project: "fireemu-oracle-sbx",
+  });
+  assert.equal(otherLaneOnSandbox(`${own}\n${elsewhere}\nnot json`, now), undefined);
+});

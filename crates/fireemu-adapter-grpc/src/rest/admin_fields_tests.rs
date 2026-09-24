@@ -43,8 +43,16 @@ fn state_with(edition: FirestoreEdition, api_mode: FirestoreApiMode) -> RestStat
     }
 }
 
+/// A Standard Native state whose field patches apply at once (the pending window production
+/// shows is covered by `a_pending_patch_reads_back_what_it_asks_for_and_applies_later`).
 fn state() -> RestState {
-    state_with(FirestoreEdition::Standard, FirestoreApiMode::Native)
+    let state = state_with(FirestoreEdition::Standard, FirestoreApiMode::Native);
+    state
+        .local
+        .admin()
+        .fields()
+        .set_apply_duration(std::time::Duration::ZERO);
+    state
 }
 
 fn call(state: &RestState, method: &str, path: &str, body: Value) -> (u16, Value) {
@@ -113,26 +121,33 @@ fn an_untouched_field_reports_the_inherited_index_configuration_and_no_ttl() {
 }
 
 #[test]
-fn patching_the_ttl_config_returns_a_completed_operation_and_the_field_reads_back_active() {
+fn patching_the_ttl_config_answers_an_initializing_operation_that_finishes_active() {
     let state = state();
     let operation = enable_ttl(&state);
-    assert_eq!(operation["done"], json!(true));
+    assert!(operation.get("done").is_none(), "{operation}");
     assert_eq!(
         operation["metadata"]["@type"],
         json!("type.googleapis.com/google.firestore.admin.v1.FieldOperationMetadata")
     );
-    assert_eq!(operation["metadata"]["state"], json!("SUCCESSFUL"));
+    assert_eq!(operation["metadata"]["state"], json!("INITIALIZING"));
+    assert_eq!(
+        operation["metadata"]["ttlConfigDelta"],
+        json!({"changeType": "ADD"})
+    );
     assert_eq!(
         operation["metadata"]["field"],
         json!("projects/demo/databases/(default)/collectionGroups/sessions/fields/expiresAt")
     );
-    assert_eq!(operation["response"]["ttlConfig"]["state"], json!("ACTIVE"));
+    let name = operation["name"].as_str().expect("operation name");
     assert!(
-        operation["name"]
-            .as_str()
-            .is_some_and(|name| name.starts_with("projects/demo/databases/(default)/operations/")),
+        name.starts_with("projects/demo/databases/(default)/operations/"),
         "{operation}"
     );
+    let (_, done) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(done["done"], json!(true), "{done}");
+    assert_eq!(done["metadata"]["state"], json!("SUCCESSFUL"));
+    assert_eq!(done["response"]["ttlConfig"], json!({"state": "ACTIVE"}));
+    assert!(done["response"].get("indexConfig").is_none(), "{done}");
 
     let (status, body) = call(
         &state,
@@ -178,8 +193,13 @@ fn a_second_ttl_field_in_the_same_collection_group_is_refused() {
         &format!("{GROUP}/fields/purgeAt?updateMask=ttlConfig"),
         json!({"ttlConfig": {}}),
     );
-    assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["status"], json!("FAILED_PRECONDITION"));
+    // Production's answer, naming the field the patch asked for (recorded 2026-09-24).
+    assert_eq!(status, 429, "{body}");
+    assert_eq!(body["error"]["status"], json!("RESOURCE_EXHAUSTED"));
+    assert_eq!(
+        body["error"]["message"],
+        json!("The collection group 'sessions' can only have at most '1' field(s) marked with TTL but already has TTL configurations set on path 'purgeAt'. Please delete at least one and try again.")
+    );
 }
 
 #[test]
@@ -222,16 +242,100 @@ fn the_wildcard_field_cannot_carry_a_ttl_policy() {
 }
 
 #[test]
-fn patching_the_index_config_is_refused_rather_than_silently_ignored() {
+fn patching_the_index_config_exempts_the_field_and_a_revert_restores_it() {
     let state = state();
-    let (status, body) = call(
+    let (status, operation) = call(
         &state,
         "PATCH",
         &format!("{GROUP}/fields/payload?updateMask=indexConfig"),
         json!({"indexConfig": {"indexes": []}}),
     );
-    assert_eq!(status, 501, "{body}");
-    assert_eq!(body["error"]["status"], json!("UNIMPLEMENTED"));
+    assert_eq!(status, 200, "{operation}");
+    let deltas = operation["metadata"]["indexConfigDeltas"]
+        .as_array()
+        .expect("deltas");
+    assert_eq!(deltas.len(), 3, "{operation}");
+    assert!(deltas.iter().all(|d| d["changeType"] == "REMOVE"));
+    assert_eq!(
+        deltas[0]["index"],
+        json!({"queryScope": "COLLECTION", "fields": [{"fieldPath": "payload", "order": "ASCENDING"}]})
+    );
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/payload"),
+        Value::Null,
+    );
+    assert_eq!(
+        field["indexConfig"],
+        json!({"ancestorField": "projects/demo/databases/(default)/collectionGroups/__default__/fields/*"})
+    );
+    let (_, listed) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields?filter=indexConfig.usesAncestorConfig:false"),
+        Value::Null,
+    );
+    assert_eq!(
+        listed["fields"].as_array().map(Vec::len),
+        Some(1),
+        "{listed}"
+    );
+
+    let (status, reverted) = call(
+        &state,
+        "PATCH",
+        &format!("{GROUP}/fields/payload?updateMask=indexConfig"),
+        json!({}),
+    );
+    assert_eq!(status, 200, "{reverted}");
+    let deltas = reverted["metadata"]["indexConfigDeltas"]
+        .as_array()
+        .expect("deltas");
+    assert!(deltas.len() == 3 && deltas.iter().all(|d| d["changeType"] == "ADD"));
+    let (_, field) = call(
+        &state,
+        "GET",
+        &format!("{GROUP}/fields/payload"),
+        Value::Null,
+    );
+    assert_eq!(field["indexConfig"]["usesAncestorConfig"], json!(true));
+    assert_eq!(
+        field["indexConfig"]["indexes"].as_array().map(Vec::len),
+        Some(3)
+    );
+}
+
+#[test]
+fn a_pending_patch_reads_back_what_it_asks_for_and_serves_queries_only_once_applied() {
+    let state = state_with(FirestoreEdition::Standard, FirestoreApiMode::Native);
+    state
+        .local
+        .admin()
+        .fields()
+        .set_apply_duration(std::time::Duration::from_secs(3600));
+    let (_, operation) = call(
+        &state,
+        "PATCH",
+        &format!("{GROUP}/fields/cg?updateMask=indexConfig"),
+        json!({"indexConfig": {"indexes": [
+            {"queryScope": "COLLECTION_GROUP", "fields": [{"fieldPath": "cg", "order": "ASCENDING"}]}
+        ]}}),
+    );
+    let deltas = operation["metadata"]["indexConfigDeltas"]
+        .as_array()
+        .expect("deltas");
+    assert_eq!(deltas.len(), 4, "{operation}");
+    assert_eq!(deltas[3]["changeType"], "ADD");
+    let (_, field) = call(&state, "GET", &format!("{GROUP}/fields/cg"), Value::Null);
+    assert_eq!(
+        field["indexConfig"]["indexes"][0]["state"],
+        json!("CREATING"),
+        "{field}"
+    );
+    let name = operation["name"].as_str().expect("operation name");
+    let (_, polled) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(polled, operation, "a pending patch polls as first answered");
 }
 
 #[test]
@@ -338,21 +442,18 @@ fn an_exempted_field_reports_the_modes_that_remain() {
         Value::Null,
     );
     assert_eq!(status, 200, "{body}");
-    let indexes = body["indexConfig"]["indexes"].as_array().expect("indexes");
-    assert_eq!(indexes.len(), 1, "{body}");
-    assert_eq!(indexes[0]["queryScope"], json!("COLLECTION"));
+    // Production names no single-field index, reports each one's state, keeps naming the
+    // ancestor field and leaves out the false usesAncestorConfig.
     assert_eq!(
-        indexes[0]["fields"],
-        json!([{"fieldPath": "payload", "order": "ASCENDING"}])
-    );
-    assert!(
-        indexes[0]["name"].as_str().is_some_and(|name| name
-            .starts_with("projects/demo/databases/(default)/collectionGroups/sessions/indexes/")),
-        "{body}"
-    );
-    assert!(
-        body["indexConfig"].get("usesAncestorConfig").is_none(),
-        "{body}"
+        body["indexConfig"],
+        json!({
+            "indexes": [{
+                "queryScope": "COLLECTION",
+                "fields": [{"fieldPath": "payload", "order": "ASCENDING"}],
+                "state": "READY"
+            }],
+            "ancestorField": "projects/demo/databases/(default)/collectionGroups/__default__/fields/*"
+        })
     );
 }
 
@@ -371,31 +472,25 @@ fn listing_with_the_ancestor_filter_excludes_a_ttl_only_field() {
 }
 
 #[test]
-fn listing_without_a_filter_reports_the_ttl_field_and_the_overrides() {
+fn listing_without_a_filter_is_refused_in_productions_words() {
     let state = state();
     enable_ttl(&state);
     let (status, body) = call(&state, "GET", &format!("{GROUP}/fields"), Value::Null);
-    assert_eq!(status, 200, "{body}");
-    let names: Vec<&str> = body["fields"]
-        .as_array()
-        .expect("fields")
-        .iter()
-        .filter_map(|field| field["name"].as_str())
-        .collect();
+    assert_eq!(status, 400, "{body}");
     assert_eq!(
-        names,
-        vec!["projects/demo/databases/(default)/collectionGroups/sessions/fields/expiresAt"]
+        body["error"]["message"],
+        json!("ListFieldsRequest.filter must include at least fields that do not use their ancestor configuration, or fields with TTLs.")
     );
 }
 
 #[test]
-fn polling_an_operation_returns_the_same_response_the_patch_returned() {
+fn polling_a_finished_operation_answers_the_same_after_a_later_patch() {
     let state = state();
     let patched = enable_ttl(&state);
     let name = patched["name"].as_str().expect("operation name");
     let (status, polled) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
     assert_eq!(status, 200, "{polled}");
-    assert_eq!(polled, patched);
+    assert_eq!(polled["done"], json!(true));
 
     // A later patch does not rewrite what the earlier operation answered.
     let (status, cleared) = call(
@@ -406,7 +501,7 @@ fn polling_an_operation_returns_the_same_response_the_patch_returned() {
     );
     assert_eq!(status, 200, "{cleared}");
     let (_, polled_again) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
-    assert_eq!(polled_again, patched);
+    assert_eq!(polled_again, polled);
 }
 
 #[test]
@@ -561,7 +656,7 @@ fn a_page_size_of_one_pages_the_listing() {
     let (status, first) = call(
         &state,
         "GET",
-        &format!("{GROUP}/fields?pageSize=1"),
+        &format!("{GROUP}/fields?filter=indexConfig.usesAncestorConfig:false&pageSize=1"),
         Value::Null,
     );
     assert_eq!(status, 200, "{first}");
@@ -570,7 +665,7 @@ fn a_page_size_of_one_pages_the_listing() {
     let (status, second) = call(
         &state,
         "GET",
-        &format!("{GROUP}/fields?pageSize=1&pageToken={token}"),
+        &format!("{GROUP}/fields?filter=indexConfig.usesAncestorConfig:false&pageSize=1&pageToken={token}"),
         Value::Null,
     );
     assert_eq!(status, 200, "{second}");
@@ -580,7 +675,7 @@ fn a_page_size_of_one_pages_the_listing() {
 }
 
 #[test]
-fn every_reported_index_carries_a_distinct_stable_resource_name() {
+fn every_reported_single_field_index_carries_its_state_and_no_name() {
     let state = state();
     let (status, body) = call(
         &state,
@@ -589,46 +684,13 @@ fn every_reported_index_carries_a_distinct_stable_resource_name() {
         Value::Null,
     );
     assert_eq!(status, 200, "{body}");
-    let names: Vec<&str> = body["indexConfig"]["indexes"]
-        .as_array()
-        .expect("indexes")
-        .iter()
-        .map(|index| index["name"].as_str().expect("an index name"))
-        .collect();
-    assert_eq!(names.len(), 3, "{body}");
-    for name in &names {
-        assert!(
-            name.starts_with(
-                "projects/demo/databases/(default)/collectionGroups/sessions/indexes/"
-            ),
-            "{name}"
-        );
-    }
-    let distinct: std::collections::BTreeSet<&&str> = names.iter().collect();
-    assert_eq!(distinct.len(), 3, "{body}");
-
-    // The name is derived from what defines the index, so a second read reports the same one.
-    let (_, again) = call(
-        &state,
-        "GET",
-        &format!("{GROUP}/fields/expiresAt"),
-        Value::Null,
-    );
-    assert_eq!(
-        again["indexConfig"]["indexes"],
-        body["indexConfig"]["indexes"]
-    );
-
-    // A different field is a different index, so the names do not collide.
-    let (_, other) = call(
-        &state,
-        "GET",
-        &format!("{GROUP}/fields/payload"),
-        Value::Null,
-    );
-    assert_ne!(
-        other["indexConfig"]["indexes"][0]["name"],
-        body["indexConfig"]["indexes"][0]["name"]
+    let indexes = body["indexConfig"]["indexes"].as_array().expect("indexes");
+    assert_eq!(indexes.len(), 3, "{body}");
+    assert!(
+        indexes
+            .iter()
+            .all(|i| i.get("name").is_none() && i["state"] == "READY"),
+        "{body}"
     );
 }
 
@@ -638,7 +700,7 @@ fn a_page_token_is_opaque_and_carries_no_offset_a_caller_can_read() {
     let (status, first) = call(
         &state,
         "GET",
-        &format!("{GROUP}/fields?pageSize=1"),
+        &format!("{GROUP}/fields?filter=indexConfig.usesAncestorConfig:false&pageSize=1"),
         Value::Null,
     );
     assert_eq!(status, 200, "{first}");
@@ -654,7 +716,7 @@ fn a_page_token_issued_for_another_listing_is_refused() {
     let (_, first) = call(
         &state,
         "GET",
-        &format!("{GROUP}/fields?pageSize=1"),
+        &format!("{GROUP}/fields?filter=indexConfig.usesAncestorConfig:false&pageSize=1"),
         Value::Null,
     );
     let token = first["nextPageToken"].as_str().expect("a next page");
@@ -665,7 +727,7 @@ fn a_page_token_issued_for_another_listing_is_refused() {
         &state,
         "GET",
         &format!(
-            "/v1/projects/demo/databases/(default)/collectionGroups/orders/fields?pageSize=1&pageToken={token}"
+            "/v1/projects/demo/databases/(default)/collectionGroups/orders/fields?filter=indexConfig.usesAncestorConfig:false&pageSize=1&pageToken={token}"
         ),
         Value::Null,
     );
@@ -690,7 +752,7 @@ fn a_malformed_page_token_is_refused() {
         let (status, body) = call(
             &state,
             "GET",
-            &format!("{GROUP}/fields?pageSize=1&pageToken={token}"),
+            &format!("{GROUP}/fields?filter=indexConfig.usesAncestorConfig:false&pageSize=1&pageToken={token}"),
             Value::Null,
         );
         assert_eq!(status, 400, "{token}: {body}");
@@ -897,7 +959,9 @@ fn an_expiration_offset_is_stored_and_read_back_by_every_surface() {
     let (status, operation) = patch_ttl(&state, &json!({ "expirationOffset": "604800s" }));
     assert_eq!(status, 200, "{operation}");
     let expected = json!({ "state": "ACTIVE", "expirationOffset": "604800s" });
-    assert_eq!(operation["response"]["ttlConfig"], expected);
+    let name = operation["name"].as_str().expect("operation name");
+    let (_, done) = call(&state, "GET", &format!("/v1/{name}"), Value::Null);
+    assert_eq!(done["response"]["ttlConfig"], expected);
     let (_, field) = call(
         &state,
         "GET",

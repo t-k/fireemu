@@ -774,6 +774,7 @@ fn delete_database(
         Ok(tombstone) => {
             state.local.delete_database(project, database);
             admin.indexes().forget(|p, d| p == project && d == database);
+            admin.fields().forget(|p, d| p == project && d == database);
             let resource = database_json(&tombstone.record, now, Some(tombstone.delete_time));
             let operation = operations::record(
                 state,
@@ -795,6 +796,19 @@ fn base64_ok(text: &str) -> bool {
         && text
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_'))
+}
+
+/// Whether a database exists for the Admin surfaces below it (fields, indexes).
+pub(crate) fn database_exists(state: &RestState, project: &str, database: &str) -> bool {
+    state
+        .local
+        .admin()
+        .get(
+            project,
+            database,
+            exists_unprompted(state, project, database),
+        )
+        .is_some()
 }
 
 /// Whether the Admin surface of a database's indexes, fields and documents is served: it must

@@ -30,6 +30,8 @@ pub enum OperationKind {
     CreateIndex,
     /// Export, import or bulk delete: finished by the time it is first polled.
     Managed,
+    /// `collectionGroups.fields.patch`: its answer follows the patch it applies.
+    Field,
 }
 
 /// One recorded operation.
@@ -106,7 +108,8 @@ impl OperationStore {
             OperationKind::CreateDatabase
             | OperationKind::UpdateDatabase
             | OperationKind::CreateIndex
-            | OperationKind::Managed => {
+            | OperationKind::Managed
+            | OperationKind::Field => {
                 let id = opaque_id(
                     seed.as_bytes(),
                     if kind == OperationKind::CreateDatabase {
@@ -196,6 +199,22 @@ impl OperationStore {
                 kind: OperationKind::Managed,
                 initial,
                 current,
+                index: None,
+            },
+        );
+    }
+
+    /// Records the operation that applies a field patch.
+    pub fn record_field(&self, project: &str, database: &str, id: &str, initial: Value) {
+        self.push(
+            project,
+            database,
+            StoredOperation {
+                id: id.to_owned(),
+                alias: None,
+                kind: OperationKind::Field,
+                current: initial.clone(),
+                initial,
                 index: None,
             },
         );
@@ -301,6 +320,17 @@ pub(crate) fn record_index(
 
 /// What `operations.get` answers for `op` now.
 fn current(state: &RestState, project: &str, database: &str, op: &StoredOperation) -> Value {
+    if op.kind == OperationKind::Field {
+        return state
+            .local
+            .admin()
+            .fields()
+            .by_operation(&op.id)
+            .map_or_else(
+                || op.current.clone(),
+                |patch| state.field_operation_json(&patch, &op.initial),
+            );
+    }
     let Some(index_id) = &op.index else {
         return op.current.clone();
     };

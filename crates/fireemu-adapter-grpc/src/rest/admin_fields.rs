@@ -33,6 +33,16 @@ use crate::rules;
 /// Largest page `fields.list` returns, and the page size it uses when none is requested.
 pub const MAX_FIELDS_PAGE_SIZE: usize = 100;
 
+/// What a field patch changes, and the field's single-field modes before it.
+type PatchChange = (
+    crate::admin::fields::FieldChange,
+    Vec<(IndexQueryScope, IndexFieldMode)>,
+);
+
+/// `FieldOperationMetadata`'s type URL.
+const FIELD_METADATA_TYPE_URL: &str =
+    "type.googleapis.com/google.firestore.admin.v1.FieldOperationMetadata";
+
 /// The wildcard field id that names a collection group's default field settings.
 const WILDCARD_FIELD: &str = "*";
 
@@ -71,50 +81,6 @@ fn scope_name(scope: IndexQueryScope) -> &'static str {
         IndexQueryScope::Collection => "COLLECTION",
         IndexQueryScope::CollectionGroup => "COLLECTION_GROUP",
     }
-}
-
-fn mode_name(mode: IndexFieldMode) -> String {
-    match mode {
-        IndexFieldMode::Ascending => "ASCENDING".to_owned(),
-        IndexFieldMode::Descending => "DESCENDING".to_owned(),
-        IndexFieldMode::Contains => "CONTAINS".to_owned(),
-        IndexFieldMode::Vector { dimension } => format!("VECTOR:{dimension}"),
-    }
-}
-
-/// The resource name of one automatic single-field index.
-///
-/// Production assigns an opaque server-side id to every index, including the automatic
-/// single-field ones a field configuration reports. A local run has no index resource to
-/// draw an id from, so the id is derived from what defines the index: the collection group,
-/// the field, the query scope and the mode. It is therefore stable across restarts of the
-/// same configuration and distinct for distinct indexes, which is what a caller that stores
-/// or compares the name needs. It is a derived value, not an observed one.
-fn single_field_index_name(
-    selector: &FieldSelector,
-    scope: IndexQueryScope,
-    mode: IndexFieldMode,
-) -> String {
-    let mut digest = fireemu_core_types::hash::Sha256::new();
-    digest.update(b"fireemu:single-field-index:");
-    digest.update(selector.project.as_bytes());
-    digest.update(b"/");
-    digest.update(selector.database.as_bytes());
-    digest.update(b"/");
-    digest.update(selector.collection_group.as_str().as_bytes());
-    digest.update(b"/");
-    digest.update(selector.field_id.as_bytes());
-    digest.update(b"/");
-    digest.update(scope_name(scope).as_bytes());
-    digest.update(b"/");
-    digest.update(mode_name(mode).as_bytes());
-    let id = fireemu_core_types::hash::hex_lower(&digest.finalize()[..12]);
-    format!(
-        "projects/{}/databases/{}/collectionGroups/{}/indexes/{id}",
-        selector.project,
-        selector.database,
-        selector.collection_group.as_str()
-    )
 }
 
 /// Binds a page token to the listing that issued it.
@@ -159,7 +125,12 @@ fn page_offset(binding: [u8; 6], token: &str) -> Result<usize, Status> {
     Ok(offset as usize)
 }
 
-fn mode_json(selector: &FieldSelector, scope: IndexQueryScope, mode: IndexFieldMode) -> Value {
+fn mode_json(
+    selector: &FieldSelector,
+    scope: IndexQueryScope,
+    mode: IndexFieldMode,
+    state: &str,
+) -> Value {
     let mut entry = json!({ "fieldPath": selector.field_id });
     match mode {
         IndexFieldMode::Ascending => entry["order"] = json!("ASCENDING"),
@@ -169,11 +140,25 @@ fn mode_json(selector: &FieldSelector, scope: IndexQueryScope, mode: IndexFieldM
             entry["vectorConfig"] = json!({"dimension": dimension, "flat": {}});
         }
     }
+    // Production names no single-field index and reports each one's state.
     json!({
-        "name": single_field_index_name(selector, scope, mode),
         "queryScope": scope_name(scope),
         "fields": [entry],
+        "state": state,
     })
+}
+
+/// One `IndexConfigDelta` index: the mode without a state.
+fn delta_index_json(
+    selector: &FieldSelector,
+    scope: IndexQueryScope,
+    mode: IndexFieldMode,
+) -> Value {
+    let mut index = mode_json(selector, scope, mode, "READY");
+    if let Some(object) = index.as_object_mut() {
+        object.remove("state");
+    }
+    index
 }
 
 /// The built-in automatic single-field indexes of a field with no override anywhere.
@@ -185,14 +170,21 @@ fn builtin_modes() -> Vec<(IndexQueryScope, IndexFieldMode)> {
     ]
 }
 
-/// The `indexConfig` a readback reports for one field, and whether it is inherited.
-fn index_config_json(selector: &FieldSelector, indexes: &IndexSet) -> Value {
+/// The `indexConfig` a readback reports for one field. `creating` lists the modes a pending
+/// patch adds, which read back `CREATING` until it is applied.
+fn index_config_json(
+    selector: &FieldSelector,
+    indexes: &IndexSet,
+    creating: &[(IndexQueryScope, IndexFieldMode)],
+) -> Value {
+    let database_default =
+        selector.field.is_none() && selector.collection_group.as_str() == DEFAULT_GROUP;
     let (modes, uses_ancestor) = match &selector.field {
         // The wildcard names one collection group's default settings, which are inherited
         // from the database-wide default until the group declares its own.
         None => match indexes.default_single_field_override(&selector.collection_group) {
             Some(modes) => (modes.to_vec(), false),
-            None => (builtin_modes(), true),
+            None => (builtin_modes(), !database_default),
         },
         Some(field) => (
             indexes.single_field_modes(&selector.collection_group, field),
@@ -203,14 +195,79 @@ fn index_config_json(selector: &FieldSelector, indexes: &IndexSet) -> Value {
     };
     let indexes_json: Vec<Value> = modes
         .into_iter()
-        .map(|(scope, mode)| mode_json(selector, scope, mode))
+        .map(|(scope, mode)| {
+            let state = if creating.contains(&(scope, mode)) {
+                "CREATING"
+            } else {
+                "READY"
+            };
+            mode_json(selector, scope, mode, state)
+        })
         .collect();
-    let mut config = json!({ "indexes": indexes_json });
-    if uses_ancestor {
-        config["usesAncestorConfig"] = json!(true);
+    let mut config = json!({});
+    if !indexes_json.is_empty() {
+        config["indexes"] = json!(indexes_json);
+    }
+    // Every field but the database-wide default names the field it would inherit from, and
+    // says so only while it does (proto3 JSON leaves the false value out).
+    if !database_default {
         config["ancestorField"] = json!(ancestor_field(&selector.project, &selector.database));
     }
+    if uses_ancestor {
+        config["usesAncestorConfig"] = json!(true);
+    }
     config
+}
+
+/// What the modes of a field are before and after an index-configuration patch, as
+/// `IndexConfigDelta`s: every removed mode, then every added one.
+fn index_config_deltas(
+    selector: &FieldSelector,
+    before: &[(IndexQueryScope, IndexFieldMode)],
+    after: &[(IndexQueryScope, IndexFieldMode)],
+) -> Vec<Value> {
+    let removed = before.iter().filter(|m| !after.contains(m)).map(|(scope, mode)| {
+        json!({"changeType": "REMOVE", "index": delta_index_json(selector, *scope, *mode)})
+    });
+    let added = after.iter().filter(|m| !before.contains(m)).map(|(scope, mode)| {
+        json!({"changeType": "ADD", "index": delta_index_json(selector, *scope, *mode)})
+    });
+    removed.chain(added).collect()
+}
+
+/// Reads the modes an `indexConfig` asks for: `None` (absent or null) inherits again.
+fn parse_index_config(
+    value: &Value,
+) -> Result<Option<Vec<(IndexQueryScope, IndexFieldMode)>>, Status> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    let mut modes = Vec::new();
+    for index in value["indexes"].as_array().into_iter().flatten() {
+        let scope = match index["queryScope"].as_str() {
+            Some("COLLECTION") | None => IndexQueryScope::Collection,
+            Some("COLLECTION_GROUP") => IndexQueryScope::CollectionGroup,
+            Some(other) => {
+                return Err(Status::invalid_argument(format!(
+                    "Invalid value at 'field.index_config.indexes.query_scope', \"{other}\""
+                )))
+            }
+        };
+        for field in index["fields"].as_array().into_iter().flatten() {
+            let mode = match (field["order"].as_str(), field["arrayConfig"].as_str()) {
+                (Some("ASCENDING"), None) => IndexFieldMode::Ascending,
+                (Some("DESCENDING"), None) => IndexFieldMode::Descending,
+                (None, Some("CONTAINS")) => IndexFieldMode::Contains,
+                _ => {
+                    return Err(Status::invalid_argument(
+                        "index field value_mode must be specified.",
+                    ))
+                }
+            };
+            modes.push((scope, mode));
+        }
+    }
+    Ok(Some(modes))
 }
 
 impl RestState {
@@ -263,21 +320,11 @@ impl RestState {
                 "field configuration must name a project and a database",
             ));
         }
-        let mut databases: std::collections::BTreeSet<String> = self
-            .local
-            .database_catalog()?
-            .into_iter()
-            .filter(|((p, _), _)| p == project)
-            .map(|((_, d), _incarnation)| d)
-            .collect();
-        databases.insert(fireemu_core_types::ids::DatabaseId::DEFAULT.to_owned());
-        databases.extend(self.local.declared_databases());
-        if databases.contains(database) {
+        if crate::admin::rest::database_exists(self, project, database) {
             Ok(())
         } else {
-            Err(Status::not_found(format!(
-                "Project '{project}' or database '{database}' does not exist."
-            )))
+            // Production's words for the fields of a database it does not have.
+            Err(Status::not_found("Requested database was not found."))
         }
     }
 
@@ -299,7 +346,8 @@ impl RestState {
             None
         } else {
             Some(FieldPath::parse(field).map_err(|error| {
-                Status::invalid_argument(format!("field path {field} is not valid: {error}"))
+                let refusal = crate::query_messages::property_path_error(field, &error);
+                Status::new(refusal.grpc_code(), refusal.to_string())
             })?)
         };
         Ok(FieldSelector {
@@ -311,16 +359,65 @@ impl RestState {
         })
     }
 
-    fn field_json(&self, selector: &FieldSelector) -> Value {
-        let indexes = self
+    /// The catalog a field readback reports: the configuration's and every Admin field patch,
+    /// pending ones included (production reads back the configuration a patch asks for).
+    fn readback_indexes(&self, selector: &FieldSelector) -> IndexSet {
+        let mut indexes = self
             .local
             .indexes_for_project_database(&selector.project, &selector.database);
+        self.local.admin().fields().overlay(
+            &selector.project,
+            &selector.database,
+            self.local.now(),
+            &mut indexes,
+            true,
+        );
+        indexes
+    }
+
+    /// The field's latest patch that is still pending, if any.
+    fn pending_patch(&self, selector: &FieldSelector) -> Option<crate::admin::fields::FieldPatch> {
+        let field = selector.field.as_ref()?;
+        let registry = self.local.admin().fields();
+        registry
+            .of_field(
+                &selector.project,
+                &selector.database,
+                &selector.collection_group,
+                field,
+            )
+            .into_iter()
+            .last()
+            .filter(|patch| !registry.applied(patch, self.local.now()))
+    }
+
+    fn field_json(&self, selector: &FieldSelector) -> Value {
+        let indexes = self.readback_indexes(selector);
+        let pending = self.pending_patch(selector);
+        let creating: Vec<(IndexQueryScope, IndexFieldMode)> = match &pending {
+            Some(crate::admin::fields::FieldPatch {
+                change: crate::admin::fields::FieldChange::IndexConfig(Some(modes)),
+                before,
+                ..
+            }) => modes
+                .iter()
+                .filter(|m| !before.contains(m))
+                .copied()
+                .collect(),
+            _ => Vec::new(),
+        };
         let mut resource = json!({
             "name": selector.resource_name(),
-            "indexConfig": index_config_json(selector, &indexes),
+            "indexConfig": index_config_json(selector, &indexes, &creating),
         });
         if let Some(policy) = self.ttl_policy(selector) {
-            let mut config = json!({ "state": policy.state.as_str() });
+            let adding = matches!(
+                pending.as_ref().map(|p| &p.change),
+                Some(crate::admin::fields::FieldChange::TtlAdd)
+            );
+            let mut config = json!({
+                "state": if adding { "CREATING" } else { policy.state.as_str() }
+            });
             // An unset `expirationOffset` is absent from the resource rather than reported
             // as zero, so a readback repeats what the patch asked for.
             if let Some(offset) = policy.expiration_offset {
@@ -340,6 +437,86 @@ impl RestState {
                 &selector.collection_group,
             )
             .filter(|policy| &policy.field == field)
+    }
+
+    /// An `indexConfig` patch: what it changes, the modes it starts from, and its deltas.
+    fn index_config_change(
+        &self,
+        selector: &FieldSelector,
+        field: &FieldPath,
+        body: &Value,
+    ) -> Result<(PatchChange, Value), Status> {
+        // Everything that can refuse this patch is decided before the first state change.
+        let target = parse_index_config(&body["indexConfig"])?;
+        let before = self
+            .readback_indexes(selector)
+            .single_field_modes(&selector.collection_group, field);
+        let after = target.clone().unwrap_or_else(|| {
+            self.local
+                .indexes_for_project_database(&selector.project, &selector.database)
+                .single_field_modes(&selector.collection_group, field)
+        });
+        let deltas = index_config_deltas(selector, &before, &after);
+        Ok((
+            (
+                crate::admin::fields::FieldChange::IndexConfig(target),
+                before,
+            ),
+            json!({ "indexConfigDeltas": deltas }),
+        ))
+    }
+
+    /// A `ttlConfig` patch, applied to the TTL catalog at once, and its delta.
+    fn ttl_change(
+        &self,
+        selector: &FieldSelector,
+        field: &FieldPath,
+        body: &Value,
+    ) -> Result<(PatchChange, Value), Status> {
+        let requested = parse_ttl_config(&body["ttlConfig"])?;
+        Ok(match requested {
+            TtlConfigRequest::Enable { expiration_offset } => {
+                self.local
+                    .enable_ttl_with_offset(
+                        &selector.project,
+                        &selector.database,
+                        selector.collection_group.clone(),
+                        field.clone(),
+                        expiration_offset,
+                    )
+                    .map_err(|error| match error {
+                        // Production allows one TTL field per collection group and says
+                        // so naming the field the patch asked for.
+                        TtlError::ConflictingField { .. } => Status::resource_exhausted(format!(
+                            "The collection group '{}' can only have at most '1' field(s) \
+                             marked with TTL but already has TTL configurations set on path \
+                             '{}'. Please delete at least one and try again.",
+                            selector.collection_group.as_str(),
+                            selector.field_id
+                        )),
+                        TtlError::DocumentNameField => Status::invalid_argument(error.to_string()),
+                        TtlError::TooManyFields { .. } => {
+                            Status::resource_exhausted(error.to_string())
+                        }
+                    })?;
+                (
+                    (crate::admin::fields::FieldChange::TtlAdd, Vec::new()),
+                    json!({ "ttlConfigDelta": { "changeType": "ADD" } }),
+                )
+            }
+            TtlConfigRequest::Disable => {
+                self.local.disable_ttl(
+                    &selector.project,
+                    &selector.database,
+                    &selector.collection_group,
+                    field,
+                );
+                (
+                    (crate::admin::fields::FieldChange::TtlRemove, Vec::new()),
+                    json!({ "ttlConfigDelta": { "changeType": "REMOVE" } }),
+                )
+            }
+        })
     }
 
     fn patch_field(
@@ -366,76 +543,131 @@ impl RestState {
             .iter()
             .find(|path| !matches!(path.as_str(), "ttlConfig" | "indexConfig"))
         {
+            // Production's words for a mask path the Field message does not have.
             return Err(Status::invalid_argument(format!(
-                "updateMask names {unknown}, which is not a field configuration path"
+                "Invalid update field mask: paths: \t \"{unknown}\"\n"
             )));
         }
         let patches_index_config = mask.iter().any(|path| path == "indexConfig")
-            || (mask.is_empty() && !body["indexConfig"].is_null());
-        if patches_index_config {
-            return Err(Status::unimplemented(
-                "patching indexConfig is not implemented; single-field exemptions are taken \
-                 from the project's index configuration and have no runtime transition",
-            ));
-        }
-        let patches_ttl = mask.iter().any(|path| path == "ttlConfig") || mask.is_empty();
-        if !patches_ttl {
+            || (mask.is_empty() && body.get("indexConfig").is_some());
+        let patches_ttl = mask.iter().any(|path| path == "ttlConfig")
+            || (mask.is_empty() && body.get("ttlConfig").is_some());
+        if !patches_ttl && !patches_index_config {
             return Err(Status::invalid_argument(
                 "updateMask must name ttlConfig or indexConfig",
             ));
         }
-        // Everything that can refuse this patch is decided before the first state change, so
-        // a refused request leaves the catalog, the readback and the operation record exactly
-        // as it found them.
-        let requested = parse_ttl_config(&body["ttlConfig"])?;
-        if let TtlConfigRequest::Enable { expiration_offset } = requested {
-            let Some(field) = selector.field.clone() else {
-                return Err(Status::invalid_argument(
-                    "the wildcard field names a collection group's default settings and \
-                     cannot carry a TTL policy",
-                ));
-            };
-            self.local
-                .enable_ttl_with_offset(
-                    &selector.project,
-                    &selector.database,
-                    selector.collection_group.clone(),
-                    field,
-                    expiration_offset,
-                )
-                .map_err(|error| match error {
-                    TtlError::ConflictingField { .. } => {
-                        Status::failed_precondition(error.to_string())
-                    }
-                    TtlError::DocumentNameField => Status::invalid_argument(error.to_string()),
-                    TtlError::TooManyFields { .. } => Status::resource_exhausted(error.to_string()),
-                })?;
-        } else if let Some(field) = selector.field.as_ref() {
-            self.local.disable_ttl(
-                &selector.project,
-                &selector.database,
-                &selector.collection_group,
-                field,
-            );
-        }
+        let Some(field) = selector.field.clone() else {
+            return Err(Status::invalid_argument(
+                "the wildcard field names a collection group's default settings and \
+                 cannot carry a TTL policy or a single-field index override",
+            ));
+        };
         let now = self.local.now();
-        // The response is recorded with the operation, so polling the operation later
-        // answers exactly what this patch answered even after a further patch changed the
-        // field. One generator renders both.
-        let mut field = self.field_json(selector);
-        field["@type"] = json!("type.googleapis.com/google.firestore.admin.v1.Field");
-        let name = self.local.record_field_operation(
+        let (change, delta) = if patches_index_config {
+            self.index_config_change(selector, &field, body)?
+        } else {
+            self.ttl_change(selector, &field, body)?
+        };
+        let admin = self.local.admin();
+        let operation = admin
+            .operations()
+            .reserve(&selector.project, &selector.database);
+        let name = format!(
+            "projects/{}/databases/{}/operations/{operation}",
+            selector.project, selector.database
+        );
+        let mut metadata = json!({
+            "@type": FIELD_METADATA_TYPE_URL,
+            "field": selector.resource_name(),
+            "startTime": timestamp_to_json(&encode_instant(now)),
+            "state": "INITIALIZING",
+        });
+        if let (Some(target), Some(extra)) = (metadata.as_object_mut(), delta.as_object()) {
+            target.extend(extra.clone());
+        }
+        let initial = json!({ "name": name, "metadata": metadata });
+        admin.fields().record(crate::admin::fields::FieldPatch {
+            project: selector.project.clone(),
+            database: selector.database.clone(),
+            group: selector.collection_group.clone(),
+            field,
+            change: change.0,
+            started: std::time::Instant::now(),
+            start_time: now,
+            operation: operation.clone(),
+            before: change.1,
+        });
+        admin.operations().record_field(
             &selector.project,
             &selector.database,
-            &selector.resource_name(),
-            now,
-            field,
+            &operation,
+            initial.clone(),
         );
-        let operation = self
-            .local
-            .field_operation(&selector.project, &name)
-            .ok_or_else(|| Status::internal("the field operation was not recorded"))?;
-        Ok(ok(operation_json(&operation)))
+        Ok(ok(initial))
+    }
+
+    /// What `operations.get` answers for a field patch now: as first answered while it is
+    /// pending, and done (with the collection group's document count and the part of the field
+    /// it changed) once it is applied.
+    pub(crate) fn field_operation_json(
+        &self,
+        patch: &crate::admin::fields::FieldPatch,
+        initial: &Value,
+    ) -> Value {
+        if !self.local.admin().fields().applied(patch, self.local.now()) {
+            return initial.clone();
+        }
+        let selector = FieldSelector {
+            project: patch.project.clone(),
+            database: patch.database.clone(),
+            collection_group: patch.collection_group_id(),
+            field: Some(patch.field.clone()),
+            field_id: patch.field.canonical(),
+        };
+        let mut metadata = initial["metadata"].clone();
+        metadata["state"] = json!("SUCCESSFUL");
+        let end = fireemu_core_types::time::LogicalInstant::from_nanos(
+            patch.start_time.as_nanos() + 1_000_000,
+        );
+        metadata["endTime"] = json!(timestamp_to_json(&encode_instant(end)));
+        let documents = crate::admin::managed::group_document_count(
+            self,
+            &patch.project,
+            &patch.database,
+            patch.group.as_str(),
+        );
+        if documents > 0 {
+            metadata["progressDocuments"] = json!({
+                "estimatedWork": documents.to_string(),
+                "completedWork": documents.to_string(),
+            });
+        }
+        let mut response = json!({
+            "@type": "type.googleapis.com/google.firestore.admin.v1.Field",
+            "name": selector.resource_name(),
+        });
+        match &patch.change {
+            crate::admin::fields::FieldChange::TtlAdd => {
+                let mut config = self.field_json(&selector)["ttlConfig"].clone();
+                if config.is_object() {
+                    config["state"] = json!("ACTIVE");
+                    response["ttlConfig"] = config;
+                } else {
+                    response["ttlConfig"] = json!({ "state": "ACTIVE" });
+                }
+            }
+            crate::admin::fields::FieldChange::TtlRemove => {}
+            crate::admin::fields::FieldChange::IndexConfig(_) => {
+                response["indexConfig"] = self.field_json(&selector)["indexConfig"].clone();
+            }
+        }
+        json!({
+            "name": initial["name"],
+            "metadata": metadata,
+            "done": true,
+            "response": response,
+        })
     }
 
     fn list_fields(
@@ -452,14 +684,14 @@ impl RestState {
         // two filters that select them. Any other filter is refused rather than silently
         // widened to a listing the caller did not ask for.
         let (ttl_only, ancestor_only) = match single(params, "filter")? {
-            None | Some("") => (false, false),
             Some("indexConfig.usesAncestorConfig:false") => (false, true),
             Some("ttlConfig:*") => (true, false),
-            Some(other) => {
-                return Err(Status::invalid_argument(format!(
-                    "filter {other} is not supported; use indexConfig.usesAncestorConfig:false \
-                     or ttlConfig:*"
-                )))
+            // Production refuses a listing that names neither selection, in its own words.
+            _ => {
+                return Err(Status::invalid_argument(
+                    "ListFieldsRequest.filter must include at least fields that do not use \
+                     their ancestor configuration, or fields with TTLs.",
+                ))
             }
         };
         let binding = listing_binding(
@@ -496,7 +728,14 @@ impl RestState {
             }
         }
         if !ttl_only {
-            let indexes = self.local.indexes_for_project_database(project, database);
+            let mut indexes = self.local.indexes_for_project_database(project, database);
+            self.local.admin().fields().overlay(
+                project,
+                database,
+                self.local.now(),
+                &mut indexes,
+                true,
+            );
             for (collection, segments, _modes) in indexes.single_field_overrides() {
                 if collection != collection_group.as_str() {
                     continue;

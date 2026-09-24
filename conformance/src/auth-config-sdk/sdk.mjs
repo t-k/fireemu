@@ -15,6 +15,7 @@
 // IAM signBlob of the project's own Admin SDK account (K6).
 
 import http from "node:http";
+import http2 from "node:http2";
 import https from "node:https";
 
 import { describeJwt, decodeJwt } from "../auth-credential/tokens.mjs";
@@ -68,9 +69,23 @@ function guardTransport(module, protocol) {
     hooks.check({ url, method, headers }, "sdk-admin", { bodyPending: true });
     const request = original.call(this, options, ...rest);
     const end = request.end.bind(request);
+    // The body is checked whole at end(); a body written in parts is refused.
+    request.write = () => {
+      const error = new Error("an SDK request body written before end()");
+      hooks.refuse(error);
+      request.destroy(error);
+      return false;
+    };
     request.end = (chunk, ...more) => {
       try {
-        const body = chunk === undefined || typeof chunk === "function" ? undefined : String(chunk);
+        const body =
+          chunk === undefined || typeof chunk === "function"
+            ? undefined
+            : Buffer.isBuffer(chunk) || typeof chunk === "string"
+              ? chunk.toString()
+              : undefined;
+        if (chunk !== undefined && typeof chunk !== "function" && body === undefined)
+          throw new Error("an SDK request body of an unexpected type");
         hooks.check({ url, method, headers, body }, "sdk-admin");
       } catch (error) {
         request.destroy(error);
@@ -78,6 +93,12 @@ function guardTransport(module, protocol) {
       }
       return end(chunk, ...more);
     };
+    return request;
+  };
+  // `get` calls the module's internal request, not the export; route it through the guard.
+  module.get = function guardedGet(...args) {
+    const request = module.request(...args);
+    request.end();
     return request;
   };
 }
@@ -90,6 +111,10 @@ async function loadSdks() {
   globalThis.fetch = guardedFetch;
   guardTransport(http, "http:");
   guardTransport(https, "https:");
+  // No operation of the vocabulary uses HTTP/2 (the Admin SDK uses it for Messaging only).
+  http2.connect = () => {
+    throw new Error("HTTP/2 is not used by any SDK step");
+  };
   const [adminApp, adminAuth, webApp, webAuth] = await Promise.all([
     import("firebase-admin/app"),
     import("firebase-admin/auth"),
@@ -107,11 +132,12 @@ let appCount = 0;
 
 /**
  * Opens one Admin app and one Web app for a program. `check(request, role)` is the guard (it
- * also counts the request); production needs the owner's access token and the web config.
+ * also counts the request) and `refuse(error)` records a refusal made outside it; production
+ * needs the owner's access token and the web config.
  */
-export async function openSdk(ctx, { check }) {
+export async function openSdk(ctx, { check, refuse }) {
   const sdk = await loadSdks();
-  hooks = { check };
+  hooks = { check, refuse };
   const name = `acs-${(appCount += 1)}`;
   const local = ctx.target.kind === "local";
   let admin;

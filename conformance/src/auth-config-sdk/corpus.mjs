@@ -8,7 +8,11 @@
 // "strict" (session-signed tokens), "strict-unsigned-emulator" (the Admin SDK's emulator mode)
 // or "emulator" (the custom-token program).
 
+import { TEST_PHONES, TEST_PHONE_CODE } from "../auth-account/harness.mjs";
+import { PROBE_PHONE } from "./guard.mjs";
+
 const CONFIG = "admin/v2/projects/{project}/config";
+const BASELINE_TEST_PHONES = Object.fromEntries(TEST_PHONES.map((p) => [p, TEST_PHONE_CODE]));
 const HOSTING = "https://{project}.firebaseapp.com/finish";
 
 // ---- step builders -------------------------------------------------------------------------
@@ -149,14 +153,14 @@ const mask = {
       client: { permissions: { disabledUserDeletion: true } },
     }),
     getConfig("read-after-parent-permissions"),
-    patchConfig("empty-mask", "", { signIn: { anonymous: { enabled: false } } }),
-    getConfig("read-after-empty-mask"),
     patchConfig("unknown-path", "unknownMember", {}),
     patchConfig("unknown-nested-path", "signIn.unknownMember", {}),
     patchConfig("duplicate-path", "signIn.allowDuplicateEmails,signIn.allowDuplicateEmails", {
       signIn: { allowDuplicateEmails: false },
     }),
-    patchConfig("read-only-name", "name", { name: "projects/{project}/config" }),
+    // Read-only members are written back with the value just read, so an accepted write
+    // changes nothing.
+    patchConfig("read-only-name", "name", { name: from("read-after-parent-permissions:name") }),
     patchConfig("read-only-subtype", "subtype", { subtype: "IDENTITY_PLATFORM" }),
     patchConfig("read-only-hosting-site", "defaultHostingSite", {
       defaultHostingSite: "{project}",
@@ -180,11 +184,12 @@ const invalid = {
     ...[
       ["phone-without-plus", { 16505550101: "123456" }],
       ["phone-letters", { "+1650555abcd": "123456" }],
-      ["phone-code-short", { "+16505550101": "12345" }],
-      ["phone-code-letters", { "+16505550101": "abcdef" }],
+      ["phone-code-short", { [PROBE_PHONE]: "12345" }],
+      ["phone-code-letters", { [PROBE_PHONE]: "abcdef" }],
     ].map(([id, numbers]) =>
+      // The six sandbox numbers stay in every probe, so an accepted probe removes none of them.
       patchConfig(id, "signIn.phoneNumber.testPhoneNumbers", {
-        signIn: { phoneNumber: { testPhoneNumbers: numbers } },
+        signIn: { phoneNumber: { testPhoneNumbers: { ...BASELINE_TEST_PHONES, ...numbers } } },
       }),
     ),
     ...[
@@ -820,7 +825,6 @@ const adminConfig = {
       settleTo: { "mobileLinksConfig.domain": "FIREBASE_DYNAMIC_LINK_DOMAIN" },
     },
     sdk("get-after-updates", "admin.getProjectConfig"),
-    sdk("update-empty", "admin.updateProjectConfig", {}),
     sdk("update-unknown-member", "admin.updateProjectConfig", { autodeleteAnonymousUsers: true }),
     sdk("update-multi-factor-read-only-check", "admin.updateProjectConfig", {
       multiFactorConfig: { state: "SOMETIMES" },

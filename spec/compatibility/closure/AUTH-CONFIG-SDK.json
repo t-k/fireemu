@@ -77,6 +77,12 @@
       "decision": "Key material in the configuration (signIn.hashConfig.signerKey and saltSeparator, client.apiKey) is recorded as placeholders, and the harness never writes a read-only path whose change could alter it (signIn.hashConfig, client.apiKey). Read-only paths are exercised through name, subtype and defaultHostingSite only.",
       "decidedBy": "lane (sandbox safety)",
       "decidedOn": "2026-09-25"
+    },
+    {
+      "id": "K13",
+      "decision": "An omitted or empty updateMask is not observed on the shared sandbox, and the harness refuses to send one: production's reading of either is undocumented, and if it replaced every settable member the harness could not write back the members other lanes own (mfa, multiTenant, blockingFunctions). fireemu keeps its present reading (an empty mask changes nothing; an omitted mask is inferred from the members present) until either is observed on a project no other lane uses. Recorded as an unobserved edge.",
+      "decidedBy": "lane (sandbox safety; pre-send review 1, 2026-09-25)",
+      "decidedOn": "2026-09-25"
     }
   ],
   "conditions": [
@@ -102,7 +108,7 @@
         "strict"
       ],
       "status": "PENDING_CORPUS",
-      "note": "The PATCH answer and the read-back for a leaf mask, a parent mask, a masked path absent from the body (reset), a body member outside the mask (ignored), an omitted mask, an empty mask, an unknown path, a duplicate path, and a read-only path (name, subtype, defaultHostingSite)."
+      "note": "The PATCH answer and the read-back for a leaf mask, a parent mask, a masked path absent from the body (reset), a body member outside the mask (ignored), an unknown path, a duplicate path, and a read-only path (name, subtype, defaultHostingSite, written back with its current value). An omitted or empty mask is K13."
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/config-validation",
@@ -258,7 +264,7 @@
         "strict-unsigned-emulator"
       ],
       "status": "PENDING_CORPUS",
-      "note": "Admin SDK projectConfigManager getProjectConfig and updateProjectConfig for its six members (passwordPolicyConfig, emailPrivacyConfig, recaptchaConfig, smsRegionConfig, mobileLinksConfig, multiFactorConfig read only), the SDK-side refusals and the server refusals it surfaces, and an empty update."
+      "note": "Admin SDK projectConfigManager getProjectConfig and updateProjectConfig for its members (passwordPolicyConfig, emailPrivacyConfig, recaptchaConfig, smsRegionConfig, mobileLinksConfig; multiFactorConfig is K9), the SDK-side refusals and the server refusals it surfaces. An empty update sends an empty mask (K13)."
     },
     {
       "conditionId": "AUTH-CONFIG-SDK/admin-sdk-tokens",

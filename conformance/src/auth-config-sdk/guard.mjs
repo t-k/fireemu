@@ -33,6 +33,11 @@ const ADMIN_SDK_HOSTS = {
     ),
   ],
 };
+/**
+ * A fictional 555-01xx number the invalid-code probes add to the test-number map next to the
+ * six sandbox numbers. It may appear only in a config write: nothing is ever sent to it.
+ */
+export const PROBE_PHONE = "+16505550107";
 export const SIGNER_ACCOUNT = `firebase-adminsdk-fbsvc@${SANDBOX_PROJECT}.iam.gserviceaccount.com`;
 
 /**
@@ -198,7 +203,7 @@ export function guardHttp(
     assertQuotaProject(lower);
   // The Admin SDK transport is checked once before its body exists and again with it.
   if (bodyPending) return;
-  const parsedBody = parseBody(body, lower["content-type"]);
+  const parsedBody = parseBody(body, lower["content-type"], role);
   const inputs = [Object.fromEntries(parsed.searchParams), parsedBody ?? {}];
   if (path.endsWith("/config")) guardConfigWrite(method, parsed, parsedBody ?? {}, role, ctx);
   if (path.endsWith(":sendOobCode")) guardOobRequest(path, lower, parsedBody ?? {}, ctx);
@@ -217,6 +222,7 @@ export function guardHttp(
         throw new Error(`${key} ${value} is not reviewed`);
       assertOnlyExampleEmail(value, key);
       for (const [phone] of value.replaceAll(/[\s().-]/g, "").matchAll(/\+\d{8,15}/g)) {
+        if (phone === PROBE_PHONE && path.endsWith("/config")) continue;
         if (!TEST_PHONES.includes(phone))
           throw new Error(`${phone} is not a configured test phone`);
       }
@@ -230,14 +236,17 @@ function assertQuotaProject(headers) {
     throw new Error("an authorized production request must bill the sandbox project");
 }
 
-function parseBody(body, contentType = "") {
-  if (typeof body !== "string" || body === "") return undefined;
+function parseBody(body, contentType = "", role = "step") {
+  if (body !== undefined && typeof body !== "string") throw new Error("request body is not text");
+  if (body === undefined || body === "") return undefined;
   if (/json/.test(contentType)) {
     try {
       return JSON.parse(body);
     } catch {
-      // A deliberately malformed body names nothing; it is sent to be refused.
-      return undefined;
+      // A deliberately malformed corpus body names nothing; it is sent to be refused. An SDK
+      // never sends one, so an unreadable SDK body is refused rather than read as empty.
+      if (role === "step") return undefined;
+      throw new Error("an SDK request body that is not JSON");
     }
   }
   return Object.fromEntries(new URLSearchParams(body));
@@ -270,30 +279,47 @@ export const writePathOf = (path) => [...CONFIG_WRITE_PATHS].find((w) => under(p
 function guardConfigWrite(method, parsed, body, role, ctx) {
   if (method === "GET") return;
   if (method !== "PATCH") throw new Error(`config ${method} is not allowed`);
-  const maskParam = parsed.searchParams.get("updateMask");
-  if (maskParam === null) throw new Error("a config write names its updateMask");
-  const mask = maskParam.split(",").filter(Boolean);
+  // An omitted or empty mask is refused: production's reading of either is unobserved, and a
+  // full replacement would reset members this harness may not write back (scope decision K13).
+  const mask = (parsed.searchParams.get("updateMask") ?? "").split(",").filter(Boolean);
+  if (mask.length === 0) throw new Error("a config write names a non-empty updateMask");
+  // A program may write only what it restores; the harness restores only write paths.
+  const touched = (path) => {
+    const written = writePathOf(path);
+    if (!written) return true;
+    if (role === "harness" || ctx.touches === undefined) return true;
+    return ctx.touches.some((t) => under(written, t) || under(t, written));
+  };
   for (const path of mask) {
     const writable = writePathOf(path) !== undefined;
     if (role === "harness" ? !writable : !writable && !CONFIG_PROBE_PATHS.has(path))
       throw new Error(`config mask path ${path} is not reviewed`);
+    if (!touched(path)) throw new Error(`config mask path ${path} is not touched by the program`);
   }
   for (const leaf of leafPaths(body)) {
     if (NEVER_WRITTEN.some((never) => under(leaf, never)))
       throw new Error(`config write names ${leaf}`);
-    if (!writePathOf(leaf) && !["name", "subtype", "defaultHostingSite"].includes(leaf))
+    if (!writePathOf(leaf) && !(role === "step" && PROBE_BODY_MEMBERS.has(leaf)))
       throw new Error(`config body member ${leaf} is not reviewed`);
+    if (!touched(leaf)) throw new Error(`config body member ${leaf} is not touched by the program`);
   }
   const recaptcha = body.recaptchaConfig ?? {};
-  if (
-    [recaptcha.emailPasswordEnforcementState, recaptcha.phoneEnforcementState].includes("ENFORCE")
-  )
+  // Only OFF and AUDIT, or the one unknown name the validation probes send (`SOMETIMES`), which
+  // production refuses; never ENFORCE or a numeric enum value (K2).
+  const states = [recaptcha.emailPasswordEnforcementState, recaptcha.phoneEnforcementState];
+  if (states.some((state) => state !== undefined && !["OFF", "AUDIT", "SOMETIMES"].includes(state)))
     throw new Error("reCAPTCHA is never enforced on the sandbox (K2)");
   for (const domain of body.authorizedDomains ?? []) {
     if (!allowedHosts(ctx.project).has(domain) && !INVALID_DOMAIN_PROBES.has(domain))
       throw new Error(`authorized domain ${domain} is not reviewed`);
   }
 }
+
+/**
+ * Body members a recorded step may send besides write paths: read-only members (written back
+ * with their current value) and one member production does not know.
+ */
+const PROBE_BODY_MEMBERS = new Set(["name", "subtype", "defaultHostingSite", "unknownMember"]);
 
 /** Malformed authorized domains a validation step may send (production is expected to refuse). */
 export const INVALID_DOMAIN_PROBES = new Set([

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { SANDBOX_PROJECT, createContext } from "./auth-account/harness.mjs";
@@ -7,7 +9,9 @@ import { guardHttp, validateConfigSdkCorpus } from "./auth-config-sdk/guard.mjs"
 import { normalizeHttp, normalizeSdk } from "./auth-config-sdk/harness.mjs";
 import { SDK_OPERATIONS } from "./auth-config-sdk/sdk.mjs";
 import { configEquals, createSession, withTimes } from "./auth-config-sdk/session.mjs";
-import { otherLaneOnSandbox, recentAbort, restoreDue } from "./auth-config-sdk/run.mjs";
+import { linesSince, otherLaneOnSandbox, recentAbort, restoreDue } from "./auth-config-sdk/run.mjs";
+import { buildRequest } from "./auth-account/harness.mjs";
+import { materialize } from "./auth-credential/session.mjs";
 
 const production = () =>
   createContext({
@@ -190,7 +194,7 @@ test("config writes stay on reviewed paths, never key material, other lanes or E
   refused(
     undefined,
     { emailPrivacyConfig: { enableImprovedEmailPrivacy: false } },
-    /names its updateMask/,
+    /non-empty updateMask/,
   );
   refused("authorizedDomains", { authorizedDomains: ["evil.example.org"] }, /not reviewed/);
   ok("authorizedDomains", { authorizedDomains: [`${SANDBOX_PROJECT}.web.app`, "app.example.com"] });
@@ -437,7 +441,7 @@ test("relative times resolve to whole seconds", () => {
 });
 
 /** A fake sandbox: an in-memory config and account list behind the session's fetch. */
-function fakeSandbox({ failPatchOn } = {}) {
+function fakeSandbox({ failPatchOn, sideEffect } = {}) {
   const state = { config: { emailPrivacyConfig: { enableImprovedEmailPrivacy: true } }, users: [] };
   const calls = [];
   const fetchImpl = async (url, init) => {
@@ -454,6 +458,7 @@ function fakeSandbox({ failPatchOn } = {}) {
       const body = JSON.parse(init.body);
       if (failPatchOn && JSON.stringify(body).includes(failPatchOn))
         return json(400, { error: { message: "INVALID_ARGUMENT" } });
+      if (sideEffect) Object.assign(state.config, sideEffect);
       for (const path of parsed.searchParams.get("updateMask").split(",")) {
         const keys = path.split(".");
         const value = keys.reduce((v, k) => v?.[k], body);
@@ -544,11 +549,237 @@ test("the ledger rules keep lanes apart and hold retries after a failed run", ()
   ].join("\n");
   assert.match(otherLaneOnSandbox(recent, now), /wrote a line/);
   assert.equal(otherLaneOnSandbox(recent, now + 20 * 60_000), undefined);
-  const mine = (outcome, ts = "2026-09-25T19:30:00Z") =>
-    line({ ts, event: "finished", taskId: "AUTH-CONFIG-SDK-SANDBOX", outcome });
+  const mine = (outcome, ts = "2026-09-25T19:30:00Z", extra = {}) =>
+    line({
+      ts,
+      event: "finished",
+      taskId: "AUTH-CONFIG-SDK-SANDBOX",
+      outcome,
+      programs: ["p"],
+      ...extra,
+    });
   assert.ok(recentAbort(mine("aborted-fatal"), now));
   assert.equal(recentAbort(mine("recorded"), now), undefined);
   assert.equal(recentAbort(mine("aborted", "2026-09-25T18:30:00Z"), now), undefined);
   assert.ok(restoreDue(line({ ts: "t", event: "started", taskId: "AUTH-CONFIG-SDK-SANDBOX" })));
   assert.ok(!restoreDue(mine("recorded")));
+  // A failed run that read the baseline back hands the sandbox over; one that did not keeps it.
+  assert.ok(!restoreDue(mine("aborted-fatal", undefined, { sandboxAtBaseline: true })));
+  assert.ok(restoreDue(mine("aborted-fatal", undefined, { sandboxAtBaseline: false })));
+  // The ledger fails closed: an unreadable line, an unreadable time, older `task` keys.
+  assert.throws(() => otherLaneOnSandbox(`${recent}\n{not json`, now), /does not parse/);
+  assert.match(
+    otherLaneOnSandbox(line({ ts: "sometime", event: "finished", taskId: "X" }), now),
+    /X wrote a line/,
+  );
+  assert.match(
+    otherLaneOnSandbox(line({ ts: "2026-09-25T18:00:00Z", event: "started", task: "OLD" }), now),
+    /OLD started/,
+  );
+  assert.deepEqual(
+    linesSince(recent, Date.parse("2026-09-25T19:00:00Z")).map((e) => e.ts),
+    ["2026-09-25T19:45:00Z"],
+  );
+});
+
+test("an empty or omitted mask is refused in every role (K13)", () => {
+  const ctx = production();
+  for (const role of ["step", "sdk-admin", "harness"]) {
+    for (const mask of [undefined, "", ","]) {
+      assert.throws(
+        () =>
+          guardHttp(
+            patch(mask, { emailPrivacyConfig: { enableImprovedEmailPrivacy: true } }),
+            ctx,
+            { role },
+          ),
+        /non-empty updateMask/,
+        `${role} ${mask}`,
+      );
+    }
+  }
+});
+
+test("a program may write only the config paths it restores", () => {
+  const ctx = { ...production(), touches: ["passwordPolicyConfig"] };
+  assert.doesNotThrow(() =>
+    guardHttp(
+      patch("passwordPolicyConfig.forceUpgradeOnSignin", {
+        passwordPolicyConfig: { forceUpgradeOnSignin: true },
+      }),
+      ctx,
+      { role: "sdk-admin" },
+    ),
+  );
+  assert.throws(
+    () =>
+      guardHttp(
+        patch("emailPrivacyConfig.enableImprovedEmailPrivacy", {
+          emailPrivacyConfig: { enableImprovedEmailPrivacy: false },
+        }),
+        ctx,
+        { role: "step" },
+      ),
+    /not touched/,
+  );
+  assert.throws(
+    () =>
+      guardHttp(
+        patch("passwordPolicyConfig", {
+          passwordPolicyConfig: {},
+          emailPrivacyConfig: { enableImprovedEmailPrivacy: false },
+        }),
+        ctx,
+        { role: "step" },
+      ),
+    /not touched/,
+    "a body member outside the mask still has to be restorable",
+  );
+  assert.doesNotThrow(
+    () =>
+      guardHttp(
+        patch("emailPrivacyConfig.enableImprovedEmailPrivacy", { emailPrivacyConfig: {} }),
+        ctx,
+        {
+          role: "harness",
+        },
+      ),
+    "the harness restores what it snapshotted",
+  );
+});
+
+/** A raw-answer map that answers any `$from` with a placeholder string. */
+const anyAnswer = {
+  get: () =>
+    new Proxy({}, { get: (_target, key) => (key === Symbol.toPrimitive ? undefined : "stub") }),
+  has: () => true,
+};
+
+test("every REST step of the corpus passes the guard as production would see it", () => {
+  const ctx = production();
+  for (const program of PROGRAMS) {
+    for (const step of program.steps.filter((s) => !s.sdk)) {
+      const request = buildRequest(
+        {
+          ...step,
+          body: materialize(withTimes(step.body), anyAnswer, new Map()),
+          query: materialize(step.query, anyAnswer, new Map()),
+        },
+        ctx,
+        anyAnswer,
+      );
+      assert.doesNotThrow(
+        () =>
+          guardHttp(
+            {
+              url: request.url,
+              method: request.init.method,
+              headers: request.init.headers,
+              body: request.init.body,
+            },
+            { ...ctx, touches: program.touches ?? [] },
+            { role: "step" },
+          ),
+        `${program.id}#${step.id}`,
+      );
+    }
+  }
+});
+
+test("every Admin SDK config update, as the pinned SDK builds it, passes the guard", async () => {
+  const require = createRequire(import.meta.url);
+  const lib = (file) =>
+    fileURLToPath(new URL(`../node_modules/firebase-admin/lib/${file}`, import.meta.url));
+  const { ProjectConfig } = require(lib("auth/project-config.js"));
+  const { generateUpdateMask } = require(lib("utils/index.js"));
+  const ctx = production();
+  let checked = 0;
+  for (const program of PROGRAMS) {
+    for (const step of program.steps.filter((s) => s.sdk === "admin.updateProjectConfig")) {
+      let request;
+      try {
+        request = ProjectConfig.buildServerRequest(step.args[0]);
+      } catch {
+        continue; // refused by the SDK before any request
+      }
+      const mask = generateUpdateMask(request).join(",");
+      assert.doesNotThrow(
+        () =>
+          guardHttp(
+            {
+              ...patch(mask, request),
+              url: `${ITK}/v2/projects/${SANDBOX_PROJECT}/config?updateMask=${encodeURIComponent(mask)}`,
+            },
+            { ...ctx, touches: program.touches ?? [] },
+            { role: "sdk-admin" },
+          ),
+        `${program.id}#${step.id} (${mask})`,
+      );
+      checked += 1;
+    }
+  }
+  assert.ok(checked >= 8, `${checked} SDK updates reach the server`);
+});
+
+test("a program that leaves any other member changed stops the run", async () => {
+  const sandbox = fakeSandbox({
+    sideEffect: { monitoring: { requestLogging: { enabled: true } } },
+  });
+  const session = createSession(local(), { fetchImpl: sandbox.fetchImpl });
+  const expected = await session.fullConfig();
+  const program = {
+    id: "auth-config-sdk/t",
+    projection: "strict",
+    touches: ["emailPrivacyConfig.enableImprovedEmailPrivacy"],
+    steps: [
+      {
+        id: "off",
+        path: "admin/v2/projects/{project}/config",
+        auth: "admin",
+        method: "PATCH",
+        query: { updateMask: "emailPrivacyConfig.enableImprovedEmailPrivacy" },
+        body: { emailPrivacyConfig: { enableImprovedEmailPrivacy: false } },
+      },
+    ],
+  };
+  const error = await session.runProgram(program, { expected }).catch((e) => e);
+  assert.ok(error?.fatal, "fatal");
+  assert.match(error.message, /left the configuration changed.*monitoring/);
+});
+
+test("the SDK transports refuse what the guard cannot see", async () => {
+  const { openSdk } = await import("./auth-config-sdk/sdk.mjs");
+  const http = await import("node:http");
+  const http2 = await import("node:http2");
+  const https = await import("node:https");
+  const refused = [];
+  const opened = await openSdk(local(), {
+    check(request, role, options = {}) {
+      guardHttp(request, local(), { role, ...options });
+    },
+    refuse(error) {
+      refused.push(error.message);
+    },
+  });
+  try {
+    assert.throws(
+      () => https.default.get("https://example.com/"),
+      /not reviewed|left the local target/,
+    );
+    assert.throws(() => http2.default.connect("https://example.com"), /HTTP\/2/);
+    const request = http.default.request({
+      protocol: "http:",
+      hostname: "127.0.0.1",
+      port: 32320,
+      path: "/identitytoolkit.googleapis.com/v1/accounts:lookup",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
+    request.on("error", () => {});
+    request.write("{}");
+    assert.deepEqual(refused, ["an SDK request body written before end()"]);
+  } finally {
+    await opened.close();
+  }
+  await assert.rejects(fetch("http://127.0.0.1:1/"), /outside an SDK step/);
 });

@@ -452,7 +452,9 @@ fn lint_functions(functions: &[DeclaredFunction<'_>], calls: &[CallSite], ctx: &
         if call.args != params {
             ctx.diagnostics.push(Diagnostic {
                 limit_id: "RULES-CALL-ARITY-MISMATCH",
-                level: DiagnosticLevel::Error,
+                // The compiler only warns: such a call is an error when it is evaluated, which
+                // makes its condition false (FS-RULES, 2026-09-24).
+                level: DiagnosticLevel::Warning(WarningSeverity::Warning),
                 current: call.args,
                 maximum: params,
                 span: Some(call.span),

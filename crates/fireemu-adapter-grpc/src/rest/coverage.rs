@@ -242,7 +242,7 @@ fn push_escaped(out: &mut String, text: &str) {
 #[cfg(test)]
 mod tests {
     use fireemu_core_rules::coverage::Coverage;
-    use fireemu_core_rules::parse::MAX_EXPR_TREE_DEPTH;
+    use fireemu_core_rules::parse::MAX_COMPILED_EXPR_DEPTH;
     use fireemu_core_rules::runtime::LoadedRules;
 
     use super::coverage_json;
@@ -253,7 +253,10 @@ mod tests {
             .name("rules-coverage-stack-regression".to_owned())
             .stack_size(2 * 1024 * 1024)
             .spawn(|| {
-                let condition = vec!["true"; MAX_EXPR_TREE_DEPTH as usize].join(" && ");
+                // The deepest tree production compiles: nested list literals, one tree level
+                // each, to MAX_COMPILED_EXPR_DEPTH with the comparison.
+                let lists = MAX_COMPILED_EXPR_DEPTH as usize - 1;
+                let condition = format!("{}{} != null", "[".repeat(lists), "]".repeat(lists));
                 let source = format!(
                     "rules_version = '2'; service cloud.firestore {{ match /databases/{{database}}/documents {{ match /{{document=**}} {{ allow read: if {condition}; }} }} }}"
                 );

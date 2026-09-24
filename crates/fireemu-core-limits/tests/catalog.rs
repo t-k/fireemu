@@ -233,7 +233,7 @@ fn rules_catalog_matches_spec_table() {
     );
     assert_eq!(
         c.find("RULES-LET-BINDINGS").unwrap().maximum,
-        LimitMaximum::Fixed(10)
+        LimitMaximum::Fixed(11)
     );
     assert_eq!(
         c.find("RULES-RECURSION").unwrap().maximum,
@@ -245,7 +245,7 @@ fn rules_catalog_matches_spec_table() {
     );
     assert_eq!(
         c.find("RULES-MATCH-DEPTH").unwrap().maximum,
-        LimitMaximum::Fixed(10)
+        LimitMaximum::Fixed(11)
     );
     assert_eq!(
         c.find("RULES-MATCH-PATH-SEGMENTS").unwrap().maximum,

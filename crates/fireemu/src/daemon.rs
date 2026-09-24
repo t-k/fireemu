@@ -1294,6 +1294,9 @@ fn close_functions_source_admission(
     close();
 }
 
+/// The stack of every runtime thread (see `build_runtime`).
+const RUNTIME_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
     let worker_override = std::env::var("FIREEMU_WORKER_THREADS").ok();
     let blocking_override = std::env::var("FIREEMU_MAX_BLOCKING_THREADS").ok();
@@ -1306,6 +1309,10 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(workers)
         .max_blocking_threads(blocking)
+        // Security Rules evaluate expressions as deep as production compiles them (up to the
+        // evaluator's own bound), which a debug build's frames do not fit into tokio's
+        // default 2 MiB.
+        .thread_stack_size(RUNTIME_THREAD_STACK_BYTES)
         .enable_all()
         .build()
         .map_err(|e| format!("cannot start runtime: {e}"))

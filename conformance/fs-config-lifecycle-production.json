@@ -1874,10 +1874,10 @@
       }
     },
     "fs-config/default-database/lifecycle": {
-      "corpusDigest": "d59f3df8629566bde00c98cb52e1960a0ad7d8c72adcf34829f94e245a4e5c77",
+      "corpusDigest": "590dea50517b575f273e06dda787694523e7126b8515dd8d415ab5553dc54457",
       "harnessDigest": "0d3a79bfd9bd1fda68575af92d0619ae677f6e07949af06f09819388a14f1942",
-      "recordedAt": "2026-09-24T12:58:46.319Z",
-      "gitSha": "d9f063ce158e66bc440423c7178802c3619c07a3",
+      "recordedAt": "2026-09-24T13:33:05.827Z",
+      "gitSha": "75593effa8e5bca85f74161a230097781f066e74",
       "steps": {
         "prepare-delete": {
           "status": 200,
@@ -1890,11 +1890,11 @@
               "@type": "type.googleapis.com/google.firestore.admin.v1.Database",
               "appEngineIntegrationMode": "DISABLED",
               "concurrencyMode": "PESSIMISTIC",
-              "createTime": "2026-09-24T09:53:06.426561Z",
+              "createTime": "<t1>",
               "databaseEdition": "STANDARD",
               "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-              "deleteTime": "<t1>",
-              "earliestVersionTime": "<t1>",
+              "deleteTime": "<t2>",
+              "earliestVersionTime": "<t2>",
               "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
               "etag": "<etag>",
               "freeTier": false,
@@ -1905,7 +1905,7 @@
               "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
               "type": "FIRESTORE_NATIVE",
               "uid": "<uid1>",
-              "updateTime": "2026-09-24T09:53:06.426561Z",
+              "updateTime": "<t1>",
               "versionRetentionPeriod": "3600s"
             }
           }
@@ -2191,20 +2191,10 @@
           }
         },
         "document-without-default": {
-          "status": 404,
-          "body": {
-            "error": {
-              "code": 404,
-              "message": "Document \"projects/demo-fs-config/databases/(default)/documents/c/d\" not found.",
-              "status": "NOT_FOUND"
-            }
-          }
-        },
-        "query-without-default": {
-          "status": 200,
-          "body": [
+          "trace": [
             {
-              "document": {
+              "status": 200,
+              "body": {
                 "createTime": "<t1>",
                 "fields": {
                   "a": {
@@ -2216,10 +2206,57 @@
                 },
                 "name": "projects/demo-fs-config/databases/(default)/documents/items/a",
                 "updateTime": "<t1>"
-              },
-              "readTime": "<t2>"
+              }
+            },
+            {
+              "status": 404,
+              "body": {
+                "error": {
+                  "code": 404,
+                  "message": "The database (default) does not exist for project demo-fs-config Please visit https://console.cloud.google.com/datastore/setup?project=demo-fs-config to add a Cloud Datastore or Cloud Firestore database. ",
+                  "status": "NOT_FOUND"
+                }
+              }
             }
-          ]
+          ],
+          "settled": {
+            "status": 404,
+            "body": {
+              "error": {
+                "code": 404,
+                "message": "The database (default) does not exist for project demo-fs-config Please visit https://console.cloud.google.com/datastore/setup?project=demo-fs-config to add a Cloud Datastore or Cloud Firestore database. ",
+                "status": "NOT_FOUND"
+              }
+            }
+          }
+        },
+        "query-without-default": {
+          "trace": [
+            {
+              "status": 404,
+              "body": [
+                {
+                  "error": {
+                    "code": 404,
+                    "message": "The database (default) does not exist for project demo-fs-config Please visit https://console.cloud.google.com/datastore/setup?project=demo-fs-config to add a Cloud Datastore or Cloud Firestore database. ",
+                    "status": "NOT_FOUND"
+                  }
+                }
+              ]
+            }
+          ],
+          "settled": {
+            "status": 404,
+            "body": [
+              {
+                "error": {
+                  "code": 404,
+                  "message": "The database (default) does not exist for project demo-fs-config Please visit https://console.cloud.google.com/datastore/setup?project=demo-fs-config to add a Cloud Datastore or Cloud Firestore database. ",
+                  "status": "NOT_FOUND"
+                }
+              }
+            ]
+          }
         },
         "list-without-default": {
           "status": 200,
@@ -2364,34 +2401,13 @@
         }
       },
       "second": {
-        "prepare-delete": {
-          "status": 200,
+        "indexes-without-default": {
+          "status": 404,
           "body": {
-            "metadata": {
-              "@type": "type.googleapis.com/google.firestore.admin.v1.DeleteDatabaseMetadata"
-            },
-            "name": "projects/demo-fs-config/databases/(default)/operations/<op1>",
-            "response": {
-              "@type": "type.googleapis.com/google.firestore.admin.v1.Database",
-              "appEngineIntegrationMode": "DISABLED",
-              "concurrencyMode": "PESSIMISTIC",
-              "createTime": "<t1>",
-              "databaseEdition": "STANDARD",
-              "deleteProtectionState": "DELETE_PROTECTION_DISABLED",
-              "deleteTime": "<t2>",
-              "earliestVersionTime": "<t2>",
-              "enhancedTextSearchQueryMode": "ENHANCED_QUERY_MODE_ENABLED",
-              "etag": "<etag>",
-              "freeTier": false,
-              "locationId": "us-central1",
-              "name": "projects/demo-fs-config/databases/<uid1>",
-              "pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_DISABLED",
-              "previousId": "(default)",
-              "realtimeUpdatesMode": "REALTIME_UPDATES_MODE_ENABLED",
-              "type": "FIRESTORE_NATIVE",
-              "uid": "<uid1>",
-              "updateTime": "<t1>",
-              "versionRetentionPeriod": "3600s"
+            "error": {
+              "code": 404,
+              "message": "The database 'demo-fs-config' does not exist.",
+              "status": "NOT_FOUND"
             }
           }
         }

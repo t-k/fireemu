@@ -39,7 +39,7 @@
     },
     {
       "id": "E6",
-      "decision": "Email-link sign-in is observed with signIn.email.passwordRequired switched off for the email-link programs only; the harness restores and reads it back after each program and checks the whole sign-in baseline at the start and end of a recording. The configured authorized domains of the sandbox (its two Firebase Hosting domains, without localhost) are required in production and given to fireemu through the same Admin config.",
+      "decision": "The project's authorized domains decide whether an action-code continueUrl is accepted: the strict profile refuses one outside them with UNAUTHORIZED_DOMAIN, as production does, and the emulator profile adds no refusal (the official emulator checks no domain). fireemu's Admin config carries authorizedDomains, by default localhost and the project's firebaseapp.com and web.app domains; the harness requires the sandbox's configured list (its two Hosting domains, without localhost) in production and gives it to fireemu through the same Admin config. Email-link sign-in is observed with signIn.email.passwordRequired switched off for the email-link programs only; the harness restores and reads it back after each program and checks the whole sign-in baseline at the start and end of a recording.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     },
@@ -164,7 +164,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "Email verification codes: inspection, apply and reapply, a newer code and the older one, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable and a deletion, and a reset code applied as a verification.",
+      "note": "Email verification codes: inspection, apply and reapply, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable (the refusal keeps the code) and a deletion, and a reset code applied as a verification. Whether a newer verification code retires an older one is unobserved: production refuses a second verification link for an address within minutes (TOO_MANY_ATTEMPTS_TRY_LATER), so the corpus gives each link an address of its own, and fireemu keeps every verification code.",
       "evidence": {
         "productionRecordings": [
           {
@@ -284,7 +284,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "Legacy ID tokens (a password sign-in without returnSecureToken) selecting a VERIFY_EMAIL or VERIFY_AND_CHANGE_EMAIL code and linking an email-link address; AUTH-CREDENTIAL left these inferred.",
+      "note": "Legacy ID tokens (a password sign-in without returnSecureToken): a VERIFY_EMAIL link selected by a legacy token on the Admin route, email-link linking with a legacy token, and the client sendOobCode of a VERIFY_AND_CHANGE_EMAIL with a legacy and with a secure token (owner decision 2026-09-24), which production accepts. The Admin route's email-change generator reads only the address (MISSING_EMAIL), so its code and application rows depend on a step that returned nothing and record only that dependency; the client row is the evidence that a legacy token selects an email change.",
       "evidence": {
         "productionRecordings": [
           {
@@ -344,7 +344,7 @@
         "default"
       ],
       "status": "VERIFIED",
-      "note": "A PASSWORD_RESET code about ten seconds before and after its one-hour lifetime (inspection, use, a second account's code, and a new code afterwards); VERIFY_EMAIL, VERIFY_AND_CHANGE_EMAIL and EMAIL_SIGNIN codes inspected and used after the same hour, which records their lifetime's lower bound. Their full lifetime is longer than a bounded recording and stays unobserved (owner decision 2026-09-24). Exploration before the recording (not evidence): docs.local/runs/auth-action-explore-20260924/lifetime-*.jsonl.",
+      "note": "A PASSWORD_RESET code about ten seconds before and after its one-hour lifetime (inspection, use, a second account's code, and a new code afterwards; production answers EXPIRED_OOB_CODE); VERIFY_EMAIL, VERIFY_AND_CHANGE_EMAIL and EMAIL_SIGNIN codes inspected and used after the same hour. Their full lifetime is unobserved (owner decision 2026-09-24): the recording shows them live at about 3,610 s, the exploration at 3,900 s. fireemu's strict profile infers three days for them and keeps an expired code a day to refuse it as expired; both values are inferences. Exploration before the recording (not evidence): docs.local/runs/auth-action-explore-20260924/lifetime-*.jsonl.",
       "evidence": {
         "productionRecordings": [
           {

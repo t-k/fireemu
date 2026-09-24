@@ -45,8 +45,8 @@ test("artifact comparison distinguishes production error reasons as well as stat
   );
 });
 
-test("stream comparison excludes only approved volatile transport trailers", () => {
-  const volatile = [
+test("stream comparison preserves stable content-disposition and excludes only volatile tracking IDs", () => {
+  const productionTrailers = [
     { key: "content-disposition", kind: "ascii", value: "attachment" },
     { key: "x-debug-tracking-id", kind: "ascii", value: "production-id" },
   ];
@@ -59,11 +59,19 @@ test("stream comparison excludes only approved volatile transport trailers", () 
     ],
     sentFrames: 1,
   });
-  const production = { streams: { "writes/stream": terminal(0, volatile) } };
+  const production = { streams: { "writes/stream": terminal(0, productionTrailers) } };
   const local = { "writes/stream": terminal(0, []) };
 
-  assert.deepEqual(compareSandboxArtifact(production, {}, local), []);
-  assert.deepEqual(production.streams["writes/stream"].status.trailers, volatile);
+  assert.deepEqual(compareSandboxArtifact(production, {}, local), ["writes/stream#grpc"]);
+  const stableLocal = [
+    { key: "content-disposition", kind: "ascii", value: "attachment" },
+    { key: "x-debug-tracking-id", kind: "ascii", value: "local-id" },
+  ];
+  assert.deepEqual(
+    compareSandboxArtifact(production, {}, { "writes/stream": terminal(0, stableLocal) }),
+    [],
+  );
+  assert.deepEqual(production.streams["writes/stream"].status.trailers, productionTrailers);
   assert.deepEqual(compareSandboxArtifact(production, {}, { "writes/stream": terminal(3, []) }), [
     "writes/stream#grpc",
   ]);

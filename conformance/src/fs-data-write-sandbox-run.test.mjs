@@ -198,13 +198,13 @@ test("a failed session still reports its bounded network attempts from metadata"
   assert.throws(() => sessionRequestCount({ requestCount: 1001 }), /bounded/);
 });
 
-test("the stable FS observation task carries retries into its ten-dollar budget", () => {
+test("the stable FS observation task carries retries into its owner-approved twenty-dollar budget", () => {
   assert.equal(
     remainingSandboxBudget([{ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 0.5 }]),
-    9.5,
+    19.5,
   );
   assert.throws(
-    () => remainingSandboxBudget([{ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 9.75 }], 0.5),
+    () => remainingSandboxBudget([{ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 19.75 }], 0.5),
     /budget/,
   );
 });
@@ -266,12 +266,12 @@ test("sandbox lock re-reads the task ledger before admitting a recording", async
   const row = (estimatedUsd) =>
     JSON.stringify({ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd }) + "\n";
   try {
-    const staleRows = [JSON.parse(row(8.5))];
+    const staleRows = [JSON.parse(row(18.5))];
     assert.equal(remainingSandboxBudget(staleRows, 1), 1.5);
-    await writeFile(ledger, row(9.5));
+    await writeFile(ledger, row(19.5));
     await assert.rejects(
       withSandboxExclusiveLock(directory, async (lockedRows) => {
-        assert.equal(lockedRows?.[0]?.estimatedUsd, 9.5);
+        assert.equal(lockedRows?.[0]?.estimatedUsd, 19.5);
         remainingSandboxBudget(lockedRows, 1);
       }),
       /budget exceeded/,

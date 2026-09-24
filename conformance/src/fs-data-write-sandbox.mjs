@@ -7,7 +7,7 @@ const RECORDED_PROJECT = "demo-firestore-probe";
 const MAX_REST_REQUESTS = 400;
 const MAX_BODY_BYTES = 16_777_217;
 const RESOURCE_NAME = /projects\/([^/]+)\/databases\/([^/?]+)/g;
-const VOLATILE_STREAM_TRAILERS = new Set(["content-disposition", "x-debug-tracking-id"]);
+const VOLATILE_STREAM_TRAILERS = new Set(["x-debug-tracking-id"]);
 
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 

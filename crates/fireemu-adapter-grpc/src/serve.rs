@@ -10,6 +10,7 @@ use bytes::{Bytes, BytesMut};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Body, Frame, Incoming};
+use hyper::header::HeaderValue;
 use hyper::service::service_fn;
 use hyper::HeaderMap;
 use hyper::{Request, Response};
@@ -706,9 +707,24 @@ fn normalize_transport_status(headers: &mut HeaderMap, enforce_limits: bool) {
     }
 }
 
-fn normalize_transport_frame(mut frame: Frame<Bytes>, enforce_limits: bool) -> Frame<Bytes> {
+fn normalize_transport_frame(
+    mut frame: Frame<Bytes>,
+    enforce_limits: bool,
+    write_stream: bool,
+) -> Frame<Bytes> {
     if let Some(trailers) = frame.trailers_mut() {
         normalize_transport_status(trailers, enforce_limits);
+        if enforce_limits
+            && write_stream
+            && Status::from_header_map(trailers)
+                .is_some_and(|status| status.code() == tonic::Code::Ok)
+            && !trailers.contains_key("content-disposition")
+        {
+            trailers.insert(
+                "content-disposition",
+                HeaderValue::from_static("attachment"),
+            );
+        }
     }
     frame
 }
@@ -782,6 +798,8 @@ where
                 let hub = hub.clone();
                 async move {
                     if is_grpc(&req) {
+                        let write_stream =
+                            req.uri().path() == "/google.firestore.v1.Firestore/Write";
                         let req = req.map(|b| {
                             tonic::body::Body::new(b.map_err(|e| Status::internal(e.to_string())))
                         });
@@ -801,7 +819,7 @@ where
                         }
                         return Ok::<_, std::io::Error>(response.map(|b| {
                             b.map_frame(move |frame| {
-                                normalize_transport_frame(frame, enforce_limits)
+                                normalize_transport_frame(frame, enforce_limits, write_stream)
                             })
                             .map_err(|e| Box::new(e) as BoxError)
                             .boxed_unsync()
@@ -865,11 +883,12 @@ mod tests {
     }
 
     use super::{
-        api_request_too_large_message, normalize_transport_status, try_admit_rest_payload_from,
-        try_admit_rest_work, RestEnvelope, MAX_REST_BODY_BYTES, MAX_STRICT_COMMIT_RAW_BYTES,
-        REST_PAYLOAD_UNIT_BYTES,
+        api_request_too_large_message, normalize_transport_frame, normalize_transport_status,
+        try_admit_rest_payload_from, try_admit_rest_work, RestEnvelope, MAX_REST_BODY_BYTES,
+        MAX_STRICT_COMMIT_RAW_BYTES, REST_PAYLOAD_UNIT_BYTES,
     };
     use bytes::Bytes;
+    use hyper::body::Frame;
     use hyper::HeaderMap;
     use tonic::{Code, Status};
 
@@ -877,6 +896,31 @@ mod tests {
         let mut headers = HeaderMap::new();
         status.add_header(&mut headers).unwrap();
         headers
+    }
+
+    #[test]
+    fn successful_write_terminal_retains_stable_content_disposition() {
+        let frame: Frame<Bytes> = Frame::trailers(headers(&Status::new(Code::Ok, "")));
+        let trailers = normalize_transport_frame(frame, true, true)
+            .into_trailers()
+            .expect("terminal trailers");
+        assert_eq!(
+            trailers
+                .get("content-disposition")
+                .and_then(|value| value.to_str().ok()),
+            Some("attachment")
+        );
+        for (strict, write_stream, code) in [
+            (false, true, Code::Ok),
+            (true, false, Code::Ok),
+            (true, true, Code::InvalidArgument),
+        ] {
+            let frame: Frame<Bytes> = Frame::trailers(headers(&Status::new(code, "refused")));
+            let trailers = normalize_transport_frame(frame, strict, write_stream)
+                .into_trailers()
+                .expect("terminal trailers");
+            assert!(!trailers.contains_key("content-disposition"));
+        }
     }
 
     #[test]

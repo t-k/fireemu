@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { PROGRAMS } from "./fs-query-index/corpus.mjs";
+import { DIVERGENCES } from "./fs-query-index/divergences.mjs";
+
 const closurePath = fileURLToPath(
   new URL("../../spec/compatibility/closure/FS-QUERY-INDEX.json", import.meta.url),
 );
@@ -115,7 +118,12 @@ test("FS-QUERY-INDEX closure inventory cannot silently omit a declared condition
         `${label}: ${divergence.row} names a recorded scope decision`,
       );
       const compared = comparison.rows.find(({ row }) => row === divergence.row);
-      assert.ok(compared && compared.status !== "MATCH", `${label}: ${divergence.row} is stale`);
+      assert.equal(
+        compared?.status,
+        "DIVERGENCE_APPROVED",
+        `${label}: ${divergence.row} differs only as its decision allows`,
+      );
+      assert.equal(compared.decision, divergence.scopeDecision, `${label}: ${divergence.row}`);
     }
     const documented = new Set(divergences.map(({ row }) => row));
     const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
@@ -151,10 +159,44 @@ test("FS-QUERY-INDEX closure inventory cannot silently omit a declared condition
   }
 });
 
+test("the comparison's approved divergences are the documented ones", () => {
+  const closure = load();
+  const documented = closure.conditions.flatMap(({ conditionId, evidence }) =>
+    (evidence?.documentedDivergences ?? []).map((divergence) => ({
+      conditionId,
+      ...divergence,
+    })),
+  );
+  const approved = DIVERGENCES.flatMap(({ decision, rows }) =>
+    rows.map((row) => ({ row, decision })),
+  );
+  const programs = new Map(PROGRAMS.map((program) => [program.id, program]));
+  for (const { row, decision } of approved) {
+    const [programId, stepId] = row.split("#");
+    assert.ok(
+      programs.get(programId)?.steps.some(({ id }) => id === stepId),
+      `${row} is a corpus step`,
+    );
+    const entries = documented.filter((divergence) => divergence.row === row);
+    // Before the evidence is written no condition documents a row yet.
+    if (documented.length === 0) continue;
+    assert.equal(entries.length, 1, `${row} is documented by exactly one condition`);
+    assert.equal(entries[0].scopeDecision, decision, row);
+  }
+  for (const { row } of documented) {
+    assert.ok(
+      approved.some((entry) => entry.row === row),
+      `${row} is approved in divergences.mjs`,
+    );
+  }
+  const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
+  for (const { decision } of DIVERGENCES) assert.ok(decided.has(decision), decision);
+});
+
 test("scope decisions are recorded, not implied", () => {
   const closure = load();
   const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
-  for (const id of ["Q1", "Q2", "Q3", "Q4a", "Q4b", "Q4c", "Q4d", "S1", "S2", "S3"]) {
+  for (const id of ["Q1", "Q2", "Q3", "Q4a", "Q4b", "Q4c", "Q4d", "S1", "S2", "S3", "S4", "S5"]) {
     assert.ok(decided.has(id), `scope decision ${id} must be recorded`);
   }
   for (const decision of closure.scopeDecisions) {
@@ -173,7 +215,6 @@ test("parent promotion requires every condition and an approved closure review",
 });
 
 test("closure recipes and corpus programs cover each other", async () => {
-  const { PROGRAMS } = await import("./fs-query-index/corpus.mjs");
   const recipes = load()
     .conditions.flatMap(({ recipeIds }) => recipeIds)
     .filter((id) => id.startsWith("fs-query-index/"));

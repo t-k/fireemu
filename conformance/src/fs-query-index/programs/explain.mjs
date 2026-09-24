@@ -63,10 +63,7 @@ export const EXPLAIN_PROGRAMS = [
       ...both(
         "composite",
         numbers({
-          where: and(
-            f("g", "EQUAL", str("odd")),
-            f("n", "GREATER_THAN", int(3)),
-          ),
+          where: and(f("g", "EQUAL", str("odd")), f("n", "GREATER_THAN", int(3))),
         }),
       ),
       ...both(
@@ -97,18 +94,12 @@ export const EXPLAIN_PROGRAMS = [
         }),
       ),
       ...both("not-equal", numbers({ where: f("n", "NOT_EQUAL", int(4)) })),
-      ...both(
-        "array-contains",
-        numbers({ where: f("tags", "ARRAY_CONTAINS", int(1)) }),
-      ),
+      ...both("array-contains", numbers({ where: f("tags", "ARRAY_CONTAINS", int(1)) })),
       ...both("empty-result", numbers({ where: f("g", "EQUAL", str("none")) })),
       ...both("limit", numbers({ orderBy: [asc("n")], limit: 3 })),
       ...both("limit-zero", numbers({ limit: 0 })),
       ...both("offset", numbers({ orderBy: [asc("n")], offset: 4, limit: 2 })),
-      ...both(
-        "cursor",
-        numbers({ orderBy: [asc("n")], startAt: cursor([int(6)], true) }),
-      ),
+      ...both("cursor", numbers({ orderBy: [asc("n")], startAt: cursor([int(6)], true) })),
       ...both(
         "name-descending",
         indexed({
@@ -125,10 +116,7 @@ export const EXPLAIN_PROGRAMS = [
         where: f("a", "EQUAL", int(0)),
         orderBy: [asc("b")],
       }),
-      ...both(
-        "missing-index",
-        indexed({ where: f("a", "EQUAL", int(1)), orderBy: [desc("b")] }),
-      ),
+      ...both("missing-index", indexed({ where: f("a", "EQUAL", int(1)), orderBy: [desc("b")] })),
       ...both("invalid-query", numbers({ limit: -1 })),
       query("analyze-false", numbers({ where: f("g", "EQUAL", str("odd")) }), {
         body: { explainOptions: { analyze: false } },
@@ -151,31 +139,20 @@ export const EXPLAIN_PROGRAMS = [
     seed: NUMBERS_SEED.concat(INDEX_SEED),
     steps: [
       ...bothAggregate("count", { from: from("qn") }, [count("c")]),
-      ...bothAggregate(
-        "count-filtered",
-        { from: from("qn"), where: f("g", "EQUAL", str("odd")) },
-        [count("c")],
-      ),
-      ...bothAggregate("count-up-to", { from: from("qn") }, [count("c", 3)]),
-      ...bothAggregate("sum-avg", { from: from("qn") }, [
-        sum("n", "s"),
-        avg("d", "a"),
+      ...bothAggregate("count-filtered", { from: from("qn"), where: f("g", "EQUAL", str("odd")) }, [
+        count("c"),
       ]),
-      ...bothAggregate(
-        "sum-composite",
-        { from: from("qx"), where: f("a", "EQUAL", int(1)) },
-        [sum("b", "s")],
-      ),
-      ...bothAggregate(
-        "count-empty",
-        { from: from("qn"), where: f("g", "EQUAL", str("none")) },
-        [count("c")],
-      ),
-      ...bothAggregate(
-        "sum-missing-index",
-        { from: from("qx"), where: f("a", "EQUAL", int(1)) },
-        [sum("d", "s")],
-      ),
+      ...bothAggregate("count-up-to", { from: from("qn") }, [count("c", 3)]),
+      ...bothAggregate("sum-avg", { from: from("qn") }, [sum("n", "s"), avg("d", "a")]),
+      ...bothAggregate("sum-composite", { from: from("qx"), where: f("a", "EQUAL", int(1)) }, [
+        sum("b", "s"),
+      ]),
+      ...bothAggregate("count-empty", { from: from("qn"), where: f("g", "EQUAL", str("none")) }, [
+        count("c"),
+      ]),
+      ...bothAggregate("sum-missing-index", { from: from("qx"), where: f("a", "EQUAL", int(1)) }, [
+        sum("d", "s"),
+      ]),
     ],
   },
   {
@@ -183,10 +160,7 @@ export const EXPLAIN_PROGRAMS = [
     // entries, or the one on the later field. `a == 1` has 3 entries; `b == 1` gets 6.
     id: "fs-query-index/explain/merge-order",
     seed: INDEX_SEED.concat(
-      Array.from({ length: 4 }, (_, i) => [
-        `qx/m${i}`,
-        { a: int(0), b: int(1), c: int(10 + i) },
-      ]),
+      Array.from({ length: 4 }, (_, i) => [`qx/m${i}`, { a: int(0), b: int(1), c: int(10 + i) }]),
     ),
     steps: [
       ...both(
@@ -227,11 +201,7 @@ export const EXPLAIN_PROGRAMS = [
       ...both(
         "three-automatic-members",
         indexed({
-          where: and(
-            f("d", "EQUAL", int(4)),
-            f("s", "EQUAL", str("s1")),
-            f("c", "EQUAL", int(1)),
-          ),
+          where: and(f("d", "EQUAL", int(4)), f("s", "EQUAL", str("s1")), f("c", "EQUAL", int(1))),
         }),
       ),
     ],

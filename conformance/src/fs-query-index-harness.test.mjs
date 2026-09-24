@@ -36,7 +36,11 @@ const production = () =>
   createContext({
     run: "1",
     startedMs: started,
-    target: { kind: "production", token: "ya29.secret-token-value", quotaProject: SANDBOX_PROJECT },
+    target: {
+      kind: "production",
+      token: "ya29.secret-token-value",
+      quotaProject: SANDBOX_PROJECT,
+    },
   });
 const local = () =>
   createContext({
@@ -104,7 +108,11 @@ test("production requests carry the quota project and only reach the sandbox dat
   guardRestRequest(request, ctx);
   const elsewhere = (url, body = "{}") => ({
     url,
-    init: { method: "POST", headers: { "content-type": "application/json" }, body },
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    },
   });
   const base = `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases`;
   assert.throws(
@@ -164,7 +172,12 @@ test("gRPC requests are scoped to the sandbox database", () => {
     {
       id: "a",
       rpc: "runQuery",
-      body: { structuredQuery: { limit: 3, findNearest: { limit: 2, distanceThreshold: "NaN" } } },
+      body: {
+        structuredQuery: {
+          limit: 3,
+          findNearest: { limit: 2, distanceThreshold: "NaN" },
+        },
+      },
     },
     ctx,
     new Map(),
@@ -185,7 +198,11 @@ test("gRPC requests are scoped to the sandbox database", () => {
   assert.throws(
     () =>
       guardGrpcRequest(
-        { request: { parent: `projects/${SANDBOX_PROJECT}/databases/named/documents` } },
+        {
+          request: {
+            parent: `projects/${SANDBOX_PROJECT}/databases/named/documents`,
+          },
+        },
         ctx,
       ),
     /outside/,
@@ -194,11 +211,18 @@ test("gRPC requests are scoped to the sandbox database", () => {
 
 test("REST JSON converts to gRPC message form", () => {
   assert.deepEqual(toGrpcMessage({ readTime: "2026-09-24T00:00:01.5Z" }), {
-    readTime: { seconds: String(Date.parse("2026-09-24T00:00:01Z") / 1000), nanos: 500_000_000 },
+    readTime: {
+      seconds: String(Date.parse("2026-09-24T00:00:01Z") / 1000),
+      nanos: 500_000_000,
+    },
   });
-  assert.deepEqual(toGrpcMessage({ doubleValue: "-Infinity" }), { doubleValue: -Infinity });
+  assert.deepEqual(toGrpcMessage({ doubleValue: "-Infinity" }), {
+    doubleValue: -Infinity,
+  });
   assert.deepEqual(toGrpcMessage({ bytesValue: "AQI=" }).bytesValue, Buffer.from([1, 2]));
-  assert.deepEqual(toGrpcMessage({ count: { upTo: "3" } }), { count: { upTo: { value: "3" } } });
+  assert.deepEqual(toGrpcMessage({ count: { upTo: "3" } }), {
+    count: { upTo: { value: "3" } },
+  });
   assert.equal(
     toGrpcMessage({ timestampValue: "2020-01-01T00:00:00.000001Z" }).timestampValue.nanos,
     1000,
@@ -252,7 +276,10 @@ test("normalization masks only run-window times, durations and opaque tokens", (
     () => normalizeRestResponse(200, JSON.stringify({ executionDuration: "fast" }), ctx),
     /unexpected executionDuration/,
   );
-  assert.deepEqual(normalizeRestResponse(400, "<html>", ctx), { status: 400, nonJson: "<html>" });
+  assert.deepEqual(normalizeRestResponse(400, "<html>", ctx), {
+    status: 400,
+    nonJson: "<html>",
+  });
 });
 
 test("a missing-index link keeps its encoded index with the project replaced", () => {
@@ -308,7 +335,9 @@ test("gRPC messages project to their REST JSON shape", () => {
       executionStats: {
         resultsReturned: "0",
         executionDuration: { seconds: "0", nanos: 1_200_000 },
-        debugStats: { fields: { a: { stringValue: "1", kind: "stringValue" } } },
+        debugStats: {
+          fields: { a: { stringValue: "1", kind: "stringValue" } },
+        },
       },
     },
   });
@@ -327,7 +356,9 @@ test("gRPC messages project to their REST JSON shape", () => {
     },
     readTime: "2026-09-21T14:13:20Z",
     done: true,
-    explainMetrics: { executionStats: { executionDuration: "0.0012s", debugStats: { a: "1" } } },
+    explainMetrics: {
+      executionStats: { executionDuration: "0.0012s", debugStats: { a: "1" } },
+    },
   });
   const status = normalizeGrpcResponse(
     {
@@ -351,11 +382,17 @@ test("transient answers are indeterminate; a repeated production 5xx is behavior
   assert.equal(isTransient({ status: 0 }), true);
   assert.equal(isTransient({ status: 429 }), true);
   assert.equal(
-    isTransient({ status: 400, body: [{ error: { status: "INVALID_ARGUMENT" } }] }),
+    isTransient({
+      status: 400,
+      body: [{ error: { status: "INVALID_ARGUMENT" } }],
+    }),
     false,
   );
   assert.equal(
-    isTransient({ status: 200, body: [{ error: { status: "RESOURCE_EXHAUSTED" } }] }),
+    isTransient({
+      status: 200,
+      body: [{ error: { status: "RESOURCE_EXHAUSTED" } }],
+    }),
     true,
   );
   assert.equal(isTransient({ transport: "grpc", code: 14 }), true);
@@ -368,7 +405,11 @@ test("transient answers are indeterminate; a repeated production 5xx is behavior
   assert.equal(classify({ production: ok, fireemu: ok }), "MATCH");
   assert.equal(classify({ production: ok, fireemu: { status: 400 } }), "MISMATCH");
   assert.equal(
-    classify({ production: ok, alternative: { status: 201 }, fireemu: { status: 201 } }),
+    classify({
+      production: ok,
+      alternative: { status: 201 },
+      fireemu: { status: 201 },
+    }),
     "MATCH_NONDETERMINISTIC",
   );
   assert.equal(classify({ production: ok, fireemu: { status: 503 } }), "MISMATCH");
@@ -439,7 +480,10 @@ test("run-window instants are numbered per step; requested instants keep a progr
   const ctx = production();
   const anchors = new Map();
   const write = normalizeStep(
-    { transport: "rest", response: { status: 200, text: '{"commitTime":"2026-09-24T00:00:05Z"}' } },
+    {
+      transport: "rest",
+      response: { status: 200, text: '{"commitTime":"2026-09-24T00:00:05Z"}' },
+    },
     ctx,
     anchors,
   );
@@ -459,7 +503,10 @@ test("run-window instants are numbered per step; requested instants keep a progr
   assert.deepEqual(echoed.body, [{ readTime: "<r1>" }, { readTime: "<t1>" }]);
   // A later step numbers its own instants from 1 again, whatever came before.
   const later = normalizeStep(
-    { transport: "rest", response: { status: 200, text: '[{"readTime":"2026-09-24T00:00:11Z"}]' } },
+    {
+      transport: "rest",
+      response: { status: 200, text: '[{"readTime":"2026-09-24T00:00:11Z"}]' },
+    },
     ctx,
     anchors,
   );
@@ -478,7 +525,11 @@ test("run-window instants are numbered per step; requested instants keep a progr
     ctx,
     anchors,
   );
-  assert.deepEqual(spelled.body, [{ readTime: "<r2>" }, { readTime: "<t1>" }, { readTime: "<t1>" }]);
+  assert.deepEqual(spelled.body, [
+    { readTime: "<r2>" },
+    { readTime: "<t1>" },
+    { readTime: "<t1>" },
+  ]);
   // Symbols are numbered in sorted key order, whatever order the server sent the keys in.
   const a = normalizeRestResponse(
     200,
@@ -529,7 +580,13 @@ test("guards refuse writes and scopes outside the sandbox database", () => {
   assert.throws(
     () =>
       guardRestRequest(
-        commit([{ update: { name: `projects/${SANDBOX_PROJECT}/databases/cfg-x/documents/a/b` } }]),
+        commit([
+          {
+            update: {
+              name: `projects/${SANDBOX_PROJECT}/databases/cfg-x/documents/a/b`,
+            },
+          },
+        ]),
         ctx,
       ),
     /outside the sandbox database/,
@@ -537,7 +594,11 @@ test("guards refuse writes and scopes outside the sandbox database", () => {
   assert.throws(
     () =>
       guardRestRequest(
-        commit([{ delete: `projects/${SANDBOX_PROJECT}/databases/cfg-x/documents/a/b` }]),
+        commit([
+          {
+            delete: `projects/${SANDBOX_PROJECT}/databases/cfg-x/documents/a/b`,
+          },
+        ]),
         ctx,
       ),
     /outside the sandbox database/,
@@ -568,7 +629,12 @@ test("guards refuse writes and scopes outside the sandbox database", () => {
   assert.throws(
     () =>
       guardGrpcRequest(
-        { request: { parent: docs, database: `projects/${SANDBOX_PROJECT}/databases/(default)` } },
+        {
+          request: {
+            parent: docs,
+            database: `projects/${SANDBOX_PROJECT}/databases/(default)`,
+          },
+        },
         ctx,
       ),
     /outside/,
@@ -578,7 +644,14 @@ test("guards refuse writes and scopes outside the sandbox database", () => {
       validateCorpus([
         {
           id: "fs-query-index/x/y",
-          steps: [{ id: "a", rpc: "runQuery", transport: "grpc", body: { parent: docs } }],
+          steps: [
+            {
+              id: "a",
+              rpc: "runQuery",
+              transport: "grpc",
+              body: { parent: docs },
+            },
+          ],
         },
       ]),
     /own scope/,
@@ -598,7 +671,9 @@ test("gRPC conversion keeps null, and Struct values project to plain JSON", () =
     },
   };
   assert.deepEqual(projectGrpcMessage({ planSummary: { indexesUsed: [struct] } }), {
-    planSummary: { indexesUsed: [{ properties: "(a ASC)", zero: 0, no: false, nothing: null }] },
+    planSummary: {
+      indexesUsed: [{ properties: "(a ASC)", zero: 0, no: false, nothing: null }],
+    },
   });
 });
 
@@ -688,7 +763,9 @@ test("guards refuse transforms of other databases and transactions", () => {
         commit({
           writes: [
             {
-              transform: { document: `projects/${SANDBOX_PROJECT}/databases/cfg-x/documents/a/b` },
+              transform: {
+                document: `projects/${SANDBOX_PROJECT}/databases/cfg-x/documents/a/b`,
+              },
             },
           ],
         }),
@@ -741,4 +818,96 @@ test("a saved raw recording normalizes again to the same rows", () => {
     q: { status: 200, body: [{ readTime: "<r1>" }] },
     u: unresolved,
   });
+});
+
+test("approved divergences remove only what their decision names", async () => {
+  const { approvedDivergence } = await import("./fs-query-index/divergences.mjs");
+  const inequality = "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-11";
+  const refusal = (message) => ({
+    status: 400,
+    body: [{ error: { code: 400, message, status: "INVALID_ARGUMENT" } }],
+  });
+  assert.equal(
+    approvedDivergence(
+      inequality,
+      refusal("fields: [f1, f0]. more"),
+      refusal("fields: [f0, f1]. more"),
+    ),
+    "S4",
+  );
+  // Another field, or other text, is still a mismatch; so is an unlisted row.
+  assert.equal(
+    approvedDivergence(inequality, refusal("fields: [f1, f0]."), refusal("fields: [f0, f2].")),
+    undefined,
+  );
+  assert.equal(
+    approvedDivergence(inequality, refusal("fields: [f1, f0]."), refusal("Fields: [f0, f1].")),
+    undefined,
+  );
+  assert.equal(
+    approvedDivergence(
+      "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-10",
+      refusal("[b, a]"),
+      refusal("[a, b]"),
+    ),
+    undefined,
+  );
+  const merge = "fs-query-index/explain/merge-order#larger-earlier-field-analyze";
+  const explain = (members, entries, docs = "1") => ({
+    status: 200,
+    body: [
+      {
+        explainMetrics: {
+          executionStats: {
+            debugStats: {
+              documents_scanned: docs,
+              index_entries_scanned: entries,
+            },
+          },
+          planSummary: {
+            indexesUsed: members.map((properties) => ({ properties })),
+          },
+        },
+      },
+    ],
+  });
+  assert.equal(
+    approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(a)", "(b)"], "6")),
+    "S4",
+  );
+  assert.equal(
+    approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(a)", "(c)"], "5")),
+    undefined,
+  );
+  assert.equal(
+    approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(a)", "(b)"], "5", "2")),
+    undefined,
+  );
+  const partition = "fs-query-index/partition-query/large-group#count-2";
+  const cursors = (...keys) => ({
+    status: 200,
+    body: {
+      partitions: keys.map((key) => ({ values: [{ referenceValue: key }] })),
+    },
+  });
+  assert.equal(approvedDivergence(partition, cursors("a", "b"), cursors("c", "d")), "S5");
+  assert.equal(approvedDivergence(partition, cursors("a", "b"), cursors("c")), undefined);
+  assert.equal(
+    approvedDivergence(partition, cursors("a", "b"), {
+      status: 200,
+      body: {
+        partitions: [
+          { before: true, values: [{ referenceValue: "c" }] },
+          { values: [{ referenceValue: "d" }] },
+        ],
+      },
+    }),
+    undefined,
+  );
+  const everything = "fs-query-index/partition-query/large-group#count-64";
+  assert.equal(approvedDivergence(everything, cursors("a", "b"), cursors("c", "d", "e")), "S5");
+  assert.equal(
+    approvedDivergence(everything, cursors("a"), cursors(...Array.from({ length: 64 }, String))),
+    undefined,
+  );
 });

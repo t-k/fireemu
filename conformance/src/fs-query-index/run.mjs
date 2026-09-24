@@ -28,6 +28,7 @@ import { promisify } from "node:util";
 import { CONFORMANCE_DIR, REPO_ROOT } from "../config.mjs";
 import { resolveFireemuBinary } from "../evidence.mjs";
 import { PROGRAMS } from "./corpus.mjs";
+import { approvedDivergence, RANGE_ROWS, rangeTotal } from "./divergences.mjs";
 import { scanFixture } from "./fixture-scan.mjs";
 import {
   DATABASE,
@@ -123,7 +124,9 @@ async function assertCleanTree() {
 }
 
 async function gitSha() {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: CONFORMANCE_DIR });
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+    cwd: CONFORMANCE_DIR,
+  });
   return stdout.trim();
 }
 
@@ -170,7 +173,10 @@ async function accessToken() {
 
 async function adminGet(path, token) {
   const response = await fetch(`${ADMIN_ORIGIN}/${path}`, {
-    headers: { authorization: `Bearer ${token}`, "x-goog-user-project": SANDBOX_PROJECT },
+    headers: {
+      authorization: `Bearer ${token}`,
+      "x-goog-user-project": SANDBOX_PROJECT,
+    },
   });
   const body = await response.json();
   if (!response.ok) throw new Error(`GET ${path}: HTTP ${response.status}`);
@@ -282,9 +288,17 @@ async function verifyIndexes() {
 async function recordOnce(programs, run, token, projectNumber) {
   const ctx = createContext({
     run,
-    target: { kind: "production", token, quotaProject: SANDBOX_PROJECT, projectNumber },
+    target: {
+      kind: "production",
+      token,
+      quotaProject: SANDBOX_PROJECT,
+      projectNumber,
+    },
   });
-  return runCorpus(programs, ctx, { ...ceilings(programs), log: (line) => console.log(line) });
+  return runCorpus(programs, ctx, {
+    ...ceilings(programs),
+    log: (line) => console.log(line),
+  });
 }
 
 /**
@@ -394,7 +408,13 @@ async function recordProduction() {
       if (failures.length) outcome = "recorded-with-program-failures";
       console.log(
         JSON.stringify(
-          { programs: programs.length, corpusRequests, requests, nondeterministic, failures },
+          {
+            programs: programs.length,
+            corpusRequests,
+            requests,
+            nondeterministic,
+            failures,
+          },
           null,
           2,
         ),
@@ -610,13 +630,34 @@ async function check() {
       const production = saved?.steps?.[step.id];
       const alternative = saved?.second?.[step.id];
       const fireemu = local.results[program.id]?.steps?.[step.id];
+      const row = `${program.id}#${step.id}`;
+      let status = classify({ stale, production, alternative, fireemu });
+      const decision =
+        status === "MISMATCH" ? approvedDivergence(row, production, fireemu) : undefined;
+      if (decision) status = "DIVERGENCE_APPROVED";
       rows.push({
-        row: `${program.id}#${step.id}`,
-        status: classify({ stale, production, alternative, fireemu }),
+        row,
+        status,
+        ...(decision ? { decision } : {}),
         production,
         ...(alternative ? { alternative } : {}),
         fireemu,
       });
+    }
+  }
+  // The range reconstruction counts may differ with the cursors, but they must still add up
+  // to the whole group on both sides.
+  const ranges = rows.filter((r) => RANGE_ROWS.includes(r.row));
+  if (
+    ranges.length === RANGE_ROWS.length &&
+    ranges.some((r) => r.status === "DIVERGENCE_APPROVED") &&
+    rangeTotal(ranges.map((r) => r.production)) !== rangeTotal(ranges.map((r) => r.fireemu))
+  ) {
+    for (const range of ranges) {
+      if (range.status === "DIVERGENCE_APPROVED") {
+        range.status = "MISMATCH";
+        delete range.decision;
+      }
     }
   }
   const known = new Set(PROGRAMS.map((p) => p.id));
@@ -628,7 +669,7 @@ async function check() {
     join(RUN_DIR, "comparison.json"),
     `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
-  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
+  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "DIVERGENCE_APPROVED"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
     console.log(`\n${row.status} ${row.row}`);
     console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 600)}`);
@@ -675,9 +716,14 @@ async function exportComparison(out) {
     artifactSha256: comparison.artifactSha256,
     fixtureSha256,
     summary: comparison.summary,
-    rows: comparison.rows.map(({ row, status, production, fireemu }) =>
-      status === "MISMATCH"
-        ? { row, status, differences: differencePaths(production, fireemu) }
+    rows: comparison.rows.map(({ row, status, decision, production, fireemu }) =>
+      status === "MISMATCH" || status === "DIVERGENCE_APPROVED"
+        ? {
+            row,
+            status,
+            ...(decision ? { decision } : {}),
+            differences: differencePaths(production, fireemu),
+          }
         : { row, status },
     ),
   };

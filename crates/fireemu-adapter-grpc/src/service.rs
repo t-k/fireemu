@@ -304,7 +304,7 @@ impl GatewayService {
     }
 
     fn validate_run_query(&self, req: &pb::RunQueryRequest) -> Result<Vec<String>, Status> {
-        let parent = parse_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
                 "RunQuery requires a structured_query",
@@ -330,7 +330,7 @@ impl GatewayService {
         &self,
         req: &pb::RunAggregationQueryRequest,
     ) -> Result<Vec<String>, Status> {
-        let parent = parse_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(|e| Rejection::Decode(e).to_status())?;
         let Some(pb::run_aggregation_query_request::QueryType::StructuredAggregationQuery(
             aggregation,
         )) = &req.query_type
@@ -346,6 +346,7 @@ impl GatewayService {
                 "structured_aggregation_query requires a structured_query",
             ));
         };
+        crate::query_messages::check_find_nearest_request(sq)?;
         let (_, aggregations) = decode_aggregations(aggregation)?;
         let accepted = if let Some(local) = self.local_backend() {
             local.accepted_aggregation_query(&parent, sq, &aggregations)?
@@ -1115,7 +1116,7 @@ impl GatewayService {
             }
             let explain_query = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
-                    let parent = parse_parent(&req.parent)
+                    let parent = crate::query_messages::parse_query_parent(&req.parent)
                         .map_err(|error| Rejection::Decode(error).to_status())?;
                     let accepted = local.accepted_query(&parent, query).map_err(|s| {
                         crate::index_messages::for_explain(req.explain_options.as_ref(), s)
@@ -1127,7 +1128,7 @@ impl GatewayService {
             let name_order_continuation = explain_query.as_ref().is_some_and(is_name_ordered_query);
             let find_nearest_query = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
-                    let parent = parse_parent(&req.parent)
+                    let parent = crate::query_messages::parse_query_parent(&req.parent)
                         .map_err(|error| Rejection::Decode(error).to_status())?;
                     local
                         .accepted_query(&parent, query)?

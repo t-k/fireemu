@@ -478,8 +478,17 @@ fn check_cursor_name_references(query: &Query, parent: &Parent) -> Result<(), De
 
 fn check_name_references(filter: &FilterExpr, parent: &Parent) -> Result<(), DecodeError> {
     let database = database_resource(parent);
-    let check =
-        |name: &str| -> Result<(), DecodeError> { check_reference_database(name, &database) };
+    // A reference outside the request's database is refused first; one that names a
+    // collection rather than a document is refused in production's words.
+    let check = |name: &str| -> Result<(), DecodeError> {
+        check_reference_database(name, &database)?;
+        if DocumentPath::from_resource_name(name).is_none() {
+            return Err(DecodeError::Refused(
+                crate::query_messages::reference_is_not_a_document(name),
+            ));
+        }
+        Ok(())
+    };
     match filter {
         FilterExpr::Field { field, value, .. } if field.is_document_name() => match value {
             Value::Reference(name) => check(name),

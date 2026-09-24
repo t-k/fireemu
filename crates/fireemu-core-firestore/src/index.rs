@@ -381,6 +381,10 @@ struct Requirement {
     equality: Vec<FieldPath>,
     contains: Option<FieldPath>,
     order: Vec<OrderClause>,
+    /// Whether an explicit order names an equality field. Production then needs one index
+    /// that carries it: it merges no single-field indexes (FS-QUERY-INDEX
+    /// query-limits/components#equalities-99-and-order).
+    equality_ordered: bool,
 }
 
 fn requirement_for(disjunction: &[FilterExpr], effective_order: &[OrderClause]) -> Requirement {
@@ -412,6 +416,7 @@ fn requirement_for(disjunction: &[FilterExpr], effective_order: &[OrderClause]) 
         }
     }
     // Ordered fields: the effective order minus fields already constrained by equality.
+    let equality_ordered = effective_order.iter().any(|o| equality.contains(&o.field));
     let order: Vec<OrderClause> = effective_order
         .iter()
         .filter(|o| !equality.contains(&o.field))
@@ -421,6 +426,7 @@ fn requirement_for(disjunction: &[FilterExpr], effective_order: &[OrderClause]) 
         equality,
         contains,
         order,
+        equality_ordered,
     }
 }
 
@@ -654,17 +660,25 @@ fn merged_indexes_for(
     collection: &CollectionId,
     group: bool,
 ) -> Option<Vec<IndexDefinition>> {
-    if req.equality.len() < 2 || req.contains.is_some() {
+    // Production merges scalar equalities, and an array-contains with them (FS-QUERY-INDEX
+    // index-selection#equality-and-array-contains-merge), but not when an explicit order
+    // names an equality field.
+    let members = req.equality.len() + usize::from(req.contains.is_some());
+    if members < 2 || req.equality_ordered {
         return None;
     }
-    let wanted: BTreeSet<&FieldPath> = req.equality.iter().collect();
+    let equalities: BTreeSet<&FieldPath> = req.equality.iter().collect();
+    let mut wanted = equalities.clone();
+    if let Some(contains) = &req.contains {
+        wanted.insert(contains);
+    }
     // (equality fields served, index), composites first.
     let mut candidates: Vec<(BTreeSet<&FieldPath>, IndexDefinition)> = Vec::new();
     for index in set.composites() {
         let served: Vec<FieldPath> = index
             .fields
             .iter()
-            .take_while(|f| wanted.contains(&f.path) && f.mode.is_ordered())
+            .take_while(|f| equalities.contains(&f.path) && f.mode.is_ordered())
             .map(|f| f.path.clone())
             .collect();
         if served.is_empty() {
@@ -674,6 +688,7 @@ fn merged_indexes_for(
             equality: served,
             contains: None,
             order: req.order.clone(),
+            equality_ordered: false,
         };
         if composite_serves(index, &sub, collection, group) {
             let fields: BTreeSet<&FieldPath> = sub
@@ -696,6 +711,25 @@ fn merged_indexes_for(
                 candidates.push((
                     BTreeSet::from([wanted.get(field).copied()?]),
                     single_field_index(collection, group, field, name_mode, name_mode),
+                ));
+            }
+        }
+        // The array field joins through its automatic contains index, whose `__name__` runs
+        // ascending.
+        if let Some(contains) = &req.contains {
+            if name_mode == IndexFieldMode::Ascending
+                && !set.is_exempt(collection, contains, group)
+                && has_single_field_mode(set, collection, contains, group, IndexFieldMode::Contains)
+            {
+                candidates.push((
+                    BTreeSet::from([wanted.get(contains).copied()?]),
+                    single_field_index(
+                        collection,
+                        group,
+                        contains,
+                        IndexFieldMode::Contains,
+                        name_mode,
+                    ),
                 ));
             }
         }
@@ -723,8 +757,11 @@ fn composite_serves(
     if &index.collection_group != collection {
         return false;
     }
+    // A collection-group index serves a collection query too (FS-QUERY-INDEX
+    // index-selection#group-scope-composite-for-collection); a collection index serves only
+    // its collection.
     let scope_ok = match index.query_scope {
-        IndexQueryScope::CollectionGroup => group,
+        IndexQueryScope::CollectionGroup => true,
         IndexQueryScope::Collection => !group,
     };
     if !scope_ok {
@@ -1013,6 +1050,22 @@ pub fn validate_aggregation_query(
     indexes: &IndexSet,
     ctx: &PlanningContext,
 ) -> IndexDecision {
+    // Over a nearest-neighbour query, each sum or avg field joins the vector index as an
+    // ascending field before the vector (FS-QUERY-INDEX vector/with-query-clauses#sum-over-nearest).
+    if query.find_nearest.is_some() {
+        let mut with_fields = query.clone();
+        for aggregation in aggregations {
+            if let Aggregation::Sum(field) | Aggregation::Avg(field) = aggregation {
+                if !with_fields.order_by.iter().any(|o| &o.field == field) {
+                    with_fields.order_by.push(OrderClause {
+                        field: field.clone(),
+                        direction: Direction::Ascending,
+                    });
+                }
+            }
+        }
+        return decide_find_nearest(&with_fields, indexes, *ctx);
+    }
     decide_with_requirements(query, indexes, *ctx, |disjunction, effective_order| {
         requirement_for_aggregation(disjunction, effective_order, aggregations)
     })

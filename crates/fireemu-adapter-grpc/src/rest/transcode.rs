@@ -702,7 +702,13 @@ fn check_kind(
 fn check_scalar(kind: Kind, value: &Value) -> Option<Value> {
     match kind {
         Kind::Enum(_) if value.is_null() => Some(Value::Null),
-        Kind::Enum(schema) => enum_name(schema, value).map(|name| Value::String(name.to_owned())),
+        // A name must be known; a number passes whatever it is, as on the wire.
+        Kind::Enum(schema) => match value {
+            Value::Number(number) if number.as_i64().is_some() => Some(
+                enum_name(schema, value).map_or_else(|| value.clone(), |name| Value::String(name.to_owned())),
+            ),
+            _ => enum_name(schema, value).map(|name| Value::String(name.to_owned())),
+        },
         Kind::Int32 => integer(value, i64::from(i32::MIN), i64::from(i32::MAX)).map(Value::from),
         Kind::Int64 => integer(value, i64::MIN, i64::MAX).map(|n| Value::String(n.to_string())),
         Kind::Bool => match value {
@@ -785,10 +791,59 @@ fn timestamp_problem(text: &str) -> Option<&'static str> {
     None
 }
 
+/// Parses a request body as production's transcoder does: a trailing comma before a closing
+/// bracket or brace is accepted (FS-QUERY-INDEX request-shape#body-trailing-comma).
+pub fn parse_body(body: &[u8]) -> Result<Value, serde_json::Error> {
+    serde_json::from_slice(body).or_else(|error| {
+        let text = String::from_utf8_lossy(body);
+        let lenient = without_trailing_commas(&text);
+        if lenient == text {
+            return Err(error);
+        }
+        serde_json::from_str(&lenient).map_err(|_| error)
+    })
+}
+
+/// `text` with every comma that only whitespace separates from a closing `]` or `}` removed,
+/// outside string literals.
+fn without_trailing_commas(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, &c) in chars.iter().enumerate() {
+        if in_string {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if c == '"' {
+            in_string = true;
+        } else if c == ',' {
+            let next = chars[i + 1..].iter().find(|c| !c.is_whitespace());
+            if matches!(next, Some(']' | '}')) {
+                continue;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// The transcoder's refusal of a body that is not JSON: the token it stopped at, echoed with
-/// its line and a caret under the column.
+/// its line and a caret under the column, or the end of the body.
 #[must_use]
 pub fn syntax_error_message(body: &[u8], error: &serde_json::Error) -> String {
+    if error.is_eof() {
+        return "Invalid JSON payload received. Unexpected end of string. Expected a value.\n\n^"
+            .to_owned();
+    }
     let text = String::from_utf8_lossy(body);
     let line = text
         .lines()

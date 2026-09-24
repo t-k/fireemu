@@ -13,8 +13,9 @@ use crate::decode::{parse_parent, DecodeError, Parent};
 pub const EMPTY_PROPERTY_PATH: &str = "Invalid empty property path string.";
 
 /// Characters production refuses in an unquoted property path before matching it against the
-/// path grammar (observed for `a[0]`, answered without the grammar).
-const FORBIDDEN_UNQUOTED: &[char] = &['~', '*', '/', '[', ']'];
+/// path grammar (observed for `a[0]`, answered without the grammar; `~`, `*` and `/` get the
+/// grammar text).
+const FORBIDDEN_UNQUOTED: &[char] = &['['];
 
 /// The refusal of a property path (a filter, order, projection or aggregation field) that
 /// does not parse. `input` is the path as the request spelled it.

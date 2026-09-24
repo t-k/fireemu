@@ -41,7 +41,10 @@ export const RPCS = {
   ]),
 };
 
-/** The query parameters a REST listDocuments step may send (its request message fields). */
+/**
+ * The query parameters a REST listDocuments step may send: its request message fields, by JSON
+ * and by proto name (HTTP transcoding binds both), and one unknown name.
+ */
 export const LIST_QUERY_KEYS = new Set([
   "pageSize",
   "pageToken",
@@ -50,6 +53,12 @@ export const LIST_QUERY_KEYS = new Set([
   "showMissing",
   "readTime",
   "transaction",
+  "page_size",
+  "page_token",
+  "order_by",
+  "mask.field_paths",
+  "show_missing",
+  "read_time",
   "unknownParameter",
 ]);
 
@@ -388,20 +397,32 @@ export function validateCorpus(programs, lane = "fs-query-index") {
       if (step.parent !== undefined) assertRelativePath(step.parent, `${program.id}#${step.id}`);
       if (step.path !== undefined && !step.path.startsWith("v1/{docs}"))
         throw new Error(`${program.id}#${step.id}: an explicit path must stay under {docs}`);
+      // An explicit path names the step's own method, so no step reaches a method (a
+      // transaction, a write) the corpus review did not see.
+      if (
+        step.path !== undefined &&
+        (step.rpc === "get" || step.rpc === "listDocuments" || !step.path.endsWith(`:${step.rpc}`))
+      )
+        throw new Error(`${program.id}#${step.id}: an explicit path must end in :${step.rpc}`);
       if (transport === "grpc" && (step.path !== undefined || step.rawBody !== undefined))
         throw new Error(`${program.id}#${step.id}: gRPC steps take a body only`);
       if (transport === "grpc" && step.body && ("parent" in step.body || "database" in step.body))
         throw new Error(`${program.id}#${step.id}: a gRPC body must not set its own scope`);
       if (step.query !== undefined && (transport !== "rest" || step.rpc !== "listDocuments"))
         throw new Error(`${program.id}#${step.id}: only a REST listDocuments step takes a query`);
-      for (const [key] of step.query ?? []) {
+      for (const [key, value] of step.query ?? []) {
         if (!LIST_QUERY_KEYS.has(key))
           throw new Error(`${program.id}#${step.id}: query parameter ${key} is not reviewed`);
+        // A transaction is never chained from an answer: only a fixed, invalid literal.
+        if (key === "transaction" && typeof value !== "string")
+          throw new Error(`${program.id}#${step.id}: a transaction parameter must be a literal`);
       }
       if (
         step.rpc === "listDocuments" &&
         transport === "rest" &&
-        (typeof step.collectionId !== "string" || !/^[A-Za-z0-9_.~-]+$/.test(step.collectionId))
+        (typeof step.collectionId !== "string" ||
+          !/^[A-Za-z0-9_.~-]+$/.test(step.collectionId) ||
+          /^\.{1,2}$/.test(step.collectionId))
       )
         throw new Error(`${program.id}#${step.id}: a REST listDocuments step names one collection`);
     }
@@ -578,7 +599,11 @@ export function normalizeIndexLink(text, ctx) {
  * echoing it shows that; every other instant is numbered by first appearance within the step
  * (`<t1>`, `<t2>`, ...), so one differing step never renumbers the rest of the program.
  */
-export const stepSymbols = (anchors = new Map()) => ({ anchors, local: new Map() });
+export const stepSymbols = (anchors = new Map()) => ({
+  anchors,
+  local: new Map(),
+  tokens: new Set(),
+});
 
 /**
  * The instant an RFC 3339 text names, as nanoseconds since the epoch, so spellings that differ
@@ -602,7 +627,10 @@ const EMBEDDED_INSTANT = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z/g;
 
 function normalizeString(text, ctx, symbols) {
   if (inRunWindow(text, ctx)) return instantSymbol(text, symbols);
-  let out = normalizeIndexLink(text, ctx)
+  let out = text;
+  // A page token the request carried, echoed by the answer (an error naming it).
+  for (const token of symbols.tokens ?? []) out = out.replaceAll(token, "<page-token>");
+  out = normalizeIndexLink(out, ctx)
     .replaceAll(EMBEDDED_INSTANT, (instant) =>
       inRunWindow(instant, ctx) ? instantSymbol(instant, symbols) : instant,
     )
@@ -623,6 +651,30 @@ export function registerRequestInstants(value, ctx, symbols) {
   else if (value && typeof value === "object") {
     for (const key of Object.keys(value).toSorted())
       registerRequestInstants(value[key], ctx, symbols);
+  }
+}
+
+/** Page tokens shorter than this are corpus literals (`garbage`), never server tokens. */
+const OPAQUE_TOKEN_LENGTH = 16;
+
+/**
+ * Registers the page tokens a request carries (a body or gRPC `pageToken`, a `pageToken` or
+ * `page_token` query pair), so an answer that echoes one records `<page-token>`, as the
+ * token itself is recorded.
+ */
+export function registerRequestTokens(value, symbols) {
+  const add = (token) => {
+    if (typeof token === "string" && token.length >= OPAQUE_TOKEN_LENGTH) symbols.tokens.add(token);
+  };
+  if (Array.isArray(value)) {
+    if (value.length === 2 && (value[0] === "pageToken" || value[0] === "page_token"))
+      add(value[1]);
+    else value.forEach((v) => registerRequestTokens(v, symbols));
+  } else if (value && typeof value === "object") {
+    for (const [key, v] of Object.entries(value)) {
+      if (key === "pageToken") add(v);
+      else registerRequestTokens(v, symbols);
+    }
   }
 }
 
@@ -771,7 +823,10 @@ export const sameRecording = (a, b) => isDeepStrictEqual(canonical(a), canonical
  */
 export function normalizeStep(raw, ctx, anchors) {
   const symbols = stepSymbols(anchors);
-  if (raw.request !== undefined) registerRequestInstants(raw.request, ctx, symbols);
+  if (raw.request !== undefined) {
+    registerRequestInstants(raw.request, ctx, symbols);
+    registerRequestTokens(raw.request, symbols);
+  }
   if (raw.response.transportError !== undefined)
     return { status: 0, transportError: raw.response.transportError };
   if (raw.transport === "grpc") return normalizeGrpcResponse(raw.response, ctx, symbols);

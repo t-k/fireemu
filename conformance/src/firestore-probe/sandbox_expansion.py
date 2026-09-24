@@ -84,6 +84,65 @@ def _field_update(name: str, fields: dict[str, Any]) -> dict[str, Any]:
     return {"update": {"name": name, "fields": fields}}
 
 
+def _near_limit_delete_program(route: str, count: int) -> dict[str, Any]:
+    run_marker = "DELETE_RUN_ID"
+    prefix = f"del{route.replace('-', '')}{count}{run_marker}"
+    runtime_collection_bytes = 998
+    marker_growth = 32 - len(run_marker)
+    collection = prefix.ljust(runtime_collection_bytes - marker_growth, "c")
+    name = f"{DOCS}/{collection}/d"
+    values = [{"integerValue": str(index)} for index in range(count)]
+    if route == "rest":
+        delete = {"id": "delete", "method": "DELETE", "path": f"/v1/{name}"}
+    elif route == "commit":
+        delete = {
+            "id": "delete",
+            "method": "POST",
+            "path": COMMIT,
+            "body": {"writes": [{"delete": name}]},
+        }
+    elif route == "batch-write":
+        delete = {
+            "id": "delete",
+            "method": "POST",
+            "path": BATCH_WRITE,
+            "body": {"writes": [{"delete": name}]},
+        }
+    else:
+        raise ValueError(f"unsupported near-limit DELETE route: {route}")
+    return {
+        "id": f"writes/limits/near-limit-delete-refusal/{route}/{count}",
+        "area": "writes",
+        "steps": [
+            {
+                "id": "seed",
+                "method": "POST",
+                "path": COMMIT,
+                "body": {
+                    "writes": [
+                        _field_update(name, {"a": {"arrayValue": {"values": values}}})
+                    ]
+                },
+            },
+            {"id": "before-delete", "method": "GET", "path": f"/v1/{name}"},
+            delete,
+            {"id": "after-delete", "method": "GET", "path": f"/v1/{name}"},
+            {
+                "id": "group-after-delete",
+                "method": "POST",
+                "path": f"/v1/{DOCS}:runQuery",
+                "body": {
+                    "structuredQuery": {
+                        "from": [{"collectionId": collection, "allDescendants": True}],
+                        "select": {"fields": [{"fieldPath": "__name__"}]},
+                        "limit": 2,
+                    }
+                },
+            },
+        ],
+    }
+
+
 def _raw_request_program(size: int) -> dict[str, Any]:
     name = f"{DOCS}/raw11/{size}"
     payload = json.dumps({"writes": [_update(name)]}, separators=(",", ":"))
@@ -395,4 +454,9 @@ def build_programs() -> list[dict[str, Any]]:
         _field_update(name, {"s": {"stringValue": "x" * 1_040_000}}) for name in names
     ]
     programs.append(_commit_program("writes/limits/decoded-11x1040000", writes, names))
+    programs.extend(
+        _near_limit_delete_program(route, count)
+        for route in ("rest", "commit", "batch-write")
+        for count in (12_112, 12_113)
+    )
     return programs

@@ -35,6 +35,13 @@ const corpusV3 = frozenNames([
   ["g2000b", 1400, 599],
   ["g1000a", 998, 1],
   ["g1000b", 998, 1],
+  ...["rest", "commit", "batch-write"].flatMap((route) =>
+    [12_112, 12_113].map((length) => [
+      `del${route.replaceAll("-", "")}${length}DELETE_RUN_ID`,
+      979,
+      1,
+    ]),
+  ),
 ]);
 
 test("shrink request counter cannot reset between cleanup phases", () => {
@@ -186,8 +193,8 @@ test("array shrink is restricted to frozen legacy or corpus-v3 root document nam
     [...legacy.slice(0, 5), corpusV3[0]],
     [...legacy.slice(0, 5), legacy[0]],
     legacy.map((name) => (name === legacy[0] ? name.replace("n31", "n30") : name)),
-    corpusV3.slice(0, 5),
-    [...corpusV3.slice(0, 5), legacy[0]],
+    corpusV3.slice(0, 11),
+    [...corpusV3.slice(0, 11), legacy[0]],
     corpusV3.map((name) => (name === corpusV3[0] ? name.replace("g500a", "g500c") : name)),
     corpusV3.map((name) => (name === corpusV3[0] ? name.replace(/\/d$/, "/x") : name)),
     [`${prefix}${"g500a"}${"c".repeat(493)}/d/child/nested`],

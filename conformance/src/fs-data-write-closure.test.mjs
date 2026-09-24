@@ -398,12 +398,92 @@ test("an unrecorded empty-write response cannot inherit the known trailer mismat
   assert.ok(selected.pendingStreamIds.includes(responseId));
   assert.equal(response.status, "PENDING_RECORDING");
   assert.deepEqual(response.recipeIds, [responseId]);
-  assert.equal(halfClose.status, "MISMATCH");
+  assert.equal(halfClose.status, "VERIFIED");
   assert.match(
     halfClose.comparisonNormalizationApproval,
     /2026-09-24.*addendum 4.*content-disposition is stable/,
   );
   assert.ok(!halfClose.recipeIds.includes(responseId));
+});
+
+test("half-close accepts the source-bound current run without rewriting historical evidence", () => {
+  const closure = JSON.parse(readFileSync(closurePath, "utf8"));
+  const condition = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/write-stream-half-close",
+  );
+  const comparisonPath = fileURLToPath(
+    new URL(
+      "../../spec/compatibility/broad-runs/fs-stream-half-close-1cb475837-current-comparison.json",
+      import.meta.url,
+    ),
+  );
+  const comparison = JSON.parse(readFileSync(comparisonPath, "utf8"));
+  const historicalPath = fileURLToPath(
+    new URL(`../../${condition.historicalComparison.comparisonPath}`, import.meta.url),
+  );
+  const historical = JSON.parse(readFileSync(historicalPath, "utf8"));
+
+  assert.equal(condition.status, "VERIFIED");
+  assert.deepEqual(condition.evidence.productionRecordings, [
+    "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
+    "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
+  ]);
+  const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));
+  assert.deepEqual(comparison.productionRecordingDigests, fixture.evidence.streamRecordingDigests);
+  assert.deepEqual(comparison.productionRecordingTimes, fixture.evidence.recordedAt);
+  assert.equal(new Set(comparison.productionRecordingTimes).size, 2);
+  assert.equal(
+    comparison.productionFixturePath,
+    "conformance/fs-data-write-production-matrix.json",
+  );
+  assert.equal(
+    condition.evidence.comparisonPath,
+    "spec/compatibility/broad-runs/fs-stream-half-close-1cb475837-current-comparison.json",
+  );
+  assert.deepEqual(condition.historicalComparison, {
+    productionRecordings: historical.productionRecordingDigests,
+    finalArtifactSha256: historical.artifactSha256,
+    comparisonPath:
+      "spec/compatibility/broad-runs/fs-stream-half-close-542b868b7-saved-comparison.json",
+  });
+  assert.deepEqual(comparison.sourceBinding, {
+    sourceHead: "1cb4758372f21a467306a0a701994b7c1a02a8bb",
+    executableSha256: "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
+    executableSha256After: "2af3f08c4d453459af86c9258f2283cb38fc7e74d83d388018cbdbb29e892a6a",
+    bindingFileSha256: "ea1c8bf15deb90fb70723e7a9a0ca3e1854779da79fb3473c6f8ab6451f7d37d",
+    streamResultsSha256: "552b434a93f637be61d4d1ac5d8e22ecc682bad60958603bb29029b8e305fa80",
+    corpusSha256: "407099fc6bb3137fdf2ca5294f0b8ef347e819bead6ab3085e804842bdb20450",
+  });
+  assert.deepEqual(comparison.result, {
+    comparableRecipes: 1,
+    mismatchedRecipes: 0,
+    wholeRunComparableRestPrograms: 39,
+    wholeRunComparableStreams: 2,
+    wholeRunKnownMismatchRows: 9,
+    wholeRunPendingRestPrograms: 39,
+    wholeRunPendingStreams: 5,
+  });
+  assert.equal(
+    comparison.localStreams[condition.recipeIds[0]].status.trailers[0].key,
+    "content-disposition",
+  );
+  assert.deepEqual(comparison.differences, []);
+
+  const trailingMetadata = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/write-stream-trailing-metadata",
+  );
+  const emptyResponse = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/write-stream-empty-write-response",
+  );
+  const finalRegression = closure.conditions.find(
+    ({ conditionId }) => conditionId === "FS-DATA-WRITE/final-artifact-regression",
+  );
+  assert.equal(trailingMetadata.status, "MISMATCH");
+  assert.equal(emptyResponse.status, "PENDING_RECORDING");
+  assert.equal(finalRegression.status, "PENDING_REVIEW");
+  assert.equal(comparison.result.wholeRunKnownMismatchRows, 9);
+  assert.equal(comparison.result.wholeRunPendingStreams, 5);
+  assert.notEqual(historical.artifactSha256, comparison.artifactSha256);
 });
 
 test("recorded conditions contain no changed or unrecorded runnable recipes", async () => {

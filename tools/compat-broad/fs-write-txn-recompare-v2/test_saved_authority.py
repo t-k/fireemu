@@ -3,6 +3,8 @@
 import importlib.util
 import json
 import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -17,6 +19,59 @@ ROOT = (
 
 
 class SavedAuthorityTests(unittest.TestCase):
+    def test_source_diff_disables_external_diff_and_textconv(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "repo"
+            root.mkdir()
+            subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.name", "Test"], check=True
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "config", "user.email", "test@example.invalid"],
+                check=True,
+            )
+            source = root / "tools/validator.txt"
+            source.parent.mkdir()
+            source.write_text("before\n")
+            (root / ".gitattributes").write_text("*.txt diff=canary\n")
+            subprocess.run(
+                ["git", "-C", str(root), "add", ".gitattributes", "tools/validator.txt"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "commit", "-qm", "base"], check=True
+            )
+            commit = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+            ).strip()
+            source.write_text("after\n")
+            external_marker = Path(temporary) / "external-ran"
+            textconv_marker = Path(temporary) / "textconv-ran"
+            external = Path(temporary) / "external-diff"
+            external.write_text(f"#!/bin/sh\ntouch {external_marker}\n")
+            external.chmod(0o700)
+            textconv = Path(temporary) / "textconv"
+            textconv.write_text(f"#!/bin/sh\ntouch {textconv_marker}\ncat\n")
+            textconv.chmod(0o700)
+            subprocess.run(
+                ["git", "-C", str(root), "config", "diff.external", str(external)],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "config", "diff.canary.textconv", str(textconv)],
+                check=True,
+            )
+
+            module = importlib.util.module_from_spec(SPEC)
+            SPEC.loader.exec_module(module)
+            try:
+                module.source_checkout(root, commit)
+            except ValueError:
+                pass
+            self.assertFalse(external_marker.exists())
+            self.assertFalse(textconv_marker.exists())
+
     @unittest.skipUnless(ROOT, "set STREAM_RECOMPARE_ROOT for retained private inputs")
     def test_saved_pairs_and_forgery(self):
         module = importlib.util.module_from_spec(SPEC)

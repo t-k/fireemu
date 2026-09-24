@@ -1208,19 +1208,40 @@ fn verify_session_with_error(
     at: LogicalInstant,
     map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
 ) -> Result<Session, JsonResponse> {
+    verify_session_accepting(store, body, at, map_error, LegacyTokens::Refused)
+}
+
+/// Whether a route honours the legacy Identity Toolkit token. Production was observed to honour
+/// it on account lookup, update and delete (sandbox recording 2026-09-24); every other route
+/// refuses it until observed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LegacyTokens {
+    Honoured,
+    Refused,
+}
+
+fn verify_session_accepting(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    map_error: fn(&fireemu_core_auth::jwt::JwtError) -> JsonResponse,
+    legacy_tokens: LegacyTokens,
+) -> Result<Session, JsonResponse> {
     let token = match body.get("idToken") {
         None | Some(Value::Null) => return Err(error(400, "MISSING_ID_TOKEN")),
         Some(Value::String(t)) => t.as_str(),
         Some(_) => return Err(error(400, "INVALID_ID_TOKEN")),
     };
-    // Account routes also honour the legacy Identity Toolkit token (sandbox recording
-    // 2026-09-24); session-cookie creation verifies ID tokens only and keeps refusing it.
+    // Account lookup, update and delete also honour the legacy Identity Toolkit token (sandbox
+    // recording 2026-09-24); every other route verifies ID tokens only.
     let leeway = fireemu_core_auth::jwt::IDENTITY_TOOLKIT_EXPIRY_LEEWAY_SECONDS;
     let (v, decoded) =
         match fireemu_core_auth::jwt::verify_id_token_decoded_with_leeway(token, store, at, leeway)
         {
             // A token of another issuer may be a legacy token; that verifier checks the issuer.
-            Err(fireemu_core_auth::jwt::JwtError::WrongIssuer { .. }) => {
+            Err(fireemu_core_auth::jwt::JwtError::WrongIssuer { .. })
+                if legacy_tokens == LegacyTokens::Honoured =>
+            {
                 fireemu_core_auth::jwt::verify_legacy_token(token, store, at, leeway)
             }
             verified => verified,
@@ -2152,7 +2173,7 @@ fn dispatch_with_blocking_hook(
         body,
         headers,
         at,
-        &state.into(),
+        &blocking_dispatch_options(state),
     );
     if blocking.blocking_auth_revision() != expected_blocking_revision {
         return error(409, "BLOCKING_FUNCTION_CONFIGURATION_CHANGED");
@@ -2386,7 +2407,7 @@ fn dispatch_with_blocking_hook(
                 body,
                 headers,
                 at,
-                &state.into(),
+                &blocking_dispatch_options(state),
             )
         };
         if committed_response.status != 200 {
@@ -3344,12 +3365,20 @@ struct DispatchOptions {
     custom_token_trust: Option<Arc<CustomTokenTrust>>,
     /// Whether sign-in without `returnSecureToken` answers with the legacy token, as
     /// production does. The emulator profile (stateless refresh tokens) keeps the official
-    /// emulator's secure tokens. Blocking functions re-issue tokens through the refresh session
-    /// a legacy sign-in does not open, and their legacy behaviour is unobserved, so they keep
-    /// secure tokens too.
+    /// emulator's secure tokens. A request whose blocking trigger is selected keeps secure tokens
+    /// too: the hook re-issues tokens through the refresh session a legacy sign-in does not open,
+    /// and the legacy behaviour of blocking functions is unobserved.
     legacy_tokens: bool,
     query_limits: AuthQueryLimits,
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
+}
+
+/// The options of a request whose blocking trigger is selected: it keeps secure tokens.
+fn blocking_dispatch_options(state: &AuthState) -> DispatchOptions {
+    DispatchOptions {
+        legacy_tokens: false,
+        ..state.into()
+    }
 }
 
 impl From<&AuthState> for DispatchOptions {
@@ -3359,7 +3388,7 @@ impl From<&AuthState> for DispatchOptions {
             stateless_refresh_tokens: state.stateless_refresh_tokens,
             fake_custom_token_expiry: state.fake_custom_token_expiry,
             custom_token_trust: state.custom_token_trust.clone(),
-            legacy_tokens: !state.stateless_refresh_tokens && state.blocking.is_none(),
+            legacy_tokens: !state.stateless_refresh_tokens,
             query_limits: state.query_limits,
             inbound_credential_policy: state.blocking.as_deref().map_or_else(
                 fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
@@ -3475,7 +3504,10 @@ fn dispatch(
             with_link["returnOobLink"] = json!(true);
             send_oob_code(store, &with_link, at, headers, true)
         }
-        Handler::AdminCreateSessionCookie => create_session_cookie(store, body, at),
+        // Stateful refresh sessions mark the strict profile.
+        Handler::AdminCreateSessionCookie => {
+            create_session_cookie(store, body, at, !options.stateless_refresh_tokens)
+        }
         Handler::TenantCreate
         | Handler::TenantList
         | Handler::TenantGet
@@ -6839,6 +6871,13 @@ fn sign_in_with_custom_token(
     // Production's rules apply with configured signers and in the strict profile; the
     // emulator profile keeps the official emulator's leniency (sandbox recording 2026-09-24).
     let production_rules = trust.is_some() || reject_expired;
+    // Production accepts only a signed token. The strict profile therefore needs the signers
+    // (`auth.customTokenSigners`) to verify one, and without them refuses every custom token as
+    // production refuses an unsigned one; the daemon says so at startup.
+    if reject_expired && trust.is_none() && str_field(body, "token").is_some_and(|t| !t.is_empty())
+    {
+        return error(400, "INVALID_CUSTOM_TOKEN");
+    }
     // An empty token is a malformed one to production and a missing one to the emulator.
     let token = match str_field(body, "token") {
         Some("") if production_rules => {
@@ -7458,13 +7497,19 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
     if !admin {
         // Select the trust boundary before parsing any administrator search criteria.
         // End-user lookup always verifies a token and can return only its subject.
-        let session = match verify_session_with_error(store, body, at, |e| {
-            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
-                error(400, "USER_NOT_FOUND")
-            } else {
-                jwt_error(e)
-            }
-        }) {
+        let session = match verify_session_accepting(
+            store,
+            body,
+            at,
+            |e| {
+                if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                    error(400, "USER_NOT_FOUND")
+                } else {
+                    jwt_error(e)
+                }
+            },
+            LegacyTokens::Honoured,
+        ) {
             Ok(session) => session,
             Err(response) => return response,
         };
@@ -8018,7 +8063,7 @@ fn update(
     } else {
         // Authenticate the client before planning any mutation. A supplied localId is
         // never a client selector, and does not change self-service invalidation rules.
-        match verify_session(store, body, at) {
+        match verify_session_accepting(store, body, at, jwt_error, LegacyTokens::Honoured) {
             Ok(session) => {
                 if self_service {
                     if let Err(response) = validate_client_update_shapes(body) {
@@ -8359,13 +8404,19 @@ fn delete_account(
         }
     } else {
         // As for lookup, a token whose account is gone is USER_NOT_FOUND.
-        match verify_session_with_error(store, body, at, |e| {
-            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
-                error(400, "USER_NOT_FOUND")
-            } else {
-                jwt_error(e)
-            }
-        }) {
+        match verify_session_accepting(
+            store,
+            body,
+            at,
+            |e| {
+                if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                    error(400, "USER_NOT_FOUND")
+                } else {
+                    jwt_error(e)
+                }
+            },
+            LegacyTokens::Honoured,
+        ) {
             Ok(session) => session.uid,
             Err(r) => return r,
         }
@@ -8733,11 +8784,18 @@ const SESSION_COOKIE_MAX_SECONDS: i64 = 14 * 24 * 60 * 60;
 /// the session-cookie issuer and the requested lifetime. Unsigned when the session is, as
 /// the official emulator's cookies are (the Admin SDK's `verifySessionCookie` accepts only
 /// `alg: none` while it points at an emulator).
-fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
-    // `validDuration` is an int64 decoded with the request; an omitted one is the maximum and
-    // any other value, zero included, must lie within the bounds (sandbox recording 2026-09-24).
+fn create_session_cookie(
+    store: &AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    strict: bool,
+) -> JsonResponse {
+    // Strict: `validDuration` is an int64 decoded with the request; an omitted one is the maximum
+    // and any other value, zero included, must lie within the bounds (sandbox recording
+    // 2026-09-24). Emulator: the official emulator's `Number(v) || two weeks`.
     let valid_duration = match body.get("validDuration") {
         None | Some(Value::Null) => SESSION_COOKIE_MAX_SECONDS,
+        Some(value) if !strict => emulator_valid_duration(value),
         Some(value) => {
             let decoded = match value {
                 Value::String(text) => text.parse::<i64>().ok(),
@@ -8791,6 +8849,23 @@ fn create_session_cookie(store: &AuthStore, body: &Value, at: LogicalInstant) ->
         status: 200,
         body: json!({"sessionCookie": cookie}),
     }
+}
+
+/// The official emulator's `Number(validDuration) || two weeks`, in whole seconds: zero and a
+/// value that is not a number mean the maximum, and a fraction is truncated as the emulator's
+/// signer truncates the resulting expiry.
+fn emulator_valid_duration(value: &Value) -> i64 {
+    let number = match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(text) if text.trim().is_empty() => Some(0.0),
+        Value::String(text) => text.trim().parse::<f64>().ok(),
+        Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
+        _ => None,
+    }
+    .filter(|n| n.is_finite() && *n != 0.0);
+    // A float-to-integer `as` saturates, so an enormous value stays out of range, as it is.
+    #[allow(clippy::cast_possible_truncation)]
+    number.map_or(SESSION_COOKIE_MAX_SECONDS, |n| n.trunc() as i64)
 }
 
 /// `application/x-www-form-urlencoded` query decoding through the shared codec: `+` is a

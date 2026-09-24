@@ -48,21 +48,60 @@ if (!Number.isInteger(MANAGED_POLL_MS) || MANAGED_POLL_MS < 1 || MANAGED_POLL_MS
 }
 const RECORD_PROJECT = process.env.FIRESTORE_PROBE_RECORD_PROJECT ?? PROJECT;
 const SHRINK_CHUNK_SIZE = 1024;
-const SHRINK_REQUEST_CAPS = { legacy: 180, v3: 100 };
-const FROZEN_ARRAY_LENGTHS = new Map([
-  ["barrayname100012116", 12_116],
-  ["barrayname100012121", 12_121],
-  ["barrayname100012123", 12_123],
-  ["barrayname20007179", 7_179],
-  ["barrayname20007183", 7_183],
-  ["barrayname20007184", 7_184],
-  ["g500a", 19_999],
-  ["g500b", 20_000],
-  ["g2000a", 7_184],
-  ["g2000b", 7_185],
-  ["g1000a", 12_123],
-  ["g1000b", 12_124],
-]);
+const SHRINK_REQUEST_CAPS = { legacy: 180, v3: 160 };
+const SANDBOX_DOCUMENTS = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
+const LEGACY_SHRINK_SPECS = [
+  ["barrayname100012116n31", 998, 1, 12_116],
+  ["barrayname100012121n32", 998, 1, 12_121],
+  ["barrayname100012123n33", 998, 1, 12_123],
+  ["barrayname20007179n45", 1400, 599, 7_179],
+  ["barrayname20007183n47", 1400, 599, 7_183],
+  ["barrayname20007184n49", 1400, 599, 7_184],
+];
+const V3_SHRINK_SPECS = [
+  ["g500a", 498, 1, 19_999],
+  ["g500b", 498, 1, 20_000],
+  ["g2000a", 1400, 599, 7_184],
+  ["g2000b", 1400, 599, 7_185],
+  ["g1000a", 998, 1, 12_123],
+  ["g1000b", 998, 1, 12_124],
+];
+const frozenResourceNames = (specs) =>
+  specs.map(
+    ([collectionPrefix, collectionBytes, documentBytes]) =>
+      `${SANDBOX_DOCUMENTS}${collectionPrefix.padEnd(collectionBytes, "c")}/${"d".repeat(documentBytes)}`,
+  );
+const LEGACY_SHRINK_NAMES = frozenResourceNames(LEGACY_SHRINK_SPECS);
+const V3_SHRINK_NAMES = frozenResourceNames(V3_SHRINK_SPECS);
+const FROZEN_ARRAY_LENGTHS = new Map(
+  [...LEGACY_SHRINK_SPECS, ...V3_SHRINK_SPECS].map(
+    ([collectionPrefix, collectionBytes, , length]) => [
+      collectionPrefix.padEnd(collectionBytes, "c"),
+      length,
+    ],
+  ),
+);
+
+export function createShrinkRequestCounter(limit) {
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new Error("array shrink request limit must be a positive safe integer");
+  }
+  let requests = 0;
+  return {
+    claim() {
+      if (requests >= limit)
+        throw new Error("array shrink request cap reached before network send");
+      requests += 1;
+      return requests;
+    },
+    reset() {
+      requests = 0;
+    },
+    current() {
+      return requests;
+    },
+  };
+}
 let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
 let managedClearBlocked = false;
@@ -94,52 +133,16 @@ export function managedShrinkScope(names, project, database) {
   if (project !== "fireemu-oracle-sbx" || database !== "(default)" || !Array.isArray(names)) {
     throw new Error("array shrink requires the fixed sandbox database");
   }
-  const prefix = `projects/${project}/databases/${database}/documents/`;
-  const documents = names.map((name) => {
-    if (typeof name !== "string" || !name.startsWith(prefix)) {
-      throw new Error("array shrink name is outside the sandbox");
-    }
-    const parts = name.slice(prefix.length).split("/");
-    if (parts.length !== 2 || parts.some((part) => !part || part === "." || part === "..")) {
-      throw new Error("array shrink requires root documents");
-    }
-    return parts;
-  });
-  if (documents.length !== 6 || new Set(documents.map(([collection]) => collection)).size !== 6) {
+  if (
+    names.length !== 6 ||
+    names.some((name) => typeof name !== "string") ||
+    new Set(names).size !== 6
+  ) {
     throw new Error("array shrink requires six distinct frozen documents");
   }
-  const legacyCollections = new Set([
-    "barrayname100012116",
-    "barrayname100012121",
-    "barrayname100012123",
-    "barrayname20007179",
-    "barrayname20007183",
-    "barrayname20007184",
-  ]);
-  if (documents.every(([collection]) => legacyCollections.has(collection))) return "legacy";
-
-  const validV3 = documents.every(([collection, document]) => {
-    const length = collection.startsWith("g500")
-      ? 500
-      : collection.startsWith("g1000")
-        ? 1000
-        : collection.startsWith("g2000")
-          ? 2000
-          : 0;
-    const expectedCollectionBytes =
-      length === 2000 ? 1400 : length === 1000 ? 998 : length === 500 ? 498 : 0;
-    const expectedDocumentBytes = length === 2000 ? 599 : length > 0 ? 1 : 0;
-    return (
-      expectedCollectionBytes > 0 &&
-      Buffer.byteLength(collection) === expectedCollectionBytes &&
-      Buffer.byteLength(document) === expectedDocumentBytes &&
-      new RegExp(`^g${length}[ab]c*$`).test(collection) &&
-      /^d+$/.test(document)
-    );
-  });
-  if (!validV3)
-    throw new Error("array shrink names do not match the frozen legacy or corpus-v3 scope");
-  return "v3";
+  if (LEGACY_SHRINK_NAMES.every((name) => names.includes(name))) return "legacy";
+  if (V3_SHRINK_NAMES.every((name) => names.includes(name))) return "v3";
+  throw new Error("array shrink names do not match the frozen legacy or corpus-v3 scope");
 }
 
 export function validateShrinkBoundaryDocument(document, expectedName) {
@@ -237,7 +240,7 @@ async function clear(database = "(default)", verifyManagedScope = false) {
 async function clearThroughPublicApi(database, verifyManagedScope) {
   const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/${database}/documents`;
   const shrinkScopeActive = managedClearState !== null && database === "(default)";
-  if (shrinkScopeActive) managedClearState.shrinkRequests = 0;
+  if (shrinkScopeActive) managedClearState.shrinkRequestCounter.reset();
   // Listing is paged and only eventually reflects deletes: loop until a full listing is empty.
   for (let round = 0; round < 8; round += 1) {
     const collectionIds = await listCollectionIds(base, "");
@@ -393,12 +396,7 @@ async function deleteCollection(base, parentPath, collectionId) {
 
 async function managedShrinkRequest(label, input, init) {
   if (!managedClearState) throw new Error("array shrink has no frozen names");
-  const used = managedClearState.shrinkRequests + 1;
-  const cap = SHRINK_REQUEST_CAPS[managedClearState.shrinkScope];
-  if (used > cap) {
-    throw new Error(`array shrink ${managedClearState.shrinkScope} request cap ${cap} exceeded`);
-  }
-  managedClearState.shrinkRequests = used;
+  managedClearState.shrinkRequestCounter.claim();
   return trackedFetch(input, init);
 }
 
@@ -754,7 +752,9 @@ async function main() {
     managedClearState = {
       names,
       shrinkScope: managedShrinkScope(names, PROJECT, "(default)"),
-      shrinkRequests: 0,
+      shrinkRequestCounter: createShrinkRequestCounter(
+        SHRINK_REQUEST_CAPS[managedShrinkScope(names, PROJECT, "(default)")],
+      ),
     };
     try {
       const previous = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));

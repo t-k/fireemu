@@ -5,6 +5,7 @@ import {
   isManagedClearCommitRefusal,
   managedClearScope,
   managedShrinkScope,
+  createShrinkRequestCounter,
   validateManagedClearOperation,
   validateManagedClearReadback,
   validateShrinkBoundaryDocument,
@@ -12,6 +13,37 @@ import {
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
 const names = [`${prefix}g500a/doc`, `${prefix}g1000b/doc`];
+const frozenNames = (specs) =>
+  specs.map(
+    ([collectionPrefix, collectionLength, documentLength]) =>
+      `${prefix}${collectionPrefix.padEnd(collectionLength, "c")}/${"d".repeat(documentLength)}`,
+  );
+const legacy = frozenNames([
+  ["barrayname100012116n31", 998, 1],
+  ["barrayname100012121n32", 998, 1],
+  ["barrayname100012123n33", 998, 1],
+  ["barrayname20007179n45", 1400, 599],
+  ["barrayname20007183n47", 1400, 599],
+  ["barrayname20007184n49", 1400, 599],
+]);
+const corpusV3 = frozenNames([
+  ["g500a", 498, 1],
+  ["g500b", 498, 1],
+  ["g2000a", 1400, 599],
+  ["g2000b", 1400, 599],
+  ["g1000a", 998, 1],
+  ["g1000b", 998, 1],
+]);
+
+test("shrink request counter stops before exceeding its finite cap", () => {
+  const counter = createShrinkRequestCounter(160);
+  for (let request = 0; request < 160; request += 1) counter.claim();
+  assert.equal(counter.current(), 160);
+  assert.throws(() => counter.claim(), /cap reached before network send/);
+  assert.equal(counter.current(), 160);
+  counter.reset();
+  assert.equal(counter.current(), 0);
+});
 
 test("managed clear is limited to distinct root collections in the fixed sandbox", () => {
   assert.deepEqual(managedClearScope(names, "fireemu-oracle-sbx", "(default)"), [
@@ -31,32 +63,17 @@ test("managed clear is limited to distinct root collections in the fixed sandbox
 });
 
 test("array shrink is restricted to frozen legacy or corpus-v3 root document names", () => {
-  const legacy = [
-    "barrayname100012116",
-    "barrayname100012121",
-    "barrayname100012123",
-    "barrayname20007179",
-    "barrayname20007183",
-    "barrayname20007184",
-  ].map((collection) => `${prefix}${collection}/item`);
-  const corpusV3 = [
-    ["g500a", 498, 1],
-    ["g500b", 498, 1],
-    ["g2000a", 1400, 599],
-    ["g2000b", 1400, 599],
-    ["g1000a", 998, 1],
-    ["g1000b", 998, 1],
-  ].map(
-    ([tag, collectionLength, documentLength]) =>
-      `${prefix}${tag}${"c".repeat(collectionLength - tag.length)}/${"d".repeat(documentLength)}`,
-  );
   assert.equal(managedShrinkScope(legacy, "fireemu-oracle-sbx", "(default)"), "legacy");
   assert.equal(managedShrinkScope(corpusV3, "fireemu-oracle-sbx", "(default)"), "v3");
   for (const invalid of [
     legacy.slice(0, 5),
-    [...legacy.slice(0, 5), `${prefix}g500a/item`],
+    [...legacy.slice(0, 5), corpusV3[0]],
+    [...legacy.slice(0, 5), legacy[0]],
+    legacy.map((name) => (name === legacy[0] ? name.replace("n31", "n30") : name)),
     corpusV3.slice(0, 5),
-    [...corpusV3.slice(0, 5), `${prefix}unexpected/item`],
+    [...corpusV3.slice(0, 5), legacy[0]],
+    corpusV3.map((name) => (name === corpusV3[0] ? name.replace("g500a", "g500c") : name)),
+    corpusV3.map((name) => (name === corpusV3[0] ? name.replace(/\/d$/, "/x") : name)),
     [`${prefix}${"g500a"}${"c".repeat(493)}/d/child/nested`],
   ]) {
     assert.throws(() => managedShrinkScope(invalid, "fireemu-oracle-sbx", "(default)"));

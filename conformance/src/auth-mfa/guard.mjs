@@ -7,7 +7,9 @@
 // phone number is one of the sandbox's configured test numbers (fixed code, no SMS is sent,
 // owner decision M3), every address is @example.com (null MX), and nothing asks production to
 // mail anything: the one action code (an email-link sign-in, owner decision M5) comes from the
-// Admin sendOobCode with the link returned. The only project config a request may change is
+// Admin sendOobCode with the link returned. Production may still notify an account's @example.com
+// address of a new or withdrawn second factor; nothing is delivered (null MX), and delivery is
+// out of scope as under AUTH-ACTION E1 and M3. No request names a tenant (M2). The only project config a request may change is
 // `mfa`, to one of the reviewed values below (owner decision M1), and the email-link switch
 // (M5); the session restores the pre-run values.
 
@@ -80,6 +82,8 @@ function assertOnlyExampleEmail(text, where) {
 }
 
 const PROJECT_KEYS = new Set(["targetProjectId", "projectId", "tenantProjectId", "project"]);
+/** Keys that would address a tenant through a project path (owner decision M2). */
+const TENANT_KEYS = new Set(["tenantId", "tenant"]);
 
 /** Where a request goes: the api family and the path below the target's origin. */
 function locate(parsed, ctx) {
@@ -142,6 +146,7 @@ export function guardMfaRequest({ url, init }, ctx, { harness = false } = {}) {
     walkEntries(input, (key, value) => {
       if (PROJECT_KEYS.has(key) && value !== ctx.project)
         throw new Error(`request names another project: ${value}`);
+      if (TENANT_KEYS.has(key)) throw new Error("request names a tenant");
       if (typeof value !== "string") return;
       assertOnlyExampleEmail(value, key);
       for (const [phone] of value.replaceAll(/[\s().-]/g, "").matchAll(/\+\d{8,15}/g)) {

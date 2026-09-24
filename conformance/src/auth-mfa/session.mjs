@@ -48,6 +48,52 @@ const fatal = (message) => Object.assign(new Error(message), { fatal: true });
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** A sleep an abort ends early (a stopped run cleans up at once instead of waiting it out). */
+function abortableSleep(ms, signal) {
+  if (!signal) return sleep(ms);
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    }
+    signal.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** Seconds past an age an aged row waits, so a refusal is attributed to an age at least this old
+ * and latency cannot put the sample on a round boundary (pre-send review SF-4). */
+export const AGE_MARGIN_SECONDS = 3;
+/** The largest clock skew between this machine and production the TOTP window rows tolerate. */
+export const MAX_CLOCK_SKEW_SECONDS = 2;
+/** The enrollment session lifetime production announced (exploration 2026-09-24), from which
+ * the clock skew is estimated. */
+const ANNOUNCED_SESSION_SECONDS = 900;
+/** Answer members whose values are secrets the fixture scan looks for by value. */
+const SECRET_MEMBERS = new Set([
+  "sharedSecretKey",
+  "sessionInfo",
+  "mfaPendingCredential",
+  "oobCode",
+  "oobLink",
+  "refreshToken",
+  "refresh_token",
+  "idToken",
+  "id_token",
+  "access_token",
+  "sessionCookie",
+]);
+
+function collectSecrets(value, into, key = "") {
+  if (typeof value === "string") {
+    if (SECRET_MEMBERS.has(key) && value.length >= 16) into.add(value);
+  } else if (Array.isArray(value)) for (const v of value) collectSecrets(v, into, key);
+  else if (value && typeof value === "object")
+    for (const [k, v] of Object.entries(value)) collectSecrets(v, into, k);
+}
+
 /** Where in a 30-second step a code-sensitive step may start, in seconds. */
 export const ALIGN_WINDOW = { from: 4, to: 14 };
 /** Production applies an accepted config change before this settles (exploration 2026-09-24). */
@@ -121,9 +167,15 @@ export function createSession(
     maxHarnessRequests = Infinity,
     maxCleanupRequests = Infinity,
     signers,
+    signal,
+    configSettleMs = CONFIG_SETTLE_MS,
     log = () => {},
   } = {},
 ) {
+  // Secret values the run saw (never recorded; handed to the fixture scan) and the achieved
+  // age of every aged row and the clock skew estimates (kept in the private recording only).
+  const seenSecrets = new Set();
+  const timings = { ages: {}, skew: [] };
   let requests = 0;
   let harnessRequests = 0;
   // Wipes and the config restore draw on their own reserve, so a run that used up its harness
@@ -188,7 +240,7 @@ export function createSession(
   /** Production waits in real time; fireemu moves its virtual clock. */
   async function wait(seconds) {
     if (ctx.target.kind === "production") {
-      await sleep(seconds * 1000);
+      await abortableSleep(seconds * 1000, signal);
       return;
     }
     charge(true);
@@ -248,12 +300,23 @@ export function createSession(
   }
 
   async function admin(method, path, { body, query, cleanup = false } = {}) {
-    const { recorded, json } = await send(
-      { id: "harness", method, path, auth: "admin", body, query },
-      new Map(),
-      createEnrollmentRegistry(),
-      { harness: true, cleanup },
-    );
+    const request = () =>
+      send(
+        { id: "harness", method, path, auth: "admin", body, query },
+        new Map(),
+        createEnrollmentRegistry(),
+        { harness: true, cleanup },
+      );
+    let { recorded, json } = await request();
+    // Cleanup must not fail on an owner token that expired early: renew it once and retry.
+    if (recorded.status === 401 && cleanup && ctx.target.kind === "production") {
+      try {
+        await ctx.target.refresh?.({ force: true });
+      } catch (error) {
+        throw fatal(`owner credential refresh failed: ${error?.message ?? error}`);
+      }
+      ({ recorded, json } = await request());
+    }
     if (recorded.status !== 200) {
       // A failed config answer may carry key material: only its error member is shown.
       throw fatal(
@@ -339,7 +402,7 @@ export function createSession(
           ? sameRecording(now[path], values[path])
           : configMatches(now[path], values[path]);
       if (mask.every(matches)) {
-        if (ctx.target.kind === "production") await sleep(CONFIG_SETTLE_MS);
+        if (ctx.target.kind === "production") await sleep(configSettleMs);
         return now;
       }
       if (ctx.target.kind === "production") await sleep(2000);
@@ -359,6 +422,8 @@ export function createSession(
     const agedFrom = new Set(program.steps.map((step) => step.age?.from).filter(Boolean));
     const acquired = new Map();
     for (const step of program.steps) {
+      // A stop request ends the program here; runProgram still wipes and restores the config.
+      if (signal?.aborted) throw fatal(`stopped by a signal before ${program.id}#${step.id}`);
       // fireemu's clock follows the wall clock only forward: once an alignment or an age moved
       // it ahead, a real sleep would not move it, so it moves the clock instead.
       if (step.delayMs) await wait(step.delayMs / 1000);
@@ -369,10 +434,19 @@ export function createSession(
         if (since === undefined) throw fatal(`${step.id}: ${step.age.from} was never sent`);
         const remaining = since + step.age.seconds - (await nowSeconds());
         if (remaining >= 600) assertNothingSilent(steps, step);
-        // Half a second past the age, so a refusal is attributed to an age at least this old.
-        if (remaining > -0.5) await wait(remaining + 0.5);
+        if (remaining > -AGE_MARGIN_SECONDS) await wait(remaining + AGE_MARGIN_SECONDS);
+        if (signal?.aborted) throw fatal(`stopped by a signal during the wait for ${step.id}`);
       }
-      if (step.align) await align();
+      if (step.align) {
+        // The window rows compare codes a few steps from the edge of what production accepts: a
+        // skewed clock here would move them across it (pre-send review SF-3).
+        const worst = Math.max(0, ...timings.skew.map((s) => Math.abs(s)));
+        if (worst > MAX_CLOCK_SKEW_SECONDS)
+          throw fatal(
+            `clock skew ${worst.toFixed(1)} s against production; not sending ${step.id}`,
+          );
+        await align();
+      }
       let outcome;
       let sentAt;
       try {
@@ -390,9 +464,19 @@ export function createSession(
         if (agedFrom.has(step.id)) acquired.set(step.id, now);
         if (step.age) {
           const age = now - acquired.get(step.age.from);
+          timings.ages[`${program.id}#${step.id}`] = Math.floor(age);
           log(`${program.id}#${step.id} aged ${age.toFixed(1)} s (target ${step.age.seconds})`);
         }
         outcome = await send(concrete, raw, registry);
+        const receivedAt = ctx.target.kind === "production" ? Date.now() / 1000 : undefined;
+        collectSecrets(outcome.json, seenSecrets);
+        const announced = outcome.json?.totpSessionInfo?.finalizeEnrollmentTime;
+        if (receivedAt !== undefined && typeof announced === "string") {
+          // Production started the session between send and receipt: its start is the
+          // announced deadline less the announced lifetime.
+          const started = Date.parse(announced) / 1000 - ANNOUNCED_SESSION_SECONDS;
+          if (Number.isFinite(started)) timings.skew.push(started - (now + receivedAt) / 2);
+        }
       } catch (error) {
         if (error.fatal || !/recorded nothing at/.test(String(error.message))) throw error;
         // An earlier step did not return what this one needs: record that, keep going.
@@ -481,7 +565,10 @@ export function createSession(
     runProgram,
     wipe,
     readConfig,
+    writeConfig,
     counts: () => ({ requests, harnessRequests: harnessRequests + cleanupRequests }),
+    secrets: () => [...seenSecrets],
+    timings: () => timings,
   };
 }
 
@@ -495,10 +582,19 @@ export async function runCorpus(programs, ctx, options = {}) {
       results[program.id] = await session.runProgram(program);
     } catch (error) {
       if (error.fatal)
-        throw Object.assign(error, { partial: { results, failures, ...session.counts() } });
+        throw Object.assign(error, {
+          partial: { results, failures, timings: session.timings(), ...session.counts() },
+          secrets: session.secrets(),
+        });
       failures.push({ program: program.id, error: String(error.message ?? error) });
     }
   }
   await session.wipe();
-  return { results, failures, ...session.counts() };
+  return {
+    results,
+    failures,
+    timings: session.timings(),
+    secrets: session.secrets(),
+    ...session.counts(),
+  };
 }

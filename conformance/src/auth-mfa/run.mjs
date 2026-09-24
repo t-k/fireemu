@@ -7,6 +7,9 @@
 //   node src/auth-mfa/run.mjs check               run the corpus against fireemu and compare
 //                                                 with the saved production rows
 //   node src/auth-mfa/run.mjs export-comparison <out.json>
+//   node src/auth-mfa/run.mjs restore-sandbox     after a run that could not clean up (SIGKILL,
+//                                                 a crash): wipe, MFA off, password required,
+//                                                 read back, and a ledger line
 //
 // `record-production` needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON,
 // kept outside the repository), owner ADC (`gcloud auth application-default`),
@@ -38,10 +41,11 @@ import {
   sameRecording,
 } from "../auth-account/harness.mjs";
 import { configMatches, createSession as createAccountSession } from "../auth-account/session.mjs";
-import { SIGNER_ACCOUNTS } from "../auth-credential/harness.mjs";
+import { SIGNER_ACCOUNTS, harnessRequest } from "../auth-credential/harness.mjs";
+import { customTokenClaims } from "../auth-credential/tokens.mjs";
 import { PROGRAMS } from "./corpus.mjs";
 import { MFA_CONFIGS, guardMfaRequest, validateMfaCorpus } from "./guard.mjs";
-import { ALIGN_WINDOW, runCorpus } from "./session.mjs";
+import { AGE_MARGIN_SECONDS, ALIGN_WINDOW, createSession, runCorpus } from "./session.mjs";
 
 const execFileAsync = promisify(execFile);
 const FIXTURE = join(CONFORMANCE_DIR, "auth-mfa-production.json");
@@ -216,8 +220,13 @@ async function assertNoAccounts(ctx) {
     throw new Error("the sandbox holds accounts: another lane may be recording");
 }
 
-async function recordOnce(programs, run, web) {
+/**
+ * A production context whose owner token is renewed every half hour, or at once when forced
+ * (a cleanup that met a 401); every token it ever held is collected for the fixture scan.
+ */
+async function productionContext(run, web, tokens) {
   let token = await adminToken();
+  tokens.push(token);
   let fetchedAt = Date.now();
   const target = {
     kind: "production",
@@ -225,28 +234,62 @@ async function recordOnce(programs, run, web) {
     adminToken: token,
     quotaProject: SANDBOX_PROJECT,
     projectNumber: web.projectNumber,
-    async refresh() {
-      if (Date.now() - fetchedAt < 30 * 60_000) return;
+    async refresh({ force = false } = {}) {
+      if (!force && Date.now() - fetchedAt < 30 * 60_000) return;
       token = await adminToken();
+      tokens.push(token);
       fetchedAt = Date.now();
       target.adminToken = token;
     },
   };
-  const ctx = createContext({ run, project: SANDBOX_PROJECT, target });
+  return createContext({ run, project: SANDBOX_PROJECT, target });
+}
+
+async function recordOnce(programs, run, web, { signal, tokens }) {
+  const ctx = await productionContext(run, web, tokens);
   await assertNoAccounts(ctx);
   const preparation = await prepareProject(ctx, { apply: false });
   const out = await runCorpus(programs, ctx, {
     ...ceilings(programs),
     signers: { project: { serviceAccount: SIGNER_ACCOUNTS.project } },
+    signal,
     log: (line) => console.log(line),
   });
   // MFA and the rest of the baseline must read back as they started.
   const after = await prepareProject(ctx, { apply: false });
-  return {
-    ...out,
-    harnessRequests: out.harnessRequests + preparation + after,
-    secrets: [token],
-  };
+  return { ...out, harnessRequests: out.harnessRequests + preparation + after };
+}
+
+/** The switches a run changes, read back after a run that stopped early (best effort). */
+async function readSwitches(web, tokens) {
+  try {
+    const ctx = await productionContext(String(Date.now()), web, tokens);
+    const session = createSession(ctx, { maxHarnessRequests: 4 });
+    return await session.readConfig(["mfa", "signIn.email.passwordRequired"]);
+  } catch (error) {
+    return { unreadable: String(error?.message ?? error) };
+  }
+}
+
+/**
+ * Whether the project's own signer may mint a custom token (the time-limited signJwt binding
+ * exists): checked before the run starts, so a missing binding does not stop it halfway.
+ */
+async function assertSignerReady(web, tokens) {
+  const ctx = await productionContext(String(Date.now()), web, tokens);
+  const now = Math.floor(Date.now() / 1000);
+  const claims = customTokenClaims(
+    { uid: "preflight" },
+    SIGNER_ACCOUNTS.project,
+    now,
+    (text) => text,
+  );
+  const request = harnessRequest.signJwt(ctx, SIGNER_ACCOUNTS.project, claims);
+  const response = await fetch(request.url, { ...request.init, redirect: "error" });
+  if (response.status !== 200)
+    throw new Error(
+      `signJwt preflight: HTTP ${response.status} (create the signJwt binding first)`,
+    );
 }
 
 async function writeFixture({ programs, recordings, meta, secrets }) {
@@ -304,9 +347,11 @@ export function recentAbort(ledgerText, now = Date.now()) {
         return undefined;
       }
     })
-    .filter((entry) => entry?.taskId === TASK_ID);
+    .filter((entry) => entry?.taskId === TASK_ID && entry.outcome !== undefined);
   const last = entries.at(-1);
-  if (!last || !String(last.outcome).startsWith("aborted")) return undefined;
+  // Anything but a clean recording (an abort, program failures, a hand restore) counts.
+  const clean = (outcome) => outcome === "recorded" || String(outcome).startsWith("exploration");
+  if (!last || clean(last.outcome)) return undefined;
   const age = now - Date.parse(last.ts);
   return age < 3_600_000 ? last : undefined;
 }
@@ -359,9 +404,29 @@ async function recordProduction() {
     corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
   };
   const web = await sandboxWebConfig();
+  const tokens = [];
+  if (programs.some(({ tokens: minted }) => minted)) await assertSignerReady(web, tokens);
   await assertIgnored(privateRoot);
   const runDir = join(privateRoot, `auth-mfa-production-${meta.startedAt.replaceAll(":", "")}`);
   await mkdir(runDir, { recursive: true, mode: 0o700 });
+  // A first SIGINT or SIGTERM stops at the next step (or ends a wait at once); the program
+  // then wipes its accounts and restores the config as on any other stop. A later signal only
+  // says so: the sandbox would otherwise keep MFA switched on (pre-send review MF-1).
+  const controller = new AbortController();
+  let signals = 0;
+  const onSignal = (name) => {
+    signals += 1;
+    if (signals === 1) {
+      console.error(
+        `${name}: stopping; the current program wipes its accounts and restores the config`,
+      );
+      controller.abort();
+    } else {
+      console.error(`${name}: cleanup is running; wait for it (restore-sandbox restores by hand)`);
+    }
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   await appendFile(
     ledger,
     `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: meta.programs })}\n`,
@@ -370,27 +435,52 @@ async function recordProduction() {
   const secrets = [];
   let outcome = "recorded";
   let error;
+  let switchesAfter;
   try {
     for (const offset of [0, 1]) {
-      const { secrets: used, ...recording } = await recordOnce(
+      const { secrets: seen, ...recording } = await recordOnce(
         programs,
         String(Date.now() + offset),
         web,
+        { signal: controller.signal, tokens },
       );
-      secrets.push(...used);
+      secrets.push(...seen);
       recordings.push(recording);
       await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
         mode: 0o600,
       });
     }
   } catch (caught) {
-    outcome = caught.fatal ? "aborted-fatal" : "aborted";
+    outcome = controller.signal.aborted
+      ? "aborted-signal"
+      : caught.fatal
+        ? "aborted-fatal"
+        : "aborted";
     error = String(caught.message ?? caught);
     if (caught.partial) recordings.push(caught.partial);
+    secrets.push(...(caught.secrets ?? []));
+    switchesAfter = await readSwitches(web, tokens);
+    console.error(`switches after the stop: ${JSON.stringify(switchesAfter)}`);
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
   }
-  await writeFile(join(runDir, "meta.json"), JSON.stringify({ ...meta, outcome, error }, null, 2), {
-    mode: 0o600,
-  });
+  await writeFile(
+    join(runDir, "meta.json"),
+    JSON.stringify(
+      {
+        ...meta,
+        outcome,
+        error,
+        switchesAfter,
+        ageMarginSeconds: AGE_MARGIN_SECONDS,
+        timings: recordings.map((r) => r.timings),
+      },
+      null,
+      2,
+    ),
+    { mode: 0o600 },
+  );
   const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
   const failures = recordings.flatMap((r) => r.failures);
   try {
@@ -399,7 +489,7 @@ async function recordProduction() {
         programs,
         recordings,
         meta,
-        secrets: [web.apiKey, ...secrets, SANDBOX_PROJECT, web.projectNumber],
+        secrets: [web.apiKey, ...tokens, ...secrets, SANDBOX_PROJECT, web.projectNumber],
       });
       if (failures.length) outcome = "recorded-with-program-failures";
       console.log(
@@ -428,6 +518,7 @@ async function recordProduction() {
         taskId: TASK_ID,
         programs: meta.programs,
         ...(error ? { error } : {}),
+        ...(switchesAfter ? { switchesAfter } : {}),
       })}\n`,
     );
   }
@@ -664,17 +755,53 @@ async function exportComparison(out) {
   console.log(JSON.stringify({ out, summary: evidence.summary, fixtureSha256 }, null, 2));
 }
 
+/**
+ * Restores the switches a run changes after a run that could not (SIGKILL, a crash): MFA off
+ * exactly as the sandbox baseline has it, password sign-in required, no project-level account.
+ * Refused while another lane is on the sandbox, since the wipe would delete its accounts.
+ */
+async function restoreSandbox() {
+  const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
+  if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
+  const busy = existsSync(ledger) ? otherLaneOnSandbox(await readFile(ledger, "utf8")) : undefined;
+  if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
+  const web = await sandboxWebConfig();
+  const tokens = [];
+  const ctx = await productionContext(String(Date.now()), web, tokens);
+  const session = createSession(ctx, {
+    maxHarnessRequests: 80,
+    maxCleanupRequests: 120,
+    log: (line) => console.log(line),
+  });
+  const before = await session.readConfig(["mfa", "signIn.email.passwordRequired"]);
+  await session.wipe();
+  const restored = await session.writeConfig(
+    ["mfa", "signIn.email.passwordRequired"],
+    { mfa: MFA_CONFIGS.disabled, "signIn.email.passwordRequired": true },
+    { cleanup: true },
+  );
+  await prepareProject(ctx, { apply: false });
+  await appendFile(
+    ledger,
+    `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome: "restored-by-hand", before, restored, requests: session.counts().harnessRequests })}\n`,
+  );
+  console.log(JSON.stringify({ before, restored }, null, 2));
+}
+
 const mode = process.argv[2];
 if (mode === "record-production") await recordProduction();
 else if (mode === "rebuild-fixture") await rebuildFixture(process.argv[3]);
 else if (mode === "check") await check();
 else if (mode === "export-comparison") await exportComparison(process.argv[3]);
 else if (mode === "session-local") await sessionLocal();
+else if (mode === "restore-sandbox") await restoreSandbox();
 else if (mode === "local") {
   const local = await runLocal(selectedPrograms());
   await writeFile(join(RUN_DIR, "fireemu-results.json"), `${JSON.stringify(local, null, 2)}\n`);
   console.log(JSON.stringify({ requests: local.requests, failures: local.failures }, null, 2));
 } else if (mode !== undefined) {
-  console.error("usage: run.mjs record-production|check|export-comparison|local");
+  console.error(
+    "usage: run.mjs record-production|restore-sandbox|rebuild-fixture|check|export-comparison|local",
+  );
   process.exitCode = 2;
 }

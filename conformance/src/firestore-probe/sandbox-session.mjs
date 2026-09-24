@@ -1624,10 +1624,20 @@ async function resolveDeltaPendingMutation() {
       : collectionId.startsWith("delbatchwrite")
         ? "batch-write"
         : null;
+  const isPatchSeed = pending.stepId === "seed" && pending.method === "PATCH";
   const expectedMethod =
-    pending.stepId === "seed" ? "POST" : route === "rest" ? "DELETE" : route ? "POST" : null;
-  const expectedPath =
-    pending.stepId === "seed" || route === "commit"
+    pending.stepId === "seed"
+      ? isPatchSeed
+        ? "PATCH"
+        : "POST"
+      : route === "rest"
+        ? "DELETE"
+        : route
+          ? "POST"
+          : null;
+  const expectedPath = isPatchSeed
+    ? `/v1/${name}`
+    : pending.stepId === "seed" || route === "commit"
       ? `/v1/projects/${PROJECT}/databases/(default)/documents:commit`
       : route === "rest"
         ? `/v1/${name}`
@@ -1649,24 +1659,36 @@ async function resolveDeltaPendingMutation() {
   if (!expectedLength) throw new Error("delta-v3 pending target has no frozen generated length");
   const expectedBody =
     pending.stepId === "seed"
-      ? JSON.stringify({
-          writes: [
-            {
-              update: {
-                name,
-                fields: {
-                  a: {
-                    arrayValue: {
-                      values: Array.from({ length: expectedLength }, (_, index) => ({
-                        integerValue: String(index),
-                      })),
+      ? isPatchSeed
+        ? JSON.stringify({
+            fields: {
+              a: {
+                arrayValue: {
+                  values: Array.from({ length: expectedLength }, (_, index) => ({
+                    integerValue: String(index),
+                  })),
+                },
+              },
+            },
+          })
+        : JSON.stringify({
+            writes: [
+              {
+                update: {
+                  name,
+                  fields: {
+                    a: {
+                      arrayValue: {
+                        values: Array.from({ length: expectedLength }, (_, index) => ({
+                          integerValue: String(index),
+                        })),
+                      },
                     },
                   },
                 },
               },
-            },
-          ],
-        })
+            ],
+          })
       : route === "rest"
         ? ""
         : JSON.stringify({ writes: [{ delete: name }] });
@@ -1870,11 +1892,12 @@ async function seed(documents) {
   for (const document of documents ?? []) {
     const input = url(document.path);
     const name = replaceRunMarker(document.path.replace(/^\/v1\//, ""));
-    await writeDeltaMutationIntent(name, "PATCH", "seed", input, JSON.stringify(document.fields));
+    const body = JSON.stringify({ fields: substituteProject(document.fields) });
+    await writeDeltaMutationIntent(name, "PATCH", "seed", input, body);
     const response = await trackedFetch(url(document.path), {
       method: "PATCH",
       headers: authorized({ "content-type": "application/json" }),
-      body: JSON.stringify({ fields: substituteProject(document.fields) }),
+      body,
       signal: timeoutSignal(),
     });
     if (!response.ok) {

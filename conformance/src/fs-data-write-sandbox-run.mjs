@@ -13,7 +13,7 @@ import {
   validateSandboxCorpus,
 } from "./fs-data-write-sandbox.mjs";
 import { validateStreamRecipes } from "./firestore-probe/stream-session.mjs";
-import { managedClearScope } from "./firestore-probe/session.mjs";
+import { legacyManagedClearNames, managedClearScope } from "./firestore-probe/session.mjs";
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
@@ -151,7 +151,14 @@ export function remainingSandboxBudget(rows, nextEstimateUsd = 0) {
   return TASK_LIMIT_USD - spent;
 }
 
-export function sandboxLedgerEntry({ gitSha, corpusDigest, requests, outcome, runDir }) {
+export function sandboxLedgerEntry({
+  gitSha,
+  corpusDigest,
+  requests,
+  outcome,
+  runDir,
+  estimatedUsd = ATTEMPT_ESTIMATE_USD,
+}) {
   if (
     requests !== null &&
     (!Number.isInteger(requests) || requests < 0 || requests > REST_CAP + MAX_STREAM_FRAMES)
@@ -165,11 +172,64 @@ export function sandboxLedgerEntry({ gitSha, corpusDigest, requests, outcome, ru
     gitSha,
     corpusDigest,
     requests,
-    estimatedUsd: ATTEMPT_ESTIMATE_USD,
+    estimatedUsd,
     outcome,
     taskId: TASK_ID,
     runDir,
   };
+}
+
+export function legacyRecoveryEnvironment({
+  token,
+  meta,
+  journal,
+  names = legacyManagedClearNames(),
+}) {
+  const frozenNames = legacyManagedClearNames();
+  if (
+    typeof token !== "string" ||
+    token.length === 0 ||
+    typeof meta !== "string" ||
+    meta.length === 0 ||
+    typeof journal !== "string" ||
+    journal.length === 0 ||
+    JSON.stringify(names) !== JSON.stringify(frozenNames)
+  ) {
+    throw new Error("legacy recovery requires the exact private sandbox scope");
+  }
+  managedClearScope(names, SANDBOX_PROJECT, "(default)");
+  return {
+    FIRESTORE_PROBE_TARGET: "production",
+    FIRESTORE_PROBE_RECOVERY_MODE: "recover-legacy",
+    FIRESTORE_PROBE_SCHEME: "https",
+    FIRESTORE_PROBE_HOST: "firestore.googleapis.com",
+    FIRESTORE_PROBE_TOKEN: token,
+    FIRESTORE_PROBE_PROJECT: SANDBOX_PROJECT,
+    FIRESTORE_PROBE_RECORD_PROJECT: RECORDED_PROJECT,
+    FIRESTORE_PROBE_META_OUT: meta,
+    FIRESTORE_PROBE_MAX_REQUESTS: String(REST_CAP),
+    FIRESTORE_PROBE_TIMEOUT_MS: "180000",
+    FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(names),
+    FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: journal,
+  };
+}
+
+export async function withLegacyRecoveryReservation(privateDir, reservation, work) {
+  return withSandboxExclusiveLock(privateDir, async (lockedRows) => {
+    const { gitSha, corpusDigest, runDir } = reservation;
+    remainingSandboxBudget(lockedRows, ATTEMPT_ESTIMATE_USD);
+    const reserve = sandboxLedgerEntry({
+      gitSha,
+      corpusDigest,
+      runDir,
+      requests: null,
+      outcome: "reserved",
+      estimatedUsd: ATTEMPT_ESTIMATE_USD,
+    });
+    await appendFile(join(privateDir, "sandbox-ledger.jsonl"), `${JSON.stringify(reserve)}\n`);
+    lockedRows.push(reserve);
+    return work();
+  });
 }
 
 export function sandboxLedgerPath(gitCommonDir) {
@@ -461,6 +521,58 @@ async function recordProduction() {
   });
 }
 
+async function recoverLegacy() {
+  const gitCommonDir = (
+    await execFileAsync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: ROOT,
+    })
+  ).stdout.trim();
+  const ledgerPath = sandboxLedgerPath(gitCommonDir);
+  const privateDir = dirname(ledgerPath);
+  await mkdir(privateDir, { recursive: true, mode: 0o700 });
+  const runDir = await mkdtemp(join(privateDir, "fs-data-write-legacy-recovery-"));
+  const meta = join(runDir, "meta.json");
+  const journal = join(runDir, "journal.json");
+  const names = legacyManagedClearNames();
+  const corpusDigest = sha256(JSON.stringify({ mode: "recover-legacy", names }));
+  const gitSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: ROOT })).stdout.trim();
+  const reservation = { gitSha, corpusDigest, runDir };
+  const result = await withLegacyRecoveryReservation(privateDir, reservation, async () => {
+    const token = (
+      process.env.FIREEMU_PRODUCTION_TOKEN ??
+      (
+        await execFileAsync("gcloud", ["auth", "application-default", "print-access-token"], {
+          maxBuffer: 4096,
+        })
+      ).stdout
+    ).trim();
+    if (!token) throw new Error("production OAuth bearer is missing");
+    let outcome = "recovery-failed";
+    let requestCount = null;
+    try {
+      await runNode(
+        "legacy array recovery",
+        "firestore-probe/session.mjs",
+        legacyRecoveryEnvironment({ token, meta, journal, names }),
+        1_200_000,
+      );
+      const state = JSON.parse(await readFile(journal, "utf8"));
+      if (state.status !== "complete" || state.mode !== "recover-legacy") {
+        throw new Error("legacy recovery did not verify exact typed absence");
+      }
+      outcome = "recovered";
+    } finally {
+      try {
+        requestCount = sessionRequestCount(JSON.parse(await readFile(meta, "utf8")));
+      } catch {
+        // The reservation remains charged when a child fails before emitting metadata.
+      }
+    }
+    return { outcome, requestCount, journal, meta };
+  });
+  process.stdout.write(`${JSON.stringify({ ...result, corpusDigest })}\n`);
+}
+
 async function localChild() {
   const { host, port } = localTarget(process.env.FIRESTORE_EMULATOR_HOST);
   const { corpus, restRequestCount } = await prepareSandboxCorpus();
@@ -560,12 +672,16 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     await compareLocal(process.argv[3]);
   } else if (process.argv[2] === "record-production") {
     await recordProduction();
+  } else if (process.argv[2] === "recover-legacy") {
+    await recoverLegacy();
   } else if (process.argv[2] === "prepare") {
     const prepared = await prepareSandboxCorpus();
     process.stdout.write(
       `${JSON.stringify({ programs: prepared.corpus.restPrograms.length, restRequests: prepared.restRequestCount, liveStreamRecipes: prepared.liveStreamCount })}\n`,
     );
   } else {
-    throw new Error("expected prepare, local-child, compare-local or record-production");
+    throw new Error(
+      "expected prepare, local-child, compare-local, record-production or recover-legacy",
+    );
   }
 }

@@ -45,6 +45,7 @@ async function observeCollector({
   omitEmptyValues = false,
   childCollectionNames = [],
   extraChildPageCollections = [],
+  recoveryOnly = false,
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "fireemu-array-shrink-"));
   const input = join(directory, "programs.json");
@@ -171,6 +172,19 @@ async function observeCollector({
         const record = records.get(name);
         if (failureMode === "cas") {
           send(409, { error: { status: "ABORTED", message: "stale updateTime" } });
+        } else if (
+          (failureMode === "halve-chunk" || failureMode === "unrelated-transform-400") &&
+          writes[0].transform.fieldTransforms[0].removeAllFromArray.values.length > 64
+        ) {
+          send(400, {
+            error: {
+              status: "INVALID_ARGUMENT",
+              message:
+                failureMode === "halve-chunk"
+                  ? "Transaction too big. Decrease transaction size."
+                  : "permission denied for test",
+            },
+          });
         } else if (failureMode === "partial" && record.transformCommits === 1) {
           send(503, { error: { status: "UNAVAILABLE", message: "interrupted after one commit" } });
         } else {
@@ -304,6 +318,7 @@ async function observeCollector({
         FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: JSON.stringify(scopeNames),
         FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: journal,
         FIRESTORE_PROBE_MANAGED_POLL_MS: "1",
+        ...(recoveryOnly ? { FIRESTORE_PROBE_RECOVERY_MODE: "recover-legacy" } : {}),
       },
       timeout: 10_000,
     });
@@ -315,7 +330,7 @@ async function observeCollector({
   const snapshot = new Map(
     [...records].map(([name, record]) => [name, { ...record, values: [...record.values] }]),
   );
-  return { directory, output, meta, requests, failure, snapshot };
+  return { directory, output, meta, journal, requests, failure, snapshot };
 }
 
 test("collector array-removes bounded chunks with updateTime CAS before exact deletion", async () => {
@@ -388,6 +403,162 @@ test("collector applies bounded shrink and verification to the six frozen legacy
     assert.ok(result.requests.some((request) => request.pathname.endsWith("/documents:runQuery")));
   } finally {
     await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery mode preflights all names before bounded CAS shrink and exact deletes", async () => {
+  const result = await observeCollector({
+    scopeNames: legacyNames,
+    visibleNames: legacyNames,
+    arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
+    recoveryOnly: true,
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    const firstWrite = result.requests.findIndex((request) =>
+      request.pathname.endsWith("/documents:commit"),
+    );
+    const preflightGroups = result.requests
+      .slice(0, firstWrite)
+      .filter((request) => request.pathname.endsWith("/documents:runQuery"));
+    assert.equal(preflightGroups.length, 6);
+    assert.equal(
+      result.requests
+        .slice(0, firstWrite)
+        .filter((request) => request.pathname.endsWith(":listCollectionIds")).length,
+      6,
+    );
+    const writes = result.requests
+      .filter((request) => request.pathname.endsWith("/documents:commit"))
+      .flatMap((request) => JSON.parse(request.body).writes);
+    assert.ok(writes.length > 6);
+    assert.ok(
+      writes.every((write) => legacyNames.includes(write.delete ?? write.transform?.document)),
+    );
+    assert.ok(writes.every((write) => write.currentDocument?.updateTime));
+    assert.equal(
+      result.requests.some((request) => request.pathname.endsWith(":bulkDeleteDocuments")),
+      false,
+    );
+    assert.equal(
+      await readFile(result.output, "utf8").then(
+        () => true,
+        () => false,
+      ),
+      false,
+    );
+    assert.equal(JSON.parse(await readFile(result.meta, "utf8")).requestCount <= 1000, true);
+    assert.equal(JSON.parse(await readFile(result.journal, "utf8")).status, "complete");
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery accepts six typed-absent names without entering ordinary corpus clearing", async () => {
+  const result = await observeCollector({
+    scopeNames: legacyNames,
+    visibleNames: [],
+    arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
+    recoveryOnly: true,
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    assert.equal(
+      result.requests.some((request) => request.pathname.endsWith("/documents:commit")),
+      false,
+    );
+    assert.equal(
+      result.requests.some((request) => request.pathname.endsWith(":bulkDeleteDocuments")),
+      false,
+    );
+    assert.equal(
+      result.requests.some((request) => request.pathname.includes("/emulator/v1/")),
+      false,
+    );
+    assert.equal(JSON.parse(await readFile(result.journal, "utf8")).status, "complete");
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery accepts deterministic suffixes and halves only exact size refusals", async () => {
+  const legacyLengths = [12_116, 12_121, 12_123, 7_179, 7_183, 7_184];
+  const result = await observeCollector({
+    scopeNames: legacyNames,
+    arrayLength: legacyLengths,
+    suffixStarts: [legacyLengths[0] - 300, ...legacyLengths.slice(1)],
+    visibleNames: [legacyNames[0]],
+    failureMode: "halve-chunk",
+    recoveryOnly: true,
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    const transforms = result.requests.filter((request) => {
+      if (!request.pathname.endsWith("/documents:commit")) return false;
+      return JSON.parse(request.body).writes[0].transform !== undefined;
+    });
+    assert.ok(transforms.length > 8);
+    assert.ok(
+      transforms.some(
+        (request) =>
+          JSON.parse(request.body).writes[0].transform.fieldTransforms[0].removeAllFromArray.values
+            .length <= 64,
+      ),
+    );
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+
+  const unsafe = await observeCollector({
+    scopeNames: legacyNames,
+    visibleNames: legacyNames,
+    arrayLength: legacyLengths,
+    recoveryOnly: true,
+    childCollectionNames: [legacyNames[2].split("/documents/")[1].split("/")[0]],
+  });
+  try {
+    assert.ok(unsafe.failure);
+    assert.equal(
+      unsafe.requests.some((request) => request.pathname.endsWith("/documents:commit")),
+      false,
+    );
+  } finally {
+    await rm(unsafe.directory, { recursive: true, force: true });
+  }
+
+  const unexpectedGroup = await observeCollector({
+    scopeNames: legacyNames,
+    visibleNames: legacyNames,
+    arrayLength: legacyLengths,
+    failureMode: "legacy-group-member",
+    recoveryOnly: true,
+  });
+  try {
+    assert.ok(unexpectedGroup.failure);
+    assert.equal(
+      unexpectedGroup.requests.some((request) => request.pathname.endsWith("/documents:commit")),
+      false,
+    );
+  } finally {
+    await rm(unexpectedGroup.directory, { recursive: true, force: true });
+  }
+
+  const refusal = await observeCollector({
+    scopeNames: legacyNames,
+    visibleNames: [legacyNames[0]],
+    arrayLength: legacyLengths,
+    suffixStarts: [legacyLengths[0] - 128, ...legacyLengths.slice(1)],
+    failureMode: "unrelated-transform-400",
+    recoveryOnly: true,
+  });
+  try {
+    assert.ok(refusal.failure);
+    assert.equal(
+      refusal.requests.filter((request) => request.pathname.endsWith("/documents:commit")).length,
+      1,
+    );
+  } finally {
+    await rm(refusal.directory, { recursive: true, force: true });
   }
 });
 

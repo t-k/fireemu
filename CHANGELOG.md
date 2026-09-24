@@ -12,6 +12,8 @@ Behavior below was measured against a real Identity Platform project on 2026-09-
 
 ### Added
 
+- `auth.signIn.email` (`enabled`, `passwordRequired`), `auth.signIn.anonymous` and `auth.signIn.phoneNumber` (`enabled`, `testPhoneNumbers`) set the sign-in providers at startup, so a production project's providers and test numbers can be carried over. Unset, every provider stays enabled in both profiles; a new production project enables none.
+
 - The Admin project config stores `notification`, `mobileLinksConfig`, `smsRegionConfig`, `recaptchaConfig`, `monitoring` and `autodeleteAnonymousUsers`: whole or by masked leaf, read back as written, and cleared back to a new project's value. They are configuration only; nothing is mailed or texted with the templates.
 
 - `auth.customTokenSigners` maps service accounts to their public JWK sets (RSA keys of at least 2048 bits). With it, `signInWithCustomToken` verifies RS256 signatures and applies production's custom-token rules in either profile; a verifying token of another project's service account is refused with `CREDENTIAL_MISMATCH`.

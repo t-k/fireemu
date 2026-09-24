@@ -216,8 +216,35 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "allowDuplicateEmails": { "type": "boolean", "default": false }
-          }
+            "allowDuplicateEmails": { "type": "boolean", "default": false },
+            "email": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "passwordRequired": { "type": "boolean", "default": false }
+              }
+            },
+            "anonymous": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "enabled": { "type": "boolean", "default": true } }
+            },
+            "phoneNumber": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "testPhoneNumbers": {
+                  "type": "object",
+                  "maxProperties": 10,
+                  "propertyNames": { "pattern": "^\\+[1-9][0-9]{1,14}$" },
+                  "additionalProperties": { "type": "string", "pattern": "^[0-9]{6}$" }
+                }
+              }
+            }
+          },
+          "description": "The project's sign-in providers. Every provider starts enabled in both profiles (a new production project enables none), so a production project's providers and test phone numbers can be carried over here."
         },
         "client": {
           "type": "object",

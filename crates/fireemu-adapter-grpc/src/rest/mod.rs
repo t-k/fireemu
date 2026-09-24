@@ -811,8 +811,14 @@ impl RestState {
         let (raw_resource, action) = match req.path.rsplit_once(':') {
             // The query methods' templates need a document below `documents`; with one
             // segment there, production's front end matches the create template instead, with
-            // the method in the collection id (FS-QUERY-INDEX parent-is-collection).
-            Some((r, a)) if QUERY_METHODS.contains(&a) && names_a_root_collection(r) => {
+            // the method in the collection id (FS-QUERY-INDEX parent-is-collection). The
+            // emulator profile keeps the query route, which refuses the collection parent, so
+            // a mistaken query never creates a document there.
+            Some((r, a))
+                if QUERY_METHODS.contains(&a)
+                    && names_a_root_collection(r)
+                    && self.gateway.production_refusals() =>
+            {
                 (req.path.as_str(), None)
             }
             Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
@@ -1225,8 +1231,6 @@ impl RestState {
         }
     }
 
-    /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does;
-    /// an Enterprise database has no REST pipeline route here.
     /// A custom method's body after production's transcoder: checked and normalized under the
     /// strict profile, as sent under the emulator profile (which may add no rejection).
     fn transcoded(&self, action: &str, body: &Value) -> Result<Value, Status> {
@@ -1237,6 +1241,8 @@ impl RestState {
         }
     }
 
+    /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does;
+    /// an Enterprise database has no REST pipeline route here.
     fn execute_pipeline(&self, principal: &Caller) -> Result<RestResponse, Status> {
         // Owner first, as over gRPC.
         if let Some(rules) = &self.rules {

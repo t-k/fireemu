@@ -306,7 +306,10 @@ fn a_configured_database_creation_time_bounds_read_times() {
     assert_eq!(status, 200, "{body}");
     let (status, body) = query(&rfc3339(3660));
     assert_eq!(status, 400, "{body}");
-    assert!(body.contains("The requested 'read_time' is too old."), "{body}");
+    assert!(
+        body.contains("The requested 'read_time' is too old."),
+        "{body}"
+    );
     daemon.stop();
 
     let (mut command, _) = Daemon::command(
@@ -318,7 +321,8 @@ fn a_configured_database_creation_time_bounds_read_times() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("firestore.databaseCreateTime 2999-01-01T00:00:00Z is after the clock start"),
+        stderr
+            .contains("firestore.databaseCreateTime 2999-01-01T00:00:00Z is after the clock start"),
         "{stderr}"
     );
 }
@@ -349,6 +353,20 @@ fn a_refusal_does_not_echo_a_large_request() {
             r#"{{"structuredQuery": {{"from": [{{"collectionId": "c"}}], "orderBy": [{{"field": {{"fieldPath": "{path}"}}}}]}}}}"#
         );
         let before = resident_kib(daemon.child.id());
+        // The peak, not only what stays resident afterwards: sampled while the requests run.
+        let pid = daemon.child.id();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sampler = {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let mut peak = 0;
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    peak = peak.max(resident_kib(pid));
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                peak
+            })
+        };
         for _ in 0..3 {
             let (status, answer) = http(
                 port,
@@ -356,12 +374,36 @@ fn a_refusal_does_not_echo_a_large_request() {
                 &format!("/v1/projects/demo-profile-echo-{profile}/databases/(default)/documents:runQuery"),
                 Some(&body),
             );
-            assert_eq!(status, 400, "{profile}: {}", &answer[..answer.len().min(300)]);
-            assert!(answer.len() < 16 * 1024, "{profile}: {} bytes", answer.len());
+            assert_eq!(
+                status,
+                400,
+                "{profile}: {}",
+                &answer[..answer.len().min(300)]
+            );
+            assert!(
+                answer.len() < 16 * 1024,
+                "{profile}: {} bytes",
+                answer.len()
+            );
+            // The refusal this request is meant to reach, not an earlier one.
+            assert!(
+                answer.contains(r#"Invalid property path \"~"#),
+                "{profile}: {}",
+                &answer[..answer.len().min(300)]
+            );
         }
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let peak = sampler.join().unwrap();
         let after = resident_kib(daemon.child.id());
-        eprintln!("{profile}: rss {before} KiB -> {after} KiB");
-        assert!(after < before + 160 * 1024, "{profile}: rss {before} KiB -> {after} KiB");
+        eprintln!("{profile}: rss {before} KiB -> peak {peak} KiB -> {after} KiB");
+        assert!(
+            after < before + 160 * 1024,
+            "{profile}: rss {before} KiB -> {after} KiB"
+        );
+        assert!(
+            peak < before + 256 * 1024,
+            "{profile}: rss {before} KiB -> peak {peak} KiB"
+        );
         daemon.stop();
     }
 }

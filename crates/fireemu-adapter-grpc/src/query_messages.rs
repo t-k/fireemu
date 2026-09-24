@@ -158,9 +158,14 @@ pub fn check_find_nearest_request(
 /// (FS-QUERY-INDEX aggregation rows, recorded 2026-09-24): one to five aggregations, default
 /// aliases `field_1`, `field_2`, ... numbered over the unnamed aggregations only, aliases held
 /// to the property-name rules, and production's texts for every refusal.
+///
+/// Without `production_refusals` (the emulator profile) the aliases are what fireemu gave
+/// before: a default alias numbered by position, and no property-name rule, so the profile adds
+/// no rejection.
 #[allow(clippy::result_large_err)]
 pub fn decode_aggregations(
     saq: &fireemu_proto_firestore::google::firestore::v1::StructuredAggregationQuery,
+    production_refusals: bool,
 ) -> Result<(Vec<String>, Vec<fireemu_core_firestore::store::Aggregation>), tonic::Status> {
     use fireemu_core_firestore::store::Aggregation;
     use fireemu_proto_firestore::google::firestore::v1::structured_aggregation_query::aggregation::Operator as O;
@@ -192,7 +197,7 @@ pub fn decode_aggregations(
     let mut aliases: Vec<String> = Vec::with_capacity(saq.aggregations.len());
     let mut aggregations = Vec::with_capacity(saq.aggregations.len());
     let mut unnamed = 0;
-    for a in &saq.aggregations {
+    for (position, a) in saq.aggregations.iter().enumerate() {
         let aggregation = match &a.operator {
             Some(O::Count(count)) => Aggregation::Count {
                 up_to: match count.up_to {
@@ -215,7 +220,16 @@ pub fn decode_aggregations(
         };
         let alias = if a.alias.is_empty() {
             unnamed += 1;
-            format!("field_{unnamed}")
+            format!(
+                "field_{}",
+                if production_refusals {
+                    unnamed
+                } else {
+                    position + 1
+                }
+            )
+        } else if !production_refusals {
+            a.alias.clone()
         } else {
             if a.alias.len() > 1500 {
                 return Err(tonic::Status::invalid_argument(

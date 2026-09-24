@@ -952,6 +952,18 @@ fn retiring_codes_removes_only_that_kind_for_that_address() {
     );
     s.retire_oob_codes(OobRequestType::EmailSignIn, "b@example.com");
     assert_eq!(codes(&s).len(), 2);
+    // A store holding only the retired codes ends up empty.
+    let mut s = store();
+    s.create_oob_code(
+        OobRequestType::PasswordReset,
+        "a@example.com",
+        None,
+        None,
+        t0(),
+    )
+    .unwrap();
+    s.retire_oob_codes(OobRequestType::PasswordReset, "a@example.com");
+    assert!(codes(&s).is_empty());
 }
 
 #[test]

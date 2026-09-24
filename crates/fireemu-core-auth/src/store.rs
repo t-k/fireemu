@@ -1812,16 +1812,11 @@ impl AuthStore {
         if self
             .oob_codes
             .values()
-            .any(|code| self.oob_code_swept(code, now))
+            .any(|code| Self::oob_code_swept(self.production_oob_lifetimes, code, now))
         {
             let production = self.production_oob_lifetimes;
-            Arc::make_mut(&mut self.oob_codes).retain(|_, code| {
-                !Self::expired(
-                    code.created_at,
-                    Self::oob_retention(production, code.request_type),
-                    now,
-                )
-            });
+            Arc::make_mut(&mut self.oob_codes)
+                .retain(|_, code| !Self::oob_code_swept(production, code, now));
         }
         if self
             .verification_codes
@@ -3097,13 +3092,9 @@ impl AuthStore {
     /// 2026-09-24).
     pub fn retire_oob_codes(&mut self, request_type: OobRequestType, email: &str) {
         let email = Self::canonicalize_email(email);
-        if self
-            .oob_codes
-            .values()
-            .any(|c| c.request_type == request_type && c.email == email)
-        {
-            Arc::make_mut(&mut self.oob_codes)
-                .retain(|_, c| !(c.request_type == request_type && c.email == email));
+        let retired = |c: &OobCode| c.request_type == request_type && c.email == email;
+        if self.oob_codes.values().any(retired) {
+            Arc::make_mut(&mut self.oob_codes).retain(|_, c| !retired(c));
         }
     }
 
@@ -3139,10 +3130,10 @@ impl AuthStore {
         }
     }
 
-    fn oob_code_swept(&self, code: &OobCode, now: LogicalInstant) -> bool {
+    fn oob_code_swept(production: bool, code: &OobCode, now: LogicalInstant) -> bool {
         Self::expired(
             code.created_at,
-            Self::oob_retention(self.production_oob_lifetimes, code.request_type),
+            Self::oob_retention(production, code.request_type),
             now,
         )
     }

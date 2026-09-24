@@ -12,6 +12,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 
 use crate::identity_toolkit::origin_is_local;
 use crate::storage::{handle, StorageRequest, StorageState};
@@ -33,6 +34,11 @@ const CHARGE_GRANULARITY: usize = 1024 * 1024;
 
 /// The budget [`serve_storage`] admits request bodies against.
 pub static BODY_BUDGET: BodyBudget = BodyBudget::new(DEFAULT_BODY_BUDGET_BYTES);
+
+/// Bounds concurrent synchronous Storage handlers, including requests waiting on a store
+/// lock. Body collection does not hold a slot, so slow clients cannot occupy the pool.
+const BLOCKING_HANDLER_LIMIT: usize = 16;
+static BLOCKING_HANDLER_SLOTS: Semaphore = Semaphore::const_new(BLOCKING_HANDLER_LIMIT);
 
 /// An admission budget for the request bodies buffered in memory at the same time.
 ///
@@ -268,6 +274,21 @@ fn body_error_response(e: BodyError, origin: Option<&str>) -> Response<Full<Byte
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
+fn handler_error_response(
+    status: StatusCode,
+    message: &'static [u8],
+    origin: Option<&str>,
+    retry: bool,
+) -> Response<Full<Bytes>> {
+    let mut builder = cors(Response::builder().status(status), origin);
+    if retry {
+        builder = builder.header("retry-after", "1");
+    }
+    builder
+        .body(Full::new(Bytes::from_static(message)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+}
+
 #[allow(clippy::too_many_lines)]
 async fn respond(
     state: Arc<StorageState>,
@@ -365,28 +386,52 @@ async fn respond(
     } else {
         MAX_STORAGE_BODY_BYTES
     };
-    // The buffer holds its budget charge until it is dropped at the end of this function,
-    // so the bytes the handler works on are accounted for the whole time they exist here.
+    // The buffer moves into the blocking handler and holds its budget charge until that
+    // handler finishes, even if the connection is closed while it runs.
     let mut buffer = match collect_body(budget, cap, declared, req.into_body()).await {
         Ok(buffer) => buffer,
         Err(e) => return Ok(body_error_response(e, origin.as_deref())),
     };
-    let body = buffer.take();
+    let Ok(permit) = BLOCKING_HANDLER_SLOTS.try_acquire() else {
+        return Ok(handler_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            b"storage handler capacity exhausted",
+            origin.as_deref(),
+            true,
+        ));
+    };
     let trace = std::env::var_os("FIREEMU_TRACE_STORAGE").is_some();
-    let (trace_method, trace_path, trace_query, trace_len) =
-        (method.clone(), path.clone(), query.clone(), body.len());
-    let response = handle(
-        &state,
-        StorageRequest {
-            method,
-            path,
-            query,
-            host,
-            headers,
-            app_check,
-            body,
-        },
+    let (trace_method, trace_path, trace_query, trace_len) = (
+        method.clone(),
+        path.clone(),
+        query.clone(),
+        buffer.bytes.len(),
     );
+    let response = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let body = buffer.take();
+        handle(
+            &state,
+            StorageRequest {
+                method,
+                path,
+                query,
+                host,
+                headers,
+                app_check,
+                body,
+            },
+        )
+    })
+    .await;
+    let Ok(response) = response else {
+        return Ok(handler_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            b"storage handler failed",
+            origin.as_deref(),
+            false,
+        ));
+    };
     if trace {
         eprintln!(
             "[storage] {trace_method} {trace_path}?{trace_query} body={trace_len} -> {} {}",

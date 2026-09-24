@@ -114,7 +114,7 @@ export const VECTOR_PROGRAMS = [
         orderBy: [asc("__name__")],
         startAt: cursor([{ referenceValue: "{docs}/qvec/v2" }], true),
       }),
-      search("without-select", nearest("EUCLIDEAN", { limit: 1 }), {
+      search("select-vector-field", nearest("EUCLIDEAN", { limit: 1 }), {
         select: { fields: [field("emb")] },
       }),
       query("collection-group", {

@@ -3,6 +3,9 @@
 // stricter scan never makes saved rows stale.
 
 const TOKEN = /\bya29\.[A-Za-z0-9_-]{10,}/;
+/** A numeric project name, as ErrorInfo `consumer` and quota messages carry it. */
+const PROJECT_NUMBER = /projects\/\d{6,}/;
+const EMAIL = /[\w.+-]+@[\w-]+(\.[\w-]+)+/;
 
 function encodings(secret) {
   const bytes = Buffer.from(secret, "latin1");
@@ -21,6 +24,8 @@ function encodings(secret) {
 
 export function scanFixture(text, secrets) {
   if (TOKEN.test(text)) throw new Error("fixture contains an access token");
+  if (PROJECT_NUMBER.test(text)) throw new Error("fixture contains a numeric project name");
+  if (EMAIL.test(text)) throw new Error("fixture contains an email address");
   for (const secret of secrets.filter(Boolean)) {
     for (const form of encodings(String(secret))) {
       if (text.includes(form)) throw new Error("fixture contains a private value");

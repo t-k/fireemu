@@ -67,7 +67,9 @@ export function createContext({ run, target, startedMs = Date.now() }) {
     run: String(run),
     project: SANDBOX_PROJECT,
     target,
-    window: { from: startedMs - 10 * 60_000, to: startedMs + 12 * 3_600_000 },
+    // Read-time steps ask for up to about an hour before the run, so the window starts two hours
+    // early.
+    window: { from: startedMs - 2 * 3_600_000, to: startedMs + 12 * 3_600_000 },
   };
 }
 
@@ -90,15 +92,45 @@ function lookup(value, path) {
   return current;
 }
 
-/** Resolves placeholders and `$from` references (to earlier raw responses) in a request value. */
+function chained(reference, raw) {
+  const found = lookup(raw.get(reference.$from), reference.path);
+  // proto-loader fills absent gRPC strings with "", which means the same as absent.
+  if (found === undefined || found === "")
+    throw new Error(`step ${reference.$from} recorded nothing at ${reference.path}`);
+  return found;
+}
+
+const NANOS_PER_SECOND = 1_000_000_000n;
+
+/** An RFC 3339 instant shifted by whole seconds and nanoseconds, with nanosecond precision. */
+export function shiftInstant(text, addSeconds = 0, addNanos = 0) {
+  const match = /^(.*T\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z$/.exec(String(text));
+  if (!match) throw new Error(`not an instant: ${text}`);
+  const seconds = BigInt(Date.parse(`${match[1]}Z`) / 1000);
+  const total =
+    seconds * NANOS_PER_SECOND +
+    BigInt((match[2] ?? "").padEnd(9, "0")) +
+    BigInt(addSeconds) * NANOS_PER_SECOND +
+    BigInt(addNanos);
+  const whole = total / NANOS_PER_SECOND;
+  const fraction = String(total % NANOS_PER_SECOND)
+    .padStart(9, "0")
+    .replace(/0+$/, "");
+  const base = new Date(Number(whole) * 1000).toISOString().replace(/\.\d{3}Z$/, "");
+  return `${base}${fraction ? `.${fraction}` : ""}Z`;
+}
+
+/**
+ * Resolves placeholders, `$from` references to earlier raw responses and `$time` shifts of a
+ * chained instant in a request value.
+ */
 export function resolveValue(value, ctx, raw) {
   if (Array.isArray(value)) return value.map((v) => resolveValue(v, ctx, raw));
   if (value && typeof value === "object") {
-    if (typeof value.$from === "string") {
-      const found = lookup(raw.get(value.$from), value.path);
-      if (found === undefined)
-        throw new Error(`step ${value.$from} recorded nothing at ${value.path}`);
-      return found;
+    if (typeof value.$from === "string") return chained(value, raw);
+    if (value.$time !== undefined) {
+      const { addSeconds = 0, addNanos = 0, ...reference } = value.$time;
+      return shiftInstant(chained(reference, raw), addSeconds, addNanos);
     }
     if (value.$array !== undefined) {
       return Array.from({ length: value.$array.count }, (_, i) =>
@@ -185,6 +217,7 @@ export function toGrpcMessage(value, key = "") {
     return { NaN: Number.NaN, Infinity: Infinity, "-Infinity": -Infinity }[value] ?? Number(value);
   }
   if (key === "bytesValue" && typeof value === "string") return Buffer.from(value, "base64");
+  if (key === "nullValue") return "NULL_VALUE";
   return value;
 }
 
@@ -225,12 +258,21 @@ function durationText({ seconds, nanos }) {
   return `${Number(seconds ?? 0)}${fraction ? `.${fraction}` : ""}s`;
 }
 
+/** A google.protobuf.Struct as proto-loader decodes it: every field value names its `kind`. */
+const isStruct = (value) =>
+  value &&
+  typeof value === "object" &&
+  value.fields &&
+  typeof value.fields === "object" &&
+  Object.keys(value).every((k) => k === "fields") &&
+  Object.values(value.fields).every((v) => v && typeof v.kind === "string");
+
 function structValue(value) {
   if (value.structValue) return structFields(value.structValue.fields ?? {});
   if (value.listValue) return (value.listValue.values ?? []).map(structValue);
-  if ("stringValue" in value) return value.stringValue;
-  if ("numberValue" in value) return value.numberValue;
-  if ("boolValue" in value) return value.boolValue;
+  if (value.kind === "stringValue") return value.stringValue;
+  if (value.kind === "numberValue") return value.numberValue;
+  if (value.kind === "boolValue") return value.boolValue;
   return null;
 }
 
@@ -249,7 +291,7 @@ export function projectGrpcMessage(value, key = "") {
   if (value?.type === "Buffer" && Array.isArray(value.data))
     return Buffer.from(value.data).toString("base64");
   if (value && typeof value === "object") {
-    if (key === "debugStats" && value.fields) return structFields(value.fields);
+    if (isStruct(value)) return structFields(value.fields);
     if ((key.endsWith("Time") || key === "readTime") && "seconds" in value)
       return timestampText(value);
     if (key === "timestampValue" && "seconds" in value) return timestampText(value);
@@ -306,6 +348,8 @@ export function validateCorpus(programs) {
         throw new Error(`${program.id}#${step.id}: an explicit path must stay under {docs}`);
       if (transport === "grpc" && (step.path !== undefined || step.rawBody !== undefined))
         throw new Error(`${program.id}#${step.id}: gRPC steps take a body only`);
+      if (transport === "grpc" && step.body && ("parent" in step.body || "database" in step.body))
+        throw new Error(`${program.id}#${step.id}: a gRPC body must not set its own scope`);
     }
   }
   if (requests > REQUEST_CAP)
@@ -323,6 +367,45 @@ function walkStrings(value, visit) {
   else if (Array.isArray(value)) for (const v of value) walkStrings(v, visit);
   else if (value && typeof value === "object")
     for (const v of Object.values(value)) walkStrings(v, visit);
+}
+
+/** A documents-root name or a canonical path below it (no empty, `.` or `..` segment). */
+function withinDocuments(name, ctx) {
+  const root = documentsName(ctx);
+  if (name === root) return true;
+  if (!String(name).startsWith(`${root}/`)) return false;
+  return String(name)
+    .slice(root.length + 1)
+    .split("/")
+    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+/** Keys whose values address a resource the request acts on (not a value it compares). */
+const SCOPE_KEYS = new Set(["delete", "parent", "database"]);
+/** Messages whose `name` is the document a write acts on. */
+const NAMED_TARGETS = new Set(["update", "document"]);
+
+/**
+ * Resource names a request acts on (written or deleted documents, parents) must be in the
+ * sandbox `(default)` database; a request never carries its own transaction.
+ */
+function assertScopedToDatabase(body, ctx) {
+  const check = (key, value) => {
+    const ok = key === "database" ? value === databaseName(ctx) : withinDocuments(value, ctx);
+    if (!ok) throw new Error(`request acts on a resource outside the sandbox database: ${value}`);
+  };
+  const visit = (value, key) => {
+    if (Array.isArray(value)) value.forEach((v) => visit(v, key));
+    else if (value && typeof value === "object") {
+      for (const [k, v] of Object.entries(value)) {
+        if (k === "transaction") throw new Error("a request must not carry a transaction");
+        if (k === "referenceValue") continue;
+        if (k === "name" && NAMED_TARGETS.has(key) && typeof v === "string") check(k, v);
+        else visit(v, k);
+      }
+    } else if (SCOPE_KEYS.has(key) && typeof value === "string") check(key, value);
+  };
+  visit(body, "");
 }
 
 /** Resource names in a request may only name the sandbox project. */
@@ -365,15 +448,23 @@ export function guardRestRequest({ url, init }, ctx, { harness = false } = {}) {
       body = init.body;
     }
     assertOnlySandboxProject(body, ctx);
+    assertScopedToDatabase(body, ctx);
   }
 }
 
 /** The same guard for a gRPC request: its parent or database must be the sandbox database. */
 export function guardGrpcRequest({ request }, ctx) {
-  const scope = request.parent ?? request.database;
-  if (scope !== databaseName(ctx) && !String(scope).startsWith(`${databaseName(ctx)}/documents`))
-    throw new Error(`gRPC request is outside the sandbox database: ${scope}`);
+  const inScope =
+    request.parent !== undefined
+      ? request.database === undefined && withinDocuments(request.parent, ctx)
+      : request.database === databaseName(ctx);
+  if (!inScope)
+    throw new Error(
+      `gRPC request is outside the sandbox database: ${request.parent ?? request.database}`,
+    );
   assertOnlySandboxProject(request, ctx);
+  const { parent: _parent, database: _database, ...rest } = request;
+  assertScopedToDatabase(rest, ctx);
 }
 
 const TRANSIENT_MESSAGE = /^(RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|INTERNAL)\b/;
@@ -417,50 +508,140 @@ export function normalizeIndexLink(text, ctx) {
   });
 }
 
-function normalizeString(text, ctx) {
-  if (inRunWindow(text, ctx)) return "<run-time>";
+/**
+ * A run-window instant becomes a symbol numbered by first appearance within its program
+ * (`<t1>`, `<t2>`, ...), so equal instants stay equal (a read time echoing the requested commit
+ * time) while their values, which differ between runs, are hidden.
+ */
+function instantSymbol(text, symbols) {
+  if (!symbols.has(text)) symbols.set(text, `<t${symbols.size + 1}>`);
+  return symbols.get(text);
+}
+
+function normalizeString(text, ctx, symbols) {
+  if (inRunWindow(text, ctx)) return instantSymbol(text, symbols);
   return normalizeIndexLink(text, ctx).replaceAll(ctx.project, RECORDED_PROJECT);
 }
 
-export function normalizeValue(value, key, ctx) {
+/**
+ * Normalizes one decoded answer. Object keys are visited in sorted order, because production
+ * map key order is not deterministic and symbols are numbered by first appearance.
+ */
+export function normalizeValue(value, key, ctx, symbols = new Map()) {
   if (OPAQUE_KEYS.has(key) && typeof value === "string" && value !== "")
     return OPAQUE_KEYS.get(key);
   if (key === "executionDuration" && typeof value === "string") {
     if (!DURATION.test(value)) throw new Error(`unexpected executionDuration ${value}`);
     return "<duration>";
   }
-  if (typeof value === "string") return normalizeString(value, ctx);
-  if (Array.isArray(value)) return value.map((v) => normalizeValue(v, key, ctx));
+  // JSON cannot carry a negative zero through a round trip; keep it as its proto3 JSON string.
+  if (key === "doubleValue" && Object.is(value, -0)) return "-0";
+  if (typeof value === "string") return normalizeString(value, ctx, symbols);
+  if (Array.isArray(value)) return value.map((v) => normalizeValue(v, key, ctx, symbols));
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, normalizeValue(v, k, ctx)]),
+      Object.keys(value)
+        .toSorted()
+        .map((k) => [k, normalizeValue(value[k], k, ctx, symbols)]),
     );
   }
   return value;
 }
 
 /** The recorded form of one REST answer. */
-export function normalizeRestResponse(status, text, ctx) {
+export function normalizeRestResponse(status, text, ctx, symbols = new Map()) {
   let body;
   try {
     body = JSON.parse(text);
   } catch {
-    return { status, nonJson: normalizeString(text.slice(0, 400), ctx) };
+    return { status, nonJson: normalizeString(text.slice(0, 400), ctx, symbols) };
   }
-  return { status, body: normalizeValue(body, "", ctx) };
+  return { status, body: normalizeValue(body, "", ctx, symbols) };
+}
+
+/** Reads the fields of one protobuf message: field number to a list of varints or byte runs. */
+function protoFields(bytes) {
+  const fields = new Map();
+  let at = 0;
+  const varint = () => {
+    let result = 0n;
+    let shift = 0n;
+    for (;;) {
+      if (at >= bytes.length) throw new Error("truncated varint");
+      const byte = bytes[at++];
+      result |= BigInt(byte & 0x7f) << shift;
+      if (!(byte & 0x80)) return result;
+      shift += 7n;
+    }
+  };
+  while (at < bytes.length) {
+    const tag = Number(varint());
+    const number = tag >> 3;
+    const wire = tag & 7;
+    let value;
+    if (wire === 0) value = varint();
+    else if (wire === 2) {
+      const length = Number(varint());
+      value = bytes.subarray(at, at + length);
+      at += length;
+    } else throw new Error(`unsupported wire type ${wire}`);
+    fields.set(number, [...(fields.get(number) ?? []), value]);
+  }
+  return fields;
+}
+
+const text = (bytes) => Buffer.from(bytes ?? []).toString("utf8");
+
+/** google.rpc.ErrorInfo and google.rpc.Help as JSON; anything else as base64. */
+export function decodeStatusDetail({ typeUrl, bytes }) {
+  const buffer = Buffer.from(bytes, "base64");
+  try {
+    if (typeUrl === "type.googleapis.com/google.rpc.ErrorInfo") {
+      const f = protoFields(buffer);
+      const metadata = Object.fromEntries(
+        (f.get(3) ?? []).map((entry) => {
+          const e = protoFields(entry);
+          return [text(e.get(1)?.[0]), text(e.get(2)?.[0])];
+        }),
+      );
+      return {
+        "@type": typeUrl,
+        reason: text(f.get(1)?.[0]),
+        domain: text(f.get(2)?.[0]),
+        ...(Object.keys(metadata).length ? { metadata } : {}),
+      };
+    }
+    if (typeUrl === "type.googleapis.com/google.rpc.Help") {
+      const links = (protoFields(buffer).get(1) ?? []).map((link) => {
+        const l = protoFields(link);
+        return { description: text(l.get(1)?.[0]), url: text(l.get(2)?.[0]) };
+      });
+      return { "@type": typeUrl, links };
+    }
+  } catch {
+    /* recorded as bytes */
+  }
+  return { "@type": typeUrl, bytes };
 }
 
 /** The recorded form of one gRPC answer: the projected messages and the final status. */
-export function normalizeGrpcResponse({ messages, code, details, errorDetails }, ctx) {
+export function normalizeGrpcResponse(
+  { messages, code, details, errorDetails },
+  ctx,
+  symbols = new Map(),
+) {
   return {
     transport: "grpc",
     code,
-    ...(details ? { message: normalizeString(details, ctx) } : {}),
-    ...(errorDetails?.length ? { errorDetails: normalizeValue(errorDetails, "", ctx) } : {}),
+    ...(details ? { message: normalizeString(details, ctx, symbols) } : {}),
+    ...(errorDetails?.length
+      ? { errorDetails: normalizeValue(errorDetails.map(decodeStatusDetail), "", ctx, symbols) }
+      : {}),
     messages: normalizeValue(
       messages.map((m) => projectGrpcMessage(m)),
       "",
       ctx,
+      symbols,
     ),
   };
 }

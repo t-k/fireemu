@@ -86,6 +86,11 @@ export const EXPLAIN_PROGRAMS = [
         indexed({ where: f("a", "EQUAL", int(1)), orderBy: [desc("__name__")] }),
       ),
       ...both("collection-group", { from: from("qn", true), select: { fields: [field("n")] } }),
+      ...both("collection-group-composite", {
+        from: from("qcg", true),
+        where: f("a", "EQUAL", int(0)),
+        orderBy: [asc("b")],
+      }),
       ...both("missing-index", indexed({ where: f("a", "EQUAL", int(1)), orderBy: [desc("b")] })),
       ...both("invalid-query", numbers({ limit: -1 })),
       query("analyze-false", numbers({ where: f("g", "EQUAL", str("odd")) }), {

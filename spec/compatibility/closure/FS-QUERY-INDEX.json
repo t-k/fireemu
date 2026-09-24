@@ -125,7 +125,7 @@
         "fs-query-index/query-limits"
       ],
       "status": "PENDING_CORPUS",
-      "note": "Every query-plan limit as an accepted/refused pair one unit apart: 30 disjunctions (IN, ARRAY_CONTAINS_ANY, __name__ IN, OR and products), 10 NOT_IN values, 10 inequality fields, 100 components (root, subcollection, orders, disjunctions)."
+      "note": "Every query-plan limit as an accepted/refused pair one unit apart: 30 disjunctions (IN, ARRAY_CONTAINS_ANY, __name__ IN, OR and products), 10 NOT_IN values, 10 inequality fields, 100 components (root, subcollection, orders, disjunctions). The IN \u00d7 IN and IN \u00d7 ARRAY_CONTAINS_ANY product pairs (30/32, 30/33) cannot land on 31; the one-unit disjunction boundary is carried by the IN-29-or-one / IN-30-or-one and OR-30 / OR-31 pairs."
     },
     {
       "conditionId": "FS-QUERY-INDEX/order-by",
@@ -224,7 +224,7 @@
         "fs-query-index/read-time"
       ],
       "status": "PENDING_CORPUS",
-      "note": "runQuery, runAggregationQuery and partitionQuery at a read time between writes, and refusals of future, too-old and malformed read times."
+      "note": "runQuery, runAggregationQuery and partitionQuery at a read time between writes, one microsecond before and one nanosecond after a commit, the one-hour retention boundary as a 59/61-minute pair (point-in-time recovery is disabled on the sandbox), and refusals of future, too-old and malformed read times."
     },
     {
       "conditionId": "FS-QUERY-INDEX/request-shape",

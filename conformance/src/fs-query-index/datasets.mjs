@@ -1,5 +1,6 @@
 // Seed datasets of the FS-QUERY-INDEX corpus. Every collection id starts with `q` and is used by
-// this lane only; the composite indexes and field overrides these collections need are in
+// this lane only (the index programs also write `pk`, `items` and query `ord`, which come from the
+// shared index file); the composite indexes and field overrides these collections need are in
 // conformance/fs-query-index.indexes.json. Seeded timestamps lie before 2026, so they are never
 // inside a run window and are never masked.
 
@@ -31,7 +32,7 @@ export const VALUE_DOCS = [
   ["neg-one", int(-1)],
   ["neg-half", dbl(-0.5)],
   ["zero", int(0)],
-  ["neg-zero", dbl(-0)],
+  ["neg-zero", dbl("-0")],
   ["zero-double", dbl(0)],
   ["one", int(1)],
   ["one-double", dbl(1)],
@@ -89,7 +90,11 @@ export const VALUES_SEED = [
       v: value,
       n: int(i),
       tags: arr(str(i % 2 ? "odd" : "even"), int(i % 3)),
-      m: map({ k: int(i % 4), deep: map({ x: str(i % 2 ? "x" : "y") }) }),
+      m: map({
+        k: int(i % 4),
+        r: i % 7 === 0 ? nan() : dbl(i / 2),
+        deep: map({ x: str(i % 2 ? "x" : "y") }),
+      }),
       "a.b": int(i % 5),
       "x y": str(`s${i % 3}`),
     },

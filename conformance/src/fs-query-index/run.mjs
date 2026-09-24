@@ -126,6 +126,30 @@ async function gitSha() {
   return stdout.trim();
 }
 
+/**
+ * The private values the committed fixture must never contain: the sandbox project number
+ * (FIREEMU_SANDBOX_PROJECT_NUMBER, kept outside the repository) and the ADC account.
+ */
+export async function privateValues() {
+  const number = process.env.FIREEMU_SANDBOX_PROJECT_NUMBER ?? "";
+  if (!/^[1-9]\d{5,}$/.test(number))
+    throw new Error("FIREEMU_SANDBOX_PROJECT_NUMBER (the sandbox project number) is required");
+  const { stdout } = await execFileAsync("gcloud", [
+    "auth",
+    "list",
+    "--filter=status:ACTIVE",
+    "--format=value(account)",
+  ]);
+  return [
+    SANDBOX_PROJECT,
+    number,
+    ...stdout
+      .split("\n")
+      .map((a) => a.trim())
+      .filter(Boolean),
+  ];
+}
+
 async function accessToken() {
   const { stdout } = await execFileAsync("gcloud", [
     "auth",
@@ -203,19 +227,37 @@ async function verifyIndexes() {
   const notReady = composites.filter((i) => i.state !== "READY").map((i) => i.name);
   const missing = wanted.filter((w) => !actual.includes(w));
   const extra = actual.filter((a) => !wanted.includes(a));
-  const overrideIds = overrides
-    .map((o) => o.name.split("/collectionGroups/")[1].replace("/fields/", ":"))
-    .filter((id) => !id.startsWith("__default__"))
+  // Field overrides compare by their full index list, in canonical form, and every one of their
+  // indexes must be READY.
+  const overrideKey = (group, path, indexes) =>
+    `${group}:${path}=[${(indexes ?? [])
+      .map((i) => `${i.queryScope}/${i.order ?? i.arrayConfig}`)
+      .toSorted()
+      .join(",")}]`;
+  const actualOverrides = overrides
+    .filter((o) => !o.name.includes("/collectionGroups/__default__/"))
+    .map((o) => {
+      const [group, path] = o.name.split("/collectionGroups/")[1].split("/fields/");
+      const indexes = (o.indexConfig?.indexes ?? []).map((i) => ({
+        queryScope: i.queryScope,
+        order: i.fields?.[0]?.order,
+        arrayConfig: i.fields?.[0]?.arrayConfig,
+      }));
+      notReady.push(
+        ...(o.indexConfig?.indexes ?? []).filter((i) => i.state !== "READY").map(() => o.name),
+      );
+      return overrideKey(group, path, indexes);
+    })
     .toSorted();
   const wantedOverrides = (expected.fieldOverrides ?? [])
-    .map((o) => `${o.collectionGroup}:${o.fieldPath}`)
+    .map((o) => overrideKey(o.collectionGroup, o.fieldPath, o.indexes))
     .toSorted();
   const result = {
     composites: composites.length,
     notReady,
     missing,
     extra,
-    overrideIds,
+    actualOverrides,
     wantedOverrides,
   };
   console.log(JSON.stringify(result, null, 2));
@@ -223,7 +265,7 @@ async function verifyIndexes() {
     notReady.length ||
     missing.length ||
     extra.length ||
-    !sameRecording(overrideIds, wantedOverrides)
+    !sameRecording(actualOverrides, wantedOverrides)
   )
     throw new Error("sandbox indexes do not equal fs-query-index.indexes.json");
 }
@@ -294,6 +336,7 @@ async function recordProduction() {
     programs: programs.map((p) => p.id),
     corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
   };
+  const secrets = await privateValues();
   await assertIgnored(privateRoot);
   const runDir = join(
     privateRoot,
@@ -303,12 +346,12 @@ async function recordProduction() {
   const recordings = [];
   let outcome = "recorded";
   let error;
-  let token;
+  const tokens = [];
   try {
-    token = await accessToken();
     await verifyIndexes();
     for (const offset of [0, 1]) {
-      token = await accessToken();
+      const token = await accessToken();
+      tokens.push(token);
       const recording = await recordOnce(programs, String(Date.now() + offset), token);
       recordings.push(recording);
       await writeFile(join(runDir, `recording-${offset + 1}.json`), JSON.stringify(recording), {
@@ -331,7 +374,7 @@ async function recordProduction() {
         programs,
         recordings,
         meta,
-        secrets: [token, SANDBOX_PROJECT],
+        secrets: [...tokens, ...secrets],
       });
       if (failures.length) outcome = "recorded-with-program-failures";
       console.log(
@@ -355,7 +398,7 @@ async function recordProduction() {
         gitSha: meta.sha,
         corpusDigest: sha256(JSON.stringify(programs)),
         requests,
-        estimatedUsd: 0.01,
+        estimatedUsd: estimatedUsd(programs, recordings.length),
         outcome,
         taskId: TASK_ID,
         programs: meta.programs.length,
@@ -366,6 +409,18 @@ async function recordProduction() {
   }
   if (error) throw new Error(error);
   if (failures.length) process.exitCode = 1;
+}
+
+/**
+ * A deliberate overestimate of one run's cost at Standard us-central1 list prices (reads
+ * US$0.03, writes US$0.09, deletes US$0.01 per 100,000): every recorded step as 100 reads,
+ * every seeded document written and deleted, per recording.
+ */
+export function estimatedUsd(programs, recordings) {
+  const seeded = programs.reduce((n, p) => n + (p.seed?.length ?? 0), 0);
+  const steps = programs.reduce((n, p) => n + p.steps.length, 0);
+  const perRecording = (steps * 100 * 0.03 + seeded * 0.09 + seeded * 0.01) / 100_000;
+  return Math.ceil(perRecording * Math.max(recordings, 1) * 10_000) / 10_000;
 }
 
 /** Retries the fixture from a saved run directory; sends nothing to production. */
@@ -387,7 +442,7 @@ async function rebuildFixture(runDir) {
     programs,
     recordings,
     meta,
-    secrets: [SANDBOX_PROJECT],
+    secrets: await privateValues(),
   });
   console.log(JSON.stringify({ programs: programs.length, nondeterministic }, null, 2));
 }
@@ -470,7 +525,8 @@ export function classify({ stale, production, alternative, fireemu }) {
     alternative === undefined &&
     (production.status >= 500 || (production.transport === "grpc" && production.code === 13));
   const transient = (recorded) => isTransient(recorded) && !repeatedServerError;
-  if ([production, alternative, fireemu].some(transient)) return "INDETERMINATE";
+  // Only production can be transient: fireemu is local, so its 5xx is a defect (MISMATCH).
+  if ([production, alternative].some(transient)) return "INDETERMINATE";
   if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
   if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";
   return "MISMATCH";

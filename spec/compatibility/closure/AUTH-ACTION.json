@@ -61,6 +61,12 @@
       "decision": "The final-artifact regression re-runs the AUTH-ACCOUNT and AUTH-CREDENTIAL corpora and inherits their one documented divergence: AUTH-ACCOUNT scope decision A12, the gson parser message text for malformed customAttributes JSON.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
+    },
+    {
+      "id": "E10",
+      "decision": "A known production refusal fireemu does not implement: production refuses a second VERIFY_EMAIL link for the same address within minutes with 400 TOO_MANY_ATTEMPTS_TRY_LATER (recording 2026-09-24), while fireemu issues it. The refusal's time window cannot be observed under production's own rate limits, so it is neither implemented nor claimed as matched; it is not an E7 quota classification either, because it is a refusal of a request the corpus deliberately avoids (each verification link has an address of its own). Tracked in the unobserved-edges issue.",
+      "decidedBy": "owner (t-k)",
+      "decidedOn": "2026-09-25"
     }
   ],
   "conditions": [
@@ -128,7 +134,8 @@
       "conditionId": "AUTH-ACTION/password-reset",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-action/password-reset"
+        "auth-action/password-reset",
+        "auth-action/address-reuse"
       ],
       "configProjections": [
         "default"
@@ -158,13 +165,14 @@
       "conditionId": "AUTH-ACTION/verify-email",
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": [
-        "auth-action/verify-email"
+        "auth-action/verify-email",
+        "auth-action/address-reuse"
       ],
       "configProjections": [
         "default"
       ],
       "status": "PENDING_REVIEW",
-      "note": "Email verification codes: inspection, apply and reapply, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable (the refusal keeps the code) and a deletion, and a reset code applied as a verification. Whether a newer verification code retires an older one is unobserved: production refuses a second verification link for an address within minutes (TOO_MANY_ATTEMPTS_TRY_LATER), so the corpus gives each link an address of its own, and fireemu keeps every verification code.",
+      "note": "Email verification codes: inspection, apply and reapply, tokens and refresh after verification, unknown and truncated codes, an already verified address, codes issued before an email change, a disable (the refusal keeps the code) and a deletion, and a reset code applied as a verification. Whether a newer verification code retires an older one is unobserved: production refuses a second verification link for an address within minutes (TOO_MANY_ATTEMPTS_TRY_LATER), so the corpus gives each link an address of its own, and fireemu keeps every verification code. That refusal is a known production behavior fireemu does not implement (scope decision E10), not a matched one.",
       "evidence": {
         "productionRecordings": [
           {

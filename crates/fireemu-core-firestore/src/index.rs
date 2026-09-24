@@ -142,6 +142,13 @@ impl IndexSet {
         self.composites.push(index);
     }
 
+    /// Removes a composite index (an Admin `indexes.delete`); returns whether it was present.
+    pub fn remove_composite(&mut self, index: &IndexDefinition) -> bool {
+        let before = self.composites.len();
+        self.composites.retain(|existing| existing != index);
+        self.composites.len() != before
+    }
+
     /// Adds a single-field exemption.
     pub fn add_exemption(&mut self, exemption: &SingleFieldExemption) {
         let mut modes = self.single_field_modes(&exemption.collection_group, &exemption.field);

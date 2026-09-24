@@ -26,6 +26,8 @@ pub enum OperationKind {
     UpdateDatabase,
     /// `databases.delete`.
     DeleteDatabase,
+    /// `collectionGroups.indexes.create`: its answer follows the index it builds.
+    CreateIndex,
 }
 
 /// One recorded operation.
@@ -39,8 +41,11 @@ pub struct StoredOperation {
     pub kind: OperationKind,
     /// The first answer.
     pub initial: Value,
-    /// What `operations.get` and `operations.list` answer.
+    /// What `operations.get` and `operations.list` answer (for an index operation, what they
+    /// answered last; the route derives the live answer from the index).
     pub current: Value,
+    /// The index an index operation builds.
+    pub index: Option<String>,
 }
 
 /// The operations of every database of one backend.
@@ -94,7 +99,11 @@ impl OperationStore {
         let seed = format!("{project}/{database}/{kind:?}/{ordinal}");
         let prefix = format!("projects/{project}/databases/{database}/operations/");
         let (id, alias, initial, current) = match kind {
-            OperationKind::CreateDatabase | OperationKind::UpdateDatabase => {
+            // An index operation is recorded through `record_index`; this arm only keeps the
+            // match total.
+            OperationKind::CreateDatabase
+            | OperationKind::UpdateDatabase
+            | OperationKind::CreateIndex => {
                 let id = opaque_id(
                     seed.as_bytes(),
                     if kind == OperationKind::CreateDatabase {
@@ -138,16 +147,55 @@ impl OperationStore {
             kind,
             initial,
             current,
+            index: None,
         };
+        self.push(project, database, stored.clone());
+        stored
+    }
+
+    fn push(&self, project: &str, database: &str, stored: StoredOperation) {
         let mut all = self.lock();
         let queue = all
             .entry((project.to_owned(), database.to_owned()))
             .or_default();
-        queue.push_back(stored.clone());
+        queue.push_back(stored);
         while queue.len() > OPERATIONS_RETAINED_PER_DATABASE {
             queue.pop_front();
         }
-        stored
+    }
+
+    /// A fresh operation id, for an operation whose answer is rendered by its caller.
+    pub fn reserve(&self, project: &str, database: &str) -> String {
+        let ordinal = self
+            .ordinal
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        opaque_id(
+            format!("{project}/{database}/reserved/{ordinal}").as_bytes(),
+            88,
+        )
+    }
+
+    /// Records the operation that builds index `index`.
+    pub fn record_index(
+        &self,
+        project: &str,
+        database: &str,
+        id: &str,
+        index: &str,
+        initial: Value,
+    ) {
+        self.push(
+            project,
+            database,
+            StoredOperation {
+                id: id.to_owned(),
+                alias: None,
+                kind: OperationKind::CreateIndex,
+                current: initial.clone(),
+                initial,
+                index: Some(index.to_owned()),
+            },
+        );
     }
 
     /// The operation `id` (or its alias) names in a database.
@@ -204,6 +252,51 @@ impl OperationStore {
     }
 }
 
+/// A fresh operation id in the backend's store.
+pub(crate) fn reserve_id(state: &RestState, project: &str, database: &str) -> String {
+    state.local.admin().operations().reserve(project, database)
+}
+
+/// Records an index operation in the backend's store.
+pub(crate) fn record_index(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    id: &str,
+    index: &str,
+    initial: Value,
+) {
+    state
+        .local
+        .admin()
+        .operations()
+        .record_index(project, database, id, index, initial);
+}
+
+/// What `operations.get` answers for `op` now.
+fn current(state: &RestState, project: &str, database: &str, op: &StoredOperation) -> Value {
+    let Some(index_id) = &op.index else {
+        return op.current.clone();
+    };
+    let registry = state.local.admin().indexes();
+    match registry.get(project, database, index_id) {
+        Some(index) => {
+            let name = format!(
+                "projects/{project}/databases/{database}/operations/{}",
+                op.id
+            );
+            super::index_rest::operation_json(
+                project,
+                database,
+                &name,
+                &index,
+                registry.state(&index, state.local.now()),
+            )
+        }
+        None => op.current.clone(),
+    }
+}
+
 /// Records an operation in the backend's store.
 pub(crate) fn record(
     state: &RestState,
@@ -243,8 +336,8 @@ pub(crate) fn route(
         ("GET", [], None) => {
             let mut operations: Vec<Value> = store
                 .list(project, database)
-                .into_iter()
-                .map(|op| op.current)
+                .iter()
+                .map(|op| current(state, project, database, op))
                 .collect();
             let prefix = format!("projects/{project}/databases/{database}/operations/");
             operations.extend(
@@ -262,7 +355,7 @@ pub(crate) fn route(
             }
         }
         ("GET", [id], None) => match store.get(project, database, id) {
-            Some(op) => ok(op.current),
+            Some(op) => ok(current(state, project, database, &op)),
             None => match field_operation(id) {
                 Some(op) => ok(crate::rest::admin_fields::operation_json(&op)),
                 None if store.was_deleted(project, database, id) => super::rest::error(

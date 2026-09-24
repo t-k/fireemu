@@ -1796,3 +1796,30 @@ fn an_order_on_an_equality_field_disables_the_merge() {
         IndexDecision::MissingRequired { .. }
     ));
 }
+
+#[test]
+fn a_removed_composite_no_longer_serves_and_only_that_one_is_removed() {
+    let definition = |second: &str| IndexDefinition {
+        collection_group: CollectionId::try_new("items").unwrap(),
+        query_scope: IndexQueryScope::Collection,
+        fields: vec![
+            IndexField {
+                path: fp("a"),
+                mode: IndexFieldMode::Ascending,
+            },
+            IndexField {
+                path: fp(second),
+                mode: IndexFieldMode::Descending,
+            },
+        ],
+    };
+    let mut set = IndexSet::default();
+    set.add_composite(definition("b"));
+    set.add_composite(definition("c"));
+    assert!(set.remove_composite(&definition("b")));
+    assert_eq!(set.composites(), &[definition("c")]);
+    assert!(
+        !set.remove_composite(&definition("b")),
+        "a second removal finds nothing"
+    );
+}

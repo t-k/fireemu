@@ -227,11 +227,13 @@ test("closure recipes and corpus programs cover each other", async (t) => {
 
 test("the contract lists the refusals the Admin API adds beyond production's", () => {
   // C14/C15: fireemu-only behaviour is documented; a new Admin-only refusal must be listed.
-  const contract = readFileSync(fromRoot("spec/compatibility/contract.json"), "utf8");
-  const entry = JSON.parse(contract)
-    .claims?.flatMap?.((claim) => claim.fireemuOnly ?? [])
-    ?.find((item) => item.behaviour.startsWith("The Firestore Admin API"));
-  const text = entry?.behaviour ?? contract;
+  const contract = JSON.parse(readFileSync(fromRoot("spec/compatibility/contract.json"), "utf8"));
+  const entries = contract.surfaces
+    .flatMap((surface) => surface.claims ?? [])
+    .flatMap((claim) => claim.fireemuOnly ?? [])
+    .filter((item) => item.behaviour.startsWith("The Firestore Admin API"));
+  assert.equal(entries.length, 1, "one fireemuOnly entry describes the Admin API");
+  const text = entries[0].behaviour;
   for (const refusal of [
     "third concurrent managed import answers RESOURCE_EXHAUSTED",
     "1,000,000 documents",

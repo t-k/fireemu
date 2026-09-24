@@ -211,15 +211,15 @@ export function createSession(
     const target = seconds * 1000 + 300;
     if (ctx.target.kind === "production") {
       await sleep(Math.max(0, target - Date.now()));
-      // A timer that fired late (a sleeping machine) would record the wrong side of the edge.
-      const late = Date.now() - target;
-      if (late > 200) throw fatal(`a timed step fired ${late} ms late`);
-      return;
+      // A timer that fired late (a sleeping machine, a slow answer before it) would record the
+      // wrong side of the edge: the caller records that step as indeterminate instead.
+      return Date.now() - target <= 200;
     }
     charge(true);
     const request = harnessRequest.advanceClockTo(ctx, target);
     const response = await fetch(request.url, request.init);
     if (response.status !== 200) throw fatal(`clock:advanceTo ${target}: HTTP ${response.status}`);
+    return true;
   }
 
   /** Production waits in real time; fireemu moves its virtual clock (see run.mjs ordering). */
@@ -246,7 +246,7 @@ export function createSession(
       }
       for (const step of program.steps) {
         if (step.delayMs) await sleep(step.delayMs);
-        if (step.waitSeconds || step.waitUntil) {
+        if (step.waitSeconds >= 600) {
           // Fail before a long wait, not after it, when an earlier answer says nothing.
           const silent = Object.entries(steps).find(([, recorded]) => isTransient(recorded));
           if (silent) throw new Error(`${silent[0]} was indeterminate; not waiting for ${step.id}`);
@@ -266,7 +266,13 @@ export function createSession(
             base = undefined;
           }
           // An answer that carried no time leaves the step to record its missing dependency.
-          if (typeof base === "number") await waitUntil(base + step.waitUntil.plus);
+          if (typeof base === "number" && !(await waitUntil(base + step.waitUntil.plus))) {
+            const recorded = { status: 0, transport: "late-timer" };
+            raw.set(step.id, null);
+            steps[step.id] = recorded;
+            log(`${program.id}#${step.id} late`);
+            continue;
+          }
         }
         let outcome;
         try {

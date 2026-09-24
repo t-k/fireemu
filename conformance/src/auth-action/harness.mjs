@@ -273,16 +273,19 @@ export function validateActionCorpus(programs) {
         throw new Error(`${program.id}#${step.id}: only the last program may wait`);
       if (step.noLinkExpected) {
         // Only an address that cannot receive anything may come back without a link.
-        const email = String(step.body?.email ?? "");
+        const email = step.body?.email;
         if (
           step.path !== "v1/projects/{project}/accounts:sendOobCode" ||
-          (!/^EMAIL\(unknown[a-z0-9-]*\)$/.test(email) && /@|^EMAIL/.test(email))
+          typeof email !== "string" ||
+          step.body?.idToken !== undefined ||
+          (!/^EMAIL\(unknown[a-z0-9-]*\)$/.test(email) && /@|EMAIL/.test(email))
         )
           throw new Error(`${step.id}: only an unknown address may expect no link`);
       }
       for (const key of ["email", "newEmail"]) {
         const creates =
           step.path === "v1/projects/{project}/accounts" ||
+          step.path.endsWith("accounts:signUp") ||
           step.path.endsWith("accounts:update") ||
           step.path.endsWith("accounts:signInWithEmailLink") ||
           (key === "newEmail" && step.path.endsWith("accounts:sendOobCode"));

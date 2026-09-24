@@ -414,3 +414,21 @@ test("unknown addresses never belong to an account and the client never changes 
     assert.throws(() => validateActionCorpus(program(step)), Error, JSON.stringify(step));
   }
 });
+
+test("no link may be expected unless the request names an unknown address by value", () => {
+  const program = (step) => [{ id: "p", steps: [{ ...step, noLinkExpected: true }] }];
+  for (const body of [
+    { requestType: "VERIFY_EMAIL", returnOobLink: true },
+    { requestType: "VERIFY_EMAIL", email: "EMAIL(unknown-1)", idToken: "x", returnOobLink: true },
+    { requestType: "VERIFY_EMAIL", email: { $from: "a:email" }, returnOobLink: true },
+  ]) {
+    assert.throws(() => validateActionCorpus(program(adminOob(body))), Error, JSON.stringify(body));
+  }
+  const signUp = {
+    id: "e",
+    path: "v1/accounts:signUp",
+    auth: "key",
+    body: { email: "EMAIL(unknown-1)", password: "password123" },
+  };
+  assert.throws(() => validateActionCorpus([{ id: "p", steps: [signUp] }]), /never belong/);
+});

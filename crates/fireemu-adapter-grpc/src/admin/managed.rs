@@ -59,6 +59,8 @@ pub struct ExportOutcome {
 /// What an import reads.
 #[derive(Debug, Clone)]
 pub struct ImportJob {
+    /// The project importing (it may read only a bucket it uses).
+    pub project: String,
     /// The bucket of the input prefix.
     pub bucket: String,
     /// The object prefix.
@@ -428,10 +430,21 @@ pub(crate) fn import(
         );
     };
     let job = ImportJob {
+        project: project.to_owned(),
         bucket,
         prefix,
         collection_ids: collection_ids.clone(),
         namespace_ids: namespace_ids.clone(),
+    };
+    // One import holds a whole export in memory: only a few run at once.
+    let Some(_running) = ImportSlot::take() else {
+        return error(
+            tonic::Code::ResourceExhausted,
+            &format!(
+                "fireemu runs at most {MAX_CONCURRENT_IMPORTS} imports at once; retry when one finishes."
+            ),
+            None,
+        );
     };
     let outcome = match storage.import(&job) {
         Ok(outcome) => outcome,
@@ -520,6 +533,48 @@ fn retarget(value: Value, from: (&str, &str), to: (&str, &str)) -> Value {
 
 /// Writes the imported documents into the target database (overwriting, as production does),
 /// in commits of at most 500 writes.
+/// The most managed imports that run at once.
+const MAX_CONCURRENT_IMPORTS: usize = 2;
+
+static IMPORTS_RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A running import's slot, released when it is dropped.
+struct ImportSlot;
+
+impl ImportSlot {
+    fn take() -> Option<Self> {
+        IMPORTS_RUNNING
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |running| (running < MAX_CONCURRENT_IMPORTS).then_some(running + 1),
+            )
+            .ok()
+            .map(|_| Self)
+    }
+}
+
+impl Drop for ImportSlot {
+    fn drop(&mut self) {
+        IMPORTS_RUNNING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Whether every collection and document id an export names is one path segment: an id that
+/// carried a `/` would write the document somewhere else than the export says.
+fn ids_are_segments(documents: &[ImportedDocument]) -> bool {
+    documents.iter().all(|d| {
+        d.document
+            .path
+            .iter()
+            .all(|(collection, id)| is_segment(collection) && is_segment(id))
+    })
+}
+
+fn is_segment(id: &str) -> bool {
+    !id.is_empty() && !id.contains('/')
+}
+
 fn apply_import(
     state: &RestState,
     project: &str,
@@ -527,6 +582,13 @@ fn apply_import(
     documents: &[ImportedDocument],
 ) -> Result<(), RestResponse> {
     use fireemu_proto_firestore::google::firestore::v1 as pb;
+    if !ids_are_segments(documents) {
+        return Err(error(
+            tonic::Code::InvalidArgument,
+            "The export names a document whose id is not a single path segment.",
+            None,
+        ));
+    }
     let root = format!("projects/{project}/databases/{database}/documents");
     let writes: Vec<pb::Write> = documents
         .iter()
@@ -694,4 +756,34 @@ fn stored_size(document: &ManagedDocument) -> u64 {
         })
         .sum();
     name + fields + 32
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_few_imports_run_at_once() {
+        let slots: Vec<ImportSlot> = (0..MAX_CONCURRENT_IMPORTS)
+            .map(|_| ImportSlot::take().unwrap())
+            .collect();
+        assert!(ImportSlot::take().is_none());
+        drop(slots);
+        assert!(ImportSlot::take().is_some());
+    }
+
+    #[test]
+    fn an_id_carrying_a_slash_is_not_a_document_of_the_export() {
+        let document = |id: &str| ImportedDocument {
+            document: ManagedDocument {
+                path: vec![("items".to_owned(), id.to_owned())],
+                fields: std::collections::BTreeMap::new(),
+            },
+            project: "p".to_owned(),
+            database: "d".to_owned(),
+        };
+        assert!(ids_are_segments(&[document("a")]));
+        assert!(!ids_are_segments(&[document("a/other/b")]));
+        assert!(!ids_are_segments(&[document("")]));
+    }
 }

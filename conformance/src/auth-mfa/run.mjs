@@ -654,7 +654,29 @@ async function runLocal(programs) {
   return { binary, ...JSON.parse(await readFile(outPath, "utf8")) };
 }
 
-export function classify({ stale, production, alternative, fireemu }) {
+/**
+ * A phone control start (`auth-mfa/lifetime#control-start-s<age>`) asks with the token of the
+ * sign-in just before the enrollment, and a phone enrollment moves `validSince` to its own
+ * second. Whether that token is then `TOKEN_EXPIRED` or still valid (`SECOND_FACTOR_EXISTS`)
+ * depends only on whether the sign-in and the enrollment fell in the same second: production
+ * answered both ways for the same row across the two recordings (s600, s1800). Such a row
+ * matches any answer production recorded for a phone control start of the program, and nothing
+ * else. The fireemu rule itself is pinned by the adapter tests.
+ */
+export function timingAlternatives(programId, stepId, saved) {
+  const phoneControlStart = /^control-start-s\d+$/;
+  if (programId !== "auth-mfa/lifetime" || !phoneControlStart.test(stepId)) return [];
+  const known = [];
+  for (const recorded of [saved?.steps ?? {}, saved?.second ?? {}]) {
+    for (const [id, answer] of Object.entries(recorded)) {
+      if (!phoneControlStart.test(id) || isTransient(answer) || answer?.status === -1) continue;
+      if (!known.some((seen) => sameRecording(seen, answer))) known.push(answer);
+    }
+  }
+  return known;
+}
+
+export function classify({ stale, production, alternative, fireemu, timing = [] }) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
@@ -664,6 +686,7 @@ export function classify({ stale, production, alternative, fireemu }) {
   if ([production, alternative, fireemu].some(transient)) return "INDETERMINATE";
   if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
   if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";
+  if (timing.some((answer) => sameRecording(answer, fireemu))) return "MATCH_TIMING_DEPENDENT";
   return "MISMATCH";
 }
 
@@ -687,7 +710,13 @@ async function check() {
       const fireemu = local.results[program.id]?.steps?.[step.id];
       rows.push({
         row: `${program.id}#${step.id}`,
-        status: classify({ stale, production, alternative, fireemu }),
+        status: classify({
+          stale,
+          production,
+          alternative,
+          fireemu,
+          timing: timingAlternatives(program.id, step.id, saved),
+        }),
         production,
         ...(alternative ? { alternative } : {}),
         fireemu,
@@ -703,7 +732,7 @@ async function check() {
     join(RUN_DIR, "comparison.json"),
     `${JSON.stringify({ artifact: local.binary, artifactSha256, summary, orphans, failures: local.failures, rows }, null, 2)}\n`,
   );
-  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC"]);
+  const passing = new Set(["MATCH", "MATCH_NONDETERMINISTIC", "MATCH_TIMING_DEPENDENT"]);
   for (const row of rows.filter((r) => !passing.has(r.status))) {
     console.log(`\n${row.status} ${row.row}`);
     console.log(`  production ${String(JSON.stringify(row.production)).slice(0, 600)}`);

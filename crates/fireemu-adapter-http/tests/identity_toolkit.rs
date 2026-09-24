@@ -17732,3 +17732,45 @@ fn emulator_batch_create_keeps_its_own_factor_import() {
     assert_eq!(imported_factor(&s, "ia")["mfaEnrollmentId"], "ia-mfa-0");
     assert_eq!(imported_factor(&s, "iu")["mfaEnrollmentId"], "iu-mfa-0");
 }
+
+/// A phone enrollment moves `validSince` to its own second, so a session signed in that same
+/// second survives it and one from an earlier second does not; production answered a later
+/// start both ways by the timing alone (sandbox recordings 2026-09-24,
+/// `auth-mfa/lifetime#control-start-s600`).
+#[test]
+fn strict_a_phone_enrollment_revokes_only_sessions_from_earlier_seconds() {
+    for (gap, survives) in [(0, true), (1, false)] {
+        let s = strict_mfa_state();
+        let (status, body) = patch_sign_in(
+            &s,
+            "signIn.phoneNumber.testPhoneNumbers",
+            &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": {"+16505550101": "123456"}}}}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let session = verified_session(&s, "same-second@example.com");
+        let (status, started) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": session, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+        );
+        assert_eq!(status, 200, "{started}");
+        advance(&s, gap);
+        let (status, enrolled) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:finalize"),
+            &json!({"idToken": session, "phoneVerificationInfo": {"sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": "123456"}}),
+        );
+        assert_eq!(status, 200, "{enrolled}");
+        let (status, body) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": session, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+        );
+        let expected = if survives {
+            "SECOND_FACTOR_EXISTS : Phone number already enrolled as second factor for this account."
+        } else {
+            "TOKEN_EXPIRED"
+        };
+        assert_eq!((status, message(&body)), (400, Some(expected)), "gap {gap}");
+    }
+}

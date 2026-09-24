@@ -20,6 +20,7 @@
     "Domain": "finite-enumerated"
   },
   "boundInputs": [
+    ".github/workflows/ci.yml",
     ".github/workflows/quint.yml",
     "crates/fireemu-export-publication/src/lib.rs",
     "crates/fireemu/src/import_export.rs",
@@ -48,6 +49,7 @@
     "verification/quint/tests/atomic_export_publication_connect.rs"
   ],
   "digests": {
+    ".github/workflows/ci.yml": "b486c815eece3daf091c8881ce64e97ea2a85f64629d9562ede81ddb17f6a240",
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "crates/fireemu-export-publication/src/lib.rs": "afb19a9a2f4f6e63c1fb7d6a75ea6c5b1213fecfea3d17f3976c412f6d0a3419",
     "crates/fireemu/src/import_export.rs": "99bb04d468613c327d2883ceb07bf0eb4e26e0189eee4363aedaef89e9d5f0d8",
@@ -66,7 +68,7 @@
     "verification/quint/specs/AtomicExportPublication.qnt": "855268571ed3966152fdf8e21932b2557cc680c0ee7a8e89d01dfec2d118a1eb",
     "verification/quint/src/atomic_export_publication.rs": "8bb1a96765f922398371e7d7033f2be907316190d966083d43c0589b70457bf8",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
-    "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
+    "verification/quint/src/evidence.rs": "2a0504c6482d4d354e90fc131b98adf20ae003243b7ede22d41224f72c29f18f",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",
     "verification/quint/src/model.rs": "74a5503f62e2b182c16e38d394d19bf8933b49beb69acc20542beeca89eef255",

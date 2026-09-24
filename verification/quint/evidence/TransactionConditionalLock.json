@@ -20,6 +20,7 @@
     "Clients": "{c1,c2}"
   },
   "boundInputs": [
+    ".github/workflows/ci.yml",
     ".github/workflows/quint.yml",
     "conformance/fixtures/firestore/transaction-read-set-abort.json",
     "conformance/fixtures/functions/concurrent-conditional-lock.json",
@@ -53,6 +54,7 @@
     "verification/quint/tests/transaction_conditional_lock_connect.rs"
   ],
   "digests": {
+    ".github/workflows/ci.yml": "b486c815eece3daf091c8881ce64e97ea2a85f64629d9562ede81ddb17f6a240",
     ".github/workflows/quint.yml": "3322397d1feaaea0a163de7b8a289a33d071650d51f4674c4a4556df6b45e972",
     "conformance/fixtures/firestore/transaction-read-set-abort.json": "d04ff10ca155a770c02b5a2c8ee78b21f44a83aa2c206168e01d13998ce53536",
     "conformance/fixtures/functions/concurrent-conditional-lock.json": "5fab49ede191c66808eccb7c3f46fa616e5db23884c6f4f8e8d1fa0640fb2759",
@@ -75,7 +77,7 @@
     "verification/quint/run-verification.sh": "57eeb07ba39d042eea571b8a939e35ab05dd37218a30aa559785788d2aa81b7f",
     "verification/quint/specs/TransactionConditionalLock.qnt": "a6bd967a949b46adb402f22a45616736c6a38f229d0d762b0b04f08670eb6faa",
     "verification/quint/src/cargo_authority.rs": "2c67dbd90419daa38f42f44b5f62c87388d5a15637ced48a2110b252dcbbd33a",
-    "verification/quint/src/evidence.rs": "2fcf95169ee6ae80bb768c874430e3869d2a29dadf4c87f7cae2794c64dbf4be",
+    "verification/quint/src/evidence.rs": "2a0504c6482d4d354e90fc131b98adf20ae003243b7ede22d41224f72c29f18f",
     "verification/quint/src/lib.rs": "2addd005fe8bee74c693854dc7ccb19dde14153b408f3d3e7335c5a8abbe929f",
     "verification/quint/src/main.rs": "f8ada163629ef231fc5e580031fab6d5f2fcdbd9b2e0cff3604a192ff24a043f",
     "verification/quint/src/model.rs": "74a5503f62e2b182c16e38d394d19bf8933b49beb69acc20542beeca89eef255",

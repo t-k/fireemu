@@ -14,6 +14,7 @@ import {
   productionAdmissionPlan,
   productionRestEnvironment,
   reserveProductionAttempt,
+  selectDeltaV3Recipes,
   selectPartialRecipes,
 } from "./fs-data-write-sandbox-run.mjs";
 
@@ -216,4 +217,18 @@ test("the recording commands refuse to start without an admission before any pre
       command,
     );
   }
+});
+
+test("delta-v3 and partial selections both accept the real saved fixture and split the pending set", async () => {
+  const { corpus, fixture, manifest } = await savedInputs();
+  const delta = selectDeltaV3Recipes(corpus, fixture, manifest);
+  const partial = selectPartialRecipes(corpus, fixture, manifest);
+  const deltaRest = delta.recordingCorpus.restPrograms.map((program) => program.id);
+  const partialRest = partial.recordingCorpus.restPrograms.map((program) => program.id);
+  assert.deepEqual(deltaRest.toSorted(), DELTA_IDS.toSorted());
+  assert.ok(partialRest.every((id) => !deltaRest.includes(id)));
+  assert.deepEqual(
+    new Set(delta.pendingRestIds.filter((id) => corpus.restPrograms.some((p) => p.id === id))),
+    new Set(partialRest),
+  );
 });

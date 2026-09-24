@@ -184,10 +184,8 @@ export function selectDeltaV3Recipes(currentCorpus, fixture, manifest) {
   ) {
     throw new Error("delta-v3 manifest programs differ from the saved production fixture");
   }
-  if (
-    JSON.stringify(Object.keys(fixture.streams ?? {}).toSorted()) !==
-    JSON.stringify(Object.keys(manifest.streams ?? {}).toSorted())
-  ) {
+  // The manifest may also pin the saved-reference stream, which has no live recording.
+  if (Object.keys(fixture.streams ?? {}).some((id) => !manifest.streams?.[id])) {
     throw new Error("delta-v3 manifest streams differ from the saved production fixture");
   }
   const retainedRestIds = currentCorpus.restPrograms
@@ -204,11 +202,12 @@ export function selectDeltaV3Recipes(currentCorpus, fixture, manifest) {
     )
     .map((recipe) => recipe.id)
     .toSorted();
-  const pendingRestIds = [
-    ...new Set([...recordedRestIds, ...currentCorpus.restPrograms.map((program) => program.id)]),
-  ]
+  const currentRestIds = new Set(currentCorpus.restPrograms.map((program) => program.id));
+  const pendingRestIds = [...currentRestIds]
     .filter((id) => !expectedRestIds.includes(id) && !retainedRestIds.includes(id))
     .toSorted();
+  // Saved rows whose recipe left the corpus are reported, never recorded again.
+  const retiredRestIds = recordedRestIds.filter((id) => !currentRestIds.has(id));
   const currentGrpcIds = currentCorpus.streamRecipes
     .filter((recipe) => recipe.transport === "grpc")
     .map((recipe) => recipe.id);
@@ -233,6 +232,7 @@ export function selectDeltaV3Recipes(currentCorpus, fixture, manifest) {
     retainedRestIds,
     retainedStreamIds,
     pendingRestIds,
+    retiredRestIds,
     pendingStreamIds,
     recordingCorpus: {
       ...currentCorpus,

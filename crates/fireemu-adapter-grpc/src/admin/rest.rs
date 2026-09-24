@@ -758,6 +758,23 @@ fn patch_database(
     };
     let masked =
         |names: [&str; 2]| mask.is_empty() || mask.iter().any(|p| names.contains(&p.as_str()));
+    if database_type.is_some()
+        && masked(["type", "type"])
+        && database_exists(state, project, database)
+    {
+        // Production changes the type of an empty database only (2026-09-24).
+        match super::managed::first_document_key(state, project, database) {
+            Ok(None) => {}
+            Ok(Some(key)) => {
+                return error(
+                    tonic::Code::FailedPrecondition,
+                    &format!("A document with key '{key}' exists in the database. The database must be empty to make this change. Delete this document and try again."),
+                    None,
+                )
+            }
+            Err(response) => return response,
+        }
+    }
     let now = state.local.admin_now();
     let result = state.local.admin().update(
         project,

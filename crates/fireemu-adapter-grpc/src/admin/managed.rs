@@ -193,6 +193,30 @@ fn filters(collection_ids: &[String], namespace_ids: &[String]) -> Vec<(&'static
     out
 }
 
+/// The first document of a database in key order, as production names it (`/items/a`), if
+/// it holds any.
+pub(crate) fn first_document_key(
+    state: &RestState,
+    project: &str,
+    database: &str,
+) -> Result<Option<String>, RestResponse> {
+    let mut keys: Vec<String> = documents_of(state, project, database)?
+        .iter()
+        .map(|d| {
+            let mut key = String::new();
+            for (collection, id) in &d.path {
+                key.push('/');
+                key.push_str(collection);
+                key.push('/');
+                key.push_str(id);
+            }
+            key
+        })
+        .collect();
+    keys.sort();
+    Ok(keys.into_iter().next())
+}
+
 fn documents_of(
     state: &RestState,
     project: &str,

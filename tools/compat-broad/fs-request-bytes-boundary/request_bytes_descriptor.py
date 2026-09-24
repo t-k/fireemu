@@ -37,7 +37,6 @@ sys.path.insert(0, str(HERE))
 
 import request_bytes_remote_transport
 import request_bytes_campaign as campaign
-from batch_contract import NUMBER, PROJECT
 from broad_contract import digest
 from o8_admission import authorize_transport
 from o8_campaign import CAMPAIGN_APPROVAL_FIELDS, CampaignDescriptor
@@ -45,14 +44,21 @@ from request_bytes_campaign import campaign_digest, compile_request_bytes_campai
 from request_bytes_collector import collect_local
 from request_bytes_compiler import (
     CAMPAIGN,
+    REQUEST_LIMIT,
+    REQUEST_TARGETS,
     RAW_16MIB_OVER_CASE_ID,
     RAW_16MIB_OVER_LABEL,
     compile_request_bytes_plan,
     compile_request_bytes_sentinel_plan,
     validate_request_bytes_plan,
     validate_request_bytes_sentinel_plan,
+    compact_utf8,
 )
-from request_bytes_shadow import classify_local_result
+from request_bytes_shadow import (
+    SHADOW_KIND,
+    classify_local_result,
+    observation_source_digest,
+)
 from shared_gate import body_reference
 
 
@@ -72,6 +78,13 @@ def _load(name: str, path: Path):
     return module
 
 
+def validate_project_number(value):
+    """Validate the owner-supplied project number without a checked-in literal."""
+    if not isinstance(value, str) or PROJECT_NUMBER_PATTERN.fullmatch(value) is None:
+        raise ValueError("owner-bound sandbox project number required")
+    return value
+
+
 # The baseline derivation is the Commit lane's reviewed implementation, reused
 # rather than reimplemented: it already refuses a literal, a replay journal and
 # a recovery-phase line.
@@ -79,13 +92,15 @@ BASELINE_MODULE = "tools/compat-broad/fs-commit-transform-limits/commit_baseline
 commit_baseline = _load("_request_bytes_commit_baseline", ROOT / BASELINE_MODULE)
 
 DATABASE = "(default)"
+PROJECT = "fireemu-oracle-sbx"
+PROJECT_NUMBER_PATTERN = re.compile(r"^[1-9][0-9]{5,19}$")
 _NONCE = re.compile(r"^[0-9a-f]{32}$")
 BUDGET_PATH = "spec/compatibility/fs-request-bytes-budget.json"
 FROZEN_INPUTS_KIND = "request-bytes-frozen-inputs-v1"
 PERMISSION_KIND = "request-bytes-owner-execution-permission-v1"
 APPROVAL_KIND = "request-bytes-o8-approval-v1"
 MANIFEST_KIND = "request-bytes-o8-manifest-v1"
-SHADOW_RECORD = "spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json"
+SHADOW_RECORD = "spec/compatibility/broad-runs/fs-request-bytes-local-shadow-11mib.json"
 PRINCIPAL_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 # The published local shadow is the comparison reference, so the artifact
 # profile names the build that shadow ran, derived from the record rather than
@@ -163,21 +178,134 @@ HISTORICAL_GENERATIONS = {
 }
 
 
-def shadow_record() -> dict:
-    """The published local shadow this campaign's production run is compared to."""
-    path = ROOT / SHADOW_RECORD
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("published local shadow record required")
-    value = json.loads(path.read_bytes())
+def validate_shadow_record(value: dict) -> dict:
+    """Require current source-bound evidence for the strict REST boundary."""
     runtime = value.get("runtime") if isinstance(value, dict) else None
     if (
         not isinstance(runtime, dict)
+        or value.get("kind") != SHADOW_KIND
         or value.get("campaignId") != CAMPAIGN
         or not isinstance(runtime.get("sourceCommit"), str)
-        or len(runtime["sourceCommit"]) != 40
+        or re.fullmatch(r"[0-9a-f]{40}", runtime["sourceCommit"]) is None
+        or runtime.get("runtimeInputsClean") is not True
+        or value.get("target") != "owned-local-artifact"
+        or value.get("sourceDigestBefore") != observation_source_digest()
+        or value.get("sourceDigestAfter") != value.get("sourceDigestBefore")
     ):
-        raise ValueError("published local shadow record required")
+        raise ValueError("source-bound current 11 MiB boundary shadow required")
+    project, database, nonce = (
+        value.get("project"),
+        value.get("database"),
+        value.get("nonce"),
+    )
+    try:
+        plan = compile_request_bytes_plan(project, database, nonce)
+        validate_request_bytes_plan(plan)
+        expected_campaign = compile_request_bytes_campaign(project, database, nonce)
+    except (TypeError, ValueError) as error:
+        raise ValueError("current 11 MiB boundary shadow compiler binding is invalid") from error
+    if (
+        value.get("planDigest") != hashlib.sha256(compact_utf8(plan)).hexdigest()
+        or value.get("campaignDigest") != campaign_digest(expected_campaign)
+    ):
+        raise ValueError("current 11 MiB boundary shadow compiler binding differs")
+    probes = value.get("probeOutcomes")
+    if not isinstance(probes, list) or len(probes) != len(REQUEST_TARGETS):
+        raise ValueError("current 11 MiB boundary probe evidence required")
+    for row, (probe, request_bytes) in zip(
+        probes, zip(("under", "exact", "over"), REQUEST_TARGETS)
+    ):
+        if (
+            not isinstance(row, dict)
+            or row.get("probe") != probe
+            or row.get("requestBytes") != request_bytes
+        ):
+            raise ValueError("current 11 MiB boundary probe evidence required")
+    try:
+        over_body = json.loads(probes[2].get("responseBody"))
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ValueError("current 11 MiB typed refusal body required") from error
+    if (
+        probes[0].get("httpStatus") != 200
+        or probes[1].get("httpStatus") != 200
+        or probes[2].get("httpStatus") != 400
+        or probes[2].get("errorCode") != 400
+        or probes[2].get("errorStatus") != "INVALID_ARGUMENT"
+        or probes[2].get("errorMessage")
+        != f"Request payload size exceeds the limit: {REQUEST_LIMIT} bytes."
+        or over_body
+        != {
+            "error": {
+                "code": 400,
+                "message": f"Request payload size exceeds the limit: {REQUEST_LIMIT} bytes.",
+                "status": "INVALID_ARGUMENT",
+            }
+        }
+        or any(row.get("complete") is not True for row in probes)
+        or value.get("complete") is not True
+        or value.get("recordingComplete") is not True
+        or value.get("stateValidation") is not True
+        or value.get("observation", {}).get("resourceAbsence") is not True
+        or value.get("shadow", {}).get("classification")
+        != campaign.LOCAL_EXPECTATION["classification"]
+    ):
+        raise ValueError(
+            "current 11 MiB boundary shadow does not prove exact/plus-one outcomes"
+        )
+    observation = value.get("observation")
+    journal = observation.get("localJournal") if isinstance(observation, dict) else None
+    expected_bindings = {
+        operation["probe"]: {
+            "bytes": len(compact_utf8(operation["body"])),
+            "sha256": hashlib.sha256(compact_utf8(operation["body"])).hexdigest(),
+        }
+        for operation in plan["observation"]
+        if operation.get("kind") == "conditional-create-commit"
+    }
+    expected_skip_count = len(
+        next(
+            probe["resources"]
+            for probe in plan["probes"]
+            if probe["label"] == "over"
+        )
+    )
+    expected_skipped_summary = [
+        {
+            "probe": "over",
+            "kind": "cleanup-version-bound-delete",
+            "reason": "creation-and-current-version-not-proven",
+            "count": expected_skip_count,
+        }
+    ]
+    if (
+        not isinstance(journal, dict)
+        or journal.get("captureComplete") is not True
+        or journal.get("rowCount") != len(plan["executionSchedule"])
+        or journal.get("sidecarCount") != observation.get("requestCount")
+        or journal.get("skippedCount") != expected_skip_count
+        or journal.get("skippedSummary") != expected_skipped_summary
+        or not isinstance(journal.get("entryDigest"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", journal["entryDigest"]) is None
+        or journal.get("requestBindings") != expected_bindings
+        or "rowEntries" in journal
+        or "sidecarEntries" in journal
+    ):
+        raise ValueError("current 11 MiB shadow has no complete bound local journal")
     return value
+
+
+def shadow_record() -> dict:
+    """The published 11 MiB local shadow used as the comparison reference."""
+    path = ROOT / SHADOW_RECORD
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("published current 11 MiB boundary shadow record required")
+    try:
+        value = json.loads(path.read_bytes())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(
+            "published current 11 MiB boundary shadow record required"
+        ) from error
+    return validate_shadow_record(value)
 
 
 # The lane has no reviewed build profile registry. This states, in the code O7
@@ -1084,7 +1212,15 @@ def campaign_digest_for(nonce: str, case_id: str | None = None) -> str:
     return campaign_digest(value)
 
 
-def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=None):
+def permission_bindings(
+    plan,
+    source_commit,
+    artifact_digest,
+    inputs,
+    baseline=None,
+    *,
+    project_number=None,
+):
     """Required non-authorizing fields for an independently supplied permission.
 
     When a derived production baseline is supplied, the values the repository
@@ -1096,12 +1232,13 @@ def permission_bindings(plan, source_commit, artifact_digest, inputs, baseline=N
     canonical = plan_compiler(plan["nonce"], case_id=case_id)
     if digest(plan) != digest(canonical):
         raise ValueError("fixed production project/database required")
+    project_number = validate_project_number(project_number)
     published_budget = budget(case_id)
     required = {
         "kind": PERMISSION_KIND,
         "campaignId": CAMPAIGN,
         "project": PROJECT,
-        "projectNumber": NUMBER,
+        "projectNumber": project_number,
         "quotaProject": PROJECT,
         "database": DATABASE,
         "nonce": plan["nonce"],

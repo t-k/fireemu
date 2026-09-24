@@ -1,16 +1,28 @@
 # Firestore request-byte boundary campaign preparation
 
-Condition: `FS-LIMIT-API-REQUEST-BYTES`, the 10,485,760-byte API request limit.
-Parent: `FS-DATA-WRITE`. Evidence class of everything below: preparation and
-local artifact shadow. No production request has been sent and no parent is
-promoted.
+Condition: `FS-LIMIT-API-REQUEST-BYTES`, scoped here to strict REST `Commit`
+raw body bytes. This campaign now targets 11,534,336 bytes and the adjacent
+11,534,337-byte refusal case. The catalog's 10,485,760-byte maximum remains in
+force on other request surfaces. Parent: `FS-DATA-WRITE`. This document cites
+preserved production evidence but sends no production request and promotes no
+parent.
 
-The limits catalog `spec/limits/firestore-standard-2026-08-25.json` records this
-condition with `maximum: 10485760`, `enforcementStage: request` and, since the
-write-path limits lane landed, `implemented: implemented`. Under
-`ip-fs-production-compatibility.md:23` the condition needs an implementation plus
-an observation. The implementation half is done; this document prepares the
-observation half, which is still outstanding.
+The new campaign artifact and O7 descriptor target the disposable
+`fireemu-oracle-sbx/(default)` project. The saved production comparison cited
+below is historical evidence from a different project, not a new observation
+of the sandbox. It is used only for the concrete request-size/refusal comparison
+and does not authorize or constitute a production send.
+
+The limits catalog `spec/limits/firestore-standard-2026-08-25.json` records a
+10,485,760-byte maximum for the general request surfaces covered by that
+condition. Strict REST `Commit` has a separate 11,534,336-byte raw-body boundary
+in this campaign; the limit must not be generalized to WebChannel or gRPC. The
+preserved comparison in
+[`fs-raw-request-bytes-3d7ceabb8-saved-comparison.json`](../../spec/compatibility/broad-runs/fs-raw-request-bytes-3d7ceabb8-saved-comparison.json)
+records an accepted 11 MiB REST write with readback and a typed refusal at 11
+MiB plus one byte with its target absent. It does not establish preservation of
+the previously accepted document after the refusal or prove a generalized
+decoded-byte metric.
 
 ## What the campaign observes
 
@@ -19,16 +31,16 @@ a time, each probe fully cleaned up before the next one starts.
 
 | Case | Request bytes | Relation to the limit | Production expectation |
 | --- | ---: | ---: | --- |
-| `FS-LIMIT-API-REQUEST-BYTES-UNDER` | 10,485,759 | one byte below | accepted |
-| `FS-LIMIT-API-REQUEST-BYTES-EXACT` | 10,485,760 | exactly the limit | accepted |
-| `FS-LIMIT-API-REQUEST-BYTES-OVER` | 10,485,761 | one byte above | refused |
+| `FS-LIMIT-API-REQUEST-BYTES-UNDER` | 11,534,335 | one byte below | accepted |
+| `FS-LIMIT-API-REQUEST-BYTES-EXACT` | 11,534,336 | exactly the limit | accepted |
+| `FS-LIMIT-API-REQUEST-BYTES-OVER` | 11,534,337 | one byte above | refused |
 
 The measured quantity is the raw REST HTTP body in compact UTF-8 bytes,
-including JSON syntax. URL and header bytes are outside it. That this is the
-metric production enforces on is an **observation hypothesis**, not an
-established backend semantic, and the campaign artifact keeps it labelled that
-way. The campaign says nothing about gRPC, where protobuf encoding is a
-different quantity.
+including JSON syntax. URL and header bytes are outside it. The saved production
+comparison supports the exact 11 MiB and 11 MiB-plus-one cases in its concrete
+recipes; the broader claim that this metric governs other REST recipes remains
+an **observation hypothesis**. The campaign says nothing about gRPC, where
+protobuf encoding is a different quantity.
 
 Each probe writes 17 documents, 16 payload documents plus one control document,
 each below the 900 KiB preparation safety margin, every write carrying
@@ -135,8 +147,8 @@ accept/refuse combinations of the three probes fits inside the published data
 maxima, which the validator checks rather than asserts.
 
 The hard ceiling is 0.50 USD and must clear the maximum, not the forecast. The
-network component is zero to the published precision: about 30 MiB is uploaded
-and ingress is not billed, and under 1 MiB is returned. The 30 MiB upload is the
+network component is zero to the published precision: about 33 MiB is uploaded
+and ingress is not billed, and under 1 MiB is returned. The 33 MiB upload is the
 unusual quantity here, not the money.
 
 The recovery window reserves 550 seconds, 102 reads and 51 delete slots inside a
@@ -210,49 +222,37 @@ the owner; it never widens scope and never retries a Commit.
 5. Acknowledgement of the untyped-refusal risk above, or a collector extension
    first.
 
-## Local shadow, and what it found
+## Local shadow, and preserved observations
 
-The shadow runs the same plan and collector against an owned local fireemu
-artifact built from this checkout, through the existing `broad.run` artifact
-builder and process supervisor.
+The retained local shadow at
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json` is historical:
+it ran the former 10 MiB triplet at source commit `b57cb0496`. Its recorded
+outcomes and 10 MiB refusal message are preserved as observed; they do not
+describe the new 11 MiB input. The current source-bound local result is published
+separately at
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow-11mib.json`; it was
+run against the committed compiler and local transport inputs at 11,534,335,
+11,534,336 and 11,534,337 bytes. Both records remain immutable and distinct.
 
-| Probe | Request bytes | Local result |
-| --- | ---: | --- |
-| under | 10,485,759 | HTTP 200, accepted |
-| exact | 10,485,760 | HTTP 200, accepted |
-| over | 10,485,761 | HTTP 400, refused |
+The current strict REST `:commit` path uses
+`MAX_STRICT_COMMIT_RAW_BYTES = 11 * 1024 * 1024`; `API_REQUEST_BYTES` remains 10
+MiB for the other surfaces. The unit and loopback transport tests exercise the
+new boundary input and 60-second admission ceiling. These local checks do not
+create production evidence and do not change the general limits catalog.
 
-The refusal body is exactly:
+The saved production comparison cited above is existing evidence from
+`fireemu-35fe6`, not a new production run or a new sandbox observation. It
+records the accepted 11 MiB recipe and the typed 400
+`INVALID_ARGUMENT` refusal at 11 MiB plus one byte, with the refused target
+absent. It did not read the earlier accepted target after the later refusal, so
+preservation of that target remains unproven. Its concrete REST recipes do not
+establish decoded request-byte behavior or behavior on gRPC, WebChannel, or other
+REST operations.
 
-```json
-{"error":{"code":400,"message":"Request payload size exceeds the limit: 10485760 bytes.","status":"INVALID_ARGUMENT"}}
-```
-
-The local runtime enforces the boundary at exactly the catalog maximum and
-answers, in the strict profile, the same status, code and message this campaign
-expects of production. The bound is applied at each transport's decode boundary
-from `API_REQUEST_BYTES` in `crates/fireemu-adapter-grpc/src/serve.rs`, before
-the request is parsed, and the limits catalog now records the condition as
-implemented.
-
-**That agreement is not confirmation.** The expected production shape is
-documented rather than observed: the quotas page states the 10 MiB maximum but
-not the answer to exceeding it, and no production receipt for that refusal exists
-in this repository. Local agreement removes a known difference and leaves the
-question this campaign exists to settle exactly where it was. Only a production
-receipt can answer it.
-
-The shape is recorded per transport, because a reader comparing a production
-receipt needs the status, the code and the message separately:
-
-| Transport | Status | Code | Message | Observed by |
-| --- | --- | --- | --- | --- |
-| REST Commit | HTTP 400 | 400 | `Request payload size exceeds the limit: 10485760 bytes.` | this campaign's local shadow |
-| gRPC unary, Write stream, WebChannel | none | 3 | the same message | the runtime's own tests, not this campaign |
-
-The gRPC code follows from `google.rpc.Code`, where `INVALID_ARGUMENT` maps to
-HTTP 400. This campaign compiles REST bodies only, so it does not observe the
-gRPC row; a gRPC boundary needs its own compiler and receipt.
+The historical local gRPC refusal row remains 10 MiB: code 3,
+`INVALID_ARGUMENT`, with the message `Request payload size exceeds the limit:
+10485760 bytes.` That separate observation is not changed by this REST-only
+campaign.
 
 The `emulator` profile keeps the refusal the local runtime answered before the
 limits layer implemented this condition, HTTP 413 `request body too large` on
@@ -264,9 +264,9 @@ has lost the implemented shape.
 <!-- BEGIN generated evidence citation -->
 
 The recorded run is published as
-`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, at source
-`b57cb04961a7b2eef09a5994083af41bd62405ed`, artifact SHA-256
-`2bf7267b841dc879d7c2eb98ea7a93b4b27279494ab86318282ad797fedbeabe`, nonce `c596db13e345427f9ab07c37377f8b06`.
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow-11mib.json`, at source
+`cebbf1b6d5142becc309601babc7e2b6f7bba204`, artifact SHA-256
+`2de0cbd668075ec8aad1fb45608e94c2c65abaed030c6bb2ee6c76f16338e1cb`, nonce `f58653151a7e4a93a6aeb5802dd8ad46`.
 
 | Property | Value |
 | --- | --- |
@@ -278,8 +278,8 @@ The recorded run is published as
 | Recovery rows | 153 |
 | Requests sent | 241 |
 | Every owned resource absent | true |
-| Small-request median, p99 | 0.0012 s, 0.0135 s |
-| Boundary Commit median | 0.0269 s |
+| Small-request median, p99 | 0.0010 s, 0.0119 s |
+| Boundary Commit median | 0.0270 s |
 
 The timings are a loopback floor, not a production estimate; see the
 section above. This block is generated from the record, so it cannot
@@ -365,7 +365,8 @@ now record.
 - `spec/compatibility/fs-request-bytes-campaign.json`, the campaign artifact.
 - `spec/compatibility/fs-request-bytes-cases.json`, the case and expectation view.
 - `spec/compatibility/fs-request-bytes-budget.json`, the budget, accounting and cost view.
-- `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, the local shadow receipt, including the loopback timing floor.
+- `spec/compatibility/broad-runs/fs-request-bytes-local-shadow-11mib.json`, the current source-bound local shadow receipt, including the loopback timing floor.
+- `spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, the preserved historical 10 MiB receipt.
 - `tools/compat-broad/fs-request-bytes-boundary/`, the compiler, collector,
   transports, campaign composer and local shadow.
 

@@ -32,9 +32,9 @@ from request_bytes_compiler import (
     compile_request_bytes_plan,
 )
 
-PROJECT = "fireemu-35fe6"
+PROJECT = "fireemu-oracle-sbx"
 DATABASE = "(default)"
-NONCE = "a32e23a844ac11484405c005bb1a9e27"
+NONCE = "388fe93ebfaafdec90477c6e938eb77a"
 SPEC = HERE.parents[2] / "spec/compatibility/fs-request-bytes-campaign.json"
 
 
@@ -42,7 +42,7 @@ SPEC = HERE.parents[2] / "spec/compatibility/fs-request-bytes-campaign.json"
 def campaign() -> dict:
     """Compiled once for the module.
 
-    Compiling builds the three 10 MiB bodies, so a per-test fixture dominated
+    Compiling builds the three 11 MiB bodies, so a per-test fixture dominated
     the suite. Every test that changes the artifact deep-copies it first, so
     sharing the compiled value is safe; a test that mutated it directly would
     leak into its neighbours, which is what the deep copies are for.
@@ -63,9 +63,9 @@ def test_campaign_is_deterministic() -> None:
 def test_boundary_covers_the_exact_limit_and_one_byte_either_side(
     campaign: dict,
 ) -> None:
-    assert campaign["boundary"]["limit"] == 10_485_760
-    assert campaign["boundary"]["acceptedBytes"] == [10_485_759, 10_485_760]
-    assert campaign["boundary"]["refusedBytes"] == [10_485_761]
+    assert campaign["boundary"]["limit"] == 11_534_336
+    assert campaign["boundary"]["acceptedBytes"] == [11_534_335, 11_534_336]
+    assert campaign["boundary"]["refusedBytes"] == [11_534_337]
     assert [case["requestBytes"] for case in campaign["cases"]] == list(REQUEST_TARGETS)
 
 
@@ -162,14 +162,17 @@ def test_local_expectation_records_the_implemented_limit(campaign: dict) -> None
     local = campaign["localExpectation"]
     assert local == LOCAL_EXPECTATION
     assert "strict profile" in local["localEnforcement"]
-    assert "API_REQUEST_BYTES" in local["enforcementSource"]
+    assert "MAX_STRICT_COMMIT_RAW_BYTES" in local["enforcementSource"]
+    assert "API_REQUEST_BYTES = 10 * 1024 * 1024 remains in force" in local[
+        "enforcementSource"
+    ]
     assert local["catalogState"] == "implemented"
     assert local["observedProbeOutcomes"]["over"] == "refused"
     assert local["observedRefusal"]["httpStatus"] == 400
     assert local["observedRefusal"]["errorStatus"] == "INVALID_ARGUMENT"
     assert (
         local["observedRefusal"]["message"]
-        == "Request payload size exceeds the limit: 10485760 bytes."
+        == "Request payload size exceeds the limit: 11534336 bytes."
     )
     assert local["observedRefusal"]["classification"] == "expected"
     assert local["expectedCollectorFailures"] == []
@@ -177,10 +180,15 @@ def test_local_expectation_records_the_implemented_limit(campaign: dict) -> None
     assert local["expectedResourceAbsence"] is True
 
 
-def test_local_agreement_is_not_treated_as_confirmation(campaign: dict) -> None:
-    """The expected production shape is documented, not observed."""
+def test_saved_production_evidence_is_scoped_to_observed_raw_rest_cases(
+    campaign: dict,
+) -> None:
     local = campaign["localExpectation"]
-    assert "does not confirm" in local["differenceFromProductionExpectation"]
+    scope = local["differenceFromProductionExpectation"]
+    assert "successful 11 MiB write with readback" in scope
+    assert "11 MiB plus one byte" in scope
+    assert "does not establish preservation" in scope
+    assert "other transports" in scope
     assert local["classification"] == "local-shape-matches-production-expectation"
 
 
@@ -202,11 +210,12 @@ def test_the_refusal_is_recorded_per_transport(campaign: dict) -> None:
     assert rest["httpStatus"] == 400
     assert rest["errorCode"] == 400
     assert rest["errorStatus"] == "INVALID_ARGUMENT"
-    assert rest["message"] == grpc["message"]
+    assert rest["message"] == "Request payload size exceeds the limit: 11534336 bytes."
     # gRPC carries a google.rpc.Code, not an HTTP status.
     assert grpc["httpStatus"] is None
     assert grpc["errorCode"] == 3
     assert grpc["errorStatus"] == "INVALID_ARGUMENT"
+    assert grpc["message"] == "Request payload size exceeds the limit: 10485760 bytes."
     # This campaign compiles REST bodies only, and the record says so.
     assert "not this campaign" in grpc["observedBy"]
 
@@ -231,12 +240,22 @@ def test_campaign_does_not_authorize_production(campaign: dict) -> None:
             lambda c: c["boundary"].update(refusedBytes=[]), id="no-refused-probe"
         ),
         pytest.param(
-            lambda c: c["boundary"].update(acceptedBytes=[10_485_759]),
+            lambda c: c["boundary"].update(acceptedBytes=[REQUEST_LIMIT - 1]),
             id="exact-limit-dropped",
         ),
         pytest.param(
             lambda c: c["boundary"].update(metricStatus="established"),
             id="metric-promoted",
+        ),
+        pytest.param(
+            lambda c: c["boundary"].update(catalogMaximum=REQUEST_LIMIT),
+            id="catalog-maximum-conflated-with-route-boundary",
+        ),
+        pytest.param(
+            lambda c: c["boundary"]["routeSpecificException"].update(
+                evidence="catalog"
+            ),
+            id="route-exception-evidence-misrepresented",
         ),
         pytest.param(
             lambda c: c["cases"][2].update(productionExpectation="accepted"),
@@ -426,7 +445,22 @@ def test_checked_in_campaign_artifact_matches_the_compiler() -> None:
     )
     assert published["owner"]["nonceDigest"] == rebuilt["owner"]["nonceDigest"]
     assert published == rebuilt
-    assert REQUEST_LIMIT == published["catalogMaximum"]
+    assert 10_485_760 == published["catalogMaximum"]
+
+
+def test_route_specific_rest_commit_boundary_does_not_rewrite_catalog_maximum() -> None:
+    compiled = compile_request_bytes_campaign("demo-project", "(default)", NONCE)
+    assert compiled["catalogMaximum"] == 10_485_760
+    assert compiled["boundary"]["limit"] == REQUEST_LIMIT == 11_534_336
+    exception = compiled["boundary"]["routeSpecificException"]
+    assert exception["operation"] == "REST Commit"
+    assert exception["limit"] == REQUEST_LIMIT
+    assert exception["evidence"] == "saved-production-comparison"
+    routes = compiled["productionPreflight"]["routes"]
+    assert all(
+        "demo-project" in routes[slot] for slot in ("project", "database", "auth")
+    )
+    validate_request_bytes_campaign(compiled)
 
 
 # --- Transport deadline -------------------------------------------------------
@@ -444,7 +478,7 @@ def test_the_deadline_carries_its_derivation_and_its_consequence(
 ) -> None:
     deadline = campaign["transportDeadline"]
     derivation = deadline["derivation"]
-    assert derivation["uploadBits"] == 10_485_761 * 8
+    assert derivation["uploadBits"] == REQUEST_TARGETS[-1] * 8
     assert deadline["perRequestSeconds"] >= derivation["derivedRequirementSeconds"]
     assert "cannot remove" in deadline["consequenceIfMissed"]
     assert "never silent" in deadline["detection"]
@@ -456,7 +490,7 @@ def test_the_slowest_usable_upstream_rate_is_reachable(campaign: dict) -> None:
     deadline = campaign["transportDeadline"]
     rate = deadline["slowestUsableUpstreamBitsPerSecond"]
     assert rate == round(
-        10_485_761
+        REQUEST_TARGETS[-1]
         * 8
         / (deadline["perRequestSeconds"] - deadline["nonUploadReserveSeconds"])
     )
@@ -713,7 +747,7 @@ def test_the_reservation_is_what_the_real_gate_charges(campaign: dict) -> None:
 
 
 def test_every_slot_reserves_its_own_bound(campaign: dict) -> None:
-    """A 10 MiB upload and a small cleanup read cannot share one honest bound."""
+    """An 11 MiB upload and a small cleanup read cannot share one honest bound."""
     plan = compile_request_bytes_plan(PROJECT, DATABASE, NONCE)
     schedule = gate_charging_plan(plan)["jobs"]["request-bytes"]["schedule"]
     assert len(schedule) == 258

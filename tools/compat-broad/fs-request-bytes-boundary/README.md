@@ -1,12 +1,12 @@
 # FS-LIMIT-API-REQUEST-BYTES bounded compiler
 
-`request_bytes_compiler.py` is an offline compiler for a finite REST-only boundary plan. It emits three canonical Firestore REST `Commit` bodies whose compact UTF-8 JSON lengths are exactly 10,485,759, 10,485,760, and 10,485,761 bytes. Each body contains a disjoint 16-payload plus one-control document set; the three sets use equal-length scope labels and total 51 distinct resources. Padding is distributed across each set so every document remains below the 900 KiB preparation safety margin. Every write carries `currentDocument: {"exists": false}`, preventing an intervening document from being overwritten.
+`request_bytes_compiler.py` is an offline compiler for a finite strict-profile REST-only boundary plan. It emits three canonical Firestore REST `Commit` bodies whose compact UTF-8 JSON lengths are exactly 11,534,335, 11,534,336, and 11,534,337 bytes: immediately below, exactly at, and one byte above the 11 MiB strict REST `Commit` boundary. Each body contains a disjoint 16-payload plus one-control document set; the three sets use equal-length scope labels and total 51 distinct resources. Padding is distributed across each set so every document remains below the 900 KiB preparation safety margin. Every write carries `currentDocument: {"exists": false}`, preventing an intervening document from being overwritten.
 
 `validate_request_bytes_plan` independently checks the compiled artifact's endpoint, owned-resource scope, write identities, payload relationships, canonical byte lengths, and finite operation counts. It does not rebuild a replacement plan to make those checks pass.
 
 The compiler also emits bounded preflight, commit, readback, and cleanup operations. The explicit `executionSchedule` interleaves each probe with its complete cleanup before the next probe may start. It is bounded at 258 data calls with at most 17 live documents; production adds seven separately charged management calls for 265 total calls, while the local shadow remains data-only. Failure to establish typed absence stops progression. The separate observation/recovery arrays are indexed operation tables, not an instruction to execute all observations before cleanup. Resources are scoped to the supplied nonce. Cleanup is described as ownership and version bound; this module does not execute it or provide a production authority. Expected field snapshots are SHA-256 references to sorted-key compact UTF-8 logical field maps from the exact probe payload (not raw response map order), avoiding repeated multi-megabyte field copies in every readback expectation. The plan serializes below 70 MiB; a later collector must implement the declared ownership and phase contract before this preparation can run.
 
-The measured quantity is recorded as an observation hypothesis for the raw REST HTTP body bytes, including compact JSON syntax and UTF-8 encoding. URL and header bytes are outside that quantity. This is not established production semantics and does not cover gRPC: protobuf message encoding would require a separate compiler and receipt. The plan makes no claims about document, nested-depth, transform, or Commit operation-count limits.
+The measured quantity is raw REST HTTP body bytes, including compact JSON syntax and UTF-8 encoding; URL and header bytes are outside that quantity. Saved production comparison evidence records acceptance at 11,534,336 bytes and typed refusal at 11,534,337 bytes for its concrete REST recipes. It does not establish decoded request-byte behavior, preservation of an earlier accepted document after refusal, or other transport behavior. This lane is strict REST `Commit` only; the 10 MiB `API_REQUEST_BYTES` bound remains in force on other surfaces. gRPC protobuf message encoding requires a separate compiler and receipt. The plan makes no claims about document, nested-depth, transform, or Commit operation-count limits.
 
 The catalog context is the Firestore quotas page ([quotas](https://firebase.google.com/docs/firestore/quotas)) and the REST Commit reference ([Commit](https://firebase.google.com/docs/firestore/reference/rest/v1/projects.databases.documents/commit)). Those sources describe the limits and Commit shape; they do not establish that raw REST body bytes are the production enforcement metric.
 
@@ -26,7 +26,7 @@ No credentials, network request, emulator, or production runner is used.
 
 `request_bytes_local_transport.py` is a campaign-specific loopback adapter. It
 accepts only numeric loopback origins, the compiled Firestore REST operation
-shape, request caps through 10,485,761 bytes, and the fixed 2 MiB response cap.
+shape, request caps through 11,534,337 bytes, and the fixed 2 MiB response cap.
 It reuses the existing bounded exchange implementation without widening the
 shared transport used by other campaigns. The transport records the canonical
 request byte count and digest passed to HTTP; this remains a local observation
@@ -71,22 +71,23 @@ an uncertain Commit whose residue cleanup detects but cannot remove.
 fireemu artifact built from this checkout, through the existing `broad.run`
 artifact builder and process supervisor.
 
-The observed local baseline is that the boundary **is** enforced and the strict
-profile's refusal carries the same status, code and message this campaign
-expects of production: HTTP 400 with
-`{"error":{"code":400,"message":"Request payload size exceeds the limit: 10485760 bytes.","status":"INVALID_ARGUMENT"}}`.
-The bound is applied at each transport's decode boundary from
-`API_REQUEST_BYTES` in `crates/fireemu-adapter-grpc/src/serve.rs`, before the
-request is parsed. The `emulator` profile keeps the legacy HTTP 413
-`request body too large`; the boundary is identical under both and only the
-shape differs.
+The current local expectation is strict-profile REST `Commit` accepting the
+exact 11,534,336-byte body and refusing the 11,534,337-byte body with HTTP 400,
+code 400, `INVALID_ARGUMENT`, and message
+`Request payload size exceeds the limit: 11534336 bytes.` The strict REST
+`:commit` handler uses `MAX_STRICT_COMMIT_RAW_BYTES` in
+`crates/fireemu-adapter-grpc/src/serve.rs`; `API_REQUEST_BYTES` remains 10 MiB
+for other surfaces. The current local observation is published in the
+source-bound 11 MiB shadow receipt described below; it is a local result, not a
+new production observation.
 
-That agreement is not confirmation. The expected production shape is documented
-rather than observed, which is what this campaign exists to settle, so
-`classify_local_result` reports
-`local-shape-matches-production-expectation` and says so in its summary. A
-legacy 413 from a strict-profile build is `local-boundary-enforced-shape-differs`
-and now means the implemented shape was lost. An accepted over probe is
+The saved production comparison establishes acceptance and typed refusal for
+its concrete 11 MiB adjacent pair, but does not establish preservation of the
+previously accepted document after refusal. The existing published local shadow
+receipt records the older 10 MiB behavior and remains historical; it is not a
+receipt for the current 11 MiB campaign. The current local shadow is published
+separately and must prove the exact adjacent pair before O8 accepts it. A legacy 413 from a strict-profile build is
+`local-boundary-enforced-shape-differs`. An accepted over probe is
 `local-boundary-not-enforced`. A refusal without a typed envelope is
 `local-untyped-transport-refusal`, which covers every complete refusal that is
 not the typed over-boundary envelope, including a status outside 400 and 413
@@ -94,6 +95,12 @@ such as 500, 429 or 403. Those report `recordingComplete` false and
 `stateValidation` true, because nothing was written but the boundary question is
 unanswered. `shadow-failure` is not the bucket for an unfamiliar status: it is
 reached only by a result the collector could not have produced.
+
+The current receipt keeps the complete row journal private to the local run and
+publishes its digest, schedule/request counts, request-body bindings and a
+bounded skip summary. The summary must show exactly 17 skips, all over-probe
+`cleanup-version-bound-delete` operations whose creation and current version
+were not proven; skipped commits and readbacks are never permitted.
 
 The refusal message is bounded in the final result. The response cap is 2 MiB
 and the result is published under a 128 KiB row limit, so a long message copied
@@ -189,11 +196,16 @@ gone, and retires the row through the real path.
 
 ## Published evidence
 
-`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json` is the
-completed local shadow run. `build_shadow_document` is the only place its shape
-is decided, and `test_request_bytes_evidence.py` rebuilds it from its own parts,
-so a hand-edited record fails. The record is bound to the modules that produced
-it, so editing one of those means rerunning the shadow and republishing.
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json` is a
+historical local shadow receipt for the earlier 10 MiB boundary. It is
+preserved as history and must not be treated as evidence for the current 11 MiB
+campaign. The current receipt is
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow-11mib.json` and
+must prove the exact three current body sizes before O8 accepts it.
+`build_shadow_document` is the only place a record's shape is decided, and
+`test_request_bytes_evidence.py` rebuilds the current record from its own parts,
+so a hand-edited record fails. The current record is bound to the modules that
+produced it, so editing one of those means rerunning the shadow and republishing.
 
 `request_bytes_run_fixture.py` drives the real collector through its full
 258-slot schedule with an injected executor, so tests assert on results the
@@ -211,7 +223,7 @@ and never inspects the receipt, so it cannot change a refusal classification or
 the deadline.
 
 `slot_timings` summarises a run's rows into the published record, separately for
-the three 10 MiB Commits and the small reads and deletes, with the median, p95,
+the three boundary Commits and the small reads and deletes, with the median, p95,
 p99 and maximum. Zero-wire skips are excluded: they send nothing, and counting
 them would drag every percentile toward zero.
 
@@ -235,7 +247,7 @@ uv run --offline --project tools/compat-inventory --locked python tools/compat-b
 ```
 
 That runs the shadow against an artifact built from the current checkout, writes
-`spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json`, and
+`spec/compatibility/broad-runs/fs-request-bytes-local-shadow-11mib.json`, and
 regenerates the block between the citation markers in
 `docs/compatibility/fs-request-bytes-campaign-preparation.md` from it. Everything
 outside those markers is hand-written and is left alone.

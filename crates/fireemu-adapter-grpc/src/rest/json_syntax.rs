@@ -1,10 +1,10 @@
 //! The JSON grammar of production's REST front end (the protobuf `JsonStreamParser` that the
 //! Extensible Service Proxy's transcoder runs over a request body), and its refusal texts.
 //!
-//! It is more lenient than RFC 8259: object keys may be bare words (`{structuredQuery: {}}`),
-//! strings may be single-quoted, a comma may trail the last member of an object or array, an
-//! unknown escape stands for its character, and control characters may appear raw in a
-//! string. Its refusals name what it expected and quote up to 20 bytes either side of where it
+//! It is more lenient than RFC 8259: object keys may be bare words (`{structuredQuery: {}}`,
+//! `{nullValue: 0}`, but not a reserved word alone), strings may be single-quoted (and `\'`
+//! escapes a quote), a comma may trail the last member of an object or array, and control
+//! characters may appear raw in a string. An unknown escape is refused. Its refusals name what it expected and quote up to 20 bytes either side of where it
 //! stopped, with a caret under that byte. It reads a body in two passes: the first stops without
 //! an error where it would need more input (an unknown character, or a token that runs to the
 //! end), and the second, "finishing", pass resumes from there and quotes only from that point
@@ -191,14 +191,14 @@ impl Parser<'_> {
                 }
                 Token::String => self.string()?,
                 Token::Key => self.bare_key(),
+                // A bare key may begin with a reserved word (`nullValue`); the word alone is
+                // no key.
                 Token::True | Token::False | Token::Null => {
-                    let word = match self.next_token() {
-                        Token::True => "true",
-                        Token::False => "false",
-                        _ => "null",
-                    };
-                    self.at += word.len();
-                    word.to_owned()
+                    let key = self.bare_key();
+                    if matches!(key.as_str(), "true" | "false" | "null") {
+                        return Err(self.fail("Expected an object key or }.", self.at));
+                    }
+                    key
                 }
                 _ => return Err(self.fail("Expected an object key or }.", self.at)),
             };
@@ -291,14 +291,14 @@ impl Parser<'_> {
                 i += consumed;
                 continue;
             }
-            // An unknown escape stands for its character.
             out.push(match escaped {
+                b'"' | b'\'' | b'\\' | b'/' => escaped,
                 b'b' => 0x08,
                 b'f' => 0x0c,
                 b'n' => b'\n',
                 b'r' => b'\r',
                 b't' => b'\t',
-                other => other,
+                _ => return Err(self.fail("Invalid escape sequence.", i)),
             });
             i += 2;
         }
@@ -455,8 +455,11 @@ mod tests {
             json!({"a": [1, 2], "b": {"c": 1}})
         );
         assert_eq!(
-            parse(b"{structuredQuery: {limit: 3}, true: 'x\\q', $k_1: \"a\tb\"}").unwrap(),
-            json!({"structuredQuery": {"limit": 3}, "true": "xq", "$k_1": "a\tb"})
+            parse(
+                b"{structuredQuery: {limit: 3}, nullValue: 'it\\'s', trueish: 1, $k_1: \"a\tb\"}"
+            )
+            .unwrap(),
+            json!({"structuredQuery": {"limit": 3}, "nullValue": "it's", "trueish": 1, "$k_1": "a\tb"})
         );
         assert_eq!(
             parse(br#"["\u00e9\ud83d\ude00\n", -0, -12, 18446744073709551615, 1e2, 1.5]"#).unwrap(),
@@ -509,6 +512,11 @@ mod tests {
     fn every_state_names_what_it_expected() {
         let cases = [
             ("{,}", "Expected an object key or }.\n{,}\n ^"),
+            (
+                "{true: 1}",
+                "Expected an object key or }.\n{true: 1}\n     ^",
+            ),
+            ("[\"c\\q\"]", "Invalid escape sequence.\n[\"c\\q\"]\n   ^"),
             (
                 "{\"a\" 1}",
                 "Expected : between key:value pair.\n{\"a\" 1}\n     ^",

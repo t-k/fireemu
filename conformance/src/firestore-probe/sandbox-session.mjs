@@ -140,8 +140,8 @@ export function createShrinkRequestCounter(limit, initial = 0) {
   };
 }
 
-export function assertV3ProductionCleanupAllowed({ host }) {
-  if (host && !/^127\.0\.0\.1:\d+$/.test(host)) {
+export function assertV3ProductionCleanupAllowed({ host, exactDeltaV3 = false }) {
+  if (host && !/^127\.0\.0\.1:\d+$/.test(host) && !exactDeltaV3) {
     throw new Error(
       "v3 production cleanup is blocked: exact cleanup is over the fixed request caps and generic broad clear is disabled",
     );
@@ -2033,7 +2033,25 @@ function deleteBoundaryProof(program, steps, raw, blocked) {
 }
 
 async function main() {
-  assertV3ProductionCleanupAllowed({ host: HOST });
+  const deltaNames = (() => {
+    try {
+      return JSON.parse(MANAGED_CLEAR_NAMES ?? "null");
+    } catch {
+      return null;
+    }
+  })();
+  const deltaScope =
+    DELTA_V3_MODE &&
+    DELTA_LOCK_HELD &&
+    PROJECT === "fireemu-oracle-sbx" &&
+    MANAGED_CLEAR_JOURNAL === undefined &&
+    typeof process.env.FIRESTORE_PROBE_DELTA_JOURNAL === "string" &&
+    process.env.FIRESTORE_PROBE_DELTA_JOURNAL.length > 0 &&
+    Number.isSafeInteger(Number(MAX_REQUESTS)) &&
+    Number(MAX_REQUESTS) >= 1 &&
+    Number(MAX_REQUESTS) <= 430 &&
+    managedShrinkScope(deltaNames, PROJECT, "(default)") === "delta-v3";
+  assertV3ProductionCleanupAllowed({ host: HOST, exactDeltaV3: deltaScope });
   if (RECOVERY_MODE !== undefined) {
     if (!["recover-legacy", "recover-v3", "recover-delta-v3"].includes(RECOVERY_MODE)) {
       throw new Error("unsupported Firestore probe recovery mode");

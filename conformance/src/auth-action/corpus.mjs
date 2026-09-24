@@ -614,6 +614,30 @@ const ownership = program("auth-action/ownership", [
   adminLookup("admin-lookup-ob", "ob"),
 ]);
 
+// ---- an address another account takes over (follow-up directive 2026-09-25, S1) -------------
+// A's reset and verification codes name A's address. A moves to another address and B signs up
+// with the old one: does production apply A's old codes to B?
+
+const addressReuse = program("auth-action/address-reuse", [
+  adminCreate("create-a", "ra"),
+  resetLink("reset-link-a", "ra"),
+  verifyLink("verify-link-a", "ra"),
+  adminUpdate("admin-move-a", "ra", { email: "EMAIL(ra-moved)" }),
+  client("sign-up-b", "signUp", {
+    email: "EMAIL(ra)",
+    password: "password123",
+    returnSecureToken: true,
+  }),
+  check("check-reset-after-reuse", "reset-link-a"),
+  reset("reset-after-reuse", "reset-link-a", "password456"),
+  signIn("sign-in-b-new-password", "ra", "password456"),
+  signIn("sign-in-b-original-password", "ra"),
+  check("check-verify-after-reuse", "verify-link-a"),
+  apply("apply-verify-after-reuse", "verify-link-a"),
+  adminCall("admin-lookup-both", "lookup", { email: ["EMAIL(ra)", "EMAIL(ra-moved)"] }),
+  adminLookup("admin-lookup-a", "ra"),
+]);
+
 // ---- code lifetime (the last program: it waits an hour) ----------------------------------------
 
 // Exploration (not evidence, 2026-09-24): a PASSWORD_RESET code answered at +3595 s after its
@@ -662,5 +686,6 @@ export const PROGRAMS = [
   emailLinkSession,
   legacyToken,
   ownership,
+  addressReuse,
   expiry,
 ];

@@ -1,0 +1,5588 @@
+{
+  "version": 1,
+  "recordedAgainst": {
+    "target": "production Identity Toolkit and Secure Token REST, Identity Platform sandbox; action codes from the Admin sendOobCode with returnOobLink (no code is mailed; an applied email change may notify the old @example.com address, which has a null MX)",
+    "project": "demo-auth-account",
+    "note": "Two recordings per program. Action codes are placeholders; an action link is recorded as its query parameters, with its code recorded as whether it is the answer's oobCode and its API key by presence, not by where its handler lives (scope decision E2). Tokens are recorded as their decoded header shape and claims, with times relative to the token's own iat. Refresh tokens, generated ids, run-window times, the project id, its number and the API key are placeholders. `second` holds the other recording of rows that differed.",
+    "baselineConfig": {
+      "signIn.email.enabled": true,
+      "signIn.email.passwordRequired": true,
+      "signIn.anonymous.enabled": true,
+      "signIn.phoneNumber.enabled": true,
+      "signIn.phoneNumber.testPhoneNumbers": {
+        "+16505550101": "123456",
+        "+16505550102": "123456",
+        "+16505550103": "123456",
+        "+16505550104": "123456",
+        "+16505550105": "123456",
+        "+16505550106": "123456"
+      }
+    },
+    "authorizedDomains": [
+      "{project}.firebaseapp.com",
+      "{project}.web.app"
+    ]
+  },
+  "programs": {
+    "auth-action/change-email": {
+      "corpusDigest": "1af03654843322c2ea5bb53d61ac1a40579f1c4ba3bbc3ff18eb9fc6b6be86bf",
+      "harnessDigest": "135f0a2583bdc3d085750e22e4f4719c49183e6f451519c2d6e600c9db87cb8f",
+      "recordedAt": "2026-09-24T11:07:18.340Z",
+      "gitSha": "dda491637534ba3b8bd7bda8a5f126a17f7d0ef6",
+      "steps": {
+        "create-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "localId": "aa-<run>-a"
+          }
+        },
+        "sign-in-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-a",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-a",
+                  "sub": "aa-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-a@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "change-link-1": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "check-1": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "newEmail": "fireemu-aa-<run>-a-first@example.com",
+            "requestType": "VERIFY_AND_CHANGE_EMAIL"
+          }
+        },
+        "change-link-2": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "check-1-after-second": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-2": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "newEmail": "fireemu-aa-<run>-a-second@example.com",
+            "requestType": "VERIFY_AND_CHANGE_EMAIL"
+          }
+        },
+        "apply-2": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-a",
+            "email": "fireemu-aa-<run>-a-second@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-a-second@example.com",
+                "email": "fireemu-aa-<run>-a-second@example.com",
+                "rawId": "fireemu-aa-<run>-a-second@example.com"
+              }
+            ],
+            "newEmail": "fireemu-aa-<run>-a-second@example.com",
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": true
+          }
+        },
+        "apply-2-again": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "apply-1": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-original-email": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_LOGIN_CREDENTIALS",
+              "errors": [
+                {
+                  "message": "INVALID_LOGIN_CREDENTIALS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-second-email": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-a",
+            "email": "fireemu-aa-<run>-a-second@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-a",
+                  "sub": "aa-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-a-second@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-a-second@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "sign-in-first-email": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_LOGIN_CREDENTIALS",
+              "errors": [
+                {
+                  "message": "INVALID_LOGIN_CREDENTIALS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "lookup-token-before-change": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOKEN_EXPIRED",
+              "errors": [
+                {
+                  "message": "TOKEN_EXPIRED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "refresh-token-before-change": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOKEN_EXPIRED",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "admin-lookup-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-a",
+                "email": "fireemu-aa-<run>-a-second@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-a-second@example.com",
+                    "email": "fireemu-aa-<run>-a-second@example.com",
+                    "rawId": "fireemu-aa-<run>-a-second@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "initialEmail": "fireemu-aa-<run>-a@example.com",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "create-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "localId": "aa-<run>-b"
+          }
+        },
+        "change-link-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "create-late": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-late@example.com",
+            "localId": "aa-<run>-late"
+          }
+        },
+        "apply-b-taken": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "EMAIL_EXISTS",
+              "errors": [
+                {
+                  "message": "EMAIL_EXISTS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-lookup-b-after-taken": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-b",
+                "email": "fireemu-aa-<run>-b@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-b@example.com",
+                    "email": "fireemu-aa-<run>-b@example.com",
+                    "rawId": "fireemu-aa-<run>-b@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        },
+        "create-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "localId": "aa-<run>-c"
+          }
+        },
+        "change-link-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-email-change-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-c",
+            "email": "fireemu-aa-<run>-c-admin@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-c-admin@example.com",
+                "email": "fireemu-aa-<run>-c-admin@example.com",
+                "rawId": "fireemu-aa-<run>-c-admin@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "check-c-after-admin-change": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "newEmail": "fireemu-aa-<run>-c-new@example.com",
+            "requestType": "VERIFY_AND_CHANGE_EMAIL"
+          }
+        },
+        "apply-c-after-admin-change": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-c",
+            "email": "fireemu-aa-<run>-c-new@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-c-new@example.com",
+                "email": "fireemu-aa-<run>-c-new@example.com",
+                "rawId": "fireemu-aa-<run>-c-new@example.com"
+              }
+            ],
+            "newEmail": "fireemu-aa-<run>-c-new@example.com",
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": true
+          }
+        },
+        "admin-lookup-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-c",
+                "email": "fireemu-aa-<run>-c-new@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-c-new@example.com",
+                    "email": "fireemu-aa-<run>-c-new@example.com",
+                    "rawId": "fireemu-aa-<run>-c-new@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>",
+                "initialEmail": "fireemu-aa-<run>-c-admin@example.com"
+              }
+            ]
+          }
+        },
+        "create-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-e@example.com",
+            "localId": "aa-<run>-e"
+          }
+        },
+        "change-link-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-e@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-disable-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-e",
+            "email": "fireemu-aa-<run>-e@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-e@example.com",
+                "email": "fireemu-aa-<run>-e@example.com",
+                "rawId": "fireemu-aa-<run>-e@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "apply-e-disabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "USER_DISABLED",
+              "errors": [
+                {
+                  "message": "USER_DISABLED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-lookup-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-e",
+                "email": "fireemu-aa-<run>-e@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-e@example.com",
+                    "email": "fireemu-aa-<run>-e@example.com",
+                    "rawId": "fireemu-aa-<run>-e@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": true,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        },
+        "create-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "localId": "aa-<run>-f"
+          }
+        },
+        "change-link-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-delete-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#DeleteAccountResponse"
+          }
+        },
+        "apply-f-deleted": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-g": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-g@example.com",
+            "localId": "aa-<run>-g"
+          }
+        },
+        "change-link-g": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-g@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-with-change-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-change-code-after-reset-attempt": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-g@example.com",
+            "newEmail": "fireemu-aa-<run>-g-new@example.com",
+            "requestType": "VERIFY_AND_CHANGE_EMAIL"
+          }
+        },
+        "create-h": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-h@example.com",
+            "localId": "aa-<run>-h"
+          }
+        },
+        "verify-link-h": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+              "errors": [
+                {
+                  "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "change-link-h": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-h@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "apply-change-h": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-h",
+            "email": "fireemu-aa-<run>-h-new@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-h-new@example.com",
+                "email": "fireemu-aa-<run>-h-new@example.com",
+                "rawId": "fireemu-aa-<run>-h-new@example.com"
+              }
+            ],
+            "newEmail": "fireemu-aa-<run>-h-new@example.com",
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": true
+          }
+        },
+        "apply-old-verify-h": {
+          "status": -1,
+          "unresolved": "step verify-link-h recorded nothing at oobCode",
+          "dependencyTransient": true
+        },
+        "admin-lookup-h": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-h",
+                "email": "fireemu-aa-<run>-h-new@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-h-new@example.com",
+                    "email": "fireemu-aa-<run>-h-new@example.com",
+                    "rawId": "fireemu-aa-<run>-h-new@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>",
+                "initialEmail": "fireemu-aa-<run>-h@example.com"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "auth-action/email-link/session": {
+      "corpusDigest": "0f3b0f4b2d35602f908c8cde759c800634072887718f9570ee0c9d642fbb6de7",
+      "harnessDigest": "135f0a2583bdc3d085750e22e4f4719c49183e6f451519c2d6e600c9db87cb8f",
+      "recordedAt": "2026-09-24T11:07:18.340Z",
+      "gitSha": "dda491637534ba3b8bd7bda8a5f126a17f7d0ef6",
+      "steps": {
+        "link-s": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-s@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-s": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-s@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-s@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-s@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": true
+          }
+        },
+        "refresh-s": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-s@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-s@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-s@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-s@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "<generated-localId>",
+            "project_id": "<project-number>"
+          },
+          "relations": {
+            "authTimeVsOrigin": "equal",
+            "iatVsOrigin": "later",
+            "userIdVsOrigin": "same"
+          }
+        },
+        "lookup-s": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-s@example.com",
+                "emailVerified": true,
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-s@example.com",
+                    "email": "fireemu-aa-<run>-s@example.com",
+                    "rawId": "fireemu-aa-<run>-s@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "emailLinkSignin": true,
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "cookie-s": {
+          "status": 200,
+          "body": {
+            "sessionCookie": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "<absent>"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://session.firebase.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-s@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-s@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true
+              }
+            }
+          }
+        },
+        "create-p": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-p@example.com",
+            "localId": "aa-<run>-p"
+          }
+        },
+        "link-p": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-p@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-p": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-p",
+                  "sub": "aa-<run>-p",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-p@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-p@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-p@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "aa-<run>-p",
+            "isNewUser": false
+          }
+        },
+        "refresh-p": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-p",
+                  "sub": "aa-<run>-p",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-p@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-p@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-p",
+                  "sub": "aa-<run>-p",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-p@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-p@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "aa-<run>-p",
+            "project_id": "<project-number>"
+          },
+          "relations": {
+            "authTimeVsOrigin": "equal",
+            "iatVsOrigin": "equal",
+            "userIdVsOrigin": "same"
+          }
+        },
+        "cookie-p": {
+          "status": 200,
+          "body": {
+            "sessionCookie": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "<absent>"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://session.firebase.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-p",
+                  "sub": "aa-<run>-p",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-p@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-p@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true
+              }
+            }
+          }
+        },
+        "sign-in-p-password": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_LOGIN_CREDENTIALS",
+              "errors": [
+                {
+                  "message": "INVALID_LOGIN_CREDENTIALS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "anonymous-sign-up": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "provider_id": "anonymous",
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {},
+                    "sign_in_provider": "anonymous"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "link-anon": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-anon@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-anon-link": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-anon@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-anon@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-anon@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": false
+          },
+          "relations": {
+            "localIdVsOrigin": "same"
+          }
+        },
+        "refresh-anon-link": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-anon@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-anon@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-anon@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-anon@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "<generated-localId>",
+            "project_id": "<project-number>"
+          },
+          "relations": {
+            "authTimeVsOrigin": "equal",
+            "iatVsOrigin": "equal",
+            "userIdVsOrigin": "same"
+          }
+        },
+        "cookie-anon-link": {
+          "status": 200,
+          "body": {
+            "sessionCookie": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "<absent>"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://session.firebase.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-anon@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-anon@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true
+              }
+            }
+          }
+        }
+      },
+      "second": {
+        "refresh-s": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-s@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-s@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-s@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-s@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "<generated-localId>",
+            "project_id": "<project-number>"
+          },
+          "relations": {
+            "authTimeVsOrigin": "equal",
+            "iatVsOrigin": "equal",
+            "userIdVsOrigin": "same"
+          }
+        }
+      }
+    },
+    "auth-action/email-link/sign-in": {
+      "corpusDigest": "fae9c05fa643f1effef0b0f22d5a27f5b8ae41d228691bc21f3114899af2b10a",
+      "harnessDigest": "135f0a2583bdc3d085750e22e4f4719c49183e6f451519c2d6e600c9db87cb8f",
+      "recordedAt": "2026-09-24T11:07:18.340Z",
+      "gitSha": "dda491637534ba3b8bd7bda8a5f126a17f7d0ef6",
+      "steps": {
+        "link-n": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-n@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "check-link-n": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "requestType": "EMAIL_SIGNIN"
+          }
+        },
+        "sign-in-mismatch": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_EMAIL : The email provided does not match the sign-in email address.",
+              "errors": [
+                {
+                  "message": "INVALID_EMAIL : The email provided does not match the sign-in email address.",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-missing-email": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_EMAIL",
+              "errors": [
+                {
+                  "message": "MISSING_EMAIL",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-missing-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_OOB_CODE",
+              "errors": [
+                {
+                  "message": "MISSING_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-unknown-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-new": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-n@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-n@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-n@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": true
+          }
+        },
+        "sign-in-reuse": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-lookup-n": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-n@example.com",
+                "emailVerified": true,
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-n@example.com",
+                    "email": "fireemu-aa-<run>-n@example.com",
+                    "rawId": "fireemu-aa-<run>-n@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "emailLinkSignin": true,
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "link-m": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-m@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-mixed-case": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-m@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-m@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-m@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": true
+          }
+        },
+        "link-without-continue-url": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_CONTINUE_URI",
+              "errors": [
+                {
+                  "message": "MISSING_CONTINUE_URI",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "link-without-in-app": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-x@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "signIn",
+                "apiKey": "<present>",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "link-in-app-false": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-x@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "signIn",
+                "apiKey": "<present>",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "link-unauthorized-continue-url": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+              "errors": [
+                {
+                  "message": "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "link-localhost-continue-url": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+              "errors": [
+                {
+                  "message": "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-p": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-p@example.com",
+            "localId": "aa-<run>-p"
+          }
+        },
+        "link-p": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-p@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-existing": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-p",
+                  "sub": "aa-<run>-p",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-p@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-p@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-p@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "aa-<run>-p",
+            "isNewUser": false
+          }
+        },
+        "admin-lookup-p": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-p",
+                "email": "fireemu-aa-<run>-p@example.com",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-p@example.com",
+                    "email": "fireemu-aa-<run>-p@example.com",
+                    "rawId": "fireemu-aa-<run>-p@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "emailLinkSignin": true,
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "sign-in-p-password": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_LOGIN_CREDENTIALS",
+              "errors": [
+                {
+                  "message": "INVALID_LOGIN_CREDENTIALS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "link-q-1": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-q@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "link-q-2": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-q@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "check-q-1-after-second": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-q-1": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-q-2": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-q@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-q@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-q@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": true
+          }
+        },
+        "create-disabled": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-dl@example.com",
+            "localId": "aa-<run>-dl"
+          }
+        },
+        "link-disabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "USER_DISABLED",
+              "errors": [
+                {
+                  "message": "USER_DISABLED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-disabled": {
+          "status": -1,
+          "unresolved": "step link-disabled recorded nothing at oobCode",
+          "dependencyTransient": false
+        },
+        "create-deleted": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-del@example.com",
+            "localId": "aa-<run>-del"
+          }
+        },
+        "link-deleted": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-del@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-delete-del": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#DeleteAccountResponse"
+          }
+        },
+        "sign-in-deleted": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-lookup-del": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse"
+          }
+        },
+        "anonymous-sign-up": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "provider_id": "anonymous",
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {},
+                    "sign_in_provider": "anonymous"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "link-anon": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-anon@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-link-to-anonymous": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-anon@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-anon@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-anon@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>",
+            "isNewUser": false
+          },
+          "relations": {
+            "localIdVsOrigin": "same"
+          }
+        },
+        "admin-lookup-anon": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-anon@example.com",
+                "emailVerified": true,
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-anon@example.com",
+                    "email": "fireemu-aa-<run>-anon@example.com",
+                    "rawId": "fireemu-aa-<run>-anon@example.com"
+                  }
+                ],
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "emailLinkSignin": true,
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "create-owner": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-owned@example.com",
+            "localId": "aa-<run>-owned"
+          }
+        },
+        "anonymous-sign-up-2": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "provider_id": "anonymous",
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "firebase": {
+                    "identities": {},
+                    "sign_in_provider": "anonymous"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "link-owned": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-owned@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-link-owned-address": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "EMAIL_EXISTS",
+              "errors": [
+                {
+                  "message": "EMAIL_EXISTS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-r": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-r@example.com",
+            "localId": "aa-<run>-r"
+          }
+        },
+        "sign-in-r": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-r",
+            "email": "fireemu-aa-<run>-r@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-r",
+                  "sub": "aa-<run>-r",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-r@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-r@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "link-r-other-address": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-r-other@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-link-other-address": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-r",
+                  "sub": "aa-<run>-r",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-r-other@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-r-other@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-r-other@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "aa-<run>-r",
+            "isNewUser": false
+          }
+        },
+        "admin-lookup-r": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-r",
+                "email": "fireemu-aa-<run>-r-other@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-r-other@example.com",
+                    "email": "fireemu-aa-<run>-r-other@example.com",
+                    "rawId": "fireemu-aa-<run>-r-other@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "emailLinkSignin": true,
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "link-z": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-z@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-with-sign-in-code": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "requestType": "EMAIL_SIGNIN"
+          }
+        },
+        "apply-sign-in-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-z-after-misuse": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "requestType": "EMAIL_SIGNIN"
+          }
+        },
+        "reset-link-p": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-p@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-with-reset-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-reset-link-p-after-misuse": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-p@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-link-n": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-n@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-n": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-n@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "admin-lookup-n-after-reset": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-n@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-n@example.com",
+                    "email": "fireemu-aa-<run>-n@example.com",
+                    "rawId": "fireemu-aa-<run>-n@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "emailLinkSignin": true,
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "sign-in-n-password": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-n@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-n@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-n@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        }
+      }
+    },
+    "auth-action/generate/admin": {
+      "corpusDigest": "9cab053b776f2bbc2ed6a4e6b124b6aa9d3a98c9181e967c2477b98daea48bc9",
+      "harnessDigest": "135f0a2583bdc3d085750e22e4f4719c49183e6f451519c2d6e600c9db87cb8f",
+      "recordedAt": "2026-09-24T11:07:18.340Z",
+      "gitSha": "dda491637534ba3b8bd7bda8a5f126a17f7d0ef6",
+      "steps": {
+        "create-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "localId": "aa-<run>-a"
+          }
+        },
+        "create-disabled": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-d@example.com",
+            "localId": "aa-<run>-d"
+          }
+        },
+        "create-phone": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "",
+            "localId": "aa-<run>-p"
+          }
+        },
+        "reset-link": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-link-check": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-link-mixed-case": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-link-continue-firebaseapp": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/done?x=1",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-link-continue-web-app": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "continueUrl": "https://demo-auth-account.web.app/next",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-link-continue-localhost": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+              "errors": [
+                {
+                  "message": "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-link-continue-unauthorized": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+              "errors": [
+                {
+                  "message": "UNAUTHORIZED_DOMAIN : Domain not allowlisted by project",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-link-continue-malformed": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_CONTINUE_URI : Missing domain in continue url",
+              "errors": [
+                {
+                  "message": "INVALID_CONTINUE_URI : Missing domain in continue url",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-link-continue-empty": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_CONTINUE_URI : Missing domain in continue url",
+              "errors": [
+                {
+                  "message": "INVALID_CONTINUE_URI : Missing domain in continue url",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-link-in-app": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "resetPassword",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-link-unknown": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "email": "fireemu-aa-<run>-unknown-a@example.com"
+          }
+        },
+        "reset-link-disabled": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-d@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-link-missing-email": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_EMAIL",
+              "errors": [
+                {
+                  "message": "MISSING_EMAIL",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-link-invalid-email": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_EMAIL",
+              "errors": [
+                {
+                  "message": "INVALID_EMAIL",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "missing-request-type": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_REQ_TYPE",
+              "errors": [
+                {
+                  "message": "MISSING_REQ_TYPE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "unknown-request-type": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "Invalid value at 'req_type' (type.googleapis.com/google.cloud.identitytoolkit.v1.OobReqType), \"NOT_A_REQUEST_TYPE\"",
+              "errors": [
+                {
+                  "message": "Invalid value at 'req_type' (type.googleapis.com/google.cloud.identitytoolkit.v1.OobReqType), \"NOT_A_REQUEST_TYPE\"",
+                  "reason": "invalid"
+                }
+              ],
+              "status": "INVALID_ARGUMENT",
+              "details": [
+                {
+                  "@type": "type.googleapis.com/google.rpc.BadRequest",
+                  "fieldViolations": [
+                    {
+                      "field": "req_type",
+                      "description": "Invalid value at 'req_type' (type.googleapis.com/google.cloud.identitytoolkit.v1.OobReqType), \"NOT_A_REQUEST_TYPE\""
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "unspecified-request-type": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_REQ_TYPE",
+              "errors": [
+                {
+                  "message": "INVALID_REQ_TYPE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "verify-link": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "verify-link-check": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "requestType": "VERIFY_EMAIL"
+          }
+        },
+        "verify-link-unknown": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "USER_NOT_FOUND",
+              "errors": [
+                {
+                  "message": "USER_NOT_FOUND",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "verify-link-disabled": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-d@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "verify-link-missing-email": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_EMAIL",
+              "errors": [
+                {
+                  "message": "MISSING_EMAIL",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "change-link": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "change-link-check": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "newEmail": "fireemu-aa-<run>-a-new@example.com",
+            "requestType": "VERIFY_AND_CHANGE_EMAIL"
+          }
+        },
+        "change-link-missing-new-email": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_NEW_EMAIL",
+              "errors": [
+                {
+                  "message": "MISSING_NEW_EMAIL",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "change-link-taken": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "email": "fireemu-aa-<run>-a@example.com"
+          }
+        },
+        "change-link-same": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "email": "fireemu-aa-<run>-a@example.com"
+          }
+        },
+        "change-link-invalid-new": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_NEW_EMAIL",
+              "errors": [
+                {
+                  "message": "INVALID_NEW_EMAIL",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "change-link-unknown": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "USER_NOT_FOUND",
+              "errors": [
+                {
+                  "message": "USER_NOT_FOUND",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "change-link-disabled": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-d@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-link-password-required": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "OPERATION_NOT_ALLOWED",
+              "errors": [
+                {
+                  "message": "OPERATION_NOT_ALLOWED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-a",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-a",
+                  "sub": "aa-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-a@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "verify-link-by-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+              "errors": [
+                {
+                  "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "change-link-by-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_EMAIL",
+              "errors": [
+                {
+                  "message": "MISSING_EMAIL",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "change-link-by-token-check": {
+          "status": -1,
+          "unresolved": "step change-link-by-token recorded nothing at oobCode",
+          "dependencyTransient": false
+        },
+        "verify-link-garbage-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_ID_TOKEN",
+              "errors": [
+                {
+                  "message": "INVALID_ID_TOKEN",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "verify-link-token-and-email": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+              "errors": [
+                {
+                  "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "phone-send-code": {
+          "status": 200,
+          "body": {
+            "sessionInfo": "<sessionInfo>"
+          }
+        },
+        "phone-sign-in": {
+          "status": 200,
+          "body": {
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-p",
+                  "sub": "aa-<run>-p",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "phone_number": "+16505550101",
+                  "firebase": {
+                    "identities": {
+                      "phone": [
+                        "+16505550101"
+                      ]
+                    },
+                    "sign_in_provider": "phone"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "aa-<run>-p",
+            "isNewUser": false,
+            "phoneNumber": "+16505550101"
+          }
+        },
+        "verify-link-phone-account": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_EMAIL",
+              "errors": [
+                {
+                  "message": "MISSING_EMAIL",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "auth-action/generate/client": {
+      "corpusDigest": "65b1740f166059b2d6e687d80bcabdc169329269cdc87a611f0489bd66cf5ac2",
+      "harnessDigest": "135f0a2583bdc3d085750e22e4f4719c49183e6f451519c2d6e600c9db87cb8f",
+      "recordedAt": "2026-09-24T11:07:18.340Z",
+      "gitSha": "dda491637534ba3b8bd7bda8a5f126a17f7d0ef6",
+      "steps": {
+        "reset-unknown": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "email": "fireemu-aa-<run>-unknown-1@example.com"
+          }
+        },
+        "reset-unknown-return-link": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INSUFFICIENT_PERMISSION",
+              "errors": [
+                {
+                  "message": "INSUFFICIENT_PERMISSION",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-unknown-continue-authorized": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "email": "fireemu-aa-<run>-unknown-1@example.com"
+          }
+        },
+        "reset-unknown-continue-unauthorized": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "email": "fireemu-aa-<run>-unknown-1@example.com"
+          }
+        },
+        "reset-unknown-without-key": {
+          "status": 403,
+          "body": {
+            "error": {
+              "code": 403,
+              "message": "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.",
+              "errors": [
+                {
+                  "message": "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.",
+                  "domain": "global",
+                  "reason": "forbidden"
+                }
+              ],
+              "status": "PERMISSION_DENIED"
+            }
+          }
+        }
+      }
+    },
+    "auth-action/legacy-token": {
+      "corpusDigest": "8dba602bc49289323f98917de0325987b948a9ea456789a7e68558330c7e4c18",
+      "harnessDigest": "135f0a2583bdc3d085750e22e4f4719c49183e6f451519c2d6e600c9db87cb8f",
+      "recordedAt": "2026-09-24T11:07:18.340Z",
+      "gitSha": "dda491637534ba3b8bd7bda8a5f126a17f7d0ef6",
+      "steps": {
+        "create-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "localId": "aa-<run>-a"
+          }
+        },
+        "legacy-sign-in-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-a",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "<absent>"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://identitytoolkit.google.com/",
+                  "aud": "demo-auth-account",
+                  "iat": "<iat>",
+                  "exp": "iat+1209600",
+                  "user_id": "aa-<run>-a",
+                  "email": "fireemu-aa-<run>-a@example.com",
+                  "sign_in_provider": "password",
+                  "verified": false
+                },
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true
+          }
+        },
+        "verify-link-by-legacy-token": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "verify-link-by-legacy-token-check": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "requestType": "VERIFY_EMAIL"
+          }
+        },
+        "change-link-by-legacy-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_EMAIL",
+              "errors": [
+                {
+                  "message": "MISSING_EMAIL",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "change-link-by-legacy-token-check": {
+          "status": -1,
+          "unresolved": "step change-link-by-legacy-token recorded nothing at oobCode",
+          "dependencyTransient": false
+        },
+        "apply-change-by-legacy-token": {
+          "status": -1,
+          "unresolved": "step change-link-by-legacy-token recorded nothing at oobCode",
+          "dependencyTransient": false
+        },
+        "admin-lookup-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-a",
+                "email": "fireemu-aa-<run>-a@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-a@example.com",
+                    "email": "fireemu-aa-<run>-a@example.com",
+                    "rawId": "fireemu-aa-<run>-a@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        },
+        "create-r": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-r@example.com",
+            "localId": "aa-<run>-r"
+          }
+        },
+        "legacy-sign-in-r": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-r",
+            "email": "fireemu-aa-<run>-r@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "<absent>"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://identitytoolkit.google.com/",
+                  "aud": "demo-auth-account",
+                  "iat": "<iat>",
+                  "exp": "iat+1209600",
+                  "user_id": "aa-<run>-r",
+                  "email": "fireemu-aa-<run>-r@example.com",
+                  "sign_in_provider": "password",
+                  "verified": false
+                },
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true
+          }
+        },
+        "link-legacy": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-r-legacy@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "apiKey": "<present>",
+                "mode": "signIn",
+                "continueUrl": "https://demo-auth-account.firebaseapp.com/finish",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "sign-in-link-legacy-token": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#EmailLinkSigninResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-r",
+                  "sub": "aa-<run>-r",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-r-legacy@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-r-legacy@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-r-legacy@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "aa-<run>-r",
+            "isNewUser": false
+          }
+        },
+        "admin-lookup-r": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-r",
+                "email": "fireemu-aa-<run>-r-legacy@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-r-legacy@example.com",
+                    "email": "fireemu-aa-<run>-r-legacy@example.com",
+                    "rawId": "fireemu-aa-<run>-r-legacy@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "emailLinkSignin": true,
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "admin-lookup-r-legacy": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-r",
+                "email": "fireemu-aa-<run>-r-legacy@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-r-legacy@example.com",
+                    "email": "fireemu-aa-<run>-r-legacy@example.com",
+                    "rawId": "fireemu-aa-<run>-r-legacy@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "emailLinkSignin": true,
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "auth-action/ownership": {
+      "corpusDigest": "c0e52bd1db11aa64b057a61ad3a2db49275344a1e2ca206246e161e95d37c262",
+      "harnessDigest": "135f0a2583bdc3d085750e22e4f4719c49183e6f451519c2d6e600c9db87cb8f",
+      "recordedAt": "2026-09-24T11:07:18.340Z",
+      "gitSha": "dda491637534ba3b8bd7bda8a5f126a17f7d0ef6",
+      "steps": {
+        "create-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "localId": "aa-<run>-a"
+          }
+        },
+        "create-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "localId": "aa-<run>-b"
+          }
+        },
+        "sign-in-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-b",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-b",
+                  "sub": "aa-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-b@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "verify-link-a": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+              "errors": [
+                {
+                  "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "apply-a-code-with-b-token": {
+          "status": -1,
+          "unresolved": "step verify-link-a recorded nothing at oobCode",
+          "dependencyTransient": true
+        },
+        "admin-lookup-both-after-verify": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-a",
+                "email": "fireemu-aa-<run>-a@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-a@example.com",
+                    "email": "fireemu-aa-<run>-a@example.com",
+                    "rawId": "fireemu-aa-<run>-a@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              },
+              {
+                "localId": "aa-<run>-b",
+                "email": "fireemu-aa-<run>-b@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-b@example.com",
+                    "email": "fireemu-aa-<run>-b@example.com",
+                    "rawId": "fireemu-aa-<run>-b@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "reset-link-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "check-a-code-naming-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-a-code-naming-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "sign-in-a-new-password": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-a",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-a",
+                  "sub": "aa-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "sign-in-b-original-password": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-b",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-b",
+                  "sub": "aa-<run>-b",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-b@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-b@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "change-link-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyAndChangeEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "apply-a-change-with-b-token": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-b",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-b@example.com",
+                "email": "fireemu-aa-<run>-b@example.com",
+                "rawId": "fireemu-aa-<run>-b@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "admin-lookup-both-after-change": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-a",
+                "email": "fireemu-aa-<run>-a@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-a@example.com",
+                    "email": "fireemu-aa-<run>-a@example.com",
+                    "rawId": "fireemu-aa-<run>-a@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              },
+              {
+                "localId": "aa-<run>-b",
+                "email": "fireemu-aa-<run>-b@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-b@example.com",
+                    "email": "fireemu-aa-<run>-b@example.com",
+                    "rawId": "fireemu-aa-<run>-b@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "verify-link-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "apply-b-code-with-garbage-token": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_ID_TOKEN",
+              "errors": [
+                {
+                  "message": "INVALID_ID_TOKEN",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-lookup-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-b",
+                "email": "fireemu-aa-<run>-b@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-b@example.com",
+                    "email": "fireemu-aa-<run>-b@example.com",
+                    "rawId": "fireemu-aa-<run>-b@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "auth-action/password-reset": {
+      "corpusDigest": "6a67e86782b0656d1b308e81ada02fc601968ac3356791ba15d01852a8255661",
+      "harnessDigest": "135f0a2583bdc3d085750e22e4f4719c49183e6f451519c2d6e600c9db87cb8f",
+      "recordedAt": "2026-09-24T11:07:18.340Z",
+      "gitSha": "dda491637534ba3b8bd7bda8a5f126a17f7d0ef6",
+      "steps": {
+        "create-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "localId": "aa-<run>-a"
+          }
+        },
+        "sign-in-before": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-a",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-a",
+                  "sub": "aa-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-a@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "reset-link-1": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "check-1": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-link-2": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "check-1-after-second": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-2": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-weak-password": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "WEAK_PASSWORD : Password should be at least 6 characters",
+              "errors": [
+                {
+                  "message": "WEAK_PASSWORD : Password should be at least 6 characters",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-2-after-weak": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-missing-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "MISSING_OOB_CODE",
+              "errors": [
+                {
+                  "message": "MISSING_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-unknown-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-truncated-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-empty-password": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "WEAK_PASSWORD",
+              "errors": [
+                {
+                  "message": "WEAK_PASSWORD",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-consume": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-reuse": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-2-after-consume": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-old-password": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_LOGIN_CREDENTIALS",
+              "errors": [
+                {
+                  "message": "INVALID_LOGIN_CREDENTIALS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-new-password": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-a",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-a",
+                  "sub": "aa-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-a@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "lookup-token-before-reset": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOKEN_EXPIRED",
+              "errors": [
+                {
+                  "message": "TOKEN_EXPIRED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "refresh-token-before-reset": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOKEN_EXPIRED",
+              "status": "INVALID_ARGUMENT"
+            }
+          }
+        },
+        "admin-lookup-after-reset": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-a",
+                "email": "fireemu-aa-<run>-a@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-a@example.com",
+                    "email": "fireemu-aa-<run>-a@example.com",
+                    "rawId": "fireemu-aa-<run>-a@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "create-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "localId": "aa-<run>-b"
+          }
+        },
+        "reset-link-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-password-change-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-b",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-b@example.com",
+                "email": "fireemu-aa-<run>-b@example.com",
+                "rawId": "fireemu-aa-<run>-b@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "check-b-after-admin-password-change": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-b-after-admin-password-change": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "create-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "localId": "aa-<run>-c"
+          }
+        },
+        "sign-in-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-c",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-c",
+                  "sub": "aa-<run>-c",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-c@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-c@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "reset-link-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "client-password-change-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-c",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-c",
+                  "sub": "aa-<run>-c",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-c@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-c@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-c@example.com",
+                "email": "fireemu-aa-<run>-c@example.com",
+                "rawId": "fireemu-aa-<run>-c@example.com"
+              }
+            ],
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "check-c-after-client-password-change": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-c-after-client-password-change": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "create-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-e@example.com",
+            "localId": "aa-<run>-e"
+          }
+        },
+        "reset-link-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-e@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-email-change-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-e",
+            "email": "fireemu-aa-<run>-e-moved@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-e-moved@example.com",
+                "email": "fireemu-aa-<run>-e-moved@example.com",
+                "rawId": "fireemu-aa-<run>-e-moved@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "check-e-after-email-change": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-e@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-e-after-email-change": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "USER_NOT_FOUND",
+              "errors": [
+                {
+                  "message": "USER_NOT_FOUND",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-lookup-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-e",
+                "email": "fireemu-aa-<run>-e-moved@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-e-moved@example.com",
+                    "email": "fireemu-aa-<run>-e-moved@example.com",
+                    "rawId": "fireemu-aa-<run>-e-moved@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        },
+        "create-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "localId": "aa-<run>-f"
+          }
+        },
+        "reset-link-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-disable-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-f",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-f@example.com",
+                "email": "fireemu-aa-<run>-f@example.com",
+                "rawId": "fireemu-aa-<run>-f@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "check-f-disabled": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-f-disabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "USER_DISABLED",
+              "errors": [
+                {
+                  "message": "USER_DISABLED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-enable-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-f",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-f@example.com",
+                "email": "fireemu-aa-<run>-f@example.com",
+                "rawId": "fireemu-aa-<run>-f@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "check-f-enabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-f-enabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-g": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-g@example.com",
+            "localId": "aa-<run>-g"
+          }
+        },
+        "reset-link-g": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-g@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-delete-g": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#DeleteAccountResponse"
+          }
+        },
+        "check-g-deleted": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "reset-g-deleted": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-h": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-h@example.com",
+            "localId": "aa-<run>-h"
+          }
+        },
+        "verify-link-h": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-h@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "reset-with-verify-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-verify-code-after-reset-attempt": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-h@example.com",
+            "requestType": "VERIFY_EMAIL"
+          }
+        },
+        "sign-in-h-original-password": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-h",
+            "email": "fireemu-aa-<run>-h@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-h",
+                  "sub": "aa-<run>-h",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-h@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-h@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        }
+      }
+    },
+    "auth-action/verify-email": {
+      "corpusDigest": "cec22cfeef45b6c367bd5528efe1e075b769a4417f1d59aa755e2bdf23c00c50",
+      "harnessDigest": "135f0a2583bdc3d085750e22e4f4719c49183e6f451519c2d6e600c9db87cb8f",
+      "recordedAt": "2026-09-24T11:07:18.340Z",
+      "gitSha": "dda491637534ba3b8bd7bda8a5f126a17f7d0ef6",
+      "steps": {
+        "create-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "localId": "aa-<run>-a"
+          }
+        },
+        "sign-in-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "aa-<run>-a",
+            "email": "fireemu-aa-<run>-a@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-a",
+                  "sub": "aa-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-a@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "verify-link-1": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+              "errors": [
+                {
+                  "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "verify-link-2": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+              "errors": [
+                {
+                  "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-1": {
+          "status": -1,
+          "unresolved": "step verify-link-1 recorded nothing at oobCode",
+          "dependencyTransient": true
+        },
+        "check-2": {
+          "status": -1,
+          "unresolved": "step verify-link-2 recorded nothing at oobCode",
+          "dependencyTransient": true
+        },
+        "apply-2": {
+          "status": -1,
+          "unresolved": "step verify-link-2 recorded nothing at oobCode",
+          "dependencyTransient": true
+        },
+        "apply-2-again": {
+          "status": -1,
+          "unresolved": "step verify-link-2 recorded nothing at oobCode",
+          "dependencyTransient": true
+        },
+        "apply-1": {
+          "status": -1,
+          "unresolved": "step verify-link-1 recorded nothing at oobCode",
+          "dependencyTransient": true
+        },
+        "lookup-token-after-verify": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-a",
+                "email": "fireemu-aa-<run>-a@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-a@example.com",
+                    "email": "fireemu-aa-<run>-a@example.com",
+                    "rawId": "fireemu-aa-<run>-a@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "refresh-after-verify": {
+          "status": 200,
+          "body": {
+            "access_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-a",
+                  "sub": "aa-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-a@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "expires_in": "3600",
+            "token_type": "Bearer",
+            "refresh_token": "<refresh_token>",
+            "id_token": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "aa-<run>-a",
+                  "sub": "aa-<run>-a",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-a@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-a@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "user_id": "aa-<run>-a",
+            "project_id": "<project-number>"
+          },
+          "relations": {
+            "authTimeVsOrigin": "equal",
+            "iatVsOrigin": "later",
+            "userIdVsOrigin": "same"
+          }
+        },
+        "apply-unknown-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "apply-truncated-code": {
+          "status": -1,
+          "unresolved": "step verify-link-1 recorded nothing at oobCode",
+          "dependencyTransient": true
+        },
+        "verify-link-verified": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+              "errors": [
+                {
+                  "message": "TOO_MANY_ATTEMPTS_TRY_LATER",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "apply-verified": {
+          "status": -1,
+          "unresolved": "step verify-link-verified recorded nothing at oobCode",
+          "dependencyTransient": true
+        },
+        "create-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "localId": "aa-<run>-b"
+          }
+        },
+        "verify-link-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-email-change-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-b",
+            "email": "fireemu-aa-<run>-b-moved@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-b-moved@example.com",
+                "email": "fireemu-aa-<run>-b-moved@example.com",
+                "rawId": "fireemu-aa-<run>-b-moved@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "check-b-after-email-change": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-b@example.com",
+            "requestType": "VERIFY_EMAIL"
+          }
+        },
+        "apply-b-after-email-change": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "EMAIL_NOT_FOUND",
+              "errors": [
+                {
+                  "message": "EMAIL_NOT_FOUND",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-lookup-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-b",
+                "email": "fireemu-aa-<run>-b-moved@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-b-moved@example.com",
+                    "email": "fireemu-aa-<run>-b-moved@example.com",
+                    "rawId": "fireemu-aa-<run>-b-moved@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        },
+        "create-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "localId": "aa-<run>-c"
+          }
+        },
+        "verify-link-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-disable-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-c",
+            "email": "fireemu-aa-<run>-c@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-c@example.com",
+                "email": "fireemu-aa-<run>-c@example.com",
+                "rawId": "fireemu-aa-<run>-c@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "apply-c-disabled": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "USER_DISABLED",
+              "errors": [
+                {
+                  "message": "USER_DISABLED",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-lookup-c": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-c",
+                "email": "fireemu-aa-<run>-c@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-c@example.com",
+                    "email": "fireemu-aa-<run>-c@example.com",
+                    "rawId": "fireemu-aa-<run>-c@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": true,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        },
+        "create-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-e@example.com",
+            "localId": "aa-<run>-e"
+          }
+        },
+        "verify-link-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-e@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-delete-e": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#DeleteAccountResponse"
+          }
+        },
+        "check-e-deleted": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "apply-e-deleted": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "create-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "localId": "aa-<run>-f"
+          }
+        },
+        "reset-link-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "apply-reset-code": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_OOB_CODE",
+              "errors": [
+                {
+                  "message": "INVALID_OOB_CODE",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "check-reset-code-after-apply-attempt": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-f@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "admin-lookup-f": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-f",
+                "email": "fireemu-aa-<run>-f@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-f@example.com",
+                    "email": "fireemu-aa-<run>-f@example.com",
+                    "rawId": "fireemu-aa-<run>-f@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

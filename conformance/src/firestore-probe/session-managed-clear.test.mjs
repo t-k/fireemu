@@ -65,6 +65,8 @@ test("delta-v3 remote scope requires the dedicated journal binding and exact nam
   const scope = {
     mode: true,
     lockHeld: true,
+    host: "firestore.googleapis.com",
+    scheme: "https",
     project: "fireemu-oracle-sbx",
     maxRequests: 430,
     deltaJournal: "/private/delta.json",
@@ -72,6 +74,9 @@ test("delta-v3 remote scope requires the dedicated journal binding and exact nam
     names: deltaNames,
   };
   assert.equal(isExactDeltaV3ProductionScope(scope), true);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, host: "attacker.example" }), false);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, scheme: "http" }), false);
+  assert.equal(isExactDeltaV3ProductionScope({ ...scope, host: "127.0.0.1:8080" }), false);
   assert.equal(isExactDeltaV3ProductionScope({ ...scope, managedClearJournal: undefined }), false);
   assert.equal(
     isExactDeltaV3ProductionScope({ ...scope, managedClearJournal: "/private/legacy.json" }),

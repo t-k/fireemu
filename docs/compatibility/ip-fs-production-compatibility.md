@@ -8,7 +8,7 @@ Auth claim-source, MFA and Limits native updates remain local-only; executor `57
 
 ## FS-DATA-WRITE current closure correction (2026-09-24)
 
-The [closure inventory](../../spec/compatibility/closure/FS-DATA-WRITE.json) now contains 29 conditions, including the production-observed refusal to delete a near-index-limit document. The new condition is `PENDING_CORPUS`: it still requires an adjacent accepted/refused pair, two production recordings and route-specific comparison. The previously accepted Write-stream half-close comparison is now `MISMATCH` because `content-disposition: attachment` is stable production trailer metadata and must remain in comparison; only the recording-varying tracking ID is excluded. Its earlier saved comparison remains historical evidence, not current acceptance. This makes 11 of 29 FS-DATA-WRITE conditions `VERIFIED`, with the parent still `WAITING_ORACLE`.
+The [closure inventory](../../spec/compatibility/closure/FS-DATA-WRITE.json) now contains 29 conditions, including the production-observed refusal to delete a near-index-limit document. The new condition is `PENDING_CORPUS`: it still requires an adjacent accepted/refused pair, two production recordings and route-specific comparison. The Write-stream half-close condition is `VERIFIED` against the current source-bound comparison, which includes stable `content-disposition: attachment` trailer metadata and excludes only the recording-varying tracking ID. Twelve of 29 FS-DATA-WRITE conditions are `VERIFIED`; the parent remains `WAITING_ORACLE`.
 
 ## Accepted finite REST error condition: malformed bytes Base64 (2026-09-23)
 

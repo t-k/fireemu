@@ -148,7 +148,7 @@ test("AUTH-CREDENTIAL closure inventory cannot silently omit a declared conditio
 test("scope decisions are recorded, not implied", () => {
   const closure = load();
   const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
-  for (const id of ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8"]) {
+  for (const id of ["C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9"]) {
     assert.ok(decided.has(id), `scope decision ${id} must be recorded`);
   }
   for (const decision of closure.scopeDecisions) {

@@ -376,6 +376,9 @@ pub struct UserRecord {
     /// Whether the account was created through the Admin API (create or import). Production
     /// then reports `disabled` and `validSince` in every read of it.
     pub admin_created: bool,
+    /// Whether a custom-token sign-in created the account. Production then reports
+    /// `customAuth` and `validSince` in every read of it (sandbox recording 2026-09-24).
+    pub custom_auth: bool,
     /// `passwordUpdatedAt` of a password credential that was since removed: production keeps
     /// reporting it (sandbox recording 2026-09-23, auth-account/provider).
     pub removed_password_updated_at: Option<LogicalInstant>,
@@ -1166,6 +1169,9 @@ pub struct AuthStore {
     /// Optional fireemu control-session incarnation. It is absent from ordinary stores so
     /// production-shaped tokens do not gain a local-only claim unless session isolation needs it.
     lifecycle_epoch: Option<AuthLifecycleEpoch>,
+    /// Whether this store has issued a legacy Identity Toolkit token. Only then does it honour
+    /// one, so a store that never issues them (the emulator profile) refuses a forged one.
+    legacy_tokens_issued: bool,
     oob_codes: Arc<BTreeMap<String, OobCode>>,
     verification_codes: Arc<BTreeMap<String, VerificationCode>>,
     /// Outstanding phone `temporaryProof`s: proof to the verified number and its issue time.
@@ -1387,6 +1393,45 @@ impl AuthStore {
         self.lifecycle_epoch = Some(epoch);
     }
 
+    /// Whether this store has issued a legacy Identity Toolkit token.
+    #[must_use]
+    pub const fn legacy_tokens_issued(&self) -> bool {
+        self.legacy_tokens_issued
+    }
+
+    /// The claims of a legacy Identity Toolkit token for `uid` issued at `iat`, carrying the
+    /// account's address and this store's session epoch when it has them; from now on the store
+    /// honours legacy tokens.
+    ///
+    /// # Errors
+    /// [`AuthError::UserNotFound`] for an unknown account.
+    pub fn legacy_token_payload(
+        &mut self,
+        uid: &LocalId,
+        iat: i64,
+        sign_in_provider: &str,
+        developer_claims: Option<&CustomClaims>,
+    ) -> Result<String, AuthError> {
+        let user = self.users.get(uid).ok_or(AuthError::UserNotFound)?;
+        let epoch = self.lifecycle_epoch_claim();
+        let payload = crate::jwt::legacy_token_payload(
+            &self.project_id,
+            iat,
+            &crate::jwt::LegacyToken {
+                uid: uid.as_str(),
+                sign_in_provider,
+                email: user
+                    .email
+                    .as_deref()
+                    .map(|email| (email, user.email_verified)),
+                extra_claims: developer_claims.map(CustomClaims::entries_map),
+                session_epoch: epoch.as_deref(),
+            },
+        );
+        self.legacy_tokens_issued = true;
+        Ok(payload)
+    }
+
     /// The private control-session incarnation expected in locally issued ID tokens.
     #[must_use]
     pub(crate) fn lifecycle_epoch_claim(&self) -> Option<String> {
@@ -1419,6 +1464,7 @@ impl AuthStore {
             signer: None,
             credential_epoch: None,
             lifecycle_epoch: None,
+            legacy_tokens_issued: false,
             oob_codes: Arc::new(BTreeMap::new()),
             verification_codes: Arc::new(BTreeMap::new()),
             temporary_proofs: BTreeMap::new(),
@@ -2246,6 +2292,7 @@ impl AuthStore {
                 tokens_revoked: user.tokens_valid_after > Self::whole_second(user.created_at),
                 federated: user.federated,
                 admin_created: true,
+                custom_auth: false,
                 removed_password_updated_at: None,
                 email_verified_recorded: true,
                 password,
@@ -2942,6 +2989,7 @@ impl AuthStore {
             tokens_revoked: false,
             federated: Vec::new(),
             admin_created: false,
+            custom_auth: false,
             removed_password_updated_at: None,
             email_verified_recorded: false,
             password: None,
@@ -4582,6 +4630,7 @@ impl AuthStore {
             phone_number: user.phone_number.clone(),
             display_name: user.display_name.clone(),
             photo_url: user.photo_url.clone(),
+            provider_id: (user.provider == Provider::Anonymous).then(|| "anonymous".to_owned()),
             firebase: FirebaseClaims {
                 identities,
                 sign_in_provider: user.provider.sign_in_provider_claim().to_owned(),
@@ -4603,6 +4652,21 @@ impl AuthStore {
             .map(Arc::make_mut)
             .ok_or(AuthError::UserNotFound)?;
         user.tokens_valid_after = user.tokens_valid_after.max(Self::whole_second(now));
+        user.tokens_revoked = true;
+        self.activate_email_owner(uid);
+        Ok(())
+    }
+
+    /// Sets `validSince` to exactly `at` (floored to its second), earlier or later than before:
+    /// production evaluates it against each session's `auth_time` whenever the session is used,
+    /// so moving it back honours older sessions again (sandbox recording 2026-09-24).
+    pub fn set_valid_since(&mut self, uid: &LocalId, at: LogicalInstant) -> Result<(), AuthError> {
+        let user = self
+            .users
+            .get_mut(uid)
+            .map(Arc::make_mut)
+            .ok_or(AuthError::UserNotFound)?;
+        user.tokens_valid_after = Self::whole_second(at);
         user.tokens_revoked = true;
         self.activate_email_owner(uid);
         Ok(())
@@ -7638,6 +7702,52 @@ mod snapshot_cow_tests {
         snapshot.restore_into(&mut destination);
         assert!(destination.oidc_config("oidc.source").is_none());
         assert!(destination.oidc_config("oidc.destination").is_some());
+    }
+
+    /// A legacy token carries its store's session epoch and is refused by a later incarnation
+    /// or by a tenant store, as ID tokens are (closure review S1).
+    #[test]
+    fn legacy_tokens_are_bound_to_their_session_epoch_and_namespace() {
+        let mut live = store();
+        live.set_lifecycle_epoch(AuthLifecycleEpoch::initial(17, 1));
+        let uid = live
+            .create_user_with_id(NewUser::email("legacy@example.test"), Some("legacy"), AT)
+            .unwrap();
+        let at_secs = i64::try_from(AT.as_nanos().div_euclid(1_000_000_000)).unwrap();
+        let payload = live
+            .legacy_token_payload(&uid, at_secs, "password", None)
+            .unwrap();
+        assert!(payload.contains("fireemu_session_epoch"), "{payload}");
+        let token =
+            crate::jwt::encode_payload_shaped(&payload, None, crate::jwt::HeaderShape::Untyped);
+        assert!(crate::jwt::verify_legacy_token(&token, &live, AT, 0).is_ok());
+        let mut stripped = live.clone();
+        stripped.set_lifecycle_epoch(AuthLifecycleEpoch::initial(17, 2));
+        assert!(matches!(
+            crate::jwt::verify_legacy_token(&token, &stripped, AT, 0),
+            Err(JwtError::WrongSessionEpoch { .. })
+        ));
+        let mut tenant = AuthStore::new_tenant(
+            "demo",
+            "tenant-a",
+            SplitMix64::new(9),
+            TotpPolicy::default(),
+        );
+        let tenant_uid = tenant
+            .create_user_with_id(NewUser::email("t@example.test"), Some("legacy"), AT)
+            .unwrap();
+        let tenant_payload = tenant
+            .legacy_token_payload(&tenant_uid, at_secs, "password", None)
+            .unwrap();
+        let tenant_token = crate::jwt::encode_payload_shaped(
+            &tenant_payload,
+            None,
+            crate::jwt::HeaderShape::Untyped,
+        );
+        assert!(matches!(
+            crate::jwt::verify_legacy_token(&tenant_token, &tenant, AT, 0),
+            Err(JwtError::WrongTenant { .. })
+        ));
     }
 
     #[test]

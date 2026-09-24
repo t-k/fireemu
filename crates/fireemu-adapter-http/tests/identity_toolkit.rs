@@ -610,6 +610,7 @@ fn state() -> AuthState {
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        custom_token_trust: None,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -1224,7 +1225,9 @@ fn secure_token_refresh_preserves_authentication_time() {
 
 #[test]
 fn strict_profile_token_expiration_matrix_preserves_account_state() {
-    for elapsed in [0, 3_600, 3_601] {
+    // Identity Toolkit honours a token for five minutes past `exp` and then refuses it as
+    // invalid (sandbox recording 2026-09-24, auth-credential/expiry/one-hour).
+    for elapsed in [0, 3_600, 3_899, 3_900, 3_901] {
         let s = strict_state();
         let (status, signed) = post(
             &s,
@@ -1256,11 +1259,11 @@ fn strict_profile_token_expiration_matrix_preserves_account_state() {
             &format!("{V1}/accounts:lookup"),
             &json!({"idToken": id_token}),
         );
-        if elapsed < 3_600 {
+        if elapsed < 3_900 {
             assert_eq!(lookup_status, 200, "elapsed={elapsed}: {lookup_response}");
         } else {
             assert_eq!(lookup_status, 400, "elapsed={elapsed}: {lookup_response}");
-            assert_eq!(lookup_response["error"]["message"], "TOKEN_EXPIRED");
+            assert_eq!(lookup_response["error"]["message"], "INVALID_ID_TOKEN");
             let (status, after) = account();
             assert_eq!(status, 200, "elapsed={elapsed}: {after}");
             assert_eq!(
@@ -1289,6 +1292,942 @@ fn strict_profile_token_expiration_matrix_preserves_account_state() {
         );
         assert_eq!(refreshed_lookup["users"][0]["localId"], uid);
     }
+}
+
+/// Production evaluates `validSince` against each session's `auth_time` when the session is
+/// used, and lets an administrator move it back: equal is accepted, one second later refuses
+/// the ID token and the refresh token with `TOKEN_EXPIRED`, and moving it back before `auth_time`
+/// honours both again (sandbox recording 2026-09-24, auth-credential/revocation/valid-since).
+#[test]
+fn strict_valid_since_is_evaluated_live_and_may_move_back() {
+    let s = strict_state();
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=k"),
+        &json!({"email": "live-valid-since@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let id_token = signed_in["idToken"].clone();
+    let refresh = signed_in["refreshToken"].clone();
+    let auth_time = fireemu_core_auth::jwt::decode_unsigned(id_token.as_str().unwrap())
+        .unwrap()
+        .payload
+        .get("auth_time")
+        .and_then(fireemu_core_types::json::JsonValue::as_i64)
+        .unwrap();
+    advance(&s, 2);
+    let set_valid_since = |seconds: i64| {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": signed_in["localId"], "validSince": seconds.to_string()}),
+        );
+        assert_eq!(status, 200, "{body}");
+    };
+    let use_session = || {
+        let (lookup, looked_up) = post(
+            &s,
+            &format!("{V1}/accounts:lookup?key=k"),
+            &json!({"idToken": id_token}),
+        );
+        let (refresh_status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token?key=k",
+            &json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+        );
+        let code = |body: &Value| body["error"]["message"].as_str().unwrap_or("").to_owned();
+        (lookup, code(&looked_up), refresh_status, code(&refreshed))
+    };
+    set_valid_since(auth_time);
+    assert_eq!(
+        use_session(),
+        (200, String::new(), 200, String::new()),
+        "equal is accepted"
+    );
+    set_valid_since(auth_time + 1);
+    assert_eq!(
+        use_session(),
+        (
+            400,
+            "TOKEN_EXPIRED".to_owned(),
+            400,
+            "TOKEN_EXPIRED".to_owned()
+        ),
+        "a session older than validSince"
+    );
+    set_valid_since(auth_time - 1);
+    assert_eq!(
+        use_session(),
+        (200, String::new(), 200, String::new()),
+        "validSince moved back honours the session again"
+    );
+    let (_, account) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [signed_in["localId"]]}),
+    );
+    assert_eq!(
+        account["users"][0]["validSince"],
+        (auth_time - 1).to_string()
+    );
+}
+
+/// An anonymous session's ID token names its provider at the top level as well as under
+/// `firebase`, on sign-up and on every refresh; other accounts carry no `provider_id`
+/// (sandbox recording 2026-09-24, auth-credential/id-token/methods#anonymous-sign-up).
+/// A client update's `validSince` changes nothing; only an administrator sets it
+/// (AUTH-ACCOUNT recording 2026-09-23, privilege/valid-token-admin-fields).
+#[test]
+fn a_client_update_cannot_move_valid_since() {
+    let s = strict_state();
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "client-valid-since@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let read = || {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [signed_in["localId"]]}),
+        )
+        .1["users"][0]["validSince"]
+            .clone()
+    };
+    let before = read();
+    let (status, updated) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": signed_in["idToken"], "validSince": "1700000000"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(read(), before);
+}
+
+/// The service account the strict test states trust for custom tokens.
+const TEST_SIGNER: &str = "firebase-adminsdk-x@demo-app.iam.gserviceaccount.com";
+
+fn test_signer_key() -> &'static rsa::RsaPrivateKey {
+    use rand_core::SeedableRng;
+    static KEY: std::sync::OnceLock<rsa::RsaPrivateKey> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| {
+        rsa::RsaPrivateKey::new(&mut rand_chacha::ChaCha20Rng::seed_from_u64(31), 2048).unwrap()
+    })
+}
+
+/// The strict profile with `auth.customTokenSigners` naming [`TEST_SIGNER`].
+fn strict_state_with_signer() -> AuthState {
+    use fireemu_adapter_http::identity_toolkit::CustomTokenTrust;
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rsa::traits::PublicKeyParts;
+    let key = test_signer_key();
+    let jwks = json!({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "k1",
+        "n": base64url_encode(&key.n().to_bytes_be()), "e": base64url_encode(&key.e().to_bytes_be())}]});
+    let trust =
+        CustomTokenTrust::from_jwks(json!({TEST_SIGNER: jwks}).as_object().unwrap()).unwrap();
+    AuthState {
+        custom_token_trust: Some(Arc::new(trust)),
+        ..strict_state()
+    }
+}
+
+/// A custom token [`TEST_SIGNER`] signed, issued at `iat` and valid for an hour.
+fn trusted_custom_token(uid: &str, claims: &Value, iat: i64) -> String {
+    signed_custom_token(test_signer_key(), TEST_SIGNER, uid, claims, iat)
+}
+
+/// Identity Toolkit honours an ID token for five minutes past `exp` and then refuses it as
+/// invalid, not as expired, in both profiles: production accepted it ten seconds past `exp` and
+/// refused it 330 seconds past (sandbox recording 2026-09-24, auth-credential/expiry/one-hour).
+/// A strict custom token follows the same allowance; the emulator profile keeps the official
+/// emulator's disregard of a fake custom token's `exp`.
+#[test]
+fn expired_tokens_have_a_skew_allowance_and_are_then_invalid() {
+    for strict in [true, false] {
+        let s = if strict {
+            strict_state_with_signer()
+        } else {
+            state()
+        };
+        let (status, signed_in) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "expiry@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{signed_in}");
+        let now = 1_788_004_860;
+        let custom = if strict {
+            trusted_custom_token("expiring-custom", &json!({}), now)
+        } else {
+            custom_token("expiring-custom", &json!({}), now + 3600)
+        };
+        let attempt = || {
+            let code = |(status, body): (u16, Value)| {
+                (
+                    status,
+                    body["error"]["message"].as_str().unwrap_or("").to_owned(),
+                )
+            };
+            (
+                code(post(
+                    &s,
+                    &format!("{V1}/accounts:lookup"),
+                    &json!({"idToken": signed_in["idToken"]}),
+                )),
+                code(admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}:createSessionCookie"),
+                    &json!({"idToken": signed_in["idToken"], "validDuration": 3600}),
+                )),
+                code(post(
+                    &s,
+                    &format!("{V1}/accounts:signInWithCustomToken"),
+                    &json!({"token": custom, "returnSecureToken": true}),
+                )),
+            )
+        };
+        advance(&s, 3610);
+        let ok = (200, String::new());
+        assert_eq!(
+            attempt(),
+            (ok.clone(), ok.clone(), ok.clone()),
+            "strict={strict}"
+        );
+        advance(&s, 320);
+        let custom_expected = if strict {
+            (400, "INVALID_CUSTOM_TOKEN".to_owned())
+        } else {
+            ok
+        };
+        assert_eq!(
+            attempt(),
+            (
+                (400, "INVALID_ID_TOKEN".to_owned()),
+                (400, "INVALID_ID_TOKEN".to_owned()),
+                custom_expected,
+            ),
+            "strict={strict}"
+        );
+    }
+}
+
+/// An administrator's email change revokes the account's sessions and retires its refresh
+/// tokens; a profile-only change does not. Production has not been observed for this; the test
+/// pins fireemu's contract.
+#[test]
+fn an_administrative_email_change_revokes_sessions_and_a_profile_change_does_not() {
+    let s = strict_state();
+    let sign_up = |email: &str| {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{body}");
+        body
+    };
+    let changed = sign_up("before-change@example.com");
+    let profiled = sign_up("profile-only@example.com");
+    advance(&s, 2);
+    for (account, change) in [
+        (&changed, json!({"email": "after-change@example.com"})),
+        (&profiled, json!({"displayName": "Renamed"})),
+    ] {
+        let mut request = change;
+        request["localId"] = account["localId"].clone();
+        let (status, body) = admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &request);
+        assert_eq!(status, 200, "{body}");
+    }
+    let use_session = |account: &Value| {
+        let (lookup, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": account["idToken"]}),
+        );
+        let (refresh, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": account["refreshToken"]}),
+        );
+        let code = |body: &Value| body["error"]["message"].as_str().unwrap_or("").to_owned();
+        (lookup, code(&looked), refresh, code(&refreshed))
+    };
+    assert_eq!(
+        use_session(&changed),
+        (
+            400,
+            "TOKEN_EXPIRED".to_owned(),
+            400,
+            "INVALID_REFRESH_TOKEN".to_owned()
+        )
+    );
+    assert_eq!(
+        use_session(&profiled),
+        (200, String::new(), 200, String::new())
+    );
+}
+
+/// Disabling and re-enabling an account keeps its sessions in the strict profile, as production
+/// does (AUTH-ACCOUNT recording 2026-09-23, admin/disable), while the emulator profile revokes
+/// them as the official emulator does.
+#[test]
+fn disable_and_re_enable_keeps_sessions_only_in_the_strict_profile() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, account) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "toggle@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{account}");
+        advance(&s, 2);
+        // A profile-only update keeps the session in either profile.
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": account["localId"], "displayName": "Still Signed In"}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": account["idToken"]}),
+        );
+        assert_eq!(status, 200, "strict={strict}: {looked}");
+        for disable in [true, false] {
+            let (status, body) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:update"),
+                &json!({"localId": account["localId"], "disableUser": disable}),
+            );
+            assert_eq!(status, 200, "{body}");
+        }
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": account["idToken"]}),
+        );
+        if strict {
+            assert_eq!(status, 200, "{looked}");
+        } else {
+            assert_eq!(
+                (status, looked["error"]["message"].clone()),
+                (400, json!("TOKEN_EXPIRED"))
+            );
+        }
+    }
+}
+
+/// The emulator profile keeps the official emulator's answer to an empty custom token, and a
+/// numeric uid names its account as a string (sandbox recording 2026-09-24,
+/// custom-token/validation#numeric-uid).
+#[test]
+fn custom_token_empty_and_numeric_uid_answers() {
+    let s = state();
+    let (status, empty) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": ""}),
+    );
+    assert_eq!(
+        (status, empty["error"]["message"].clone()),
+        (400, json!("MISSING_CUSTOM_TOKEN"))
+    );
+    for strict in [false, true] {
+        let s = if strict {
+            strict_state_with_signer()
+        } else {
+            state()
+        };
+        let now = 1_788_004_860;
+        let issuer = if strict {
+            TEST_SIGNER
+        } else {
+            "firebase-auth-emulator@example.com"
+        };
+        let payload = json!({
+            "aud": fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE,
+            "iss": issuer,
+            "sub": issuer,
+            "iat": now,
+            "exp": now + 3600,
+            "uid": 12345,
+        });
+        let token = if strict {
+            signed_payload(test_signer_key(), &payload)
+        } else {
+            custom_token_from_payload(&payload)
+        };
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(token_parts(&body["idToken"]).1["sub"], "12345");
+    }
+}
+
+/// The emulator profile never issues legacy tokens, so it keeps refusing a token that claims
+/// the legacy issuer (closure review S3).
+#[test]
+fn the_emulator_profile_refuses_a_forged_legacy_token() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "forged-legacy@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let now = 1_788_004_860;
+    let forged = fireemu_core_auth::jwt::encode_payload_shaped(
+        &json!({
+            "iss": "https://identitytoolkit.google.com/",
+            "aud": "demo-app",
+            "iat": now,
+            "exp": now + 1_209_600,
+            "user_id": account["localId"],
+            "sign_in_provider": "password",
+        })
+        .to_string(),
+        None,
+        fireemu_core_auth::jwt::HeaderShape::Untyped,
+    );
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": forged}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_ID_TOKEN"))
+    );
+}
+
+/// Without `returnSecureToken` the emulator profile keeps the official emulator's secure tokens,
+/// while strict answers with production's legacy token (sandbox recording 2026-09-24).
+#[test]
+fn only_the_strict_profile_answers_without_secure_tokens_with_a_legacy_token() {
+    for strict in [false, true] {
+        let s = if strict {
+            strict_state_with_signer()
+        } else {
+            state()
+        };
+        let (status, _) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "profile-legacy@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200);
+        let now = 1_788_004_860;
+        let custom = if strict {
+            trusted_custom_token("profile-custom", &json!({}), now)
+        } else {
+            custom_token("profile-custom", &json!({}), now + 3600)
+        };
+        for (path, body) in [
+            (
+                "accounts:signInWithPassword",
+                json!({"email": "profile-legacy@example.com", "password": "hunter22"}),
+            ),
+            ("accounts:signInWithCustomToken", json!({"token": custom})),
+        ] {
+            let (status, answer) = post(&s, &format!("{V1}/{path}"), &body);
+            assert_eq!(status, 200, "{answer}");
+            let issuer = token_parts(&answer["idToken"]).1["iss"].clone();
+            if strict {
+                assert_eq!(issuer, "https://identitytoolkit.google.com/", "{path}");
+                assert!(answer.get("refreshToken").is_none(), "{path}: {answer}");
+            } else {
+                assert_eq!(issuer, "https://securetoken.google.com/demo-app", "{path}");
+                assert!(answer.get("refreshToken").is_some(), "{path}: {answer}");
+            }
+        }
+    }
+}
+
+/// A strict project keeps legacy tokens unless a blocking trigger is selected for the sign-in:
+/// a beforeCreate-only function does not stop a password sign-in's legacy token, a
+/// beforeSignIn function does.
+#[test]
+fn legacy_tokens_stop_only_where_a_blocking_trigger_is_selected() {
+    for (label, hook, legacy) in [
+        (
+            "beforeCreate only",
+            Arc::new(BeforeCreateOnlySuccessfulHook(Arc::new(Mutex::new(
+                Vec::new(),
+            )))) as Arc<dyn AuthBlockingHook>,
+            true,
+        ),
+        (
+            "beforeSignIn",
+            Arc::new(RecordingBlockingHook {
+                events: Arc::new(Mutex::new(Vec::new())),
+                reject: None,
+            }) as Arc<dyn AuthBlockingHook>,
+            false,
+        ),
+    ] {
+        let mut s = strict_state();
+        let (status, _) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "blocking-legacy@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200);
+        s.blocking = Some(hook);
+        let (status, answer) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "blocking-legacy@example.com", "password": "hunter22"}),
+        );
+        assert_eq!(status, 200, "{label}: {answer}");
+        assert_eq!(
+            answer.get("refreshToken").is_none(),
+            legacy,
+            "{label}: {answer}"
+        );
+    }
+}
+
+/// Production accepts only signed custom tokens: without `auth.customTokenSigners` the strict
+/// profile refuses unsigned and JSON fake tokens as production refuses an unsigned one, and the
+/// emulator profile keeps accepting them as the official emulator does.
+#[test]
+fn strict_refuses_unsigned_custom_tokens_without_configured_signers() {
+    let now = 1_788_004_860;
+    for (strict, expected) in [(true, 400), (false, 200)] {
+        let s = if strict { strict_state() } else { state() };
+        for token in [
+            custom_token("unsigned-user", &json!({}), now + 3600),
+            r#"{"uid":"json-user"}"#.to_owned(),
+        ] {
+            let (status, body) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithCustomToken"),
+                &json!({"token": token, "returnSecureToken": true}),
+            );
+            assert_eq!(status, expected, "strict={strict}: {body}");
+            if strict {
+                assert_eq!(body["error"]["message"], "INVALID_CUSTOM_TOKEN");
+            }
+        }
+    }
+}
+
+/// Production honours a legacy token on account lookup, update and delete, a verification
+/// mail, phone linking, a sign-up upgrade and MFA enrollment (sandbox recording 2026-09-24,
+/// id-token/without-return-secure-token). Email-link and identity-provider linking, not yet
+/// observed, keep refusing it; separate tests pin both.
+#[test]
+fn legacy_tokens_are_honoured_where_production_honours_them() {
+    let s = strict_state_with_signer();
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "legacy-routes@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200);
+    let (status, legacy) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "legacy-routes@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{legacy}");
+    let token = legacy["idToken"].clone();
+    let code = |(status, body): (u16, Value)| {
+        (
+            status,
+            body["error"]["message"].as_str().unwrap_or("").to_owned(),
+        )
+    };
+    let v2 = "/identitytoolkit.googleapis.com/v2";
+    assert_eq!(
+        code(post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": token})
+        )),
+        (200, String::new())
+    );
+    assert_eq!(
+        code(post(
+            &s,
+            &format!("{V1}/accounts:sendOobCode"),
+            &json!({"idToken": token, "requestType": "VERIFY_EMAIL"}),
+        )),
+        (200, String::new())
+    );
+    let (status, started) = post(
+        &s,
+        &format!("{v2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "totpEnrollmentInfo": {}}),
+    );
+    assert_eq!(
+        (status, started.clone()),
+        (
+            400,
+            json!({"error": {"code": 400, "message": "OPERATION_NOT_ALLOWED : TOTP based MFA not enabled.", "status": "INVALID_ARGUMENT"}})
+        )
+    );
+    let (status, withdrawn) = post(
+        &s,
+        &format!("{v2}/accounts/mfaEnrollment:withdraw"),
+        &json!({"idToken": token, "mfaEnrollmentId": "unknown"}),
+    );
+    assert_eq!(
+        (status, withdrawn),
+        (
+            400,
+            json!({"error": {"code": 400, "message": "MFA_ENROLLMENT_NOT_FOUND", "status": "INVALID_ARGUMENT"}})
+        )
+    );
+    // A sign-up upgrade with a legacy token of a custom account adds the address.
+    let (status, custom) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": trusted_custom_token("legacy-upgrade", &json!({}), 1_788_004_860)}),
+    );
+    assert_eq!(status, 200, "{custom}");
+    let (status, upgraded) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"idToken": custom["idToken"], "email": "upgraded@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{upgraded}");
+    assert_eq!(upgraded["email"], "upgraded@example.com");
+}
+
+/// `validDuration` follows the official emulator's `Number(v) || two weeks` in the emulator
+/// profile and production's int64 decoding in strict (sandbox recording 2026-09-24).
+#[test]
+fn session_cookie_durations_follow_each_profile() {
+    for strict in [false, true] {
+        let s = if strict { strict_state() } else { state() };
+        let (status, signed_up) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "duration-profile@example.com", "password": "hunter22", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{signed_up}");
+        for (duration, lifetime) in [
+            (json!(0), 1_209_600),
+            (json!(3600.5), 3600),
+            (json!("an hour"), 1_209_600),
+            (json!("3600"), 3600),
+        ] {
+            let (status, answer) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}:createSessionCookie"),
+                &json!({"idToken": signed_up["idToken"], "validDuration": duration}),
+            );
+            if strict && duration != json!("3600") {
+                assert_eq!(status, 400, "{duration}: {answer}");
+            } else {
+                assert_eq!(status, 200, "strict={strict} {duration}: {answer}");
+                let claims = token_parts(&answer["sessionCookie"]).1;
+                assert_eq!(
+                    claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+                    lifetime,
+                    "strict={strict} {duration}"
+                );
+            }
+        }
+    }
+}
+
+/// An email-link sign-in that links to a session refuses a legacy token (not yet observed with
+/// one in production), after its own action code has been verified.
+#[test]
+fn an_email_link_refuses_a_legacy_token() {
+    let s = strict_state_with_signer();
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "legacy-link@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200);
+    let (status, legacy) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "legacy-link@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{legacy}");
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "legacy-link@example.com", "continueUrl": "http://localhost/"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, codes) = admin(
+        &s,
+        "GET",
+        "/emulator/v1/projects/demo-app/oobCodes",
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{codes}");
+    let code = codes["oobCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["requestType"] == "EMAIL_SIGNIN")
+        .unwrap()["oobCode"]
+        .clone();
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"email": "legacy-link@example.com", "oobCode": code, "idToken": legacy["idToken"]}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_ID_TOKEN"))
+    );
+}
+
+/// Linking an identity provider refuses a legacy token (not yet observed with one in
+/// production) where a secure token of the same account links.
+#[test]
+fn an_identity_provider_link_refuses_a_legacy_token() {
+    let s = strict_state_with_signer();
+    let (status, secure) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "legacy-idp@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{secure}");
+    let (status, legacy) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "legacy-idp@example.com", "password": "hunter22"}),
+    );
+    assert_eq!(status, 200, "{legacy}");
+    let link = |token: &Value, subject: &str| {
+        let assertion =
+            json!({"sub": subject, "email": format!("{subject}@example.com")}).to_string();
+        let encoded: String = assertion
+            .bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() {
+                    (b as char).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect();
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithIdp"),
+            &json!({
+                "idToken": token,
+                "postBody": format!("id_token={encoded}&providerId=google.com"),
+                "requestUri": "http://localhost",
+                "returnSecureToken": true,
+            }),
+        )
+    };
+    let (status, refused) = link(&legacy["idToken"], "g-legacy");
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_ID_TOKEN"))
+    );
+    let (status, linked) = link(&secure["idToken"], "g-secure");
+    assert_eq!(status, 200, "{linked}");
+}
+
+/// Configured signers bring production's custom-token rules to the emulator profile too.
+#[test]
+fn configured_signers_apply_production_rules_in_the_emulator_profile() {
+    let trusted = strict_state_with_signer();
+    let s = AuthState {
+        custom_token_trust: trusted.custom_token_trust.clone(),
+        ..state()
+    };
+    let now = 1_788_004_860;
+    let wrong_audience = signed_payload(
+        test_signer_key(),
+        &json!({"iss": TEST_SIGNER, "sub": TEST_SIGNER, "aud": "https://example.com", "iat": now, "exp": now + 3600, "uid": "u"}),
+    );
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": wrong_audience, "returnSecureToken": true}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_CUSTOM_TOKEN"))
+    );
+}
+
+/// A strict custom token is honoured through exp+299 and refused from exp+300, the edge
+/// production showed (exploration 2026-09-24, skew-1790210153.json).
+#[test]
+fn a_custom_token_is_refused_from_exactly_five_minutes_past_exp() {
+    let s = strict_state_with_signer();
+    let now = 1_788_004_860;
+    let token = trusted_custom_token("edge", &json!({}), now);
+    let sign_in = || {
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        )
+    };
+    advance(&s, 3600 + 299);
+    assert_eq!(sign_in().0, 200);
+    advance(&s, 1);
+    let (status, refused) = sign_in();
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_CUSTOM_TOKEN"))
+    );
+}
+
+/// The emulator profile keeps the official emulator's error shape on MFA enrollment.
+#[test]
+fn the_emulator_profile_keeps_the_official_mfa_error_shape() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "mfa-shape@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let (status, refused) = post(
+        &s,
+        "/identitytoolkit.googleapis.com/v2/accounts/mfaEnrollment:withdraw",
+        &json!({"idToken": account["idToken"], "mfaEnrollmentId": "unknown"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert!(refused["error"].get("errors").is_some(), "{refused}");
+    assert!(refused["error"].get("status").is_none(), "{refused}");
+}
+
+/// `Number(true)` is one second, below the minimum; `Number(false)` is zero, the maximum.
+#[test]
+fn the_emulator_profile_reads_a_boolean_duration_as_a_number() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "bool-duration@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let cookie = |duration: Value| {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:createSessionCookie"),
+            &json!({"idToken": account["idToken"], "validDuration": duration}),
+        )
+    };
+    let (status, refused) = cookie(json!(true));
+    assert_eq!(
+        (status, refused["error"]["message"].clone()),
+        (400, json!("INVALID_DURATION"))
+    );
+    let (status, accepted) = cookie(json!(false));
+    assert_eq!(status, 200, "{accepted}");
+    let claims = token_parts(&accepted["sessionCookie"]).1;
+    assert_eq!(
+        claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+        1_209_600
+    );
+}
+
+#[test]
+fn anonymous_id_tokens_carry_a_top_level_provider_id() {
+    let s = strict_state();
+    let claim = |token: &Value| {
+        fireemu_core_auth::jwt::decode_unsigned(token.as_str().unwrap())
+            .unwrap()
+            .payload
+            .get("provider_id")
+            .and_then(|v| v.as_str().map(str::to_owned))
+    };
+    let (status, anonymous) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=k"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{anonymous}");
+    assert_eq!(claim(&anonymous["idToken"]).as_deref(), Some("anonymous"));
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token?key=k",
+        &json!({"grant_type": "refresh_token", "refresh_token": anonymous["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(claim(&refreshed["id_token"]).as_deref(), Some("anonymous"));
+    let (status, password) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=k"),
+        &json!({"email": "not-anonymous@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{password}");
+    assert_eq!(claim(&password["idToken"]), None);
+}
+
+/// Secure Token treats an absent or empty `grant_type` or `refresh_token` as missing, and its
+/// front end refuses a caller without identity without an `errors` list (sandbox recording
+/// 2026-09-24, auth-credential/refresh/refusals).
+#[test]
+fn secure_token_missing_fields_and_unregistered_callers_have_production_shapes() {
+    let s = strict_state();
+    let token = "/securetoken.googleapis.com/v1/token";
+    let message = |body: &Value| body["error"]["message"].as_str().unwrap_or("").to_owned();
+    for (body, expected) in [
+        (json!({"refresh_token": "anything"}), "MISSING_GRANT_TYPE"),
+        (json!({}), "MISSING_GRANT_TYPE"),
+        (
+            json!({"grant_type": "", "refresh_token": "anything"}),
+            "MISSING_GRANT_TYPE",
+        ),
+        (
+            json!({"grant_type": "refresh_token", "refresh_token": ""}),
+            "MISSING_REFRESH_TOKEN",
+        ),
+        (
+            json!({"grant_type": "refresh_token"}),
+            "MISSING_REFRESH_TOKEN",
+        ),
+        (
+            json!({"grant_type": "password", "refresh_token": "x"}),
+            "INVALID_GRANT_TYPE",
+        ),
+    ] {
+        let (status, refused) = post(&s, &format!("{token}?key=k"), &body);
+        assert_eq!(
+            (status, message(&refused)),
+            (400, expected.to_owned()),
+            "{body}"
+        );
+        assert!(refused["error"].get("errors").is_none(), "{refused}");
+    }
+    // `post` adds the key an SDK would send; this caller sends none.
+    let refused = handle(
+        &s,
+        "POST",
+        token,
+        &json!({"grant_type": "refresh_token", "refresh_token": "x"}),
+    );
+    assert_eq!(refused.status, 403);
+    assert_eq!(
+        refused.body,
+        json!({"error": {
+            "code": 403,
+            "message": "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.",
+            "status": "PERMISSION_DENIED",
+        }})
+    );
 }
 
 #[test]
@@ -5179,14 +6118,15 @@ fn deleted_account_credentials_are_distinct_from_unknown_inputs() {
     );
     assert_eq!(status, 400);
     assert_eq!(response["error"]["message"], "INVALID_ID_TOKEN");
-    advance(&s, 3601);
+    // Past the five-minute allowance an expired token is invalid (sandbox recording 2026-09-24).
+    advance(&s, 3901);
     let (status, response) = post(
         &s,
         &format!("{V1}/accounts:lookup"),
         &json!({"idToken": accounts[0]["idToken"]}),
     );
     assert_eq!(status, 400);
-    assert_eq!(response["error"]["message"], "TOKEN_EXPIRED");
+    assert_eq!(response["error"]["message"], "INVALID_ID_TOKEN");
 }
 
 #[test]
@@ -6392,7 +7332,8 @@ fn end_user_update_session_failure_precedes_admin_field_authorization() {
 
         // Expired: the token outlives its one-hour lifetime before the update.
         let (expired_uid, expired_token) = fresh("expired-field@example.com");
-        advance(&s, 3601);
+        // Past the five-minute allowance (sandbox recording 2026-09-24).
+        advance(&s, 3901);
         // Revoked: a fresh token, then a privileged password change advances validSince.
         let (revoked_uid, revoked_token) = fresh("revoked-field@example.com");
         advance(&s, 2);
@@ -6427,7 +7368,7 @@ fn end_user_update_session_failure_precedes_admin_field_authorization() {
                 "expired",
                 &expired_token,
                 Some(&expired_uid),
-                "TOKEN_EXPIRED",
+                "INVALID_ID_TOKEN",
             ),
             (
                 "revoked",
@@ -6837,7 +7778,9 @@ fn strict_password_change_distinguishes_revoked_refresh() {
         assert_eq!(status, 400);
         assert_eq!(response["error"]["message"], "TOKEN_EXPIRED");
     }
-    for token in ["", "rt-unknown", "malformed.token"] {
+    // An empty refresh token is a missing one (sandbox recording 2026-09-24,
+    // auth-credential/refresh/refusals#empty-refresh-token).
+    for token in ["rt-unknown", "malformed.token"] {
         let (status, response) = post(
             &s,
             refresh_path,
@@ -7164,6 +8107,99 @@ fn self_service_password_change_invalidates_an_existing_session_cookie() {
     assert!(valid(new_cookie["sessionCookie"].as_str().unwrap()));
 }
 
+/// Session-cookie creation as production answers it (sandbox recording 2026-09-24,
+/// auth-credential/session-cookie): a zero duration is refused, a duration that is not an
+/// int64 is a proto decoding error, an API key cannot stand in for the owner credential, and a
+/// deleted account's token is `USER_NOT_FOUND`.
+#[test]
+fn session_cookie_requests_are_decoded_and_authorized_as_production_does() {
+    let s = strict_state();
+    let (status, signed_up) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "cookie-decode@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_up}");
+    let cookie = |duration: Value| {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:createSessionCookie"),
+            &json!({"idToken": signed_up["idToken"], "validDuration": duration}),
+        )
+    };
+    let (status, zero) = cookie(json!(0));
+    assert_eq!(
+        (status, zero["error"]["message"].clone()),
+        (400, json!("INVALID_DURATION"))
+    );
+    for (duration, rendered) in [(json!(3600.5), "3600.5"), (json!("an hour"), "\"an hour\"")] {
+        let description = format!("Invalid value at 'valid_duration' (TYPE_INT64), {rendered}");
+        let (status, refused) = cookie(duration);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(
+            refused,
+            json!({"error": {
+                "code": 400,
+                "message": description,
+                "errors": [{"message": description, "reason": "invalid"}],
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{"field": "valid_duration", "description": description}],
+                }],
+            }})
+        );
+    }
+    assert_eq!(cookie(json!("3600")).0, 200);
+    let keyed = handle(
+        &s,
+        "POST",
+        &format!("{ADMIN}:createSessionCookie?key=fake-api-key"),
+        &json!({"idToken": signed_up["idToken"], "validDuration": 3600}),
+    );
+    assert_eq!(keyed.status, 401, "{}", keyed.body);
+    assert_eq!(
+        keyed.body,
+        json!({"error": {
+            "code": 401,
+            "message": "API keys are not supported by this API. Expected OAuth2 access token or other authentication credentials that assert a principal. See https://cloud.google.com/docs/authentication",
+            "errors": [{
+                "message": "Login Required.",
+                "domain": "global",
+                "reason": "required",
+                "location": "Authorization",
+                "locationType": "header",
+            }],
+            "status": "UNAUTHENTICATED",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                "reason": "CREDENTIALS_MISSING",
+                "domain": "googleapis.com",
+                "metadata": {
+                    "method": "google.cloud.identitytoolkit.v1.SessionManagementService.CreateSessionCookie",
+                    "service": "identitytoolkit.googleapis.com",
+                },
+            }],
+        }})
+    );
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": signed_up["localId"]})
+        )
+        .0,
+        200
+    );
+    let (status, deleted) = cookie(json!(3600));
+    assert_eq!(
+        (status, deleted["error"]["message"].clone()),
+        (400, json!("USER_NOT_FOUND"))
+    );
+}
+
 #[test]
 fn session_cookie_rejects_invalid_expired_revoked_deleted_and_disabled_id_tokens() {
     for transition in ["invalid", "expired", "revoked", "deleted", "disabled"] {
@@ -7179,7 +8215,8 @@ fn session_cookie_rejects_invalid_expired_revoked_deleted_and_disabled_id_tokens
         match transition {
             "invalid" => token = json!("not-a-token"),
             "expired" => {
-                advance(&s, 3600);
+                // Past the five-minute allowance (sandbox recording 2026-09-24).
+                advance(&s, 3900);
             }
             "revoked" => {
                 advance(&s, 1);
@@ -7296,7 +8333,7 @@ fn session_cookie_rejects_wrong_project_tenant_issuer_and_audience_without_mutat
 }
 
 #[test]
-fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
+fn admin_valid_since_is_parsed_before_mutation_and_applied_as_given() {
     let s = state();
     assert_eq!(
         admin(
@@ -7383,7 +8420,9 @@ fn admin_valid_since_is_parsed_before_mutation_and_applied_monotonically() {
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": ["revoked-user"]}),
     );
-    assert_eq!(looked["users"][0]["validSince"], "1788005001");
+    // Production stores an earlier validSince as given (sandbox recording 2026-09-24,
+    // auth-credential/revocation/valid-since#valid-since-before).
+    assert_eq!(looked["users"][0]["validSince"], "1788004900");
     assert_eq!(looked["users"][0]["displayName"], "numeric-applied");
 }
 
@@ -7572,7 +8611,9 @@ fn refresh_custom_token(state: &AuthState, body: &Value, tenant: &str) -> Value 
         &json!({"grant_type": "refresh_token", "refresh_token": body["refreshToken"], "tenantId": tenant}),
     );
     assert_eq!(status, 200, "{refreshed}");
-    assert_refreshed_claims(&refreshed, tenant, body["localId"].as_str().unwrap());
+    // The custom-token answer names its account only inside the token.
+    let uid = token_parts(&body["idToken"]).1["sub"].clone();
+    assert_refreshed_claims(&refreshed, tenant, uid.as_str().unwrap());
     refreshed
 }
 
@@ -7665,6 +8706,459 @@ fn assert_tenant_stores_after_sign_in(
     }
 }
 
+/// A token the configured service account signed, as the Admin SDK with a real credential does.
+fn signed_custom_token(
+    key: &rsa::RsaPrivateKey,
+    issuer: &str,
+    uid: &str,
+    claims: &Value,
+    iat: i64,
+) -> String {
+    use fireemu_adapter_http::identity_toolkit::CUSTOM_TOKEN_AUDIENCE;
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rsa::signature::{SignatureEncoding, Signer};
+    let header = base64url_encode(br#"{"alg":"RS256","kid":"k1","typ":"JWT"}"#);
+    let payload = json!({
+        "aud": CUSTOM_TOKEN_AUDIENCE,
+        "iss": issuer,
+        "sub": issuer,
+        "uid": uid,
+        "claims": claims,
+        "iat": iat,
+        "exp": iat + 3600,
+    });
+    let input = format!(
+        "{header}.{}",
+        base64url_encode(payload.to_string().as_bytes())
+    );
+    let signature =
+        rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(key.clone()).sign(input.as_bytes());
+    format!("{input}.{}", base64url_encode(&signature.to_vec()))
+}
+
+fn signed_payload(key: &rsa::RsaPrivateKey, payload: &Value) -> String {
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rsa::signature::{SignatureEncoding, Signer};
+    let header = base64url_encode(br#"{"alg":"RS256","kid":"k1","typ":"JWT"}"#);
+    let input = format!(
+        "{header}.{}",
+        base64url_encode(payload.to_string().as_bytes())
+    );
+    let signature =
+        rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(key.clone()).sign(input.as_bytes());
+    format!("{input}.{}", base64url_encode(&signature.to_vec()))
+}
+
+/// The claim rules production applies to a verified custom token (sandbox recording
+/// 2026-09-24, auth-credential/custom-token/sign-in and validation).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn signed_custom_tokens_follow_production_claim_rules() {
+    use fireemu_adapter_http::identity_toolkit::{CustomTokenTrust, CUSTOM_TOKEN_AUDIENCE};
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rand_core::SeedableRng;
+    use rsa::traits::PublicKeyParts;
+    let account = "firebase-adminsdk-x@demo-app.iam.gserviceaccount.com";
+    let key =
+        rsa::RsaPrivateKey::new(&mut rand_chacha::ChaCha20Rng::seed_from_u64(21), 2048).unwrap();
+    let jwks = json!({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "k1",
+        "n": base64url_encode(&key.n().to_bytes_be()), "e": base64url_encode(&key.e().to_bytes_be())}]});
+    let trust = CustomTokenTrust::from_jwks(json!({account: jwks}).as_object().unwrap()).unwrap();
+    let s = AuthState {
+        custom_token_trust: Some(Arc::new(trust)),
+        ..strict_state()
+    };
+    let now = 1_788_004_860_i64;
+    let base = |uid: &str| {
+        json!({"iss": account, "sub": account, "aud": CUSTOM_TOKEN_AUDIENCE,
+            "iat": now, "exp": now + 3600, "uid": uid})
+    };
+    let with = |uid: &str, changes: &[(&str, Value)], removed: &[&str]| {
+        let mut payload = base(uid);
+        for (name, value) in changes {
+            payload[*name] = value.clone();
+        }
+        for name in removed {
+            payload.as_object_mut().unwrap().remove(*name);
+        }
+        signed_payload(&key, &payload)
+    };
+    let sign_in = |token: Value| {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": token, "returnSecureToken": true}),
+        );
+        (
+            status,
+            body["error"]["message"].as_str().unwrap_or("").to_owned(),
+        )
+    };
+    let invalid = (400, "INVALID_CUSTOM_TOKEN".to_owned());
+    let length = (
+        400,
+        "INVALID_IDENTIFIER : Invalid user ID length. Expect to have length between 1 and 128."
+            .to_owned(),
+    );
+    let ok = (200, String::new());
+    let format = (
+        400,
+        "INVALID_CUSTOM_TOKEN : Invalid assertion format. 3 dot separated segments required."
+            .to_owned(),
+    );
+    let signed = with("stripped", &[], &[]);
+    let stripped = format!("{}.", signed.rsplit_once('.').unwrap().0);
+    for (label, token, expected) in [
+        (
+            "wrong audience",
+            json!(with("aud", &[("aud", json!("https://example.com"))], &[])),
+            invalid.clone(),
+        ),
+        (
+            "iss not sub",
+            json!(with("iss", &[("sub", json!("someone@example.com"))], &[])),
+            invalid.clone(),
+        ),
+        (
+            "no exp",
+            json!(with("no-exp", &[], &["exp"])),
+            invalid.clone(),
+        ),
+        (
+            "no iat",
+            json!(with("no-iat", &[], &["iat"])),
+            invalid.clone(),
+        ),
+        (
+            "two hours",
+            json!(with("long", &[("exp", json!(now + 7200))], &[])),
+            invalid.clone(),
+        ),
+        (
+            "iat ahead",
+            json!(with(
+                "ahead",
+                &[("iat", json!(now + 600)), ("exp", json!(now + 4200))],
+                &[]
+            )),
+            invalid.clone(),
+        ),
+        ("empty uid", json!(with("", &[], &[])), length.clone()),
+        ("129", json!(with(&"u".repeat(129), &[], &[])), length),
+        ("128", json!(with(&"u".repeat(128), &[], &[])), ok.clone()),
+        (
+            "claims string",
+            json!(with("c1", &[("claims", json!("role=admin"))], &[])),
+            (400, "INVALID_CLAIMS".to_owned()),
+        ),
+        (
+            "claims array",
+            json!(with("c2", &[("claims", json!(["role"]))], &[])),
+            (400, "INVALID_CLAIMS".to_owned()),
+        ),
+        (
+            "reserved",
+            json!(with("c3", &[("claims", json!({"sub": "x"}))], &[])),
+            (400, "FORBIDDEN_CLAIM : sub".to_owned()),
+        ),
+        (
+            "1001 bytes",
+            json!(with(
+                "c4",
+                &[("claims", json!({"k": "x".repeat(993)}))],
+                &[]
+            )),
+            ok.clone(),
+        ),
+        (
+            "stripped",
+            json!(stripped),
+            (400, "INVALID_CUSTOM_TOKEN : Missing signature.".to_owned()),
+        ),
+        ("garbage", json!("not-a-jwt"), format.clone()),
+        ("empty", json!(""), format),
+    ] {
+        assert_eq!(sign_in(token), expected, "{label}");
+    }
+    let (status, missing) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(
+        (status, missing["error"]["message"].clone()),
+        (400, json!("MISSING_CUSTOM_TOKEN"))
+    );
+    // A custom sign-in into an account created otherwise marks it as custom-authenticated.
+    assert_eq!(
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": "made-by-admin", "email": "admin-made@example.com"})
+        )
+        .0,
+        200
+    );
+    assert_eq!(sign_in(json!(with("made-by-admin", &[], &[]))), ok);
+    let (_, account) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["made-by-admin"]}),
+    );
+    assert_eq!(account["users"][0]["customAuth"], true, "{account}");
+}
+
+#[test]
+fn configured_signers_admit_only_the_tokens_they_signed() {
+    use fireemu_adapter_http::identity_toolkit::CustomTokenTrust;
+    use fireemu_core_auth::jwt::base64url_encode;
+    use rand_core::SeedableRng;
+    use rsa::traits::PublicKeyParts;
+    let own_account = "firebase-adminsdk-x@demo-app.iam.gserviceaccount.com";
+    let other_account = "robot@other-project.iam.gserviceaccount.com";
+    let key = |seed| {
+        rsa::RsaPrivateKey::new(&mut rand_chacha::ChaCha20Rng::seed_from_u64(seed), 2048).unwrap()
+    };
+    let (own, other) = (key(11), key(12));
+    let jwks = |k: &rsa::RsaPrivateKey| {
+        json!({"keys": [{"kty": "RSA", "alg": "RS256", "kid": "k1",
+            "n": base64url_encode(&k.n().to_bytes_be()), "e": base64url_encode(&k.e().to_bytes_be())}]})
+    };
+    let trust = CustomTokenTrust::from_jwks(
+        json!({own_account: jwks(&own), other_account: jwks(&other)})
+            .as_object()
+            .unwrap(),
+    )
+    .unwrap();
+    let s = AuthState {
+        custom_token_trust: Some(Arc::new(trust)),
+        ..strict_state()
+    };
+    let now = 1_788_004_860;
+    let sign_in = |token: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken?key=k"),
+            &json!({"token": token, "returnSecureToken": true}),
+        )
+    };
+    let (status, body) = sign_in(&signed_custom_token(
+        &own,
+        own_account,
+        "signed-1",
+        &json!({"role": "r"}),
+        now,
+    ));
+    assert_eq!(status, 200, "{body}");
+    let claims = fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap())
+        .unwrap()
+        .payload;
+    assert_eq!(claims.get("role").and_then(|v| v.as_str()), Some("r"));
+    assert_eq!(claims.get("sub").and_then(|v| v.as_str()), Some("signed-1"));
+    let refused = |token: String| {
+        let (status, body) = sign_in(&token);
+        (
+            status,
+            body["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        )
+    };
+    assert_eq!(
+        refused(signed_custom_token(
+            &other,
+            other_account,
+            "signed-2",
+            &json!({}),
+            now
+        )),
+        (400, "CREDENTIAL_MISMATCH".to_owned())
+    );
+    assert_eq!(
+        refused(custom_token("signed-3", &json!({}), now + 3600)),
+        (400, "INVALID_CUSTOM_TOKEN".to_owned()),
+        "an unsigned token is refused once signers are configured"
+    );
+    assert_eq!(
+        refused(signed_custom_token(
+            &other,
+            own_account,
+            "signed-4",
+            &json!({}),
+            now
+        )),
+        (400, "INVALID_CUSTOM_TOKEN".to_owned()),
+        "a signature by another key than the issuer's"
+    );
+    assert_eq!(
+        refused(r#"{"uid":"json-token"}"#.to_owned()),
+        (
+            400,
+            "INVALID_CUSTOM_TOKEN : Invalid assertion format. 3 dot separated segments required."
+                .to_owned()
+        ),
+        "the emulator's JSON fake token is not a signed token"
+    );
+}
+
+fn token_parts(token: &Value) -> (Value, Value) {
+    let mut parts = token.as_str().unwrap().split('.');
+    let mut part = || {
+        serde_json::from_slice::<Value>(
+            &fireemu_core_auth::jwt::base64url_decode(parts.next().unwrap()).unwrap(),
+        )
+        .unwrap()
+    };
+    (part(), part())
+}
+
+fn keys(body: &Value) -> Vec<&str> {
+    let mut keys: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    keys
+}
+
+/// Without `returnSecureToken`, password and custom-token sign-in answer with the legacy
+/// Identity Toolkit token and no refresh token; account lookup honours it and session-cookie
+/// creation refuses it. Custom-token answers never carry `localId` (sandbox recording
+/// 2026-09-24, auth-credential/id-token/without-return-secure-token and methods).
+#[test]
+fn sign_in_without_secure_tokens_answers_with_the_legacy_identity_toolkit_token() {
+    let s = strict_state_with_signer();
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "legacy@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    for request in [
+        json!({"email": "legacy@example.com", "password": "password1"}),
+        json!({"email": "legacy@example.com", "password": "password1", "returnSecureToken": false}),
+    ] {
+        let (status, body) = post(&s, &format!("{V1}/accounts:signInWithPassword"), &request);
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            keys(&body),
+            [
+                "displayName",
+                "email",
+                "idToken",
+                "kind",
+                "localId",
+                "registered"
+            ]
+        );
+        let (header, claims) = token_parts(&body["idToken"]);
+        assert_eq!(header, json!({"alg": "none"}));
+        assert_eq!(claims["iss"], "https://identitytoolkit.google.com/");
+        assert_eq!(claims["aud"], "demo-app");
+        assert_eq!(claims["user_id"], created["localId"]);
+        assert_eq!(claims["email"], "legacy@example.com");
+        assert_eq!(claims["verified"], false);
+        assert_eq!(claims["sign_in_provider"], "password");
+        assert_eq!(
+            claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
+            1_209_600
+        );
+        for absent in ["sub", "auth_time", "firebase", "email_verified"] {
+            assert!(claims.get(absent).is_none(), "{absent}: {claims}");
+        }
+        let (status, looked_up) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": body["idToken"]}),
+        );
+        assert_eq!(status, 200, "{looked_up}");
+        assert_eq!(looked_up["users"][0]["localId"], created["localId"]);
+        let (status, refused) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:createSessionCookie"),
+            &json!({"idToken": body["idToken"], "validDuration": 3600}),
+        );
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "INVALID_ID_TOKEN");
+    }
+    let now = 1_788_004_860;
+    let (status, legacy) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({"token": trusted_custom_token("legacy-custom", &json!({"role": "r"}), now)}),
+    );
+    assert_eq!(status, 200, "{legacy}");
+    assert_eq!(keys(&legacy), ["idToken", "isNewUser", "kind"]);
+    let (header, claims) = token_parts(&legacy["idToken"]);
+    assert_eq!(header, json!({"alg": "none"}));
+    assert_eq!(claims["sign_in_provider"], "custom");
+    assert_eq!(claims["user_id"], "legacy-custom");
+    assert_eq!(claims["extra_claims"], json!({"role": "r"}));
+    assert!(claims.get("role").is_none());
+    let (_, account) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["legacy-custom"]}),
+    );
+    let user = &account["users"][0];
+    assert_eq!(user["customAuth"], true, "{account}");
+    assert!(user.get("validSince").is_some(), "{user}");
+    assert!(user.get("lastRefreshAt").is_none(), "{user}");
+    assert!(user.get("disabled").is_none(), "{user}");
+    let (status, secure) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithCustomToken"),
+        &json!({
+            "token": trusted_custom_token("legacy-custom", &json!({}), now),
+            "returnSecureToken": true,
+        }),
+    );
+    assert_eq!(status, 200, "{secure}");
+    assert_eq!(
+        keys(&secure),
+        ["expiresIn", "idToken", "isNewUser", "kind", "refreshToken"]
+    );
+}
+
+/// An Admin update answers `emailVerified` only for an account with an address (sandbox
+/// recording 2026-09-24, auth-credential/revocation/valid-since#custom-valid-since-after).
+#[test]
+fn admin_update_reports_email_verified_only_with_an_address() {
+    let s = strict_state();
+    for (id, email) in [
+        ("no-address", None),
+        ("with-address", Some("with-address@example.com")),
+    ] {
+        let mut create = json!({"localId": id});
+        if let Some(email) = email {
+            create["email"] = json!(email);
+        }
+        assert_eq!(
+            admin(&s, "POST", &format!("{ADMIN}/accounts"), &create).0,
+            200
+        );
+        let (status, updated) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": id, "validSince": "1788004000"}),
+        );
+        assert_eq!(status, 200, "{updated}");
+        assert_eq!(
+            updated.get("emailVerified").is_some(),
+            email.is_some(),
+            "{updated}"
+        );
+    }
+}
+
 #[test]
 fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
     let s = state();
@@ -7677,7 +9171,8 @@ fn custom_tokens_sign_in_creating_the_user_and_carry_developer_claims() {
     );
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["isNewUser"], true);
-    assert_eq!(body["localId"], "custom-1");
+    // Production's answer names the account only inside the token.
+    assert!(body.get("localId").is_none(), "{body}");
     let id_token = body["idToken"].as_str().unwrap();
     let decoded = fireemu_core_auth::jwt::decode_unsigned(id_token).unwrap();
     assert_eq!(
@@ -7943,7 +9438,8 @@ fn legacy_v3_custom_token_exchange_matches_v1() {
     );
 
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["localId"], "legacy-custom");
+    assert!(body.get("localId").is_none(), "{body}");
+    assert_eq!(token_parts(&body["idToken"]).1["sub"], "legacy-custom");
     assert_eq!(body["isNewUser"], true);
     let decoded =
         fireemu_core_auth::jwt::decode_unsigned(body["idToken"].as_str().unwrap()).unwrap();
@@ -7959,7 +9455,7 @@ fn legacy_v3_custom_token_exchange_matches_v1() {
         &json!({"token": expired}),
     );
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["localId"], "legacy-expired");
+    assert_eq!(token_parts(&body["idToken"]).1["sub"], "legacy-expired");
 
     for invalid in [
         "not-a-token".to_owned(),
@@ -7990,20 +9486,25 @@ fn legacy_v3_custom_token_exchange_matches_v1() {
         &json!({"token": other_issuer}),
     );
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["localId"], "legacy-other-issuer");
+    assert_eq!(
+        token_parts(&body["idToken"]).1["sub"],
+        "legacy-other-issuer"
+    );
 }
 
 #[test]
 fn strict_profile_rejects_an_expired_custom_token() {
     let s = strict_state();
-    let expired = custom_token("strict-expired", &json!({}), 1_788_004_859);
+    // Past the five-minute allowance production refuses it as invalid (sandbox recording
+    // 2026-09-24, auth-credential/expiry/one-hour#custom-token-expired-later).
+    let expired = custom_token("strict-expired", &json!({}), 1_788_004_860 - 300);
     let (status, body) = post(
         &s,
         "/www.googleapis.com/identitytoolkit/v3/relyingparty/verifyCustomToken?key=demo-key",
         &json!({"token": expired}),
     );
     assert_eq!(status, 400, "{body}");
-    assert_eq!(body["error"]["message"], "TOKEN_EXPIRED");
+    assert_eq!(body["error"]["message"], "INVALID_CUSTOM_TOKEN");
 }
 
 #[test]
@@ -9498,6 +10999,45 @@ fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
         &format!("{PROJECT_CONFIG}?updateMask={mask}"),
         body,
     )
+}
+
+/// Linking a phone number to a signed-in account answers with a session whose provider is the
+/// phone sign-in (sandbox recording 2026-09-24,
+/// id-token/without-return-secure-token#phone-link-with-legacy-token).
+#[test]
+fn a_phone_link_answers_with_a_phone_session() {
+    let s = state();
+    let (status, config) = patch_sign_in(
+        &s,
+        "signIn.email.enabled,signIn.phoneNumber.enabled,signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {
+            "email": {"enabled": true},
+            "phoneNumber": {"enabled": true, "testPhoneNumbers": {"+16505550105": "123456"}},
+        }}),
+    );
+    assert_eq!(status, 200, "{config}");
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "phone-link@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+16505550105", "recaptchaToken": "x"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let (status, linked) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"idToken": account["idToken"], "sessionInfo": sent["sessionInfo"], "code": "123456"}),
+    );
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(
+        token_parts(&linked["idToken"]).1["firebase"]["sign_in_provider"],
+        "phone"
+    );
 }
 
 /// The Admin config sets the sign-in providers and test phone numbers the sandbox baseline
@@ -11083,7 +12623,8 @@ fn sign_up_link_authenticates_before_password_policy_and_preserves_state() {
 
     for (label, expected_error) in [
         ("invalid", "INVALID_ID_TOKEN"),
-        ("expired", "TOKEN_EXPIRED"),
+        // Past the five-minute allowance an expired token is invalid (2026-09-24).
+        ("expired", "INVALID_ID_TOKEN"),
         ("mismatched-audience", "INVALID_ID_TOKEN"),
     ] {
         let s = state();
@@ -11093,7 +12634,7 @@ fn sign_up_link_authenticates_before_password_policy_and_preserves_state() {
         let token = match label {
             "invalid" => "not-a-token".to_owned(),
             "expired" => {
-                advance(&s, 3_601);
+                advance(&s, 3_901);
                 valid_token
             }
             "mismatched-audience" => {
@@ -11155,6 +12696,78 @@ fn sign_up_link_authenticates_before_password_policy_and_preserves_state() {
     assert!(s.store.lock().unwrap().user_by_email(email).is_none());
 }
 
+/// With the project's API keys declared (`auth.apiKeys`), any other key is refused by the API
+/// front end before the service reads the request, on Identity Toolkit and Secure Token alike
+/// (sandbox recording 2026-09-24, auth-credential/refresh/refusals#invalid-api-key).
+#[test]
+fn undeclared_api_keys_are_refused_as_the_api_front_end_does() {
+    let mut s = strict_state();
+    let mut tenancy = Tenancy::new("demo-app");
+    tenancy.declare_default_api_keys(&["declared-key".to_owned()]);
+    s.tenancy = Some(Arc::new(RwLock::new(tenancy)));
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp?key=declared-key"),
+        &json!({"email": "declared-key@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let invalid = |service: &str| {
+        let message = "API key not valid. Please pass a valid API key.";
+        let mut body = json!({"error": {
+            "code": 400,
+            "message": message,
+            "status": "INVALID_ARGUMENT",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "API_KEY_INVALID",
+                    "domain": "googleapis.com",
+                    "metadata": {"service": service},
+                },
+                {
+                    "@type": "type.googleapis.com/google.rpc.LocalizedMessage",
+                    "locale": "en-US",
+                    "message": message,
+                },
+            ],
+        }});
+        // Identity Toolkit adds its `errors` list; Secure Token does not (2026-09-24).
+        if service == "identitytoolkit.googleapis.com" {
+            body["error"]["errors"] =
+                json!([{"message": message, "domain": "global", "reason": "badRequest"}]);
+        }
+        body
+    };
+    assert_eq!(
+        post(
+            &s,
+            &format!("{V1}/accounts:signUp?key=other-key"),
+            &json!({"email": "other-key@example.com", "password": "password1"}),
+        ),
+        (400, invalid("identitytoolkit.googleapis.com"))
+    );
+    assert!(s
+        .store
+        .lock()
+        .unwrap()
+        .user_by_email("other-key@example.com")
+        .is_none());
+    assert_eq!(
+        post(
+            &s,
+            "/securetoken.googleapis.com/v1/token?key=other-key",
+            &json!({"grant_type": "refresh_token", "refresh_token": created["refreshToken"]}),
+        ),
+        (400, invalid("securetoken.googleapis.com"))
+    );
+    let (status, refreshed) = post(
+        &s,
+        "/securetoken.googleapis.com/v1/token?key=declared-key",
+        &json!({"grant_type": "refresh_token", "refresh_token": created["refreshToken"]}),
+    );
+    assert_eq!(status, 200, "{refreshed}");
+}
+
 #[test]
 fn client_namespace_selectors_fail_closed_without_default_fallback() {
     let mut s = state();
@@ -11180,7 +12793,10 @@ fn client_namespace_selectors_fail_closed_without_default_fallback() {
         &json!({"email": "unknown-key@example.com", "password": "password1"}),
     );
     assert_eq!(status, 400, "{refused}");
-    assert_eq!(refused["error"]["message"], "INVALID_API_KEY");
+    assert_eq!(
+        refused["error"]["message"],
+        "API key not valid. Please pass a valid API key."
+    );
     assert!(s
         .store
         .lock()
@@ -11659,7 +13275,10 @@ fn query_tenant_binds_custom_token_namespace_before_auth_work() {
         }),
     );
     assert_eq!(status, 200, "{accepted}");
-    assert_eq!(accepted["localId"], "query-custom-user");
+    assert_eq!(
+        token_parts(&accepted["idToken"]).1["sub"],
+        "query-custom-user"
+    );
     assert_eq!(
         registry
             .tenant_store("worker-alpha", "customer-b")

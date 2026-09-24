@@ -423,6 +423,17 @@ fn reapply_explicit_auth_quota(
     Ok(())
 }
 
+/// The startup notice for a strict profile without custom-token signers: production accepts only
+/// signed custom tokens, so strict refuses every custom token until `auth.customTokenSigners`
+/// names the service accounts whose keys verify them.
+pub(crate) fn custom_token_signer_note(cfg: &RuntimeConfig) -> Option<&'static str> {
+    (cfg.profile == crate::config::CompatibilityProfile::Strict
+        && cfg.auth_custom_token_signers.is_none())
+    .then_some(
+        "  custom tokens:    refused (strict accepts only signed tokens: set auth.customTokenSigners to the service accounts' public JWK sets, or use profile \"emulator\" for the Admin SDK's unsigned emulator tokens)",
+    )
+}
+
 fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     let BoundStartup {
         cfg,
@@ -532,6 +543,16 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
     // This adapter-level gate is also shared with the export seam so an Auth export cannot
     // capture stores and Blocking Functions settings from different logical generations.
     let auth_operation_gate = Arc::new(Mutex::new(()));
+    // Validated when the configuration was parsed; a failure here is a configuration bug.
+    let custom_token_trust = cfg
+        .auth_custom_token_signers
+        .as_ref()
+        .map(|signers| {
+            fireemu_adapter_http::identity_toolkit::CustomTokenTrust::from_jwks(signers)
+                .map(Arc::new)
+        })
+        .transpose()
+        .map_err(|e| format!("auth.customTokenSigners: {e}"))?;
     let auth = Arc::new(AuthState {
         store: auth_store.clone(),
         clock: clock.clone(),
@@ -599,6 +620,7 @@ fn assemble_adapters(bound: BoundStartup) -> Result<ServiceAssembly, String> {
                 fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject
             }
         },
+        custom_token_trust,
         tenancy: Some(tenancy.clone()),
         app_check: app_check.clone(),
         app_check_policy: auth_policy,
@@ -1361,9 +1383,10 @@ pub(super) fn run(options: Options, exec: Option<ExecPlan>) -> ExitCode {
             Arc::new(fireemu_core_session::fault::FaultRegistry::new());
         backend.set_faults(faults.clone());
         // Which session owns which project, bucket and API key.
-        let tenancy: fireemu_core_session::tenancy::SharedTenancy = Arc::new(RwLock::new(
-            fireemu_core_session::tenancy::Tenancy::new(&cfg.auth_project),
-        ));
+        let mut default_tenancy = fireemu_core_session::tenancy::Tenancy::new(&cfg.auth_project);
+        default_tenancy.declare_default_api_keys(&cfg.auth_api_keys);
+        let tenancy: fireemu_core_session::tenancy::SharedTenancy =
+            Arc::new(RwLock::new(default_tenancy));
         backend.set_tenancy(tenancy.clone());
         let auth_store = Arc::new(Mutex::new(AuthStore::new(
             &cfg.auth_project,

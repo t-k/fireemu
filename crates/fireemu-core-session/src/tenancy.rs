@@ -13,6 +13,9 @@ pub struct Tenancy {
     buckets: BTreeMap<String, BTreeSet<String>>,
     /// API key → registered project.
     api_keys: BTreeMap<String, String>,
+    /// The default project's declared API keys (`auth.apiKeys`). Once any is declared, a key
+    /// that no project declared is refused.
+    default_api_keys: BTreeSet<String>,
 }
 
 /// What one session owns.
@@ -67,7 +70,28 @@ impl Tenancy {
             default_project: default_project.to_owned(),
             buckets: BTreeMap::new(),
             api_keys: BTreeMap::new(),
+            default_api_keys: BTreeSet::new(),
         }
+    }
+
+    /// Declares the default project's API keys.
+    pub fn declare_default_api_keys(&mut self, keys: &[String]) {
+        self.default_api_keys.extend(keys.iter().cloned());
+    }
+
+    /// Whether `key` is one of the default project's declared API keys.
+    #[must_use]
+    pub fn is_default_api_key(&self, key: &str) -> bool {
+        self.default_api_keys.contains(key)
+    }
+
+    /// Whether `key` is refused because the default project declared its keys and no project
+    /// declared this one.
+    #[must_use]
+    pub fn refuses_api_key(&self, key: &str) -> bool {
+        !self.default_api_keys.is_empty()
+            && !self.default_api_keys.contains(key)
+            && !self.api_keys.contains_key(key)
     }
 
     /// The default project.
@@ -188,6 +212,22 @@ pub type SharedTenancy = std::sync::Arc<std::sync::RwLock<Tenancy>>;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_default_keys_refuse_every_undeclared_key() {
+        let mut t = Tenancy::new("demo-a");
+        t.register("demo-b", &[], &["key-b".to_owned()]).unwrap();
+        // Without declared default keys any key is accepted.
+        assert!(!t.refuses_api_key("anything"));
+        assert!(!t.is_default_api_key("key-a"));
+        t.declare_default_api_keys(&["key-a".to_owned()]);
+        assert!(t.is_default_api_key("key-a"));
+        assert!(!t.is_default_api_key("key-b"));
+        assert!(!t.refuses_api_key("key-a"), "the default project's own key");
+        assert!(!t.refuses_api_key("key-b"), "a registered session's key");
+        assert!(t.refuses_api_key("anything"));
+        assert!(t.refuses_api_key(""));
+    }
 
     #[test]
     fn buckets_and_keys_resolve_to_their_session() {

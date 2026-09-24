@@ -120,6 +120,7 @@ fn auth_state(store: Arc<Mutex<AuthStore>>) -> AuthState {
         client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
+        custom_token_trust: None,
         app_check: None,
         app_check_policy: None,
         tenancy: None,
@@ -424,6 +425,14 @@ fn session_cookie_duration_boundaries_preserve_claims_in_both_signing_modes() {
                 assert_eq!(response.status, 200);
                 let store = state.store.lock().unwrap();
                 let encoded = response.body["sessionCookie"].as_str().unwrap();
+                // Production session cookies carry {alg, kid} and no typ (sandbox recording
+                // 2026-09-24, auth-credential/session-cookie).
+                let header =
+                    fireemu_core_auth::jwt::base64url_decode(encoded.split('.').next().unwrap())
+                        .unwrap();
+                let header: serde_json::Value = serde_json::from_slice(&header).unwrap();
+                assert!(header.get("typ").is_none(), "{header}");
+                assert_eq!(header.get("kid").is_some(), signed, "{header}");
                 let cookie = decode_token(encoded, store.signer()).unwrap();
                 let original = decode_token(token, store.signer()).unwrap();
                 let mut expected: serde_json::Value =

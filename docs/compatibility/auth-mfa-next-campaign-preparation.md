@@ -95,6 +95,16 @@ The local answers that matter for the production comparison:
 
 `fireemu`'s pending lifetime is a declared 3600-second local policy that the source itself marks as not a claimed production value, so the 600-second row is the already-recorded `GAP-AUTH-007` divergence rather than a new one. The 450-second row is the one the campaign would add.
 
+## Token claims moved from AUTH-CREDENTIAL
+
+AUTH-CREDENTIAL scope decision C7 (owner, 2026-09-24) moves these token-claim conditions here; they are required conditions of this parent and are not verified anywhere else:
+
+- The ID token after a second-factor sign-in carries `firebase.sign_in_second_factor` and `firebase.second_factor_identifier` as production issues them, for SMS and TOTP.
+- A refresh of that session keeps both claims, and a session cookie made from it carries them.
+- A session revoked or a factor withdrawn afterwards is answered as production answers it.
+
+AUTH-CREDENTIAL's harness (`conformance/src/auth-credential/`) records a token as its header shape and every claim, and can be reused for these rows.
+
 ## What this campaign still would not establish
 
 An exact production lifetime, an error-precedence rule, tenant-scoped behaviour, blocking-function interaction, SDK and Rules paths, and the expired-pending-with-independently-valid-code residual that `AUTH-U03` tracks. A refusal's error name is not a TTL, and three ages on one account in one run are not a universal guarantee.

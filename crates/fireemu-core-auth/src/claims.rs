@@ -90,6 +90,14 @@ impl ClaimValue {
     }
 }
 
+/// The canonical JSON of a claim map (sorted keys, no whitespace).
+#[must_use]
+pub fn canonical_map_json(entries: &BTreeMap<String, ClaimValue>) -> String {
+    let mut out = String::new();
+    write_map(&mut out, entries);
+    out
+}
+
 fn write_map(out: &mut String, entries: &BTreeMap<String, ClaimValue>) {
     out.push('{');
     for (i, (k, v)) in entries.iter().enumerate() {
@@ -193,6 +201,12 @@ impl PartialEq for CustomClaims {
 }
 
 impl CustomClaims {
+    /// The claims as a map, in canonical key order.
+    #[must_use]
+    pub const fn entries_map(&self) -> &BTreeMap<String, ClaimValue> {
+        &self.entries
+    }
+
     /// Inserts a claim, rejecting reserved names.
     pub fn insert(&mut self, name: &str, value: ClaimValue) -> Result<(), CustomClaimsError> {
         if name.is_empty() {
@@ -361,6 +375,9 @@ pub struct IdTokenClaims {
     pub display_name: Option<String>,
     /// Profile photo URL (`picture` in the JWT).
     pub photo_url: Option<String>,
+    /// `provider_id` at the top level: production sets it to `anonymous` for an anonymous
+    /// account and leaves it out otherwise.
+    pub provider_id: Option<String>,
     /// Firebase block.
     pub firebase: FirebaseClaims,
     /// Custom claims (merged at the top level when serialized).
@@ -379,6 +396,9 @@ impl IdTokenClaims {
         entries.insert("sub".into(), ClaimValue::String(self.sub.clone()));
         entries.insert("iat".into(), ClaimValue::Int(self.iat));
         entries.insert("exp".into(), ClaimValue::Int(self.exp));
+        if let Some(provider) = &self.provider_id {
+            entries.insert("provider_id".into(), ClaimValue::String(provider.clone()));
+        }
         if let Some(email) = &self.email {
             entries.insert("email".into(), ClaimValue::String(email.clone()));
             entries.insert(

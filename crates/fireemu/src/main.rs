@@ -2078,7 +2078,12 @@ fn print_banner(
         None => println!("  firestore:        not selected by --only (nothing is bound)"),
     }
     match addrs.auth {
-        Some(a) => println!("  auth (REST):      {a}   FIREBASE_AUTH_EMULATOR_HOST={a}"),
+        Some(a) => {
+            println!("  auth (REST):      {a}   FIREBASE_AUTH_EMULATOR_HOST={a}");
+            if let Some(note) = daemon::custom_token_signer_note(cfg) {
+                println!("{note}");
+            }
+        }
         None => println!("  auth:             not selected by --only (nothing is bound)"),
     }
     match addrs.storage {

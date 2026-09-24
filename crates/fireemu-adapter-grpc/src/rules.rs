@@ -36,7 +36,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
-use fireemu_core_auth::jwt::{verify_rules_token, verify_rules_token_for_project, TokenAcceptance};
+use fireemu_core_auth::jwt::{verify_firestore_rules_token, JwtError, TokenAcceptance};
 use fireemu_core_auth::store::AuthStore;
 use fireemu_core_firestore::field_path::FieldPath;
 use fireemu_core_firestore::path::DocumentPath;
@@ -532,11 +532,25 @@ impl RulesEnforcer {
         let Some(value) = value else {
             return Ok(Principal::Anonymous);
         };
+        // The strict profile refuses a credential in production's shapes (see
+        // `refusal`); the emulator profile keeps the texts it has always answered with.
+        let production = self.acceptance == TokenAcceptance::Verified;
         let token = value
             .strip_prefix("Bearer ")
-            .ok_or_else(|| Status::unauthenticated("authorization must be a Bearer token"))?;
+            .filter(|token| !production || !token.is_empty())
+            .ok_or_else(|| {
+                if production {
+                    Status::permission_denied(PERMISSION_DENIED_MESSAGE)
+                } else {
+                    Status::unauthenticated("authorization must be a Bearer token")
+                }
+            })?;
         if token == OWNER_TOKEN {
             return Ok(Principal::Owner);
+        }
+        // A bearer value that is not a JWT is taken for an OAuth access token by the front end.
+        if production && token.split('.').count() != 3 {
+            return Err(Status::unauthenticated(INVALID_CREDENTIALS_MESSAGE));
         }
         let now = self.now()?;
         // The token's audience names its project: verify against that project's store.
@@ -575,27 +589,48 @@ impl RulesEnforcer {
         let store = store_arc
             .lock()
             .map_err(|_| Status::internal("auth store lock poisoned"))?;
-        let decoded = match expected_project {
-            Some(project) => {
-                verify_rules_token_for_project(token, &store, now, self.acceptance, project)
-            }
-            None => verify_rules_token(token, &store, now, self.acceptance),
-        }
-        .map_err(|e| Status::unauthenticated(format!("invalid ID token: {e}")))?;
+        let decoded =
+            verify_firestore_rules_token(token, &store, now, self.acceptance, expected_project)
+                .map_err(|error| match error {
+                    JwtError::Expired if production => {
+                        Status::unauthenticated(EXPIRED_CREDENTIALS_MESSAGE)
+                    }
+                    _ if production => Status::permission_denied(PERMISSION_DENIED_MESSAGE),
+                    error => Status::unauthenticated(format!("invalid ID token: {error}")),
+                })?;
         drop(store);
-        let ctx = AuthContext::from_id_token_json(&decoded.payload_json)
-            .map_err(|e| Status::unauthenticated(format!("invalid ID token claims: {e}")))?;
+        let ctx = AuthContext::from_id_token_json(&decoded.payload_json).map_err(|e| {
+            if production {
+                Status::permission_denied(PERMISSION_DENIED_MESSAGE)
+            } else {
+                Status::unauthenticated(format!("invalid ID token claims: {e}"))
+            }
+        })?;
         Ok(Principal::User(ctx))
     }
 
     /// Owner-only surfaces (collection enumeration) while rules are loaded.
     pub fn require_owner(&self, principal: &Principal, what: &str) -> Result<(), Status> {
-        if matches!(principal, Principal::Owner) || !self.loaded()? {
+        if matches!(principal, Principal::Owner) {
             return Ok(());
         }
-        Err(Status::permission_denied(format!(
-            "{what} requires admin credentials while Security Rules are enforced"
-        )))
+        let rules = self.rules.snapshot().map_err(Status::internal)?;
+        if !rules.is_loaded() {
+            return self.without_ruleset(
+                &rules.diagnostics,
+                principal,
+                Method::List,
+                what.to_owned(),
+            );
+        }
+        // Production refuses an end user here with its usual Security Rules denial.
+        Err(denied(
+            &rules.diagnostics,
+            principal,
+            Method::List,
+            what.to_owned(),
+            format!("{what} is for administrators only while Security Rules are enforced"),
+        ))
     }
 
     /// Runs the loaded ruleset for one request; `Ok(())` = allowed.
@@ -1043,8 +1078,16 @@ fn decide(
 }
 
 /// What production answers for every Security Rules denial, in both profiles (FS-RULES scope
-/// decision R6). The reason fireemu found stays in the ruleset's request traces.
+/// decision R6). The reason fireemu found stays in the ruleset's request traces. Production
+/// answers the same for a credential it cannot verify, another scheme and an empty bearer.
 pub const PERMISSION_DENIED_MESSAGE: &str = "Missing or insufficient permissions.";
+
+/// Production's answer to an ID token past its allowance (FS-RULES, 2026-09-24).
+pub const EXPIRED_CREDENTIALS_MESSAGE: &str = "Missing or invalid authentication.";
+
+/// The front end's answer to a bearer value that is not a JWT, which it takes for an OAuth
+/// access token (FS-RULES, 2026-09-24).
+pub const INVALID_CREDENTIALS_MESSAGE: &str = "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.";
 
 /// A denial decided outside the evaluator (a budget across items, an exact-name query): traced
 /// with its reason like an evaluated one, answered with production's text.

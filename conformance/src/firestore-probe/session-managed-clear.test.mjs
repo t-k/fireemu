@@ -14,6 +14,7 @@ import {
   assertV3ProductionCleanupAllowed,
   isExactDeltaV3ProductionScope,
   isExactPartialProductionScope,
+  mutationIntentTarget,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -369,4 +370,34 @@ test("managed clear accepts only a terminal successful operation in the fixed da
   ]) {
     assert.throws(() => validateManagedClearOperation(state, "fireemu-oracle-sbx"));
   }
+});
+
+test("the write-ahead intent target never parses a WebChannel form body as JSON", () => {
+  const commit = JSON.stringify({
+    writes: [{ update: { name: "projects/p/databases/(default)/documents/c/d" } }],
+  });
+  assert.equal(
+    mutationIntentTarget({
+      body: commit,
+      json: true,
+      resolvedPath: "/v1/projects/p/databases/(default)/documents:commit",
+    }),
+    "projects/p/databases/(default)/documents/c/d",
+  );
+  assert.equal(
+    mutationIntentTarget({
+      body: "count=0&req0___data__=x",
+      json: false,
+      resolvedPath: "/google.firestore.v1.Firestore/Write/channel?VER=8",
+    }),
+    null,
+  );
+  assert.equal(
+    mutationIntentTarget({
+      body: undefined,
+      json: false,
+      resolvedPath: "/v1/projects/p/databases/(default)/documents/c/d?currentDocument.exists=true",
+    }),
+    "projects/p/databases/(default)/documents/c/d",
+  );
 });

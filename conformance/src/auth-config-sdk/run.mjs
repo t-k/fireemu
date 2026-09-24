@@ -82,7 +82,14 @@ export const SANDBOX_BASELINE = {
   passwordPolicyConfig: undefined,
   "client.permissions.disabledUserSignup": undefined,
   "client.permissions.disabledUserDeletion": undefined,
-  recaptchaConfig: undefined,
+  // Once written, production keeps a reCAPTCHA config: clearing it leaves both providers
+  // unspecified (sandbox, 2026-09-24 22:2xZ). It answers clients as an unset one does.
+  recaptchaConfig: {
+    emailPasswordEnforcementState: "RECAPTCHA_PROVIDER_ENFORCEMENT_STATE_UNSPECIFIED",
+    phoneEnforcementState: "RECAPTCHA_PROVIDER_ENFORCEMENT_STATE_UNSPECIFIED",
+    useSmsBotScore: false,
+    useSmsTollFraudProtection: false,
+  },
   "quota.signUpQuotaConfig": undefined,
   "mobileLinksConfig.domain": "HOSTING_DOMAIN",
   smsRegionConfig: { allowByDefault: {} },
@@ -101,6 +108,8 @@ const APPLIED_LOCALLY = [
   "authorizedDomains",
   // The sandbox allows SMS to every region; a new project allows none.
   "smsRegionConfig",
+  // The sandbox keeps the reCAPTCHA config an earlier run wrote; a new project has none.
+  "recaptchaConfig",
 ];
 
 function selectedPrograms() {
@@ -849,7 +858,11 @@ export function classify({ stale, production, alternative, fireemu }) {
   if (stale) return "STALE_FIXTURE";
   if (production === undefined) return "MISSING_FIXTURE";
   if (fireemu === undefined) return "MISSING";
-  if ([production, alternative, fireemu].some(transient)) return "INDETERMINATE";
+  // A server error both recordings answered alike is the recorded behaviour, not noise.
+  const repeatedServerError = production.status >= 500 && alternative === undefined;
+  const indeterminate = (recorded) =>
+    transient(recorded) && !(repeatedServerError && recorded?.status >= 500);
+  if ([production, alternative, fireemu].some(indeterminate)) return "INDETERMINATE";
   if (sameRecording(production, fireemu)) return alternative ? "MATCH_NONDETERMINISTIC" : "MATCH";
   if (alternative && sameRecording(alternative, fireemu)) return "MATCH_NONDETERMINISTIC";
   return "MISMATCH";

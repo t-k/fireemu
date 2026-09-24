@@ -572,7 +572,8 @@ const recaptchaProgram = {
     { ...getConfig("read-audit-phone"), delayMs: 3000 },
     recaptchaRead("client-audit-phone"),
     client("audit-send-code-without-token", "sendVerificationCode", { phoneNumber: "PHONE(2)" }),
-    setConfig("clear", "recaptchaConfig", {}),
+    // Production does not clear the member this way; the restore writes the snapshot back.
+    patchConfig("clear", "recaptchaConfig", {}),
     getConfig("read-cleared"),
     recaptchaRead("client-cleared"),
   ],

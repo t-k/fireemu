@@ -44,19 +44,31 @@ fn default_bucket_project(bucket: &str) -> Option<&str> {
 struct BucketOwners(std::sync::Mutex<std::collections::BTreeMap<String, String>>);
 
 impl BucketOwners {
-    /// Whether `project` may use `bucket`, which then belongs to it if no project used it yet.
-    fn claim(&self, project: &str, bucket: &str) -> bool {
+    fn owners(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeMap<String, String>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Whether `project` may use `bucket`: its own default bucket, or a bucket no other
+    /// project's export or import has used. Asking takes nothing.
+    fn permits(&self, project: &str, bucket: &str) -> bool {
         if let Some(owner) = default_bucket_project(bucket) {
             return owner == project;
         }
-        let mut owners = self
-            .0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        owners
-            .entry(bucket.to_owned())
-            .or_insert_with(|| project.to_owned())
-            == project
+        self.owners()
+            .get(bucket)
+            .is_none_or(|owner| owner == project)
+    }
+
+    /// Records that `project` used `bucket` in an export or import that succeeded, making it
+    /// that project's if no project used it yet.
+    fn claim(&self, project: &str, bucket: &str) {
+        if default_bucket_project(bucket).is_none() {
+            self.owners()
+                .entry(bucket.to_owned())
+                .or_insert_with(|| project.to_owned());
+        }
     }
 }
 
@@ -172,7 +184,7 @@ impl ManagedStorage for StorageBridge {
         self.storage
             .store()
             .is_ok_and(|store| store.buckets().contains(&name))
-            && self.owners.claim(project, bucket)
+            && self.owners.permits(project, bucket)
     }
 
     fn export(&self, job: &ExportJob) -> Result<ExportOutcome, String> {
@@ -214,6 +226,7 @@ impl ManagedStorage for StorageBridge {
                 )
                 .map_err(|e| e.to_string())?;
         }
+        self.owners.claim(&job.project, &job.bucket);
         Ok(ExportOutcome {
             documents: export.documents,
             bytes: export.bytes,
@@ -224,7 +237,7 @@ impl ManagedStorage for StorageBridge {
         let name = export_name(&job.prefix);
         let overall_name = join(&job.prefix, &format!("{name}.overall_export_metadata"));
         // A bucket another project uses is not readable to this one: it answers as absent.
-        let readable = self.owners.claim(&job.project, &job.bucket);
+        let readable = self.owners.permits(&job.project, &job.bucket);
         let Some(overall) = readable
             .then(|| self.read(&job.bucket, &overall_name))
             .flatten()
@@ -293,6 +306,7 @@ impl ManagedStorage for StorageBridge {
             }
             bytes = bytes.saturating_add(entry.bytes);
         }
+        self.owners.claim(&job.project, &job.bucket);
         Ok(ImportOutcome { documents, bytes })
     }
 }
@@ -301,18 +315,100 @@ impl ManagedStorage for StorageBridge {
 mod tests {
     use super::*;
 
+    fn bridge() -> StorageBridge {
+        use fireemu_core_auth::mfa::TotpPolicy;
+        use fireemu_core_auth::store::{AuthRegistry, AuthStore};
+        use fireemu_core_session::clock::VirtualClock;
+        use fireemu_core_types::determinism::SplitMix64;
+        use fireemu_core_types::time::LogicalInstant;
+        use std::sync::Mutex;
+
+        let clock = Arc::new(Mutex::new(VirtualClock::new(LogicalInstant::UNIX_EPOCH)));
+        let auth_store = Arc::new(Mutex::new(AuthStore::new(
+            "proj-a",
+            SplitMix64::new(3),
+            TotpPolicy::default(),
+        )));
+        let auth = Arc::new(AuthRegistry::new("proj-a", auth_store));
+        StorageBridge::new(Arc::new(StorageState {
+            store: Mutex::new(fireemu_core_storage::store::StorageState::new(9)),
+            clock,
+            auth,
+            tenancy: None,
+            rules: Arc::new(fireemu_adapter_http::storage::StorageRulesRegistry::default()),
+            project: "proj-a".to_owned(),
+            events: None,
+            barrier: None,
+            firestore: None,
+            faults: None,
+            clock_observer: None,
+            app_check_policy: None,
+            admin_capability: None,
+            token_acceptance: fireemu_core_auth::jwt::TokenAcceptance::default(),
+            control_token: None,
+        }))
+    }
+
+    fn put(bridge: &StorageBridge, bucket: &str, name: &str) {
+        bridge
+            .storage
+            .store()
+            .unwrap()
+            .put(
+                &BucketName::try_new(bucket).unwrap(),
+                &ObjectName::try_new(name).unwrap(),
+                b"x".to_vec(),
+                NewMetadata::default(),
+                Precondition::default(),
+                fireemu_core_types::time::LogicalInstant::UNIX_EPOCH,
+            )
+            .unwrap();
+    }
+
+    fn import_job(project: &str, bucket: &str) -> ImportJob {
+        ImportJob {
+            project: project.to_owned(),
+            bucket: bucket.to_owned(),
+            prefix: "x".to_owned(),
+            collection_ids: Vec::new(),
+            namespace_ids: Vec::new(),
+        }
+    }
+
     #[test]
-    fn a_bucket_belongs_to_the_first_project_that_uses_it() {
+    fn a_failed_import_does_not_take_a_bucket_nobody_uses_yet() {
+        // Review 2026-09-25: proj-b's import from a bucket that did not exist yet made it
+        // proj-b's, so proj-a's export into it, once it existed, was refused as missing.
+        let bridge = bridge();
+        assert!(matches!(
+            bridge.import(&import_job("proj-b", "squat-bkt")),
+            Err(ImportRefusal::MissingMetadata(_))
+        ));
+        put(&bridge, "squat-bkt", "marker");
+        assert!(bridge.bucket_exists("proj-a", "squat-bkt"));
+        // A failed import of an existing bucket does not take it either.
+        assert!(bridge.import(&import_job("proj-b", "squat-bkt")).is_err());
+        assert!(bridge.bucket_exists("proj-a", "squat-bkt"));
+    }
+
+    #[test]
+    fn a_bucket_belongs_to_the_first_project_whose_export_or_import_succeeded() {
         let owners = BucketOwners::default();
-        assert!(owners.claim("a", "shared"));
-        assert!(owners.claim("a", "shared"));
-        assert!(!owners.claim("b", "shared"), "another project's bucket");
-        assert!(owners.claim("b", "b.appspot.com"));
+        assert!(owners.permits("a", "shared") && owners.permits("b", "shared"));
+        owners.claim("a", "shared");
+        assert!(owners.permits("a", "shared"));
+        assert!(!owners.permits("b", "shared"), "another project's bucket");
+        owners.claim("b", "shared");
         assert!(
-            !owners.claim("a", "b.appspot.com"),
+            !owners.permits("b", "shared"),
+            "a later use does not take it over"
+        );
+        assert!(owners.permits("b", "b.appspot.com"));
+        assert!(
+            !owners.permits("a", "b.appspot.com"),
             "another project's default bucket"
         );
-        assert!(!owners.claim("a", "b.firebasestorage.app"));
+        assert!(!owners.permits("a", "b.firebasestorage.app"));
     }
 
     #[test]

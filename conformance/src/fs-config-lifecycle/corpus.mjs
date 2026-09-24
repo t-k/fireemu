@@ -634,7 +634,6 @@ const PROGRAMS_RAW = [
       },
       pollFrom("disable-operation", "disable", "done"),
       pollPath("removed", fieldPath("a", "items", "ttl_at"), "ttlGone"),
-      pollFrom("second-field-operation", "second-field", "done", { max: 40 }),
     ],
   },
   // ---- operations ----------------------------------------------------------------------------

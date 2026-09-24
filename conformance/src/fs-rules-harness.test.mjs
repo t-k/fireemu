@@ -14,7 +14,14 @@ import {
   SANDBOX_PROJECT,
 } from "./fs-rules/harness.mjs";
 import { markerOf, RULESET_IDS, rulesetSource } from "./fs-rules/rulesets.mjs";
-import { classify, otherLanesRecently, recentAbort } from "./fs-rules/run.mjs";
+import {
+  classify,
+  confirmedNoAuthRecording,
+  openRuns,
+  otherLanesRecently,
+  preflightProblems,
+  recentAbort,
+} from "./fs-rules/run.mjs";
 
 const production = () =>
   createContext({
@@ -320,4 +327,63 @@ test("other lanes that used the sandbox in the last 30 minutes are named", () =>
     "not json",
   ].join("\n");
   assert.deepEqual(otherLanesRecently(ledger, now), ["AUTH-ACTION-SANDBOX"]);
+});
+
+test("runs another task started and has not finished block a recording", () => {
+  const now = Date.parse("2026-09-25T12:00:00Z");
+  const line = (ts, taskId, extra = {}) =>
+    JSON.stringify({ ts, taskId, project: "fireemu-oracle-idp", ...extra });
+  const ledger = [
+    line("2026-09-25T10:00:00Z", "AUTH-MFA-SANDBOX", { event: "started" }),
+    line("2026-09-25T09:00:00Z", "AUTH-X", { event: "started" }),
+    line("2026-09-25T09:30:00Z", "AUTH-X", { outcome: "recorded" }),
+    line("2026-09-25T02:00:00Z", "AUTH-OLD", { event: "started" }),
+    line("2026-09-25T11:00:00Z", "FS-RULES-SANDBOX", { event: "started" }),
+  ].join("\n");
+  assert.deepEqual(openRuns(ledger, now), ["AUTH-MFA-SANDBOX"]);
+});
+
+test("the operator confirmation is a recent time", () => {
+  const now = Date.parse("2026-09-25T12:00:00Z");
+  assert.equal(
+    confirmedNoAuthRecording({ FS_RULES_NO_AUTH_RECORDING: "2026-09-25T11:30:00Z" }, now),
+    "2026-09-25T11:30:00.000Z",
+  );
+  for (const value of [undefined, "yes", "2026-09-25T10:30:00Z", "2026-09-25T12:10:00Z"]) {
+    assert.throws(() => confirmedNoAuthRecording({ FS_RULES_NO_AUTH_RECORDING: value }, now));
+  }
+});
+
+test("preflight refuses every leftover a crashed run or another lane could leave", () => {
+  const clean = {
+    failedReads: [],
+    databases: ["(default)"],
+    releases: [],
+    rulesets: 0,
+    allowTenants: false,
+    tenants: 0,
+    projectAccounts: 0,
+    otherLanesRecently: [],
+    openRuns: [],
+    signJwt: true,
+    compiled: { main: 200, alt: 200, named: 200 },
+  };
+  assert.deepEqual(preflightProblems(clean), []);
+  const cases = {
+    failedReads: ["releases (HTTP 500)"],
+    databases: ["(default)", "fsr-1-a"],
+    releases: ["cloud.firestore"],
+    rulesets: 1,
+    allowTenants: true,
+    tenants: 1,
+    projectAccounts: 1,
+    otherLanesRecently: ["AUTH-MFA-SANDBOX"],
+    openRuns: ["AUTH-MFA-SANDBOX"],
+    signJwt: false,
+    compiled: { main: 400, alt: 200, named: 200 },
+  };
+  for (const [key, value] of Object.entries(cases)) {
+    assert.equal(preflightProblems({ ...clean, [key]: value }).length, 1, key);
+  }
+  assert.equal(preflightProblems({ ...clean, projectAccounts: -1 }).length, 1);
 });

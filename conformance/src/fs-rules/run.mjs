@@ -180,40 +180,56 @@ async function ownerFetch(target, method, url, body) {
  */
 export async function preflight(target, ledgerText = "", now = Date.now()) {
   const rules = `${PRODUCTION.rules}/v1/projects/${SANDBOX_PROJECT}`;
-  const releases = await ownerFetch(target, "GET", `${rules}/releases`);
-  const databases = await ownerFetch(
-    target,
-    "GET",
-    `${PRODUCTION.firestore}/v1/projects/${SANDBOX_PROJECT}/databases`,
-  );
-  const documents = await ownerFetch(
-    target,
-    "POST",
-    `${PRODUCTION.firestore}/v1/projects/${SANDBOX_PROJECT}/databases/(default)/documents:runQuery`,
-    { structuredQuery: { from: [{ allDescendants: true }], limit: 1 } },
-  );
-  const accounts = await ownerFetch(
-    target,
-    "POST",
-    `${PRODUCTION.itk}/v1/projects/${SANDBOX_PROJECT}/accounts:query`,
-    { returnUserInfo: false },
-  );
-  const signJwt = await ownerFetch(
-    target,
-    "POST",
-    `https://iam.googleapis.com/v1/projects/-/serviceAccounts/${SIGNER_ACCOUNTS.project}:testIamPermissions`,
-    { permissions: ["iam.serviceAccounts.signJwt"] },
-  );
+  const itk = `${PRODUCTION.itk}`;
+  const reads = {
+    releases: await ownerFetch(target, "GET", `${rules}/releases`),
+    rulesets: await ownerFetch(target, "GET", `${rules}/rulesets`),
+    databases: await ownerFetch(
+      target,
+      "GET",
+      `${PRODUCTION.firestore}/v1/projects/${SANDBOX_PROJECT}/databases`,
+    ),
+    documents: await ownerFetch(
+      target,
+      "POST",
+      `${PRODUCTION.firestore}/v1/projects/${SANDBOX_PROJECT}/databases/(default)/documents:runQuery`,
+      { structuredQuery: { from: [{ allDescendants: true }], limit: 1 } },
+    ),
+    accounts: await ownerFetch(
+      target,
+      "POST",
+      `${itk}/v1/projects/${SANDBOX_PROJECT}/accounts:query`,
+      {
+        returnUserInfo: false,
+      },
+    ),
+    config: await ownerFetch(target, "GET", `${itk}/admin/v2/projects/${SANDBOX_PROJECT}/config`),
+    tenants: await ownerFetch(
+      target,
+      "GET",
+      `${itk}/v2/projects/${SANDBOX_PROJECT}/tenants?pageSize=100`,
+    ),
+    signJwt: await ownerFetch(
+      target,
+      "POST",
+      `https://iam.googleapis.com/v1/projects/-/serviceAccounts/${SIGNER_ACCOUNTS.project}:testIamPermissions`,
+      { permissions: ["iam.serviceAccounts.signJwt"] },
+    ),
+  };
   const report = {
-    projectAccounts: Number(accounts.json?.recordsCount ?? -1),
-    signJwt: (signJwt.json?.permissions ?? []).includes("iam.serviceAccounts.signJwt"),
+    failedReads: Object.entries(reads)
+      .filter(([, { status }]) => status !== 200)
+      .map(([name, { status }]) => `${name} (HTTP ${status})`),
+    projectAccounts: Number(reads.accounts.json?.recordsCount ?? -1),
+    signJwt: (reads.signJwt.json?.permissions ?? []).includes("iam.serviceAccounts.signJwt"),
+    allowTenants: reads.config.json?.multiTenant?.allowTenants === true,
+    tenants: (reads.tenants.json?.tenants ?? []).length,
+    rulesets: (reads.rulesets.json?.rulesets ?? []).length,
     otherLanesRecently: otherLanesRecently(ledgerText, now),
-    releases: (releases.json?.releases ?? []).map(({ name, rulesetName }) => ({
-      name,
-      rulesetName,
-    })),
-    databases: (databases.json?.databases ?? []).map(({ name }) => name.split("/").at(-1)),
-    defaultHasDocuments: (documents.json ?? []).some((e) => e.document),
+    openRuns: openRuns(ledgerText, now),
+    releases: (reads.releases.json?.releases ?? []).map(({ name }) => name.split("/releases/")[1]),
+    databases: (reads.databases.json?.databases ?? []).map(({ name }) => name.split("/").at(-1)),
+    defaultHasDocuments: (reads.documents.json ?? []).some((e) => e.document),
     compiled: {},
   };
   for (const id of RULESET_IDS) {
@@ -221,27 +237,60 @@ export async function preflight(target, ledgerText = "", now = Date.now()) {
       source: { files: [{ name: "firestore.rules", content: rulesetSource(id) }] },
     });
     report.compiled[id] = created.status;
-    if (created.status === 200)
-      await ownerFetch(target, "DELETE", `${PRODUCTION.rules}/v1/${created.json.name}`);
+    if (created.status === 200) {
+      const deleted = await ownerFetch(
+        target,
+        "DELETE",
+        `${PRODUCTION.rules}/v1/${created.json.name}`,
+      );
+      if (deleted.status !== 200) report.failedReads.push(`delete of the ${id} compile probe`);
+    }
   }
+  return { report, problems: preflightProblems(report) };
+}
+
+/**
+ * Why a recording may not start. The sandbox must be as the lane leaves it: no release, no
+ * ruleset, no named database, no tenant and multi-tenancy off, no project-level account (the
+ * AUTH lanes leave none when idle), no other lane active, signJwt granted, the rulesets compiling,
+ * and every read answered.
+ */
+export function preflightProblems(report) {
   const foreign = report.databases.filter((db) => db !== "(default)");
-  const problems = [
+  return [
+    ...report.failedReads.map((read) => `preflight read failed: ${read}`),
     ...(foreign.length ? [`databases other than (default) exist: ${foreign.join(", ")}`] : []),
-    // A release left behind would make the first settle meaningless: cleanup it by hand first.
-    ...(report.releases.length ? ["a release exists"] : []),
-    // The AUTH lanes wipe every project-level account per program, and leave none when idle.
+    ...(report.releases.length ? [`release(s) exist: ${report.releases.join(", ")}`] : []),
+    ...(report.rulesets ? [`${report.rulesets} ruleset(s) exist`] : []),
+    ...(report.allowTenants ? ["multiTenant.allowTenants is on"] : []),
+    ...(report.tenants ? [`${report.tenants} tenant(s) exist`] : []),
     ...(report.projectAccounts !== 0
       ? [`${report.projectAccounts} project-level account(s) exist`]
       : []),
     ...(report.otherLanesRecently.length
       ? [`other lanes used the sandbox within 30 minutes: ${report.otherLanesRecently.join(", ")}`]
       : []),
+    ...(report.openRuns.length ? [`runs still open: ${report.openRuns.join(", ")}`] : []),
     ...(report.signJwt ? [] : ["the owner lacks signJwt on the sandbox's Admin SDK account"]),
     ...Object.entries(report.compiled)
       .filter(([, status]) => status !== 200)
       .map(([id, status]) => `ruleset ${id} does not compile (HTTP ${status})`),
   ];
-  return { report, problems };
+}
+
+/**
+ * The AUTH lanes do not all write `started` lines, so the operator confirms that none is
+ * recording on the sandbox: FS_RULES_NO_AUTH_RECORDING=<ISO time of the check>, at most an hour
+ * old. The value goes into the run's meta and its ledger `started` line.
+ */
+export function confirmedNoAuthRecording(env = process.env, now = Date.now()) {
+  const at = Date.parse(env.FS_RULES_NO_AUTH_RECORDING ?? "");
+  if (!Number.isFinite(at) || now - at > 3_600_000 || at - now > 60_000) {
+    throw new Error(
+      "FS_RULES_NO_AUTH_RECORDING must be the ISO time (within the last hour) at which the operator confirmed that no AUTH lane is recording on the sandbox",
+    );
+  }
+  return new Date(at).toISOString();
 }
 
 /** Set by SIGINT or SIGTERM: the session stops before its next step and cleans up. */
@@ -309,6 +358,26 @@ export function otherLanesRecently(ledgerText, now = Date.now()) {
   return [...tasks];
 }
 
+/**
+ * Other tasks with a `started` line for the sandbox in the last 6 hours and no later line of
+ * the same task: a run of theirs may still be going.
+ */
+export function openRuns(ledgerText, now = Date.now()) {
+  const open = new Map();
+  for (const line of ledgerText.split("\n")) {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry?.project !== SANDBOX_PROJECT || entry.taskId === TASK_ID || !entry.taskId) continue;
+    if (entry.event === "started") open.set(entry.taskId, Date.parse(entry.ts));
+    else open.delete(entry.taskId);
+  }
+  return [...open].filter(([, started]) => now - started < 6 * 3_600_000).map(([task]) => task);
+}
+
 /** Refuses a run within an hour of this task's last aborted run (per-IP account limits). */
 export function recentAbort(ledgerText, now = Date.now()) {
   const entries = ledgerText
@@ -338,6 +407,7 @@ async function recordProduction() {
     throw new Error(`the last run aborted at ${aborted.ts}; wait an hour before retrying`);
   const programs = selectPrograms();
   const corpusRequests = validateCorpus(programs);
+  const operatorConfirmation = confirmedNoAuthRecording();
   const web = await sandboxWebConfig();
   const target = await productionTarget(web);
   const { report, problems } = await preflight(
@@ -352,6 +422,7 @@ async function recordProduction() {
     programs: programs.map((p) => p.id),
     corpusDigests: Object.fromEntries(programs.map((p) => [p.id, programDigest(p)])),
     preflight: report,
+    operatorConfirmation,
     clockOffsetSeconds: await assertClockSynchronized(),
   };
   await assertIgnored(privateRoot);
@@ -359,13 +430,19 @@ async function recordProduction() {
   await mkdir(runDir, { recursive: true, mode: 0o700 });
   await appendFile(
     ledger,
-    `${JSON.stringify({ ts: meta.startedAt, event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: programs.length })}\n`,
+    `${JSON.stringify({ ts: meta.startedAt, event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: programs.length, operatorConfirmation })}\n`,
   );
   const signers = { project: { serviceAccount: SIGNER_ACCOUNTS.project } };
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
+      if (stopRequested) {
+        console.error(
+          `${signal} again: cleanup is running and is not interrupted. A kill -9 now leaves releases, rulesets, databases, accounts, the tenant and multiTenant.allowTenants for hand cleanup (see the private run directory).`,
+        );
+        return;
+      }
       stopRequested = true;
-      console.error(`${signal}: stopping before the next step; cleanup follows`);
+      console.error(`${signal}: stopping at the next step or wait; cleanup follows`);
     });
   }
   const recordings = [];
@@ -373,6 +450,7 @@ async function recordProduction() {
   let error;
   try {
     for (const n of [1, 2]) {
+      if (stopRequested) throw Object.assign(new Error("stopped by a signal"), { fatal: true });
       const recording = await recordOnce(programs, web, signers);
       recordings.push(recording);
       await writeFile(join(runDir, `recording-${n}.json`), JSON.stringify(recording), {
@@ -398,6 +476,12 @@ async function recordProduction() {
   });
   const requests = recordings.reduce((n, r) => n + r.requests + r.harnessRequests, 0);
   const failures = recordings.flatMap((r) => r.failures ?? []);
+  // Something the run could not remove or restore is the first thing anyone must see.
+  const cleanupErrors = recordings.flatMap((r) => r.cleanupErrors ?? []);
+  if (cleanupErrors.length) {
+    outcome = "aborted-cleanup-incomplete";
+    console.error(`CLEANUP INCOMPLETE on ${SANDBOX_PROJECT}:\n  ${cleanupErrors.join("\n  ")}`);
+  }
   try {
     if (!error) {
       const nondeterministic = await writeFixture({
@@ -434,6 +518,7 @@ async function recordProduction() {
         taskId: TASK_ID,
         programs: meta.programs,
         configurationChanges: recordings.flatMap((r) => r.changes ?? []),
+        ...(cleanupErrors.length ? { cleanupErrors } : {}),
         publications: recordings.flatMap((r) => r.publications ?? []).length,
         ...(error ? { error } : {}),
       })}\n`,

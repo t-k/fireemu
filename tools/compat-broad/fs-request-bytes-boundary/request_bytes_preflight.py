@@ -22,8 +22,8 @@ from broad_contract import digest
 from credential_prep import private_string
 
 SCOPE = "https://www.googleapis.com/auth/cloud-platform"
-PROJECT = "fireemu-35fe6"
-NUMBER = "592603257417"
+PROJECT = "fireemu-oracle-sbx"
+_PROJECT_NUMBER = re.compile(r"^[1-9][0-9]{5,19}$")
 DATABASE = f"projects/{PROJECT}/databases/(default)"
 _ROUTES = {
     "project": f"https://cloudresourcemanager.googleapis.com/v1/projects/{PROJECT}",
@@ -36,6 +36,12 @@ def metadata_url(slot):
     if slot not in _ROUTES:
         raise ValueError("closed metadata slot required")
     return _ROUTES[slot]
+
+
+def validate_project_number(value):
+    if not isinstance(value, str) or _PROJECT_NUMBER.fullmatch(value) is None:
+        raise ValueError("owner-bound sandbox project number required")
+    return value
 
 
 def validate_principal(principal):
@@ -109,7 +115,11 @@ def verify_metadata(slot, body, permission):
     if not isinstance(body, dict):
         raise TypeError("typed metadata object required")
     if slot == "project":
-        if body.get("projectId") != PROJECT or body.get("projectNumber") != NUMBER:
+        project_number = validate_project_number(permission.get("projectNumber"))
+        if (
+            body.get("projectId") != PROJECT
+            or body.get("projectNumber") != project_number
+        ):
             raise ValueError("project identity differs")
     elif slot == "database":
         evidence = database_evidence(body)
@@ -297,7 +307,11 @@ def metadata_attestation(slot, receipt, permission):
         public["complete"] = False
     else:
         body["baselineVerified"] = True
-        if slot == "database":
+        if slot == "project":
+            body["projectNumberDigest"] = digest(
+                {"projectNumber": validate_project_number(permission.get("projectNumber"))}
+            )
+        elif slot == "database":
             body["projection"] = database_evidence(receipt["body"])["projection"]
     public["body"] = body
     return public
@@ -321,7 +335,13 @@ def validate_metadata_attestation(slot, response, permission):
         raise ValueError("saved metadata attestation differs")
     if slot == "auth" and body["bodyDigest"] != permission.get("authConfigDigest"):
         raise ValueError("saved Auth baseline differs")
-    if slot == "database":
+    if slot == "project":
+        project_number = validate_project_number(permission.get("projectNumber"))
+        if body.get("projectNumberDigest") != digest(
+            {"projectNumber": project_number}
+        ):
+            raise ValueError("project metadata binding differs")
+    elif slot == "database":
         projection = body.get("projection")
         if (
             not isinstance(projection, dict)

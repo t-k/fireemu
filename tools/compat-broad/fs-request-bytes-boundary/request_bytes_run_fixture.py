@@ -32,7 +32,7 @@ TYPED_413 = {
     "status": 413,
     "body": {"error": {"code": 413, "status": "INVALID_ARGUMENT"}},
 }
-EXPECTED_MESSAGE = "Request payload size exceeds the limit: 10485760 bytes."
+EXPECTED_MESSAGE = "Request payload size exceeds the limit: 11534336 bytes."
 
 TYPED_400 = {
     "status": 400,

@@ -5,9 +5,10 @@ record is a broken binding, not a cosmetic difference:
 
     uv run --offline --project tools/compat-inventory --locked python \\
         tools/compat-broad/fs-request-bytes-boundary/request_bytes_shadow.py \\
-        --output <fresh-directory>
+        --output <fresh-directory> --publish
 
-then copy its `local-shadow.json` over the published record.
+which writes a new 11 MiB-specific receipt and updates the preparation citation;
+the old 10 MiB receipt remains historical.
 """
 
 from __future__ import annotations
@@ -40,10 +41,10 @@ from request_bytes_compiler import (
     compile_request_bytes_plan,
 )
 
-RECORD = ROOT / "spec/compatibility/broad-runs/fs-request-bytes-local-shadow.json"
+RECORD = ROOT / "spec/compatibility/broad-runs/fs-request-bytes-local-shadow-11mib.json"
 
 REGENERATE = (
-    "rerun request_bytes_shadow.py and republish its local-shadow.json; the "
+    "rerun request_bytes_shadow.py and republish the 11 MiB local-shadow; the "
     "published record was produced by different modules"
 )
 
@@ -84,6 +85,25 @@ def test_the_published_record_is_assembled_the_way_the_generator_assembles_it():
     )
     assert set(generated) == set(value), set(generated) ^ set(value)
     assert generated == value, "the published record is not the generator's output"
+
+
+def test_published_journal_is_compact_but_bound_to_the_private_capture():
+    observation = record()["observation"]
+    journal = observation["localJournal"]
+    assert journal["captureComplete"] is True
+    assert journal["rowCount"] == 258
+    assert journal["sidecarCount"] == observation["requestCount"]
+    assert journal["skippedCount"] == 17
+    assert journal["skippedSummary"] == [
+        {
+            "probe": "over",
+            "kind": "cleanup-version-bound-delete",
+            "reason": "creation-and-current-version-not-proven",
+            "count": 17,
+        }
+    ]
+    assert "rowEntries" not in journal
+    assert "sidecarEntries" not in journal
 
 
 def test_the_published_classification_recomputes_from_the_published_observation():

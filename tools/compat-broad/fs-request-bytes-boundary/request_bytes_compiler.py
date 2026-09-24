@@ -7,8 +7,9 @@ import json
 import re
 from typing import Any
 
-REQUEST_TARGETS = (10_485_759, 10_485_760, 10_485_761)
-REQUEST_LIMIT = 10_485_760
+REQUEST_LIMIT = 11_534_336
+REQUEST_TARGETS = (REQUEST_LIMIT - 1, REQUEST_LIMIT, REQUEST_LIMIT + 1)
+CATALOG_MAXIMUM = 10_485_760
 RAW_16MIB_OVER_BYTES = 16_777_217
 RAW_16MIB_OVER_CASE_ID = "FS-LIMIT-API-REQUEST-BYTES-RAW-16MIB-OVER"
 RAW_16MIB_OVER_LABEL = "raw-16mib-over"
@@ -278,7 +279,7 @@ def compile_request_bytes_plan(
         "schemaVersion": 3,
         "campaignId": CAMPAIGN,
         "catalogId": CAMPAIGN,
-        "catalogMaximum": REQUEST_LIMIT,
+        "catalogMaximum": CATALOG_MAXIMUM,
         "project": project,
         "database": database,
         "nonce": nonce,
@@ -458,7 +459,7 @@ def compile_request_bytes_sentinel_plan(
         "caseId": RAW_16MIB_OVER_CASE_ID,
         "campaignId": CAMPAIGN,
         "catalogId": CAMPAIGN,
-        "catalogMaximum": REQUEST_LIMIT,
+        "catalogMaximum": CATALOG_MAXIMUM,
         "project": project,
         "database": database,
         "nonce": nonce,
@@ -517,7 +518,7 @@ def validate_request_bytes_sentinel_plan(plan: dict[str, Any]) -> None:
         "caseId": RAW_16MIB_OVER_CASE_ID,
         "campaignId": CAMPAIGN,
         "catalogId": CAMPAIGN,
-        "catalogMaximum": REQUEST_LIMIT,
+        "catalogMaximum": CATALOG_MAXIMUM,
         "protocol": "REST",
         "metric": "REST raw HTTP body UTF-8 bytes",
         "metricStatus": "observation hypothesis",
@@ -705,7 +706,7 @@ def validate_request_bytes_plan(plan: dict[str, Any]) -> None:
         "schemaVersion": 3,
         "campaignId": CAMPAIGN,
         "catalogId": CAMPAIGN,
-        "catalogMaximum": 10485760,
+        "catalogMaximum": CATALOG_MAXIMUM,
         "protocol": "REST",
         "metric": "REST raw HTTP body UTF-8 bytes",
         "metricStatus": "observation hypothesis",

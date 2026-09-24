@@ -508,10 +508,7 @@ impl admin::firestore_admin_server::FirestoreAdmin for AdminGrpc {
         request: Request<admin::CreateDatabaseRequest>,
     ) -> R<lro::Operation> {
         let r = request.get_ref();
-        let body = r
-            .database
-            .as_ref()
-            .map_or_else(|| json!({}), database_body);
+        let body = r.database.as_ref().map_or_else(|| json!({}), database_body);
         let query = encode_query(&[("databaseId", &r.database_id)]);
         let path = format!("{}/databases", r.parent);
         let answer = self.call(&request, "POST", &path, &query, body)?;

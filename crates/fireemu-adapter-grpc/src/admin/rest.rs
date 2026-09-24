@@ -263,6 +263,21 @@ fn refusal_response(refusal: &CatalogRefusal, project: &str, database: &str) -> 
     }
 }
 
+/// What fireemu answers for the managed-infrastructure surfaces scope decision C1 keeps out.
+pub(crate) const MANAGED_INFRASTRUCTURE: &str = "fireemu does not serve backups, backup \
+    schedules, restore, clone or point-in-time recovery (FS-CONFIG-LIFECYCLE scope decision C1)";
+
+/// Whether a request names a managed-infrastructure surface: `databases:restore`,
+/// `databases:clone`, `databases/{d}/backupSchedules[...]` or `locations/{l}/backups[...]`.
+fn managed_infrastructure(segments: &[&str], action: Option<&str>) -> bool {
+    match (segments.get(1).copied(), segments.len(), action) {
+        (Some("databases"), 2, Some("restore" | "clone")) => true,
+        (Some("databases"), n, _) if n >= 4 => segments[3] == "backupSchedules",
+        (Some("locations"), n, _) if n >= 4 => segments[3] == "backups",
+        _ => false,
+    }
+}
+
 /// Routes an Admin request, or returns `None` for a path this module does not serve.
 pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse> {
     let path = req.path.strip_prefix("/v1/projects/")?;
@@ -272,6 +287,11 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
     };
     let segments: Vec<&str> = resource.split('/').collect();
     let project = *segments.first()?;
+    if managed_infrastructure(&segments, action) {
+        return Some(crate::rest::error_response(&Status::unimplemented(
+            MANAGED_INFRASTRUCTURE,
+        )));
+    }
     let admin = match (segments.get(1).copied(), segments.len(), action) {
         (Some("locations" | "databases"), 2 | 3, None)
         | (
@@ -643,6 +663,9 @@ fn patch_database(
             | "delete_protection_state"
             | "concurrencyMode"
             | "concurrency_mode" => {}
+            "pointInTimeRecoveryEnablement" | "point_in_time_recovery_enablement" => {
+                return crate::rest::error_response(&Status::unimplemented(MANAGED_INFRASTRUCTURE))
+            }
             "locationId" | "location_id" => {
                 return error(
                     tonic::Code::InvalidArgument,

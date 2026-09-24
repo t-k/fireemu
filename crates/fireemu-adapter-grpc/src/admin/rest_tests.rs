@@ -779,3 +779,30 @@ fn bulk_delete_refuses_an_empty_filter_and_deletes_the_named_collection_groups()
     let (status, _) = call(&state, "GET", &format!("{docs}/items/a"), Value::Null);
     assert_eq!(status, 200);
 }
+
+#[test]
+fn managed_infrastructure_is_refused_as_unimplemented() {
+    let (state, _clock) = state();
+    for (method, path) in [
+        ("GET", "/v1/projects/p/databases/(default)/backupSchedules"),
+        ("POST", "/v1/projects/p/databases/(default)/backupSchedules"),
+        ("GET", "/v1/projects/p/locations/us-central1/backups"),
+        ("DELETE", "/v1/projects/p/locations/us-central1/backups/b1"),
+        ("POST", "/v1/projects/p/databases:restore"),
+        ("POST", "/v1/projects/p/databases:clone"),
+    ] {
+        let (status, body) = call(&state, method, path, json!({}));
+        assert_eq!(status, 501, "{method} {path}: {body}");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("scope decision C1"));
+    }
+    let (status, _) = call(
+        &state,
+        "PATCH",
+        "/v1/projects/p/databases/(default)?updateMask=pointInTimeRecoveryEnablement",
+        json!({"pointInTimeRecoveryEnablement": "POINT_IN_TIME_RECOVERY_ENABLED"}),
+    );
+    assert_eq!(status, 501);
+}

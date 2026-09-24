@@ -185,11 +185,16 @@ const idTokenLegacy = program(
       sessionInfo: from("phone-send-code-for-link:sessionInfo"),
       code: TEST_PHONE_CODE,
     }),
-    client("sign-up-upgrade-with-legacy-token", "signUp", {
-      idToken: from("custom-sign-in:idToken"),
-      email: "EMAIL(legacy-upgrade)",
-      password: "password123",
-    }),
+    // A second boundary after the legacy sign-in, so the password the upgrade sets revokes the
+    // legacy token on both sides, however fast they answer.
+    {
+      ...client("sign-up-upgrade-with-legacy-token", "signUp", {
+        idToken: from("custom-sign-in:idToken"),
+        email: "EMAIL(legacy-upgrade)",
+        password: "password123",
+      }),
+      delayMs: 1100,
+    },
     client("delete-with-legacy-custom-token", "delete", {
       idToken: from("custom-sign-in:idToken"),
     }),

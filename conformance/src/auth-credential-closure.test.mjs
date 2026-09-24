@@ -270,18 +270,45 @@ test("scope decisions are recorded, not implied", () => {
   }
 });
 
-test("AUTH-CREDENTIAL inherited final regression binds to the current attested artifact", () => {
+test("AUTH-CREDENTIAL final regression stays pending without a current 222-row comparison", () => {
   const closure = load();
   const regression = closure.conditions.find(
     ({ conditionId }) => conditionId === "AUTH-CREDENTIAL/final-artifact-regression",
   );
-  assert.equal(regression.status, "VERIFIED");
+  const accountComparison = readJson(
+    "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-account-regression.json",
+  );
+  const credentialComparison = readJson(
+    "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-comparison.json",
+  );
+  assert.equal(regression.status, "PENDING_REVIEW");
   assert.equal(closure.parentStatus, "IMPLEMENTING");
   assert.equal(
     regression.evidence.finalArtifactSha256,
     "a8bfc5dc1737dee01bae028b2e3dd421f04326e12640cb4936d896ebfcfa358a",
   );
   assert.equal(regression.evidence.sourceCommit, "c86b8490c1717bce2881eac051bef94388a84001");
+  assert.deepEqual(accountComparison.summary, { MATCH: 631 });
+  assert.equal(accountComparison.artifactSha256, regression.evidence.finalArtifactSha256);
+  assert.deepEqual(credentialComparison.summary, { MATCH: 222 });
+  assert.notEqual(credentialComparison.artifactSha256, regression.evidence.finalArtifactSha256);
+  assert.equal(
+    regression.evidence.pendingCredentialComparison.status,
+    "PENDING_REVIEW",
+  );
+  assert.equal(
+    regression.evidence.pendingCredentialComparison.currentlyBoundArtifactSha256,
+    credentialComparison.artifactSha256,
+  );
+  assert.equal(
+    regression.evidence.pendingCredentialComparison.requiredArtifactSha256,
+    regression.evidence.finalArtifactSha256,
+  );
+  assert.equal(
+    regression.evidence.pendingCredentialComparison.path,
+    "spec/compatibility/closure/evidence/AUTH-CREDENTIAL-comparison.json",
+  );
+  assert.equal(regression.evidence.rows, undefined);
   assert.equal(
     closure.conditions.find(
       ({ conditionId }) => conditionId === "AUTH-CREDENTIAL/closure-review",

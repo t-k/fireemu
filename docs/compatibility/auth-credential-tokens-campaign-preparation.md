@@ -1,6 +1,8 @@
 # AUTH-CREDENTIAL token and session-cookie campaign preparation
 
-Status: `PREPARATION`. `productionExecuted=false`. Production-unobserved conditions reduced: 0.
+Status: `SUPERSEDED`. This preparation was never executed. The disposable Identity Platform sandbox track replaced it on 2026-09-24: [`spec/compatibility/closure/AUTH-CREDENTIAL.json`](../../spec/compatibility/closure/AUTH-CREDENTIAL.json) freezes the parent's conditions, and `conformance/auth-credential-production.json` holds the two production recordings of each program. Every case below is covered there, including the same-second boundary, session-cookie bounds, signed custom tokens (through IAM `signJwt`), refresh `auth_time` preservation and claim precedence. The text below is kept as it was written.
+
+Original status: `PREPARATION`. `productionExecuted=false`. Production-unobserved conditions reduced: 0.
 
 This page prepares a bounded production observation for the `AUTH-CREDENTIAL` conditions that the inventory row still lists as required. Nothing here is a production observation, a comparison result or an approval. No credential was acquired and no production service was contacted. The `AUTH-CREDENTIAL` status in [the goal inventory](ip-fs-production-compatibility.md) stays `IMPLEMENTING`.
 

@@ -406,7 +406,10 @@ async function observeCollector({
       } else if (writes[0].transform) {
         const name = writes[0].transform.document;
         const record = records.get(name);
-        if (failureMode === "cas") {
+        if (
+          failureMode === "cas" ||
+          (failureMode === "cas-after-seed" && probeSeededNames.has(name))
+        ) {
           send(409, { error: { status: "ABORTED", message: "stale updateTime" } });
         } else if (
           (failureMode === "halve-chunk" || failureMode === "unrelated-transform-400") &&
@@ -1307,24 +1310,23 @@ test("delta-v3 loopback run uses only six source-bound names and a separate resu
     ).length,
     0,
   );
-  const bulkDeleteRequests = result.requests.filter((request) =>
-    request.pathname.endsWith("):bulkDeleteDocuments"),
+  // A production bulk delete runs for hours, so documents that refuse a direct delete are
+  // shrunk with arrayRemove and then deleted with an updateTime precondition.
+  assert.equal(
+    result.requests.filter((request) => request.pathname.endsWith("):bulkDeleteDocuments")).length,
+    0,
   );
-  assert.ok(bulkDeleteRequests.length <= 2);
-  for (const request of bulkDeleteRequests) {
-    const collectionIds = JSON.parse(request.body).collectionIds;
-    assert.ok(collectionIds.length > 0 && collectionIds.length <= 6);
-    assert.ok(
-      collectionIds.every((id) =>
-        deltaNames.some(
-          (name) =>
-            name
-              .replaceAll("DELETE_RUN_ID", defaultDeleteRunId)
-              .split("/documents/")[1]
-              .split("/")[0] === id,
-        ),
-      ),
+  const runNames = deltaNames.map((name) => name.replaceAll("DELETE_RUN_ID", defaultDeleteRunId));
+  const cleanupWrites = result.requests
+    .filter((request) => request.pathname.endsWith("/documents:commit"))
+    .map((request) => JSON.parse(request.body).writes[0]);
+  assert.ok(cleanupWrites.some((write) => runNames.includes(write.transform?.document)));
+  for (const name of runNames) {
+    // The recipes' own delete steps carry no precondition; the cleanup's deletes do.
+    const cleanupDeletes = cleanupWrites.filter(
+      (write) => write.delete === name && typeof write.currentDocument?.updateTime === "string",
     );
+    assert.ok(cleanupDeletes.length > 0, name);
   }
   assert.ok(
     result.requests.every(
@@ -1353,80 +1355,6 @@ test("delta-v3 loopback run uses only six source-bound names and a separate resu
   assert.equal(secondJournal.status, "complete");
   await rm(result.directory, { recursive: true, force: true });
   await rm(second.directory, { recursive: true, force: true });
-});
-
-test("delta-v3 cleanup waits between bulk-delete polls and keeps the recording if the operation outlives them", async () => {
-  const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
-  const { corpus } = await prepareSandboxCorpus();
-  const digest = createHash("sha256").update(JSON.stringify(corpus)).digest("hex");
-  const ids = new Set(
-    ["rest", "commit", "batch-write"].flatMap((route) =>
-      [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
-    ),
-  );
-  const restPrograms = corpus.restPrograms.filter((program) => ids.has(program.id));
-  const packet = {
-    schemaVersion: 1,
-    sourceCorpusSha256: digest,
-    restPrograms,
-    streamRecipes: corpus.streamRecipes.filter(
-      (recipe) => recipe.id === "writes/write-stream-terminal/response-before-half-close",
-    ),
-    restRequestCount: 30,
-  };
-  const deltaNames = restPrograms.map((program) => program.steps[0].body.writes[0].update.name);
-  const counts = restPrograms.map((program) => Number(program.id.split("/").at(-1)));
-  const polls = (result) =>
-    result.requests.filter((request) => request.pathname.endsWith("/operations/delta-test"));
-
-  const paced = await observeCollector({
-    scopeNames: deltaNames,
-    visibleNames: deltaNames,
-    arrayLength: counts,
-    deltaV3: true,
-    corpusDigest: digest,
-    inputCorpus: packet,
-    operationPendingPolls: 3,
-    managedPollMs: "40",
-  });
-  try {
-    assert.equal(paced.failure, undefined);
-    // The initial clear and the final clear each start one bulk delete; each answers
-    // three pending polls before it is done.
-    const times = polls(paced).map((request) => request.at);
-    assert.equal(times.length, 8);
-    for (let index = 1; index < times.length; index += 1) {
-      assert.ok(times[index] - times[index - 1] >= 30, `poll ${index} was not paced`);
-    }
-  } finally {
-    await rm(paced.directory, { recursive: true, force: true });
-  }
-
-  const stuck = await observeCollector({
-    scopeNames: deltaNames,
-    visibleNames: deltaNames,
-    arrayLength: counts,
-    deltaV3: true,
-    corpusDigest: digest,
-    inputCorpus: packet,
-    operationPendingPolls: 100_000,
-    pendingFromOperation: 2,
-  });
-  try {
-    assert.match(String(stuck.failure?.stderr), /remains nonterminal/);
-    // The recording made before the cleanup is kept for recovery and review.
-    const recorded = JSON.parse(await readFile(stuck.output, "utf8"));
-    assert.deepEqual(Object.keys(recorded).toSorted(), [...ids].toSorted());
-    // The journal still names the unfinished operation, so recover-delta-v3 resumes it.
-    const journal = JSON.parse(await readFile(stuck.deltaJournal, "utf8"));
-    assert.notEqual(journal.status, "complete");
-    assert.equal(
-      journal.bulkDeleteOperation,
-      "projects/fireemu-oracle-sbx/databases/(default)/operations/delta-test",
-    );
-  } finally {
-    await rm(stuck.directory, { recursive: true, force: true });
-  }
 });
 
 test("delta-v3 recovery resolves a durable candidate DELETE intent by fresh typed reads without replay", async () => {
@@ -1541,8 +1469,14 @@ test("delta-v3 recovery resolves a durable candidate DELETE intent by fresh type
     });
     try {
       assert.ifError(routeResult.failure);
+      // The recipe's unconditioned delete is never replayed; the cleanup's own commits
+      // (arrayRemove and updateTime-conditioned deletes) are a different request.
+      const replayBody = JSON.stringify({ writes: [{ delete: target }] });
       assert.equal(
-        routeResult.requests.some((request) => request.pathname === path),
+        routeResult.requests.some(
+          (request) =>
+            request.pathname === path && JSON.stringify(JSON.parse(request.body)) === replayBody,
+        ),
         false,
       );
       const recovered = JSON.parse(
@@ -1644,6 +1578,91 @@ test("delta-v3 recovery re-entry polls the journaled LRO without starting anothe
     );
     assert.equal(recovered.status, "complete");
     assert.equal(recovered.bulkDeleteOperation, null);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+
+  // A journaled operation is polled at the managed interval, and one that outlives the
+  // polls stays named in the journal for a later recovery.
+  const paced = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: [],
+    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: journal.corpusDigest,
+    operationPendingPolls: 3,
+    pendingFromOperation: 0,
+    managedPollMs: "40",
+  });
+  try {
+    assert.ifError(paced.failure);
+    const times = paced.requests
+      .filter((request) => request.pathname.endsWith("/operations/delta-test"))
+      .map((request) => request.at);
+    assert.equal(times.length, 4);
+    for (let index = 1; index < times.length; index += 1) {
+      assert.ok(times[index] - times[index - 1] >= 30, `poll ${index} was not paced`);
+    }
+  } finally {
+    await rm(paced.directory, { recursive: true, force: true });
+  }
+  const stuck = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: [],
+    arrayLength: [12_112, 12_113, 12_112, 12_113, 12_112, 12_113],
+    deleteRunId: runId,
+    deltaV3: true,
+    recoveryMode: "recover-delta-v3",
+    initialDeltaJournal: journal,
+    corpusDigest: journal.corpusDigest,
+    operationPendingPolls: 100_000,
+    pendingFromOperation: 0,
+  });
+  try {
+    assert.match(String(stuck.failure?.stderr), /remains nonterminal/);
+    const kept = JSON.parse(await readFile(join(stuck.directory, "delta-cleanup.json"), "utf8"));
+    assert.notEqual(kept.status, "complete");
+    assert.equal(kept.bulkDeleteOperation, journal.bulkDeleteOperation);
+  } finally {
+    await rm(stuck.directory, { recursive: true, force: true });
+  }
+});
+
+test("a delta-v3 recording keeps its results when the final cleanup fails", async () => {
+  const { prepareSandboxCorpus } = await import("../fs-data-write-sandbox-run.mjs");
+  const { corpus } = await prepareSandboxCorpus();
+  const digest = createHash("sha256").update(JSON.stringify(corpus)).digest("hex");
+  const ids = new Set(
+    ["rest", "commit", "batch-write"].flatMap((route) =>
+      [12112, 12113].map((count) => `writes/limits/near-limit-delete-refusal/${route}/${count}`),
+    ),
+  );
+  const restPrograms = corpus.restPrograms.filter((program) => ids.has(program.id));
+  const deltaNames = restPrograms.map((program) => program.steps[0].body.writes[0].update.name);
+  const result = await observeCollector({
+    scopeNames: deltaNames,
+    visibleNames: deltaNames,
+    arrayLength: restPrograms.map((program) => Number(program.id.split("/").at(-1))),
+    deltaV3: true,
+    corpusDigest: digest,
+    failureMode: "cas-after-seed",
+    inputCorpus: {
+      schemaVersion: 1,
+      sourceCorpusSha256: digest,
+      restPrograms,
+      streamRecipes: corpus.streamRecipes.filter(
+        (recipe) => recipe.id === "writes/write-stream-terminal/response-before-half-close",
+      ),
+      restRequestCount: 30,
+    },
+  });
+  try {
+    assert.match(String(result.failure?.stderr), /array shrink transform 409/);
+    const recorded = JSON.parse(await readFile(result.output, "utf8"));
+    assert.deepEqual(Object.keys(recorded).toSorted(), [...ids].toSorted());
   } finally {
     await rm(result.directory, { recursive: true, force: true });
   }

@@ -1723,6 +1723,7 @@ async function productionRecording({
     packetId,
     runId,
   });
+  const tokens = [token];
   const restOut = join(runDir, "rest-results.json");
   const metaOut = join(runDir, "rest-meta.json");
   const streamOut = join(runDir, "stream-results.json");
@@ -1764,13 +1765,16 @@ async function productionRecording({
     if (partial && requestCount > partial.maxHttpRequests) {
       throw new Error("partial HTTP requests exceeded the reviewed recording bound");
     }
+    // The REST phase can outlive a cached credential; the gRPC child gets a fresh one.
+    const streamToken = await productionAccessToken();
+    tokens.push(streamToken);
     await runNode("production gRPC", "firestore-probe/stream-session.mjs", {
       FIRESTORE_STREAM_CORPUS: corpusIn,
       FIRESTORE_STREAM_OUT: streamOut,
       FIRESTORE_STREAM_TARGET: "production",
       FIRESTORE_STREAM_HOST: undefined,
       FIRESTORE_STREAM_PORT: undefined,
-      FIRESTORE_STREAM_TOKEN: token,
+      FIRESTORE_STREAM_TOKEN: streamToken,
       FIRESTORE_STREAM_RUN_ID: runId,
       FIRESTORE_PROBE_ADMISSION: admission === undefined ? undefined : JSON.stringify(admission),
     });
@@ -1788,7 +1792,18 @@ async function productionRecording({
       throw new Error("production stream messages escaped the bounded corpus");
     }
     outcome = "recorded";
-    return { rest, stream, startedAt, runDir, journal, runId, requestCount, streamFrames, token };
+    return {
+      rest,
+      stream,
+      startedAt,
+      runDir,
+      journal,
+      runId,
+      requestCount,
+      streamFrames,
+      token,
+      tokens,
+    };
   } finally {
     if (requestCount === null) {
       try {
@@ -2034,7 +2049,8 @@ export async function recordDeltaV3Production(admissionArgs) {
         sdkVersions: recordingSdkVersions(),
         credentialToken: recordings[0].token,
       });
-      if (JSON.stringify(frozen).includes(recordings[1].token)) {
+      const frozenText = JSON.stringify(frozen);
+      if (recordings.some(({ tokens }) => tokens.some((t) => frozenText.includes(t)))) {
         throw new Error("recorded response contains a credential token");
       }
       // Written beside the private summary (gitignored) so the checkout stays clean for the
@@ -2259,7 +2275,8 @@ export async function recordPartialProduction(admissionArgs) {
       sdkVersions: recordingSdkVersions(),
       credentialToken: recordings[0].token,
     });
-    if (JSON.stringify(fixture).includes(recordings[1].token)) {
+    const fixtureText = JSON.stringify(fixture);
+    if (recordings.some(({ tokens }) => tokens.some((t) => fixtureText.includes(t)))) {
       throw new Error("recorded response contains a credential token");
     }
     // Written under the gitignored run directory so the checkout stays clean for the next

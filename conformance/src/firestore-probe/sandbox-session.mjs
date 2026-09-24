@@ -1081,6 +1081,8 @@ async function writeDeltaCleanupJournal(status, extra = {}) {
     bulkDeleteOperation: managedClearState.bulkDeleteOperation ?? null,
     pendingMutation: managedClearState.pendingMutation ?? null,
     lastMutation: managedClearState.lastMutation ?? null,
+    cleanupDeleteIntent: managedClearState.cleanupDeleteIntent ?? null,
+    deletedNames: [...(managedClearState.cleanupDeletedNames ?? [])],
     ...extra,
   });
 }
@@ -1102,51 +1104,50 @@ async function clearDeltaV3Exact(base, verifyManagedScope) {
       throw new Error("delta-v3 found an absent/changed target or unexpected child collection");
     }
   }
-  const collectionIds = managedClearScope(managedClearState.names, PROJECT, "(default)");
+  managedClearScope(managedClearState.names, PROJECT, "(default)");
   const presentNames = [...managedClearState.preflightUpdateTimes.keys()];
-  const presentCollections = collectionIds.filter((collectionId) =>
-    presentNames.some((name) => name.split("/documents/")[1].split("/")[0] === collectionId),
-  );
-  if (presentCollections.length > 0) {
-    if (managedClearState.bulkDeleteIntent || managedClearState.bulkDeleteOperation) {
-      throw new Error("delta-v3 cleanup has an unresolved prior bulk-delete operation");
-    }
-    managedClearState.bulkDeleteIntent = {
-      collectionIds: presentCollections,
-      names: presentNames,
-      updateTimes: Object.fromEntries(managedClearState.preflightUpdateTimes),
-    };
-    await writeDeltaCleanupJournal("bulk-delete-intent");
-    const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
-    const started = await managedShrinkRequest(
-      "delta-v3 bulk-delete start",
-      `${api}:bulkDeleteDocuments`,
-      {
-        method: "POST",
-        headers: authorized({ "content-type": "application/json" }),
-        body: JSON.stringify({ collectionIds: presentCollections, namespaceIds: [""] }),
-        signal: timeoutSignal(),
-      },
-    );
-    if (!started.ok) throw new Error(`delta-v3 bulk-delete start ${started.status}`);
-    const operation = (await started.json()).name;
-    const operationPrefix = `projects/${PROJECT}/databases/(default)/operations/`;
-    if (
-      typeof operation !== "string" ||
-      !operation.startsWith(operationPrefix) ||
-      !/^[A-Za-z0-9_-]+$/.test(operation.slice(operationPrefix.length))
-    ) {
-      throw new Error("delta-v3 bulk-delete operation escaped the fixed sandbox");
-    }
-    managedClearState.bulkDeleteOperation = operation;
-    await writeDeltaCleanupJournal("bulk-delete-active");
-    await pollDeltaV3BulkDelete();
+  if (managedClearState.bulkDeleteIntent || managedClearState.bulkDeleteOperation) {
+    throw new Error("delta-v3 cleanup has an unresolved prior bulk-delete operation");
+  }
+  // Shrink, then delete: a production bulk delete runs for hours, while a refused
+  // document shrinks in a few arrayRemove commits (owner-approved cleanup exception).
+  for (const name of presentNames) {
+    await deleteDeltaV3Document(base, name);
   }
   if (verifyManagedScope) {
     await verifyManagedShrinkScopeAbsent(base);
     await writeDeltaCleanupJournal("complete");
   }
   managedClearBlocked = false;
+}
+
+async function deleteDeltaV3Document(base, name) {
+  const send = async (action, updateTime) => {
+    managedClearState.cleanupDeleteIntent = { action, name, updateTime };
+    await writeDeltaCleanupJournal("cleanup-delete-intent");
+    return managedShrinkRequest(action, `${base}:commit`, {
+      method: "POST",
+      headers: authorized({ "content-type": "application/json" }),
+      body: JSON.stringify({ writes: [{ delete: name, currentDocument: { updateTime } }] }),
+      signal: timeoutSignal(),
+    });
+  };
+  const updateTime = managedClearState.preflightUpdateTimes.get(name);
+  if (!updateTime) throw new Error("delta-v3 cleanup target was not present in its preflight");
+  let response = await send("delta-v3 cleanup delete", updateTime);
+  if (!response.ok) {
+    const body = await response.text();
+    if (!isTransactionTooBigRefusal(response.status, body)) {
+      throw new Error(`delta-v3 cleanup delete ${response.status}`);
+    }
+    const shrunkUpdateTime = await shrinkBoundaryDocument(name);
+    response = await send("delta-v3 cleanup delete retry", shrunkUpdateTime);
+    if (!response.ok) throw new Error(`delta-v3 cleanup delete retry ${response.status}`);
+  }
+  await validateDeleteAcknowledgement(response);
+  managedClearState.cleanupDeleteIntent = null;
+  managedClearState.cleanupDeletedNames.push(name);
+  await writeDeltaCleanupJournal("cleanup-deleted");
 }
 
 async function pollDeltaV3BulkDelete() {

@@ -8,7 +8,7 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
-Behavior below was measured against a real Identity Platform project on 2026-09-24 (AUTH-CREDENTIAL). Each item names the profiles it affects; "unlike the official emulator" marks where the emulator profile now differs from the Firebase Emulator Suite.
+Storage pagination below follows the published Firebase and Cloud Storage list API references. The remaining behavior below was measured against a real Identity Platform project on 2026-09-24 (AUTH-CREDENTIAL). Each item names the profiles it affects; "unlike the official emulator" marks where the emulator profile now differs from the Firebase Emulator Suite.
 
 ### Added
 
@@ -17,6 +17,7 @@ Behavior below was measured against a real Identity Platform project on 2026-09-
 
 ### Changed
 
+- Both profiles: Storage lists count prefixes and items together toward `maxResults`, cap pages at 1000 entries and return each prefix on one page only, as the [Firebase ListOptions reference](https://firebase.google.com/docs/reference/js/storage.listoptions) and [Cloud Storage JSON API reference](https://cloud.google.com/storage/docs/json_api/v1/objects/list) describe. The official emulator pages items alone and repeats prefixes.
 - Strict profile: `signInWithCustomToken` accepts only signed tokens, as production does. Without `auth.customTokenSigners` every custom token, including the Admin SDK's unsigned emulator tokens and JSON fake tokens, is refused with `INVALID_CUSTOM_TOKEN`, and the startup banner says so. Use `auth.customTokenSigners`, or the emulator profile for the Admin SDK's emulator tokens.
 - Strict profile: password and custom-token sign-in without `returnSecureToken` return production's legacy Identity Toolkit token (issuer `https://identitytoolkit.google.com/`, two-week lifetime) and no refresh token. The routes production was observed to honour it on accept it: account lookup, update and delete, a verification mail, phone linking, a sign-up upgrade and MFA enrollment. Email-link and identity-provider linking and session-cookie creation refuse it. A request whose blocking trigger runs keeps secure tokens. The emulator profile keeps secure tokens.
 - Strict profile: `createSessionCookie` decodes `validDuration` as an int64, refusing a fraction or text with `INVALID_ARGUMENT` and zero with `INVALID_DURATION`. The emulator profile keeps the official emulator's `Number(validDuration) || two weeks`.

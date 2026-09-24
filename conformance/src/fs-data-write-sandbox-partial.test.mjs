@@ -7,8 +7,13 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { managedShrinkScope } from "./firestore-probe/sandbox-session.mjs";
 import {
+  managedShrinkScope,
+  productionScopeFromEnvironment,
+} from "./firestore-probe/sandbox-session.mjs";
+import {
+  deltaV3ManagedClearNames,
+  deltaV3RecordingCorpus,
   partialManagedClearNames,
   partialRequestBound,
   prepareSandboxCorpus,
@@ -296,4 +301,41 @@ test("supplement fixtures cover only pending recipes whose recipe digest is unch
   const unbound = supplement([b]);
   unbound.fixture.recipeDigests.programs = {};
   assert.throws(() => selectSupplementComparisons([unbound], corpus, [b.id], []), /recipe digests/);
+});
+
+test("the child admits the exact production scope the parent actually sends for each mode", async () => {
+  const { corpus, fixture, manifest } = await savedInputs();
+  const common = {
+    input: "/private/corpus.json",
+    output: "/private/rest.json",
+    meta: "/private/meta.json",
+    token: "not-used",
+    journal: "/private/journal.json",
+    runId: "a".repeat(32),
+    corpusDigest: "b".repeat(64),
+    sourceGitSha: "c".repeat(40),
+  };
+  const delta = deltaV3RecordingCorpus(selectDeltaV3Recipes(corpus, fixture, manifest));
+  const deltaEnv = productionRestEnvironment({
+    ...common,
+    managedNames: deltaV3ManagedClearNames(delta),
+    deltaV3: true,
+  });
+  assert.deepEqual(productionScopeFromEnvironment(deltaEnv), { delta: true, partial: false });
+  const { recordingCorpus } = selectPartialRecipes(corpus, fixture, manifest);
+  const partialEnv = productionRestEnvironment({
+    ...common,
+    managedNames: partialManagedClearNames(recordingCorpus),
+    partial: { maxHttpRequests: partialRequestBound(recordingCorpus).maxHttpRequests },
+  });
+  assert.deepEqual(productionScopeFromEnvironment(partialEnv), { delta: false, partial: true });
+  // Without the run ID the marker names cannot match a run-specific scope.
+  assert.deepEqual(
+    productionScopeFromEnvironment({ ...deltaEnv, FIRESTORE_PROBE_DELETE_RUN_ID: undefined }),
+    { delta: false, partial: false },
+  );
+  assert.deepEqual(
+    productionScopeFromEnvironment({ ...deltaEnv, FIRESTORE_PROBE_HOST: "attacker.example" }),
+    { delta: false, partial: false },
+  );
 });

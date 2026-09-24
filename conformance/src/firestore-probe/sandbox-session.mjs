@@ -239,6 +239,49 @@ export function isExactDeltaV3ProductionScope({
   }
   return false;
 }
+/**
+ * Which exact production cleanup scope, if any, this child's environment asks for. The
+ * parent passes the frozen names with the run marker; the run-specific scope is judged on
+ * the names this run will actually touch.
+ */
+export function productionScopeFromEnvironment(env) {
+  let names = null;
+  try {
+    names = JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES ?? "null");
+  } catch {
+    names = null;
+  }
+  const runId = env.FIRESTORE_PROBE_DELETE_RUN_ID;
+  if (Array.isArray(names) && /^[a-f0-9]{32}$/.test(runId ?? "")) {
+    names = names.map((name) =>
+      typeof name === "string" ? name.replaceAll(DELETE_RUN_MARKER, runId) : name,
+    );
+  }
+  const common = {
+    host: env.FIRESTORE_PROBE_HOST,
+    scheme: env.FIRESTORE_PROBE_SCHEME ?? "http",
+    project: env.FIRESTORE_PROBE_PROJECT ?? "demo-conformance",
+    maxRequests: Number(env.FIRESTORE_PROBE_MAX_REQUESTS),
+    managedClearJournal:
+      env.FIRESTORE_PROBE_DELTA_JOURNAL ?? env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL,
+    names,
+  };
+  return {
+    delta: isExactDeltaV3ProductionScope({
+      ...common,
+      mode: env.FIRESTORE_PROBE_DELTA_V3 === "1",
+      lockHeld: env.FIRESTORE_PROBE_DELTA_LOCK_HELD === "1",
+      deltaJournal: env.FIRESTORE_PROBE_DELTA_JOURNAL,
+    }),
+    partial: isExactPartialProductionScope({
+      ...common,
+      mode: env.FIRESTORE_PROBE_PARTIAL === "1",
+      lockHeld: env.FIRESTORE_PROBE_PARTIAL_LOCK_HELD === "1",
+      deltaMode: env.FIRESTORE_PROBE_DELTA_V3 === "1",
+    }),
+  };
+}
+
 export function isLoopbackHost(host) {
   return /^(?:127\.0\.0\.1|localhost|\[::1\]|::1):\d+$/.test(host ?? "");
 }
@@ -2358,35 +2401,7 @@ async function main() {
       runId: process.env.FIRESTORE_PROBE_DELETE_RUN_ID,
     });
   }
-  const deltaNames = (() => {
-    try {
-      return JSON.parse(MANAGED_CLEAR_NAMES ?? "null");
-    } catch {
-      return null;
-    }
-  })();
-  const deltaScope = isExactDeltaV3ProductionScope({
-    mode: DELTA_V3_MODE,
-    lockHeld: DELTA_LOCK_HELD,
-    host: HOST,
-    scheme: SCHEME,
-    project: PROJECT,
-    maxRequests: Number(MAX_REQUESTS),
-    deltaJournal: process.env.FIRESTORE_PROBE_DELTA_JOURNAL,
-    managedClearJournal: MANAGED_CLEAR_JOURNAL,
-    names: deltaNames,
-  });
-  const partialScope = isExactPartialProductionScope({
-    mode: PARTIAL_MODE,
-    lockHeld: PARTIAL_LOCK_HELD,
-    deltaMode: DELTA_V3_MODE,
-    host: HOST,
-    scheme: SCHEME,
-    project: PROJECT,
-    maxRequests: Number(MAX_REQUESTS),
-    managedClearJournal: MANAGED_CLEAR_JOURNAL,
-    names: deltaNames,
-  });
+  const { delta: deltaScope, partial: partialScope } = productionScopeFromEnvironment(process.env);
   assertV3ProductionCleanupAllowed({
     host: HOST,
     exactDeltaV3: deltaScope,

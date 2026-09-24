@@ -6,7 +6,7 @@
 //   node src/fs-query-index/run.mjs record-production   record the corpus twice against
 //                                                       fireemu-oracle-query/(default) and update
 //                                                       fs-query-index-production.json
-//   node src/fs-query-index/run.mjs rebuild-fixture <runDir>
+//   node src/fs-query-index/run.mjs rebuild-fixture <runDir> [--skip-changed]
 //   node src/fs-query-index/run.mjs check               run the corpus against fireemu and
 //                                                       compare with the saved production rows
 //   node src/fs-query-index/run.mjs export-comparison <out.json>
@@ -470,18 +470,21 @@ export function renormalize(recording, programs) {
 }
 
 /** Retries the fixture from a saved run directory; sends nothing to production. */
-async function rebuildFixture(runDir) {
+async function rebuildFixture(runDir, skipChanged) {
   const meta = JSON.parse(await readFile(join(runDir, "meta.json"), "utf8"));
   const recordings = await Promise.all(
     [1, 2].map(async (n) =>
       JSON.parse(await readFile(join(runDir, `recording-${n}.json`), "utf8")),
     ),
   );
-  const programs = PROGRAMS.filter((p) => meta.programs.includes(p.id));
-  const changed = programs.filter((p) => meta.corpusDigests?.[p.id] !== programDigest(p));
-  if (changed.length || programs.length !== meta.programs.length) {
+  const recorded = PROGRAMS.filter((p) => meta.programs.includes(p.id));
+  const changed = recorded.filter((p) => meta.corpusDigests?.[p.id] !== programDigest(p));
+  if (recorded.length !== meta.programs.length || (changed.length && !skipChanged)) {
     throw new Error(`corpus changed since the recording: ${changed.map((p) => p.id).join(", ")}`);
   }
+  // With --skip-changed, programs edited after this recording keep the rows a later recording
+  // gave them; rebuild that later recording next.
+  const programs = recorded.filter((p) => !changed.includes(p));
   const harness = await harnessDigest();
   const rebuilt =
     meta.harness === harness ? recordings : recordings.map((r) => renormalize(r, programs));
@@ -493,7 +496,12 @@ async function rebuildFixture(runDir) {
   });
   console.log(
     JSON.stringify(
-      { programs: programs.length, renormalized: meta.harness !== harness, nondeterministic },
+      {
+        programs: programs.length,
+        skipped: changed.map((p) => p.id),
+        renormalized: meta.harness !== harness,
+        nondeterministic,
+      },
       null,
       2,
     ),
@@ -681,7 +689,8 @@ const mode = process.argv[2];
 if (import.meta.url === `file://${process.argv[1]}`) {
   if (mode === "verify-indexes") await verifyIndexes();
   else if (mode === "record-production") await recordProduction();
-  else if (mode === "rebuild-fixture") await rebuildFixture(process.argv[3]);
+  else if (mode === "rebuild-fixture")
+    await rebuildFixture(process.argv[3], process.argv[4] === "--skip-changed");
   else if (mode === "check") await check();
   else if (mode === "export-comparison") await exportComparison(process.argv[3]);
   else if (mode === "session-local") await sessionLocal();

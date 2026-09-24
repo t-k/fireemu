@@ -1022,3 +1022,127 @@ fn operations_list_filter_cancel_and_delete_follow_production() {
         200
     );
 }
+
+#[test]
+fn database_patch_and_delete_refusals_use_production_messages() {
+    let (state, _clock) = state();
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=patchy",
+        native(),
+    );
+    let db = "/v1/projects/p/databases/patchy";
+    let refused = |status: u16, code: &str, message: &str| {
+        (
+            status,
+            json!({"error": {"code": status, "status": code, "message": message}}),
+        )
+    };
+    assert_eq!(
+        call(
+            &state,
+            "PATCH",
+            &format!("{db}?updateMask=databaseEdition"),
+            json!({"databaseEdition": "ENTERPRISE"})
+        ),
+        refused(
+            400,
+            "INVALID_ARGUMENT",
+            "Changing the edition of a database is not supported."
+        )
+    );
+    assert_eq!(
+        call(&state, "PATCH", &format!("{db}?updateMask=foo"), json!({})),
+        refused(
+            400,
+            "INVALID_ARGUMENT",
+            "Invalid updateMask for database proto."
+        )
+    );
+    let missing = refused(404, "NOT_FOUND", "Requested database was not found.");
+    assert_eq!(
+        call(
+            &state,
+            "PATCH",
+            "/v1/projects/p/databases/never-made?updateMask=deleteProtectionState",
+            json!({"deleteProtectionState": "DELETE_PROTECTION_DISABLED"})
+        ),
+        missing
+    );
+    assert_eq!(
+        call(
+            &state,
+            "DELETE",
+            "/v1/projects/p/databases/never-made",
+            Value::Null
+        ),
+        missing
+    );
+    assert_eq!(
+        call(
+            &state,
+            "GET",
+            "/v1/projects/p/databases/never-made/operations",
+            Value::Null
+        ),
+        refused(
+            404,
+            "NOT_FOUND",
+            "Project 'p' or database 'never-made' does not exist."
+        )
+    );
+    assert_eq!(
+        call(
+            &state,
+            "DELETE",
+            &format!("{db}?etag=AAAAAAAAAAAAAAAA"),
+            Value::Null
+        ),
+        refused(
+            409,
+            "ABORTED",
+            "There are concurrent database changes, please try again."
+        )
+    );
+}
+
+#[test]
+fn an_empty_native_database_can_become_a_datastore_mode_database() {
+    // Production (2026-09-24) accepts the type change on an empty database; realtime updates
+    // are then disabled, and the data plane refuses it like any Datastore-mode database.
+    let (state, _clock) = state();
+    call(
+        &state,
+        "POST",
+        "/v1/projects/p/databases?databaseId=switch",
+        native(),
+    );
+    let (status, operation) = call(
+        &state,
+        "PATCH",
+        "/v1/projects/p/databases/switch?updateMask=type",
+        json!({"type": "DATASTORE_MODE"}),
+    );
+    assert_eq!(status, 200, "{operation}");
+    assert_eq!(operation["done"], true);
+    assert_eq!(operation["response"]["type"], "DATASTORE_MODE");
+    assert_eq!(
+        operation["response"]["realtimeUpdatesMode"],
+        "REALTIME_UPDATES_MODE_DISABLED"
+    );
+    let (status, get) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/switch",
+        Value::Null,
+    );
+    assert_eq!((status, &get["type"]), (200, &json!("DATASTORE_MODE")));
+    let (status, _) = call(
+        &state,
+        "GET",
+        "/v1/projects/p/databases/switch/documents/items/a",
+        Value::Null,
+    );
+    assert_ne!(status, 200);
+}

@@ -1212,15 +1212,30 @@ fn verify_session_with_error(
         Some(Value::String(t)) => t.as_str(),
         Some(_) => return Err(error(400, "INVALID_ID_TOKEN")),
     };
-    let (v, decoded) = fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at)
-        .map_err(|e| map_error(&e))?;
-    let provider = decoded
-        .payload
-        .get("firebase")
-        .and_then(|f| f.get("sign_in_provider"))
-        .and_then(JsonValue::as_str)
-        .unwrap_or("")
-        .to_owned();
+    // Account routes also honour the legacy Identity Toolkit token (sandbox recording
+    // 2026-09-24); session-cookie creation verifies ID tokens only and keeps refusing it.
+    let (v, decoded) = match fireemu_core_auth::jwt::verify_id_token_decoded(token, store, at) {
+        Err(fireemu_core_auth::jwt::JwtError::WrongIssuer { actual, .. })
+            if actual == fireemu_core_auth::jwt::LEGACY_TOKEN_ISSUER =>
+        {
+            fireemu_core_auth::jwt::verify_legacy_token(token, store, at)
+        }
+        verified => verified,
+    }
+    .map_err(|e| map_error(&e))?;
+    let legacy = decoded.payload.get("iss").and_then(JsonValue::as_str)
+        == Some(fireemu_core_auth::jwt::LEGACY_TOKEN_ISSUER);
+    let provider = if legacy {
+        decoded.payload.get("sign_in_provider")
+    } else {
+        decoded
+            .payload
+            .get("firebase")
+            .and_then(|f| f.get("sign_in_provider"))
+    }
+    .and_then(JsonValue::as_str)
+    .unwrap_or("")
+    .to_owned();
     let second_factor = decoded.payload.get("firebase").and_then(|firebase| {
         let sign_in_second_factor = firebase.get("sign_in_second_factor")?.as_str()?;
         let second_factor_identifier = firebase.get("second_factor_identifier")?.as_str()?;
@@ -1232,7 +1247,12 @@ fn verify_session_with_error(
     });
     let sign_in_attributes = sign_in_attributes(&decoded.payload);
     let mut extra_claims = CustomClaims::default();
-    if let JsonValue::Object(values) = &decoded.payload {
+    let developer = if legacy {
+        decoded.payload.get("extra_claims")
+    } else {
+        Some(&decoded.payload)
+    };
+    if let Some(JsonValue::Object(values)) = developer {
         for (name, value) in values {
             // Reserved token fields are rejected by insert; everything else is a developer,
             // user or blocking-function session claim that a replacement token must retain.
@@ -3133,9 +3153,14 @@ fn handle_with_policy(
         response
     };
     let response = if response.status == 200 {
+        let body = without_nulls(response.body);
         JsonResponse {
             status: 200,
-            body: without_nulls(response.body),
+            body: if route.handler == routes::Handler::SignInWithCustomToken {
+                public_custom_token_answer(body)
+            } else {
+                body
+            },
         }
     } else {
         response
@@ -3263,6 +3288,12 @@ struct DispatchOptions {
     stateless_refresh_tokens: bool,
     fake_custom_token_expiry: FakeCustomTokenExpiry,
     custom_token_trust: Option<Arc<CustomTokenTrust>>,
+    /// Whether sign-in without `returnSecureToken` answers with the legacy token, as
+    /// production does. The emulator profile (stateless refresh tokens) keeps the official
+    /// emulator's secure tokens. Blocking functions re-issue tokens through the refresh session
+    /// a legacy sign-in does not open, and their legacy behaviour is unobserved, so they keep
+    /// secure tokens too.
+    legacy_tokens: bool,
     query_limits: AuthQueryLimits,
     inbound_credential_policy: fireemu_core_functions::manifest::BlockingAuthTokenPolicy,
 }
@@ -3274,6 +3305,7 @@ impl From<&AuthState> for DispatchOptions {
             stateless_refresh_tokens: state.stateless_refresh_tokens,
             fake_custom_token_expiry: state.fake_custom_token_expiry,
             custom_token_trust: state.custom_token_trust.clone(),
+            legacy_tokens: !state.stateless_refresh_tokens && state.blocking.is_none(),
             query_limits: state.query_limits,
             inbound_credential_policy: state.blocking.as_deref().map_or_else(
                 fireemu_core_functions::manifest::BlockingAuthTokenPolicy::default,
@@ -3321,13 +3353,16 @@ fn dispatch(
             }
         }
         Handler::SignUp => sign_up(store, body, at, None),
-        Handler::SignInWithPassword => sign_in_with_password(store, body, at),
+        Handler::SignInWithPassword => {
+            sign_in_with_password(store, body, at, options.legacy_tokens)
+        }
         Handler::SignInWithCustomToken => sign_in_with_custom_token(
             store,
             body,
             at,
             options.fake_custom_token_expiry == FakeCustomTokenExpiry::Reject,
             options.custom_token_trust.as_deref(),
+            options.legacy_tokens,
         ),
         Handler::Lookup => lookup(store, body, at, false),
         Handler::Update | Handler::AdminUpdate => update(
@@ -6745,6 +6780,7 @@ fn sign_in_with_custom_token(
     at: LogicalInstant,
     reject_expired: bool,
     trust: Option<&CustomTokenTrust>,
+    legacy_tokens: bool,
 ) -> JsonResponse {
     let Some(token) = str_field(body, "token").filter(|t| !t.is_empty()) else {
         return error(400, "MISSING_CUSTOM_TOKEN");
@@ -6837,7 +6873,12 @@ fn sign_in_with_custom_token(
             provider: fireemu_core_auth::store::Provider::Custom,
         };
         match store.create_user_with_id_as(AuthPrincipal::EndUser, new_user, Some(uid), at) {
-            Ok(id) => (id, true),
+            Ok(id) => {
+                if let Some(user) = store.user_mut(&id) {
+                    user.custom_auth = true;
+                }
+                (id, true)
+            }
             Err(e) => return auth_error(&e),
         }
     };
@@ -6845,6 +6886,18 @@ fn sign_in_with_custom_token(
         return error(400, "USER_DISABLED");
     }
     store.record_sign_in(&uid, at);
+    if legacy_tokens && wants_legacy_token(store, body) {
+        let id_token = legacy_sign_in_token(store, &uid, at, "custom", Some(&extra));
+        return JsonResponse {
+            status: 200,
+            body: json!({
+                "kind": "identitytoolkit#VerifyCustomTokenResponse",
+                "localId": uid.as_str(),
+                "idToken": id_token,
+                "isNewUser": is_new,
+            }),
+        };
+    }
     match issue_tokens_with(
         store,
         &uid,
@@ -6854,12 +6907,58 @@ fn sign_in_with_custom_token(
         Some(fireemu_core_auth::store::Provider::Custom),
     ) {
         Ok(mut body) => {
+            // `localId` and `email` stay until the request's creation is committed; the answer
+            // is trimmed afterwards (`public_custom_token_answer`).
             body["kind"] = json!("identitytoolkit#VerifyCustomTokenResponse");
             body["isNewUser"] = json!(is_new);
             JsonResponse { status: 200, body }
         }
         Err(r) => r,
     }
+}
+
+/// Production's custom-token answer names the account only inside the token (sandbox
+/// recording 2026-09-24): the `localId` and `email` the creation commit reads are removed once
+/// it has run.
+fn public_custom_token_answer(mut body: Value) -> Value {
+    if let Some(object) = body.as_object_mut() {
+        object.remove("localId");
+        object.remove("email");
+    }
+    body
+}
+
+/// Whether a sign-in answers with the legacy Identity Toolkit token: production does so for
+/// password and custom-token sign-in unless `returnSecureToken` is true (sandbox recording
+/// 2026-09-24). Tenant namespaces keep secure tokens until their legacy shape is observed.
+fn wants_legacy_token(store: &AuthStore, body: &Value) -> bool {
+    body.get("returnSecureToken").and_then(Value::as_bool) != Some(true)
+        && store.tenant_id().is_none()
+}
+
+/// A legacy Identity Toolkit token for `uid`, in the unsigned internal form the response
+/// signer replaces. It opens no refresh session.
+fn legacy_sign_in_token(
+    store: &AuthStore,
+    uid: &LocalId,
+    at: LogicalInstant,
+    sign_in_provider: &str,
+    developer_claims: Option<&CustomClaims>,
+) -> String {
+    let user = store.user(uid);
+    let email = user.and_then(|u| u.email.as_deref().map(|email| (email, u.email_verified)));
+    let iat = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
+    let payload = fireemu_core_auth::jwt::legacy_token_payload(
+        store.project_id(),
+        iat,
+        &fireemu_core_auth::jwt::LegacyToken {
+            uid: uid.as_str(),
+            sign_in_provider,
+            email,
+            extra_claims: developer_claims.map(CustomClaims::entries_map),
+        },
+    );
+    fireemu_core_auth::jwt::encode_payload_shaped(&payload, None, HeaderShape::Untyped)
 }
 
 fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) -> Value {
@@ -6890,7 +6989,12 @@ fn password_policy_notification(code: ViolationCode, policy: &PasswordPolicy) ->
     })
 }
 
-fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
+fn sign_in_with_password(
+    store: &mut AuthStore,
+    body: &Value,
+    at: LogicalInstant,
+    legacy_tokens: bool,
+) -> JsonResponse {
     // The official order: the email is checked (present, well-formed) before the password.
     let Some(email) = str_field(body, "email") else {
         return error(400, "MISSING_EMAIL");
@@ -6934,6 +7038,20 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
                     .collect(),
             ),
         ));
+    }
+    if legacy_tokens && wants_legacy_token(store, body) && mfa_info(store, &uid, true).is_empty() {
+        let mut response = json!({
+            "localId": uid.as_str(),
+            "email": store.user(&uid).and_then(|u| u.email.clone()),
+            "idToken": legacy_sign_in_token(store, &uid, at, "password", None),
+        });
+        for (key, value) in extra {
+            response[key] = value;
+        }
+        return JsonResponse {
+            status: 200,
+            body: response,
+        };
     }
     finish_sign_in(
         store,
@@ -7086,8 +7204,8 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
-    let valid_since =
-        (has_password || u.tokens_revoked || u.admin_created).then_some(u.tokens_valid_after);
+    let valid_since = (has_password || u.tokens_revoked || u.admin_created || u.custom_auth)
+        .then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
         "tenantId": store.tenant_id(),
@@ -7110,6 +7228,7 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "lastRefreshAt": u.last_refresh_at.and_then(|t| LogicalInstant::to_rfc3339(t).ok()),
         "lastLoginAt": u.last_sign_in_at.map(|t| (t.as_nanos() / 1_000_000).to_string()),
         "validSince": valid_since.map(|t| (t.as_nanos() / 1_000_000_000).to_string()),
+        "customAuth": u.custom_auth.then_some(true),
     })
 }
 
@@ -8046,7 +8165,11 @@ fn update(
         json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"});
     if let Some(u) = store.user(&uid) {
         response["email"] = json!(u.email);
-        response["emailVerified"] = json!(u.email_verified);
+        // As in a lookup: with an address, and while true after one was removed; never for an
+        // account that had none (sandbox recording 2026-09-24).
+        if u.email.is_some() || u.email_verified || u.email_verified_recorded {
+            response["emailVerified"] = json!(u.email_verified);
+        }
         response["displayName"] = json!(u.display_name);
         response["photoUrl"] = json!(u.photo_url);
         // Production's Admin update answer carries no `newEmail` (sandbox recording

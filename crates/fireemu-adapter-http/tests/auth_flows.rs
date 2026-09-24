@@ -433,7 +433,7 @@ fn password_reset_goes_through_an_oob_code_the_test_can_read() {
     let (status, signed) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
-        &json!({"email": "a@example.com", "password": "newpassword1"}),
+        &json!({"email": "a@example.com", "password": "newpassword1", "returnSecureToken": true}),
     );
     assert_eq!(status, 200, "{signed}");
     assert_eq!(
@@ -2586,7 +2586,7 @@ fn allow_duplicate_emails_still_refuses_a_second_password_account() {
     let (status, signed_in) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
-        &json!({"email": "duplicate@example.com", "password": "hunter22"}),
+        &json!({"email": "duplicate@example.com", "password": "hunter22", "returnSecureToken": true}),
     );
     assert_eq!(status, 200, "{signed_in}");
     assert_eq!(

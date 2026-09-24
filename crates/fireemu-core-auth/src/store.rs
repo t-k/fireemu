@@ -376,6 +376,9 @@ pub struct UserRecord {
     /// Whether the account was created through the Admin API (create or import). Production
     /// then reports `disabled` and `validSince` in every read of it.
     pub admin_created: bool,
+    /// Whether a custom-token sign-in created the account. Production then reports
+    /// `customAuth` and `validSince` in every read of it (sandbox recording 2026-09-24).
+    pub custom_auth: bool,
     /// `passwordUpdatedAt` of a password credential that was since removed: production keeps
     /// reporting it (sandbox recording 2026-09-23, auth-account/provider).
     pub removed_password_updated_at: Option<LogicalInstant>,
@@ -2246,6 +2249,7 @@ impl AuthStore {
                 tokens_revoked: user.tokens_valid_after > Self::whole_second(user.created_at),
                 federated: user.federated,
                 admin_created: true,
+                custom_auth: false,
                 removed_password_updated_at: None,
                 email_verified_recorded: true,
                 password,
@@ -2942,6 +2946,7 @@ impl AuthStore {
             tokens_revoked: false,
             federated: Vec::new(),
             admin_created: false,
+            custom_auth: false,
             removed_password_updated_at: None,
             email_verified_recorded: false,
             password: None,

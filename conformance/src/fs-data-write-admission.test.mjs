@@ -266,3 +266,42 @@ test("hand-launched REST and stream children with production variables stop at a
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("recovery children skip the generic cleanup gate and stop at their own journal checks", async () => {
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const run = promisify(execFile);
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-recovery-gate-"));
+  try {
+    for (const mode of ["recover-v3", "recover-legacy"]) {
+      await assert.rejects(
+        run("node", [new URL("./firestore-probe/sandbox-session.mjs", import.meta.url).pathname], {
+          env: {
+            ...process.env,
+            FIRESTORE_PROBE_TARGET: "production",
+            FIRESTORE_PROBE_RECOVERY_MODE: mode,
+            FIRESTORE_PROBE_SCHEME: "https",
+            // TEST-NET-1: a missing journal must stop the child before any request.
+            FIRESTORE_PROBE_HOST: "192.0.2.1:443",
+            FIRESTORE_PROBE_PROJECT: "fireemu-oracle-sbx",
+            FIRESTORE_PROBE_TOKEN: "test-only",
+            FIRESTORE_PROBE_TIMEOUT_MS: "500",
+            FIRESTORE_PROBE_MAX_REQUESTS: "1000",
+            FIRESTORE_PROBE_META_OUT: join(directory, `${mode}.meta.json`),
+            FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL: join(directory, `${mode}-missing.json`),
+            FIRESTORE_PROBE_MANAGED_CLEAR_NAMES: "[]",
+          },
+        }),
+        (error) =>
+          !/v3 production cleanup is blocked/.test(error.stderr) &&
+          /journal|recovery/i.test(error.stderr),
+        mode,
+      );
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

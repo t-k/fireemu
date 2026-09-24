@@ -8,6 +8,19 @@ Each release is a Git tag; the binaries and the npm packages are built from that
 
 ## [Unreleased]
 
+### Added
+
+- `auth.customTokenSigners` maps service accounts to their public JWK sets. With it, `signInWithCustomToken` verifies RS256 signatures and applies production's custom-token rules; a verifying token of another project's service account is refused with `CREDENTIAL_MISMATCH`. Without it, the unsigned tokens the Admin SDK mints in emulator mode keep working.
+- `auth.apiKeys` declares the project's Web API keys. A client request with any other key is refused with production's `400 API_KEY_INVALID`.
+
+### Changed
+
+- Identity Toolkit honours an ID token or a custom token for five minutes past its `exp`, then refuses it with `INVALID_ID_TOKEN` or `INVALID_CUSTOM_TOKEN` instead of `TOKEN_EXPIRED`, in both profiles (matching production, 2026-09-24). A revoked session still answers `TOKEN_EXPIRED`.
+- An administrator's `validSince` is stored as given, and may move back; sessions are judged against it when they are used, so a refresh token is `TOKEN_EXPIRED` below it and works again once it moves back. A client update's `validSince` is ignored.
+- Session cookies carry `{alg, kid}` with no `typ`, and anonymous ID tokens carry a top-level `provider_id`.
+- In the strict profile, password and custom-token sign-in without `returnSecureToken` return production's legacy Identity Toolkit token and no refresh token. Custom-token answers never include `localId` or `email`.
+- Secure Token reads an empty `grant_type` or `refresh_token` as missing, and `createSessionCookie` decodes `validDuration` as an int64 and refuses zero.
+
 ## [0.7.1] - 2026-09-10
 
 ### Fixed

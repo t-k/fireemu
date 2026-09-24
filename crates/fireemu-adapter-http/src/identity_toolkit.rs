@@ -8147,9 +8147,11 @@ fn update(
     if implicit_revocation || (stateless_refresh_tokens && plan.disable == Some(true)) {
         let _ = store.revoke_tokens(&uid, at);
     }
-    // An explicit validSince is stored as given, even when it is earlier than before; sessions
-    // are judged against it when they are used (sandbox recording 2026-09-24).
-    if let Some(valid_since) = plan.revoke_at {
+    // An administrator's validSince is stored as given, even when it is earlier than before;
+    // sessions are judged against it when they are used (sandbox recording 2026-09-24). A
+    // client update's validSince changes nothing (AUTH-ACCOUNT recording 2026-09-23,
+    // privilege/valid-token-admin-fields#admin-readback-valid-since).
+    if let Some(valid_since) = plan.revoke_at.filter(|_| !self_service) {
         let _ = store.set_valid_since(&uid, valid_since);
     }
     // A privileged password replacement or an explicit validSince advances `validSince` but

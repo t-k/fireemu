@@ -866,24 +866,22 @@ test("approved divergences remove only what their decision names", async () => {
       },
     ],
   });
+  // larger-earlier-field: `b == 2` has 2 entries and `a == 0` has 7 (with c) in its seed, so
+  // any walk that returns one document reads between 2 and 9 entries.
+  const [A, B, C] = ["a", "b", "c"].map((field) => `(${field} ASC, c ASC, __name__ ASC)`);
   // Members in another order, and the walk's entry count that follows from it.
-  assert.equal(
-    approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(a)", "(b)"], "6")),
-    "S4",
-  );
+  assert.equal(approvedDivergence(merge, explain([B, A], "5"), explain([A, B], "6")), "S4");
   // Another member, another document count, or the same order with another entry count.
+  assert.equal(approvedDivergence(merge, explain([B, A], "5"), explain([A, C], "5")), undefined);
   assert.equal(
-    approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(a)", "(c)"], "5")),
+    approvedDivergence(merge, explain([B, A], "5"), explain([A, B], "5", "2")),
     undefined,
   );
-  assert.equal(
-    approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(a)", "(b)"], "5", "2")),
-    undefined,
-  );
-  assert.equal(
-    approvedDivergence(merge, explain(["(b)", "(a)"], "5"), explain(["(b)", "(a)"], "6")),
-    undefined,
-  );
+  assert.equal(approvedDivergence(merge, explain([B, A], "5"), explain([B, A], "6")), undefined);
+  // An entry count outside what any join order reads is not.
+  assert.equal(approvedDivergence(merge, explain([B, A], "5"), explain([A, B], "10")), undefined);
+  assert.equal(approvedDivergence(merge, explain([B, A], "5"), explain([A, B], "1")), undefined);
+  assert.equal(approvedDivergence(merge, explain([B, A], "5"), explain([A, B], "9")), "S4");
   const docs = "projects/demo-fs-query-index/databases/(default)/documents";
   const partition = "fs-query-index/partition-query/large-group#count-2";
   const cursors = (...keys) => ({
@@ -930,6 +928,9 @@ test("approved divergences remove only what their decision names", async () => {
   // Fewer than the largest count answered in full, as many as requested, or no cursor at all.
   assert.equal(approvedDivergence(everything, many(14), many(7)), undefined);
   assert.equal(approvedDivergence(everything, many(14), many(64)), undefined);
+  // More samples than a group of 2,000 plausibly has, on either side.
+  assert.equal(approvedDivergence(everything, many(14), many(28)), undefined);
+  assert.equal(approvedDivergence(everything, many(40), many(20)), undefined);
   assert.equal(approvedDivergence(everything, many(14), { status: 200, body: {} }), undefined);
 });
 

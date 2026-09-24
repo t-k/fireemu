@@ -919,3 +919,25 @@ fn aggregations_run_over_the_nearest_results() {
         vec![Value::Integer(2), Value::Integer(3)]
     );
 }
+
+/// The zero-vector refusal is production's, so a query without production's refusals (the
+/// emulator profile) leaves the zero candidate out as a distance that is not finite, as
+/// fireemu did before.
+#[test]
+fn without_production_refusals_a_zero_vector_is_left_out() {
+    let mut state = vector_state();
+    put_vector(&mut state, "zero", vec![0.0, 0.0], 1);
+    let mut query = nearest(DistanceMeasure::Cosine, 4)
+        .canonicalize_emulator()
+        .unwrap();
+    assert!(!query.production_refusals);
+    let ids: Vec<String> = state
+        .run_query(&query, None)
+        .unwrap()
+        .into_iter()
+        .map(|document| document.path.document_id().as_str().to_owned())
+        .collect();
+    assert_eq!(ids, ["near", "mid", "far"]);
+    query.find_nearest.as_mut().unwrap().query_vector = vec![0.0, 0.0];
+    assert!(state.run_query(&query, None).unwrap().is_empty());
+}

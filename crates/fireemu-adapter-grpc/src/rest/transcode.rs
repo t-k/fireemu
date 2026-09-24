@@ -543,18 +543,25 @@ pub fn check_document_keys(body: &Value, at: &str) -> Result<(), Status> {
     let Value::Object(object) = body else {
         return Ok(());
     };
-    // The first unknown key only, as for any transcoder refusal.
-    match object
+    // Every unknown key, as the transcoder lists them, within the same bounds.
+    let violations: Vec<(String, String)> = object
         .keys()
-        .find(|key| !DOCUMENT_KEYS.contains(&key.as_str()))
-    {
-        None => Ok(()),
-        Some(key) => Err(crate::production_status::bad_request(&[(
-            at.to_owned(),
-            format!(
-                "Invalid JSON payload received. Unknown name \"{key}\" at '{at}': Cannot find field."
-            ),
-        )])),
+        .filter(|key| !DOCUMENT_KEYS.contains(&key.as_str()))
+        .take(MAX_VIOLATIONS)
+        .map(|key| {
+            (
+                at.to_owned(),
+                format!(
+                    "Invalid JSON payload received. Unknown name \"{}\" at '{at}': Cannot find field.",
+                    echo(key)
+                ),
+            )
+        })
+        .collect();
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        Err(crate::production_status::bad_request(&violations))
     }
 }
 
@@ -573,10 +580,48 @@ pub fn check_body(method: &str, body: &Value) -> Result<Value, Status> {
     };
     let mut checker = Checker::default();
     let normalized = checker.message(schema, object);
-    match checker.refusal {
-        None => Ok(Value::Object(normalized)),
-        Some(violation) => Err(crate::production_status::bad_request(&[violation])),
+    if checker.violations.is_empty() {
+        Ok(Value::Object(normalized))
+    } else {
+        Err(crate::production_status::bad_request(&checker.violations))
     }
+}
+
+/// The most violations one refusal lists. Production's transcoder keeps going after a
+/// violation (firestore-production-matrix programs 10 and 11 add a second line, for the
+/// URL-bound database name, after a oneof conflict in the body); whether it lists several
+/// violations of one body is unrecorded (follow-ups). Past this many the walk stops, so a
+/// body of many bad items costs what a body with a few does.
+const MAX_VIOLATIONS: usize = 16;
+/// The most bytes of a value, key or path one violation echoes; a longer one ends in `...`.
+/// Every recorded refusal echoes a short value. The bound all refusal texts share.
+const MAX_ECHO: usize = fireemu_core_types::codec::MAX_ECHO_BYTES;
+
+/// A `fmt::Write` that keeps the first [`MAX_ECHO`] bytes and stops the formatting after them.
+struct Bounded(String);
+
+impl core::fmt::Write for Bounded {
+    fn write_str(&mut self, text: &str) -> core::fmt::Result {
+        let room = MAX_ECHO.saturating_sub(self.0.len());
+        if text.len() <= room {
+            self.0.push_str(text);
+            return Ok(());
+        }
+        let mut end = room;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.0.push_str(&text[..end]);
+        self.0.push_str("...");
+        Err(core::fmt::Error)
+    }
+}
+
+/// `value` as the refusal echoes it: its display, cut at [`MAX_ECHO`] bytes.
+pub(crate) fn echo(value: &dyn core::fmt::Display) -> String {
+    let mut out = Bounded(String::new());
+    let _ = write!(out, "{value}");
+    out.0
 }
 
 /// One step of the path the transcoder names in a refusal.
@@ -590,50 +635,53 @@ enum Segment<'a> {
     Key(&'a str),
 }
 
-/// Walks a body against its schema. The path is kept as segments and rendered only for the
-/// refusal, and the walk stops at the first violation: production's transcoder reports one
-/// (every recorded refusal carries a single field violation), and a body of many bad items
-/// must cost no more than one that has a single bad item.
+/// Walks a body against its schema, collecting violations as production's transcoder does.
+/// The path is kept as segments and rendered only for a violation, what a violation echoes is
+/// bounded, and the walk stops after [`MAX_VIOLATIONS`].
 #[derive(Default)]
 struct Checker<'a> {
     path: Vec<Segment<'a>>,
-    refusal: Option<(String, String)>,
+    violations: Vec<(String, String)>,
 }
 
 impl<'a> Checker<'a> {
+    fn full(&self) -> bool {
+        self.violations.len() >= MAX_VIOLATIONS
+    }
+
     fn rendered_path(&self) -> String {
-        let mut out = String::new();
+        let mut out = Bounded(String::new());
         for segment in &self.path {
-            match segment {
-                Segment::Field(name) => {
-                    if !out.is_empty() {
-                        out.push('.');
-                    }
-                    out.push_str(name);
-                }
-                Segment::Index(index) => {
-                    let _ = write!(out, "[{index}]");
-                }
-                Segment::Key(key) => {
-                    let _ = write!(out, "[{key}]");
-                }
+            let written = match segment {
+                Segment::Field(name) if out.0.is_empty() => out.write_str(name),
+                Segment::Field(name) => write!(out, ".{name}"),
+                Segment::Index(index) => write!(out, "[{index}]"),
+                Segment::Key(key) => write!(out, "[{key}]"),
+            };
+            if written.is_err() {
+                break;
             }
         }
-        out
+        out.0
     }
 
     fn refuse(&mut self, description: String) {
-        if self.refusal.is_none() {
-            self.refusal = Some((self.rendered_path(), description));
+        if !self.full() {
+            let path = self.rendered_path();
+            self.violations.push((path, description));
         }
     }
 
     /// `Invalid value at '<path>' (<type>), <value>`.
     fn refuse_value(&mut self, kind: Kind, value: &Value) {
-        if self.refusal.is_none() {
+        if !self.full() {
             let path = self.rendered_path();
-            let description = format!("Invalid value at '{path}' ({}), {value}", kind_name(kind));
-            self.refusal = Some((path, description));
+            let description = format!(
+                "Invalid value at '{path}' ({}), {}",
+                kind_name(kind),
+                echo(value)
+            );
+            self.violations.push((path, description));
         }
     }
 
@@ -641,7 +689,7 @@ impl<'a> Checker<'a> {
         let mut out = Map::new();
         let mut oneofs: Vec<&str> = Vec::new();
         for (key, value) in object {
-            if self.refusal.is_some() {
+            if self.full() {
                 break;
             }
             let Some(field) = schema
@@ -651,10 +699,11 @@ impl<'a> Checker<'a> {
             else {
                 let path = self.rendered_path();
                 self.refuse(format!(
-                    "Invalid JSON payload received. Unknown name \"{key}\"{}: Cannot find field.",
+                    "Invalid JSON payload received. Unknown name \"{}\"{}: Cannot find field.",
+                    echo(key),
                     at(&path)
                 ));
-                break;
+                continue;
             };
             // proto3 JSON: null is the default value, whatever the type, except for
             // `google.protobuf.NullValue`, whose only value it is.
@@ -667,10 +716,11 @@ impl<'a> Checker<'a> {
                 if oneofs.contains(&oneof) {
                     let path = self.rendered_path();
                     self.refuse(format!(
-                        "Invalid value{} (oneof), oneof field '{oneof}' is already set. Cannot set '{key}'",
-                        at(&path)
+                        "Invalid value{} (oneof), oneof field '{oneof}' is already set. Cannot set '{}'",
+                        at(&path),
+                        echo(key)
                     ));
-                    break;
+                    continue;
                 }
                 oneofs.push(oneof);
             }
@@ -679,7 +729,7 @@ impl<'a> Checker<'a> {
                 if let Value::Array(items) = value {
                     let mut checked = Vec::with_capacity(items.len());
                     for (index, item) in items.iter().enumerate() {
-                        if self.refusal.is_some() {
+                        if self.full() {
                             break;
                         }
                         self.path.push(Segment::Index(index));
@@ -711,7 +761,7 @@ impl<'a> Checker<'a> {
                 if let Value::Object(entries) = value {
                     let mut checked = Map::new();
                     for (key, entry) in entries {
-                        if self.refusal.is_some() {
+                        if self.full() {
                             break;
                         }
                         let normalized = match entry {
@@ -1049,26 +1099,47 @@ mod tests {
             );
         }
         assert!(check_document_keys(&json!("not an object"), "document").is_ok());
-        // Only the first unknown key is reported, as for any transcoder refusal.
+        // Every unknown key, joined by newlines as the transcoder joins its violations.
         let status =
             check_document_keys(&json!({"a": 1, "fields": {}, "b": 2}), "document").unwrap_err();
         assert_eq!(
             status.message(),
-            "Invalid JSON payload received. Unknown name \"a\" at 'document': Cannot find field."
+            "Invalid JSON payload received. Unknown name \"a\" at 'document': Cannot find field.\n\
+             Invalid JSON payload received. Unknown name \"b\" at 'document': Cannot find field."
         );
     }
 
-    /// A body of many bad items costs what a body with one does: one violation, and no path
-    /// built for the items that are fine (safety review M1).
+    /// A body of many bad items costs what a body with a few does: at most `MAX_VIOLATIONS`
+    /// violations, each echoing at most `MAX_ECHO` bytes, and no path built for the items
+    /// that are fine (safety review M1, re-review MF1).
     #[test]
-    fn a_body_of_many_bad_items_is_refused_once() {
+    fn a_body_of_many_bad_items_is_refused_within_bounds() {
         let many = vec![json!(1); 1_000_000];
         let status =
             check_body("runQuery", &json!({"structuredQuery": {"from": many}})).unwrap_err();
+        let lines: Vec<&str> = status.message().split('\n').collect();
+        assert_eq!(lines.len(), MAX_VIOLATIONS);
         assert_eq!(
-            status.message(),
+            lines[0],
             "Invalid value at 'structured_query.from[0]' (type.googleapis.com/google.firestore.v1.StructuredQuery.CollectionSelector), 1"
         );
+        // Long values, keys and map keys are echoed only in part.
+        let control = "\u{1}".repeat(8 << 20);
+        for body in [
+            json!({"structuredQuery": {"from": control.clone()}}),
+            json!({"structuredQuery": {control.clone(): 1}}),
+            json!({"structuredQuery": {"where": {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "EQUAL",
+                "value": {"mapValue": {"fields": {control.clone(): {"integerValue": []}}}}}}}}),
+        ] {
+            let status = check_body("runQuery", &body).unwrap_err();
+            assert!(
+                status.message().len() < 4 * MAX_ECHO,
+                "{}",
+                status.message().len()
+            );
+        }
+        let status = check_document_keys(&json!({control.clone(): 1}), "document").unwrap_err();
+        assert!(status.message().len() < 2 * MAX_ECHO);
         let key = "k".repeat(1 << 20);
         let values = vec![json!({}); 200_000];
         let body = json!({"structuredQuery": {"where": {"fieldFilter": {
@@ -1086,8 +1157,10 @@ mod tests {
         bad["structuredQuery"]["where"]["fieldFilter"]["value"]["mapValue"]["fields"][&key]
             ["arrayValue"]["values"][150_000] = json!(1);
         let status = check_body("runQuery", &bad).unwrap_err();
-        assert!(status.message().ends_with(
-            ".array_value.values[150000]' (type.googleapis.com/google.firestore.v1.Value), 1"
-        ));
+        // The path holds the 1 MiB key, so it is echoed only in part.
+        assert!(status
+            .message()
+            .ends_with("...' (type.googleapis.com/google.firestore.v1.Value), 1"));
+        assert!(status.message().len() < 4 * MAX_ECHO);
     }
 }

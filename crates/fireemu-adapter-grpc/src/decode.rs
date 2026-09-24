@@ -476,13 +476,18 @@ fn check_cursor_name_references(query: &Query, parent: &Parent) -> Result<(), De
     Ok(())
 }
 
-fn check_name_references(filter: &FilterExpr, parent: &Parent) -> Result<(), DecodeError> {
+fn check_name_references(
+    filter: &FilterExpr,
+    parent: &Parent,
+    production_refusals: bool,
+) -> Result<(), DecodeError> {
     let database = database_resource(parent);
     // A reference outside the request's database is refused first; one that names a
-    // collection rather than a document is refused in production's words.
+    // collection rather than a document is refused in production's words (a production-only
+    // refusal: the emulator profile compares such a name as fireemu did before).
     let check = |name: &str| -> Result<(), DecodeError> {
         check_reference_database(name, &database)?;
-        if DocumentPath::from_resource_name(name).is_none() {
+        if production_refusals && DocumentPath::from_resource_name(name).is_none() {
             // The name parsed as a parent tells a collection (odd segment count) apart from
             // the other malformed names, each in its own words; the database root itself is
             // no document either.
@@ -507,7 +512,7 @@ fn check_name_references(filter: &FilterExpr, parent: &Parent) -> Result<(), Dec
         FilterExpr::Field { .. } | FilterExpr::Unary { .. } => Ok(()),
         FilterExpr::And(children) | FilterExpr::Or(children) => children
             .iter()
-            .try_for_each(|c| check_name_references(c, parent)),
+            .try_for_each(|c| check_name_references(c, parent, production_refusals)),
     }
 }
 
@@ -562,7 +567,8 @@ fn decode_find_nearest(find_nearest: &sq::FindNearest) -> Result<FindNearest, De
                 .or_else(|_| FieldPath::parse(name))
                 .map_err(|_| {
                     DecodeError::Refused(format!(
-                        "The distanceResultField.property.name \"{name}\" is reserved."
+                        "The distanceResultField.property.name \"{}\" is reserved.",
+                        fireemu_core_types::codec::echo(name)
                     ))
                 })?,
         )
@@ -577,10 +583,21 @@ fn decode_find_nearest(find_nearest: &sq::FindNearest) -> Result<FindNearest, De
     })
 }
 
-/// Decodes a `StructuredQuery` under `parent` into the canonical query.
+/// Decodes a `StructuredQuery` under `parent` into the canonical query, with production's
+/// refusals.
 pub fn decode_structured_query(
     parent: &Parent,
     query: &pb::StructuredQuery,
+) -> Result<Query, DecodeError> {
+    decode_structured_query_in(parent, query, true)
+}
+
+/// [`decode_structured_query`] under a profile: without `production_refusals` (the emulator
+/// profile) the decoder makes only the refusals fireemu made before the strict profile.
+pub fn decode_structured_query_in(
+    parent: &Parent,
+    query: &pb::StructuredQuery,
+    production_refusals: bool,
 ) -> Result<Query, DecodeError> {
     let from = match query.from.as_slice() {
         [from] => from,
@@ -621,7 +638,7 @@ pub fn decode_structured_query(
     let mut q = Query::new(scope);
     if let Some(w) = &query.r#where {
         let filter = decode_filter(w)?;
-        check_name_references(&filter, parent)?;
+        check_name_references(&filter, parent, production_refusals)?;
         q.filter = Some(filter);
     }
     for o in &query.order_by {

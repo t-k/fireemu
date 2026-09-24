@@ -3,6 +3,9 @@
 //   node src/fs-query-index/run.mjs verify-indexes      read-only: the sandbox's composite
 //                                                       indexes and field overrides must equal
 //                                                       fs-query-index.indexes.json, all READY
+//   node src/fs-query-index/run.mjs preflight           read-only: verify-indexes, the lane file
+//                                                       holds the shared indexes, and (default)
+//                                                       is empty (record-production runs it first)
 //   node src/fs-query-index/run.mjs record-production   record the corpus twice against
 //                                                       fireemu-oracle-query/(default) and update
 //                                                       fs-query-index-production.json
@@ -285,6 +288,62 @@ async function verifyIndexes() {
     throw new Error("sandbox indexes do not equal fs-query-index.indexes.json");
 }
 
+/**
+ * Whether the sandbox `(default)` database holds any document. The corpus wipes the whole
+ * database around every program, so it records only into an empty one: a document there is
+ * another lane's, or a failed run's, and must not be deleted unseen.
+ */
+async function databaseDocuments(token) {
+  const response = await fetch(
+    `https://firestore.googleapis.com/v1/projects/${SANDBOX_PROJECT}/databases/${DATABASE}/documents:runQuery`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-goog-user-project": SANDBOX_PROJECT,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ allDescendants: true }],
+          select: { fields: [{ fieldPath: "__name__" }] },
+          limit: 1,
+        },
+      }),
+    },
+  );
+  const body = await response.json();
+  if (!response.ok) throw new Error(`runQuery: HTTP ${response.status}`);
+  return body.filter((entry) => entry.document).map((entry) => entry.document.name);
+}
+
+/**
+ * The checks before any production recording (owner directive 2026-09-24, oracle-query
+ * shared rules): the `(default)` indexes equal the lane file, which holds every index of the
+ * shared `conformance/firestore.indexes.json`, and are all READY; and the database is empty.
+ * Read-only.
+ */
+async function preflight(token) {
+  const shared = JSON.parse(
+    await readFile(join(CONFORMANCE_DIR, "firestore.indexes.json"), "utf8"),
+  );
+  const lane = JSON.parse(await readFile(INDEXES, "utf8"));
+  const key = (i) => indexKey(i.collectionGroup, i.queryScope, i.fields);
+  const laneKeys = new Set(lane.indexes.map(key));
+  const notInLane = shared.indexes.map(key).filter((k) => !laneKeys.has(k));
+  if (notInLane.length) {
+    throw new Error(`the lane index file lacks shared indexes: ${notInLane.join(", ")}`);
+  }
+  await verifyIndexes();
+  const documents = await databaseDocuments(token);
+  if (documents.length) {
+    throw new Error(
+      `the sandbox (default) database is not empty (${documents[0]}); record only into an empty database`,
+    );
+  }
+  console.log(JSON.stringify({ preflight: "ok", database: DATABASE }, null, 2));
+}
+
 async function recordOnce(programs, run, token, projectNumber) {
   const ctx = createContext({
     run,
@@ -372,7 +431,7 @@ async function recordProduction() {
   let error;
   const tokens = [];
   try {
-    await verifyIndexes();
+    await preflight(await accessToken());
     for (const offset of [0, 1]) {
       const token = await accessToken();
       tokens.push(token);
@@ -729,6 +788,7 @@ async function exportComparison(out) {
 const mode = process.argv[2];
 if (import.meta.url === `file://${process.argv[1]}`) {
   if (mode === "verify-indexes") await verifyIndexes();
+  else if (mode === "preflight") await preflight(await accessToken());
   else if (mode === "record-production") await recordProduction();
   else if (mode === "rebuild-fixture")
     await rebuildFixture(process.argv[3], process.argv[4] === "--skip-changed");
@@ -741,7 +801,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(JSON.stringify({ requests: local.requests, failures: local.failures }, null, 2));
   } else {
     console.error(
-      "usage: run.mjs verify-indexes|record-production|rebuild-fixture|check|export-comparison|local",
+      "usage: run.mjs verify-indexes|preflight|record-production|rebuild-fixture|check|export-comparison|local",
     );
     process.exitCode = 2;
   }

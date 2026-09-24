@@ -306,7 +306,10 @@ fn a_configured_database_creation_time_bounds_read_times() {
     assert_eq!(status, 200, "{body}");
     let (status, body) = query(&rfc3339(3660));
     assert_eq!(status, 400, "{body}");
-    assert!(body.contains("The requested 'read_time' is too old."), "{body}");
+    assert!(
+        body.contains("The requested 'read_time' is too old."),
+        "{body}"
+    );
     daemon.stop();
 
     let (mut command, _) = Daemon::command(
@@ -318,7 +321,121 @@ fn a_configured_database_creation_time_bounds_read_times() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("firestore.databaseCreateTime 2999-01-01T00:00:00Z is after the clock start"),
+        stderr
+            .contains("firestore.databaseCreateTime 2999-01-01T00:00:00Z is after the clock start"),
         "{stderr}"
     );
+}
+
+/// The resident memory of a process in KiB, from `ps`.
+fn resident_kib(pid: u32) -> u64 {
+    sampled_resident_kib(pid).unwrap()
+}
+
+/// The resident set of `pid` in KiB, or `None` when `ps` could not tell (a sampler skips it).
+fn sampled_resident_kib(pid: u32) -> Option<u64> {
+    let output = Command::new("ps")
+        .args(["-o", "rss=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+}
+
+/// A refusal echoes at most 1 KiB of what it names, in both profiles: a 9 MiB property path of
+/// control characters, refused before authorization, answers in a few KiB and does not grow
+/// the daemon by many times its size (promotion review Security Should 1; the bound is local,
+/// see `spec/compatibility/contract.json`).
+#[test]
+fn a_refusal_does_not_echo_a_large_request() {
+    for profile in ["strict", "emulator"] {
+        let daemon = Daemon::start_with(&format!("echo-{profile}"), profile, "");
+        let port = daemon.firestore_port();
+        let path = format!("~{}", "\u{1}".repeat(9 << 20));
+        let body = format!(
+            r#"{{"structuredQuery": {{"from": [{{"collectionId": "c"}}], "orderBy": [{{"field": {{"fieldPath": "{path}"}}}}]}}}}"#
+        );
+        let before = resident_kib(daemon.child.id());
+        // The peak, not only what stays resident afterwards: sampled while the requests run
+        // (every few milliseconds, so a shorter spike can escape it).
+        let pid = daemon.child.id();
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sampler = {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let mut peak = 0;
+                while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                    peak = peak.max(sampled_resident_kib(pid).unwrap_or(0));
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                peak
+            })
+        };
+        for _ in 0..3 {
+            let (status, answer) = http(
+                port,
+                "POST",
+                &format!("/v1/projects/demo-profile-echo-{profile}/databases/(default)/documents:runQuery"),
+                Some(&body),
+            );
+            assert_eq!(
+                status,
+                400,
+                "{profile}: {}",
+                &answer[..answer.len().min(300)]
+            );
+            assert!(
+                answer.len() < 16 * 1024,
+                "{profile}: {} bytes",
+                answer.len()
+            );
+            // The refusal this request is meant to reach, not an earlier one.
+            assert!(
+                answer.contains(r#"Invalid property path \"~"#),
+                "{profile}: {}",
+                &answer[..answer.len().min(300)]
+            );
+        }
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let peak = sampler.join().unwrap();
+        let after = resident_kib(daemon.child.id());
+        eprintln!("{profile}: rss {before} KiB -> peak {peak} KiB -> {after} KiB");
+        assert!(
+            after < before + 160 * 1024,
+            "{profile}: rss {before} KiB -> {after} KiB"
+        );
+        assert!(
+            peak < before + 256 * 1024,
+            "{profile}: rss {before} KiB -> peak {peak} KiB"
+        );
+        daemon.stop();
+    }
+}
+
+/// A REST body nested deeper than production's JSON grammar allows: the strict profile refuses
+/// it in production's words, the emulator profile reads it as standard JSON as fireemu did
+/// before and answers for its content (confirmation review 2026-09-24, round 2).
+#[test]
+fn a_deep_body_is_refused_by_the_grammar_only_under_the_strict_profile() {
+    let deep = format!("{}{}", "[".repeat(110), "]".repeat(110));
+    let body = format!(
+        r#"{{"structuredQuery": {{"from": [{{"collectionId": "c"}}]}}, "readTime": {deep}}}"#
+    );
+    for profile in ["strict", "emulator"] {
+        let daemon = Daemon::start_with(&format!("deep-{profile}"), profile, "");
+        let (status, answer) = http(
+            daemon.firestore_port(),
+            "POST",
+            &format!(
+                "/v1/projects/demo-profile-deep-{profile}/databases/(default)/documents:runQuery"
+            ),
+            Some(&body),
+        );
+        assert_eq!(status, 400, "{profile}: {answer}");
+        assert_eq!(
+            answer.contains("Message too deep"),
+            profile == "strict",
+            "{profile}: {answer}"
+        );
+        daemon.stop();
+    }
 }

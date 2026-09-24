@@ -3,6 +3,8 @@
 use core::fmt;
 use std::collections::BTreeSet;
 
+use fireemu_core_types::codec::echo;
+
 use fireemu_core_limits::catalogs::FIRESTORE_STANDARD_QUERY_2026_08_25;
 use fireemu_core_limits::model::LimitMaximum;
 use fireemu_core_types::ids::CollectionId;
@@ -361,6 +363,10 @@ pub struct Query {
     pub projection: Option<Vec<FieldPath>>,
     /// Optional nearest-neighbor stage, applied after ordinary query stages.
     pub find_nearest: Option<FindNearest>,
+    /// Whether execution refuses what only production refuses (the strict profile): a
+    /// cosine search that meets a zero vector. The emulator profile's canonicalization clears
+    /// it, and such a candidate is then left out as a distance that is not finite.
+    pub production_refusals: bool,
 }
 
 /// Structural validation errors found while canonicalizing.
@@ -448,18 +454,25 @@ impl fmt::Display for QueryError {
                 write!(f, "'{}' requires an non-empty ArrayValue.", op.name())
             }
             Self::DuplicateOrderField { field } => {
-                write!(f, "order by clause cannot contain duplicate fields {field}")
+                let field = field.to_string();
+                write!(
+                    f,
+                    "order by clause cannot contain duplicate fields {}",
+                    echo(&field)
+                )
             }
             Self::NameReserved => f.write_str("the name __key__ is reserved"),
             Self::KindRequiredForFilter { field } => {
-                write!(f, "kind is required for filter: {field}")
+                let field = field.to_string();
+                write!(f, "kind is required for filter: {}", echo(&field))
             }
             Self::KindRequiredForOrder => {
                 f.write_str("kind is required for all orders except __key__ ascending")
             }
             Self::CursorReferenceNotDocument { name } => write!(
                 f,
-                "Document parent name \"{name}\" lacks \"/\" at index {}.",
+                "Document parent name \"{}\" lacks \"/\" at index {}.",
+                echo(name),
                 name.len()
             ),
             Self::EmptyComposite => {
@@ -633,6 +646,7 @@ impl Query {
             limit: None,
             projection: None,
             find_nearest: None,
+            production_refusals: true,
         }
     }
 
@@ -692,6 +706,7 @@ impl Query {
         };
         let q = Self {
             filter,
+            production_refusals: production,
             ..self.clone()
         };
         if let Some(find_nearest) = &q.find_nearest {
@@ -843,7 +858,7 @@ impl Query {
             format!("{inequality} distinct range / inequality fields"),
             format!(
                 "The query contains {inequality} distinct inequality fields: [{}]. A query may not have more than {maximum_inequality} distinct inequality fields.",
-                listed.join(", ")
+                echo(&listed.join(", "))
             ),
         );
         let components = self.component_count();

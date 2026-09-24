@@ -369,7 +369,7 @@ async fn execute_pipeline_records_deterministic_small_and_large_page_stats() {
         else {
             unreachable!()
         };
-        let decoded = decode_structured_query(&parent, &structured).unwrap();
+        let decoded = crate::decode::decode_structured_query(&parent, &structured).unwrap();
         let (legacy, legacy_stats) = backend
             .database_handle(&parent)
             .unwrap()

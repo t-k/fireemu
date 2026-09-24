@@ -803,6 +803,57 @@ impl RestState {
         }
     }
 
+    /// The database inventory, field-configuration and operation routes, which live under
+    /// the database resource and carry no `/documents` segment.
+    fn database_subroute(
+        &self,
+        req: &RestRequest,
+        path: &str,
+        segments: &[&str],
+        action: Option<&str>,
+        params: &BTreeMap<String, Vec<String>>,
+    ) -> Option<Result<RestResponse, Status>> {
+        if req.method == "GET"
+            && action.is_none()
+            && matches!(
+                segments,
+                ["projects", _, "databases"] | ["projects", _, "databases", _]
+            )
+        {
+            return Some(self.admin_inventory_route(req, path, params));
+        }
+        // The field-configuration and operation routes live under the database resource and
+        // carry no `/documents` segment, so they are matched before the document-route guard.
+        if action.is_none()
+            && matches!(
+                segments,
+                [
+                    "projects",
+                    _,
+                    "databases",
+                    _,
+                    "collectionGroups",
+                    _,
+                    "fields",
+                    ..
+                ]
+            )
+        {
+            return Some(self.admin_fields_route(req, segments, params));
+        }
+        if req.method == "GET"
+            && action.is_none()
+            && matches!(
+                segments,
+                ["projects", _, "databases", _, "operations"]
+                    | ["projects", _, "databases", _, "operations", _]
+            )
+        {
+            return Some(self.admin_operations_route(req, segments));
+        }
+        None
+    }
+
     fn dispatch(&self, req: &RestRequest) -> Result<RestResponse, Status> {
         // The custom-method suffix is recognised on the raw path (an encoded colon inside a
         // document ID is data, not routing syntax); segments are decoded afterwards.
@@ -818,8 +869,14 @@ impl RestState {
         let (raw_resource, action) = match req.path.rsplit_once(':') {
             // The query methods' templates need a document below `documents`; with one
             // segment there, production's front end matches the create template instead, with
-            // the method in the collection id (FS-QUERY-INDEX parent-is-collection).
-            Some((r, a)) if QUERY_METHODS.contains(&a) && names_a_root_collection(r) => {
+            // the method in the collection id (FS-QUERY-INDEX parent-is-collection). The
+            // emulator profile keeps the query route, which refuses the collection parent, so
+            // a mistaken query never creates a document there.
+            Some((r, a))
+                if QUERY_METHODS.contains(&a)
+                    && names_a_root_collection(r)
+                    && self.gateway.production_refusals() =>
+            {
                 (req.path.as_str(), None)
             }
             Some((r, a)) if CUSTOM_METHODS.contains(&a) => (r, Some(a)),
@@ -837,43 +894,8 @@ impl RestState {
         };
         let params = query_params(&req.query);
         let segments: Vec<&str> = path.split('/').collect();
-        if req.method == "GET"
-            && action.is_none()
-            && matches!(
-                segments.as_slice(),
-                ["projects", _, "databases"] | ["projects", _, "databases", _]
-            )
-        {
-            return self.admin_inventory_route(req, path, &params);
-        }
-        // The field-configuration and operation routes live under the database resource and
-        // carry no `/documents` segment, so they are matched before the document-route guard.
-        if action.is_none()
-            && matches!(
-                segments.as_slice(),
-                [
-                    "projects",
-                    _,
-                    "databases",
-                    _,
-                    "collectionGroups",
-                    _,
-                    "fields",
-                    ..
-                ]
-            )
-        {
-            return self.admin_fields_route(req, &segments, &params);
-        }
-        if req.method == "GET"
-            && action.is_none()
-            && matches!(
-                segments.as_slice(),
-                ["projects", _, "databases", _, "operations"]
-                    | ["projects", _, "databases", _, "operations", _]
-            )
-        {
-            return self.admin_operations_route(req, &segments);
+        if let Some(response) = self.database_subroute(req, path, &segments, action, &params) {
+            return response;
         }
         if !path.contains("/documents") {
             return Ok(not_found_text());
@@ -1034,7 +1056,9 @@ impl RestState {
         let document_id = first(params, "documentId").unwrap_or("");
         let document_resource =
             (!document_id.is_empty()).then(|| format!("{parent}/{collection_id}/{document_id}"));
-        transcode::check_document_keys(body, "document")?;
+        if self.gateway.production_refusals() {
+            transcode::check_document_keys(body, "document")?;
+        }
         let req = pb::CreateDocumentRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
@@ -1155,26 +1179,31 @@ impl RestState {
             }
             // The streaming methods answer an error as a one-element array, like their results.
             "runQuery" => stream_errors(
-                transcode::check_body(action, body)
+                self.transcoded(action, body)
                     .and_then(|body| self.run_query(principal, resource, &body)),
             ),
             "runAggregationQuery" => stream_errors(
-                transcode::check_body(action, body)
+                self.transcoded(action, body)
                     .and_then(|body| self.run_aggregation_query(principal, resource, &body)),
             ),
             // The template is `{database=projects/*/databases/*}/documents:executePipeline`;
             // any other resource names no route.
+            // Only the strict profile has this route: before it the emulator profile named no
+            // REST pipeline route, and it may add no rejection.
             "executePipeline" => {
-                if matches!(
-                    resource.split('/').collect::<Vec<_>>().as_slice(),
-                    ["projects", _, "databases", _, "documents"]
-                ) {
+                if self.gateway.production_refusals()
+                    && matches!(
+                        resource.split('/').collect::<Vec<_>>().as_slice(),
+                        ["projects", _, "databases", _, "documents"]
+                    )
+                {
                     stream_errors(self.execute_pipeline(principal))
                 } else {
                     Ok(not_found_text())
                 }
             }
-            "partitionQuery" => transcode::check_body(action, body)
+            "partitionQuery" => self
+                .transcoded(action, body)
                 .and_then(|body| self.partition_query(principal, resource, &body)),
             "listCollectionIds" => {
                 json::strict_keys(
@@ -1222,6 +1251,16 @@ impl RestState {
                 Ok(ok(out))
             }
             _ => Ok(not_found_text()),
+        }
+    }
+
+    /// A custom method's body after production's transcoder: checked and normalized under the
+    /// strict profile, as sent under the emulator profile (which may add no rejection).
+    fn transcoded(&self, action: &str, body: &Value) -> Result<Value, Status> {
+        if self.gateway.production_refusals() {
+            transcode::check_body(action, body)
+        } else {
+            Ok(body.clone())
         }
     }
 
@@ -1476,7 +1515,10 @@ impl RestState {
             ));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
-        crate::query_messages::check_find_nearest_request(&structured)?;
+        crate::query_messages::check_find_nearest_request(
+            &structured,
+            self.gateway.production_refusals(),
+        )?;
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;
         exclusive_selectors(body)?;
@@ -1560,7 +1602,10 @@ impl RestState {
         if let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(query)) =
             &aggregation.query_type
         {
-            crate::query_messages::check_find_nearest_request(query)?;
+            crate::query_messages::check_find_nearest_request(
+                query,
+                self.gateway.production_refusals(),
+            )?;
         }
         let explain_options =
             explain_options_from_json(body.get("explainOptions")).map_err(|e| bad(&e))?;

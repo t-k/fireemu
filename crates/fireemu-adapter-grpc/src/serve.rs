@@ -467,7 +467,7 @@ async fn rest_call(
             ));
         }
     };
-    let body = match request_body(&bytes, &path) {
+    let body = match request_body(&bytes, &path, state.gateway.production_refusals()) {
         Ok(body) => body,
         Err(response) => return Ok(json_response(&response, origin.as_deref())),
     };
@@ -667,20 +667,35 @@ fn is_prost_recursion(status: &Status) -> bool {
 /// through.
 /// A REST request body as production's front end reads it: an empty body is the empty
 /// message, and a body that is not JSON is refused in the front end's words, inside the result
-/// array for a streaming method.
-fn request_body(bytes: &[u8], path: &str) -> Result<serde_json::Value, crate::rest::RestResponse> {
+/// array for a streaming method. Without `production_refusals` (the emulator profile) a body
+/// that grammar refuses but standard JSON admits (one nested deeper than its limit) is read as
+/// standard JSON, as fireemu read every body before, so the profile adds no rejection.
+fn request_body(
+    bytes: &[u8],
+    path: &str,
+    production_refusals: bool,
+) -> Result<serde_json::Value, crate::rest::RestResponse> {
     if bytes.is_empty() {
         return Ok(serde_json::Value::Object(serde_json::Map::new()));
     }
-    crate::rest::transcode::parse_body(bytes).map_err(|error| {
-        let mut response = crate::rest::error_response(&Status::invalid_argument(
-            crate::rest::transcode::syntax_error_message(bytes, &error),
-        ));
-        if crate::rest::transcode::is_streaming_method(path) {
-            response.body = serde_json::Value::Array(vec![response.body]);
-        }
-        response
-    })
+    crate::rest::transcode::parse_body(bytes)
+        .or_else(|error| {
+            if !production_refusals {
+                if let Ok(value) = serde_json::from_slice(bytes) {
+                    return Ok(value);
+                }
+            }
+            Err(error)
+        })
+        .map_err(|error| {
+            let mut response = crate::rest::error_response(&Status::invalid_argument(
+                crate::rest::transcode::syntax_error_message(bytes, &error),
+            ));
+            if crate::rest::transcode::is_streaming_method(path) {
+                response.body = serde_json::Value::Array(vec![response.body]);
+            }
+            response
+        })
 }
 
 fn is_decoded_message_too_large(status: &Status) -> bool {
@@ -887,17 +902,32 @@ mod tests {
         let query = "/v1/projects/p/databases/(default)/documents:runQuery";
         let commit = "/v1/projects/p/databases/(default)/documents:commit";
         assert_eq!(
-            super::request_body(br#"{"structuredQuery": {"limit": 1,},}"#, query).unwrap(),
+            super::request_body(br#"{"structuredQuery": {"limit": 1,},}"#, query, true).unwrap(),
             json!({"structuredQuery": {"limit": 1}})
         );
-        assert_eq!(super::request_body(b"", commit).unwrap(), json!({}));
-        let truncated = super::request_body(br#"{"structuredQuery":"#, query).unwrap_err();
+        assert_eq!(super::request_body(b"", commit, true).unwrap(), json!({}));
+        let truncated = super::request_body(br#"{"structuredQuery":"#, query, true).unwrap_err();
         assert_eq!(truncated.status, 400);
         assert_eq!(
             truncated.body[0]["error"]["message"],
             "Invalid JSON payload received. Unexpected end of string. Expected a value.\n\n^"
         );
-        let bare = super::request_body(b"not json", commit).unwrap_err();
+        let bare = super::request_body(b"not json", commit, true).unwrap_err();
+        assert_eq!(
+            bare.body["error"]["message"],
+            "Invalid JSON payload received. Unexpected token.\nnot json\n^"
+        );
+        // Nesting past production's limit: refused under strict, read as standard JSON under
+        // the emulator profile; what neither grammar admits keeps production's words.
+        let deep = format!("{}{}", "[".repeat(110), "]".repeat(110));
+        let refused = super::request_body(deep.as_bytes(), commit, true).unwrap_err();
+        assert!(refused.body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Message too deep"));
+        let read = super::request_body(deep.as_bytes(), commit, false).unwrap();
+        assert!(read.is_array());
+        let bare = super::request_body(b"not json", commit, false).unwrap_err();
         assert_eq!(
             bare.body["error"]["message"],
             "Invalid JSON payload received. Unexpected token.\nnot json\n^"

@@ -8,8 +8,8 @@
 //                                                 with the saved production rows
 //   node src/auth-mfa/run.mjs export-comparison <out.json>
 //   node src/auth-mfa/run.mjs restore-sandbox     after a run that could not clean up (SIGKILL,
-//                                                 a crash): wipe, MFA off, password required,
-//                                                 read back, and a ledger line
+//                                                 a crash): MFA off, password required, read
+//                                                 back, and a ledger line (no account deleted)
 //
 // `record-production` needs FIREEMU_AUTH_SANDBOX_WEB_CONFIG (the sandbox web app config JSON,
 // kept outside the repository), owner ADC (`gcloud auth application-default`),
@@ -425,8 +425,13 @@ async function recordProduction() {
       console.error(`${name}: cleanup is running; wait for it (restore-sandbox restores by hand)`);
     }
   };
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
+  // A closed terminal (SIGHUP) stops the run the same way; its later writes may fail, which must
+  // not interrupt the cleanup.
+  const signalNames = ["SIGINT", "SIGTERM", "SIGHUP"];
+  for (const name of signalNames) process.on(name, onSignal);
+  const ignoreWriteError = () => {};
+  process.stdout.on("error", ignoreWriteError);
+  process.stderr.on("error", ignoreWriteError);
   await appendFile(
     ledger,
     `${JSON.stringify({ ts: new Date().toISOString(), event: "started", taskId: TASK_ID, project: SANDBOX_PROJECT, gitSha: meta.sha, programs: meta.programs })}\n`,
@@ -461,9 +466,6 @@ async function recordProduction() {
     secrets.push(...(caught.secrets ?? []));
     switchesAfter = await readSwitches(web, tokens);
     console.error(`switches after the stop: ${JSON.stringify(switchesAfter)}`);
-  } finally {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
   }
   await writeFile(
     join(runDir, "meta.json"),
@@ -521,6 +523,8 @@ async function recordProduction() {
         ...(switchesAfter ? { switchesAfter } : {}),
       })}\n`,
     );
+    // Only now: a signal before the terminal line is in must not end the process.
+    for (const name of signalNames) process.off(name, onSignal);
   }
   if (error) throw new Error(error);
   if (failures.length) process.exitCode = 1;
@@ -756,35 +760,85 @@ async function exportComparison(out) {
 }
 
 /**
+ * Whether a hand restore is due: this task's last ledger line is a `started` line without a
+ * terminal line, or an outcome other than a clean recording.
+ */
+export function restoreDue(ledgerText) {
+  const entries = ledgerText
+    .split("\n")
+    .filter((line) => line.trim())
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((entry) => entry?.taskId === TASK_ID && entry.project === SANDBOX_PROJECT);
+  const last = entries.at(-1);
+  if (!last) return false;
+  if (last.event === "started") return true;
+  return last.outcome !== "recorded" && !String(last.outcome).startsWith("exploration");
+}
+
+/** Whether a recording of this harness is running on this machine. */
+async function recordingRunning() {
+  try {
+    const { stdout } = await execFileAsync("pgrep", ["-f", "auth-mfa/run.mjs record-production"]);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Restores the switches a run changes after a run that could not (SIGKILL, a crash): MFA off
- * exactly as the sandbox baseline has it, password sign-in required, no project-level account.
- * Refused while another lane is on the sandbox, since the wipe would delete its accounts.
+ * exactly as the sandbox baseline has it and password sign-in required, read back. It deletes
+ * no account: another lane's accounts cannot be told apart from ours, and every program wipes
+ * the project before it starts anyway. Refused unless this task's ledger shows a run that did
+ * not end cleanly, while a recording of this harness runs, or while another lane is on the
+ * sandbox. A terminal ledger line is written whatever happens.
  */
 async function restoreSandbox() {
   const ledger = process.env.FIREEMU_SANDBOX_LEDGER;
   if (!ledger) throw new Error("FIREEMU_SANDBOX_LEDGER is required");
-  const busy = existsSync(ledger) ? otherLaneOnSandbox(await readFile(ledger, "utf8")) : undefined;
+  const text = existsSync(ledger) ? await readFile(ledger, "utf8") : "";
+  if (!restoreDue(text)) throw new Error("the ledger shows no run of this task to restore after");
+  if (await recordingRunning()) throw new Error("a recording of this harness is still running");
+  const busy = otherLaneOnSandbox(text);
   if (busy) throw new Error(`another lane is on the sandbox: ${busy}`);
   const web = await sandboxWebConfig();
   const tokens = [];
-  const ctx = await productionContext(String(Date.now()), web, tokens);
-  const session = createSession(ctx, {
-    maxHarnessRequests: 80,
-    maxCleanupRequests: 120,
-    log: (line) => console.log(line),
-  });
-  const before = await session.readConfig(["mfa", "signIn.email.passwordRequired"]);
-  await session.wipe();
-  const restored = await session.writeConfig(
-    ["mfa", "signIn.email.passwordRequired"],
-    { mfa: MFA_CONFIGS.disabled, "signIn.email.passwordRequired": true },
-    { cleanup: true },
-  );
-  await prepareProject(ctx, { apply: false });
-  await appendFile(
-    ledger,
-    `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome: "restored-by-hand", before, restored, requests: session.counts().harnessRequests })}\n`,
-  );
+  let outcome = "restore-failed";
+  let before;
+  let restored;
+  let error;
+  let requests = 0;
+  try {
+    const ctx = await productionContext(String(Date.now()), web, tokens);
+    const session = createSession(ctx, {
+      maxHarnessRequests: 40,
+      maxCleanupRequests: 40,
+      log: (line) => console.log(line),
+    });
+    before = await session.readConfig(["mfa", "signIn.email.passwordRequired"]);
+    restored = await session.writeConfig(
+      ["mfa", "signIn.email.passwordRequired"],
+      { mfa: MFA_CONFIGS.disabled, "signIn.email.passwordRequired": true },
+      { cleanup: true },
+    );
+    requests = session.counts().harnessRequests;
+    await prepareProject(ctx, { apply: false });
+    outcome = "restored-by-hand";
+  } catch (caught) {
+    error = String(caught?.message ?? caught);
+  } finally {
+    await appendFile(
+      ledger,
+      `${JSON.stringify({ ts: new Date().toISOString(), project: SANDBOX_PROJECT, database: null, taskId: TASK_ID, outcome, before, restored, requests, ...(error ? { error } : {}) })}\n`,
+    );
+  }
+  if (error) throw new Error(error);
   console.log(JSON.stringify({ before, restored }, null, 2));
 }
 

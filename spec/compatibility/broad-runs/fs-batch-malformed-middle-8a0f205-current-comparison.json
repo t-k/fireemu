@@ -20,6 +20,7 @@
   "recordingDigestNote": "The two production captures have distinct recordedAt timestamps but identical normalized recording digests; digest equality alone does not establish capture identity.",
   "localRunPath": "conformance/.runs/fs-data-write-local-DbrwFE",
   "command": "pnpm -C conformance fs-data-write:check",
+  "verificationCommand": "pnpm -C conformance install --frozen-lockfile && uv run --project tools/compat-inventory --locked --python 3.12 -m pytest -q -p no:cacheprovider tools/compat-inventory/tests/test_fs_batch_malformed_middle_current_rebind.py",
   "comparisonCommand": "node conformance/src/fs-data-write-sandbox-run.mjs compare-local conformance/.runs/fs-data-write-local-DbrwFE",
   "localExecutableSha256": "242248dd5d1119c1ef72724efda21f19caf1411b344a884106ff4258e5cfb15e",
   "localRunBinding": {

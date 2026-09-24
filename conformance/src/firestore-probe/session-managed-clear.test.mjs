@@ -15,6 +15,7 @@ import {
   isExactDeltaV3ProductionScope,
   isExactPartialProductionScope,
   mutationIntentTarget,
+  queryDocumentNames,
 } from "./sandbox-session.mjs";
 
 const prefix = "projects/fireemu-oracle-sbx/databases/(default)/documents/";
@@ -400,4 +401,28 @@ test("the write-ahead intent target never parses a WebChannel form body as JSON"
     }),
     "projects/p/databases/(default)/documents/c/d",
   );
+});
+
+test("a collection-group answer counts only rows that carry a document", () => {
+  const readTime = "2026-09-25T00:00:00.000000Z";
+  // Production's empty answer is one row holding only readTime.
+  assert.deepEqual(queryDocumentNames([{ readTime }]), []);
+  assert.deepEqual(queryDocumentNames([]), []);
+  assert.deepEqual(queryDocumentNames([{ document: { name: "p/d/c/x" }, readTime }]), ["p/d/c/x"]);
+  assert.deepEqual(
+    queryDocumentNames([
+      { document: { name: "a" }, readTime },
+      { document: { name: "b" }, readTime },
+    ]),
+    ["a", "b"],
+  );
+  for (const invalid of [
+    null,
+    {},
+    [{ error: { code: 3 } }],
+    [{ skipped: 1 }],
+    [{ document: {} }],
+  ]) {
+    assert.equal(queryDocumentNames(invalid), null, JSON.stringify(invalid));
+  }
 });

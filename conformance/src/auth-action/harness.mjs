@@ -298,6 +298,8 @@ export function validateActionCorpus(programs) {
       }
       if (step.path === "v1/projects/{project}/accounts" && typeof step.body?.email === "string")
         created.add(step.body.email);
+      // A deleted or changed account may no longer own its address: forget them all.
+      if (/accounts:(delete|update|batchDelete)$/.test(step.path)) created.clear();
       for (const key of ["email", "newEmail"]) {
         const creates =
           step.path === "v1/projects/{project}/accounts" ||

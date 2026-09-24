@@ -1339,9 +1339,9 @@ fn a_deleted_default_database_lists_nothing_and_can_be_recreated_after_the_coold
         (
             404,
             json!({"error": {"code": 404, "status": "NOT_FOUND",
-                "message": "The database 'p' does not exist."}})
+                "message": "Project 'p' or database '(default)' does not exist."}})
         ),
-        "production's settled answer: it names the project (fireemu-fs-bisect-0924a, 2026-09-24)"
+        "production's lasting answer once the deletion settles (fireemu-fs-bisect-0924a, 2026-09-24)"
     );
     let (status, created) = call(
         &state,

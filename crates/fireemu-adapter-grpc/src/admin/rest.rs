@@ -415,19 +415,6 @@ pub(crate) fn route(state: &RestState, req: &RestRequest) -> Option<RestResponse
             Ok(()) => {
                 super::index_rest::route(state, project, database, group, method, rest, &req.body)
             }
-            // Production lists a deleted database's indexes for a while, then refuses: fireemu
-            // answers the settled refusal (C10), which for (default) names the project
-            // (fireemu-fs-bisect-0924a, 2026-09-24).
-            Err(_)
-                if *database == fireemu_core_types::ids::DatabaseId::DEFAULT
-                    && was_deleted(state, project, database) =>
-            {
-                error(
-                    tonic::Code::NotFound,
-                    &format!("The database '{project}' does not exist."),
-                    None,
-                )
-            }
             Err(response) => response,
         },
         (
@@ -902,16 +889,6 @@ fn base64_ok(text: &str) -> bool {
 }
 
 /// Whether a database exists for the Admin surfaces below it (fields, indexes).
-/// Whether `database` is a deleted database of `project` (listed with `showDeleted`).
-fn was_deleted(state: &RestState, project: &str, database: &str) -> bool {
-    state
-        .local
-        .admin()
-        .deleted(project)
-        .iter()
-        .any(|d| d.record.database == database)
-}
-
 pub(crate) fn database_exists(state: &RestState, project: &str, database: &str) -> bool {
     state
         .local

@@ -16152,3 +16152,212 @@ fn strict_action_codes_follow_the_sandbox_lifetimes() {
         assert_eq!(status, if strict { 200 } else { 400 }, "{body}");
     }
 }
+
+/// Deleting an account voids its codes in strict only, through each delete route; the
+/// emulator profile keeps them, as the official emulator does.
+#[test]
+fn only_strict_deletion_voids_an_accounts_codes() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        for (id, route) in [("client", "client"), ("batch", "batch")] {
+            let email = format!("{id}@example.com");
+            create(
+                &s,
+                &json!({"localId": id, "email": email, "password": "password123"}),
+            );
+            let (_, link) = oob(
+                &s,
+                &json!({"requestType": "PASSWORD_RESET", "email": email}),
+            );
+            if route == "client" {
+                let (_, signed) = password_sign_in(&s, &email, "password123");
+                let (status, body) = post(
+                    &s,
+                    &format!("{V1}/accounts:delete"),
+                    &json!({"idToken": signed["idToken"]}),
+                );
+                assert_eq!(status, 200, "{body}");
+            } else {
+                let (status, body) = admin(
+                    &s,
+                    "POST",
+                    &format!("{ADMIN}/accounts:batchDelete"),
+                    &json!({"localIds": [id], "force": true}),
+                );
+                assert_eq!(status, 200, "{body}");
+            }
+            let (status, _) = check_code(&s, &link["oobCode"]);
+            assert_eq!(
+                status,
+                if strict { 400 } else { 200 },
+                "{route} strict={strict}"
+            );
+        }
+    }
+}
+
+/// The emulator profile keeps the official emulator's answers to request types.
+#[test]
+fn the_emulator_profile_keeps_the_official_request_type_answers() {
+    let s = state();
+    create(
+        &s,
+        &json!({"email": "a@example.com", "password": "password123"}),
+    );
+    let (status, body) = oob(
+        &s,
+        &json!({"requestType": "OOB_REQ_TYPE_UNSPECIFIED", "email": "a@example.com"}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("MISSING_REQ_TYPE")));
+    let (status, _) = oob(
+        &s,
+        &json!({"requestType": "NOT_A_REQUEST_TYPE", "email": "a@example.com"}),
+    );
+    assert_eq!(status, 501);
+}
+
+/// Without an update mask, a present list replaces the authorized domains and a null one is
+/// no field at all.
+#[test]
+fn an_unmasked_config_patch_reads_authorized_domains_by_presence() {
+    let s = state();
+    let (status, _) = admin(
+        &s,
+        "PATCH",
+        PROJECT_CONFIG,
+        &json!({"authorizedDomains": ["demo-app.web.app"]}),
+    );
+    assert_eq!(status, 200);
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        PROJECT_CONFIG,
+        &json!({"authorizedDomains": null, "signIn": {"anonymous": {"enabled": true}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["authorizedDomains"], json!(["demo-app.web.app"]));
+}
+
+/// An Admin-created account with neither address nor number stays anonymous: a custom-token
+/// session of it carries the anonymous `provider_id`, a phone-only one does not.
+#[test]
+fn an_admin_created_account_is_anonymous_only_without_a_number() {
+    let s = state();
+    create(&s, &json!({"localId": "empty"}));
+    create(
+        &s,
+        &json!({"localId": "phone", "phoneNumber": "+16505550102"}),
+    );
+    for (uid, anonymous) in [("empty", true), ("phone", false)] {
+        let (status, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithCustomToken"),
+            &json!({"token": json!({"uid": uid}).to_string(), "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{signed}");
+        let claims = token_parts(&signed["idToken"]).1;
+        assert_eq!(
+            claims.get("provider_id").is_some(),
+            anonymous,
+            "{uid}: {claims}"
+        );
+    }
+}
+
+/// A change code keeps its account when the account's address changed before it is applied
+/// (sandbox recording 2026-09-24, change-email#apply-c-after-admin-change); the emulator
+/// profile also applies a verification code by the account it was issued for.
+#[test]
+fn codes_applied_after_an_administrative_address_change() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        create(
+            &s,
+            &json!({"localId": "c", "email": "c@example.com", "password": "password123"}),
+        );
+        let (_, change) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "email": "c@example.com", "newEmail": "c-new@example.com"}),
+        );
+        let (_, verify) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_EMAIL", "email": "c@example.com"}),
+        );
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "c", "email": "c-admin@example.com"}),
+        );
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"oobCode": verify["oobCode"]}),
+        );
+        if strict {
+            assert_eq!((status, message(&body)), (400, Some("EMAIL_NOT_FOUND")));
+        } else {
+            assert_eq!(status, 200, "{body}");
+        }
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"oobCode": change["oobCode"]}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["email"], "c-new@example.com");
+        let (_, users) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": ["c"]}),
+        );
+        assert_eq!(users["users"][0]["initialEmail"], "c-admin@example.com");
+    }
+}
+
+/// The email-link route checks a code's kind before its address, as the official emulator
+/// does: another kind of code for another address is still `INVALID_OOB_CODE`.
+#[test]
+fn an_email_link_checks_the_code_kind_before_the_address() {
+    let s = state();
+    email_links_on(&s);
+    create(
+        &s,
+        &json!({"email": "p@example.com", "password": "password123"}),
+    );
+    let (_, reset) = oob(
+        &s,
+        &json!({"requestType": "PASSWORD_RESET", "email": "p@example.com"}),
+    );
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"oobCode": reset["oobCode"], "email": "other@example.com"}),
+    );
+    assert_eq!((status, message(&body)), (400, Some("INVALID_OOB_CODE")));
+}
+
+/// Strict removes the password only of an account whose address was never verified; a verified
+/// account keeps it (inferred: production was observed only for an unverified address).
+#[test]
+fn strict_email_link_keeps_the_password_of_a_verified_address() {
+    let s = strict_state();
+    email_links_on(&s);
+    with_email_privacy(&s);
+    create(
+        &s,
+        &json!({"email": "v@example.com", "password": "password123", "emailVerified": true}),
+    );
+    let (_, link) = oob(
+        &s,
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "v@example.com", "continueUrl": "https://demo-app.firebaseapp.com/finish"}),
+    );
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithEmailLink"),
+        &json!({"oobCode": link["oobCode"], "email": "v@example.com"}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(password_sign_in(&s, "v@example.com", "password123").0, 200);
+}

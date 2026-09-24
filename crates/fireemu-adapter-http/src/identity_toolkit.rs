@@ -8420,29 +8420,13 @@ fn update(
     if !stateless_refresh_tokens && removes_refresh_credential {
         store.revoke_refresh_tokens(&uid);
     }
-    let mut response =
-        json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"});
-    if let Some(u) = store.user(&uid) {
-        response["email"] = json!(u.email);
-        // As in a lookup: with an address, and while true after one was removed; never for an
-        // account that had none (sandbox recording 2026-09-24).
-        if u.email.is_some() || u.email_verified || u.email_verified_recorded {
-            response["emailVerified"] = json!(u.email_verified);
-        }
-        response["displayName"] = json!(u.display_name);
-        response["photoUrl"] = json!(u.photo_url);
-        // Production's Admin update answer carries no `newEmail` (sandbox recording
-        // 2026-09-23, `auth-account/admin/update#change-email`).
-        if email_changed && self_service {
-            response["newEmail"] = json!(u.email);
-        }
-    }
-    let record = user_json(store, &uid);
-    for key in ["providerUserInfo", "passwordHash"] {
-        if let Some(value) = record.get(key) {
-            response[key] = value.clone();
-        }
-    }
+    // Production's Admin update answer carries no `newEmail` (sandbox recording 2026-09-23,
+    // `auth-account/admin/update#change-email`).
+    let new_email = store
+        .user(&uid)
+        .and_then(|u| u.email.clone())
+        .filter(|_| email_changed && self_service);
+    let mut response = account_update_answer(store, &uid, new_email.as_deref());
     // Tokens follow a credential change only for an account that is enabled after this
     // update: production (recorded 2026-09-12) applies an administrative password
     // replacement to a disabled account without returning tokens.
@@ -10286,6 +10270,8 @@ fn account_update_answer(store: &AuthStore, uid: &LocalId, new_email: Option<&st
         json!({"localId": uid.as_str(), "kind": "identitytoolkit#SetAccountInfoResponse"});
     if let Some(u) = store.user(uid) {
         response["email"] = json!(u.email);
+        // As in a lookup: with an address, and while true after one was removed; never for an
+        // account that had none (sandbox recording 2026-09-24).
         if u.email.is_some() || u.email_verified || u.email_verified_recorded {
             response["emailVerified"] = json!(u.email_verified);
         }
@@ -10715,9 +10701,6 @@ fn sign_in_with_email_link(
     if let Some(u) = store.user_mut(&uid) {
         u.email_link_signin = true;
         u.email_link_created |= is_new;
-        if u.provider == fireemu_core_auth::store::Provider::Anonymous {
-            u.provider = fireemu_core_auth::store::Provider::EmailLink;
-        }
     }
     // The account and the pending credential keep `Provider::EmailLink`, which drives
     // `providerUserInfo`, the `createAuthUri` sign-in methods and the `emailLink` sign-in

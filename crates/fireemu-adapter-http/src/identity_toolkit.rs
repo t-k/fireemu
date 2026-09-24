@@ -32,7 +32,7 @@ use fireemu_core_auth::store::{
     AuthError, AuthPrincipal, AuthStore, CredentialNotice, FederatedIdentity,
     InboundSamlProviderConfig, LocalId, NewUser, OAuthResponseType, OidcProviderConfig,
     OobRequestType, PendingSignInId, PhoneCodeUse, ProjectAuthConfigPatch, RoutedStoreInstall,
-    SecondFactorAssertion, UserQueryExpression, UserSortField, VerificationCode,
+    SecondFactorAssertion, SignInConfig, UserQueryExpression, UserSortField, VerificationCode,
     VerificationPurpose,
 };
 use fireemu_core_session::clock::VirtualClock;
@@ -64,6 +64,8 @@ const QUOTA_SIMULATION_FIELDS: [&str; 4] = [
 ];
 const SIGNUP_QUOTA_FIELDS: [&str; 3] = ["quota", "startTime", "quotaDuration"];
 
+mod password_hash;
+pub use password_hash::restorable_spec as restorable_imported_hash_spec;
 mod routes;
 pub mod widget;
 mod widget_templates;
@@ -619,6 +621,15 @@ pub enum AuthQueryLimits {
     ProductionBounded,
 }
 
+/// Whether client routes admit a caller that presents neither an API key nor a credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientApiKeyPolicy {
+    /// Match the Firebase Auth Emulator, which serves keyless client requests.
+    Optional,
+    /// Refuse them as production's API front end does ("unregistered callers").
+    Required,
+}
+
 /// Whether this embedding exposes bounded local `pendingToken` continuation handles.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdpContinuationPolicy {
@@ -668,6 +679,8 @@ pub struct AuthState {
     pub fake_custom_token_expiry: FakeCustomTokenExpiry,
     /// Profile-specific Admin query behavior.
     pub query_limits: AuthQueryLimits,
+    /// Whether client routes refuse a request carrying neither an API key nor a credential.
+    pub client_api_key: ClientApiKeyPolicy,
     /// Explicit local `IdP` continuation policy, independent of query paging.
     pub idp_continuations: IdpContinuationPolicy,
     /// App Check exchange, JWKS and debug-token management, when `appCheck.enabled` selects
@@ -714,6 +727,61 @@ pub struct JsonResponse {
     pub status: u16,
     /// Body.
     pub body: Value,
+}
+
+/// A proto3 JSON decoding refusal as production sends it: the gRPC status name, an `errors`
+/// entry without a domain, and a `BadRequest` violation naming the proto field (sandbox
+/// recording 2026-09-23).
+fn proto_field_error(field: &str, description: &str) -> JsonResponse {
+    JsonResponse {
+        status: 400,
+        body: json!({"error": {
+            "code": 400,
+            "message": description,
+            "errors": [{"message": description, "reason": "invalid"}],
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": field, "description": description}],
+            }],
+        }}),
+    }
+}
+
+/// Secure Token refusals carry a gRPC status name and no `errors` list, unlike Identity
+/// Toolkit's (sandbox recording 2026-09-23).
+fn secure_token_error_shape(mut response: JsonResponse) -> JsonResponse {
+    if let Some(error) = response
+        .body
+        .get_mut("error")
+        .and_then(Value::as_object_mut)
+    {
+        error.remove("errors");
+        if response.status == 400 {
+            error.insert("status".to_owned(), json!("INVALID_ARGUMENT"));
+        }
+    }
+    response
+}
+
+/// Production answers an Admin create with a longer id with an internal error and creates
+/// nothing (sandbox exploration 2026-09-24).
+fn local_id_too_long(id: &str) -> bool {
+    id.encode_utf16().count() > fireemu_core_auth::store::MAX_LOCAL_ID_UTF16_UNITS
+}
+
+/// Production's generic backend failure (sandbox recording 2026-09-23).
+fn backend_internal_error() -> JsonResponse {
+    const MESSAGE: &str = "Internal error encountered.";
+    JsonResponse {
+        status: 500,
+        body: json!({"error": {
+            "code": 500,
+            "message": MESSAGE,
+            "errors": [{"message": MESSAGE, "domain": "global", "reason": "backendError"}],
+            "status": "INTERNAL",
+        }}),
+    }
 }
 
 fn error(status: u16, message: &str) -> JsonResponse {
@@ -845,11 +913,16 @@ fn auth_error(e: &AuthError) -> JsonResponse {
             400,
             "WEAK_PASSWORD : Password should be at least 6 characters",
         ),
-        AuthError::PasswordTooLong | AuthError::PasswordPolicyViolation => {
-            error(400, "PASSWORD_DOES_NOT_MEET_REQUIREMENTS")
+        AuthError::PasswordTooLong => error(
+            400,
+            "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters",
+        ),
+        AuthError::PasswordPolicyViolation(refusal) => {
+            error(400, &password_requirements_message(refusal))
         }
+        // Production names the client-permission refusal (sandbox recording 2026-09-23).
         AuthError::UserSignupDisabled | AuthError::UserDeletionDisabled => {
-            error(400, "OPERATION_NOT_ALLOWED")
+            error(400, "ADMIN_ONLY_OPERATION")
         }
         AuthError::SignupQuotaExceeded => error(400, "SIGNUP_QUOTA_EXCEEDED"),
         AuthError::SignupQuotaUnavailable => error(500, "SIGNUP_QUOTA_UNAVAILABLE"),
@@ -860,6 +933,7 @@ fn auth_error(e: &AuthError) -> JsonResponse {
         AuthError::ExpiredRefreshToken => error(400, "TOKEN_EXPIRED"),
         AuthError::UserNotFound => error(400, "USER_NOT_FOUND"),
         AuthError::InvalidLocalId => error(400, "INVALID_LOCAL_ID"),
+        AuthError::ImportedHashFailure => backend_internal_error(),
         AuthError::LocalIdExists => error(400, "DUPLICATE_LOCAL_ID"),
         AuthError::PhoneNumberExists => error(400, "PHONE_NUMBER_EXISTS"),
         AuthError::InvalidPhoneNumber => error(400, "INVALID_PHONE_NUMBER"),
@@ -876,8 +950,53 @@ fn auth_error(e: &AuthError) -> JsonResponse {
             400,
             "QUOTA_EXCEEDED : too many outstanding codes; consume or expire some first",
         ),
+        AuthError::LimitExceeded(v) if v.limit_id == "AUTH-LIMIT-CUSTOM-CLAIMS-BYTES" => {
+            error(400, "CLAIMS_TOO_LARGE")
+        }
         AuthError::LimitExceeded(v) => error(400, &format!("INVALID_CLAIMS : {}", v.limit_id)),
     }
+}
+
+/// Production lists every unmet requirement of a custom password policy (sandbox recording
+/// 2026-09-23, auth-account/policy/enforce-custom). The maximum, upper-case, numeric and
+/// non-alphanumeric sentences and their relative order are observed; the minimum and
+/// lower-case sentences follow the same wording and are not yet observed.
+fn password_requirements_message(
+    refusal: &fireemu_core_auth::password_policy::PolicyRefusal,
+) -> String {
+    use fireemu_core_auth::password_policy::ViolationCode;
+    let sentences: Vec<String> = refusal
+        .violations
+        .iter()
+        .map(|violation| match violation {
+            ViolationCode::MinimumPasswordLength => {
+                format!(
+                    "Password must contain at least {} characters",
+                    refusal.min_length
+                )
+            }
+            ViolationCode::MaximumPasswordLength => format!(
+                "Password may contain at most {} characters",
+                refusal.max_length.unwrap_or(4096)
+            ),
+            ViolationCode::MissingLowercaseCharacter => {
+                "Password must contain a lower case character".to_owned()
+            }
+            ViolationCode::MissingUppercaseCharacter => {
+                "Password must contain an upper case character".to_owned()
+            }
+            ViolationCode::MissingNumericCharacter => {
+                "Password must contain a numeric character".to_owned()
+            }
+            ViolationCode::MissingNonAlphanumericCharacter => {
+                "Password must contain a non-alphanumeric character".to_owned()
+            }
+        })
+        .collect();
+    format!(
+        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [{}]",
+        sentences.join(", ")
+    )
 }
 
 fn mfa_error(e: &MfaError) -> JsonResponse {
@@ -906,8 +1025,8 @@ fn mfa_error(e: &MfaError) -> JsonResponse {
 
 fn jwt_error(e: &JwtError) -> JsonResponse {
     match e {
-        JwtError::Expired => error(400, "TOKEN_EXPIRED"),
-        JwtError::Revoked => error(400, "TOKEN_EXPIRED : credentials revoked"),
+        // Production has no detail for a revoked token either (sandbox recording 2026-09-23).
+        JwtError::Expired | JwtError::Revoked => error(400, "TOKEN_EXPIRED"),
         JwtError::UserDisabled => error(400, "USER_DISABLED"),
         _ => error(400, "INVALID_ID_TOKEN"),
     }
@@ -1155,10 +1274,11 @@ pub const OWNER_CREDENTIAL: &str = "Bearer owner";
 fn admin_guard(
     headers: &RequestHeaders,
     method: &str,
+    api_key: bool,
     project: &str,
     store: &AuthStore,
 ) -> Result<(), JsonResponse> {
-    admin_request_guard(headers, method)?;
+    admin_request_guard(headers, method, api_key)?;
     if project.is_empty() || project != store.project_id() {
         return Err(error(
             400,
@@ -1171,7 +1291,40 @@ fn admin_guard(
     Ok(())
 }
 
-fn admin_request_guard(headers: &RequestHeaders, method: &str) -> Result<(), JsonResponse> {
+/// Production's API front end refuses a caller that presents no identity at all: neither a
+/// credential nor an API key (sandbox recording 2026-09-23).
+fn unregistered_caller() -> JsonResponse {
+    const MESSAGE: &str = "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";
+    JsonResponse {
+        status: 403,
+        body: json!({"error": {
+            "code": 403,
+            "message": MESSAGE,
+            "errors": [{"message": MESSAGE, "domain": "global", "reason": "forbidden"}],
+            "status": "PERMISSION_DENIED",
+        }}),
+    }
+}
+
+fn admin_request_guard(
+    headers: &RequestHeaders,
+    method: &str,
+    api_key: bool,
+) -> Result<(), JsonResponse> {
+    // Without an `Authorization` header production answers by what the request still
+    // carries: an API key identifies the caller but cannot address a project, and nothing at
+    // all is an unregistered caller (sandbox recording 2026-09-23). A present but foreign
+    // credential keeps the local owner-credential refusal; its production shape is unobserved.
+    if headers.authorization.is_none() {
+        return Err(if api_key {
+            error(
+                400,
+                "INSUFFICIENT_PERMISSION : Only authenticated requests can specify target_project_id.",
+            )
+        } else {
+            unregistered_caller()
+        });
+    }
     if headers.authorization.as_deref() != Some(OWNER_CREDENTIAL) {
         return Err(error(
             401,
@@ -2057,6 +2210,11 @@ fn dispatch_with_blocking_hook(
         if live.reset_generation() != reset_generation {
             return error(409, "AUTH_STATE_RESET");
         }
+        if tenant.is_none() {
+            if let Some(denial) = project_provider_denial(handler, live.sign_in_config(), body) {
+                return denial;
+            }
+        }
         if live.generated_id_interference_count() != generated_id_interference {
             return error(
                 400,
@@ -2359,8 +2517,16 @@ fn handle_with_policy(
         Some((p, q)) => (p, Some(q)),
         None => (path, None),
     };
+    // Whether the caller identified itself with an API key; its validity is checked when the
+    // store is selected.
+    let api_key = query_selectors(query).is_ok_and(|(key, _)| key.is_some());
     let at = now(state);
     let resolution = routes::resolve(method, path);
+    // Production's API front end answers a caller without identity before the service reads
+    // any selector, tenant or body (sandbox recording 2026-09-23).
+    if let Err(response) = caller_identity_check(state, resolution, headers, api_key) {
+        return response;
+    }
     let emulator_clear = matches!(
         resolution,
         routes::Resolution::Matched {
@@ -2410,7 +2576,7 @@ fn handle_with_policy(
         if fireemu_core_types::ids::ProjectId::try_new(project.to_owned()).is_err() {
             return error(400, "INVALID_PROJECT_ID");
         }
-        if let Err(response) = admin_request_guard(headers, method) {
+        if let Err(response) = admin_request_guard(headers, method, api_key) {
             return response;
         }
     }
@@ -2584,14 +2750,28 @@ fn handle_with_policy(
             resource: _,
         } => (route, project, tenant),
         routes::Resolution::MethodNotAllowed { class, project, .. } => {
-            if let Err(r) = privilege_check(state, class, project, headers, method, &store) {
+            if let Err(r) = privilege_check(state, class, project, headers, method, api_key, &store)
+            {
                 return r;
+            }
+            // Production's front end answers a POST to accounts:batchGet with a plain 404
+            // (sandbox recording 2026-09-23); other method mismatches are unobserved.
+            if path.ends_with("/accounts:batchGet") {
+                return not_found();
             }
             return error(405, "METHOD_NOT_ALLOWED");
         }
         routes::Resolution::NotFound => return not_found(),
     };
-    if let Err(r) = privilege_check(state, route.class, project, headers, method, &store) {
+    if let Err(r) = privilege_check(
+        state,
+        route.class,
+        project,
+        headers,
+        method,
+        api_key,
+        &store,
+    ) {
         return r;
     }
     if matches!(
@@ -2705,6 +2885,11 @@ fn handle_with_policy(
         if let Some(denial) =
             tenant_policy_denial_with_metadata(route.handler, tenant_metadata.as_ref(), body)
         {
+            return denial;
+        }
+    }
+    if route.class == routes::RouteClass::EndUser && store_tenant.is_none() {
+        if let Some(denial) = project_provider_denial(route.handler, store.sign_in_config(), body) {
             return denial;
         }
     }
@@ -2944,6 +3129,33 @@ fn handle_with_policy(
     response
 }
 
+/// Refuses a request that carries no `Authorization` header where production's front end does:
+/// every Admin route, and client routes when the profile requires an API key.
+fn caller_identity_check(
+    state: &AuthState,
+    resolution: routes::Resolution<'_>,
+    headers: &RequestHeaders,
+    api_key: bool,
+) -> Result<(), JsonResponse> {
+    if headers.authorization.is_some() {
+        return Ok(());
+    }
+    let class = match resolution {
+        routes::Resolution::Matched { route, .. } => route.class,
+        routes::Resolution::MethodNotAllowed { class, .. } => class,
+        routes::Resolution::NotFound => return Ok(()),
+    };
+    match class {
+        routes::RouteClass::Admin => admin_request_guard(headers, "", api_key),
+        routes::RouteClass::EndUser
+            if state.client_api_key == ClientApiKeyPolicy::Required && !api_key =>
+        {
+            Err(unregistered_caller())
+        }
+        _ => Ok(()),
+    }
+}
+
 /// The credential and project checks of a route class.
 fn privilege_check(
     state: &AuthState,
@@ -2951,6 +3163,7 @@ fn privilege_check(
     project: Option<&str>,
     headers: &RequestHeaders,
     method: &str,
+    api_key: bool,
     store: &AuthStore,
 ) -> Result<(), JsonResponse> {
     match class {
@@ -2964,7 +3177,9 @@ fn privilege_check(
             }
             Ok(())
         }
-        routes::RouteClass::Admin => admin_guard(headers, method, project.unwrap_or(""), store),
+        routes::RouteClass::Admin => {
+            admin_guard(headers, method, api_key, project.unwrap_or(""), store)
+        }
     }
 }
 
@@ -3076,7 +3291,9 @@ fn dispatch(
         Handler::MfaEnrollmentWithdraw => mfa_enrollment_withdraw(store, body, at),
         Handler::MfaSignInStart => mfa_sign_in_start(store, body, at),
         Handler::MfaSignInFinalize => mfa_sign_in_finalize(store, body, at),
-        Handler::Token => refresh(store, body, at, options.stateless_refresh_tokens),
+        Handler::Token => {
+            secure_token_error_shape(refresh(store, body, at, options.stateless_refresh_tokens))
+        }
         Handler::AdminCreate => admin_create(store, body, at),
         Handler::AdminLookup => lookup(store, body, at, true),
         Handler::AdminDelete => delete_account(store, body, at, true),
@@ -3200,6 +3417,7 @@ fn apply_project_config_fields(
             field
                 if field == "passwordPolicyConfig"
                     || field.starts_with("passwordPolicyConfig.")
+                    || SIGN_IN_PROVIDER_FIELDS.contains(&field)
                     || valid_blocking_config_field(field)
                     || valid_quota_field(field) => {}
             _ => return Err(error(400, "INVALID_ARGUMENT")),
@@ -3497,7 +3715,143 @@ fn valid_project_config_field(field: &str) -> bool {
             | "blockingFunctions.forwardInboundCredentials.idToken"
             | "blockingFunctions.forwardInboundCredentials.accessToken"
             | "blockingFunctions.forwardInboundCredentials.refreshToken"
-    )
+    ) || SIGN_IN_PROVIDER_FIELDS.contains(&field)
+}
+
+/// Project config fields of the sign-in providers and test phone numbers.
+const SIGN_IN_PROVIDER_FIELDS: &[&str] = &[
+    "signIn.email",
+    "signIn.email.enabled",
+    "signIn.email.passwordRequired",
+    "signIn.anonymous",
+    "signIn.anonymous.enabled",
+    "signIn.phoneNumber",
+    "signIn.phoneNumber.enabled",
+    "signIn.phoneNumber.testPhoneNumbers",
+];
+
+/// The sign-in configuration a masked Admin config PATCH produces from `current`, or `None`
+/// when the mask names no sign-in provider field. A whole-object mask (`signIn.email`)
+/// replaces the object, so an omitted switch is off; the parent `signIn` mask replaces only
+/// the provider objects the body carries.
+fn sign_in_config_from_update(
+    current: &SignInConfig,
+    body: &Value,
+    fields: &[String],
+) -> Result<Option<SignInConfig>, JsonResponse> {
+    let invalid = || error(400, "INVALID_ARGUMENT");
+    let provider = |name: &str| {
+        body.get("signIn")
+            .and_then(|sign_in| sign_in.get(name))
+            .filter(|value| !value.is_null())
+    };
+    let switch = |name: &str, key: &str| match provider(name).and_then(|p| p.get(key)) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(invalid()),
+    };
+    let numbers = || -> Result<BTreeMap<String, String>, JsonResponse> {
+        match provider("phoneNumber").and_then(|p| p.get("testPhoneNumbers")) {
+            None | Some(Value::Null) => Ok(BTreeMap::new()),
+            Some(Value::Object(entries)) => entries
+                .iter()
+                .map(|(number, code)| {
+                    code.as_str()
+                        .map(|code| (number.clone(), code.to_owned()))
+                        .ok_or_else(invalid)
+                })
+                .collect(),
+            Some(_) => Err(invalid()),
+        }
+    };
+    let mut next = current.clone();
+    let mut changed = false;
+    for field in fields {
+        let whole = |name: &str| field == "signIn" && provider(name).is_some();
+        if field == "signIn.email" || whole("email") {
+            next.email_enabled = switch("email", "enabled")?;
+            next.password_required = switch("email", "passwordRequired")?;
+            changed = true;
+        }
+        if field == "signIn.anonymous" || whole("anonymous") {
+            next.anonymous_enabled = switch("anonymous", "enabled")?;
+            changed = true;
+        }
+        if field == "signIn.phoneNumber" || whole("phoneNumber") {
+            next.phone_enabled = switch("phoneNumber", "enabled")?;
+            next.test_phone_numbers = numbers()?;
+            changed = true;
+        }
+        match field.as_str() {
+            "signIn.email.enabled" => next.email_enabled = switch("email", "enabled")?,
+            "signIn.email.passwordRequired" => {
+                next.password_required = switch("email", "passwordRequired")?;
+            }
+            "signIn.anonymous.enabled" => next.anonymous_enabled = switch("anonymous", "enabled")?,
+            "signIn.phoneNumber.enabled" => next.phone_enabled = switch("phoneNumber", "enabled")?,
+            "signIn.phoneNumber.testPhoneNumbers" => next.test_phone_numbers = numbers()?,
+            _ => continue,
+        }
+        changed = true;
+    }
+    if !changed {
+        return Ok(None);
+    }
+    if !next.is_valid() {
+        return Err(invalid());
+    }
+    Ok(Some(next))
+}
+
+/// Adds the sign-in providers to a project config body in production's shape: an enabled
+/// provider reports `enabled`, a disabled one is omitted, and test numbers are listed.
+fn add_sign_in_config_json(body: &mut Value, config: &SignInConfig) {
+    let sign_in = &mut body["signIn"];
+    if config.email_enabled {
+        sign_in["email"] = json!({"enabled": true});
+        if config.password_required {
+            sign_in["email"]["passwordRequired"] = json!(true);
+        }
+    }
+    if config.anonymous_enabled {
+        sign_in["anonymous"] = json!({"enabled": true});
+    }
+    if config.phone_enabled || !config.test_phone_numbers.is_empty() {
+        let mut phone = serde_json::Map::new();
+        if config.phone_enabled {
+            phone.insert("enabled".to_owned(), json!(true));
+        }
+        if !config.test_phone_numbers.is_empty() {
+            phone.insert(
+                "testPhoneNumbers".to_owned(),
+                json!(config.test_phone_numbers),
+            );
+        }
+        sign_in["phoneNumber"] = Value::Object(phone);
+    }
+}
+
+/// Project sign-in providers gate their client flows as a tenant's switches do.
+fn project_provider_denial(
+    handler: routes::Handler,
+    config: &SignInConfig,
+    body: &Value,
+) -> Option<JsonResponse> {
+    if !config.phone_enabled
+        && matches!(
+            handler,
+            routes::Handler::SendVerificationCode | routes::Handler::SignInWithPhoneNumber
+        )
+    {
+        return Some(error(400, "OPERATION_NOT_ALLOWED"));
+    }
+    let metadata = fireemu_core_auth::store::TenantMetadata {
+        allow_password_signup: config.email_enabled,
+        enable_email_link_signin: config.email_enabled && !config.password_required,
+        enable_anonymous_user: config.anonymous_enabled,
+        ..fireemu_core_auth::store::TenantMetadata::default()
+    };
+    tenant_policy_denial_with_metadata(handler, Some(&metadata), body)
 }
 
 fn valid_blocking_config_field(field: &str) -> bool {
@@ -3977,8 +4331,28 @@ fn validate_project_config_payload(body: &Value) -> Result<(), JsonResponse> {
         let sign_in = value
             .as_object()
             .ok_or_else(|| error(400, "INVALID_ARGUMENT"))?;
-        if sign_in.keys().any(|key| key != "allowDuplicateEmails") {
+        if sign_in.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "allowDuplicateEmails" | "email" | "anonymous" | "phoneNumber"
+            )
+        }) {
             return Err(error(400, "INVALID_ARGUMENT"));
+        }
+        for (provider, allowed) in [
+            ("email", &["enabled", "passwordRequired"][..]),
+            ("anonymous", &["enabled"][..]),
+            ("phoneNumber", &["enabled", "testPhoneNumbers"][..]),
+        ] {
+            match sign_in.get(provider) {
+                None | Some(Value::Null) => {}
+                Some(Value::Object(fields)) => {
+                    if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
+                        return Err(error(400, "INVALID_ARGUMENT"));
+                    }
+                }
+                Some(_) => return Err(error(400, "INVALID_ARGUMENT")),
+            }
         }
         if sign_in
             .get("allowDuplicateEmails")
@@ -4176,6 +4550,7 @@ fn project_config_management(
             store.password_policy(),
             store.signup_quota().config(),
         );
+        add_sign_in_config_json(&mut body, store.sign_in_config());
         if let Some(blocking) = state
             .blocking
             .as_ref()
@@ -4253,6 +4628,12 @@ fn project_config_management(
     if let Err(response) = apply_project_config_fields(&mut patch, body, &fields) {
         return response;
     }
+    // Decode the sign-in providers before anything changes; they are applied after the rest.
+    let updates_sign_in = match sign_in_config_from_update(&SignInConfig::default(), body, &fields)
+    {
+        Ok(update) => update.is_some(),
+        Err(response) => return response,
+    };
     // Keep a rollback snapshot while the paired Auth candidate is published. Runtime-backed
     // bridges include private discovery markers in this snapshot so a failed Auth update cannot
     // turn an omitted Discovery trigger into Disabled.
@@ -4301,7 +4682,19 @@ fn project_config_management(
                 Ok((password_policy, signup_quota))
             },
         ) {
-            Ok(Some(config)) => config,
+            Ok(Some(config)) => {
+                if updates_sign_in {
+                    match registry.update_project_sign_in_config(project, |current| {
+                        sign_in_config_from_update(current, body, &fields)
+                            .map(|next| next.unwrap_or_else(|| current.clone()))
+                    }) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
+                        Err(response) => return rollback_blocking(response),
+                    }
+                }
+                config
+            }
             Ok(None) => return rollback_blocking(error(500, "INTERNAL")),
             Err(response) => return rollback_blocking(response),
         }
@@ -4321,8 +4714,13 @@ fn project_config_management(
             Ok(quota) => quota,
             Err(response) => return rollback_blocking(response),
         };
+        let sign_in = match sign_in_config_from_update(store.sign_in_config(), body, &fields) {
+            Ok(sign_in) => sign_in,
+            Err(response) => return rollback_blocking(response),
+        };
         let has_policy = password_policy.is_some();
         let has_quota = signup_quota.is_some();
+        let has_sign_in = sign_in.is_some();
         let config = patch.apply_to(store.config());
         if !patch.is_empty() {
             store.set_config(config);
@@ -4335,8 +4733,13 @@ fn project_config_management(
                 return rollback_blocking(error(400, "INVALID_ARGUMENT"));
             }
         }
+        if let Some(sign_in) = sign_in {
+            if store.set_sign_in_config(sign_in).is_err() {
+                return rollback_blocking(error(400, "INVALID_ARGUMENT"));
+            }
+        }
         drop(store);
-        if !patch.is_empty() || has_policy || has_quota {
+        if !patch.is_empty() || has_policy || has_quota || has_sign_in {
             if let Some(project) = pending_project {
                 if let Err(response) = install_routed_candidate(state, project, selected_store) {
                     return rollback_blocking(response);
@@ -4356,6 +4759,7 @@ fn project_config_management(
                 store.password_policy(),
                 store.signup_quota().config(),
             );
+            add_sign_in_config_json(&mut body, store.sign_in_config());
             if let Some(blocking) = state
                 .blocking
                 .as_ref()
@@ -6177,11 +6581,12 @@ fn sign_up(
         let Some(email) = new_user.email.as_deref() else {
             return error(400, "MISSING_EMAIL");
         };
-        if !store.config().allow_duplicate_emails
-            && store
-                .user_by_email(email)
-                .is_some_and(|u| u.local_id != uid)
-        {
+        // The upgrade always gives the account a password, so another password account on
+        // the address refuses it even in duplicate-email mode (closure re-review 2026-09-24).
+        if store.users_by_email(email).iter().any(|u| {
+            u.local_id != uid
+                && (!store.config().allow_duplicate_emails || store.has_password(&u.local_id))
+        }) {
             return error(400, "EMAIL_EXISTS");
         }
         if let Err(e) = store.set_email(&uid, email) {
@@ -6302,6 +6707,11 @@ fn sign_in_with_custom_token(
     let Some(uid) = uid else {
         return error(400, "MISSING_IDENTIFIER");
     };
+    // Custom-token uids keep the Admin SDK's 128-character bound; the wider Admin create
+    // bound was observed only for accounts:create.
+    if uid.chars().count() > 128 {
+        return auth_error(&AuthError::InvalidLocalId);
+    }
     let uid = uid.as_str();
     let now_secs = i64::try_from(at.as_nanos().div_euclid(1_000_000_000)).unwrap_or(i64::MAX);
     if reject_expired
@@ -6402,7 +6812,12 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
     let Some(password) = str_field(body, "password").filter(|p| !p.is_empty()) else {
         return error(400, "MISSING_PASSWORD");
     };
-    let (uid, violations) = match store.verify_password_with_policy(email, password, at) {
+    let (uid, violations) = match store.verify_password_with_imports(
+        email,
+        password,
+        at,
+        &password_hash::ImportedHashes,
+    ) {
         Ok(result) => result,
         Err(e) => return auth_error(&e),
     };
@@ -6416,6 +6831,9 @@ fn sign_in_with_password(store: &mut AuthStore, body: &Value, at: LogicalInstant
         ("registered", json!(true)),
         ("displayName", json!(display_name)),
     ];
+    if let Some(photo) = store.user(&uid).and_then(|u| u.photo_url.clone()) {
+        extra.push(("profilePicture", json!(photo)));
+    }
     if !violations.is_empty() {
         let policy = store.password_policy().clone();
         extra.push((
@@ -6555,7 +6973,15 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         return Value::Null;
     };
     let mfa = mfa_info(store, uid, false);
+    // Production lists phone first, then federated identities in link order, then password
+    // (sandbox recording 2026-09-23: auth-account/provider, admin/create, admin/import).
     let mut providers: Vec<Value> = Vec::new();
+    if let Some(phone) = &u.phone_number {
+        providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
+    }
+    for f in &u.federated {
+        providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
+    }
     // The official record lists a `password` provider for an email with a password or an
     // email-link sign-in, and nothing for an address that has neither.
     if let Some(email) = &u.email {
@@ -6563,19 +6989,16 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
             providers.push(json!({"providerId": "password", "rawId": email, "federatedId": email, "email": email, "displayName": u.display_name, "photoUrl": u.photo_url}));
         }
     }
-    if let Some(phone) = &u.phone_number {
-        providers.push(json!({"providerId": "phone", "rawId": phone, "phoneNumber": phone}));
-    }
-    for f in &u.federated {
-        providers.push(json!({"providerId": f.provider_id, "rawId": f.raw_id, "federatedId": f.raw_id, "email": f.email, "displayName": f.display_name, "photoUrl": f.photo_url}));
-    }
-    // Production omits every default-valued field (proto3 JSON): no `disabled: false`, no
-    // empty `mfaInfo` or `providerUserInfo`, `emailVerified` only with an address, and
-    // `validSince` once tokens were ever revoked or a password set. The password hash is the
+    // Production omits most default-valued fields (proto3 JSON): no empty `mfaInfo` or
+    // `providerUserInfo`, `emailVerified` only with an address. `disabled` and `validSince`
+    // are present for an account the Admin API created (the sandbox recording of 2026-09-23),
+    // and otherwise `disabled` only when true and `validSince` once tokens were ever revoked
+    // or a password set. The password hash is the
     // redacted marker production sends a caller without hash-config permission
     // (conformance/auth-production-matrix.json, password/sign-up-and-sign-in#lookup).
     let has_password = store.has_password(uid);
-    let valid_since = (has_password || u.tokens_revoked).then_some(u.tokens_valid_after);
+    let valid_since =
+        (has_password || u.tokens_revoked || u.admin_created).then_some(u.tokens_valid_after);
     json!({
         "localId": u.local_id.as_str(),
         "tenantId": store.tenant_id(),
@@ -6583,10 +7006,13 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
         "displayName": u.display_name,
         "photoUrl": u.photo_url,
         "phoneNumber": u.phone_number,
-        "emailVerified": u.email.as_ref().map(|_| u.email_verified),
-        "disabled": u.disabled.then_some(true),
+        // Reported with an address, and while true even without one (production keeps the
+        // flag through an Admin email removal).
+        "emailVerified": (u.email.is_some() || u.email_verified || u.email_verified_recorded)
+            .then_some(u.email_verified),
+        "disabled": (u.disabled || u.admin_created).then_some(u.disabled),
         // Absent, not "{}", when no claim is set: what the Admin SDK reads back as no claims.
-        "customAttributes": (u.custom_claims.canonical_json() != "{}").then(|| u.custom_claims.canonical_json()),
+        "customAttributes": u.custom_claims.attributes_text(),
         "providerUserInfo": (!providers.is_empty()).then_some(providers),
         "mfaInfo": (!mfa.is_empty()).then_some(mfa),
         "passwordHash": has_password.then_some(REDACTED_PASSWORD_HASH),
@@ -6602,8 +7028,9 @@ fn user_json(store: &AuthStore, uid: &LocalId) -> Value {
 /// configuration: base64 of `REDACTED`.
 const REDACTED_PASSWORD_HASH: &str = "UkVEQUNURUQ=";
 
-/// Maximum identifiers per lookup (Admin SDK `getUsers`).
-const MAX_LOOKUP_IDENTIFIERS: usize = 100;
+/// Maximum identifiers per lookup. Production accepted 101 (sandbox recording 2026-09-23);
+/// this is a local guard, not an observed quota.
+const MAX_LOOKUP_IDENTIFIERS: usize = 10_000;
 
 /// Optional string field; a present non-string (other than null) is a type error.
 fn opt_str<'a>(body: &'a Value, key: &str) -> Result<Option<&'a str>, JsonResponse> {
@@ -6639,6 +7066,9 @@ fn id_list(body: &Value, key: &str) -> Result<Vec<String>, JsonResponse> {
             for item in items {
                 match item {
                     Value::String(s) => out.push(s.clone()),
+                    // Proto3 JSON reads a number into a string field (production accepted
+                    // `localId: [42]`).
+                    Value::Number(n) => out.push(n.to_string()),
                     _ => {
                         return Err(error(
                             400,
@@ -6719,12 +7149,8 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
             Ok(session) => session,
             Err(response) => return response,
         };
-        if ["localId", "email", "phoneNumber", "federatedUserId"]
-            .iter()
-            .any(|field| body.get(*field).is_some())
-        {
-            return error(400, "OPERATION_NOT_ALLOWED");
-        }
+        // Admin selectors beside a verified session are ignored: production answers with the
+        // session's subject only (sandbox recording 2026-09-23).
         return JsonResponse {
             status: 200,
             body: json!({"kind": "identitytoolkit#GetAccountInfoResponse", "users": [user_json(store, &session.uid)]}),
@@ -6743,7 +7169,13 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         Ok(l) => l,
         Err(r) => return r,
     };
-    let total = local_ids.len() + emails.len() + phones.len() + federated.len();
+    // `initialEmail` is a selector production accepts; it matched nothing in the sandbox
+    // recording (2026-09-23) and fireemu keeps no initial address, so it never matches here.
+    let initial_emails = match id_list(body, "initialEmail") {
+        Ok(list) => list.len(),
+        Err(r) => return r,
+    };
+    let total = local_ids.len() + emails.len() + phones.len() + federated.len() + initial_emails;
     if total > MAX_LOOKUP_IDENTIFIERS {
         return error(
             400,
@@ -6751,10 +7183,8 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
         );
     }
     if total == 0 {
-        return error(
-            400,
-            "MISSING_IDENTIFIER : localId, email, phoneNumber or federatedUserId",
-        );
+        // Production answers an Admin lookup without identifiers as if it lacked a token.
+        return error(400, "MISSING_ID_TOKEN");
     }
     // Authenticated Admin lookup resolves identifiers in request order without duplicates.
     let mut found: Vec<LocalId> = Vec::new();
@@ -6768,8 +7198,10 @@ fn lookup(store: &AuthStore, body: &Value, at: LogicalInstant, admin: bool) -> J
             push(u.local_id.clone());
         }
     }
+    // Every account sharing an address answers (sandbox recording 2026-09-23,
+    // `config/duplicate-email#admin-lookup-by-email`).
     for email in &emails {
-        if let Some(u) = store.user_by_email(email) {
+        for u in store.users_by_email(email) {
             push(u.local_id.clone());
         }
     }
@@ -6883,17 +7315,21 @@ fn reject_control_characters(value: &str, field: &str) -> Result<(), JsonRespons
 
 /// `{providerId, rawId, email?, displayName?, photoUrl?}` of a link request.
 fn parse_identity(v: &Value) -> Result<FederatedIdentity, JsonResponse> {
+    // Production's refusals (sandbox recording 2026-09-23, auth-account/provider).
+    let missing = || {
+        error(
+            400,
+            "MISSING_IDENTIFIER : providerId & rawId are both required for provider linking",
+        )
+    };
     let provider_id = opt_str(v, "providerId")?
         .filter(|p| !p.is_empty())
-        .ok_or_else(|| error(400, "INVALID_ARGUMENT : providerId is required"))?;
+        .ok_or_else(missing)?;
     let raw_id = opt_str(v, "rawId")?
         .filter(|p| !p.is_empty())
-        .ok_or_else(|| error(400, "INVALID_ARGUMENT : rawId is required"))?;
+        .ok_or_else(missing)?;
     if matches!(provider_id, "password" | "phone" | "emailLink") {
-        return Err(error(
-            400,
-            "INVALID_ARGUMENT : linkProviderUserInfo takes a federated providerId",
-        ));
+        return Err(error(400, "INVALID_PROVIDER_ID"));
     }
     let identity = FederatedIdentity {
         provider_id: provider_id.to_owned(),
@@ -6937,21 +7373,29 @@ fn parse_phone_factors(entries: &Value) -> Result<Vec<(String, Option<String>)>,
 
 fn parse_custom_claims(attrs: &str) -> Result<CustomClaims, JsonResponse> {
     let Ok(JsonValue::Object(parsed)) = fireemu_core_types::json::parse(attrs) else {
-        return Err(error(
-            400,
-            "INVALID_CLAIMS : customAttributes must be a JSON object",
-        ));
+        // Production echoes a well-formed non-object value compactly ("Not a JSON Object:
+        // [1,2]"); for malformed JSON it returns its parser's exception text, which is not
+        // reproduced.
+        return Err(match serde_json::from_str::<Value>(attrs) {
+            Ok(value) => error(400, &format!("INVALID_CLAIMS : Not a JSON Object: {value}")),
+            Err(_) => error(
+                400,
+                "INVALID_CLAIMS : customAttributes must be a JSON object",
+            ),
+        });
     };
     let mut claims = CustomClaims::default();
     for (k, v) in &parsed {
         let Some(cv) = claims_from_json(v) else {
             return Err(error(400, "INVALID_CLAIMS"));
         };
-        if let Err(e) = claims.insert(k, cv) {
-            return Err(error(400, &format!("FORBIDDEN_CLAIM : {e}")));
+        if claims.insert(k, cv).is_err() {
+            // Production names only the claim: "FORBIDDEN_CLAIM : sub".
+            return Err(error(400, &format!("FORBIDDEN_CLAIM : {k}")));
         }
     }
-    Ok(claims)
+    // Production reads the attributes back as they were set (sandbox recording 2026-09-23).
+    Ok(claims.with_source(attrs))
 }
 
 fn reject_unsupported(body: &Value, fields: &[&str]) -> Result<(), JsonResponse> {
@@ -7036,21 +7480,30 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
     let change = |key: &str| -> Result<Change, JsonResponse> {
         Ok(opt_str(body, key)?.map_or(Change::Keep, |v| Change::Set(v.to_owned())))
     };
-    for field in ["displayName", "photoUrl"] {
-        if let Some(value) = opt_str(body, field)? {
-            reject_control_characters(value, field)?;
-        }
+    // Production stores a displayName carrying control characters, NUL included, on update
+    // (sandbox recording 2026-09-23, auth-account/values). photoUrl stays refused until observed.
+    if let Some(value) = opt_str(body, "photoUrl")? {
+        reject_control_characters(value, "photoUrl")?;
     }
     let mut display_name = change("displayName")?;
     let mut photo_url = change("photoUrl")?;
     let mut phone_number = change("phoneNumber")?;
-    if let Change::Set(p) = &phone_number {
-        AuthStore::validate_phone_number(p).map_err(|e| auth_error(&e))?;
+    if let Change::Set(p) = &mut phone_number {
+        *p = AuthStore::normalize_phone_number(p).map_err(|e| auth_error(&e))?;
+    }
+    // Java string length, so UTF-16 units (sandbox recording 2026-09-23, 257 is refused).
+    if let Change::Set(name) = &display_name {
+        if name.encode_utf16().count() > 256 {
+            return Err(error(
+                400,
+                "INVALID_PROFILE_ATTRIBUTE : Display name too long.",
+            ));
+        }
     }
     let mut clear_password = false;
     let mut clear_email = false;
     if let Some(attrs) = body.get("deleteAttribute") {
-        for a in string_list(attrs, "deleteAttribute")? {
+        for (index, a) in string_list(attrs, "deleteAttribute")?.iter().enumerate() {
             match a.as_str() {
                 "USER_ATTRIBUTE_NAME_UNSPECIFIED" => {}
                 "DISPLAY_NAME" => display_name = Change::Clear,
@@ -7058,10 +7511,12 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
                 "PASSWORD" => clear_password = true,
                 "EMAIL" => clear_email = true,
                 other => {
-                    return Err(error(
-                        400,
-                        &format!("INVALID_ARGUMENT : unknown deleteAttribute {other:?}"),
-                    ))
+                    // The proto3 JSON enum decoder's refusal, index and all.
+                    let field = format!("delete_attribute[{index}]");
+                    return Err(proto_field_error(
+                        &field,
+                        &format!("Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.v1.SetAccountInfoRequest.UserAttributeName), {other:?}"),
+                    ));
                 }
             }
         }
@@ -7071,11 +7526,9 @@ fn parse_update(body: &Value) -> Result<UpdatePlan, JsonResponse> {
         for p in string_list(providers, "deleteProvider")? {
             match p.as_str() {
                 "phone" => phone_number = Change::Clear,
-                // The official emulator drops the address with the credential.
-                "password" => {
-                    clear_password = true;
-                    clear_email = true;
-                }
+                // Production keeps the address when the password provider is removed
+                // (sandbox recording 2026-09-23); the official emulator drops it.
+                "password" => clear_password = true,
                 "emailLink" => {
                     return Err(error(
                         400,
@@ -7224,7 +7677,21 @@ fn update(
     // The provider the request's session signed in with, when it carries one: the official
     // emulator re-issues tokens for a session whose credentials it just changed.
     let mut session_provider: Option<fireemu_core_auth::store::Provider> = None;
+    if privileged && local_id.is_none() && body.get("idToken").is_none_or(Value::is_null) {
+        return error(400, "MISSING_LOCAL_ID");
+    }
     let uid = if let Some(local_id) = local_id {
+        // An enforced custom policy refuses the password before the account is looked up;
+        // the default minimum length is checked after (sandbox recording 2026-09-23,
+        // `policy/enforce-custom#admin-update-weak`, `policy/default/routes#admin-update-weak`).
+        if let Some(password) = str_field(body, "password") {
+            if let Err(e @ AuthError::PasswordPolicyViolation(_)) = store.validate_password_for(
+                fireemu_core_auth::password_policy::Operation::Change,
+                password,
+            ) {
+                return auth_error(&e);
+            }
+        }
         match store.user_by_id(local_id) {
             Some(u) => u.local_id.clone(),
             None => return error(400, "USER_NOT_FOUND"),
@@ -7242,11 +7709,14 @@ fn update(
                         return error(400, "INSUFFICIENT_PERMISSION");
                     }
                 }
-                if has_admin_field
-                    && ["mfa", "linkProviderUserInfo"]
-                        .iter()
-                        .any(|key| body.get(*key).is_some())
-                {
+                if has_admin_field && body.get("linkProviderUserInfo").is_some() {
+                    // Sandbox recording 2026-09-23 (`client-update-link-provider`).
+                    return error(
+                        400,
+                        "UNEXPECTED_PARAMETER : link_provider_user_info is not allowed with ID token.",
+                    );
+                }
+                if has_admin_field && body.get("mfa").is_some() {
                     return error(400, "OPERATION_NOT_ALLOWED");
                 }
                 if body.get("disableUser").is_some_and(|v| !v.is_null()) {
@@ -7284,7 +7754,17 @@ fn update(
         && store.config().enable_improved_email_privacy
         && (plan.email.is_some() || plan.clear_email)
     {
-        return error(400, "OPERATION_NOT_ALLOWED");
+        if plan
+            .email
+            .as_deref()
+            .is_some_and(|email| !email.contains('@'))
+        {
+            return error(400, "INVALID_EMAIL");
+        }
+        return error(
+            400,
+            "OPERATION_NOT_ALLOWED : Please verify the new email before changing email.",
+        );
     }
     if let Some(email) = &plan.email {
         if !store.config().allow_duplicate_emails
@@ -7294,6 +7774,29 @@ fn update(
         {
             return error(400, "EMAIL_EXISTS");
         }
+    }
+    // Duplicate-email mode never gives an address two password accounts, judged on the state
+    // this update produces, so neither the address nor the password can arrive second
+    // (closure re-review 2026-09-24).
+    let final_email = if plan.clear_email {
+        None
+    } else {
+        plan.email
+            .clone()
+            .or_else(|| store.user(&uid).and_then(|u| u.email.clone()))
+    };
+    let final_password =
+        plan.password.is_some() || (store.has_password(&uid) && !plan.clear_password);
+    if final_password
+        && (plan.email.is_some() || plan.password.is_some())
+        && final_email.as_deref().is_some_and(|email| {
+            store
+                .users_by_email(email)
+                .iter()
+                .any(|other| other.local_id != uid && store.has_password(&other.local_id))
+        })
+    {
+        return error(400, "EMAIL_EXISTS");
     }
     if let Change::Set(phone) = &plan.phone_number {
         if store
@@ -7361,15 +7864,25 @@ fn update(
         if let Err(e) = store.set_email(&uid, email) {
             return auth_error(&e);
         }
-        if email_changed {
+        // Production keeps emailVerified through an Admin email change (sandbox recording
+        // 2026-09-23); an end-user change still starts unverified.
+        if email_changed && self_service {
             if let Some(u) = store.user_mut(&uid) {
                 u.email_verified = false;
             }
         }
     }
     if plan.clear_email {
+        let verified = store.user(&uid).is_some_and(|u| u.email_verified);
         if let Err(e) = store.clear_email(&uid) {
             return auth_error(&e);
+        }
+        // An Admin email removal keeps emailVerified in production (sandbox recording
+        // 2026-09-23, auth-account/admin/update#delete-email).
+        if !self_service && verified {
+            if let Some(u) = store.user_mut(&uid) {
+                u.email_verified = true;
+            }
         }
     }
     if plan.clear_password {
@@ -7441,7 +7954,9 @@ fn update(
         response["emailVerified"] = json!(u.email_verified);
         response["displayName"] = json!(u.display_name);
         response["photoUrl"] = json!(u.photo_url);
-        if email_changed {
+        // Production's Admin update answer carries no `newEmail` (sandbox recording
+        // 2026-09-23, `auth-account/admin/update#change-email`).
+        if email_changed && self_service {
             response["newEmail"] = json!(u.email);
         }
     }
@@ -7459,8 +7974,16 @@ fn update(
         if let Some(provider) = session_provider {
             match issue_tokens_with(store, &uid, None, at, None, Some(provider)) {
                 Ok(tokens) => {
-                    for key in ["idToken", "refreshToken", "expiresIn"] {
-                        response[key] = tokens[key].clone();
+                    // Production returns the refresh token and its lifetime only when the
+                    // request asks with returnSecureToken (sandbox recording 2026-09-23).
+                    let keys: &[&str] =
+                        if body.get("returnSecureToken").and_then(Value::as_bool) == Some(true) {
+                            &["idToken", "refreshToken", "expiresIn"]
+                        } else {
+                            &["idToken"]
+                        };
+                    for key in keys {
+                        response[*key] = tokens[*key].clone();
                     }
                 }
                 Err(r) => return r,
@@ -7504,8 +8027,15 @@ fn delete_account(
             Err(r) => return r,
         }
     } else {
-        match verify(store, body, at) {
-            Ok(uid) => uid,
+        // As for lookup, a token whose account is gone is USER_NOT_FOUND.
+        match verify_session_with_error(store, body, at, |e| {
+            if matches!(e, fireemu_core_auth::jwt::JwtError::UnknownUser) {
+                error(400, "USER_NOT_FOUND")
+            } else {
+                jwt_error(e)
+            }
+        }) {
+            Ok(session) => session.uid,
             Err(r) => return r,
         }
     };
@@ -7538,9 +8068,15 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         if password.is_some() && email.is_none() {
             return Err(error(400, "INVALID_ARGUMENT : password requires an email"));
         }
-        let phone = opt_str(body, "phoneNumber")?.map(str::to_owned);
+        // Production's Admin create stores the number normalized and names the format problem
+        // (sandbox recording 2026-09-23).
+        let phone = opt_str(body, "phoneNumber")?
+            .map(|p| {
+                AuthStore::normalize_phone_number(p)
+                    .map_err(|_| error(400, "INVALID_PHONE_NUMBER : Invalid format."))
+            })
+            .transpose()?;
         if let Some(p) = &phone {
-            AuthStore::validate_phone_number(p).map_err(|e| auth_error(&e))?;
             if store.user_by_phone(p).is_some() {
                 return Err(error(400, "PHONE_NUMBER_EXISTS"));
             }
@@ -7580,6 +8116,9 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         Ok(p) => p,
         Err(r) => return r,
     };
+    if requested_id.as_deref().is_some_and(local_id_too_long) {
+        return backend_internal_error();
+    }
     let new_user = match &email {
         Some(email) => NewUser {
             email: Some(email.clone()),
@@ -7612,6 +8151,7 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
         u.display_name = display_name;
         u.photo_url = photo_url;
         u.disabled = disabled;
+        u.admin_created = true;
     }
     if let Err(e) = store.set_phone_factors(&uid, factors, at) {
         let _ = store.delete_user_by_id(uid.as_str());
@@ -7619,7 +8159,8 @@ fn admin_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> Json
     }
     JsonResponse {
         status: 200,
-        body: json!({"kind": "identitytoolkit#SignupNewUserResponse", "localId": uid.as_str(), "email": email, "tenantId": store.tenant_id()}),
+        // Production always carries `email` here, empty when the request gave none.
+        body: json!({"kind": "identitytoolkit#SignupNewUserResponse", "localId": uid.as_str(), "email": email.as_deref().unwrap_or(""), "tenantId": store.tenant_id()}),
     }
 }
 
@@ -7725,8 +8266,8 @@ fn admin_query(store: &AuthStore, body: &Value, limits: AuthQueryLimits) -> Json
 }
 
 /// Decode `SqlExpression`, not a SQL string. Validate every field before applying the
-/// documented priority email > phoneNumber > userId. Reject empty/unrecognized selectors
-/// rather than turning a malformed filter into an unfiltered query. Limits below are local
+/// documented priority email > phoneNumber > userId. Unrecognized or mistyped selectors are
+/// refused; an empty one is no constraint, as production answers it. Limits below are local
 /// parser safety limits, not claimed Identity Platform quotas.
 fn parse_admin_query_expressions(body: &Value) -> Result<Vec<UserQueryExpression>, JsonResponse> {
     const MAX_EXPRESSIONS: usize = 128;
@@ -7736,7 +8277,7 @@ fn parse_admin_query_expressions(body: &Value) -> Result<Vec<UserQueryExpression
         Some(Value::Array(expressions)) if expressions.len() <= MAX_EXPRESSIONS => expressions,
         _ => return Err(error(400, "INVALID_ARGUMENT : invalid expression array")),
     };
-    let mut result = BTreeSet::new();
+    let mut result = Vec::new();
     for expression in expressions {
         let Some(object) = expression.as_object() else {
             return Err(error(
@@ -7761,23 +8302,22 @@ fn parse_admin_query_expressions(body: &Value) -> Result<Vec<UserQueryExpression
                 return Err(error(400, "INVALID_ARGUMENT : invalid expression selector"));
             }
         }
-        let selected = if let Some(email) = str_field(expression, "email") {
-            UserQueryExpression::Email(canonicalize_email(email))
-        } else if let Some(phone) = str_field(expression, "phoneNumber") {
-            UserQueryExpression::PhoneNumber(phone.to_owned())
-        } else if let Some(id) = str_field(expression, "userId") {
-            UserQueryExpression::UserId(id.to_owned())
-        } else {
-            return Err(error(
-                400,
-                "INVALID_ARGUMENT : expression selector required",
-            ));
-        };
-        // Empty strings remain exact values (not wildcards), including a higher-priority
-        // empty email. A field's presence must not silently select a different predicate.
-        result.insert(selected);
+        // The first non-empty selector in email > phoneNumber > userId order; none at all is
+        // no constraint, as production answers it (sandbox recording 2026-09-23,
+        // expression-empty-item and expression-empty-string).
+        let non_empty = |key: &str| str_field(expression, key).filter(|v| !v.is_empty());
+        let selected = non_empty("email")
+            .map(|email| UserQueryExpression::Email(canonicalize_email(email)))
+            .or_else(|| {
+                non_empty("phoneNumber")
+                    .map(|phone| UserQueryExpression::PhoneNumber(phone.to_owned()))
+            })
+            .or_else(|| non_empty("userId").map(|id| UserQueryExpression::UserId(id.to_owned())));
+        result.push(selected);
     }
-    Ok(result.into_iter().collect())
+    // Production evaluates only the first expression (sandbox recording 2026-09-23,
+    // auth-account/admin/query#expression-two); every item is still type-checked above.
+    Ok(result.into_iter().next().flatten().into_iter().collect())
 }
 
 fn production_admin_query_page(
@@ -7788,8 +8328,10 @@ fn production_admin_query_page(
 ) -> JsonResponse {
     // Enum fields were validated before the count-only branch in `admin_query`.
     let descending = str_field(body, "order") == Some("DESC");
+    // Production accepts a limit above 500 (sandbox recording 2026-09-23); the upper bound
+    // here is a local guard, not an observed quota.
     let limit = match query_i64(body, "limit", 500) {
-        Ok(limit @ 0..=500) => usize::try_from(limit).unwrap_or(500),
+        Ok(limit @ 0..=10_000) => usize::try_from(limit).unwrap_or(500),
         Ok(_) | Err(()) => return error(400, "INVALID_ARGUMENT : invalid limit"),
     };
     let offset = match query_i64(body, "offset", 0) {
@@ -7797,17 +8339,21 @@ fn production_admin_query_page(
             Ok(offset) => offset,
             Err(_) => return error(400, "INVALID_ARGUMENT : invalid offset"),
         },
-        Ok(_) | Err(()) => return error(400, "INVALID_ARGUMENT : invalid offset"),
+        // Production fails a negative offset internally (corpus v2 recording 2026-09-24).
+        Ok(_) => return backend_internal_error(),
+        Err(()) => return error(400, "INVALID_ARGUMENT : invalid offset"),
     };
     let page = store.users_matching_sorted_page(expressions, sort, offset, limit, descending);
     let users = page
         .iter()
         .map(|user| user_json(store, &user.local_id))
         .collect::<Vec<_>>();
-    JsonResponse {
-        status: 200,
-        body: json!({"recordsCount": users.len().to_string(), "userInfo": users}),
+    // An empty page carries no `userInfo` (sandbox recording 2026-09-23, limit-0).
+    let mut body = json!({"recordsCount": users.len().to_string()});
+    if !users.is_empty() {
+        body["userInfo"] = Value::Array(users);
     }
+    JsonResponse { status: 200, body }
 }
 
 fn validate_production_admin_query_enums(body: &Value) -> Result<UserSortField, JsonResponse> {
@@ -7817,7 +8363,13 @@ fn validate_production_admin_query_enums(body: &Value) -> Result<UserSortField, 
         Ok(Some("CREATED_AT")) => UserSortField::CreatedAt,
         Ok(Some("LAST_LOGIN_AT")) => UserSortField::LastLoginAt,
         Ok(Some("USER_EMAIL")) => UserSortField::Email,
-        Ok(Some(_)) | Err(_) => return Err(error(400, "INVALID_ARGUMENT : invalid sortBy")),
+        Ok(Some(other)) => {
+            return Err(proto_field_error(
+                "sort_by",
+                &format!("Invalid value at 'sort_by' (type.googleapis.com/google.cloud.identitytoolkit.v1.QueryUserInfoRequest.SortByField), {other:?}"),
+            ))
+        }
+        Err(_) => return Err(error(400, "INVALID_ARGUMENT : invalid sortBy")),
     };
     match opt_str(body, "order") {
         Ok(None | Some("ORDER_UNSPECIFIED" | "ASC" | "DESC")) => Ok(sort),
@@ -7916,7 +8468,7 @@ fn query_params(query: Option<&str>) -> BTreeMap<String, String> {
 /// a hash it cannot compare (a sign-in against it fails).
 fn batch_row_password(row: &Value) -> Result<Option<(String, String)>, JsonResponse> {
     if let Some(raw) = opt_str(row, "rawPassword")? {
-        AuthStore::validate_password(raw).map_err(|e| auth_error(&e))?;
+        AuthStore::validate_imported_password(raw).map_err(|e| auth_error(&e))?;
         let salt = opt_str(row, "salt")?
             .filter(|s| !s.is_empty())
             .map_or_else(|| "fakeSaltimport".to_owned(), str::to_owned);
@@ -8063,6 +8615,7 @@ fn batch_row_factors(
 fn batch_row_user(
     row: &Value,
     at: LogicalInstant,
+    hash_spec: Option<&password_hash::HashSpec>,
 ) -> Result<fireemu_core_auth::store::ImportedUser, JsonResponse> {
     use fireemu_core_auth::store::{ImportedUser, Provider};
     validate_batch_row_shapes(row)?;
@@ -8111,7 +8664,12 @@ fn batch_row_user(
     let (totp_factors, phone_factors) =
         batch_row_factors(row, local_id, email.is_some(), email_verified, at)?;
     let password = batch_row_password(row)?;
-    let provider = if password.is_some() || email.is_some() {
+    let imported_password = if password.is_none() {
+        batch_row_imported_hash(row, hash_spec)?
+    } else {
+        None
+    };
+    let provider = if password.is_some() || imported_password.is_some() || email.is_some() {
         Provider::Password
     } else if phone_number.is_some() {
         Provider::Phone
@@ -8137,15 +8695,89 @@ fn batch_row_user(
         tokens_valid_after: at,
         federated,
         password,
+        imported_password,
+        allow_shared_email: true,
         totp_factors,
         phone_factors,
     })
+}
+
+/// A row's `passwordHash` (and `salt`) under the request's hash algorithm, kept for the
+/// adapter's verifier. A row without a hash has no password credential.
+fn batch_row_imported_hash(
+    row: &Value,
+    spec: Option<&password_hash::HashSpec>,
+) -> Result<Option<fireemu_core_auth::store::ImportedPasswordHash>, JsonResponse> {
+    let Some(hash) = opt_str(row, "passwordHash")? else {
+        return Ok(None);
+    };
+    let hash =
+        password_hash::base64_decode(hash).ok_or_else(|| error(400, "INVALID_PASSWORD_HASH"))?;
+    // proto3 reads empty bytes as unset: an empty hash is no password credential (external
+    // review 2026-09-24; unobserved in production).
+    if hash.is_empty() {
+        return Ok(None);
+    }
+    let salt = match opt_str(row, "salt")? {
+        Some(salt) => {
+            password_hash::base64_decode(salt).ok_or_else(|| error(400, "INVALID_SALT"))?
+        }
+        None => Vec::new(),
+    };
+    // Without `hashAlgorithm` production still keeps the hash as the password credential;
+    // no password ever matches it.
+    Ok(Some(fireemu_core_auth::store::ImportedPasswordHash {
+        spec: spec.map_or_else(
+            || password_hash::UNSPECIFIED_SPEC.to_owned(),
+            password_hash::encode,
+        ),
+        hash,
+        salt,
+    }))
 }
 
 /// Admin `accounts:batchCreate` (`importUsers`): every row is attempted, and a refused row
 /// is reported by index in `error` while the others are created, which is the official
 /// contract of the route. With `allowOverwrite` an existing account of the same `localId`
 /// is replaced; without it the row is refused.
+/// Bytes and int64 fields of `batchCreate` rows are decoded with the request, before anything
+/// else is validated; a malformed one refuses the whole request.
+fn decode_batch_rows(rows: &[Value]) -> Result<(), JsonResponse> {
+    for (index, row) in rows.iter().enumerate() {
+        for (key, field) in [
+            ("createdAt", "created_at"),
+            ("lastLoginAt", "last_login_at"),
+        ] {
+            let decodes = match row.get(key) {
+                None | Some(Value::Null) => true,
+                Some(Value::Number(n)) => n.is_i64(),
+                Some(Value::String(text)) => text.parse::<i64>().is_ok(),
+                Some(_) => false,
+            };
+            if !decodes {
+                let field = format!("users[{index}].{field}");
+                let value = row.get(key).map(Value::to_string).unwrap_or_default();
+                return Err(proto_field_error(
+                    &field,
+                    &format!("Invalid value at '{field}' (TYPE_INT64), {value}"),
+                ));
+            }
+        }
+        for (key, field) in [("passwordHash", "password"), ("salt", "salt")] {
+            if let Some(text) = row.get(key).and_then(Value::as_str) {
+                if !text.starts_with("fakeHash:") && password_hash::base64_decode(text).is_none() {
+                    let field = format!("users[{index}].{field}");
+                    return Err(proto_field_error(
+                        &field,
+                        &format!("Invalid value at '{field}' (TYPE_BYTES), Base64 decoding failed for {text:?}"),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -> JsonResponse {
     let Some(rows) = body
         .get("users")
@@ -8159,20 +8791,37 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
         Some(Value::Bool(value)) => *value,
         Some(_) => return error(400, "INVALID_ARGUMENT : allowOverwrite must be a boolean"),
     };
-    if !allow_overwrite {
+    // Production upserts rows by localId whatever allowOverwrite says: a repeated localId in
+    // the request is replaced by its later row and an existing account is replaced without an
+    // error (sandbox recording 2026-09-23). The field is still type-checked above.
+    let _ = allow_overwrite;
+    // sanityCheck refuses an address repeated inside the request, before anything is imported.
+    if body.get("sanityCheck").and_then(Value::as_bool) == Some(true) {
         let mut seen = std::collections::BTreeSet::new();
         for row in rows {
-            if let Some(id) = str_field(row, "localId").filter(|id| !id.is_empty()) {
-                if !seen.insert(id) {
-                    return error(400, &format!("DUPLICATE_LOCAL_ID : {id}"));
+            if let Some(email) = str_field(row, "email").filter(|e| !e.is_empty()) {
+                if !seen.insert(canonicalize_email(email)) {
+                    return error(400, &format!("DUPLICATE_EMAIL : {email}"));
                 }
             }
         }
     }
+    if let Err(response) = decode_batch_rows(rows) {
+        return response;
+    }
+    // The hash algorithm and its parameters apply to every row of the request; production
+    // refuses the whole request when they are invalid.
+    let hash_spec = match body.get("hashAlgorithm") {
+        None | Some(Value::Null) => None,
+        Some(_) => match password_hash::spec_from_options(body) {
+            Ok(spec) => Some(spec),
+            Err(code) => return error(400, code),
+        },
+    };
     let mut errors = Vec::new();
     for (index, row) in rows.iter().enumerate() {
         let refused = |message: String| json!({"index": index, "message": message});
-        let user = match batch_row_user(row, at) {
+        let user = match batch_row_user(row, at, hash_spec.as_ref()) {
             Ok(u) => u,
             Err(r) => {
                 let message = r.body["error"]["message"]
@@ -8183,13 +8832,8 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
                 continue;
             }
         };
+        let imported_password = user.imported_password.is_some() || user.password.is_some();
         let import_result = if store.user_by_id(&user.local_id).is_some() {
-            if !allow_overwrite {
-                errors.push(refused(
-                    "localId belongs to an existing account - can not overwrite.".to_owned(),
-                ));
-                continue;
-            }
             // Validate and install a replacement on a copy first. A row can fail after the
             // UID collision check (for example because its email belongs to another account),
             // and a failed import must leave the existing account untouched.
@@ -8205,18 +8849,26 @@ fn admin_batch_create(store: &mut AuthStore, body: &Value, at: LogicalInstant) -
         } else {
             store.import_user(user)
         };
-        if let Err(e) = import_result {
-            errors.push(refused(e.to_string()));
+        match import_result {
+            // Production stamps an imported password, raw or hashed, with the import time.
+            Ok(uid) if imported_password => store.set_password_updated_at(&uid, at),
+            Ok(_) => {}
+            Err(e) => errors.push(refused(e.to_string())),
         }
     }
     JsonResponse {
         status: 200,
-        body: json!({"kind": "identitytoolkit#UploadAccountResponse", "error": errors}),
+        // Production omits `error` when every row was imported.
+        body: if errors.is_empty() {
+            json!({"kind": "identitytoolkit#UploadAccountResponse"})
+        } else {
+            json!({"kind": "identitytoolkit#UploadAccountResponse", "error": errors})
+        },
     }
 }
 
 /// Admin `accounts:batchGet` (`listUsers`): `GET ?maxResults=&nextPageToken=`, users in
-/// creation order; the page token is an opaque versioned cursor.
+/// user-id order; the page token is the last user id of the page.
 fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> JsonResponse {
     let params = query_params(query);
     let max_text = params.get("maxResults").cloned().or_else(|| {
@@ -8225,11 +8877,13 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
             other => other.to_string(),
         })
     });
+    // Production answers maxResults 0 with no users and caps larger values at 1000 (sandbox
+    // recording 2026-09-23).
     let max = match max_text.as_deref() {
         None => 1_000usize,
         Some(t) => match t.parse::<usize>() {
-            Ok(n) if (1..=1_000).contains(&n) => n,
-            _ => return error(400, "INVALID_ARGUMENT : maxResults must be 1..=1000"),
+            Ok(n) => n.min(1_000),
+            Err(_) => return error(400, "INVALID_ARGUMENT : maxResults must be a number"),
         },
     };
     let token = params
@@ -8241,22 +8895,34 @@ fn admin_batch_get(store: &AuthStore, query: Option<&str>, body: &Value) -> Json
                 .map(str::to_owned)
         })
         .filter(|t| !t.is_empty());
-    let after: u64 = match token.as_deref() {
-        None => 0,
-        Some(t) => match t.strip_prefix("v1:").and_then(|n| n.parse::<u64>().ok()) {
-            Some(n) => n,
-            None => return error(400, "INVALID_PAGE_TOKEN"),
-        },
-    };
+    // The page token is the last user id of the previous page; production reads any other
+    // string the same way (sandbox recording 2026-09-23).
     let page: Vec<&fireemu_core_auth::store::UserRecord> =
-        store.users_after_sequence(after, max.saturating_add(1));
+        store.users_after_local_id(token.as_deref(), max.saturating_add(1));
     let has_more = page.len() > max;
     let page = &page[..page.len().min(max)];
-    let users: Vec<Value> = page.iter().map(|u| user_json(store, &u.local_id)).collect();
-    let mut response = json!({"kind": "identitytoolkit#DownloadAccountResponse", "users": users});
+    // The Admin download carries the stored hash material production returns to a caller that
+    // may read it: fireemu's own digest and salt, and hash version 0.
+    let users: Vec<Value> = page
+        .iter()
+        .map(|u| {
+            let mut user = user_json(store, &u.local_id);
+            if let Some(digest) = store.password_digest(&u.local_id) {
+                let (hash, salt) = digest.stored_material();
+                user["passwordHash"] = json!(fireemu_core_types::hash::base64_standard(&hash));
+                user["salt"] = json!(fireemu_core_types::hash::base64_standard(&salt));
+                user["version"] = json!(0);
+            }
+            user
+        })
+        .collect();
+    let mut response = json!({"kind": "identitytoolkit#DownloadAccountResponse"});
+    if !users.is_empty() {
+        response["users"] = json!(users);
+    }
     if has_more {
         if let Some(last) = page.last() {
-            response["nextPageToken"] = Value::String(format!("v1:{}", last.sequence));
+            response["nextPageToken"] = Value::String(last.local_id.as_str().to_owned());
         }
     }
     JsonResponse {
@@ -9312,8 +9978,15 @@ fn sign_in_with_phone_number(
     body: &Value,
     at: LogicalInstant,
 ) -> JsonResponse {
-    let (Some(session), Some(code)) = (str_field(body, "sessionInfo"), str_field(body, "code"))
-    else {
+    if let Some(proof) = str_field(body, "temporaryProof") {
+        return sign_in_with_temporary_proof(store, body, proof, at);
+    }
+    // Production names the missing code before the session (sandbox recording 2026-09-23,
+    // `auth-account/phone#missing-code`).
+    let Some(code) = str_field(body, "code") else {
+        return error(400, "MISSING_CODE");
+    };
+    let Some(session) = str_field(body, "sessionInfo") else {
         return error(400, "MISSING_SESSION_INFO");
     };
     // Checked first, consumed once the request is known to succeed.
@@ -9333,7 +10006,21 @@ fn sign_in_with_phone_number(
             .user_by_phone(&verified.phone_number)
             .is_some_and(|u| u.local_id != uid)
         {
-            return error(400, "PHONE_NUMBER_EXISTS");
+            // Production answers a link to a taken number with a proof of the verified number
+            // instead of an error (sandbox recording 2026-09-23, `phone#link-taken-phone`).
+            store.consume_phone_code(session);
+            return match store.issue_temporary_proof(&verified.phone_number, at) {
+                Ok(proof) => JsonResponse {
+                    status: 200,
+                    body: json!({
+                        "temporaryProof": proof,
+                        "phoneNumber": verified.phone_number,
+                        "temporaryProofExpiresIn":
+                            fireemu_core_auth::store::TEMPORARY_PROOF_TTL_SECONDS.to_string(),
+                    }),
+                },
+                Err(e) => auth_error(&e),
+            };
         }
         store.consume_phone_code(session);
         if let Err(e) = store.set_phone_number(&uid, Some(&verified.phone_number)) {
@@ -9341,6 +10028,10 @@ fn sign_in_with_phone_number(
         }
         return match issue_tokens(store, &uid, None, at) {
             Ok(mut tokens) => {
+                // Production's link answer carries no email (sandbox recording 2026-09-23).
+                if let Some(fields) = tokens.as_object_mut() {
+                    fields.remove("email");
+                }
                 tokens["phoneNumber"] = json!(verified.phone_number);
                 tokens["isNewUser"] = json!(false);
                 JsonResponse {
@@ -9365,6 +10056,33 @@ fn sign_in_with_phone_number(
             ("phoneNumber", json!(verified.phone_number)),
             ("isNewUser", json!(is_new)),
         ],
+    )
+}
+
+/// `accounts:signInWithPhoneNumber` with a `temporaryProof`: signs in to the number's owner,
+/// as the SDK does after a link to a taken number.
+fn sign_in_with_temporary_proof(
+    store: &mut AuthStore,
+    body: &Value,
+    proof: &str,
+    at: LogicalInstant,
+) -> JsonResponse {
+    let Some(phone) = str_field(body, "phoneNumber") else {
+        return error(400, "MISSING_PHONE_NUMBER");
+    };
+    if !store.check_temporary_proof(proof, phone, at) {
+        return error(400, "INVALID_TEMPORARY_PROOF");
+    }
+    let (uid, is_new) = match store.sign_in_with_phone(phone, at) {
+        Ok(r) => r,
+        Err(e) => return auth_error(&e),
+    };
+    finish_sign_in(
+        store,
+        &uid,
+        at,
+        Some(fireemu_core_auth::store::Provider::Phone),
+        &[("phoneNumber", json!(phone)), ("isNewUser", json!(is_new))],
     )
 }
 
@@ -10308,12 +11026,20 @@ fn project_config_json_with_auth_settings(
 }
 
 fn password_policy_json(policy: &PasswordPolicy) -> JsonResponse {
-    let mut allowed: Vec<String> = policy
-        .allowed_non_alphanumeric
-        .iter()
-        .map(char::to_string)
+    // Production's order first, then any other configured character in code-point order.
+    let order = fireemu_core_auth::password_policy::DEFAULT_NON_ALPHANUMERIC_ORDER;
+    let allowed: Vec<String> = order
+        .chars()
+        .filter(|c| policy.allowed_non_alphanumeric.contains(c))
+        .chain(
+            policy
+                .allowed_non_alphanumeric
+                .iter()
+                .copied()
+                .filter(|c| !order.contains(*c)),
+        )
+        .map(String::from)
         .collect();
-    allowed.sort();
     let options = password_policy_config_json(policy)
         .get("passwordPolicyVersions")
         .and_then(Value::as_array)

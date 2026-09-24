@@ -138,11 +138,13 @@
       },
       {
         "expected": {
-          "count": "0",
-          "ids": [],
+          "count": "1",
+          "ids": [
+            "a"
+          ],
           "status": 200
         },
-        "id": "empty-email-is-not-wildcard",
+        "id": "empty-email-falls-through",
         "request": {
           "expression": [
             {
@@ -214,15 +216,13 @@
       },
       {
         "expected": {
-          "count": "3",
+          "count": "1",
           "ids": [
-            "a",
-            "c",
-            "d"
+            "a"
           ],
           "status": 200
         },
-        "id": "overlap-is-not-duplicate",
+        "id": "only-the-first-expression",
         "request": {
           "expression": [
             {
@@ -242,10 +242,9 @@
       },
       {
         "expected": {
-          "count": "2",
+          "count": "1",
           "ids": [
-            "d",
-            "c"
+            "a"
           ],
           "status": 200
         },
@@ -266,17 +265,14 @@
             }
           ],
           "limit": 2,
-          "offset": 1,
+          "offset": 0,
           "sortBy": "NAME"
         }
       },
       {
         "expected": {
-          "count": "2",
-          "ids": [
-            "d",
-            "a"
-          ],
+          "count": "0",
+          "ids": [],
           "status": 200
         },
         "id": "filter-sort-page-desc",
@@ -303,7 +299,7 @@
       },
       {
         "expected": {
-          "count": "3",
+          "count": "1",
           "ids": null,
           "status": 200
         },
@@ -457,34 +453,6 @@
           "ids": null,
           "status": 400
         },
-        "id": "empty-item",
-        "request": {
-          "expression": [
-            {}
-          ]
-        }
-      },
-      {
-        "expected": {
-          "count": null,
-          "ids": null,
-          "status": 400
-        },
-        "id": "null-selector",
-        "request": {
-          "expression": [
-            {
-              "userId": null
-            }
-          ]
-        }
-      },
-      {
-        "expected": {
-          "count": null,
-          "ids": null,
-          "status": 400
-        },
         "id": "bool-selector",
         "request": {
           "expression": [
@@ -588,11 +556,51 @@
       },
       {
         "expected": {
-          "count": null,
-          "ids": null,
-          "status": 400
+          "count": "4",
+          "ids": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "status": 200
         },
-        "id": "partial-valid-array",
+        "id": "empty-item-is-unconstrained",
+        "request": {
+          "expression": [
+            {}
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "4",
+          "ids": [
+            "a",
+            "b",
+            "c",
+            "d"
+          ],
+          "status": 200
+        },
+        "id": "null-selector-is-unconstrained",
+        "request": {
+          "expression": [
+            {
+              "userId": null
+            }
+          ]
+        }
+      },
+      {
+        "expected": {
+          "count": "1",
+          "ids": [
+            "a"
+          ],
+          "status": 200
+        },
+        "id": "later-empty-item-is-ignored",
         "request": {
           "expression": [
             {

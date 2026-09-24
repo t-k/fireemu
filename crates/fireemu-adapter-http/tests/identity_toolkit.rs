@@ -607,6 +607,7 @@ fn state() -> AuthState {
         stateless_refresh_tokens: true,
         idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -628,6 +629,7 @@ fn strict_state() -> AuthState {
             fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::LocalBounded,
         query_limits: AuthQueryLimits::ProductionBounded,
         stateless_refresh_tokens: false,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject,
         ..state()
@@ -635,8 +637,24 @@ fn strict_state() -> AuthState {
 }
 
 fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
-    let r = handle(state, "POST", path, body);
+    let path = with_client_key(state, path, "fake-api-key");
+    let r = handle(state, "POST", &path, body);
     (r.status, r.body)
+}
+
+/// Client SDKs always send their API key. Under a profile that refuses keyless client calls,
+/// the plain helper adds it to client routes that do not carry one, as an SDK would.
+fn with_client_key(state: &AuthState, path: &str, key: &str) -> String {
+    let project_scoped = path.contains("/projects/") || path.starts_with("/emulator");
+    let keyed = path.contains("key=") || path.contains("apiKey=");
+    if state.client_api_key != fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Required
+        || project_scoped
+        || keyed
+    {
+        return path.to_owned();
+    }
+    let separator = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{separator}key={key}")
 }
 
 #[test]
@@ -1130,6 +1148,12 @@ fn sign_up_sign_in_lookup_and_refresh() {
     );
     assert_eq!(status, 400);
     assert_eq!(bad["error"]["message"], "INVALID_REFRESH_TOKEN");
+    // Secure Token errors have their own shape in production (sandbox recording 2026-09-23):
+    // a gRPC status name and no `errors` list.
+    assert_eq!(
+        bad,
+        json!({"error": {"code": 400, "message": "INVALID_REFRESH_TOKEN", "status": "INVALID_ARGUMENT"}})
+    );
 }
 
 #[test]
@@ -2195,7 +2219,7 @@ fn signup_and_project_patch_have_a_bounded_shared_gate() {
             (1, 0)
         );
     } else {
-        assert_eq!(signup_body["error"]["message"], "OPERATION_NOT_ALLOWED");
+        assert_eq!(signup_body["error"]["message"], "ADMIN_ONLY_OPERATION");
         assert!(store_guard
             .user_by_email("concurrent-project@example.com")
             .is_none());
@@ -2279,7 +2303,7 @@ fn signup_and_tenant_patch_have_a_bounded_shared_gate() {
             (1, 0)
         );
     } else {
-        assert_eq!(signup_body["error"]["message"], "OPERATION_NOT_ALLOWED");
+        assert_eq!(signup_body["error"]["message"], "ADMIN_ONLY_OPERATION");
         assert!(store_guard
             .user_by_email("concurrent-tenant@example.com")
             .is_none());
@@ -3228,6 +3252,73 @@ fn blocking_auth_never_replays_a_response_onto_a_different_generated_user() {
     assert!(store.user_by_email("original@example.com").is_none());
 }
 
+const UNREGISTERED_CALLER: &str = "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";
+
+/// Production refuses an Admin route called without an `Authorization` header by whether the
+/// request still carries an API key, and a strict-profile client route called with neither
+/// (sandbox recording 2026-09-23, `auth-account/privilege/credentials`).
+#[test]
+fn requests_without_credentials_are_refused_with_production_shapes() {
+    for s in [state(), strict_state()] {
+        let keyed = post(
+            &s,
+            &format!("{ADMIN}/accounts:lookup?key=fake-api-key"),
+            &json!({"localId": ["x"]}),
+        );
+        let insufficient =
+            "INSUFFICIENT_PERMISSION : Only authenticated requests can specify target_project_id.";
+        assert_eq!(keyed.0, 400, "{}", keyed.1);
+        assert_eq!(
+            keyed.1,
+            json!({"error": {"code": 400, "message": insufficient, "errors": [
+                {"message": insufficient, "domain": "global", "reason": "invalid"}
+            ]}})
+        );
+        let bare = post(
+            &s,
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": ["x"]}),
+        );
+        assert_eq!(bare.0, 403, "{}", bare.1);
+        assert_eq!(
+            bare.1,
+            json!({"error": {"code": 403, "message": UNREGISTERED_CALLER, "errors": [
+                {"message": UNREGISTERED_CALLER, "domain": "global", "reason": "forbidden"}
+            ], "status": "PERMISSION_DENIED"}})
+        );
+    }
+    let strict = strict_state();
+    let keyless = handle(
+        &strict,
+        "POST",
+        &format!("{V1}/accounts:signUp"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(keyless.status, 403, "{}", keyless.body);
+    assert_eq!(keyless.body["error"]["message"], UNREGISTERED_CALLER);
+    assert_eq!(keyless.body["error"]["status"], "PERMISSION_DENIED");
+    let keyed = post(
+        &strict,
+        &format!("{V1}/accounts:signUp?key=fake-api-key"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(keyed.0, 200, "{}", keyed.1);
+    let owner_call = handle_with(
+        &strict,
+        "POST",
+        &format!("{V1}/accounts:lookup"),
+        &owner(),
+        &json!({"localId": ["x"]}),
+    );
+    assert_ne!(owner_call.status, 403, "{}", owner_call.body);
+    let emulator = post(
+        &state(),
+        &format!("{V1}/accounts:signUp"),
+        &json!({"returnSecureToken": true}),
+    );
+    assert_eq!(emulator.0, 200, "{}", emulator.1);
+}
+
 #[test]
 fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_project() {
     let s = state();
@@ -3239,7 +3330,7 @@ fn admin_routes_require_the_owner_credential_a_local_origin_and_the_right_projec
         &RequestHeaders::default(),
         &body,
     );
-    assert_eq!(anon.status, 401);
+    assert_eq!(anon.status, 403);
     let mut foreign = owner();
     foreign.origin = Some("https://evil.example".to_owned());
     assert_eq!(
@@ -3824,7 +3915,7 @@ fn provider_ids_and_semantic_validation_are_kind_specific_and_atomic() {
     let saml = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/inboundSamlConfigs";
     assert_eq!(
         handle_with(&s, "GET", oidc, &RequestHeaders::default(), &json!({})).status,
-        401
+        403
     );
     assert_eq!(
         handle_with(
@@ -4047,6 +4138,7 @@ fn admin_create_is_atomic_and_typed() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
     let s = state();
     for (local_id, field, value) in [
@@ -4078,8 +4170,6 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
             "providerUserInfo",
             json!([["not-an-object"]]),
         ),
-        ("batch-bad-created", "createdAt", json!("not-a-timestamp")),
-        ("batch-bad-login", "lastLoginAt", json!(false)),
     ] {
         let (status, response) = admin(
             &s,
@@ -4091,6 +4181,25 @@ fn batch_import_rejects_malformed_typed_fields_without_creating_rows() {
         assert_eq!(
             response["error"].as_array().map(Vec::len),
             Some(1),
+            "{response}"
+        );
+        assert!(s.store.lock().unwrap().user_by_id(local_id).is_none());
+    }
+    // Timestamps are int64 fields of the request: a malformed one refuses the whole request
+    // (sandbox recording 2026-09-23, `values#import-created-at-invalid`).
+    for (local_id, field, value) in [
+        ("batch-bad-created", "createdAt", json!("not-a-timestamp")),
+        ("batch-bad-login", "lastLoginAt", json!(false)),
+    ] {
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{"localId": local_id, field: value}]}),
+        );
+        assert_eq!(status, 400, "{response}");
+        assert_eq!(
+            response["error"]["status"], "INVALID_ARGUMENT",
             "{response}"
         );
         assert!(s.store.lock().unwrap().user_by_id(local_id).is_none());
@@ -4170,7 +4279,7 @@ fn batch_import_treats_null_optional_fields_as_unset() {
         }),
     );
     assert_eq!(status, 200, "{response}");
-    assert_eq!(response["error"], json!([]), "{response}");
+    assert!(response.get("error").is_none(), "{response}");
 
     assert!(s
         .store
@@ -4190,8 +4299,8 @@ fn batch_import_treats_null_optional_fields_as_unset() {
     assert!(imported.get("mfaInfo").is_none());
     assert!(imported.get("lastLoginAt").is_none());
 
-    // `allowOverwrite: null` follows the omitted/default false path. A duplicate
-    // localId must be reported without replacing the already imported account.
+    // `allowOverwrite: null` follows the omitted/default false path, and production replaces an
+    // existing localId on that path too (sandbox recording 2026-09-23).
     let (status, response) = admin(
         &s,
         "POST",
@@ -4206,11 +4315,7 @@ fn batch_import_treats_null_optional_fields_as_unset() {
         }),
     );
     assert_eq!(status, 200, "{response}");
-    assert_eq!(
-        response["error"].as_array().map(Vec::len),
-        Some(1),
-        "{response}"
-    );
+    assert!(response.get("error").is_none(), "{response}");
     let (status, lookup) = admin(
         &s,
         "POST",
@@ -4218,8 +4323,8 @@ fn batch_import_treats_null_optional_fields_as_unset() {
         &json!({"localId": ["batch-null-fields"]}),
     );
     assert_eq!(status, 200, "{lookup}");
-    assert_eq!(lookup["users"][0]["email"], "batch-null-fields@example.com");
-    assert_ne!(lookup["users"][0]["displayName"], "must-not-replace");
+    assert_eq!(lookup["users"][0]["email"], "replacement@example.com");
+    assert_eq!(lookup["users"][0]["displayName"], "must-not-replace");
 }
 
 #[test]
@@ -4278,7 +4383,7 @@ fn batch_import_treats_omitted_null_and_empty_repeated_fields_consistently() {
             &json!({"users": [row]}),
         );
         assert_eq!(status, 200, "{response}");
-        assert_eq!(response["error"], json!([]), "{response}");
+        assert!(response.get("error").is_none(), "{response}");
     }
 
     let (status, lookup) = admin(
@@ -4323,7 +4428,7 @@ fn password_policy_admin_create_covers_maximum_and_invalid_password_inputs_atomi
         assert_eq!(status, expected_status, "{response}");
         if expected_status == 400 {
             assert_eq!(
-                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters",
                 "{response}"
             );
             assert!(s.store.lock().unwrap().user_by_id(&uid).is_none());
@@ -4438,7 +4543,9 @@ fn account_lifecycle_keeps_admin_and_client_post_state_consistent() {
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": [uid]}),
     );
-    assert!(reenabled_view["users"][0].get("disabled").is_none());
+    // An Admin-created account keeps `disabled: false` after re-enable (sandbox recording
+    // 2026-09-23, auth-account/admin/disable#admin-lookup-after).
+    assert_eq!(reenabled_view["users"][0]["disabled"], false);
     let (status, client_signed) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -4523,7 +4630,8 @@ fn admin_lookup_resolves_every_identifier_and_batch_get_pages_over_get() {
         &format!("{ADMIN}/accounts:lookup"),
         &json!({"localId": [1]}),
     );
-    assert_eq!(status, 400);
+    // Production reads a numeric identifier as a string (sandbox recording 2026-09-23).
+    assert_eq!(status, 200);
 
     let (status, page1) = admin(
         &s,
@@ -4550,13 +4658,18 @@ fn admin_lookup_resolves_every_identifier_and_batch_get_pages_over_get() {
     );
     assert_eq!(page3["users"].as_array().map(Vec::len), Some(1));
     assert!(page3.get("nextPageToken").is_none());
-    let (status, _) = admin(
+    // maxResults 0 is an empty page in production (sandbox recording 2026-09-23).
+    let (status, empty) = admin(
         &s,
         "GET",
         &format!("{ADMIN}/accounts:batchGet?maxResults=0"),
         &json!({}),
     );
-    assert_eq!(status, 400);
+    assert_eq!(
+        (status, empty.get("users").is_none()),
+        (200, true),
+        "{empty}"
+    );
 
     let (status, count) = admin(
         &s,
@@ -4644,10 +4757,21 @@ fn strict_admin_query_applies_the_production_page_contract() {
     assert_eq!(name_page["userInfo"][0]["localId"], "user-000");
     assert_eq!(name_page["userInfo"][1]["localId"], "user-001");
 
+    // Production accepts a limit above 500 (sandbox recording 2026-09-23).
+    assert_eq!(
+        admin(
+            &strict,
+            "POST",
+            &format!("{ADMIN}/accounts:query"),
+            &json!({"limit": "501"})
+        )
+        .0,
+        200
+    );
+    // A negative offset is production's internal error instead
+    // (`strict_admin_query_negative_offset_is_a_backend_failure`).
     for invalid in [
-        json!({"limit": "501"}),
         json!({"limit": "-1"}),
-        json!({"offset": "-1"}),
         json!({"returnUserInfo": "true"}),
         json!({"order": "SIDEWAYS"}),
         json!({"order": 1}),
@@ -4912,26 +5036,42 @@ fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
                     Some(signed[0]["idToken"].clone()),
                     Some(signed[1]["idToken"].clone()),
                 ] {
+                    // A verified session answers with its own subject and ignores every
+                    // Admin selector, as production does (sandbox recording 2026-09-23,
+                    // `client-lookup-with-admin-selectors`).
+                    let subject = token.as_ref().and_then(|token| {
+                        signed
+                            .iter()
+                            .find(|account| &account["idToken"] == token)
+                            .map(|account| account["localId"].clone())
+                    });
                     let expected_error = match token.as_ref().and_then(Value::as_str) {
-                        None => "MISSING_ID_TOKEN",
-                        Some("malformed") => "INVALID_ID_TOKEN",
-                        Some(_) => "OPERATION_NOT_ALLOWED",
+                        None => Some("MISSING_ID_TOKEN"),
+                        Some("malformed") => Some("INVALID_ID_TOKEN"),
+                        Some(_) => None,
                     };
                     let mut request = json!({"admin": true});
                     request[field] = value.clone();
                     if let Some(token) = token {
                         request["idToken"] = token;
                     }
-                    let (status, refused) = post(&s, &format!("{V1}/accounts:lookup"), &request);
-                    assert_eq!(
-                        status, 400,
-                        "selector {field} must not bypass end-user identity"
-                    );
-                    assert!(refused.get("users").is_none());
-                    assert_eq!(refused["error"]["message"], expected_error);
+                    let (status, answered) = post(&s, &format!("{V1}/accounts:lookup"), &request);
+                    if let Some(expected_error) = expected_error {
+                        assert_eq!(
+                            status, 400,
+                            "selector {field} must not bypass end-user identity"
+                        );
+                        assert!(answered.get("users").is_none());
+                        assert_eq!(answered["error"]["message"], expected_error);
+                    } else {
+                        assert_eq!(status, 200, "{answered}");
+                        assert_eq!(answered["users"].as_array().unwrap().len(), 1);
+                        assert_eq!(answered["users"][0]["localId"], subject.unwrap());
+                    }
                 }
             }
-            // Even the emulator owner header cannot change an end-user handler's role.
+            // Even the emulator owner header cannot change an end-user handler's role: the
+            // session's subject is the only account answered.
             query["idToken"] = signed[0]["idToken"].clone();
             let response = handle_with(
                 &s,
@@ -4940,8 +5080,9 @@ fn lookup_authorization_separates_end_user_identity_from_admin_selectors() {
                 &owner(),
                 &query,
             );
-            assert_eq!(response.status, 400);
-            assert!(response.body.get("users").is_none());
+            assert_eq!(response.status, 200, "{}", response.body);
+            assert_eq!(response.body["users"].as_array().unwrap().len(), 1);
+            assert_eq!(response.body["users"][0]["localId"], signed[0]["localId"]);
         }
         assert_eq!(
             post(
@@ -5224,7 +5365,7 @@ fn password_maximum_update_counts_utf16_units_and_preserves_rejected_state() {
         if !accepted {
             assert_eq!(
                 changed["error"]["message"],
-                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
             );
         }
         let (status, after) = post(
@@ -5314,7 +5455,7 @@ fn password_maximum_update_preserves_credentials_and_full_suffix() {
     assert_eq!(status, 400, "{refused}");
     assert_eq!(
         refused["error"]["message"],
-        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
     );
     let (status, looked) = post(
         &s,
@@ -5362,8 +5503,11 @@ fn password_policy_boundaries_apply_to_sign_up_without_creating_rejected_account
         );
         assert_eq!(status, expected_status, "{response}");
         if expected_status == 400 {
-            assert_eq!(
-                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+            // The detail after " : " is pinned in password_rules_answer_like_production.
+            assert!(
+                response["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
                 "{response}"
             );
         }
@@ -5433,8 +5577,11 @@ fn password_policy_boundaries_apply_to_admin_update_before_any_profile_mutation(
         );
         assert_eq!(status, expected_status, "{response}");
         if expected_status == 400 {
-            assert_eq!(
-                response["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+            // The detail after " : " is pinned in password_rules_answer_like_production.
+            assert!(
+                response["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
                 "{response}"
             );
         }
@@ -5555,7 +5702,7 @@ fn password_policy_client_update_rejects_invalid_values_before_profile_mutation(
         assert_eq!(
             response["error"]["message"],
             if password.encode_utf16().count() > AuthStore::MAX_PASSWORD_UTF16_UNITS {
-                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS"
+                "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
             } else {
                 "WEAK_PASSWORD : Password should be at least 6 characters"
             },
@@ -5618,7 +5765,7 @@ fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semant
             }]}),
         );
         assert_eq!(status, 200, "{imported}");
-        assert!(imported["error"].as_array().unwrap().is_empty());
+        assert!(imported.get("error").is_none());
     }
     for units in [4095, 4096] {
         let (status, signed) = post(
@@ -5662,7 +5809,7 @@ fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semant
         }]}),
     );
     assert_eq!(status, 200, "{imported}");
-    assert!(imported["error"].as_array().unwrap().is_empty());
+    assert!(imported.get("error").is_none());
     let (status, signed) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -5677,11 +5824,13 @@ fn password_policy_batch_import_validates_raw_password_and_preserves_hash_semant
         &json!({"users": [{
             "localId": "unsupported-hash-user",
             "email": "unsupported-hash-user@example.com",
-            "passwordHash": "scrypt$unreadable"
+            // Well-formed bytes that no algorithm was named for: production keeps them as the
+            // credential and no password matches (a malformed base64 value is refused).
+            "passwordHash": "c2NyeXB0LXVucmVhZGFibGU="
         }]}),
     );
     assert_eq!(status, 200, "{unsupported}");
-    assert!(unsupported["error"].as_array().unwrap().is_empty());
+    assert!(unsupported.get("error").is_none());
     let (status, sign_in) = post(
         &s,
         &format!("{V1}/accounts:signInWithPassword"),
@@ -5754,13 +5903,15 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
         if units == 4097 {
             assert_eq!(imported["error"].as_array().unwrap().len(), 1, "{imported}");
             assert_eq!(imported["error"][0]["index"], 0, "{imported}");
-            assert_eq!(
-                imported["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+            assert!(
+                imported["error"][0]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
                 "{imported}"
             );
             assert!(s.store.lock().unwrap().user_by_id(&local_id).is_none());
         } else {
-            assert!(imported["error"].as_array().unwrap().is_empty());
+            assert!(imported.get("error").is_none());
             let (status, signed) = post(
                 &s,
                 &format!("{V1}/accounts:signInWithPassword"),
@@ -5790,8 +5941,10 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
     );
     assert_eq!(status, 200, "{refused}");
     assert_eq!(refused["error"].as_array().unwrap().len(), 1, "{refused}");
-    assert_eq!(
-        refused["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+    assert!(
+        refused["error"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
         "{refused}"
     );
     let (status, unchanged) = post(
@@ -5829,8 +5982,10 @@ fn password_policy_batch_import_validates_supported_fake_hashes_before_overwrite
     assert_eq!(status, 200, "{response}");
     assert_eq!(response["error"].as_array().unwrap().len(), 1, "{response}");
     assert_eq!(response["error"][0]["index"], 0, "{response}");
-    assert_eq!(
-        response["error"][0]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+    assert!(
+        response["error"][0]["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
         "{response}"
     );
     let (status, signed) = post(
@@ -5905,7 +6060,9 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
             "allowOverwrite": true,
             "users": [{
                 "localId": uid,
-                "email": "other-overwrite@example.com",
+                // A malformed address is a row refusal in production; an address owned by
+                // another account is not (sandbox recording 2026-09-23).
+                "email": "not-an-email",
                 "passwordHash": "fakeHash:salt=fakeSalt:password=replacement-password",
             }],
         }),
@@ -5986,7 +6143,7 @@ fn batch_import_failed_overwrite_keeps_the_existing_account() {
         "successful overwrite request failed: status {status}"
     );
     assert!(
-        replaced["error"].as_array().is_some_and(Vec::is_empty),
+        replaced.get("error").is_none(),
         "successful overwrite returned row errors"
     );
     let (status, _signed_replacement) = post(
@@ -6140,6 +6297,8 @@ fn end_user_update_rejects_admin_fields_atomically_by_presence() {
                 rejected["error"]["message"],
                 if field == "customAttributes" {
                     "INSUFFICIENT_PERMISSION"
+                } else if field == "linkProviderUserInfo" {
+                    "UNEXPECTED_PARAMETER : link_provider_user_info is not allowed with ID token."
                 } else {
                     "OPERATION_NOT_ALLOWED"
                 },
@@ -6274,7 +6433,8 @@ fn end_user_update_session_failure_precedes_admin_field_authorization() {
                 "revoked",
                 &revoked_token,
                 Some(&revoked_uid),
-                "TOKEN_EXPIRED : credentials revoked",
+                // Production has no detail for a revoked token (sandbox recording 2026-09-23).
+                "TOKEN_EXPIRED",
             ),
             (
                 "disabled",
@@ -6395,6 +6555,8 @@ fn end_user_update_authenticates_before_authorizing_admin_fields() {
                 refused["error"]["message"],
                 if *field == "customAttributes" {
                     "INSUFFICIENT_PERMISSION"
+                } else if *field == "linkProviderUserInfo" {
+                    "UNEXPECTED_PARAMETER : link_provider_user_info is not allowed with ID token."
                 } else {
                     "OPERATION_NOT_ALLOWED"
                 },
@@ -7990,17 +8152,15 @@ fn admin_update_applies_every_supported_field_and_refuses_the_rest() {
         admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &json!({})).0,
         400
     );
-    // Page tokens are validated.
-    assert_eq!(
-        admin(
-            &s,
-            "GET",
-            &format!("{ADMIN}/accounts:batchGet?nextPageToken=u-a"),
-            &json!({})
-        )
-        .0,
-        400
+    // A page token is the user id the next page starts after, so the last account's id is an
+    // empty page (sandbox recording 2026-09-23).
+    let (status, page) = admin(
+        &s,
+        "GET",
+        &format!("{ADMIN}/accounts:batchGet?nextPageToken=u-m"),
+        &json!({}),
     );
+    assert_eq!((status, page.get("users").is_none()), (200, true), "{page}");
 }
 
 #[test]
@@ -8364,6 +8524,82 @@ fn second45_invalid_token_precedes_new_shape_validation_without_mutation() {
             assert_eq!(lookup(), before, "{field}");
         }
     }
+}
+
+fn enforce_custom_password_policy(s: &AuthState) {
+    let (status, body) = admin(
+        s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=passwordPolicyConfig",
+        &json!({"passwordPolicyConfig": {
+            "passwordPolicyEnforcementState": "ENFORCE",
+            "passwordPolicyVersions": [{"customStrengthOptions": {
+                "minPasswordLength": 8,
+                "maxPasswordLength": 20,
+                "containsUppercaseCharacter": true,
+                "containsLowercaseCharacter": true,
+                "containsNumericCharacter": true,
+                "containsNonAlphanumericCharacter": true
+            }}]
+        }}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+/// `batchCreate` stores a raw password without the minimum length or the project's policy,
+/// and signs in with it (sandbox recording 2026-09-23, `policy/*#import-raw-weak`).
+#[test]
+fn batch_import_stores_raw_passwords_below_the_policy() {
+    let default_policy = state();
+    let enforced = state();
+    enforce_custom_password_policy(&enforced);
+    for (s, password) in [(&default_policy, "12345"), (&enforced, "password")] {
+        let (status, imported) = admin(
+            s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &json!({"users": [{"localId": "weak", "email": "weak@example.com", "rawPassword": password}]}),
+        );
+        assert_eq!(status, 200, "{imported}");
+        assert!(imported.get("error").is_none(), "{imported}");
+        let (status, signed) = post(
+            s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "weak@example.com", "password": password}),
+        );
+        assert_eq!(status, 200, "{signed}");
+    }
+}
+
+/// Under an enforced custom policy, an Admin update names the unmet requirements before it
+/// looks the account up; the default minimum is checked after (sandbox recording 2026-09-23,
+/// `policy/enforce-custom#admin-update-weak` and `policy/default/routes#admin-update-weak`).
+#[test]
+fn admin_password_update_checks_a_custom_policy_before_the_account() {
+    let enforced = state();
+    enforce_custom_password_policy(&enforced);
+    let (status, refused) = admin(
+        &enforced,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "nobody", "password": "password"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: ["),
+        "{refused}"
+    );
+    let (status, refused) = admin(
+        &state(),
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "nobody", "password": "12345"}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "USER_NOT_FOUND");
 }
 
 #[test]
@@ -8745,6 +8981,28 @@ fn admin_v2_password_policy_invalid_selected_update_is_atomic() {
     }
 }
 
+/// The SDK policy lists production's 30 non-alphanumeric characters in production's order
+/// (sandbox recording 2026-09-23, `policy/enforce-custom#password-policy`).
+#[test]
+fn password_policy_lists_production_symbols_in_production_order() {
+    let s = state();
+    enforce_custom_password_policy(&s);
+    let (status, policy) = admin(
+        &s,
+        "GET",
+        "/identitytoolkit.googleapis.com/v2/passwordPolicy?key=fake-api-key",
+        &Value::Null,
+    );
+    assert_eq!(status, 200, "{policy}");
+    let listed: String = policy["allowedNonAlphanumericCharacters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c.as_str().unwrap())
+        .collect();
+    assert_eq!(listed, r#"^$*.[]{}()?"!@#%&/\,><':;|_~`-"#);
+}
+
 #[test]
 fn password_policy_projections_omit_unset_custom_maximum() {
     let s = state();
@@ -8909,6 +9167,887 @@ fn tenant_password_policy_null_without_mask_is_absent_and_list_projects_policy()
             ["minPasswordLength"],
         12
     );
+}
+
+/// Client permissions refuse the end-user operation with `ADMIN_ONLY_OPERATION` (sandbox
+/// recording 2026-09-23, `auth-account/config/client-permissions`).
+/// Password sign-in reports the account's photo as `profilePicture` (sandbox recording
+/// 2026-09-23, `auth-account/admin/create#sign-in-created`).
+#[test]
+fn password_sign_in_reports_the_profile_picture() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "pic@example.com", "password": "password1", "photoUrl": "https://example.com/p.png"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "nopic@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200);
+    let sign_in = |email: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": email, "password": "password1", "returnSecureToken": true}),
+        )
+    };
+    let (status, signed) = sign_in("pic@example.com");
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["profilePicture"], "https://example.com/p.png");
+    let (status, signed) = sign_in("nopic@example.com");
+    assert_eq!(status, 200, "{signed}");
+    assert!(signed.get("profilePicture").is_none(), "{signed}");
+}
+
+/// An Admin email change answers without `newEmail` (sandbox recording 2026-09-23,
+/// `auth-account/admin/update#change-email`).
+#[test]
+fn admin_email_change_answers_without_new_email() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "mail", "email": "before@example.com"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let (status, updated) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "mail", "email": "after@example.com"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(updated["email"], "after@example.com");
+    assert!(updated.get("newEmail").is_none(), "{updated}");
+}
+
+/// `accounts:batchGet` lists in user-id order and its page token is the last user id of the
+/// page; any other string is read as a user id (sandbox recording 2026-09-23,
+/// `auth-account/admin/batch-get`).
+#[test]
+fn admin_batch_get_pages_by_user_id() {
+    let s = state();
+    for uid in ["m", "b", "x", "a"] {
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid}),
+        );
+        assert_eq!(status, 200, "{created}");
+    }
+    let page = |query: &str| {
+        let (status, body) = admin(
+            &s,
+            "GET",
+            &format!("{ADMIN}/accounts:batchGet?{query}"),
+            &json!({}),
+        );
+        assert_eq!(status, 200, "{body}");
+        let ids: Vec<String> = body
+            .get("users")
+            .map_or(&[][..], |users| users.as_array().unwrap())
+            .iter()
+            .map(|user| user["localId"].as_str().unwrap().to_owned())
+            .collect();
+        (ids, body.get("nextPageToken").cloned())
+    };
+    assert_eq!(
+        page("maxResults=2"),
+        (vec!["a".to_owned(), "b".to_owned()], Some(json!("b")))
+    );
+    assert_eq!(
+        page("maxResults=2&nextPageToken=b"),
+        (vec!["m".to_owned(), "x".to_owned()], None)
+    );
+    assert_eq!(
+        page("maxResults=2&nextPageToken=c"),
+        (vec!["m".to_owned(), "x".to_owned()], None)
+    );
+    assert_eq!(
+        page("maxResults=2&nextPageToken=not-a-token"),
+        (vec!["x".to_owned()], None)
+    );
+}
+
+/// Value classes production answers differently from the bare format rules (sandbox recording
+/// 2026-09-23, `auth-account/values`).
+#[test]
+fn value_classes_follow_production() {
+    let s = state();
+    // A formatted E.164 number is stored normalized; letters map through the phone keypad;
+    // a zero country code is refused.
+    for (uid, phone, stored) in [
+        ("formatted", "+1 650-555-0104", Some("+16505550104")),
+        ("letters", "+1650555ABCD", Some("+16505552223")),
+        ("zero", "+0 650 555 0104", None),
+    ] {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid, "phoneNumber": phone}),
+        );
+        if let Some(stored) = stored {
+            assert_eq!(status, 200, "{phone}: {body}");
+            let (_, found) = admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:lookup"),
+                &json!({"localId": [uid]}),
+            );
+            assert_eq!(found["users"][0]["phoneNumber"], stored, "{found}");
+        } else {
+            assert_eq!(status, 400, "{phone}: {body}");
+            assert_eq!(
+                body["error"]["message"],
+                "INVALID_PHONE_NUMBER : Invalid format."
+            );
+        }
+    }
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "space", "email": " space@example.com"}),
+    );
+    assert_eq!(
+        (status, body["error"]["message"].as_str()),
+        (400, Some("INVALID_EMAIL")),
+        "{body}"
+    );
+
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "values@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    for (length, refused) in [(256, false), (257, true)] {
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": "n".repeat(length)}),
+        );
+        if refused {
+            assert_eq!(status, 400, "{body}");
+            assert_eq!(
+                body["error"]["message"],
+                "INVALID_PROFILE_ATTRIBUTE : Display name too long."
+            );
+        } else {
+            assert_eq!(status, 200, "{body}");
+        }
+    }
+
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{"localId": "ts", "createdAt": "yesterday"}]}),
+    );
+    let description = r#"Invalid value at 'users[0].created_at' (TYPE_INT64), "yesterday""#;
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], description);
+    assert_eq!(body["error"]["status"], "INVALID_ARGUMENT");
+    assert_eq!(
+        body["error"]["details"][0]["fieldViolations"][0]["field"],
+        "users[0].created_at"
+    );
+    let (status, body) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{"localId": "ts", "createdAt": "1600000000000", "lastLoginAt": 1_600_000_100_000_i64}]}),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert!(body.get("error").is_none(), "{body}");
+}
+
+/// Custom attributes read back as the text they were set with, key order included, an
+/// explicit `{}` stays visible, and `user_id` is not a reserved name; the ID token still
+/// carries the account's own `user_id` (sandbox recording 2026-09-23,
+/// `auth-account/admin/custom-attributes`).
+#[test]
+fn custom_attributes_read_back_as_set() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "ca", "email": "ca@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let readback = || {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": ["ca"]}),
+        )
+        .1["users"][0]
+            .get("customAttributes")
+            .cloned()
+    };
+    assert_eq!(readback(), None);
+    for text in [r#"{"role":"editor","level":3}"#, "{}", r#"{"user_id":"x"}"#] {
+        let (status, updated) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "ca", "customAttributes": text}),
+        );
+        assert_eq!(status, 200, "{text}: {updated}");
+        assert_eq!(readback(), Some(json!(text)));
+    }
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "ca@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    let token =
+        fireemu_core_auth::jwt::decode_unsigned(signed["idToken"].as_str().unwrap()).unwrap();
+    let claims: Value = serde_json::from_str(&token.payload_json).unwrap();
+    assert_eq!(claims["user_id"], "ca");
+    assert_eq!(claims["sub"], "ca");
+}
+
+/// `allowDuplicateEmails` does not let a password sign-up or an Admin create take an address
+/// in use; an import may share it, a lookup by the address answers every owner, and a
+/// password sign-in reaches the owner holding the password (sandbox recording 2026-09-23,
+/// `auth-account/config/duplicate-email`).
+#[test]
+fn duplicate_email_mode_keeps_password_accounts_unique() {
+    let s = state();
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=signIn.allowDuplicateEmails",
+        &json!({"signIn": {"allowDuplicateEmails": true}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sign_up = |password: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "dup@example.com", "password": password, "returnSecureToken": true}),
+        )
+    };
+    let (status, first) = sign_up("password123");
+    assert_eq!(status, 200, "{first}");
+    let (status, refused) = sign_up("password456");
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS"))
+    );
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "dup-admin", "email": "dup@example.com"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS"))
+    );
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{"localId": "dup-import", "email": "dup@example.com"}]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert!(imported.get("error").is_none(), "{imported}");
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "dup@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["localId"], first["localId"]);
+    let (status, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"email": ["dup@example.com"]}),
+    );
+    assert_eq!(status, 200, "{found}");
+    let ids: Vec<&Value> = found["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| &u["localId"])
+        .collect();
+    assert_eq!(ids, [&first["localId"], &json!("dup-import")]);
+}
+
+const PROJECT_CONFIG: &str = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+
+fn patch_sign_in(s: &AuthState, mask: &str, body: &Value) -> (u16, Value) {
+    admin(
+        s,
+        "PATCH",
+        &format!("{PROJECT_CONFIG}?updateMask={mask}"),
+        body,
+    )
+}
+
+/// The Admin config sets the sign-in providers and test phone numbers the sandbox baseline
+/// uses, reads them back in production's shape, and a test number signs in with its fixed
+/// code (sandbox recording 2026-09-23, `auth-account/phone`).
+#[test]
+#[allow(clippy::too_many_lines)]
+fn test_phone_numbers_sign_in_with_their_fixed_code() {
+    let s = state();
+    let (status, config) = patch_sign_in(
+        &s,
+        "signIn.email.enabled,signIn.email.passwordRequired,signIn.anonymous.enabled,signIn.phoneNumber.enabled,signIn.phoneNumber.testPhoneNumbers",
+        &json!({"signIn": {
+            "email": {"enabled": true, "passwordRequired": true},
+            "anonymous": {"enabled": true},
+            "phoneNumber": {"enabled": true, "testPhoneNumbers": {"+16505550101": "123456"}},
+        }}),
+    );
+    assert_eq!(status, 200, "{config}");
+    let (status, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(status, 200, "{read}");
+    assert_eq!(
+        read["signIn"]["email"],
+        json!({"enabled": true, "passwordRequired": true})
+    );
+    assert_eq!(read["signIn"]["anonymous"], json!({"enabled": true}));
+    assert_eq!(
+        read["signIn"]["phoneNumber"],
+        json!({"enabled": true, "testPhoneNumbers": {"+16505550101": "123456"}})
+    );
+    let send_code = || {
+        post(
+            &s,
+            &format!("{V1}/accounts:sendVerificationCode"),
+            &json!({"phoneNumber": "+16505550101", "recaptchaToken": "x"}),
+        )
+    };
+    let (status, sent) = send_code();
+    assert_eq!(status, 200, "{sent}");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": "000000"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("INVALID_CODE"))
+    );
+    let (status, missing) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"]}),
+    );
+    assert_eq!(
+        (status, missing["error"]["message"].as_str()),
+        (400, Some("MISSING_CODE"))
+    );
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": "123456"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["isNewUser"], true);
+    assert_eq!(signed["phoneNumber"], "+16505550101");
+
+    // A taken number linked to another account answers a temporary proof instead of an
+    // error; the proof signs in to the number's owner once.
+    let (status, other) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "linker@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{other}");
+    let (_, sent) = send_code();
+    let (status, proof) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": "123456", "idToken": other["idToken"]}),
+    );
+    assert_eq!(status, 200, "{proof}");
+    assert_eq!(proof["phoneNumber"], "+16505550101");
+    assert_eq!(proof["temporaryProofExpiresIn"], "3600");
+    assert!(proof.get("idToken").is_none(), "{proof}");
+    let proof_body =
+        json!({"temporaryProof": proof["temporaryProof"], "phoneNumber": "+16505550101"});
+    // The proof is reusable within its lifetime (corpus v2 recording 2026-09-24,
+    // `phone#sign-in-with-temporary-proof-again`).
+    for _ in 0..2 {
+        let (status, owner) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPhoneNumber"),
+            &proof_body,
+        );
+        assert_eq!(status, 200, "{owner}");
+        assert_eq!(owner["localId"], signed["localId"]);
+        assert_eq!(owner["isNewUser"], false);
+    }
+    let wrong_number =
+        json!({"temporaryProof": proof["temporaryProof"], "phoneNumber": "+16505550102"});
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &wrong_number,
+    );
+    assert_eq!(status, 400);
+
+    // Invalid test numbers are refused and change nothing.
+    for numbers in [
+        json!({"6505550101": "123456"}),
+        json!({"+16505550101": "12345"}),
+        json!({"+16505550101": 123_456}),
+    ] {
+        let (status, refused) = patch_sign_in(
+            &s,
+            "signIn.phoneNumber.testPhoneNumbers",
+            &json!({"signIn": {"phoneNumber": {"testPhoneNumbers": numbers}}}),
+        );
+        assert_eq!(status, 400, "{refused}");
+    }
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert_eq!(
+        read["signIn"]["phoneNumber"]["testPhoneNumbers"],
+        json!({"+16505550101": "123456"})
+    );
+}
+
+/// Linking a free number answers the session's tokens and the number, without the account's
+/// email (sandbox recording 2026-09-23, `auth-account/phone#link-phone`).
+#[test]
+fn phone_link_answers_without_the_email() {
+    let s = state();
+    let (status, account) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "linkme@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{account}");
+    let (status, sent) = post(
+        &s,
+        &format!("{V1}/accounts:sendVerificationCode"),
+        &json!({"phoneNumber": "+16505550104", "recaptchaToken": "x"}),
+    );
+    assert_eq!(status, 200, "{sent}");
+    let code = s.store.lock().unwrap().verification_codes()[0].code.clone();
+    let (status, linked) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPhoneNumber"),
+        &json!({"sessionInfo": sent["sessionInfo"], "code": code, "idToken": account["idToken"]}),
+    );
+    assert_eq!(status, 200, "{linked}");
+    assert_eq!(linked["phoneNumber"], "+16505550104");
+    assert_eq!(linked["isNewUser"], false);
+    assert!(linked.get("email").is_none(), "{linked}");
+}
+
+/// An imported raw password is stamped with the import time like an imported hash (sandbox
+/// recording 2026-09-23, `import-hash/errors#lookup-all`).
+#[test]
+fn imported_raw_passwords_report_their_update_time() {
+    let s = state();
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"users": [{"localId": "raw", "email": "raw@example.com", "rawPassword": "password123"}]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["raw"]}),
+    );
+    assert_eq!(
+        found["users"][0]["passwordUpdatedAt"], 1_788_004_860_000_i64,
+        "{found}"
+    );
+}
+
+/// An Admin create takes a `localId` of 0 to 256 characters, the empty one included, and
+/// answers a longer one with production's internal error without creating anything
+/// (sandbox exploration 2026-09-24, `docs.local/runs/auth-localid-explore-20260924`;
+/// recording 2026-09-23, `values#local-id-empty`, `admin/create#local-id-129`).
+#[test]
+fn admin_create_local_id_lengths_follow_production() {
+    let s = state();
+    for uid in [String::new(), "b".repeat(129), "c".repeat(256)] {
+        let (status, created) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": uid}),
+        );
+        assert_eq!(status, 200, "{}: {created}", uid.len());
+        assert_eq!(created["localId"], uid);
+    }
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": [""]}),
+    );
+    assert_eq!(found["users"][0]["localId"], "", "{found}");
+    let (status, deleted) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:delete"),
+        &json!({"localId": ""}),
+    );
+    assert_eq!(status, 200, "{deleted}");
+    let long = "d".repeat(257);
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": long}),
+    );
+    assert_eq!(status, 500, "{refused}");
+    assert_eq!(
+        refused,
+        json!({"error": {"code": 500, "message": "Internal error encountered.", "errors": [
+            {"message": "Internal error encountered.", "domain": "global", "reason": "backendError"}
+        ], "status": "INTERNAL"}})
+    );
+    assert!(s.store.lock().unwrap().user_by_id(&long).is_none());
+}
+
+/// `HMAC_SHA512` imports without a key, and a sign-in against it is production's internal
+/// error rather than a credential refusal (sandbox recording 2026-09-23,
+/// `import-hash/errors#sign-in-hmac-sha512-without-key`).
+#[test]
+fn keyless_hmac_sha512_sign_in_is_a_backend_failure() {
+    let s = state();
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"hashAlgorithm": "HMAC_SHA512", "users": [{
+            "localId": "hmac", "email": "hmac@example.com",
+            "passwordHash": "AAAAAAAAAAAAAAAAAAAAAA==", "salt": "c2FsdA=="
+        }]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    assert!(imported.get("error").is_none(), "{imported}");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "hmac@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 500, "{refused}");
+    assert_eq!(refused["error"]["status"], "INTERNAL");
+    assert_eq!(refused["error"]["message"], "Internal error encountered.");
+}
+
+/// A negative query offset is production's internal error (corpus v2 recording 2026-09-24,
+/// `admin/query#negative-offset`, the same in both recordings).
+#[test]
+fn strict_admin_query_negative_offset_is_a_backend_failure() {
+    let s = strict_state();
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:query"),
+        &json!({"offset": "-1"}),
+    );
+    assert_eq!(status, 500, "{refused}");
+    assert_eq!(refused["error"]["status"], "INTERNAL");
+}
+
+/// Imported hash parameters are held to local work bounds: an oversized standard scrypt is
+/// refused at import and a bcrypt cost above the bound fails the sign-in quickly instead of
+/// exhausting memory or CPU (closure security review 2026-09-24).
+#[test]
+fn imported_hash_work_is_bounded() {
+    let b64 = fireemu_core_types::hash::base64_standard;
+    let s = state();
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"hashAlgorithm": "STANDARD_SCRYPT", "cpuMemCost": 1_u64 << 40, "blockSize": 8,
+            "parallelization": 1, "dkLen": 64,
+            "users": [{"localId": "huge", "email": "huge@example.com", "passwordHash": b64(&[0; 64]), "salt": b64(b"salt")}]}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "INVALID_HASH_PARAMETER");
+    let bcrypt = format!("$2b$31${}", "a".repeat(53));
+    let (status, imported) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchCreate"),
+        &json!({"hashAlgorithm": "BCRYPT",
+            "users": [{"localId": "slow", "email": "slow@example.com", "passwordHash": b64(bcrypt.as_bytes())}]}),
+    );
+    assert_eq!(status, 200, "{imported}");
+    let started = std::time::Instant::now();
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "slow@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 500, "{refused}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
+
+/// The custom-attribute size limit applies to the stored text, so whitespace cannot carry an
+/// oversized value (closure security review 2026-09-24).
+#[test]
+fn custom_attribute_padding_counts_toward_the_size_limit() {
+    let s = state();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "pad"}),
+    );
+    assert_eq!(status, 200);
+    let padded = format!("{{\"a\":1{}}}", " ".repeat(2_000));
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "pad", "customAttributes": padded}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "CLAIMS_TOO_LARGE");
+}
+
+/// In duplicate-email mode a password account cannot move onto an address another password
+/// account holds, so the holder cannot be locked out of password sign-in (closure security
+/// review 2026-09-24; production refuses a second password account for an address).
+#[test]
+fn duplicate_email_mode_keeps_one_password_account_per_address_on_change() {
+    let s = state();
+    let (status, body) = admin(
+        &s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=signIn.allowDuplicateEmails,emailPrivacyConfig.enableImprovedEmailPrivacy",
+        &json!({"signIn": {"allowDuplicateEmails": true}, "emailPrivacyConfig": {"enableImprovedEmailPrivacy": false}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let sign_up = |email: &str| {
+        post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": email, "password": "password123", "returnSecureToken": true}),
+        )
+    };
+    let (_, owner) = sign_up("owner@example.com");
+    let (_, mover) = sign_up("mover@example.com");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": mover["idToken"], "email": "owner@example.com"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS")),
+        "{refused}"
+    );
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": mover["localId"], "email": "owner@example.com"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS")),
+        "{refused}"
+    );
+    // An account without a password cannot reach the same state by taking the address and a
+    // password in one update or in two (closure re-review 2026-09-24).
+    for two_steps in [false, true] {
+        let (_, anonymous) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"returnSecureToken": true}),
+        );
+        let update = |body: Value| post(&s, &format!("{V1}/accounts:update"), &body);
+        let refused = if two_steps {
+            let (status, relocated) = update(
+                json!({"idToken": anonymous["idToken"], "email": "owner@example.com", "returnSecureToken": true}),
+            );
+            assert_eq!(status, 200, "{relocated}");
+            update(json!({"idToken": relocated["idToken"], "password": "password456"}))
+        } else {
+            update(
+                json!({"idToken": anonymous["idToken"], "email": "owner@example.com", "password": "password456"}),
+            )
+        };
+        assert_eq!(
+            (refused.0, refused.1["error"]["message"].as_str()),
+            (400, Some("EMAIL_EXISTS")),
+            "two_steps={two_steps}: {}",
+            refused.1
+        );
+    }
+    let (_, anonymous) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"returnSecureToken": true}),
+    );
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"idToken": anonymous["idToken"], "email": "owner@example.com", "password": "password456"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("EMAIL_EXISTS")),
+        "upgrade: {refused}"
+    );
+    let (status, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "owner@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 200, "{signed}");
+    assert_eq!(signed["localId"], owner["localId"]);
+}
+
+/// An empty imported hash is no credential: no password signs in with it, whatever the
+/// algorithm derives (external review 2026-09-24; proto3 reads empty bytes as unset).
+#[test]
+fn an_empty_imported_hash_never_matches() {
+    for options in [
+        json!({"hashAlgorithm": "PBKDF_SHA1", "rounds": 1000}),
+        json!({"hashAlgorithm": "PBKDF2_SHA256", "rounds": 1000}),
+        json!({"hashAlgorithm": "SHA256", "rounds": 1}),
+        json!({"hashAlgorithm": "MD5", "rounds": 0}),
+    ] {
+        let s = state();
+        let mut body = options.clone();
+        body["users"] =
+            json!([{"localId": "empty", "email": "empty@example.com", "passwordHash": ""}]);
+        let (status, imported) = admin(&s, "POST", &format!("{ADMIN}/accounts:batchCreate"), &body);
+        assert_eq!(status, 200, "{options}: {imported}");
+        for password in ["anything1", "password123"] {
+            let (status, refused) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": "empty@example.com", "password": password}),
+            );
+            assert_eq!(status, 400, "{options}: {refused}");
+        }
+        let store = s.store.lock().unwrap();
+        let uid = store.user_by_id("empty").map(|user| user.local_id.clone());
+        assert!(uid.is_some_and(|uid| store.password_digest(&uid).is_none()));
+    }
+}
+
+/// Disabled project providers refuse their client flows with `OPERATION_NOT_ALLOWED`, and
+/// `passwordRequired` turns email-link sign-in off.
+#[test]
+fn project_sign_in_providers_gate_client_flows() {
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.email.enabled,signIn.anonymous.enabled,signIn.phoneNumber.enabled",
+        &json!({"signIn": {"email": {"enabled": false}, "anonymous": {"enabled": false}, "phoneNumber": {"enabled": false}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    for (route, body) in [
+        (
+            "signUp",
+            json!({"email": "off@example.com", "password": "password1"}),
+        ),
+        ("signUp", json!({"returnSecureToken": true})),
+        (
+            "signInWithPassword",
+            json!({"email": "off@example.com", "password": "password1"}),
+        ),
+        (
+            "sendVerificationCode",
+            json!({"phoneNumber": "+16505550101", "recaptchaToken": "x"}),
+        ),
+    ] {
+        let (status, refused) = post(&s, &format!("{V1}/accounts:{route}"), &body);
+        assert_eq!(
+            (status, refused["error"]["message"].as_str()),
+            (400, Some("OPERATION_NOT_ALLOWED")),
+            "{route}"
+        );
+    }
+    let (_, read) = admin(&s, "GET", PROJECT_CONFIG, &Value::Null);
+    assert!(read["signIn"].get("email").is_none(), "{read}");
+    assert!(read["signIn"].get("anonymous").is_none(), "{read}");
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"email": "admin@example.com", "password": "password1"}),
+    );
+    assert_eq!(status, 200);
+
+    let s = state();
+    let (status, body) = patch_sign_in(
+        &s,
+        "signIn.email.passwordRequired",
+        &json!({"signIn": {"email": {"passwordRequired": true}}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "link@example.com", "continueUrl": "http://localhost/"}),
+    );
+    assert_eq!(
+        (status, refused["error"]["message"].as_str()),
+        (400, Some("OPERATION_NOT_ALLOWED"))
+    );
+}
+
+#[test]
+fn client_permissions_refuse_end_users_as_admin_only_operations() {
+    let s = state();
+    let (status, created) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "perm@example.com", "password": "password1", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{created}");
+    let path = "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config";
+    let updated = admin(
+        &s,
+        "PATCH",
+        &format!("{path}?updateMask=client.permissions.disabledUserSignup,client.permissions.disabledUserDeletion"),
+        &json!({"client": {"permissions": {
+            "disabledUserSignup": true,
+            "disabledUserDeletion": true
+        }}}),
+    );
+    assert_eq!(updated.0, 200, "{}", updated.1);
+    for body in [
+        json!({"email": "perm2@example.com", "password": "password1"}),
+        json!({"returnSecureToken": true}),
+    ] {
+        let (status, refused) = post(&s, &format!("{V1}/accounts:signUp"), &body);
+        assert_eq!(status, 400, "{refused}");
+        assert_eq!(refused["error"]["message"], "ADMIN_ONLY_OPERATION");
+    }
+    let (status, refused) = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": created["idToken"]}),
+    );
+    assert_eq!(status, 400, "{refused}");
+    assert_eq!(refused["error"]["message"], "ADMIN_ONLY_OPERATION");
 }
 
 #[test]
@@ -9749,7 +10888,7 @@ fn self_deletion_permission_denies_end_user_but_admin_delete_still_succeeds() {
         &json!({"idToken": signed["idToken"]}),
     );
     assert_eq!(denied.0, 400, "{}", denied.1);
-    assert_eq!(denied.1["error"]["message"], "OPERATION_NOT_ALLOWED");
+    assert_eq!(denied.1["error"]["message"], "ADMIN_ONLY_OPERATION");
     let lookup = admin(
         &s,
         "POST",
@@ -10006,8 +11145,11 @@ fn sign_up_link_authenticates_before_password_policy_and_preserves_state() {
         }),
     );
     assert_eq!(status, 400, "{refused}");
-    assert_eq!(
-        refused["error"]["message"], "PASSWORD_DOES_NOT_MEET_REQUIREMENTS",
+    // The detail after " : " is pinned in password_rules_answer_like_production.
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("PASSWORD_DOES_NOT_MEET_REQUIREMENTS")),
         "a valid session reaches policy evaluation after authentication"
     );
     assert!(s.store.lock().unwrap().user_by_email(email).is_none());
@@ -11242,12 +12384,55 @@ fn query_sort_fixture() -> AuthState {
 }
 
 fn query_result_ids(body: &Value) -> Vec<&str> {
-    body["userInfo"]
-        .as_array()
-        .unwrap()
+    // An empty page omits `userInfo`.
+    assert!(body.get("recordsCount").is_some(), "{body}");
+    body.get("userInfo")
+        .map_or(&[][..], |rows| rows.as_array().unwrap())
         .iter()
         .map(|row| row["localId"].as_str().unwrap())
         .collect()
+}
+
+/// Descending sorts keep ties in ascending user-id order, and an empty page carries no
+/// `userInfo` (sandbox recording 2026-09-23, `auth-account/admin/query`).
+#[test]
+fn strict_admin_query_descending_ties_stay_in_user_id_order() {
+    let s = strict_state();
+    for (uid, name) in [
+        ("q1", Some("Carol")),
+        ("q2", Some("alice")),
+        ("q3", Some("Bob")),
+        ("q4", None),
+        ("q5", Some("Bob")),
+    ] {
+        let mut body = json!({"localId": uid});
+        if let Some(name) = name {
+            body["displayName"] = json!(name);
+        }
+        assert_eq!(
+            admin(&s, "POST", &format!("{ADMIN}/accounts"), &body).0,
+            200
+        );
+    }
+    let path = format!("{ADMIN}/accounts:query");
+    for (sort, order, expected) in [
+        ("NAME", "ASC", ["q4", "q3", "q5", "q1", "q2"]),
+        ("NAME", "DESC", ["q2", "q1", "q3", "q5", "q4"]),
+        ("LAST_LOGIN_AT", "DESC", ["q1", "q2", "q3", "q4", "q5"]),
+        ("USER_ID", "DESC", ["q5", "q4", "q3", "q2", "q1"]),
+    ] {
+        let (status, page) = admin(&s, "POST", &path, &json!({"sortBy": sort, "order": order}));
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(query_result_ids(&page), expected, "{sort} {order}");
+    }
+    for body in [
+        json!({"limit": "0"}),
+        json!({"expression": [{"email": "nobody@example.com"}]}),
+    ] {
+        let (status, page) = admin(&s, "POST", &path, &body);
+        assert_eq!(status, 200, "{page}");
+        assert_eq!(page, json!({"recordsCount": "0"}));
+    }
 }
 
 #[test]
@@ -11293,7 +12478,7 @@ fn strict_admin_query_all_documented_sorts_apply_before_paging_on_both_routes() 
 }
 
 #[test]
-fn strict_admin_query_count_and_empty_pages_keep_their_distinct_contracts() {
+fn strict_admin_query_count_and_empty_pages_answer_only_the_count() {
     let s = query_sort_fixture();
     for sort in ["NAME", "CREATED_AT", "LAST_LOGIN_AT", "USER_EMAIL"] {
         let (status, count) = admin(
@@ -11310,8 +12495,8 @@ fn strict_admin_query_count_and_empty_pages_keep_their_distinct_contracts() {
             request["sortBy"] = json!(sort);
             let (status, page) = admin(&s, "POST", &format!("{ADMIN}/accounts:query"), &request);
             assert_eq!(status, 200, "{page}");
-            assert_eq!(page["recordsCount"], "0");
-            assert_eq!(page["userInfo"], json!([]));
+            // Production omits an empty page (sandbox recording 2026-09-23, limit-0).
+            assert_eq!(page, json!({"recordsCount": "0"}));
         }
     }
 }
@@ -11379,7 +12564,7 @@ fn sorted_admin_query_does_not_admit_an_end_user_or_a_wrong_project() {
     for suffix in ["/accounts:query", ":queryAccounts"] {
         let path = format!("{ADMIN}{suffix}");
         let (status, _) = post(&s, &path, &request);
-        assert_eq!(status, 401);
+        assert_eq!(status, 403);
         let (status, _) = admin(
             &s,
             "POST",
@@ -11465,7 +12650,7 @@ fn strict_admin_query_body_tenant_is_scoped_and_never_silently_ignored() {
         );
         assert_eq!(status, 200, "{count}");
         assert_eq!(count["recordsCount"], "1");
-        assert_eq!(post(&s, &path, &body).0, 401);
+        assert_eq!(post(&s, &path, &body).0, 403);
         for malformed in [json!(false), json!(7), json!([]), json!({})] {
             let (status, refused) = admin(
                 &s,
@@ -11539,11 +12724,13 @@ fn strict_query_expression_priorities_exact_union_and_duplicates_are_explicit() 
             json!([{"email":null, "phoneNumber":null, "userId":"c"}]),
             vec!["c"],
         ),
+        // Production evaluates only the first expression and treats an empty selector as
+        // unset (sandbox recording 2026-09-23, auth-account/admin/query).
         (
             json!([{"email":"a@example.com"}, {"userId":"a"}, {"userId":"c"}, {"userId":"c"}]),
-            vec!["a", "c"],
+            vec!["a"],
         ),
-        (json!([{"email":"", "userId":"a"}]), vec![]),
+        (json!([{"email":"", "userId":"a"}]), vec!["a"]),
         (json!([{"email":"%@example.com"}]), vec![]),
         (json!([{"email":"a@"}]), vec![]),
         (json!([{"userId":"A"}]), vec![]),
@@ -11572,8 +12759,9 @@ fn strict_expression_filters_before_sort_paging_and_count_only() {
         &json!({"expression":expression, "returnUserInfo":false, "sortBy":"NAME"}),
     );
     assert_eq!(status, 200, "{count}");
-    assert_eq!(count, json!({"recordsCount":"3"}));
-    for (order, expected) in [("ASC", vec!["d", "c"]), ("DESC", vec!["d", "a"])] {
+    // Only the first expression is evaluated in production (sandbox recording 2026-09-23).
+    assert_eq!(count, json!({"recordsCount":"1"}));
+    for (order, expected) in [("ASC", Vec::<&str>::new()), ("DESC", Vec::new())] {
         let (status, page) = admin(
             &s,
             "POST",
@@ -11582,7 +12770,7 @@ fn strict_expression_filters_before_sort_paging_and_count_only() {
         );
         assert_eq!(status, 200, "{page}");
         assert_eq!(query_result_ids(&page), expected);
-        assert_eq!(page["recordsCount"], "2");
+        assert_eq!(page["recordsCount"], "0");
     }
     for body in [
         json!({"expression":expression, "limit":0}),
@@ -11590,7 +12778,7 @@ fn strict_expression_filters_before_sort_paging_and_count_only() {
     ] {
         let (status, page) = admin(&s, "POST", &format!("{ADMIN}:queryAccounts"), &body);
         assert_eq!(status, 200, "{page}");
-        assert_eq!(page["userInfo"], json!([]));
+        assert!(page.get("userInfo").is_none(), "{page}");
     }
     assert_eq!(before, format!("{:?}", s.store.lock().unwrap()));
 }
@@ -11604,8 +12792,6 @@ fn malformed_expression_never_falls_back_to_an_unfiltered_response() {
         json!("SQL"),
         json!([null]),
         json!([[]]),
-        json!([{}]),
-        json!([{"userId":null}]),
         json!([{"email":true}]),
         json!([{"userId":4}]),
         json!([{"phoneNumber":{}}]),
@@ -11626,6 +12812,24 @@ fn malformed_expression_never_falls_back_to_an_unfiltered_response() {
             assert!(body.get("userInfo").is_none());
             assert!(body.get("recordsCount").is_none());
         }
+    }
+    // An item without a selector (or with a null one) is well-formed and unconstrained in
+    // production (sandbox recording 2026-09-23, auth-account/admin/query#expression-empty-item).
+    let (_, all) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}:queryAccounts"),
+        &json!({"returnUserInfo": false}),
+    );
+    for expression in [json!([{}]), json!([{"userId": null}])] {
+        let (status, body) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}:queryAccounts"),
+            &json!({"expression": expression, "returnUserInfo": false}),
+        );
+        assert_eq!(status, 200, "{expression}: {body}");
+        assert_eq!(body["recordsCount"], all["recordsCount"], "{expression}");
     }
     assert_eq!(before, format!("{:?}", s.store.lock().unwrap()));
 }
@@ -11687,7 +12891,7 @@ fn account_expression_is_namespace_scoped_and_keeps_management_authorization() {
         let (status, page) = admin(&s, "POST", &path, &body);
         assert_eq!(status, 200, "{page}");
         assert_eq!(query_result_ids(&page), expected);
-        assert_eq!(post(&s, &path, &body).0, 401);
+        assert_eq!(post(&s, &path, &body).0, 403);
         let mut foreign = owner();
         foreign.origin = Some("https://external.invalid".into());
         assert_eq!(handle_with(&s, "POST", &path, &foreign, &body).status, 403);
@@ -11771,4 +12975,777 @@ fn generated_account_expression_corpus_runs_through_the_native_handler() {
             );
         }
     }
+}
+
+/// Every hash vector production accepted (conformance/src/auth-account/hash-vectors.json)
+/// imports through `accounts:batchCreate` and signs in with its password only.
+#[test]
+fn imported_production_hash_formats_sign_in_with_their_password_only() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../conformance/src/auth-account/hash-vectors.json"
+    );
+    let vectors: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let s = state();
+    for (index, (name, vector)) in vectors.as_object().unwrap().iter().enumerate() {
+        let email = format!("hash-{index}@example.com");
+        let mut request = vector["options"].clone();
+        let mut user = vector["user"].clone();
+        user["localId"] = json!(format!("hash-{index}"));
+        user["email"] = json!(email);
+        request["users"] = json!([user]);
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &request,
+        );
+        assert_eq!(status, 200, "{name}: {response}");
+        assert!(response.get("error").is_none(), "{name}: {response}");
+        let sign_in = |password: &str| {
+            post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": email, "password": password, "returnSecureToken": true}),
+            )
+            .0
+        };
+        assert_eq!(
+            sign_in("password124"),
+            400,
+            "{name} refuses another password"
+        );
+        assert_eq!(sign_in("password123"), 200, "{name} accepts its password");
+        assert_eq!(
+            sign_in("password123"),
+            200,
+            "{name} still signs in after the rehash"
+        );
+    }
+}
+
+#[test]
+fn invalid_hash_parameters_refuse_the_whole_import() {
+    let s = state();
+    let argon = |overrides: Value| {
+        let mut params = json!({"hashType": "ARGON2_ID", "iterations": 2, "memoryCostKib": 1024, "parallelism": 1, "hashLengthBytes": 32});
+        for (k, v) in overrides.as_object().unwrap() {
+            params[k] = v.clone();
+        }
+        json!({"hashAlgorithm": "ARGON2", "argon2Parameters": params})
+    };
+    let scrypt = |rounds: u32, memory: u32| json!({"hashAlgorithm": "SCRYPT", "signerKey": "AAAA", "rounds": rounds, "memoryCost": memory});
+    // Every code the Identity Platform sandbox answered (recording 2026-09-23).
+    for (options, code) in [
+        (json!({"hashAlgorithm": "NOT_AN_ALGORITHM"}), "INVALID_HASH_ALGORITHM"),
+        (json!({"hashAlgorithm": "PBKDF_SHA1"}), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "PBKDF_SHA1", "rounds": 0}), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "PBKDF_SHA1", "rounds": 120_001}), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "SHA256", "rounds": 8193}), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "MD5", "rounds": 8193}), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "HMAC_SHA256"}), "EMPTY_HASH_KEY"),
+        (scrypt(8, 15), "INVALID_HASH_MEMORY_COSTS"),
+        (scrypt(8, 0), "INVALID_HASH_MEMORY_COSTS"),
+        (scrypt(9, 14), "INVALID_HASH_ROUNDS"),
+        (scrypt(0, 14), "INVALID_HASH_ROUNDS"),
+        (json!({"hashAlgorithm": "STANDARD_SCRYPT", "blockSize": 8, "parallelization": 1, "dkLen": 64}), "INVALID_HASH_PARAMETER"),
+        (json!({"hashAlgorithm": "STANDARD_SCRYPT", "cpuMemCost": 1024, "blockSize": 8, "parallelization": 1, "dkLen": 0}), "INVALID_HASH_PARAMETER"),
+        (json!({"hashAlgorithm": "ARGON2"}), "INVALID_ARGON2_MEMORY_COST"),
+        (argon(json!({"memoryCostKib": 32769})), "INVALID_ARGON2_MEMORY_COST"),
+        (argon(json!({"iterations": 17})), "INVALID_ARGON2_ITERATIONS"),
+        (argon(json!({"parallelism": 0})), "INVALID_ARGON2_PARALLELISM"),
+        (argon(json!({"hashType": "HASH_TYPE_UNSPECIFIED"})), "INVALID_ARGON2_HASH_TYPE"),
+        (
+            json!({"hashAlgorithm": "SHA256", "users": [{"localId": "refused", "passwordHash": "not base64!"}]}),
+            "Invalid value at 'users[0].password' (TYPE_BYTES), Base64 decoding failed for \"not base64!\"",
+        ),
+    ] {
+        let mut request = options.clone();
+        if request.get("users").is_none() {
+            request["users"] = json!([{"localId": "refused", "passwordHash": "AAAA", "salt": "AAAA"}]);
+        }
+        let (status, response) = admin(&s, "POST", &format!("{ADMIN}/accounts:batchCreate"), &request);
+        assert_eq!(status, 400, "{options}: {response}");
+        assert_eq!(response["error"]["message"], code, "{options}");
+        assert!(s.store.lock().unwrap().user_by_id("refused").is_none());
+    }
+}
+
+/// Production (sandbox recording 2026-09-23): an account created through the Admin API carries
+/// `disabled` and `validSince` in every read, a client-created anonymous account neither, and
+/// the Admin create response always carries `email`, empty when none was given.
+#[test]
+fn admin_created_accounts_report_disabled_and_valid_since_like_production() {
+    let s = state();
+    let (status, created) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "admin-made"}),
+    );
+    assert_eq!(status, 200, "{created}");
+    assert_eq!(created["email"], json!(""));
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["admin-made"]}),
+    );
+    assert_eq!(found["users"][0]["disabled"], json!(false), "{found}");
+    assert!(found["users"][0]["validSince"].is_string(), "{found}");
+
+    let (_, anonymous) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"returnSecureToken": true}),
+    );
+    let (_, looked) = post(
+        &s,
+        &format!("{V1}/accounts:lookup"),
+        &json!({"idToken": anonymous["idToken"]}),
+    );
+    assert!(looked["users"][0].get("disabled").is_none(), "{looked}");
+    assert!(looked["users"][0].get("validSince").is_none(), "{looked}");
+}
+
+/// Error messages the Identity Platform sandbox returned for account operations (recording
+/// of 2026-09-23, conformance/auth-account-production.json), exact to the detail after " : ".
+#[test]
+fn account_operation_errors_carry_production_messages() {
+    let s = strict_state();
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "m1", "email": "m1@example.com", "password": "password123"}),
+    );
+    assert_eq!(status, 200);
+    let update = |body: Value| {
+        admin(&s, "POST", &format!("{ADMIN}/accounts:update"), &body).1["error"]["message"].clone()
+    };
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": "{\"sub\":\"x\"}"})),
+        "FORBIDDEN_CLAIM : sub"
+    );
+    let big = format!("{{\"k\":\"{}\"}}", "v".repeat(993));
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": big})),
+        "CLAIMS_TOO_LARGE"
+    );
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": "[1,2]"})),
+        "INVALID_CLAIMS : Not a JSON Object: [1,2]"
+    );
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": "\"text\""})),
+        "INVALID_CLAIMS : Not a JSON Object: \"text\""
+    );
+    assert_eq!(
+        update(json!({"localId": "m1", "customAttributes": "null"})),
+        "INVALID_CLAIMS : Not a JSON Object: null"
+    );
+    assert_eq!(update(json!({"displayName": "x"})), "MISSING_LOCAL_ID");
+    assert_eq!(
+        update(json!({"localId": "m1", "deleteAttribute": ["NOT_A_FIELD"]})),
+        "Invalid value at 'delete_attribute[0]' (type.googleapis.com/google.cloud.identitytoolkit.v1.SetAccountInfoRequest.UserAttributeName), \"NOT_A_FIELD\""
+    );
+    let created = |body: Value| {
+        admin(&s, "POST", &format!("{ADMIN}/accounts"), &body).1["error"]["message"].clone()
+    };
+    assert_eq!(
+        created(json!({"localId": "m2", "phoneNumber": "6505550101"})),
+        "INVALID_PHONE_NUMBER : Invalid format."
+    );
+    let lookup = |body: Value| {
+        admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &body).1["error"]["message"].clone()
+    };
+    assert_eq!(lookup(json!({})), "MISSING_ID_TOKEN");
+    assert_eq!(lookup(json!({"localId": []})), "MISSING_ID_TOKEN");
+
+    {
+        let mut store = s.store.lock().unwrap();
+        let mut config = store.config();
+        config.enable_improved_email_privacy = true;
+        store.set_config(config);
+    }
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "m1@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    let client_update = |body: Value| {
+        post(&s, &format!("{V1}/accounts:update"), &body).1["error"]["message"].clone()
+    };
+    assert_eq!(
+        client_update(json!({"idToken": signed["idToken"], "email": "m1-new@example.com"})),
+        "OPERATION_NOT_ALLOWED : Please verify the new email before changing email."
+    );
+    assert_eq!(
+        client_update(json!({"idToken": signed["idToken"], "email": "not-an-email"})),
+        "INVALID_EMAIL"
+    );
+}
+
+/// Production keeps a hash imported without `hashAlgorithm`, or with a three-byte Argon2
+/// length, as a password credential with `passwordUpdatedAt` (it just never matches).
+#[test]
+fn imported_hashes_production_accepts_are_password_credentials() {
+    let s = state();
+    for (id, request) in [
+        (
+            "no-algorithm",
+            json!({"users": [{"localId": "no-algorithm", "email": "na@example.com", "passwordHash": "AAAA", "salt": "AAAA"}]}),
+        ),
+        (
+            "argon-short",
+            json!({"hashAlgorithm": "ARGON2", "argon2Parameters": {"hashType": "ARGON2_ID", "iterations": 2, "memoryCostKib": 1024, "parallelism": 1, "hashLengthBytes": 3}, "users": [{"localId": "argon-short", "email": "as@example.com", "passwordHash": "AAAA", "salt": "AAAA"}]}),
+        ),
+    ] {
+        let (status, response) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:batchCreate"),
+            &request,
+        );
+        assert_eq!(status, 200, "{id}: {response}");
+        assert!(response.get("error").is_none(), "{id}: {response}");
+        let (_, found) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [id]}),
+        );
+        let user = &found["users"][0];
+        assert_eq!(user["passwordHash"], "UkVEQUNURUQ=", "{id}: {found}");
+        assert!(user["passwordUpdatedAt"].is_number(), "{id}: {found}");
+        assert_eq!(
+            user["providerUserInfo"][0]["providerId"], "password",
+            "{id}: {found}"
+        );
+    }
+}
+
+/// A client delete with the token of an account that no longer exists is `USER_NOT_FOUND` in
+/// production (sandbox recording 2026-09-23, auth-account/client/delete-effects#delete-again).
+#[test]
+fn deleting_again_with_a_deleted_accounts_token_is_user_not_found() {
+    let s = state();
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "gone@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    let (status, _) = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_eq!(status, 200);
+    let (status, again) = post(
+        &s,
+        &format!("{V1}/accounts:delete"),
+        &json!({"idToken": signed["idToken"]}),
+    );
+    assert_eq!(status, 400, "{again}");
+    assert_eq!(again["error"]["message"], "USER_NOT_FOUND");
+}
+
+/// A password change moves validSince to the change's second: tokens issued in an earlier
+/// second are `TOKEN_EXPIRED` for lookup, update and refresh, in production (sandbox recording
+/// 2026-09-23: auth-account/admin/disable#refresh-after-re-enable after an Admin password
+/// update, auth-account/policy/default/client-update after client password updates).
+#[test]
+fn a_password_change_expires_tokens_from_earlier_seconds() {
+    for admin_change in [false, true] {
+        let s = strict_state();
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signUp"),
+            &json!({"email": "pw@example.com", "password": "password123", "returnSecureToken": true}),
+        );
+        advance(&s, 2);
+        let (status, changed) = if admin_change {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts:update"),
+                &json!({"localId": signed["localId"], "password": "password456"}),
+            )
+        } else {
+            let (_, fresh) = post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": "pw@example.com", "password": "password123", "returnSecureToken": true}),
+            );
+            post(
+                &s,
+                &format!("{V1}/accounts:update"),
+                &json!({"idToken": fresh["idToken"], "password": "password456", "returnSecureToken": true}),
+            )
+        };
+        assert_eq!(status, 200, "{changed}");
+        advance(&s, 1);
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(
+            (status, looked["error"]["message"].as_str()),
+            (400, Some("TOKEN_EXPIRED")),
+            "admin={admin_change}: {looked}"
+        );
+        if admin_change {
+            // Observed for an Admin change only; the client-change refresh is re-recorded
+            // with a second boundary before it is pinned.
+            let (status, refreshed) = post(
+                &s,
+                "/securetoken.googleapis.com/v1/token",
+                &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"]}),
+            );
+            assert_eq!(
+                (status, refreshed["error"]["message"].as_str()),
+                (400, Some("TOKEN_EXPIRED")),
+                "{refreshed}"
+            );
+        }
+    }
+}
+
+/// After an Admin deletes an account and creates a new one with the same UID, the old refresh
+/// token is `TOKEN_EXPIRED`, not `USER_NOT_FOUND`, in production (sandbox recording 2026-09-23,
+/// auth-account/admin/uid-reuse#first-refresh-token-after-reuse); without reuse it stays
+/// `USER_NOT_FOUND`.
+#[test]
+fn a_reused_uids_old_refresh_token_is_expired() {
+    let s = strict_state();
+    for (id, reuse, expected) in [
+        ("reused", true, "TOKEN_EXPIRED"),
+        ("gone", false, "USER_NOT_FOUND"),
+    ] {
+        let email = format!("{id}@example.com");
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts"),
+            &json!({"localId": id, "email": email, "password": "password123"}),
+        );
+        let (_, signed) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": email, "password": "password123", "returnSecureToken": true}),
+        );
+        advance(&s, 2);
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:delete"),
+            &json!({"localId": id}),
+        );
+        if reuse {
+            admin(
+                &s,
+                "POST",
+                &format!("{ADMIN}/accounts"),
+                &json!({"localId": id, "email": format!("{id}-2@example.com")}),
+            );
+        }
+        let (status, refreshed) = post(
+            &s,
+            "/securetoken.googleapis.com/v1/token",
+            &json!({"grant_type": "refresh_token", "refresh_token": signed["refreshToken"]}),
+        );
+        assert_eq!(
+            (status, refreshed["error"]["message"].as_str()),
+            (400, Some(expected)),
+            "{id}: {refreshed}"
+        );
+        let (status, looked) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": signed["idToken"]}),
+        );
+        assert_eq!(
+            status, 400,
+            "{id}: the old ID token never reads the new account: {looked}"
+        );
+    }
+}
+
+/// Proto3 JSON decoding refusals have their own body in production: a status name, an
+/// `errors` entry without a domain, and a `BadRequest` field violation (sandbox recording
+/// 2026-09-23).
+#[test]
+fn proto_decoding_refusals_carry_production_bad_request_details() {
+    let s = state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "p1"}),
+    );
+    let (status, refused) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "p1", "deleteAttribute": ["NOT_A_FIELD"]}),
+    );
+    assert_eq!(status, 400);
+    let message = "Invalid value at 'delete_attribute[0]' (type.googleapis.com/google.cloud.identitytoolkit.v1.SetAccountInfoRequest.UserAttributeName), \"NOT_A_FIELD\"";
+    assert_eq!(
+        refused,
+        json!({"error": {
+            "code": 400,
+            "message": message,
+            "errors": [{"message": message, "reason": "invalid"}],
+            "status": "INVALID_ARGUMENT",
+            "details": [{
+                "@type": "type.googleapis.com/google.rpc.BadRequest",
+                "fieldViolations": [{"field": "delete_attribute[0]", "description": message}],
+            }],
+        }})
+    );
+}
+
+/// An Admin email change or email removal keeps `emailVerified` in production, and a read
+/// reports it while it is true even without an address (sandbox recording 2026-09-23,
+/// auth-account/admin/update).
+#[test]
+fn admin_email_changes_keep_email_verified() {
+    let s = state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "ev", "email": "ev@example.com", "emailVerified": true}),
+    );
+    let (_, changed) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "ev", "email": "ev-new@example.com"}),
+    );
+    assert_eq!(changed["emailVerified"], true, "{changed}");
+    let (_, cleared) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "ev", "deleteAttribute": ["EMAIL"]}),
+    );
+    assert_eq!(cleared["emailVerified"], true, "{cleared}");
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["ev"]}),
+    );
+    assert_eq!(found["users"][0]["emailVerified"], true, "{found}");
+    assert!(found["users"][0].get("email").is_none(), "{found}");
+}
+
+/// Production's Admin read routes are lenient where fireemu used to refuse (sandbox
+/// recording 2026-09-23): lookups beyond 100 identifiers, numeric identifiers and
+/// `initialEmail` answer 200; batchGet with `maxResults` 0, above 1000 or a malformed page
+/// token answers 200; a POST to batchGet is a plain 404; queries accept `limit` above 500 and
+/// an empty expression; and batchGet returns the password hash material.
+#[test]
+fn admin_read_routes_are_as_lenient_as_production() {
+    let s = strict_state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "r1", "email": "r1@example.com", "password": "password123"}),
+    );
+    let lookup = |body: Value| admin(&s, "POST", &format!("{ADMIN}/accounts:lookup"), &body);
+    let many: Vec<String> = (0..101).map(|i| format!("nobody-{i}")).collect();
+    for body in [
+        json!({"localId": many}),
+        json!({"localId": [42]}),
+        json!({"initialEmail": ["r1@example.com"]}),
+    ] {
+        let (status, found) = lookup(body.clone());
+        assert_eq!(status, 200, "{body}: {found}");
+    }
+    let batch_get = |query: &str| {
+        admin(
+            &s,
+            "GET",
+            &format!("{ADMIN}/accounts:batchGet?{query}"),
+            &Value::Null,
+        )
+    };
+    let (status, none) = batch_get("maxResults=0");
+    assert_eq!((status, none.get("users").is_none()), (200, true), "{none}");
+    let (status, all) = batch_get("maxResults=1001");
+    assert_eq!(status, 200, "{all}");
+    let user = &all["users"][0];
+    assert!(
+        user["passwordHash"].is_string() && user["passwordHash"] != "UkVEQUNURUQ=",
+        "{all}"
+    );
+    assert!(user["salt"].is_string(), "{all}");
+    assert_eq!(user["version"], 0, "{all}");
+    // A token is read as the user id to start after; nothing sorts after this one.
+    let (status, bad) = batch_get("maxResults=2&nextPageToken=zz-not-a-token");
+    assert_eq!((status, bad.get("users").is_none()), (200, true), "{bad}");
+    let (status, _) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:batchGet"),
+        &json!({"maxResults": 2}),
+    );
+    assert_eq!(status, 404);
+    for body in [json!({"limit": "501"}), json!({"expression": [{}]})] {
+        let (status, queried) = admin(&s, "POST", &format!("{ADMIN}/accounts:query"), &body);
+        assert_eq!(status, 200, "{body}: {queried}");
+        assert_eq!(queried["recordsCount"], "1", "{body}: {queried}");
+    }
+}
+
+/// Production stores a displayName carrying control characters, NUL included, on update
+/// (sandbox recording 2026-09-23, `auth-account/values`).
+#[test]
+fn a_client_update_stores_control_characters_in_the_display_name() {
+    let s = strict_state();
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "cc@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    for name in ["a\u{0007}b", "a\u{0000}b"] {
+        let (status, updated) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "displayName": name}),
+        );
+        assert_eq!(status, 200, "{updated}");
+        assert_eq!(updated["displayName"], name);
+    }
+}
+
+/// Password rules as the Identity Platform sandbox answered them (recording 2026-09-23):
+/// lengths count UTF-16 units, an overlong password names the 4096 limit, a custom policy lists
+/// every missing requirement in a fixed order, and a client password change returns only the
+/// ID token unless `returnSecureToken` asks for the rest.
+#[test]
+fn password_rules_answer_like_production() {
+    let s = strict_state();
+    let (status, astral) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "astral@example.com", "password": "\u{1F600}\u{1F600}\u{1F600}", "returnSecureToken": true}),
+    );
+    assert_eq!(
+        status, 200,
+        "three astral characters are six UTF-16 units: {astral}"
+    );
+    let (status, long) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "long@example.com", "password": "a".repeat(4097)}),
+    );
+    assert_eq!(status, 400);
+    assert_eq!(
+        long["error"]["message"],
+        "PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Password cannot be longer than 4096 characters"
+    );
+
+    let (_, fresh) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "astral@example.com", "password": "\u{1F600}\u{1F600}\u{1F600}", "returnSecureToken": true}),
+    );
+    let (status, changed) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": fresh["idToken"], "password": "password456", "returnSecureToken": false}),
+    );
+    assert_eq!(status, 200, "{changed}");
+    assert!(changed["idToken"].is_string(), "{changed}");
+    assert!(
+        changed.get("refreshToken").is_none() && changed.get("expiresIn").is_none(),
+        "{changed}"
+    );
+
+    {
+        let mut store = s.store.lock().unwrap();
+        store.set_password_policy(fireemu_core_auth::password_policy::PasswordPolicy {
+            enforcement_state: fireemu_core_auth::password_policy::EnforcementState::Enforce,
+            min_length: 8,
+            max_length: Some(20),
+            require_uppercase: true,
+            require_lowercase: true,
+            require_numeric: true,
+            require_non_alphanumeric: true,
+            ..Default::default()
+        });
+    }
+    for (password, missing) in [
+        ("password", "Password must contain an upper case character, Password must contain a numeric character, Password must contain a non-alphanumeric character"),
+        ("Passw0rd!Passw0rd!Pas", "Password may contain at most 20 characters"),
+        ("passw0rd!", "Password must contain an upper case character"),
+        ("Passw0rdx", "Password must contain a non-alphanumeric character"),
+    ] {
+        let (status, refused) = post(&s, &format!("{V1}/accounts:signUp"), &json!({"email": format!("{password}@example.com"), "password": password}));
+        assert_eq!(status, 400, "{password}");
+        assert_eq!(refused["error"]["message"], format!("PASSWORD_DOES_NOT_MEET_REQUIREMENTS : Missing password requirements: [{missing}]"), "{password}");
+    }
+}
+
+/// providerUserInfo lists phone first, then federated identities in link order, then password
+/// (sandbox recording 2026-09-23: auth-account/provider#lookup-linked, admin/create).
+#[test]
+fn provider_user_info_follows_production_order() {
+    let s = state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "ord", "email": "ord@example.com", "password": "password123"}),
+    );
+    for (provider, raw) in [("google.com", "g-1"), ("oidc.test", "o-1")] {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "ord", "linkProviderUserInfo": {"providerId": provider, "rawId": raw}}),
+        );
+    }
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "ord", "phoneNumber": "+15550000009"}),
+    );
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["ord"]}),
+    );
+    let order: Vec<&str> = found["users"][0]["providerUserInfo"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["providerId"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, ["phone", "google.com", "oidc.test", "password"]);
+}
+
+/// Unlinking providers as production answered it (sandbox recording 2026-09-23,
+/// auth-account/provider): removing the password provider keeps the address and
+/// passwordUpdatedAt, removing the last provider keeps the account, an unknown provider is a
+/// no-op, and link refusals carry production's codes.
+#[test]
+fn provider_unlinking_and_link_refusals_follow_production() {
+    let s = strict_state();
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts"),
+        &json!({"localId": "un", "email": "un@example.com", "password": "password123"}),
+    );
+    admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:update"),
+        &json!({"localId": "un", "linkProviderUserInfo": {"providerId": "oidc.test", "rawId": "o-1"}}),
+    );
+    let (_, signed) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "un@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    let unlink = |providers: Value| {
+        post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"idToken": signed["idToken"], "deleteProvider": providers}),
+        )
+    };
+    let (status, unlinked) = unlink(json!(["password"]));
+    assert_eq!(status, 200, "{unlinked}");
+    assert_eq!(unlinked["email"], "un@example.com");
+    assert!(unlinked.get("passwordHash").is_none(), "{unlinked}");
+    let (_, found) = admin(
+        &s,
+        "POST",
+        &format!("{ADMIN}/accounts:lookup"),
+        &json!({"localId": ["un"]}),
+    );
+    assert_eq!(found["users"][0]["email"], "un@example.com");
+    assert!(
+        found["users"][0]["passwordUpdatedAt"].is_number(),
+        "{found}"
+    );
+    let (status, last) = unlink(json!(["oidc.test"]));
+    assert_eq!(status, 200, "{last}");
+    assert!(last.get("providerUserInfo").is_none(), "{last}");
+    let (status, unknown) = unlink(json!(["facebook.com"]));
+    assert_eq!(status, 200, "{unknown}");
+
+    let link = |identity: Value| {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "un", "linkProviderUserInfo": identity}),
+        )
+        .1["error"]["message"]
+            .clone()
+    };
+    assert_eq!(
+        link(json!({"providerId": "google.com"})),
+        "MISSING_IDENTIFIER : providerId & rawId are both required for provider linking"
+    );
+    assert_eq!(
+        link(json!({"providerId": "password", "rawId": "x"})),
+        "INVALID_PROVIDER_ID"
+    );
+}
+
+/// batchCreate as production answered it (sandbox recording 2026-09-23,
+/// auth-account/admin/import): rows upsert by localId (a later duplicate in the request wins,
+/// an existing account is replaced without an error), an address owned by another account is
+/// accepted, sanityCheck refuses an address repeated inside the request, and an imported row
+/// always records emailVerified.
+#[test]
+fn batch_create_upserts_and_checks_duplicates_like_production() {
+    let s = strict_state();
+    let import = |body: Value| admin(&s, "POST", &format!("{ADMIN}/accounts:batchCreate"), &body);
+    let lookup = |id: &str| {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [id]}),
+        )
+        .1["users"][0]
+            .clone()
+    };
+    let (status, body) = import(
+        json!({"users": [{"localId": "i1", "email": "i1@example.com"}, {"localId": "i2", "phoneNumber": "+15550000021"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i2")["emailVerified"], false);
+    let (status, body) =
+        import(json!({"users": [{"localId": "i1", "email": "i1-new@example.com"}]}));
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i1")["email"], "i1-new@example.com");
+    let (status, body) = import(
+        json!({"users": [{"localId": "i6", "email": "i6@example.com"}, {"localId": "i6", "email": "i6b@example.com"}]}),
+    );
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i6")["email"], "i6b@example.com");
+    let (status, body) =
+        import(json!({"users": [{"localId": "i7", "email": "i1-new@example.com"}]}));
+    assert_eq!((status, body.get("error").is_none()), (200, true), "{body}");
+    assert_eq!(lookup("i7")["email"], "i1-new@example.com");
+    let (status, body) = import(
+        json!({"sanityCheck": true, "users": [{"localId": "i8", "email": "i8@example.com"}, {"localId": "i9", "email": "i8@example.com"}]}),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert_eq!(body["error"]["message"], "DUPLICATE_EMAIL : i8@example.com");
+    assert!(lookup("i8").is_null());
 }

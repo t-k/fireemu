@@ -63,6 +63,18 @@ impl ViolationCode {
     }
 }
 
+/// Why a password was refused under a custom policy: the unmet requirements and the bounds
+/// they refer to, enough for an adapter to word the refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PolicyRefusal {
+    /// Unmet requirements, in evaluation order.
+    pub violations: Vec<ViolationCode>,
+    /// The policy's inclusive minimum length in UTF-16 units.
+    pub min_length: usize,
+    /// The policy's inclusive custom maximum in UTF-16 units.
+    pub max_length: Option<usize>,
+}
+
 /// A validated password-policy definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -193,13 +205,17 @@ impl PasswordPolicy {
     }
 }
 
-/// Conservative default punctuation set.  It is intentionally explicit and limited to ASCII
-/// punctuation; Unicode letters, whitespace, emoji, and arbitrary non-ASCII symbols do not
-/// satisfy the requirement without an explicitly supplied server set.
+/// Production's default punctuation set: ASCII punctuation except `+` and `=`. Unicode
+/// letters, whitespace, emoji, and arbitrary non-ASCII symbols do not satisfy the requirement
+/// without an explicitly supplied server set.
 #[must_use]
 pub fn default_allowed_non_alphanumeric() -> BTreeSet<char> {
-    "~!@#$%^&*_-+=[]{}|\\:;'<>,.?/`\"()".chars().collect()
+    DEFAULT_NON_ALPHANUMERIC_ORDER.chars().collect()
 }
+
+/// Production's non-alphanumeric characters in the order `v2/passwordPolicy` lists them. `+`
+/// and `=` are not among them (sandbox recording 2026-09-23, `policy/enforce-custom`).
+pub const DEFAULT_NON_ALPHANUMERIC_ORDER: &str = r#"^$*.[]{}()?"!@#%&/\,><':;|_~`-"#;
 
 #[cfg(test)]
 mod tests {

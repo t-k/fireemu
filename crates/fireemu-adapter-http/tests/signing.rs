@@ -117,6 +117,7 @@ fn auth_state(store: Arc<Mutex<AuthStore>>) -> AuthState {
         stateless_refresh_tokens: true,
         idp_continuations: fireemu_adapter_http::identity_toolkit::IdpContinuationPolicy::Disabled,
         query_limits: fireemu_adapter_http::identity_toolkit::AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: fireemu_adapter_http::identity_toolkit::ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry:
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Ignore,
         app_check: None,
@@ -541,7 +542,7 @@ fn session_cookie_signed_mode_rejects_unsigned_foreign_and_tampered_id_tokens() 
         "/identitytoolkit.googleapis.com/v1/projects/demo-app:createSessionCookie",
         &json!({"idToken": valid, "validDuration": "300"}),
     );
-    assert_eq!(unprivileged.status, 401);
+    assert_eq!(unprivileged.status, 403);
     assert!(verify_id_token(&valid, &state.store.lock().unwrap(), START).is_ok());
 }
 

@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "profile": "strict",
+  "daemon": {
+    "authProjectNumbers": { "fireemu-oracle-idp": "123456789012" }
+  }
+}

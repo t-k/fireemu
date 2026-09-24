@@ -42,14 +42,15 @@ fn explicit_local_ids_are_validated_and_unique() {
         s.create_user_with_id(NewUser::email("b@example.com"), Some("custom-id"), t0()),
         Err(AuthError::LocalIdExists)
     );
-    for bad in ["", &"x".repeat(129), "has\u{1}control"] {
+    // Production stores ids of 0 to 256 characters (sandbox exploration 2026-09-24).
+    for bad in [&"x".repeat(257), "has\u{1}control"] {
         assert_eq!(
             s.create_user_with_id(NewUser::email("c@example.com"), Some(bad), t0()),
             Err(AuthError::InvalidLocalId),
             "{bad:?}"
         );
     }
-    let longest = "y".repeat(128);
+    let longest = "y".repeat(256);
     assert!(s
         .create_user_with_id(NewUser::email("d@example.com"), Some(&longest), t0())
         .is_ok());
@@ -194,7 +195,7 @@ fn email_creation_canonicalizes_storage_and_rejects_case_variant_duplicates() {
 }
 
 #[test]
-fn duplicate_email_mode_allows_distinct_accounts_and_keeps_the_latest_lookup_target() {
+fn duplicate_email_mode_refuses_password_duplicates_and_admits_idp_accounts() {
     let mut s = store();
     let password_user = s
         .create_user(NewUser::email("shared@example.com"), t0())
@@ -204,14 +205,15 @@ fn duplicate_email_mode_allows_distinct_accounts_and_keeps_the_latest_lookup_tar
         ..ProjectAuthConfig::default()
     });
 
-    let password_user_2 = s
-        .create_user(NewUser::email("shared@example.com"), t(1))
-        .expect("duplicate-email mode permits another password/Admin account");
-    assert_ne!(password_user, password_user_2);
+    // Production refuses a second password or Admin account even in duplicate-email mode
+    // (sandbox recording 2026-09-23, `config/duplicate-email#sign-up-duplicate`).
+    assert_eq!(
+        s.create_user(NewUser::email("shared@example.com"), t(1)),
+        Err(AuthError::EmailExists)
+    );
     assert_eq!(
         s.user_by_email("shared@example.com").unwrap().local_id,
-        password_user_2,
-        "the latest password/Admin account is the active email lookup target"
+        password_user
     );
 
     let result = s
@@ -864,4 +866,22 @@ fn credential_notices_are_drained_once_in_issue_order() {
     );
     assert_eq!(s.take_credential_notices(), vec![first, second]);
     assert!(s.take_credential_notices().is_empty());
+}
+
+/// A temporary proof is a credential of its namespace: restoring a snapshot into another
+/// project drops it, while a same-namespace restore keeps it (closure re-review 2026-09-24).
+#[test]
+fn temporary_proofs_do_not_cross_namespaces_on_restore() {
+    let mut source = store();
+    let proof = source.issue_temporary_proof("+16505550101", t(0)).unwrap();
+    let snapshot = fireemu_core_auth::store::AuthSnapshot::capture(&source);
+
+    let mut same = store();
+    snapshot.restore_into(&mut same);
+    assert!(same.check_temporary_proof(&proof, "+16505550101", t(1)));
+
+    let mut other = AuthStore::new("other-project", SplitMix64::new(9), TotpPolicy::default());
+    snapshot.restore_into(&mut other);
+    assert!(!other.check_temporary_proof(&proof, "+16505550101", t(1)));
+    assert!(source.check_temporary_proof(&proof, "+16505550101", t(1)));
 }

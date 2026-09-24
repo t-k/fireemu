@@ -14,8 +14,8 @@
 use std::sync::{Arc, Mutex, RwLock};
 
 use fireemu_adapter_http::identity_toolkit::{
-    handle, handle_with, AuthQueryLimits, AuthState, FakeCustomTokenExpiry, IdpContinuationPolicy,
-    RequestHeaders,
+    handle, handle_with, AuthQueryLimits, AuthState, ClientApiKeyPolicy, FakeCustomTokenExpiry,
+    IdpContinuationPolicy, RequestHeaders,
 };
 use fireemu_core_auth::jwt::{base64url_encode, decode_unsigned};
 use fireemu_core_auth::mfa::TotpPolicy;
@@ -59,6 +59,7 @@ fn emulator_state() -> AuthState {
         stateless_refresh_tokens: true,
         idp_continuations: IdpContinuationPolicy::Disabled,
         query_limits: AuthQueryLimits::EmulatorUnbounded,
+        client_api_key: ClientApiKeyPolicy::Optional,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Ignore,
         app_check: None,
         app_check_policy: None,
@@ -71,6 +72,7 @@ fn strict_state() -> AuthState {
         idp_continuations: IdpContinuationPolicy::LocalBounded,
         query_limits: AuthQueryLimits::ProductionBounded,
         stateless_refresh_tokens: false,
+        client_api_key: ClientApiKeyPolicy::Required,
         fake_custom_token_expiry: FakeCustomTokenExpiry::Reject,
         ..emulator_state()
     }
@@ -103,8 +105,21 @@ fn owner() -> RequestHeaders {
 }
 
 fn post(state: &AuthState, path: &str, body: &Value) -> (u16, Value) {
-    let r = handle(state, "POST", path, body);
+    let path = with_client_key(state, path, KEY);
+    let r = handle(state, "POST", &path, body);
     (r.status, r.body)
+}
+
+/// Client SDKs always send their API key. Under a profile that refuses keyless client calls,
+/// the plain helper adds it to client routes that do not carry one, as an SDK would.
+fn with_client_key(state: &AuthState, path: &str, key: &str) -> String {
+    let project_scoped = path.contains("/projects/") || path.starts_with("/emulator");
+    let keyed = path.contains("key=") || path.contains("apiKey=");
+    if state.client_api_key != ClientApiKeyPolicy::Required || project_scoped || keyed {
+        return path.to_owned();
+    }
+    let separator = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{separator}key={key}")
 }
 
 fn admin(state: &AuthState, method: &str, path: &str, body: &Value) -> (u16, Value) {
@@ -204,7 +219,7 @@ fn google_post_body(sub: &str, email: &str) -> String {
 
 /// How a client names the destination tenant. The SDK shape carries the API key and the
 /// body tenant; the other two shapes are the selector forms the handler accepts as well.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Selector {
     KeyAndBody,
     BodyOnly,
@@ -213,6 +228,17 @@ enum Selector {
 
 impl Selector {
     const ALL: [Self; 3] = [Self::KeyAndBody, Self::BodyOnly, Self::QueryOnly];
+
+    /// The shapes a profile serves. The strict profile refuses a client request without an
+    /// API key before any selector is read, as production does, so only the SDK shape reaches
+    /// tenant selection there (`strict_keyless_tenant_selectors_are_unregistered_callers`).
+    fn admitted(state: &AuthState) -> &'static [Self] {
+        if state.client_api_key == ClientApiKeyPolicy::Required {
+            &[Self::KeyAndBody]
+        } else {
+            &Self::ALL
+        }
+    }
 
     fn request(self, state: &AuthState, route: &str, tenant: &str, body: Value) -> (u16, Value) {
         let mut body = body;
@@ -228,6 +254,40 @@ impl Selector {
             Self::QueryOnly => post(state, &format!("{route}?tenantId={tenant}"), &body),
         }
     }
+}
+
+/// The strict profile refuses the fireemu-only keyless selector shapes as production refuses
+/// any client call without an API key: 403 before tenant selection, with no state change
+/// (sandbox recording 2026-09-23, `auth-account/privilege/credentials`).
+#[test]
+fn strict_keyless_tenant_selectors_are_unregistered_callers() {
+    let (_, state, _registry) = profiles().pop().unwrap();
+    assert_eq!(state.client_api_key, ClientApiKeyPolicy::Required);
+    let a = sign_up(&state, TENANT_A, "keyless@example.com");
+    let before_a = snapshot(&state, Some(TENANT_A));
+    let token = a["idToken"].as_str().unwrap();
+    let refresh = a["refreshToken"].as_str().unwrap();
+    for (route, body) in [
+        (format!("{V1}/accounts:lookup"), json!({"idToken": token})),
+        (
+            SECURE_TOKEN.to_owned(),
+            json!({"grant_type": "refresh_token", "refresh_token": refresh}),
+        ),
+    ] {
+        for selector in [Selector::BodyOnly, Selector::QueryOnly] {
+            let mut body = body.clone();
+            let path = if selector == Selector::BodyOnly {
+                body["tenantId"] = Value::String(TENANT_A.to_owned());
+                route.clone()
+            } else {
+                format!("{route}?tenantId={TENANT_A}")
+            };
+            let refused = handle(&state, "POST", &path, &body);
+            assert_eq!(refused.status, 403, "{path} {selector:?}: {}", refused.body);
+            assert_eq!(refused.body["error"]["status"], "PERMISSION_DENIED");
+        }
+    }
+    assert_eq!(snapshot(&state, Some(TENANT_A)), before_a);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -292,7 +352,7 @@ fn a_tenant_id_token_is_refused_on_every_other_tenant_route_without_mutation() {
             ),
         ];
         for (label, route, body) in &rows {
-            for selector in Selector::ALL {
+            for &selector in Selector::admitted(&state) {
                 let (status, refused) = selector.request(&state, route, TENANT_B, body.clone());
                 assert_eq!(status, 400, "{profile} {label} {selector:?}: {refused}");
                 // The class depends on which selector picked the store: the API key routes
@@ -400,7 +460,7 @@ fn a_tenant_refresh_token_is_refused_by_the_other_tenant_without_rotating_the_se
         let before_b = snapshot(&state, Some(TENANT_B));
 
         for (refresh, destination) in [(&refresh_a, TENANT_B), (&refresh_b, TENANT_A)] {
-            for selector in Selector::ALL {
+            for &selector in Selector::admitted(&state) {
                 let (status, refused) = selector.request(
                     &state,
                     SECURE_TOKEN,
@@ -428,7 +488,7 @@ fn a_tenant_refresh_token_is_refused_by_the_other_tenant_without_rotating_the_se
         // Positive control: the refused attempts did not revoke or rotate either session.
         // Every selector shape that names the token's own tenant renews it.
         for (refresh, tenant) in [(&refresh_a, TENANT_A), (&refresh_b, TENANT_B)] {
-            for selector in Selector::ALL {
+            for &selector in Selector::admitted(&state) {
                 let (status, renewed) = selector.request(
                     &state,
                     SECURE_TOKEN,
@@ -534,7 +594,14 @@ fn sdk_shaped_refresh_keeps_project_refresh_and_contradicting_selectors_unchange
                 if let Some(tenant) = body_tenant {
                     body["tenantId"] = Value::String(tenant.to_owned());
                 }
-                let (status, refused) = post(&state, &format!("{SECURE_TOKEN}{query}"), &body);
+                let response = handle(&state, "POST", &format!("{SECURE_TOKEN}{query}"), &body);
+                let (status, refused) = (response.status, response.body);
+                if state.client_api_key == ClientApiKeyPolicy::Required && !query.contains("key=") {
+                    // Production refuses a keyless client call before reading any selector.
+                    assert_eq!(status, 403, "{profile} {query}: {refused}");
+                    assert_eq!(refused["error"]["status"], "PERMISSION_DENIED");
+                    continue;
+                }
                 assert_eq!(
                     status, 400,
                     "{profile} tenancy={tenancy_label} {query} body_tenant={body_tenant:?}: {refused}"
@@ -689,7 +756,7 @@ fn a_tenant_mfa_pending_credential_is_refused_by_the_other_tenant() {
             "mfaEnrollmentId": enrollment_id,
             "phoneSignInInfo": {"recaptchaToken": "x"},
         });
-        for selector in Selector::ALL {
+        for &selector in Selector::admitted(&state) {
             let (status, refused) = selector.request(
                 &state,
                 &format!("{V2}/accounts/mfaSignIn:start"),
@@ -739,7 +806,7 @@ fn a_tenant_mfa_pending_credential_is_refused_by_the_other_tenant() {
             ("phone", &finalize_body, "INVALID_SESSION_INFO"),
             ("totp", &totp_shaped, "INVALID_MFA_PENDING_CREDENTIAL"),
         ] {
-            for selector in Selector::ALL {
+            for &selector in Selector::admitted(&state) {
                 let (status, refused) = selector.request(
                     &state,
                     &format!("{V2}/accounts/mfaSignIn:finalize"),
@@ -819,7 +886,7 @@ fn a_tenant_oob_code_is_refused_by_the_other_tenant_and_stays_consumable() {
         assert!(oob_codes(&state, TENANT_B).is_empty(), "{profile}");
         let oob_code = codes[0]["oobCode"].as_str().unwrap().to_owned();
 
-        for selector in Selector::ALL {
+        for &selector in Selector::admitted(&state) {
             let (status, refused) = selector.request(
                 &state,
                 &format!("{V1}/accounts:resetPassword"),
@@ -1479,7 +1546,7 @@ fn tenant_settings_inherit_at_creation_and_tenant_patches_override_them() {
                     tenant,
                     json!({"email": "blocked@example.com", "password": "twelve-chars-ok"})
                 ),
-                (400, "OPERATION_NOT_ALLOWED".to_owned()),
+                (400, "ADMIN_ONLY_OPERATION".to_owned()),
                 "{profile} {tenant}"
             );
             assert!(
@@ -1801,7 +1868,10 @@ fn deleting_a_tenant_invalidates_its_credentials_and_leaves_the_sibling_and_proj
                 404,
                 "TENANT_NOT_FOUND",
             ),
-        ] {
+        ]
+        .into_iter()
+        .filter(|row| Selector::admitted(&state).contains(&row.0))
+        {
             let (status, refused) = selector.request(
                 &state,
                 &format!("{V1}/accounts:lookup"),

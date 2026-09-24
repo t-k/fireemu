@@ -89,16 +89,36 @@ function maskNumbers(value, projectNumber) {
   return value;
 }
 
-function decodeTokens(value, key, ctx) {
+/**
+ * Generated ids are masked one by one, so a token also records whether its `sub` is its
+ * `user_id` and, in an answer that names the account, whether it is that `localId`.
+ */
+function identityRelations(claims, localId) {
+  const out = {};
+  if (typeof claims.sub === "string" && typeof claims.user_id === "string") {
+    out.subIsUserId = claims.sub === claims.user_id;
+  }
+  if (typeof claims.sub === "string" && typeof localId === "string") {
+    out.subIsLocalId = claims.sub === localId;
+  }
+  return out;
+}
+
+function decodeTokens(value, key, ctx, localId) {
   if (JWT_KEYS.has(key) && typeof value === "string") {
     const described = describeJwt(value);
     // A token that does not decode is never recorded raw.
     if (!described) return "<undecodable-jwt>";
-    return { "<jwt>": maskNumbers(described, ctx.target.projectNumber) };
+    const identity = identityRelations(decodeJwt(value).claims, localId);
+    return { "<jwt>": maskNumbers({ ...described, ...identity }, ctx.target.projectNumber) };
   }
-  if (Array.isArray(value)) return value.map((v) => decodeTokens(v, key, ctx));
+  if (Array.isArray(value)) return value.map((v) => decodeTokens(v, key, ctx, localId));
   if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, decodeTokens(v, k, ctx)]));
+    // An answer names its account as `localId`, or as `user_id` in a Secure Token answer.
+    const named = [value.localId, value.user_id].find((id) => typeof id === "string") ?? localId;
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, decodeTokens(v, k, ctx, named)]),
+    );
   }
   return value;
 }
@@ -115,7 +135,7 @@ export function normalizeCredentialResponse(status, text, ctx) {
   } catch {
     return { status, nonJson: true };
   }
-  return { status, body: normalizeConfig(decodeTokens(body, "", ctx), ctx) };
+  return { status, body: normalizeConfig(decodeTokens(body, "", ctx, undefined), ctx) };
 }
 
 /**

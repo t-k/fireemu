@@ -202,6 +202,23 @@ export function createSession(
     return body.signedJwt;
   }
 
+  /**
+   * Waits until `seconds` (Unix time) plus a 300 ms margin, so a request lands inside the
+   * intended whole second whatever the transport latency: production sleeps, fireemu moves its
+   * virtual clock to the same instant.
+   */
+  async function waitUntil(seconds) {
+    const target = seconds * 1000 + 300;
+    if (ctx.target.kind === "production") {
+      await sleep(Math.max(0, target - Date.now()));
+      return;
+    }
+    charge(true);
+    const request = harnessRequest.advanceClockTo(ctx, target);
+    const response = await fetch(request.url, request.init);
+    if (response.status !== 200) throw fatal(`clock:advanceTo ${target}: HTTP ${response.status}`);
+  }
+
   /** Production waits in real time; fireemu moves its virtual clock (see run.mjs ordering). */
   async function wait(seconds) {
     if (ctx.target.kind === "production") {
@@ -227,6 +244,17 @@ export function createSession(
       for (const step of program.steps) {
         if (step.delayMs) await sleep(step.delayMs);
         if (step.waitSeconds) await wait(step.waitSeconds);
+        if (step.waitUntil) {
+          // `{of: "step:path" | "token:name:claim", plus}`: a time claim of an earlier answer
+          // or of a minted custom token, plus whole seconds.
+          const [kind, name, claim] = step.waitUntil.of.split(":");
+          const base =
+            kind === "token"
+              ? decodeJwt(tokens.get(name) ?? "")?.claims?.[claim]
+              : fromRaw(raw, step.waitUntil.of);
+          if (typeof base !== "number") throw fatal(`${step.id}: no time at ${step.waitUntil.of}`);
+          await waitUntil(base + step.waitUntil.plus);
+        }
         let outcome;
         try {
           const concrete = {

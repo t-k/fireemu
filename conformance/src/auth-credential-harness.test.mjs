@@ -60,6 +60,7 @@ test("a JWT is recorded as header shape and claims relative to its own iat", () 
         "<jwt>": {
           header: { alg: "RS256", kid: "<present>", typ: "JWT" },
           signature: "<present>",
+          subIsUserId: true,
           claims: {
             iss: "https://securetoken.google.com/demo-auth-account",
             aud: "demo-auth-account",
@@ -221,8 +222,24 @@ test("the guard admits reviewed families only and never another project", () => 
       harness: true,
     },
   );
+  // A verification mail only for the account behind a token, never to a named address.
+  guardCredentialRequest(
+    request("v1/accounts:sendOobCode", { requestType: "VERIFY_EMAIL", idToken: "t" }),
+    local,
+  );
+  for (const body of [
+    {},
+    { requestType: "PASSWORD_RESET", email: "a@example.com" },
+    { requestType: "VERIFY_EMAIL", idToken: "t", email: "a@example.com" },
+  ]) {
+    assert.throws(
+      () => guardCredentialRequest(request("v1/accounts:sendOobCode", body), local),
+      /VERIFY_EMAIL/,
+    );
+  }
+  guardCredentialRequest(request("v2/accounts/mfaEnrollment:start", {}), local);
   assert.throws(
-    () => guardCredentialRequest(request("v1/accounts:sendOobCode", {}), local),
+    () => guardCredentialRequest(request("v2/accounts/mfaEnrollment:finalize", {}), local),
     /reviewed family/,
   );
   assert.throws(
@@ -376,7 +393,12 @@ test("the expiry program asks everything of the live account before deleting it"
   assert.equal(ids.indexOf("delete-expired"), ids.length - 2);
   assert.ok(ids.indexOf("refresh-after-hour") < ids.indexOf("delete-expired"));
   const waited = expiry.steps.reduce((total, step) => total + (step.waitSeconds ?? 0), 0);
-  assert.ok(waited >= 3600 + 300, "past any five-minute skew allowance");
+  assert.ok(waited > 3600, "past exp");
+  // The edge of the allowance is reached exactly, then passed.
+  const edges = expiry.steps.filter((step) => step.waitUntil).map((step) => step.waitUntil.plus);
+  assert.deepEqual(edges, [299, 300, 299, 300]);
+  const edge = ids.indexOf("lookup-at-exp-plus-300");
+  assert.ok(edge < ids.indexOf("lookup-expired-later"));
 });
 
 test("every validSince later than a session's auth_time is written after a second boundary", () => {
@@ -409,4 +431,39 @@ test("a run is refused within an hour of this task's last aborted run", () => {
     recentAbort(ledger(line("aborted", "2026-09-24T11:30:00Z", "AUTH-ACCOUNT-SANDBOX")), now),
     undefined,
   );
+});
+
+test("an answer records whether its token's sub is the account it names", () => {
+  const token = jwt({ alg: "RS256" }, { iat: 1, sub: "u1", user_id: "u1" });
+  const other = jwt({ alg: "RS256" }, { iat: 1, sub: "u2", user_id: "u1" });
+  const named = normalizeCredentialResponse(
+    200,
+    JSON.stringify({ localId: "u1", idToken: token }),
+    local,
+  );
+  assert.equal(named.body.idToken["<jwt>"].subIsLocalId, true);
+  assert.equal(named.body.idToken["<jwt>"].subIsUserId, true);
+  const refresh = normalizeCredentialResponse(
+    200,
+    JSON.stringify({ user_id: "u1", id_token: other }),
+    local,
+  );
+  assert.equal(refresh.body.id_token["<jwt>"].subIsLocalId, false);
+  assert.equal(refresh.body.id_token["<jwt>"].subIsUserId, false);
+  const unnamed = normalizeCredentialResponse(200, JSON.stringify({ sessionCookie: token }), local);
+  assert.equal(unnamed.body.sessionCookie["<jwt>"].subIsLocalId, undefined);
+});
+
+test("fireemu's clock moves to an absolute instant for a timed step", () => {
+  const withControl = {
+    ...local,
+    target: { ...local.target, control: { url: "http://127.0.0.1:9/v1/", token: "c" } },
+  };
+  const { url, init } = harnessRequest.advanceClockTo(
+    withControl,
+    Date.parse("2026-09-24T00:00:00.300Z"),
+  );
+  assert.equal(url, "http://127.0.0.1:9/v1/sessions/default/clock:advanceTo");
+  assert.deepEqual(JSON.parse(init.body), { instant: "2026-09-24T00:00:00.300Z" });
+  assert.equal(init.headers.authorization, "Bearer c");
 });

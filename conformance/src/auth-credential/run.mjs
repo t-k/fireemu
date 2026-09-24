@@ -83,7 +83,10 @@ const ceilings = (programs) => ({
   maxRequests: programs.reduce((total, p) => total + p.steps.length, 0),
   maxHarnessRequests: programs.reduce(
     (total, p) =>
-      total + 12 + Object.keys(p.tokens ?? {}).length + p.steps.filter((s) => s.waitSeconds).length,
+      total +
+      12 +
+      Object.keys(p.tokens ?? {}).length +
+      p.steps.filter((s) => s.waitSeconds || s.waitUntil).length,
     20,
   ),
 });

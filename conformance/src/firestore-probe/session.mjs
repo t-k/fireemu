@@ -40,6 +40,7 @@ const SCHEME = process.env.FIRESTORE_PROBE_SCHEME ?? "http";
 const TOKEN = process.env.FIRESTORE_PROBE_TOKEN ?? "owner";
 const USER_TOKEN = process.env.FIRESTORE_PROBE_USER_TOKEN;
 const PRODUCTION = process.env.FIRESTORE_PROBE_TARGET === "production";
+const RECOVERY_MODE = process.env.FIRESTORE_PROBE_RECOVERY_MODE;
 const MANAGED_POLL_MS = /^127\.0\.0\.1:\d+$/.test(HOST ?? "")
   ? Number(process.env.FIRESTORE_PROBE_MANAGED_POLL_MS ?? 60_000)
   : 60_000;
@@ -106,6 +107,10 @@ let requestCount = 0;
 const requestBudget = MAX_REQUESTS === undefined ? null : createRequestBudget(Number(MAX_REQUESTS));
 let managedClearBlocked = false;
 let managedClearState = null;
+
+export function legacyManagedClearNames() {
+  return [...LEGACY_SHRINK_NAMES];
+}
 
 export function managedClearScope(names, project, database) {
   if (project !== "fireemu-oracle-sbx" || database !== "(default)" || !Array.isArray(names)) {
@@ -635,31 +640,36 @@ async function shrinkBoundaryDocument(name) {
   }
   const collectionId = name.split("/documents/")[1].split("/")[0];
   const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
-  let values = validateShrinkBoundaryState(document, name, expectedLength, {
-    allowEmptyOmitted: true,
-  });
+  let values = validateCurrentShrinkState(document, name, expectedLength);
   let updateTime = document.updateTime;
   while (values.length > 0) {
-    const removed = values.slice(0, SHRINK_CHUNK_SIZE);
-    const committed = await managedShrinkRequest("arrayRemove commit", `${base}:commit`, {
-      method: "POST",
-      headers: authorized({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        writes: [
-          {
-            transform: {
-              document: name,
-              fieldTransforms: [{ fieldPath: "a", removeAllFromArray: { values: removed } }],
+    let chunkSize = Math.min(SHRINK_CHUNK_SIZE, values.length);
+    let committed;
+    while (true) {
+      const removed = values.slice(0, chunkSize);
+      committed = await managedShrinkRequest("arrayRemove commit", `${base}:commit`, {
+        method: "POST",
+        headers: authorized({ "content-type": "application/json" }),
+        body: JSON.stringify({
+          writes: [
+            {
+              transform: {
+                document: name,
+                fieldTransforms: [{ fieldPath: "a", removeAllFromArray: { values: removed } }],
+              },
+              currentDocument: { updateTime },
             },
-            currentDocument: { updateTime },
-          },
-        ],
-      }),
-      signal: timeoutSignal(),
-    });
-    if (!committed.ok) {
+          ],
+        }),
+        signal: timeoutSignal(),
+      });
+      if (committed.ok) break;
       const body = await committed.text();
-      throw new Error(`array shrink transform ${committed.status} ${body}`);
+      if (!isTransactionTooBigRefusal(committed.status, body)) {
+        throw new Error(`array shrink transform ${committed.status} ${body}`);
+      }
+      if (chunkSize <= 1) throw new Error("array shrink refused the minimum single-value chunk");
+      chunkSize = Math.max(1, Math.floor(chunkSize / 2));
     }
     const result = await committed.json();
     const nextUpdateTime = result?.writeResults?.[0]?.updateTime;
@@ -667,7 +677,7 @@ async function shrinkBoundaryDocument(name) {
       throw new Error("array shrink transform omitted its updateTime");
     }
     updateTime = nextUpdateTime;
-    values = values.slice(removed.length);
+    values = values.slice(chunkSize);
   }
   const readback = await managedShrinkRequest("post-shrink read", urlForDocument(name), {
     headers: authorized(),
@@ -678,11 +688,179 @@ async function shrinkBoundaryDocument(name) {
   if (shrunkDocument.updateTime !== updateTime) {
     throw new Error("array shrink target changed during post-shrink verification");
   }
-  const shrunk = validateShrinkBoundaryState(shrunkDocument, name, expectedLength, {
-    allowEmptyOmitted: true,
-  });
+  const shrunk = validateCurrentShrinkState(shrunkDocument, name, expectedLength);
   if (shrunk.length !== 0) throw new Error("array shrink left indexed array values behind");
   return shrunkDocument.updateTime;
+}
+
+function validateCurrentShrinkState(document, name, expectedLength) {
+  if (managedClearState?.shrinkScope === "legacy") {
+    return validateLegacyDebrisDocument(document, name, expectedLength);
+  }
+  return validateShrinkBoundaryState(document, name, expectedLength, { allowEmptyOmitted: true });
+}
+
+function isTransactionTooBigRefusal(status, body) {
+  if (status !== 400) return false;
+  try {
+    const error = JSON.parse(body)?.error;
+    return (
+      error?.status === "INVALID_ARGUMENT" &&
+      error?.message === "Transaction too big. Decrease transaction size."
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function writeManagedRecoveryJournal(status, extra = {}) {
+  if (!MANAGED_CLEAR_JOURNAL) throw new Error("managed recovery journal is required");
+  const entry = {
+    schemaVersion: 1,
+    mode: "recover-legacy",
+    status,
+    project: PROJECT,
+    database: "(default)",
+    names: LEGACY_SHRINK_NAMES,
+    ...extra,
+  };
+  await writeFile(MANAGED_CLEAR_JOURNAL, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+}
+
+async function preflightLegacyRecoveryScope(base) {
+  if (!managedClearState || managedClearState.shrinkScope !== "legacy") {
+    throw new Error("legacy recovery preflight has no exact frozen scope");
+  }
+  managedClearState.preflightUpdateTimes = new Map();
+  const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
+  const groupPresence = new Map();
+  for (const name of LEGACY_SHRINK_NAMES) {
+    const collectionId = name.split("/documents/")[1].split("/")[0];
+    const names = await managedGroupNames(api, collectionId, managedShrinkRequest);
+    if (names.length > 1 || (names.length === 1 && names[0] !== name)) {
+      throw new Error("legacy recovery collection group contains an unexpected document");
+    }
+    groupPresence.set(name, names.length === 1);
+  }
+  const readback = await managedShrinkRequest(
+    "legacy recovery typed preflight",
+    `${base}:batchGet`,
+    {
+      method: "POST",
+      headers: authorized({ "content-type": "application/json" }),
+      body: JSON.stringify({ documents: LEGACY_SHRINK_NAMES }),
+      signal: timeoutSignal(),
+    },
+  );
+  if (!readback.ok) throw new Error(`legacy recovery typed preflight ${readback.status}`);
+  const rows = await readback.json();
+  if (!Array.isArray(rows) || rows.length !== LEGACY_SHRINK_NAMES.length) {
+    throw new Error("legacy recovery typed preflight is incomplete");
+  }
+  const seen = new Set();
+  for (const row of rows) {
+    const hasFound = Object.hasOwn(row ?? {}, "found");
+    const hasMissing = Object.hasOwn(row ?? {}, "missing");
+    const name = hasFound ? row.found?.name : row?.missing;
+    if (
+      hasFound === hasMissing ||
+      !LEGACY_SHRINK_NAMES.includes(name) ||
+      seen.has(name) ||
+      row?.error ||
+      (hasMissing && row.missing !== name)
+    ) {
+      throw new Error("legacy recovery typed preflight returned an unexpected result");
+    }
+    seen.add(name);
+    const found = Boolean(row.found);
+    if (found !== groupPresence.get(name)) {
+      throw new Error("legacy recovery changed during its read-only scope preflight");
+    }
+    if (found) {
+      const collectionId = name.split("/documents/")[1].split("/")[0];
+      validateLegacyDebrisDocument(row.found, name, FROZEN_ARRAY_LENGTHS.get(collectionId));
+      managedClearState.preflightUpdateTimes.set(name, row.found.updateTime);
+    }
+    const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
+    const children = await listCollectionIds(base, relative, (input, init) =>
+      managedShrinkRequest("legacy recovery child collection preflight", input, init),
+    );
+    if (children === null || children.length !== 0) {
+      throw new Error("legacy recovery target has an unexpected or unverified child collection");
+    }
+  }
+  if (seen.size !== LEGACY_SHRINK_NAMES.length) {
+    throw new Error("legacy recovery typed preflight omitted a frozen name");
+  }
+}
+
+async function recoverLegacyManagedClear() {
+  const base = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)/documents`;
+  managedClearBlocked = true;
+  await writeManagedRecoveryJournal("starting");
+  await preflightLegacyRecoveryScope(base);
+  await writeManagedRecoveryJournal("preflight-complete", {
+    presentNames: [...managedClearState.preflightUpdateTimes.keys()],
+    absentNames: LEGACY_SHRINK_NAMES.filter(
+      (name) => !managedClearState.preflightUpdateTimes.has(name),
+    ),
+  });
+  const deletedNames = [];
+  for (const name of LEGACY_SHRINK_NAMES) {
+    if (!managedClearState.preflightUpdateTimes.has(name)) continue;
+    const updateTime = await shrinkBoundaryDocument(name);
+    const deleted = await managedShrinkRequest("exact legacy document delete", `${base}:commit`, {
+      method: "POST",
+      headers: authorized({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        writes: [{ delete: name, currentDocument: { updateTime } }],
+      }),
+      signal: timeoutSignal(),
+    });
+    if (!deleted.ok) {
+      const body = await deleted.text();
+      throw new Error(`legacy recovery exact delete ${deleted.status} ${body}`);
+    }
+    const acknowledgement = await deleted.json();
+    if (
+      !Array.isArray(acknowledgement?.writeResults) ||
+      acknowledgement.writeResults.length !== 1 ||
+      typeof acknowledgement.writeResults[0]?.updateTime !== "string"
+    ) {
+      throw new Error("legacy recovery exact delete acknowledgement is uncertain");
+    }
+    deletedNames.push(name);
+    await writeManagedRecoveryJournal("deleting", { deletedNames });
+  }
+  await verifyManagedShrinkScopeAbsent(base);
+  await writeManagedRecoveryJournal("complete");
+  managedClearBlocked = false;
+}
+
+async function runLegacyRecoveryOnly() {
+  if (!HOST || !META_OUT || !MANAGED_CLEAR_JOURNAL) {
+    throw new Error("legacy recovery requires a target, private journal and metadata");
+  }
+  const names = JSON.parse(MANAGED_CLEAR_NAMES ?? "null");
+  if (JSON.stringify(names) !== JSON.stringify(LEGACY_SHRINK_NAMES)) {
+    throw new Error("legacy recovery names do not match the exact frozen scope");
+  }
+  if (!requestBudget || MAX_REQUESTS !== "1000") {
+    throw new Error("legacy recovery requires the fixed 1000-request session cap");
+  }
+  managedClearScope(names, PROJECT, "(default)");
+  managedClearState = {
+    names,
+    shrinkScope: "legacy",
+    recoveryOnly: true,
+    preflightUpdateTimes: new Map(),
+    shrinkRequestCounter: createShrinkRequestCounter(SHRINK_REQUEST_CAPS.legacy),
+  };
+  try {
+    await recoverLegacyManagedClear();
+  } finally {
+    await writeFile(META_OUT, `${JSON.stringify({ requestCount })}\n`, { mode: 0o600 });
+  }
 }
 
 function urlForDocument(name) {
@@ -726,6 +904,17 @@ async function verifyManagedShrinkScopeAbsent(base) {
   for (const collectionId of managedClearScope(managedClearState.names, PROJECT, "(default)")) {
     if ((await managedGroupNames(api, collectionId, managedShrinkRequest)).length !== 0) {
       throw new Error("array shrink scope collection group remains populated");
+    }
+  }
+  if (managedClearState.recoveryOnly) {
+    for (const name of managedClearState.names) {
+      const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
+      const children = await listCollectionIds(base, relative, (input, init) =>
+        managedShrinkRequest("legacy recovery final child check", input, init),
+      );
+      if (children === null || children.length !== 0) {
+        throw new Error("legacy recovery final child collection check was not empty");
+      }
     }
   }
 }
@@ -966,6 +1155,16 @@ async function step(spec, raw) {
 }
 
 async function main() {
+  if (RECOVERY_MODE !== undefined) {
+    if (RECOVERY_MODE !== "recover-legacy") {
+      throw new Error("unsupported Firestore probe recovery mode");
+    }
+    if (!PRODUCTION || PROJECT !== "fireemu-oracle-sbx" || !HOST || !TOKEN) {
+      throw new Error("legacy recovery requires the fixed sandbox production target");
+    }
+    await runLegacyRecoveryOnly();
+    return;
+  }
   if (!HOST || !IN || !OUT) {
     throw new Error(
       "FIRESTORE_PROBE_HOST, FIRESTORE_PROBE_IN and FIRESTORE_PROBE_OUT are required",

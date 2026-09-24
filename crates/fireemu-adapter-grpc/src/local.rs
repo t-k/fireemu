@@ -3296,7 +3296,7 @@ impl LocalBackend {
         let Some(pb::partition_query_request::QueryType::StructuredQuery(sq)) = &req.query_type
         else {
             return Err(Status::invalid_argument(
-                "PartitionQuery requires a structured_query",
+                crate::query_messages::PARTITION_WITHOUT_QUERY,
             ));
         };
         self.fault(parent.project.as_str(), "firestore.read")?;
@@ -3622,17 +3622,20 @@ impl LocalBackend {
         outcome
     }
 
-    /// The index entries an Explain plan reads over the latest state of `parent`'s database
-    /// (the gRPC stream counts them once its pages are done).
+    /// The index entries an Explain plan reads in `parent`'s database at the snapshot of
+    /// `read_time` (the latest state without one); the gRPC stream counts them once its pages
+    /// are done.
     pub(crate) fn explain_index_entries(
         &self,
         parent: &Parent,
         query: &Query,
         aggregations: Option<&[Aggregation]>,
         scans: &[fireemu_core_firestore::index::PlannedScan],
+        read_time: Option<&prost_types::Timestamp>,
     ) -> Result<u64, Status> {
         self.read_db(parent, |db| {
-            crate::service::index_entries(db, None, query, aggregations, scans)
+            let version = read_time.map(|time| db.version_at(crate::encode::decode_instant(time)));
+            crate::service::index_entries(db, version, query, aggregations, scans)
                 .map_err(|error| status_from_error(&error))
         })
     }
@@ -4881,7 +4884,7 @@ impl LocalBackend {
         self.fault(parent.project.as_str(), "firestore.read")?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
-                "RunQuery requires a structured_query",
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
         let accepted = self
@@ -4900,7 +4903,7 @@ impl LocalBackend {
             &authorization_req.query_type
         else {
             return Err(Status::invalid_argument(
-                "RunQuery requires a structured_query",
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
         let authorization = self
@@ -5095,16 +5098,11 @@ impl LocalBackend {
             &req.query_type
         else {
             return Err(Status::invalid_argument(
-                "RunAggregationQuery requires a structured_aggregation_query",
+                crate::query_messages::AGGREGATION_WITHOUT_QUERY,
             ));
         };
-        let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) =
-            &saq.query_type
-        else {
-            return Err(Status::invalid_argument(
-                "aggregation query requires a structured_query",
-            ));
-        };
+        let sq = crate::query_messages::aggregation_structured_query(saq);
+        let sq = sq.as_ref();
         let (aliases, aggregations) = decode_aggregations(saq)?;
         let accepted = self
             .accepted_aggregation_query(&parent, sq, &aggregations)
@@ -5113,13 +5111,6 @@ impl LocalBackend {
             .explain_options
             .as_ref()
             .is_some_and(|options| !options.analyze);
-        if let Some(response) = crate::query_messages::zero_capped_count(
-            &aliases,
-            &aggregations,
-            plan_only || req.consistency_selector.is_some(),
-        ) {
-            return Ok((response, QueryStats::default()));
-        }
         let now = self.write_time();
         let selector = match &req.consistency_selector {
             Some(pb::run_aggregation_query_request::ConsistencySelector::Transaction(bytes)) => {
@@ -5148,6 +5139,15 @@ impl LocalBackend {
                     query: &accepted.query,
                 },
             )?;
+            // Only once the database exists and the caller may read the query: a count
+            // capped at zero reads nothing and answers at the instant before the epoch.
+            if let Some(response) = crate::query_messages::zero_capped_count(
+                &aliases,
+                &aggregations,
+                req.explain_options.is_some() || req.consistency_selector.is_some(),
+            ) {
+                return Ok((response, QueryStats::default()));
+            }
             let explain_started = std::time::Instant::now();
             if plan_only {
                 return Ok((

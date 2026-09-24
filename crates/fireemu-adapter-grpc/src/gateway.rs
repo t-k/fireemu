@@ -173,13 +173,7 @@ impl Gateway {
         query: &Query,
         indexes: &IndexSet,
     ) -> Result<AcceptedQuery, Rejection> {
-        self.validate_canonical_query(
-            query
-                .canonicalize()
-                .map_err(|e| Rejection::InvalidQuery(e.to_string()))?,
-            indexes,
-            None,
-        )
+        self.validate_canonical_query(self.canonicalize(query)?, indexes, None)
     }
 
     /// Runs every strict check for an aggregation query with a borrowed database-specific index
@@ -191,13 +185,17 @@ impl Gateway {
         aggregations: &[Aggregation],
         indexes: &IndexSet,
     ) -> Result<AcceptedQuery, Rejection> {
-        self.validate_canonical_query(
-            query
-                .canonicalize()
-                .map_err(|e| Rejection::InvalidQuery(e.to_string()))?,
-            indexes,
-            Some(aggregations),
-        )
+        self.validate_canonical_query(self.canonicalize(query)?, indexes, Some(aggregations))
+    }
+
+    /// The canonical query, with the refusals of the profile's policy: production's under
+    /// the strict profile, the official emulator's under the emulator profile.
+    fn canonicalize(&self, query: &Query) -> Result<Query, Rejection> {
+        match self.ctx.policy {
+            IndexValidationPolicy::Production => query.canonicalize(),
+            IndexValidationPolicy::Emulator => query.canonicalize_emulator(),
+        }
+        .map_err(|e| Rejection::InvalidQuery(e.to_string()))
     }
 
     fn validate_canonical_query(

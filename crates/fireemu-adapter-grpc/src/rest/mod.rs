@@ -1155,7 +1155,18 @@ impl RestState {
                 transcode::check_body(action, body)
                     .and_then(|body| self.run_aggregation_query(principal, resource, &body)),
             ),
-            "executePipeline" => stream_errors(self.execute_pipeline()),
+            // The template is `{database=projects/*/databases/*}/documents:executePipeline`;
+            // any other resource names no route.
+            "executePipeline" => {
+                if matches!(
+                    resource.split('/').collect::<Vec<_>>().as_slice(),
+                    ["projects", _, "databases", _, "documents"]
+                ) {
+                    stream_errors(self.execute_pipeline(principal))
+                } else {
+                    Ok(not_found_text())
+                }
+            }
             "partitionQuery" => transcode::check_body(action, body)
                 .and_then(|body| self.partition_query(principal, resource, &body)),
             "listCollectionIds" => {
@@ -1209,7 +1220,11 @@ impl RestState {
 
     /// `:executePipeline`: a Standard-edition database refuses every pipeline as production does;
     /// an Enterprise database has no REST pipeline route here.
-    fn execute_pipeline(&self) -> Result<RestResponse, Status> {
+    fn execute_pipeline(&self, principal: &Caller) -> Result<RestResponse, Status> {
+        // Owner first, as over gRPC.
+        if let Some(rules) = &self.rules {
+            rules.require_owner(principal, "ExecutePipeline")?;
+        }
         if self.gateway.ctx.edition == fireemu_core_types::edition::FirestoreEdition::Enterprise {
             return Ok(not_found_text());
         }
@@ -1239,7 +1254,9 @@ impl RestState {
             rules.require_owner(principal, "partitionQuery")?;
         }
         let Some(sq) = body.get("structuredQuery") else {
-            return Err(Status::invalid_argument("Query is required."));
+            return Err(Status::invalid_argument(
+                crate::query_messages::PARTITION_WITHOUT_QUERY,
+            ));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
         let partition_count = match body.get("partitionCount") {
@@ -1448,7 +1465,7 @@ impl RestState {
         .map_err(|e| bad(&e))?;
         let Some(sq) = body.get("structuredQuery") else {
             return Err(Status::invalid_argument(
-                "only structured queries are supported",
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
         let structured = structured_query_from_json(sq).map_err(|e| bad(&e))?;
@@ -1529,7 +1546,7 @@ impl RestState {
         .map_err(|e| bad(&e))?;
         let Some(saq) = body.get("structuredAggregationQuery") else {
             return Err(Status::invalid_argument(
-                "Only structured aggregation queries are supported.",
+                crate::query_messages::AGGREGATION_WITHOUT_QUERY,
             ));
         };
         let aggregation = aggregation_query_from_json(saq).map_err(|e| bad(&e))?;

@@ -9,7 +9,7 @@ use fireemu_core_firestore::index::{
     IndexDefinition, IndexFieldMode, IndexQueryScope, PlannedScan,
 };
 use fireemu_core_firestore::path::DocumentPath;
-use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, QueryScope};
+use fireemu_core_firestore::query::{Direction, FieldOp, FilterExpr, Query, QueryScope, UnaryOp};
 use fireemu_core_firestore::store::{
     get_field, Aggregation, CommitVersion, FirestoreError, FirestoreState,
 };
@@ -100,18 +100,19 @@ fn index_used(index: &IndexDefinition) -> Struct {
     ])
 }
 
-/// How many index scans one DNF disjunct becomes: each `in` or `array-contains-any` value is
-/// a scan, `!=` scans the two ranges around its value (FS-QUERY-INDEX explain in / not-equal),
-/// and `not-in` the ranges between its values.
+/// At most this many plan entries are reported. Production plans at most 30 disjunctions and
+/// refuses a `not-in` of more than ten values, so a query it serves never comes near; a query
+/// only the emulator profile or the Enterprise edition serves cannot make the plan grow with
+/// its request (safety review M2).
+const MAX_PLAN_ENTRIES: usize = 1024;
+
+/// How many index scans one DNF disjunct becomes: `!=` scans the two ranges around its value
+/// (FS-QUERY-INDEX explain not-equal) and `not-in` the ranges between its values. (`in` and
+/// `array-contains-any` are already one disjunct per value.)
 fn scan_count(disjunct: &[FilterExpr]) -> usize {
     disjunct
         .iter()
         .map(|filter| match filter {
-            FilterExpr::Field {
-                op: FieldOp::In | FieldOp::ArrayContainsAny,
-                value: FsValue::Array(values),
-                ..
-            } => values.len().max(1),
             FilterExpr::Field {
                 op: FieldOp::NotEqual,
                 ..
@@ -120,21 +121,29 @@ fn scan_count(disjunct: &[FilterExpr]) -> usize {
                 op: FieldOp::NotIn,
                 value: FsValue::Array(values),
                 ..
-            } => values.len() + 1,
+            } => values.len().saturating_add(1),
             _ => 1,
         })
-        .product()
+        .fold(1, usize::saturating_mul)
 }
 
 /// The plan summary's `indexesUsed`: per disjunct, per scan, the index (or each merge member
-/// in join order).
+/// in join order), up to [`MAX_PLAN_ENTRIES`].
 fn indexes_used(query: &Query, scans: &[PlannedScan]) -> Vec<Struct> {
     let mut out = Vec::new();
     for (disjunct, scan) in query.dnf().iter().zip(scans) {
         for _ in 0..scan_count(disjunct) {
+            if out.len() >= MAX_PLAN_ENTRIES {
+                return out;
+            }
             match scan {
                 PlannedScan::Index(index) => out.push(index_used(index)),
-                PlannedScan::Merge(members) => out.extend(members.iter().map(index_used)),
+                PlannedScan::Merge(members) => out.extend(
+                    members
+                        .iter()
+                        .take(MAX_PLAN_ENTRIES - out.len())
+                        .map(index_used),
+                ),
             }
         }
     }
@@ -212,14 +221,35 @@ fn has_vector(fields: &BTreeMap<String, FsValue>, field: &FieldPath, dimension: 
     )
 }
 
-/// The equality (and array-contains) filters of `disjunct` a merge member serves: those on
-/// the fields of its prefix.
-fn member_filters(member: &IndexDefinition, disjunct: &[FilterExpr]) -> Vec<FilterExpr> {
+/// Whether `filter` is one a merge member serves with its prefix: an equality, `IS_NULL`,
+/// `IS_NAN`, `array-contains` or a one-value `array-contains-any` (the atoms the planner makes
+/// equality or contains fields of), on a field other than `__name__`.
+fn is_member_atom(filter: &FilterExpr) -> Option<&FieldPath> {
+    match filter {
+        FilterExpr::Field {
+            field,
+            op: FieldOp::Equal | FieldOp::ArrayContains | FieldOp::ArrayContainsAny,
+            ..
+        }
+        | FilterExpr::Unary {
+            field,
+            op: UnaryOp::IsNull | UnaryOp::IsNan,
+        } if !field.is_document_name() => Some(field),
+        _ => None,
+    }
+}
+
+/// The filters a merge member's entries satisfy: the member atoms on the fields of its prefix,
+/// and every other filter of the disjunct (ranges and inequalities, which every member shares
+/// with the order suffix they imply). `member` `None` is the shared order alone.
+fn member_filters(member: Option<&IndexDefinition>, disjunct: &[FilterExpr]) -> Vec<FilterExpr> {
     disjunct
         .iter()
-        .filter(|filter| {
-            matches!(filter, FilterExpr::Field { field, op: FieldOp::Equal | FieldOp::ArrayContains, .. }
-                if !field.is_document_name() && member.fields.iter().any(|f| &f.path == field))
+        .filter(|filter| match is_member_atom(filter) {
+            Some(field) => {
+                member.is_some_and(|member| member.fields.iter().any(|f| &f.path == field))
+            }
+            None => true,
         })
         .cloned()
         .collect()
@@ -252,7 +282,7 @@ fn disjunct_entries(
             }
         }
         PlannedScan::Merge(members) => {
-            let everything = disjunct_query(query, Vec::new());
+            let everything = disjunct_query(query, member_filters(None, disjunct));
             let (order, _) = db.run_query_paths_with_stats(&everything, version)?;
             let position: HashMap<&DocumentPath, usize> = order
                 .iter()
@@ -261,7 +291,7 @@ fn disjunct_entries(
                 .collect();
             let mut lists = Vec::with_capacity(members.len());
             for member in members {
-                let sub = disjunct_query(query, member_filters(member, disjunct));
+                let sub = disjunct_query(query, member_filters(Some(member), disjunct));
                 let (paths, _) = db.run_query_paths_with_stats(&sub, version)?;
                 lists.push(
                     paths
@@ -574,36 +604,144 @@ mod tests {
     }
 
     #[test]
-    fn in_and_not_equal_scan_once_per_value_or_range() {
+    fn not_equal_and_not_in_scan_once_per_range_and_the_plan_is_bounded() {
         let field = |op, value| FilterExpr::Field {
             field: FieldPath::parse("n").unwrap(),
             op,
             value,
         };
-        let three = FsValue::Array(vec![
-            FsValue::Integer(1),
-            FsValue::Integer(4),
-            FsValue::Integer(7),
-        ]);
+        let values = |count: i64| FsValue::Array((0..count).map(FsValue::Integer).collect());
         assert_eq!(scan_count(&[]), 1);
         assert_eq!(scan_count(&[field(FieldOp::Equal, FsValue::Integer(1))]), 1);
-        assert_eq!(scan_count(&[field(FieldOp::In, three.clone())]), 3);
-        assert_eq!(
-            scan_count(&[field(FieldOp::ArrayContainsAny, three.clone())]),
-            3
-        );
         assert_eq!(
             scan_count(&[field(FieldOp::NotEqual, FsValue::Integer(4))]),
             2
         );
-        assert_eq!(scan_count(&[field(FieldOp::NotIn, three.clone())]), 4);
+        assert_eq!(scan_count(&[field(FieldOp::NotIn, values(3))]), 4);
+        // `in` is one disjunct per value already.
+        let collection = || {
+            Query::new(QueryScope::collection(
+                None,
+                CollectionId::try_new("qn").unwrap(),
+            ))
+        };
+        let scan = || {
+            PlannedScan::Index(index(
+                IndexQueryScope::Collection,
+                &[
+                    ("n", IndexFieldMode::Ascending),
+                    ("__name__", IndexFieldMode::Ascending),
+                ],
+            ))
+        };
+        let in_query = collection()
+            .with_filter(field(FieldOp::In, values(3)))
+            .canonicalize()
+            .unwrap();
+        assert_eq!(in_query.dnf().len(), 3);
+        assert_eq!(indexes_used(&in_query, &[scan(), scan(), scan()]).len(), 3);
+        // A not-in only the emulator profile serves cannot grow the plan with the request.
+        let huge = collection().with_filter(field(FieldOp::NotIn, values(100_000)));
+        assert_eq!(indexes_used(&huge, &[scan()]).len(), MAX_PLAN_ENTRIES);
+    }
+
+    /// A merge member's entries are the documents its atoms select, `IS_NULL` included, and the
+    /// disjunct's range stays on every member (core review should-fix 1).
+    #[test]
+    fn merge_members_read_the_entries_their_atoms_select() {
+        use fireemu_core_firestore::path::DocumentPath;
+        use fireemu_core_firestore::store::{Write, WriteOp};
+        use fireemu_core_types::ids::{DatabaseId, ProjectId};
+        let mut db = FirestoreState::new();
+        let project = ProjectId::try_new("p").unwrap();
+        let write = |id: &str, fields: &[(&str, FsValue)]| Write {
+            op: WriteOp::Set {
+                path: DocumentPath::parse(&project, &DatabaseId::default_database(), id).unwrap(),
+                fields: fields
+                    .iter()
+                    .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                    .collect(),
+                update_mask: None,
+            },
+            precondition: None,
+            transforms: vec![],
+        };
+        db.commit(
+            &[
+                write(
+                    "qx/x1",
+                    &[
+                        ("a", FsValue::Integer(1)),
+                        ("b", FsValue::Null),
+                        ("c", FsValue::Integer(5)),
+                    ],
+                ),
+                write(
+                    "qx/x2",
+                    &[
+                        ("a", FsValue::Integer(1)),
+                        ("b", FsValue::Integer(2)),
+                        ("c", FsValue::Integer(1)),
+                    ],
+                ),
+                write(
+                    "qx/x3",
+                    &[
+                        ("a", FsValue::Integer(1)),
+                        ("b", FsValue::Integer(3)),
+                        ("c", FsValue::Integer(9)),
+                    ],
+                ),
+            ],
+            None,
+            fireemu_core_types::time::LogicalInstant::from_unix_seconds(1_788_000_000),
+        )
+        .unwrap();
+        let auto = |path: &str| {
+            index(
+                IndexQueryScope::Collection,
+                &[
+                    (path, IndexFieldMode::Ascending),
+                    ("__name__", IndexFieldMode::Ascending),
+                ],
+            )
+        };
+        let query = |filters: Vec<FilterExpr>| {
+            Query::new(QueryScope::collection(
+                None,
+                CollectionId::try_new("qx").unwrap(),
+            ))
+            .with_filter(FilterExpr::And(filters))
+            .canonicalize()
+            .unwrap()
+        };
+        let a_is_1 = FilterExpr::Field {
+            field: FieldPath::parse("a").unwrap(),
+            op: FieldOp::Equal,
+            value: FsValue::Integer(1),
+        };
+        let b_is_null = FilterExpr::Unary {
+            field: FieldPath::parse("b").unwrap(),
+            op: UnaryOp::IsNull,
+        };
+        // a == 1 selects [x1, x2, x3], b IS NULL selects [x1]: a walk of three entries.
+        let null_merge = query(vec![a_is_1.clone(), b_is_null.clone()]);
+        let merge = [PlannedScan::Merge(vec![auto("a"), auto("b")])];
         assert_eq!(
-            scan_count(&[
-                field(FieldOp::In, three),
-                field(FieldOp::NotEqual, FsValue::Integer(4))
-            ]),
-            6
+            index_entries(&db, None, &null_merge, None, &merge).unwrap(),
+            3
         );
+        // With c > 3 on every member only x1 and x3 are entries of a, x1 of b.
+        let ranged = query(vec![
+            a_is_1,
+            b_is_null,
+            FilterExpr::Field {
+                field: FieldPath::parse("c").unwrap(),
+                op: FieldOp::GreaterThan,
+                value: FsValue::Integer(3),
+            },
+        ]);
+        assert_eq!(index_entries(&db, None, &ranged, None, &merge).unwrap(), 3);
     }
 
     /// Production's index entry counts for the merges of FS-QUERY-INDEX explain (entries as

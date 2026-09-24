@@ -4299,6 +4299,8 @@ fn explain_rest_authorization_denies_without_metrics_or_leaked_transactions() {
                 request["newTransaction"] = json!({"readOnly": {}});
                 let (status, body) = call_as(&s, "POST", &format!("{DOCS}:{}", explain_method(aggregation)), request, None);
                 assert_eq!(status, 403, "{body}");
+                // The array wraps every streaming-method error; for a Rules denial that comes
+                // from an exploratory probe only (not closure evidence).
                 assert_eq!(body[0]["error"]["status"], "PERMISSION_DENIED");
                 assert!(!body.to_string().contains("explainMetrics"));
                 assert!(s.local.latest_query_execution_stats().is_none());
@@ -4500,8 +4502,9 @@ fn every_data_plane_surface_refuses_a_database_that_was_never_created() {
     ] {
         let (status, body) = call(&s, method, &path, body);
         assert_eq!(status, 404, "{method} {path}: {body}");
-        // Production answers the streaming methods' errors inside a one-element array
-        // (observed 2026-09-24 for a never-created database).
+        // Production answers the streaming methods' errors inside a one-element array (recorded
+        // for refusals in FS-QUERY-INDEX; a never-created database was seen so only in an
+        // exploratory probe, which is not closure evidence).
         let body = if path.ends_with(":runQuery") || path.ends_with(":runAggregationQuery") {
             body[0].clone()
         } else {
@@ -4781,4 +4784,103 @@ fn rest_query_method_on_a_root_collection_routes_as_a_create_document() {
         json!({"structuredQuery": {"from": [{"collectionId": "sub"}]}}),
     );
     assert_eq!(status, 200, "{body}");
+}
+
+/// An enum given by an unknown number reaches the query decoder over REST as over gRPC, which
+/// refuses it in production's words (closure review F5).
+#[test]
+fn rest_unknown_enum_numbers_are_refused_as_the_decoder_refuses_them() {
+    let s = state(None);
+    let cases = [
+        (
+            json!({"from": [{"collectionId": "c"}], "where": {"unaryFilter": {"field": {"fieldPath": "a"}, "op": 99}}}),
+            "Unknown UnaryFilter operator.",
+        ),
+        (
+            json!({"from": [{"collectionId": "c"}], "where": {"compositeFilter": {"op": 9, "filters": [
+                {"fieldFilter": {"field": {"fieldPath": "a"}, "op": "EQUAL", "value": {"integerValue": "1"}}},
+                {"fieldFilter": {"field": {"fieldPath": "b"}, "op": "EQUAL", "value": {"integerValue": "1"}}}
+            ]}}}),
+            "Unsupported CompositeFilter operator.",
+        ),
+        (
+            json!({"from": [{"collectionId": "c"}], "findNearest": {
+                "vectorField": {"fieldPath": "e"}, "queryVector": {"mapValue": {"fields": {
+                    "__type__": {"stringValue": "__vector__"},
+                    "value": {"arrayValue": {"values": [{"doubleValue": 1.0}]}}}}},
+                "distanceMeasure": 9, "limit": 1}}),
+            "Unknown Distance Measure.",
+        ),
+    ];
+    for (query, expected) in cases {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": query}),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(body[0]["error"]["message"], expected, "{body}");
+    }
+}
+
+/// `:executePipeline` is routed only on the database's documents resource, and a caller who is
+/// not the owner is refused first, as over gRPC (closure review F6).
+#[test]
+fn rest_execute_pipeline_routes_one_resource_and_checks_the_owner_first() {
+    let s = state(None);
+    for path in [
+        "qn:executePipeline",
+        "qn/d:executePipeline",
+        "a/b/c:executePipeline",
+    ] {
+        let (status, body) = call(&s, "POST", &format!("{DOCS}/{path}"), json!({}));
+        assert_ne!(
+            body[0]["error"]["status"], "FAILED_PRECONDITION",
+            "{path}: {body}"
+        );
+        assert!(status == 404 || status == 400, "{path}: {status} {body}");
+    }
+    let s = state(Some(
+        "rules_version = '2';\nservice cloud.firestore { match /databases/{d}/documents { match /{document=**} { allow read, write: if true; } } }",
+    ));
+    let (status, body) = call_as(
+        &s,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        json!({}),
+        None,
+    );
+    assert_eq!(status, 403, "{body}");
+    assert_eq!(body[0]["error"]["status"], "PERMISSION_DENIED");
+}
+
+/// A `__name__` filter on a collection name is refused with production's "lacks /" text
+/// (filter-validation/paths-and-names#name-collection-reference); another malformed name gets
+/// the text that names its own fault, not that one (closure review 11).
+#[test]
+fn rest_name_filter_references_are_refused_for_their_own_fault() {
+    let s = state(None);
+    let refusal = |reference: &str| {
+        let (status, body) = call(
+            &s,
+            "POST",
+            &format!("{DOCS}:runQuery"),
+            json!({"structuredQuery": {"from": [{"collectionId": "qn"}], "where": {"fieldFilter": {
+                "field": {"fieldPath": "__name__"}, "op": "EQUAL",
+                "value": {"referenceValue": reference}}}}}),
+        );
+        assert_eq!(status, 400, "{body}");
+        body[0]["error"]["message"].as_str().unwrap().to_owned()
+    };
+    let collection = "projects/demo-app/databases/(default)/documents/qn".to_owned();
+    assert_eq!(
+        refusal(&collection),
+        format!(
+            "Document parent name \"{collection}\" lacks \"/\" at index {}.",
+            collection.len()
+        )
+    );
+    let dotted = "projects/demo-app/databases/(default)/documents/qn/d/./x".to_owned();
+    assert!(!refusal(&dotted).contains("lacks"), "{}", refusal(&dotted));
 }

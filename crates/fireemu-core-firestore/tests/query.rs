@@ -502,11 +502,11 @@ fn a_cursor_value_in_the_document_name_slot_must_be_a_full_resource_name() {
         Query::new(cursor_scope()).with_order(name_order()),
         vec![Value::Reference("cur/c3".to_owned())],
     );
+    // Not a resource name at all, so not production's collection-reference refusal
+    // (cursors/names#name-collection-reference); it positions nothing.
     assert_eq!(
         cursor_error(&query),
-        QueryError::CursorReferenceNotDocument {
-            name: "cur/c3".to_owned()
-        }
+        QueryError::CursorNameValue { position: 0 }
     );
 }
 
@@ -686,4 +686,202 @@ fn a_root_collection_cursor_reference_may_name_another_collection() {
         .with_order(name_order()),
         vec![reference("other/o1")],
     ));
+}
+
+/// The refusals production makes and the official emulator does not are strict-profile
+/// refusals only: the emulator profile may add no rejection
+/// (`spec/compatibility/contract.json`). Each text is production's (FS-QUERY-INDEX rows named
+/// per case).
+#[test]
+fn production_only_refusals_apply_to_the_strict_canonicalization_only() {
+    use fireemu_core_firestore::query::{Cursor, UnaryOp};
+    let reference =
+        || Value::Reference("projects/p/databases/(default)/documents/tasks/a".to_owned());
+    let kindless = || Query::new(QueryScope::kindless_all_descendants(None));
+    let asc = |path: &str| OrderClause {
+        field: fp(path),
+        direction: Direction::Ascending,
+    };
+    let cases: Vec<(&str, Query, &str)> = vec![
+        (
+            // collection-group/scopes#kindless-with-filter
+            "kindless filter",
+            kindless().with_filter(field("n", FieldOp::Equal, Value::Integer(1))),
+            "kind is required for filter: n",
+        ),
+        (
+            // collection-group/scopes#kindless-name-descending
+            "kindless order",
+            kindless().with_order(OrderClause {
+                field: FieldPath::document_name(),
+                direction: Direction::Descending,
+            }),
+            "kind is required for all orders except __key__ ascending",
+        ),
+        (
+            // order-by/basic#duplicate-field
+            "duplicate order field",
+            base()
+                .with_order(asc("a"))
+                .with_order(asc("b"))
+                .with_order(asc("a")),
+            "order by clause cannot contain duplicate fields a",
+        ),
+        (
+            // filter-validation/operators-and-values#or-empty
+            "empty or",
+            base().with_filter(FilterExpr::Or(Vec::new())),
+            "Composite filter must have at least one sub-filter.",
+        ),
+        (
+            // filter-validation/paths-and-names#name-array-contains
+            "name array-contains",
+            base().with_filter(field("__name__", FieldOp::ArrayContains, reference())),
+            "the name __key__ is reserved",
+        ),
+        (
+            // unary-filters/all#is-null-name
+            "name unary",
+            base().with_filter(FilterExpr::Unary {
+                field: FieldPath::document_name(),
+                op: UnaryOp::IsNull,
+            }),
+            "__key__ filter value must be a Key",
+        ),
+        (
+            // cursors/values: a cursor longer than the explicit order
+            "cursor past the explicit order",
+            {
+                let mut q = base().with_filter(field("n", FieldOp::GreaterThan, Value::Integer(0)));
+                q.start_at = Some(Cursor {
+                    values: vec![Value::Integer(1)],
+                    before: true,
+                });
+                q
+            },
+            "Cursor has too many values.",
+        ),
+    ];
+    for (name, query, text) in cases {
+        let error = query.canonicalize().expect_err(name);
+        assert_eq!(error.to_string(), text, "{name}");
+        assert!(
+            query.canonicalize_emulator().is_ok(),
+            "{name} under the emulator profile"
+        );
+    }
+    // What both refuse: a cursor longer than the whole implied order, an empty in list.
+    let mut long = base();
+    long.start_at = Some(Cursor {
+        values: vec![Value::Integer(1), Value::Integer(2)],
+        before: true,
+    });
+    assert!(long.canonicalize().is_err());
+    assert!(long.canonicalize_emulator().is_err());
+    let empty_in = base().with_filter(field("n", FieldOp::In, Value::Array(Vec::new())));
+    assert_eq!(
+        empty_in.canonicalize().unwrap_err().to_string(),
+        empty_in.canonicalize_emulator().unwrap_err().to_string()
+    );
+}
+
+/// Duplicate order fields are found in one pass over a long order-by.
+#[test]
+fn a_long_order_by_is_checked_without_quadratic_work() {
+    let mut query = base();
+    for i in 0..200_000 {
+        query = query.with_order(OrderClause {
+            field: fp(&format!("f{i}")),
+            direction: Direction::Ascending,
+        });
+    }
+    let started = std::time::Instant::now();
+    assert!(query.canonicalize().is_ok());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// A cursor reference that names a collection is refused in production's words
+/// (cursors/names#name-collection-reference); another malformed reference is no document
+/// reference either, but that text is not production's, so it is not reused.
+#[test]
+fn cursor_references_to_collections_and_malformed_names_are_told_apart() {
+    use fireemu_core_firestore::query::Cursor;
+    let at = |name: &str| {
+        let mut q = base().with_order(OrderClause {
+            field: FieldPath::document_name(),
+            direction: Direction::Ascending,
+        });
+        q.start_at = Some(Cursor {
+            values: vec![Value::Reference(name.to_owned())],
+            before: true,
+        });
+        q.canonicalize()
+            .unwrap()
+            .check_production_cursor_constraints()
+            .unwrap_err()
+            .to_string()
+    };
+    let collection = "projects/p/databases/(default)/documents/qn";
+    assert_eq!(
+        at(collection),
+        format!("Document parent name \"{collection}\" lacks \"/\" at index 43.")
+    );
+    for malformed in [
+        "projects/p/databases/(default)/documents/qn//d",
+        "projects/p/databases/(default)/documents/qn/d/",
+        "projects/p/databases/(default)/documents",
+    ] {
+        assert_eq!(
+            at(malformed),
+            "Cursor __key__ value is not a document reference.",
+            "{malformed}"
+        );
+    }
+}
+
+/// Production reports a value count before the other limits, in its words
+/// (query-limits/not-in-and-inequalities#not-in-11, #inequality-fields-11); the later checks
+/// still run, so the official emulator's own refusal of two array-contains filters is kept
+/// (core review note).
+#[test]
+fn value_counts_come_first_and_do_not_hide_later_limits() {
+    let values = |count: i64| Value::Array((0..count).map(Value::Integer).collect());
+    let query = base().with_filter(FilterExpr::And(vec![
+        field("n", FieldOp::NotIn, values(11)),
+        field("t1", FieldOp::ArrayContains, Value::Integer(1)),
+        field("t2", FieldOp::ArrayContains, Value::Integer(2)),
+    ]));
+    let violations = query
+        .canonicalize()
+        .unwrap()
+        .check_standard_limits()
+        .unwrap_err();
+    assert_eq!(
+        violations[0].message,
+        "'NOT_IN' supports up to 10 comparison values."
+    );
+    assert!(
+        violations.len() > 1,
+        "the array-contains limit is still checked: {violations:?}"
+    );
+    let inequalities = base().with_filter(FilterExpr::And(
+        (0..11)
+            .map(|i| field(&format!("f{i}"), FieldOp::GreaterThan, Value::Integer(0)))
+            .collect(),
+    ));
+    let violations = inequalities
+        .canonicalize()
+        .unwrap()
+        .check_standard_limits()
+        .unwrap_err();
+    assert!(violations[0]
+        .message
+        .starts_with("The query contains 11 distinct inequality fields: ["));
+    assert!(violations[0]
+        .message
+        .ends_with("]. A query may not have more than 10 distinct inequality fields."));
 }

@@ -308,7 +308,7 @@ impl GatewayService {
             .map_err(|e| Rejection::Decode(e).to_status())?;
         let Some(pb::run_query_request::QueryType::StructuredQuery(sq)) = &req.query_type else {
             return Err(Status::invalid_argument(
-                "RunQuery requires a structured_query",
+                crate::query_messages::RUN_QUERY_WITHOUT_QUERY,
             ));
         };
         let accepted = if let Some(local) = self.local_backend() {
@@ -338,16 +338,11 @@ impl GatewayService {
         )) = &req.query_type
         else {
             return Err(Status::invalid_argument(
-                "RunAggregationQuery requires a structured_aggregation_query",
+                crate::query_messages::AGGREGATION_WITHOUT_QUERY,
             ));
         };
-        let Some(pb::structured_aggregation_query::QueryType::StructuredQuery(sq)) =
-            &aggregation.query_type
-        else {
-            return Err(Status::invalid_argument(
-                "structured_aggregation_query requires a structured_query",
-            ));
-        };
+        let sq = crate::query_messages::aggregation_structured_query(aggregation);
+        let sq = sq.as_ref();
         crate::query_messages::check_find_nearest_request(sq)?;
         let (_, aggregations) = decode_aggregations(aggregation)?;
         let accepted = if let Some(local) = self.local_backend() {
@@ -1250,6 +1245,8 @@ impl GatewayService {
                 // Keep one response until exhaustion and execution finalization are known.
                 // Page-local completion must never terminate the public query stream.
                 let mut pending = None;
+                // The snapshot every page reads, which Explain counts its index entries at.
+                let snapshot_read_time = first.iter().find_map(|response| response.read_time);
                 for mut response in first {
                     response.continuation_selector = None;
                     response.explain_metrics = None;
@@ -1395,13 +1392,39 @@ impl GatewayService {
                     .as_ref()
                     .is_some_and(|options| options.analyze)
                 {
+                    // The count scans the store, so it runs off the async workers, at the
+                    // query's snapshot.
+                    let index_entries = match explain_query.as_ref() {
+                        Some((query, Some(scans), parent)) => {
+                            let (local, query, scans, parent) =
+                                (local.clone(), query.clone(), scans.clone(), parent.clone());
+                            let counted = tokio::task::spawn_blocking(move || {
+                                local.explain_index_entries(
+                                    &parent,
+                                    &query,
+                                    None,
+                                    &scans,
+                                    snapshot_read_time.as_ref(),
+                                )
+                            })
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(Status::internal("Explain accounting did not complete"))
+                            });
+                            match counted {
+                                Ok(entries) => Some(entries),
+                                Err(error) => {
+                                    let _ = sender.send(Err(error)).await;
+                                    return;
+                                }
+                            }
+                        }
+                        _ => None,
+                    };
                     if let Some(response) = pending.as_mut() {
                         // Stream-owned count survives eviction from the bounded diagnostic cache.
                         response.explain_metrics =
-                            explain_query.as_ref().map(|(query, scans, parent)| {
-                                let index_entries = scans.as_deref().and_then(|scans| {
-                                    local.explain_index_entries(parent, query, None, scans).ok()
-                                });
+                            explain_query.as_ref().map(|(query, scans, _)| {
                                 explain_metrics(
                                     query,
                                     None,

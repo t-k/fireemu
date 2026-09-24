@@ -124,6 +124,12 @@ export function guardActionRequest({ url, init }, ctx, { harness = false } = {})
     );
   }
   const body = inputs[1] ?? {};
+  // A client link request carries its parameters in the body only; the query holds the key.
+  if (
+    path === "/v1/accounts:sendOobCode" &&
+    [...parsed.searchParams.keys()].some((k) => k !== "key")
+  )
+    throw new Error("the client sendOobCode takes no query parameters but the key");
   if (path.endsWith("/config")) guardConfigWrite(init, parsed, body);
   if (path.endsWith(":sendOobCode")) guardOobRequest(path, init, body, project);
   for (const input of inputs) {
@@ -233,7 +239,7 @@ function noLinkExplained(step, created) {
 export function validateActionCorpus(programs) {
   let requests = 0;
   // The owner allowed two client email changes in the whole corpus (2026-09-24).
-  let clientChanges = 0;
+  const clientChanges = new Set();
   const programIds = new Set();
   programs.forEach((program, index) => {
     if (programIds.has(program.id)) throw new Error(`duplicate program ${program.id}`);
@@ -271,7 +277,12 @@ export function validateActionCorpus(programs) {
           step.path.endsWith("accounts:update") ||
           step.path.endsWith("accounts:signInWithEmailLink") ||
           (key === "newEmail" && step.path.endsWith("accounts:sendOobCode"));
-        const address = String(step.body?.[key] ?? "");
+        const value = step.body?.[key];
+        if (creates && value !== undefined && typeof value !== "string")
+          throw new Error(
+            `${step.id}: an address that makes or changes an account is given by value`,
+          );
+        const address = String(value ?? "").replace(/^EMAILMIXED\(/, "EMAIL(");
         const clientChange =
           step.path === "v1/accounts:sendOobCode" &&
           step.body?.requestType === "VERIFY_AND_CHANGE_EMAIL";
@@ -288,11 +299,22 @@ export function validateActionCorpus(programs) {
       } else if (step.path.endsWith("accounts:sendOobCode")) {
         if (step.body?.requestType === "VERIFY_AND_CHANGE_EMAIL") {
           const { requestType: _type, idToken, newEmail, ...rest } = step.body;
-          if (!idToken || Object.keys(rest).length || !/^EMAIL\(lvc-[a-z0-9-]+\)$/.test(newEmail))
-            throw new Error(`${step.id}: a client email change needs a token and an lvc-* address`);
-          clientChanges += 1;
-          if (clientChanges > 2) throw new Error(`${step.id}: at most two client email changes`);
+          if (
+            step.auth !== "key" ||
+            step.query !== undefined ||
+            !idToken ||
+            Object.keys(rest).length ||
+            !/^EMAIL\(lvc-[a-z0-9-]+\)$/.test(newEmail) ||
+            clientChanges.has(newEmail)
+          )
+            throw new Error(
+              `${step.id}: a client email change needs a token and a fresh lvc-* address`,
+            );
+          clientChanges.add(newEmail);
+          if (clientChanges.size > 2)
+            throw new Error(`${step.id}: at most two client email changes`);
         } else if (
+          step.query !== undefined ||
           step.body?.requestType !== "PASSWORD_RESET" ||
           step.body?.idToken !== undefined ||
           !/^EMAIL\(unknown[a-z0-9-]*\)$/.test(step.body?.email ?? "")

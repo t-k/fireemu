@@ -376,17 +376,19 @@ async function auditLegacyDebris(base) {
   // This audit is read-only and runs once before this collector's first v3 cleanup write.
   // External writer exclusivity remains an operator precondition; this process cannot enforce it.
   const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
+  const managedFetch = (input, init) =>
+    managedShrinkRequest("legacy debris child collection audit", input, init);
   const groups = new Map();
   for (let index = 0; index < LEGACY_SHRINK_NAMES.length; index += 1) {
     const name = LEGACY_SHRINK_NAMES[index];
     const collectionId = name.split("/documents/")[1].split("/")[0];
-    const groupNames = await managedGroupNames(api, collectionId);
+    const groupNames = await managedGroupNames(api, collectionId, managedShrinkRequest);
     if (groupNames.length > 1 || (groupNames.length === 1 && groupNames[0] !== name)) {
       throw new Error("legacy debris collection group contains an unexpected document");
     }
     groups.set(name, groupNames.length === 1);
   }
-  const readback = await trackedFetch(`${base}:batchGet`, {
+  const readback = await managedShrinkRequest("legacy debris typed read", `${base}:batchGet`, {
     method: "POST",
     headers: authorized({ "content-type": "application/json" }),
     body: JSON.stringify({ documents: LEGACY_SHRINK_NAMES }),
@@ -421,7 +423,7 @@ async function auditLegacyDebris(base) {
       const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
       validateLegacyDebrisDocument(row.found, name, expectedLength);
       const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
-      const childCollections = await listCollectionIds(base, relative);
+      const childCollections = await listCollectionIds(base, relative, managedFetch);
       if (!childCollections || childCollections.length !== 0) {
         throw new Error("legacy debris document has unexpected subcollections");
       }
@@ -433,17 +435,19 @@ async function auditLegacyDebris(base) {
 }
 
 /** Every collection id under `parentPath` (all pages), or `null` for a missing database. */
-async function listCollectionIds(base, parentPath) {
+async function listCollectionIds(base, parentPath, request = trackedFetch) {
   const parent = parentPath ? `${base}/${parentPath}` : base;
   const ids = [];
   let pageToken;
   do {
-    const listed = await trackedFetch(`${parent}:listCollectionIds`, {
+    const input = `${parent}:listCollectionIds`;
+    const init = {
       method: "POST",
       headers: authorized({ "content-type": "application/json" }),
       body: JSON.stringify(pageToken ? { pageToken } : {}),
       signal: timeoutSignal(),
-    });
+    };
+    const listed = await request(input, init);
     if (listed.status === 404) return null;
     if (!listed.ok) {
       throw new Error(`clear: listCollectionIds ${listed.status} ${await listed.text()}`);

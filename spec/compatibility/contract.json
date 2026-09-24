@@ -583,6 +583,10 @@
             {
               "behaviour": "A refusal text echoes at most 1 KiB of the client input it names (a property path, a collection id, a document reference, a distance result field, the inequality-field list, a transcoder value, key or path), in both profiles, and a transcoder refusal lists at most 16 violations: a refusal is produced before authorization and can travel in a grpc-message header, so the answer must not grow with the request. Production's own truncation is unobserved; this is a local safety bound",
               "precision": "strictly-safer"
+            },
+            {
+              "behaviour": "A PartitionQuery page token names the snapshot version it was issued at and carries a fingerprint of the request and that version, in both profiles, so a token edited to read another version is refused as foreign. fireemu before FS-QUERY-INDEX did not bind the version; this is the one refusal the emulator profile adds, a local integrity bound on a token only fireemu issues",
+              "precision": "strictly-safer"
             }
           ],
           "productionOnly": [

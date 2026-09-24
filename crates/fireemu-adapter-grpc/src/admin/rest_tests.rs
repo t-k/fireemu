@@ -757,7 +757,7 @@ fn bulk_delete_refuses_an_empty_filter_and_deletes_the_named_collection_groups()
         &state,
         "POST",
         &format!("{docs}/other?documentId=c"),
-        json!({"fields": {}}),
+        json!({"fields": {"i": {"integerValue": "10"}}}),
     );
     let bulk = "/v1/projects/p/databases/bulkdb:bulkDeleteDocuments";
     let (status, answer) = call(&state, "POST", bulk, json!({}));
@@ -774,6 +774,25 @@ fn bulk_delete_refuses_an_empty_filter_and_deletes_the_named_collection_groups()
         .as_str()
         .unwrap()
         .ends_with(":00Z"));
+    let (_, done) = call(
+        &state,
+        "GET",
+        &format!("/v1/{}", operation["name"].as_str().unwrap()),
+        Value::Null,
+    );
+    // Production (2026-09-24): the stored size of other/c {i: 10} is 66 bytes.
+    assert_eq!(
+        done["metadata"]["progressBytes"],
+        json!({"completedWork": "66"})
+    );
+    assert_eq!(
+        done["metadata"]["progressDocuments"],
+        json!({"completedWork": "1"})
+    );
+    assert_eq!(
+        done["response"],
+        json!({"@type": "type.googleapis.com/google.firestore.admin.v1.BulkDeleteDocumentsResponse"})
+    );
     let (status, _) = call(&state, "GET", &format!("{docs}/other/c"), Value::Null);
     assert_eq!(status, 404);
     let (status, _) = call(&state, "GET", &format!("{docs}/items/a"), Value::Null);

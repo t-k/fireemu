@@ -260,7 +260,8 @@ async function writeFixture({ programs, recordings, meta, secrets }) {
   const text = `${JSON.stringify(fixture, null, 2)}\n`;
   scanFixture(text, secrets);
   // A link nested in another link would carry its code and key past describeLink.
-  if (/oobCode=|apiKey=/.test(text)) throw new Error("fixture holds a raw action link");
+  if (/oobcode(=|%3d)|apikey(=|%3d)/i.test(text))
+    throw new Error("fixture holds a raw action link");
   await writeFile(FIXTURE, text);
   return diffRecordings(first.results, second.results);
 }

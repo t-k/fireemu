@@ -209,6 +209,34 @@ pub fn missing_index_message(
     message
 }
 
+/// Production's refusal of a query whose index was deleted: the ordinary refusal, except that
+/// the link to create the index again carries the deleted index's id.
+#[must_use]
+pub fn deleted_index_message(
+    database: &str,
+    index_id: &str,
+    requirement: &IndexDefinition,
+) -> String {
+    format!(
+        "The query requires an index. You can create it here: {}?create_composite={}",
+        console(database),
+        blob(&named_index(database, index_id, requirement))
+    )
+}
+
+fn named_index(database: &str, index_id: &str, requirement: &IndexDefinition) -> AdminIndex {
+    let group = requirement.collection_group.as_str();
+    AdminIndex {
+        name: format!("{database}/collectionGroups/{group}/indexes/{index_id}"),
+        query_scope: scope_number(requirement.query_scope),
+        fields: requirement
+            .fields
+            .iter()
+            .map(|field| admin_field(field.path.canonical(), field.mode))
+            .collect(),
+    }
+}
+
 /// Production's refusal of a query whose index an Admin create is still building: the console
 /// link carries the index itself, its server-assigned id and the implied `__name__` included.
 #[must_use]
@@ -217,20 +245,10 @@ pub fn building_index_message(
     index_id: &str,
     requirement: &IndexDefinition,
 ) -> String {
-    let group = requirement.collection_group.as_str();
-    let index = AdminIndex {
-        name: format!("{database}/collectionGroups/{group}/indexes/{index_id}"),
-        query_scope: scope_number(requirement.query_scope),
-        fields: requirement
-            .fields
-            .iter()
-            .map(|field| admin_field(field.path.canonical(), field.mode))
-            .collect(),
-    };
     format!(
         "The query requires an index. That index is currently building and cannot be used yet. See its status here: {}?create_composite={}",
         console(database),
-        blob(&index)
+        blob(&named_index(database, index_id, requirement))
     )
 }
 

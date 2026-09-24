@@ -2618,6 +2618,19 @@ impl LocalBackend {
                 }
                 return refused;
             }
+            if let Some(index) = self.admin.indexes().deleted(
+                parent.project.as_str(),
+                parent.database.as_str(),
+                requirement,
+            ) {
+                let mut refused = Status::failed_precondition(
+                    crate::index_messages::deleted_index_message(&database, &index.id, requirement),
+                );
+                if let Ok(v) = "FS_GW_MISSING_INDEX".parse() {
+                    refused.metadata_mut().insert("fireemu-reason", v);
+                }
+                return refused;
+            }
         }
         rejection.to_status_in(&database)
     }

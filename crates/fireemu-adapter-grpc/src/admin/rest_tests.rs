@@ -516,8 +516,21 @@ fn an_index_is_creating_then_ready_and_queries_follow_its_state() {
     assert_eq!(status, 404);
     let (status, again) = call(&state, "DELETE", &format!("/v1/{name}"), Value::Null);
     assert_eq!((status, again), (200, json!({})));
-    let (status, _) = call(&state, "POST", &format!("{docs}:runQuery"), query);
+    let (status, refused) = call(&state, "POST", &format!("{docs}:runQuery"), query);
     assert_eq!(status, 400, "a deleted index no longer serves");
+    // Production's link to create the index again names the deleted index (2026-09-24).
+    let message = refused[0]["error"]["message"]
+        .as_str()
+        .unwrap_or_else(|| refused["error"]["message"].as_str().unwrap())
+        .to_owned();
+    assert!(
+        message.starts_with("The query requires an index. You can create it here: "),
+        "{message}"
+    );
+    let blob = message.rsplit("create_composite=").next().unwrap();
+    let decoded = crate::rest::json::base64_decode(blob).unwrap();
+    let text = String::from_utf8_lossy(&decoded);
+    assert!(text.contains(&format!("/indexes/{id}")), "{text}");
 }
 
 #[test]

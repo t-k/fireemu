@@ -31,6 +31,7 @@ const requiredConditions = new Set([
   "FS-LIMIT-INDEX-ENTRIES-PER-DOCUMENT",
   "FS-LIMIT-INDEX-ENTRY-BYTES",
   "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
+  "FS-DATA-WRITE/near-limit-delete-refusal",
   "FS-LIMIT-FIELD-PATH-BYTES",
   "FS-LIMIT-FIELD-VALUE-BYTES/scalar-refusal",
   "FS-LIMIT-FIELD-VALUE-BYTES/aggregate-string",
@@ -397,10 +398,10 @@ test("an unrecorded empty-write response cannot inherit the known trailer mismat
   assert.ok(selected.pendingStreamIds.includes(responseId));
   assert.equal(response.status, "PENDING_RECORDING");
   assert.deepEqual(response.recipeIds, [responseId]);
-  assert.equal(halfClose.status, "VERIFIED");
+  assert.equal(halfClose.status, "MISMATCH");
   assert.match(
     halfClose.comparisonNormalizationApproval,
-    /2026-09-24.*addendum 3.*comparison-only/,
+    /2026-09-24.*addendum 4.*content-disposition is stable/,
   );
   assert.ok(!halfClose.recipeIds.includes(responseId));
 });

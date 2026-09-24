@@ -131,8 +131,16 @@
       "conditionId": "FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
       "source": "spec/limits/firestore-standard-2026-08-25.json#FS-LIMIT-INDEX-ENTRY-SUM-PER-DOCUMENT",
       "recipeIds": ["writes/limits/index-entry-sum-per-document", "writes/limits/index-entry-sum/adjacent"],
-      "boundaryStatus": "UNBRACKETED",
+      "boundaryStatus": "PENDING_RECORDING",
       "status": "MISMATCH"
+    },
+    {
+      "conditionId": "FS-DATA-WRITE/near-limit-delete-refusal",
+      "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
+      "recipeIds": ["writes/limits/near-limit-delete-refusal"],
+      "boundaryStatus": "PENDING_RECORDING",
+      "status": "PENDING_CORPUS",
+      "ownerDecision": "The owner added this 29th condition on 2026-09-24 after production refused deletion of accepted near-index-limit documents. Acceptance requires a one-unit accepted/refused pair, two production recordings, readback, and matching REST DELETE, Commit DELETE and BatchWrite DELETE paths where observed."
     },
     {
       "conditionId": "FS-LIMIT-FIELD-PATH-BYTES",
@@ -297,9 +305,9 @@
       "source": "docs/compatibility/ip-fs-production-compatibility.md#feature-group-status",
       "recipeIds": ["writes/write-stream-terminal/half-close"],
       "boundaryStatus": "NOT_APPLICABLE",
-      "comparisonNormalizationApproval": "Owner directive 2026-09-24 FS-DATA-WRITE addendum 3 section 2: comparison-only exclusion of volatile GFE content-disposition and x-debug-tracking-id trailers; raw evidence, status, code, message, and document state remain strict.",
-      "status": "VERIFIED",
-      "evidence": {
+      "comparisonNormalizationApproval": "Owner directive 2026-09-24 FS-DATA-WRITE addendum 4 section 5: content-disposition is stable and must remain in comparison; only volatile x-debug-tracking-id is excluded. The earlier two-key comparison is superseded, while its raw evidence is retained.",
+      "status": "MISMATCH",
+      "historicalComparison": {
         "productionRecordings": [
           "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f",
           "ba880dc6feb56588256298deba48c9cbfd53de115e2f9381968867a28279d56f"

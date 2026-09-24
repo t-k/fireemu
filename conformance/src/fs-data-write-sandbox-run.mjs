@@ -19,7 +19,8 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const ROOT = resolve(CONFORMANCE_DIR, "..");
 const TASK_ID = "FS-DATA-WRITE-SANDBOX";
-const TASK_LIMIT_USD = 10;
+// Owner-approved exception for the stable FS-DATA-WRITE-SANDBOX task (addendum 4).
+const TASK_LIMIT_USD = 20;
 const SANDBOX_PROJECT = "fireemu-oracle-sbx";
 const RECORDED_PROJECT = "demo-firestore-probe";
 // The declared REST observation steps need pre/final clears; the 100-level document chain adds

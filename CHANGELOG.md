@@ -34,6 +34,17 @@ These follow production Firestore as recorded on 2026-09-24 (FS-QUERY-INDEX). Un
 - findNearest's `distanceResultField` names one property, as production reads it: `a.b` is a field named `a.b`, not a nested path.
 - A `read_time` before the database's creation time is refused in production's words, in both profiles.
 
+- listDocuments and listCollectionIds follow production as recorded on 2026-09-24 (FS-DATA-WRITE-LIST), in both profiles unless marked strict:
+  - a page holds at most 300 documents;
+  - an ordered listing continues after the order values its last document had when the page was issued;
+  - a listDocuments page token is bound to its collection, order, mask and `showMissing` but not to its read time or transaction, and a listCollectionIds token is a cursor of collection ids that another parent or read time continues;
+  - page-token and page-size refusals use production's texts;
+  - an empty listCollectionIds answer leaves `collectionIds` out;
+  - a collection given as a parent is refused as a document parent name;
+  - gRPC ListDocuments without a collection id lists every document directly below the parent, and refuses `show_missing`.
+- REST listDocuments binds its query parameters by JSON or proto name (`page_size`, `order_by`, `mask.field_paths`, `show_missing`, `read_time`), takes the last value of a repeated one, reads `showMissing` as the front end reads booleans (`1`, `yes`, `True`), and refuses a value in the transcoder's words with a `BadRequest` detail. Strict only: an unknown query parameter is refused as production refuses it; the emulator profile ignores it.
+- Strict only: a REST listCollectionIds body goes through production's transcoder check. A timestamp with more than nine fractional digits is refused as out of range.
+
 ### Fixed
 
 - A refusal echoes at most 1 KiB of the value, key, path or property path it names, and a transcoder refusal lists at most 16 violations, so a large request cannot grow the response or the daemon's memory many times its size.

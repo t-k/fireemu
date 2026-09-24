@@ -358,6 +358,119 @@ fn single<'a>(
     Ok(values.first().map(String::as_str))
 }
 
+/// The system parameters of Google's front end, which bind to no request field.
+const SYSTEM_PARAMETERS: &[&str] = &[
+    "$.xgafv",
+    "access_token",
+    "alt",
+    "callback",
+    "fields",
+    "key",
+    "oauth_token",
+    "prettyPrint",
+    "quotaUser",
+    "uploadType",
+    "upload_protocol",
+];
+
+/// The query parameters of a REST `ListDocuments`, bound to the request fields as production's
+/// front end binds them (FS-DATA-WRITE-LIST, recorded 2026-09-24): by JSON or proto name, the
+/// last value of a repeated scalar winning, values refused in the transcoder's words.
+#[derive(Debug, Default)]
+struct ListParameters {
+    page_size: i32,
+    page_token: String,
+    order_by: String,
+    mask: Vec<String>,
+    show_missing: bool,
+    transaction: Option<String>,
+    read_time: Option<String>,
+}
+
+/// A query parameter the front end cannot read as the field's type.
+fn parameter_refusal(field: &str, kind: &str, value: &str) -> Status {
+    crate::production_status::bad_request(&[(
+        field.to_owned(),
+        format!(
+            "Invalid value at '{field}' ({kind}), \"{}\"",
+            fireemu_core_types::codec::echo(value)
+        ),
+    )])
+}
+
+/// A boolean as the front end reads a query parameter (`absl::SimpleAtob`: `true`, `t`, `yes`,
+/// `y`, `1` and their negations, in any case). Production takes `True`, `yes` and `1`
+/// (show-missing#show-missing-capitalized, -not-a-bool, -number) and refuses `""`.
+fn parameter_bool(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "true" | "t" | "yes" | "y" | "1" => Some(true),
+        "false" | "f" | "no" | "n" | "0" => Some(false),
+        _ => None,
+    }
+}
+
+fn bind_list_parameters(
+    params: &BTreeMap<String, Vec<String>>,
+    production_refusals: bool,
+) -> Result<ListParameters, Status> {
+    let mut bound = ListParameters::default();
+    let mut page_size = None;
+    let mut show_missing = None;
+    for (name, values) in params {
+        let Some(last) = values.last() else { continue };
+        match name.as_str() {
+            "pageSize" | "page_size" => page_size = Some(last.as_str()),
+            "pageToken" | "page_token" => bound.page_token.clone_from(last),
+            "orderBy" | "order_by" => bound.order_by.clone_from(last),
+            "mask.fieldPaths" | "mask.field_paths" => bound.mask.extend(values.iter().cloned()),
+            "showMissing" | "show_missing" => show_missing = Some(last.as_str()),
+            "transaction" => bound.transaction = Some(last.clone()),
+            "readTime" | "read_time" => bound.read_time = Some(last.clone()),
+            other if SYSTEM_PARAMETERS.contains(&other) => {}
+            // Production refuses a name that binds to nothing; the emulator profile, which may
+            // add no rejection, ignores it as fireemu did before.
+            other if production_refusals => {
+                return Err(crate::production_status::bad_request(&[(
+                    String::new(),
+                    format!(
+                        "Invalid JSON payload received. Unknown name \"{0}\": Cannot bind query parameter. Field '{0}' could not be found in request message.",
+                        fireemu_core_types::codec::echo(other)
+                    ),
+                )]));
+            }
+            _ => {}
+        }
+    }
+    if let Some(value) = page_size {
+        bound.page_size = value
+            .parse::<i32>()
+            .map_err(|_| parameter_refusal("page_size", "TYPE_INT32", value))?;
+    }
+    if let Some(value) = show_missing {
+        bound.show_missing = parameter_bool(value)
+            .ok_or_else(|| parameter_refusal("show_missing", "TYPE_BOOL", value))?;
+    }
+    if let Some(value) = &bound.read_time {
+        if let Some(problem) = transcode::timestamp_problem(value) {
+            return Err(crate::production_status::bad_request(&[(
+                "read_time".to_owned(),
+                format!(
+                    "Invalid value at 'read_time' (type.googleapis.com/google.protobuf.Timestamp), Field 'read_time', {problem}"
+                ),
+            )]));
+        }
+    }
+    // Both members of the consistency oneof: the front end names the one it could not set.
+    if bound.transaction.is_some() && bound.read_time.is_some() {
+        return Err(crate::production_status::bad_request(&[(
+            String::new(),
+            "Invalid value (oneof), oneof field 'consistency_selector' is already set. Cannot set 'transaction'"
+                .to_owned(),
+        )]));
+    }
+    Ok(bound)
+}
+
 /// What a REST path names.
 enum Target {
     /// `.../documents` (database root) or a document path.
@@ -958,48 +1071,19 @@ impl RestState {
         collection_id: &str,
         params: &BTreeMap<String, Vec<String>>,
     ) -> Result<RestResponse, Status> {
-        let page_size = single(params, "pageSize")?.map_or(Ok(0), |value| {
-            value
-                .parse::<i32>()
-                .map_err(|_| Status::invalid_argument("pageSize must be an int32"))
-        })?;
-        if page_size < 0 {
-            return Err(Status::invalid_argument("pageSize must not be negative"));
-        }
-        let show_missing = match single(params, "showMissing")? {
-            None | Some("false") => false,
-            Some("true") => true,
-            Some(_) => {
-                return Err(Status::invalid_argument(
-                    "showMissing must be true or false",
-                ))
-            }
-        };
-        let order_by = single(params, "orderBy")?.unwrap_or("");
-        let transaction = single(params, "transaction")?;
-        let read_time = single(params, "readTime")?;
-        if show_missing && !order_by.is_empty() {
-            return Err(Status::invalid_argument(
-                "showMissing cannot be used with orderBy",
-            ));
-        }
+        let bound = bind_list_parameters(params, self.gateway.production_refusals())?;
         let req = pb::ListDocumentsRequest {
             parent: parent.to_owned(),
             collection_id: collection_id.to_owned(),
-            page_size,
-            page_token: single(params, "pageToken")?.unwrap_or("").to_owned(),
-            order_by: order_by.to_owned(),
-            mask: mask_from_paths(params.get("mask.fieldPaths").map_or(&[][..], Vec::as_slice)),
-            show_missing,
-            consistency_selector: match (transaction, read_time) {
-                (Some(_), Some(_)) => {
-                    return Err(Status::invalid_argument(
-                        "transaction and readTime are mutually exclusive",
-                    ))
-                }
+            page_size: bound.page_size,
+            page_token: bound.page_token,
+            order_by: bound.order_by,
+            mask: mask_from_paths(&bound.mask),
+            show_missing: bound.show_missing,
+            consistency_selector: match (bound.transaction, bound.read_time) {
                 (Some(t), None) => Some(
                     pb::list_documents_request::ConsistencySelector::Transaction(
-                        base64_decode_field("transaction", t).map_err(|e| bad(&e))?,
+                        base64_decode_field("transaction", &t).map_err(|e| bad(&e))?,
                     ),
                 ),
                 (None, Some(rt)) => {
@@ -1009,7 +1093,7 @@ impl RestState {
                             .unwrap_or_default(),
                     ))
                 }
-                (None, None) => None,
+                _ => None,
             },
             request_options: None,
         };
@@ -1182,53 +1266,66 @@ impl RestState {
             "partitionQuery" => self
                 .transcoded(action, body)
                 .and_then(|body| self.partition_query(principal, resource, &body)),
-            "listCollectionIds" => {
-                json::strict_keys(
-                    body,
-                    &["pageSize", "pageToken", "readTime", "requestOptions"],
-                )
-                .map_err(|e| bad(&e))?;
-                if let Some(rules) = &self.rules {
-                    rules.require_owner(principal, "listCollectionIds")?;
-                }
-                let read_time = body
-                    .get("readTime")
-                    .map(|value| json::read_time_from_json(&json!({"readTime": value})))
-                    .transpose()
-                    .map_err(|e| bad(&e))?
-                    .flatten();
-                let request_options =
-                    request_options_from_json(body.get("requestOptions")).map_err(|e| bad(&e))?;
-                let response = self
-                    .local
-                    .list_collection_ids(&pb::ListCollectionIdsRequest {
-                        parent: resource.to_owned(),
-                        page_size: json::int32(body.get("pageSize"), "pageSize")
-                            .map_err(|e| bad(&e))?
-                            .unwrap_or(0),
-                        page_token: body
-                            .get("pageToken")
-                            .filter(|value| !value.is_null())
-                            .map(|value| {
-                                value.as_str().ok_or_else(|| {
-                                    bad(&json::JsonError("pageToken must be a string".into()))
-                                })
-                            })
-                            .transpose()?
-                            .unwrap_or_default()
-                            .to_owned(),
-                        request_options,
-                        consistency_selector: read_time
-                            .map(pb::list_collection_ids_request::ConsistencySelector::ReadTime),
-                    })?;
-                let mut out = json!({"collectionIds": response.collection_ids});
-                if !response.next_page_token.is_empty() {
-                    out["nextPageToken"] = Value::String(response.next_page_token);
-                }
-                Ok(ok(out))
-            }
+            "listCollectionIds" => self.list_collection_ids(principal, resource, body),
             _ => Ok(not_found_text()),
         }
+    }
+
+    /// `:listCollectionIds`, its body after production's transcoder (strict).
+    fn list_collection_ids(
+        &self,
+        principal: &Caller,
+        resource: &str,
+        body: &Value,
+    ) -> Result<RestResponse, Status> {
+        let body = &self.transcoded("listCollectionIds", body)?;
+        json::strict_keys(
+            body,
+            &["pageSize", "pageToken", "readTime", "requestOptions"],
+        )
+        .map_err(|e| bad(&e))?;
+        if let Some(rules) = &self.rules {
+            rules.require_owner(principal, "listCollectionIds")?;
+        }
+        let read_time = body
+            .get("readTime")
+            .map(|value| json::read_time_from_json(&json!({"readTime": value})))
+            .transpose()
+            .map_err(|e| bad(&e))?
+            .flatten();
+        let request_options =
+            request_options_from_json(body.get("requestOptions")).map_err(|e| bad(&e))?;
+        let response = self
+            .local
+            .list_collection_ids(&pb::ListCollectionIdsRequest {
+                parent: resource.to_owned(),
+                page_size: json::int32(body.get("pageSize"), "pageSize")
+                    .map_err(|e| bad(&e))?
+                    .unwrap_or(0),
+                page_token: body
+                    .get("pageToken")
+                    .filter(|value| !value.is_null())
+                    .map(|value| {
+                        value.as_str().ok_or_else(|| {
+                            bad(&json::JsonError("pageToken must be a string".into()))
+                        })
+                    })
+                    .transpose()?
+                    .unwrap_or_default()
+                    .to_owned(),
+                request_options,
+                consistency_selector: read_time
+                    .map(pb::list_collection_ids_request::ConsistencySelector::ReadTime),
+            })?;
+        // proto3 JSON: an empty list and an empty token are left out.
+        let mut out = json!({});
+        if !response.collection_ids.is_empty() {
+            out["collectionIds"] = json!(response.collection_ids);
+        }
+        if !response.next_page_token.is_empty() {
+            out["nextPageToken"] = Value::String(response.next_page_token);
+        }
+        Ok(ok(out))
     }
 
     /// A custom method's body after production's transcoder: checked and normalized under the

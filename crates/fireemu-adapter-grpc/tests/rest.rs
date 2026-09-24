@@ -3241,7 +3241,9 @@ fn rest_list_rejects_invalid_page_size_and_show_missing_encodings() {
         assert_eq!(status, 400, "pageSize={page_size}");
     }
 
-    for show_missing in ["1", "TRUE", ""] {
+    // The front end reads booleans loosely (`1`, `TRUE`, `yes`) and refuses anything else
+    // (FS-DATA-WRITE-LIST show-missing rows).
+    for show_missing in ["maybe", ""] {
         let (status, _) = call(
             &s,
             "GET",
@@ -3260,6 +3262,8 @@ fn rest_list_rejects_invalid_page_size_and_show_missing_encodings() {
         "showMissing=false",
         "showMissing=false&orderBy=__name__",
         "showMissing=true&orderBy=",
+        "showMissing=1",
+        "showMissing=TRUE",
     ] {
         let (status, body) = call(&s, "GET", &format!("{DOCS}/listed?{query}"), json!({}));
         assert_eq!(status, 200, "{query}: {body}");
@@ -3272,8 +3276,10 @@ fn rest_list_rejects_invalid_page_size_and_show_missing_encodings() {
     );
 }
 
+/// A repeated scalar parameter takes its last value, as production's front end does
+/// (FS-DATA-WRITE-LIST paging#page-size-twice); the value is then checked as usual.
 #[test]
-fn rest_list_rejects_duplicate_scalar_parameters() {
+fn rest_list_takes_the_last_value_of_a_repeated_scalar_parameter() {
     let s = state(None);
     let (status, created) = call(
         &s,
@@ -3285,14 +3291,19 @@ fn rest_list_rejects_duplicate_scalar_parameters() {
 
     for query in [
         "pageSize=1&pageSize=invalid",
-        "showMissing=false&showMissing=TRUE",
-        "orderBy=&orderBy=__name__",
         "showMissing=true&orderBy=&orderBy=__name__",
-        "transaction=one&transaction=two",
         "readTime=one&readTime=two",
     ] {
         let (status, _) = call(&s, "GET", &format!("{DOCS}/duplicates?{query}"), json!({}));
         assert_eq!(status, 400, "{query}");
+    }
+    for query in [
+        "pageSize=invalid&pageSize=1",
+        "showMissing=false&showMissing=TRUE",
+        "orderBy=&orderBy=__name__",
+    ] {
+        let (status, body) = call(&s, "GET", &format!("{DOCS}/duplicates?{query}"), json!({}));
+        assert_eq!(status, 200, "{query}: {body}");
     }
 
     let (status, valid) = call(&s, "GET", &format!("{DOCS}/duplicates"), json!({}));
@@ -3301,7 +3312,7 @@ fn rest_list_rejects_duplicate_scalar_parameters() {
 }
 
 #[test]
-fn rest_list_rejects_duplicate_page_token_without_fault_or_state_change() {
+fn rest_list_refuses_a_malformed_last_page_token_without_fault_or_state_change() {
     use fireemu_core_session::fault::{
         FaultAction, FaultMatch, FaultPlan, FaultRegistry, FaultRule,
     };
@@ -3462,13 +3473,16 @@ fn rest_list_collection_ids_validates_body_and_honors_read_time() {
     );
     assert_eq!(status, 200, "{historical}");
     assert_eq!(historical["collectionIds"], json!(["first"]));
-    let (status, _) = call(
+    // A token is a cursor of collection ids, continued at another read time as production
+    // continues it (FS-DATA-WRITE-LIST read-time#collection-ids-paged-at-write-1-next-without-
+    // read-time).
+    let (status, body) = call(
         &s,
         "POST",
         &format!("{DOCS}:listCollectionIds"),
         json!({"pageSize": 1, "pageToken": token, "readTime": read_time}),
     );
-    assert_eq!(status, 400);
+    assert_eq!((status, &body), (200, &json!({})));
 
     for body in [
         json!({"unknown": true}),

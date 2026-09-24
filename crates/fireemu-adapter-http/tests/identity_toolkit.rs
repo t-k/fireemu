@@ -16312,7 +16312,9 @@ fn codes_applied_after_an_administrative_address_change() {
             &format!("{ADMIN}/accounts:lookup"),
             &json!({"localId": ["c"]}),
         );
-        assert_eq!(users["users"][0]["initialEmail"], "c-admin@example.com");
+        if strict {
+            assert_eq!(users["users"][0]["initialEmail"], "c-admin@example.com");
+        }
     }
 }
 
@@ -16460,5 +16462,112 @@ fn strict_an_email_link_account_without_a_password_is_not_anonymous() {
             .get("provider_id")
             .is_none(),
         "{refreshed}"
+    );
+}
+
+/// Strict: a continue URL whose authority a backslash ends names the host before it, as a
+/// browser reads it, so it cannot pass as an authorized domain (closure security review).
+#[test]
+fn strict_a_backslash_ends_the_continue_url_authority() {
+    let s = strict_state();
+    create(
+        &s,
+        &json!({"email": "a@example.com", "password": "password123"}),
+    );
+    let (status, body) = oob(
+        &s,
+        &json!({"requestType": "PASSWORD_RESET", "email": "a@example.com", "continueUrl": "https://evil.example\\@demo-app.firebaseapp.com/x"}),
+    );
+    assert_eq!(
+        (status, message(&body)),
+        (
+            400,
+            Some("UNAUTHORIZED_DOMAIN : Domain not allowlisted by project")
+        )
+    );
+}
+
+/// Strict: only the Admin generator is told an address belongs to a disabled account; a client
+/// under improved email privacy gets the sent-mail answer (the client route is unobserved).
+#[test]
+fn strict_a_client_email_link_request_does_not_reveal_a_disabled_account() {
+    let s = strict_state();
+    with_email_privacy(&s);
+    email_links_on(&s);
+    create(
+        &s,
+        &json!({"email": "dl@example.com", "password": "password123", "disabled": true}),
+    );
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:sendOobCode"),
+        &json!({"requestType": "EMAIL_SIGNIN", "email": "dl@example.com", "continueUrl": "https://demo-app.firebaseapp.com/finish"}),
+    );
+    assert_eq!(status, 200, "{body}");
+}
+
+/// Only strict records the address an applied change replaced; the official emulator records
+/// `initialEmail` on a direct update only.
+#[test]
+fn only_strict_records_the_initial_email_of_an_applied_change() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        create(
+            &s,
+            &json!({"localId": "c", "email": "c@example.com", "password": "password123"}),
+        );
+        let (_, change) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_AND_CHANGE_EMAIL", "email": "c@example.com", "newEmail": "c-new@example.com"}),
+        );
+        let (status, _) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"oobCode": change["oobCode"]}),
+        );
+        assert_eq!(status, 200);
+        let (_, users) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": ["c"]}),
+        );
+        assert_eq!(
+            users["users"][0].get("initialEmail").is_some(),
+            strict,
+            "strict={strict}"
+        );
+    }
+}
+
+/// Strict: the emulator's action page treats a reset code past its lifetime as gone, like one
+/// that never existed, while the API refuses it as expired.
+#[test]
+fn strict_the_action_page_treats_an_expired_code_as_gone() {
+    let s = strict_state();
+    create(
+        &s,
+        &json!({"email": "a@example.com", "password": "password123"}),
+    );
+    let (_, reset) = oob(
+        &s,
+        &json!({"requestType": "PASSWORD_RESET", "email": "a@example.com"}),
+    );
+    advance(&s, 3_601);
+    let code = reset["oobCode"].as_str().unwrap();
+    let r = handle(
+        &s,
+        "GET",
+        &format!("/emulator/action?mode=resetPassword&oobCode={code}&apiKey=fake-api-key&newPassword=password456"),
+        &Value::Null,
+    );
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert!(
+        r.body["authEmulator"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("has expired"),
+        "{}",
+        r.body
     );
 }

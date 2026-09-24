@@ -1101,3 +1101,41 @@ fn production_lifetimes_keep_long_codes_and_refuse_an_expired_reset() {
         Err(AuthError::InvalidOobCode)
     );
 }
+
+#[test]
+fn codes_kept_past_their_lifetime_make_room_at_the_cap() {
+    let mut s = store();
+    s.set_production_oob_lifetimes(true);
+    for i in 0..fireemu_core_auth::store::MAX_OUTSTANDING_CODES {
+        s.create_oob_code(
+            OobRequestType::PasswordReset,
+            &format!("u{i}@example.com"),
+            None,
+            None,
+            t0(),
+        )
+        .unwrap();
+    }
+    assert_eq!(
+        s.create_oob_code(
+            OobRequestType::PasswordReset,
+            "late@example.com",
+            None,
+            None,
+            t(10)
+        ),
+        Err(AuthError::TooManyOutstandingCodes)
+    );
+    // An hour later every reset code is expired but still kept; a new one fits.
+    let fresh = s
+        .create_oob_code(
+            OobRequestType::PasswordReset,
+            "late@example.com",
+            None,
+            None,
+            t(3_601),
+        )
+        .unwrap();
+    assert_eq!(s.oob_codes().len(), 1);
+    assert!(s.oob_code(&fresh).is_some());
+}

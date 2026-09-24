@@ -33,7 +33,7 @@ const RUN_QUERY_BATCH_SIZE: i32 = 32;
 const RUN_QUERY_CHANNEL_CAPACITY: usize = 16;
 
 mod explain;
-pub(crate) use explain::{explain_metrics, ExplainExecution};
+pub(crate) use explain::{explain_metrics, index_entries, ExplainExecution};
 
 fn explain_page_duration(rows: &[pb::RunQueryResponse]) -> std::time::Duration {
     rows.iter()
@@ -1123,11 +1123,13 @@ impl GatewayService {
                     let accepted = local.accepted_query(&parent, query).map_err(|s| {
                         crate::index_messages::for_explain(req.explain_options.as_ref(), s)
                     })?;
-                    Some(accepted.query)
+                    Some((accepted.query, accepted.scans, parent))
                 }
                 None => None,
             };
-            let name_order_continuation = explain_query.as_ref().is_some_and(is_name_ordered_query);
+            let name_order_continuation = explain_query
+                .as_ref()
+                .is_some_and(|(query, _, _)| is_name_ordered_query(query));
             let find_nearest_query = match req.query_type.as_ref() {
                 Some(pb::run_query_request::QueryType::StructuredQuery(query)) => {
                     let parent = crate::query_messages::parse_query_parent(&req.parent)
@@ -1383,9 +1385,10 @@ impl GatewayService {
                 }
                 if plan_only {
                     if let Some(response) = pending.as_mut() {
-                        response.explain_metrics = explain_query
-                            .as_ref()
-                            .map(|query| explain_metrics(query, None, None));
+                        response.explain_metrics =
+                            explain_query.as_ref().map(|(query, scans, _)| {
+                                explain_metrics(query, None, scans.as_deref(), None)
+                            });
                     }
                 } else if req
                     .explain_options
@@ -1394,19 +1397,25 @@ impl GatewayService {
                 {
                     if let Some(response) = pending.as_mut() {
                         // Stream-owned count survives eviction from the bounded diagnostic cache.
-                        response.explain_metrics = explain_query.as_ref().map(|query| {
-                            explain_metrics(
-                                query,
-                                None,
-                                Some(ExplainExecution {
-                                    results_returned,
-                                    entries: u64::try_from(results_returned)
-                                        .unwrap_or(0)
-                                        .saturating_add(skipped_entries),
-                                    duration: execution_duration,
-                                }),
-                            )
-                        });
+                        response.explain_metrics =
+                            explain_query.as_ref().map(|(query, scans, parent)| {
+                                let index_entries = scans.as_deref().and_then(|scans| {
+                                    local.explain_index_entries(parent, query, None, scans).ok()
+                                });
+                                explain_metrics(
+                                    query,
+                                    None,
+                                    scans.as_deref(),
+                                    Some(ExplainExecution {
+                                        results_returned,
+                                        entries: u64::try_from(results_returned)
+                                            .unwrap_or(0)
+                                            .saturating_add(skipped_entries),
+                                        index_entries,
+                                        duration: execution_duration,
+                                    }),
+                                )
+                            });
                     }
                 }
                 drop(rollback);

@@ -3,8 +3,8 @@
 use core::fmt;
 
 use fireemu_core_firestore::index::{
-    decide, validate_aggregation_query as validate_aggregation_index_query, IndexDecision,
-    IndexDefinition, IndexSet, IndexValidationPolicy, PlanningContext,
+    decide, plan_scans, validate_aggregation_query as validate_aggregation_index_query,
+    IndexDecision, IndexDefinition, IndexSet, IndexValidationPolicy, PlannedScan, PlanningContext,
 };
 use fireemu_core_firestore::query::{Query, QueryLimitViolation};
 use fireemu_core_firestore::store::{normalize_aggregation_query, Aggregation};
@@ -118,6 +118,9 @@ pub struct AcceptedQuery {
     pub query: Query,
     /// Index decision (never `MissingRequired`).
     pub decision: IndexDecision,
+    /// The index scans of each DNF disjunct, for Explain; `None` when no index plan
+    /// describes the query (kindless, or a full scan on Enterprise).
+    pub scans: Option<Vec<PlannedScan>>,
     /// Diagnostics such as `FS_ENT_FULL_COLLECTION_SCAN`.
     pub warnings: Vec<String>,
 }
@@ -281,9 +284,25 @@ impl Gateway {
                 return Err(Rejection::Unsupported((*feature).to_owned()));
             }
         }
+        let scans = matches!(
+            decision,
+            IndexDecision::UseIndex { .. }
+                | IndexDecision::MergeIndexes { .. }
+                | IndexDecision::AssumedIndex { .. }
+        )
+        .then(|| {
+            plan_scans(
+                &execution_query,
+                aggregations.unwrap_or_default(),
+                indexes,
+                &self.ctx,
+            )
+        })
+        .flatten();
         Ok(AcceptedQuery {
             query: canonical,
             decision,
+            scans,
             warnings,
         })
     }

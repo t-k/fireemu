@@ -608,7 +608,10 @@ async fn explain_count_up_to_caps_billable_index_entries() {
 }
 
 #[tokio::test]
-async fn explain_unmodeled_aggregations_do_not_claim_count_index_or_billing() {
+/// Every aggregation reports the index its plan reads and bills its entries, as production's
+/// count and sum rows do (FS-QUERY-INDEX explain/aggregations): a sum or average reads the
+/// automatic index of its field.
+async fn explain_aggregations_report_their_index_and_billing() {
     use pb::structured_aggregation_query::aggregation::{Avg, Operator, Sum};
     let backend = test_backend();
     let service = GatewayService::local(test_gateway(), backend.clone());
@@ -627,11 +630,11 @@ async fn explain_unmodeled_aggregations_do_not_claim_count_index_or_billing() {
         }),
     });
     let count = Operator::Count(pb::structured_aggregation_query::aggregation::Count::default());
-    for operators in [
-        vec![sum.clone()],
-        vec![avg],
-        vec![count.clone(), sum],
-        vec![count.clone(), count],
+    for (operators, index) in [
+        (vec![sum.clone()], "(rank ASC, __name__ ASC)"),
+        (vec![avg], "(rank ASC, __name__ ASC)"),
+        (vec![count.clone(), sum], "(rank ASC, __name__ ASC)"),
+        (vec![count.clone(), count], "(__name__ ASC)"),
     ] {
         for analyze in [false, true] {
             let mut request = request.clone();
@@ -667,13 +670,28 @@ async fn explain_unmodeled_aggregations_do_not_claim_count_index_or_billing() {
                 .unwrap()
                 .unwrap();
             let metrics = response.explain_metrics.unwrap();
-            assert!(metrics.plan_summary.unwrap().indexes_used.is_empty());
+            let used = metrics.plan_summary.unwrap().indexes_used;
+            assert_eq!(used.len(), 1, "{operators:?}");
+            assert_eq!(
+                used[0].fields["properties"].kind,
+                Some(prost_types::value::Kind::StringValue(index.to_owned())),
+                "{operators:?}"
+            );
             if analyze {
                 let stats = metrics.execution_stats.unwrap();
                 assert_eq!(stats.results_returned, 1);
                 assert!(stats.execution_duration.is_some());
-                assert_eq!(stats.read_operations, 0);
-                assert!(stats.debug_stats.is_none());
+                assert_eq!(stats.read_operations, 1);
+                let debug = stats.debug_stats.unwrap();
+                assert_eq!(
+                    debug.fields["index_entries_scanned"].kind,
+                    Some(prost_types::value::Kind::StringValue("3".to_owned())),
+                    "{operators:?}"
+                );
+                assert_eq!(
+                    debug.fields["documents_scanned"].kind,
+                    Some(prost_types::value::Kind::StringValue("0".to_owned()))
+                );
             } else {
                 assert!(metrics.execution_stats.is_none());
             }

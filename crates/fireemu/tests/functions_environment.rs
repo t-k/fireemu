@@ -131,6 +131,115 @@ fn exec_with_profile(source: &Path, project: &str, profile: &str) -> Output {
 }
 
 #[test]
+fn relative_functions_source_sets_runner_cwd_to_codebase_dir() {
+    if !have_sdk() {
+        return;
+    }
+    let dir = scratch_codebase("relative-cwd");
+    write(&dir, "cwd-marker.txt", "relative");
+    write(
+        &dir,
+        "index.js",
+        r"
+const fs = require('node:fs');
+const { onRequest } = require('firebase-functions/v2/https');
+exports.fxCwd = onRequest((_request, response) => response.json({
+  cwd: process.cwd(),
+  marker: fs.readFileSync('cwd-marker.txt', 'utf8'),
+}));
+",
+    );
+    let relative_source = Path::new(dir.file_name().unwrap());
+    let output = fireemu_exec(relative_source, "demo-relative-cwd")
+        .current_dir(dir.parent().unwrap())
+        .args(["--", "node", "-e", r"
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+(async () => {
+  const endpoint = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-relative-cwd/us-central1/fxCwd`;
+  const response = await fetch(endpoint);
+  const body = await response.text();
+  assert.equal(response.status, 200, body);
+  assert.deepEqual(JSON.parse(body), { cwd: fs.realpathSync(process.argv[1]), marker: 'relative' });
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"])
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn http_function_uses_codebase_cwd_and_reload_snapshot_for_relative_reads() {
+    if !have_sdk() {
+        return;
+    }
+    let dir = scratch_codebase("cwd-and-reload");
+    write(&dir, "cwd-marker.txt", "before");
+    write(
+        &dir,
+        "index.js",
+        r"
+const fs = require('node:fs');
+const { onRequest } = require('firebase-functions/v2/https');
+exports.fxCwd = onRequest((_request, response) => response.json({
+  cwd: process.cwd(),
+  marker: fs.readFileSync('cwd-marker.txt', 'utf8'),
+}));
+",
+    );
+    let output = fireemu_exec(&dir, "demo-cwd-and-reload")
+        .args(["--", "node", "-e", r"
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+(async () => {
+  const source = process.argv[1];
+  const sourceCwd = fs.realpathSync(source);
+  const endpoint = `http://${process.env.FIREEMU_FUNCTIONS_HOST}/demo-cwd-and-reload/us-central1/fxCwd`;
+  const get = async () => {
+    const response = await fetch(endpoint);
+    const body = await response.text();
+    assert.equal(response.status, 200, body);
+    return JSON.parse(body);
+  };
+  assert.deepEqual(await get(), { cwd: sourceCwd, marker: 'before' });
+  fs.writeFileSync(path.join(source, 'cwd-marker.txt'), 'after');
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const value = await get();
+    if (value.marker === 'after' && value.cwd !== sourceCwd) {
+      assert.equal(path.dirname(value.cwd), fs.realpathSync(os.tmpdir()));
+      assert.match(path.basename(value.cwd), /^fireemu-functions-\d+-\d+$/);
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('the reload did not read the marker from its snapshot cwd');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"])
+        .arg(&dir)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn a_same_size_rewrite_reloads_and_an_invalid_generation_keeps_the_last_good_one() {
     if !have_sdk() {
         return;

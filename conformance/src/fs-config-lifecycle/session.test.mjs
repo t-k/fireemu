@@ -75,3 +75,82 @@ test("the final sweep fails the run when a database of the run is still listed",
     restore();
   }
 });
+
+test("a failed token refresh at cleanup is retried and every database is still deleted", async () => {
+  const deleted = new Set();
+  const { calls, restore } = stubbed(() => [404, {}]);
+  restore();
+  const ctx = createContext({
+    run: "1790000000",
+    target: {
+      kind: "production",
+      token: "t0",
+      quotaProject: "fireemu-oracle-query",
+      bucket: "fireemu-oracle-query-cfg-1790000000",
+    },
+  });
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    const path = decodeURIComponent(new URL(url).pathname);
+    calls.push(`${init.method} ${path}`);
+    const id = path.split("/").at(-1);
+    if (path.endsWith("/databases"))
+      return new Response(JSON.stringify({ databases: [] }), { status: 200 });
+    if (init.method === "DELETE") deleted.add(id);
+    return new Response("{}", { status: deleted.has(id) ? 404 : 200 });
+  };
+  let refreshes = 0;
+  try {
+    await runCorpus([program], ctx, {
+      bucket: false,
+      pollScale: 0,
+      refreshToken: async () => {
+        refreshes += 1;
+        if (refreshes === 1) throw new Error("gcloud failed once");
+        return `t${refreshes}`;
+      },
+    });
+    assert.deepEqual([...deleted].toSorted(), ["cfg1790000000-00a", "cfg1790000000-00b"]);
+    assert.ok(refreshes >= 2);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("a 401 is retried once with a fresh token and never recorded", async () => {
+  const ctx = createContext({
+    run: "1790000000",
+    target: {
+      kind: "production",
+      token: "stale",
+      quotaProject: "fireemu-oracle-query",
+      bucket: "fireemu-oracle-query-cfg-1790000000",
+    },
+  });
+  const seen = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    seen.push(init.headers.authorization);
+    const path = decodeURIComponent(new URL(url).pathname);
+    if (path.endsWith("/databases"))
+      return new Response(JSON.stringify({ databases: [] }), { status: 200 });
+    if (init.headers.authorization === "Bearer stale") return new Response("{}", { status: 401 });
+    return new Response("{}", { status: 404 });
+  };
+  const readProgram = {
+    ...program,
+    databases: [],
+    steps: [{ id: "get", path: "v1/{project}/locations" }],
+  };
+  try {
+    const out = await runCorpus([readProgram], ctx, {
+      bucket: false,
+      pollScale: 0,
+      refreshToken: async () => "fresh",
+    });
+    assert.equal(out.results[readProgram.id].steps.get.status, 404);
+    assert.deepEqual(seen.slice(0, 2), ["Bearer stale", "Bearer fresh"]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

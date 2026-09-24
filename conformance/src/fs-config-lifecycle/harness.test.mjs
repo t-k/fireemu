@@ -341,3 +341,21 @@ test("an export capture is normalized with same-length placeholders and restores
     /carries/,
   );
 });
+
+test("rate limits, database operations and an applied exemption are recognized", async () => {
+  const { isRateLimited, isDatabaseOperation, UNTIL } = await import("./harness.mjs");
+  assert.ok(isRateLimited(429, { error: { details: [{ reason: "RATE_LIMIT_EXCEEDED" }] } }));
+  assert.ok(!isRateLimited(429, { error: { message: "TTL" } }));
+  assert.ok(!isRateLimited(400, { error: { details: [{ reason: "RATE_LIMIT_EXCEEDED" }] } }));
+  const base = "https://firestore.googleapis.com/v1/projects/p/databases";
+  assert.ok(isDatabaseOperation(`${base}?databaseId=x`));
+  assert.ok(isDatabaseOperation(`${base}/x`));
+  assert.ok(isDatabaseOperation(base));
+  assert.ok(!isDatabaseOperation(`${base}/x/documents/c/d`));
+  assert.ok(!isDatabaseOperation(`${base}/x:exportDocuments`));
+  assert.ok(UNTIL.exempt({ indexConfig: {} }));
+  assert.ok(UNTIL.exempt({ indexConfig: { indexes: [] } }));
+  assert.ok(!UNTIL.exempt({ indexConfig: { ancestorField: "x" } }));
+  assert.ok(!UNTIL.exempt({ indexConfig: { usesAncestorConfig: true, ancestorField: "x" } }));
+  assert.ok(!UNTIL.exempt({}));
+});

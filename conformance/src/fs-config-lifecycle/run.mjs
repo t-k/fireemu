@@ -93,7 +93,8 @@ export async function harnessDigest() {
 
 /** Per recording: every step once (every poll a poll step may make); a cleanup allowance. */
 const ceilings = (programs) => ({
-  maxRequests: validateCorpus(programs),
+  // Rate-limited requests are retried and each retry is counted: a fixed allowance for them.
+  maxRequests: validateCorpus(programs) + 100,
   maxHarnessRequests: programs.reduce((n, p) => n + 20 + 12 * (p.databases?.length ?? 0), 200),
 });
 

@@ -1,10 +1,9 @@
 {
   "kind": "auth-account-comparison-v1",
-  "artifactSha256": "db8cafcd1c4dc8d56113a9b6b4c7dbd255154071f1a5c95dd27db2b43537ede4",
+  "artifactSha256": "4c716c18bceffda4a16050d1458f740897085164cd7a95c2ec10861461a2ad86",
   "fixtureSha256": "253e48959ca7ccdefd42c64bb8371107d7aeca698a969e78bb7974898e84b8b0",
   "summary": {
-    "MATCH": 630,
-    "MISMATCH": 1
+    "MATCH": 631
   },
   "rows": [
     {
@@ -829,12 +828,7 @@
     },
     {
       "row": "auth-account/admin/custom-attributes#invalid-json",
-      "status": "MISMATCH",
-      "differences": [
-        "body.error.message",
-        "body.error.errors.0.message"
-      ],
-      "sameErrorCode": true
+      "status": "MATCH"
     },
     {
       "row": "auth-account/admin/custom-attributes#json-array",

@@ -516,12 +516,37 @@ static PARTITION_QUERY: Schema = Schema {
     ],
 };
 
+static REQUEST_OPTIONS: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.RequestOptions",
+    fields: &[repeated("requestTags", "request_tags", Kind::Str)],
+};
+static LIST_COLLECTION_IDS: Schema = Schema {
+    type_url: "type.googleapis.com/google.firestore.v1.ListCollectionIdsRequest",
+    fields: &[
+        f("parent", "parent", Kind::Str),
+        f("pageSize", "page_size", Kind::Int32),
+        f("pageToken", "page_token", Kind::Str),
+        one(
+            "readTime",
+            "read_time",
+            Kind::Timestamp,
+            "consistency_selector",
+        ),
+        f(
+            "requestOptions",
+            "request_options",
+            Kind::Message(&REQUEST_OPTIONS),
+        ),
+    ],
+};
+
 /// The request bodies this module checks, by REST custom method.
 fn request_schema(method: &str) -> Option<&'static Schema> {
     match method {
         "runQuery" => Some(&RUN_QUERY),
         "runAggregationQuery" => Some(&RUN_AGGREGATION_QUERY),
         "partitionQuery" => Some(&PARTITION_QUERY),
+        "listCollectionIds" => Some(&LIST_COLLECTION_IDS),
         _ => None,
     }
 }
@@ -923,8 +948,9 @@ fn integer(value: &Value, min: i64, max: i64) -> Option<i64> {
     (min..=max).contains(&parsed).then_some(parsed)
 }
 
-/// Why production's transcoder refuses an RFC 3339 timestamp, if it does.
-fn timestamp_problem(text: &str) -> Option<&'static str> {
+/// Why production's transcoder refuses an RFC 3339 timestamp, if it does. A fraction of more
+/// than nine digits is out of range (FS-DATA-WRITE-LIST read-time#read-time-ten-digits).
+pub(crate) fn timestamp_problem(text: &str) -> Option<&'static str> {
     let bytes = text.as_bytes();
     let offset_ok = text.ends_with('Z')
         || (bytes.len() > 6
@@ -936,7 +962,10 @@ fn timestamp_problem(text: &str) -> Option<&'static str> {
         );
     }
     let year = text.split('-').next().unwrap_or_default();
-    if year.len() > 4 || year.parse::<u32>().is_ok_and(|y| y == 0) {
+    let fraction_digits = text.split_once('.').map_or(0, |(_, rest)| {
+        rest.bytes().take_while(u8::is_ascii_digit).count()
+    });
+    if year.len() > 4 || year.parse::<u32>().is_ok_and(|y| y == 0) || fraction_digits > 9 {
         return Some("Timestamp value exceeds limits");
     }
     None

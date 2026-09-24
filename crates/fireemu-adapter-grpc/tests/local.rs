@@ -4187,7 +4187,10 @@ async fn list_documents_rejects_show_missing_with_order_by() {
             .await
             .unwrap_err();
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
-        assert_eq!(error.message(), "show_missing cannot be used with order_by");
+        assert_eq!(
+            error.message(),
+            "cannot specify an order when show_missing is true"
+        );
     }
 
     handle.abort();
@@ -5272,7 +5275,10 @@ async fn list_page_tokens_are_bound_to_their_listing() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    let err = client
+    assert_eq!(err.message(), "Invalid page token.");
+    // The snapshot is not part of the listing: production continues a token at a read time
+    // (FS-DATA-WRITE-LIST read-time#paged-at-write-1-next-without-read-time).
+    let continued_at = client
         .list_documents(continued(
             page.next_page_token,
             "pg",
@@ -5281,8 +5287,9 @@ async fn list_page_tokens_are_bound_to_their_listing() {
             )),
         ))
         .await
-        .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        .unwrap()
+        .into_inner();
+    assert!(continued_at.documents[0].name.ends_with("/pg/1"));
     handle.abort();
 }
 
@@ -8748,4 +8755,94 @@ async fn grpc_execute_pipeline_on_standard_keeps_each_profiles_words() {
         assert_eq!(status.message(), message, "{policy:?}");
         handle.abort();
     }
+}
+
+/// `ListDocuments` without a collection id lists every document directly below the parent, in
+/// name order and paged, and refuses `show_missing` (FS-DATA-WRITE-LIST grpc/list-documents
+/// #every-collection-of-document, #every-collection-of-missing-document).
+#[tokio::test]
+async fn grpc_list_documents_without_a_collection_id_lists_every_child_collection() {
+    let (mut client, _clock, handle) = start().await;
+    client
+        .commit(pb::CommitRequest {
+            database: DB.to_owned(),
+            writes: [
+                "p/d",
+                "p/d/sub/s1",
+                "p/d/sub/s2",
+                "p/d/other/o1",
+                "p/d/sub/s1/deep/x",
+                "q/y",
+            ]
+            .iter()
+            .map(|path| update_write(path, &[("v", i(1))]))
+            .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let list = |page_size, page_token: String| pb::ListDocumentsRequest {
+        parent: format!("{DOCS}/p/d"),
+        page_size,
+        page_token,
+        ..Default::default()
+    };
+    let names = |response: &pb::ListDocumentsResponse| -> Vec<String> {
+        response
+            .documents
+            .iter()
+            .map(|d| {
+                d.name
+                    .trim_start_matches(&format!("{DOCS}/p/d/"))
+                    .to_owned()
+            })
+            .collect()
+    };
+    let all = client
+        .list_documents(list(0, String::new()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(names(&all), ["other/o1", "sub/s1", "sub/s2"]);
+    let first = client
+        .list_documents(list(2, String::new()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(names(&first), ["other/o1", "sub/s1"]);
+    let next = client
+        .list_documents(list(2, first.next_page_token))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(names(&next), ["sub/s2"]);
+    assert!(next.next_page_token.is_empty());
+    let root = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: DOCS.to_owned(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        root.documents
+            .iter()
+            .map(|d| d.name.trim_start_matches(&format!("{DOCS}/")).to_owned())
+            .collect::<Vec<_>>(),
+        ["p/d", "q/y"]
+    );
+    let refused = client
+        .list_documents(pb::ListDocumentsRequest {
+            parent: format!("{DOCS}/p/d"),
+            show_missing: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.message(),
+        "collection id must be set when show_missing is true"
+    );
+    handle.abort();
 }

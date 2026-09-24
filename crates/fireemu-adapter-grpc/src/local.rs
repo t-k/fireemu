@@ -5241,13 +5241,22 @@ impl LocalBackend {
         req: &pb::ListDocumentsRequest,
         guard: ReadGuard<'_>,
     ) -> Result<pb::ListDocumentsResponse, Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        // Production's texts (FS-DATA-WRITE-LIST, recorded 2026-09-24).
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument("Page size must be nonnegative."));
+        }
         if req.show_missing && !req.order_by.is_empty() {
             return Err(Status::invalid_argument(
-                "show_missing cannot be used with order_by",
+                "cannot specify an order when show_missing is true",
             ));
         }
-        self.fault(parent.project.as_str(), "firestore.read")?;
+        if req.show_missing && req.collection_id.is_empty() {
+            return Err(Status::invalid_argument(
+                "collection id must be set when show_missing is true",
+            ));
+        }
+        check_list_mask(req.mask.as_ref())?;
         let now = self.write_time();
         let (txn, read_at) = match &req.consistency_selector {
             Some(pb::list_documents_request::ConsistencySelector::ReadTime(ts)) => (
@@ -5268,12 +5277,14 @@ impl LocalBackend {
             }
             None => SnapshotSelector::Latest,
         };
-        // Page tokens carry the resource name of the last document of the previous page
-        // (documents are listed by name) and the identity of the listing they continue:
-        // parent, collection, result-shaping options, session generation, and the snapshot
-        // (live, read_time or transaction).
+        // Page tokens carry the resource name of the last document of the previous page, the
+        // order values it had when the page was issued (an ordered listing continues after
+        // those, as production's does), and the identity of the listing they continue:
+        // parent, collection, result-shaping options and session generation. The snapshot is
+        // not part of it: production continues a token issued at a read time without one,
+        // and the other way round (read-time#paged-at-write-1-next-without-read-time).
         let identity = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}",
             req.parent,
             req.collection_id,
             req.mask
@@ -5284,16 +5295,9 @@ impl LocalBackend {
             req.show_missing,
             self.epoch(),
             self.database_generation(&parent),
-            match (&txn, read_at) {
-                (Some(t), _) => format!(
-                    "txn:{}",
-                    crate::rest::json::base64_encode(&encode_transaction(t))
-                ),
-                (None, Some(at)) => format!("rt:{}", at.as_nanos()),
-                (None, None) => "live".to_owned(),
-            }
         );
-        let after = list_page_cursor(&req.page_token, &identity)?;
+        let after_cursor = list_page_cursor(&req.page_token, &identity)?;
+        let after = after_cursor.as_ref().map(|cursor| cursor.name.clone());
         let after_path = after
             .as_deref()
             .map(decode_document_name)
@@ -5303,23 +5307,28 @@ impl LocalBackend {
             path.project() != &parent.project
                 || path.database() != &parent.database
                 || path.parent_document().as_ref() != parent.document.as_ref()
-                || path.collection_id().as_str() != req.collection_id
+                || (!req.collection_id.is_empty()
+                    && path.collection_id().as_str() != req.collection_id)
         }) {
-            return Err(Status::invalid_argument(
-                "page_token cursor is outside the requested collection",
-            ));
+            return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
         }
         let mask = decode_mask(req.mask.as_ref()).map_err(status)?;
-        if req.page_size < 0 {
-            return Err(Status::invalid_argument("page_size must not be negative"));
-        }
+        // Faults apply to requests that validated.
+        self.fault(parent.project.as_str(), "firestore.read")?;
         let accepted = self.accepted_query(&parent, &list_query(req)?)?;
         let ordered = !accepted.query.order_by.is_empty();
+        // Without a collection id the listing is every document directly below the parent,
+        // in name order (gRPC only; grpc/list-documents#every-collection-of-document): read
+        // through the query engine like an ordered listing.
+        let name_scan = !ordered && !req.collection_id.is_empty();
         // The rules see the page size as `request.query.limit` (the number of documents the
         // request can return); the scan itself stays unlimited so the page cursor applies
-        // before truncation.
+        // before truncation. Production serves at most 300 documents a page
+        // (large#page-size-1000).
         let page_size = if req.page_size > 0 {
-            usize::try_from(req.page_size).unwrap_or(usize::MAX)
+            usize::try_from(req.page_size)
+                .unwrap_or(usize::MAX)
+                .min(MAX_LIST_PAGE_SIZE)
         } else {
             DEFAULT_LIST_PAGE_SIZE
         };
@@ -5327,8 +5336,8 @@ impl LocalBackend {
         let scan_size = page_size.saturating_add(1);
         let mut proof_query = accepted.query.clone();
         proof_query.limit = Some(u32::try_from(page_size).unwrap_or(u32::MAX));
-        let bounded_name_page = txn.is_none() && !ordered;
-        let bounded_ordered_page = txn.is_none() && ordered;
+        let bounded_name_page = txn.is_none() && name_scan;
+        let bounded_ordered_page = txn.is_none() && !name_scan;
         self.with_selected_snapshot(&parent, selector, now, |access| {
             let version = access.version()?;
             guard(
@@ -5369,16 +5378,23 @@ impl LocalBackend {
             } else if bounded_ordered_page {
                 let mut page_query = accepted.query.clone();
                 page_query.limit = Some(u32::try_from(scan_size).unwrap_or(u32::MAX));
-                let cursor = after_path
-                    .as_ref()
-                    .map(|path| {
-                        access
-                            .db()
-                            .cursor_after_document(&accepted.query, version, path)
-                    })
-                    .transpose()
-                    .map_err(|e| status_from_error(&e))?
-                    .flatten();
+                // After the values the page ended on, as the token recorded them.
+                let cursor = match after_cursor.as_ref().and_then(|c| c.values.clone()) {
+                    Some(values) => Some(fireemu_core_firestore::query::Cursor {
+                        values,
+                        before: false,
+                    }),
+                    None => after_path
+                        .as_ref()
+                        .map(|path| {
+                            access
+                                .db()
+                                .cursor_after_document(&accepted.query, version, path)
+                        })
+                        .transpose()
+                        .map_err(|e| status_from_error(&e))?
+                        .flatten(),
+                };
                 let cursor_matches_document = cursor.is_some();
                 page_query.start_at = cursor;
                 let mut docs = access
@@ -5502,12 +5518,28 @@ impl LocalBackend {
             // for every full page and then an empty page).
             let full = documents.len() > page_size;
             documents.truncate(page_size);
-            let next_page_token = if full {
-                documents.last().map_or(String::new(), |d| {
-                    crate::rest::json::base64_encode(format!("{}\n{identity}", d.name).as_bytes())
-                })
-            } else {
-                String::new()
+            let next_page_token = match documents.last() {
+                Some(last) if full => {
+                    // An ordered listing also records the order values of its last document
+                    // in this snapshot.
+                    let values = if name_scan {
+                        None
+                    } else {
+                        decode_document_name(&last.name)
+                            .ok()
+                            .map(|path| {
+                                access
+                                    .db()
+                                    .cursor_after_document(&accepted.query, version, &path)
+                            })
+                            .transpose()
+                            .map_err(|e| status_from_error(&e))?
+                            .flatten()
+                            .map(|cursor| cursor.values)
+                    };
+                    list_page_token(&last.name, &identity, values.as_deref())
+                }
+                _ => String::new(),
             };
             Ok(pb::ListDocumentsResponse {
                 documents,
@@ -5521,9 +5553,11 @@ impl LocalBackend {
         &self,
         req: &pb::ListCollectionIdsRequest,
     ) -> Result<pb::ListCollectionIdsResponse, Status> {
-        let parent = parse_parent(&req.parent).map_err(status)?;
+        let parent = crate::query_messages::parse_query_parent(&req.parent).map_err(status)?;
         if req.page_size < 0 {
-            return Err(Status::invalid_argument("page_size must not be negative"));
+            return Err(Status::invalid_argument(
+                "page_size must be greater than or equal to zero.",
+            ));
         }
         let now = self.write_time();
         let read_at = match &req.consistency_selector {
@@ -5551,27 +5585,21 @@ impl LocalBackend {
             match existing {
                 Some(handle) => Some(handle),
                 None if !req.page_token.is_empty() => {
-                    return Err(Status::invalid_argument(
-                        "page_token was issued for a different listing",
-                    ));
+                    return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
                 }
                 None => None,
             }
         };
+        // A token is a cursor of collection ids within one database session: production
+        // continues it under another parent or read time (list-collection-ids/rest
+        // #page-token-from-other-parent, read-time#collection-ids-paged-at-write-1-next-without-
+        // read-time).
         let identity = |handle: &DatabaseHandle| {
             format!(
-                "{}|{}|{}|{}|{}|{}",
-                req.parent,
+                "{}|{}|{}",
                 self.epoch(),
                 self.database_generation(&parent),
                 handle.0.incarnation,
-                match read_at {
-                    Some(at) => format!("rt:{}", at.as_nanos()),
-                    None => "live".to_owned(),
-                },
-                req.request_options
-                    .as_ref()
-                    .map_or_else(String::new, |options| format!("{options:?}")),
             )
         };
         if let Some(handle) = &handle {
@@ -5825,7 +5853,14 @@ pub fn list_query(req: &pb::ListDocumentsRequest) -> Result<pb::StructuredQuery,
 
 /// `ListDocuments.order_by`: a comma-separated list of `field [asc|desc]` clauses.
 fn list_order_by(order_by: &str) -> Result<Vec<pb::structured_query::Order>, Status> {
-    let invalid = || Status::invalid_argument(format!("Invalid order by clause \"{order_by}\"."));
+    // Any clause production cannot read, its field path included, is refused as the whole
+    // clause (order-and-mask#order-by-invalid-path).
+    let invalid = || {
+        Status::invalid_argument(format!(
+            "Invalid order by clause \"{}\".",
+            fireemu_core_types::codec::echo(order_by)
+        ))
+    };
     if order_by.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -5834,6 +5869,7 @@ fn list_order_by(order_by: &str) -> Result<Vec<pb::structured_query::Order>, Sta
         .map(|clause| {
             let mut words = clause.split_whitespace();
             let field = words.next().ok_or_else(invalid)?;
+            FieldPath::parse(field).map_err(|_| invalid())?;
             let direction = match words.next().map(str::to_ascii_lowercase).as_deref() {
                 None | Some("asc") => pb::structured_query::Direction::Ascending,
                 Some("desc") => pb::structured_query::Direction::Descending,
@@ -5852,24 +5888,116 @@ fn list_order_by(order_by: &str) -> Result<Vec<pb::structured_query::Order>, Sta
         .collect()
 }
 
-/// The document name a `ListDocuments` page token continues after; the token must have been
-/// issued for the same listing (`identity`).
-fn list_page_cursor(page_token: &str, identity: &str) -> Result<Option<String>, Status> {
+/// Production's refusal of a page token that is not one it issued.
+const LIST_TOKEN_MALFORMED: &str = "invalid page token";
+/// Production's refusal of a page token issued for another listing (another collection,
+/// order, mask or `show_missing`).
+const LIST_TOKEN_FOREIGN: &str = "Invalid page token.";
+/// The most documents a `ListDocuments` page holds (large#page-size-1000).
+pub const MAX_LIST_PAGE_SIZE: usize = 300;
+
+/// Where a `ListDocuments` page token continues: after the named document, and in an ordered
+/// listing after the order values that document had when the token was issued.
+struct ListCursor {
+    name: String,
+    values: Option<Vec<fireemu_core_firestore::value::Value>>,
+}
+
+fn list_page_token(
+    name: &str,
+    identity: &str,
+    values: Option<&[fireemu_core_firestore::value::Value]>,
+) -> String {
+    use crate::rest::json::base64_encode;
+    use prost::Message as _;
+    let values = values.map_or_else(String::new, |values| {
+        base64_encode(
+            &pb::Cursor {
+                values: values.iter().map(encode_value).collect(),
+                before: false,
+            }
+            .encode_to_vec(),
+        )
+    });
+    base64_encode(
+        format!(
+            "{}\n{}\n{values}",
+            base64_encode(name.as_bytes()),
+            base64_encode(identity.as_bytes())
+        )
+        .as_bytes(),
+    )
+}
+
+/// The cursor a `ListDocuments` page token continues after; the token must have been issued
+/// for the same listing (`identity`).
+fn list_page_cursor(page_token: &str, identity: &str) -> Result<Option<ListCursor>, Status> {
+    use crate::rest::json::base64_decode;
+    use prost::Message as _;
     if page_token.is_empty() {
         return Ok(None);
     }
-    let malformed = || Status::invalid_argument("malformed page_token");
-    let token =
-        String::from_utf8(crate::rest::json::base64_decode(page_token).map_err(|_| malformed())?)
-            .map_err(|_| malformed())?;
-    let (name, token_identity) = token.split_once('\n').ok_or_else(malformed)?;
-    if token_identity != identity {
-        return Err(Status::invalid_argument(
-            "page_token was issued for a different listing",
-        ));
+    let malformed = || Status::invalid_argument(LIST_TOKEN_MALFORMED);
+    let text = |part: &str| {
+        base64_decode(part)
+            .ok()
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .ok_or_else(malformed)
+    };
+    let token = text(page_token)?;
+    let mut parts = token.split('\n');
+    let (Some(name), Some(token_identity), Some(values), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(malformed());
+    };
+    let name = text(name)?;
+    decode_document_name(&name).map_err(|_| malformed())?;
+    if text(token_identity)? != identity {
+        return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
     }
-    decode_document_name(name).map_err(|_| malformed())?;
-    Ok(Some(name.to_owned()))
+    let values = if values.is_empty() {
+        None
+    } else {
+        let cursor = base64_decode(values)
+            .ok()
+            .and_then(|bytes| pb::Cursor::decode(bytes.as_slice()).ok())
+            .ok_or_else(malformed)?;
+        Some(
+            cursor
+                .values
+                .iter()
+                .map(crate::decode::decode_value)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| malformed())?,
+        )
+    };
+    Ok(Some(ListCursor { name, values }))
+}
+
+/// A `ListDocuments` mask in production's words: an empty path and a path that does not parse
+/// are refused as a query's property paths are (order-and-mask#mask-empty,
+/// #mask-comma-separated); the length limits stay with the shared mask decoder.
+fn check_list_mask(mask: Option<&pb::DocumentMask>) -> Result<(), Status> {
+    use fireemu_core_firestore::field_path::FieldPathError;
+    for path in mask.map_or(&[][..], |mask| mask.field_paths.as_slice()) {
+        match FieldPath::parse(path) {
+            Ok(_)
+            | Err(FieldPathError::PathTooLong { .. } | FieldPathError::SegmentTooLong { .. }) => {}
+            Err(FieldPathError::Empty) => {
+                return Err(Status::invalid_argument(
+                    crate::query_messages::EMPTY_PROPERTY_PATH,
+                ));
+            }
+            Err(_) => {
+                return Err(Status::invalid_argument(format!(
+                    r#"Invalid property path "{}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#,
+                    fireemu_core_types::codec::echo(path)
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn list_collection_ids_page_cursor(
@@ -5879,15 +6007,16 @@ fn list_collection_ids_page_cursor(
     if page_token.is_empty() {
         return Ok(None);
     }
-    let malformed = || Status::invalid_argument("malformed page_token");
+    let malformed = || Status::invalid_argument(LIST_TOKEN_MALFORMED);
     let token =
         String::from_utf8(crate::rest::json::base64_decode(page_token).map_err(|_| malformed())?)
             .map_err(|_| malformed())?;
     let (id, token_identity) = token.split_once('\n').ok_or_else(malformed)?;
-    if token_identity != identity || id.is_empty() {
-        return Err(Status::invalid_argument(
-            "page_token was issued for a different listing",
-        ));
+    if id.is_empty() {
+        return Err(malformed());
+    }
+    if token_identity != identity {
+        return Err(Status::invalid_argument(LIST_TOKEN_FOREIGN));
     }
     CollectionId::try_new(id).map_err(|_| malformed())?;
     Ok(Some(id.to_owned()))

@@ -878,7 +878,100 @@ function lifetimeSteps() {
 
 const lifetime = program("auth-mfa/lifetime", lifetimeSteps(), ENABLED);
 
-/** Every program, in recording order: MFA disabled first, the waits last. */
+// ---- short lifetimes (owner decision M8; waits about six minutes) ------------------------------
+
+// The first recording (2026-09-24) found a TOTP pending credential refused as
+// TOTP_CHALLENGE_TIMEOUT already at 300 seconds, and an enrollment start refused as
+// CREDENTIAL_TOO_OLD_LOGIN_AGAIN with a token 1800 seconds old. This program brackets both: a
+// TOTP pending credential at 60, 120, 180, 240 and 290 seconds, an SMS pending credential at 150
+// and 300 seconds (its code is sent at that age and entered at once), and an enrollment start
+// with a token 240 and 330 seconds old, each followed at once by a same-account control.
+const SHORT_TOTP_PENDING_AGES = [60, 120, 180, 240, 290];
+const SHORT_SMS_PENDING_AGES = [150, 300];
+const SHORT_TOKEN_AGES = [240, 330];
+
+function shortLifetimeSteps() {
+  const setup = [];
+  const acquire = [];
+  const rows = [];
+  SHORT_TOTP_PENDING_AGES.forEach((age) => {
+    const n = `q${age}`;
+    setup.push(
+      adminCreate(`create-${n}`, n),
+      signIn(`sign-in-${n}`, n),
+      totpStart(`start-${n}`, `sign-in-${n}`),
+      totpFinalize(`finalize-${n}`, `sign-in-${n}`, `start-${n}`, totp(`start-${n}`, 0)),
+    );
+    acquire.push(signIn(`pending-${n}`, n));
+    rows.push({
+      age,
+      steps: [
+        aged(
+          totpSignIn(`aged-pending-${n}`, `pending-${n}`, listed(`pending-${n}`), totp(`start-${n}`, 0)),
+          `pending-${n}`,
+          age,
+        ),
+        signIn(`control-pending-${n}`, n),
+        totpSignIn(
+          `control-finalize-${n}`,
+          `control-pending-${n}`,
+          listed(`control-pending-${n}`),
+          totp(`start-${n}`, 1),
+        ),
+      ],
+    });
+  });
+  SHORT_SMS_PENDING_AGES.forEach((age, index) => {
+    const n = `m${age}`;
+    setup.push(
+      adminCreate(`create-${n}`, n),
+      signIn(`sign-in-${n}`, n),
+      phoneStart(`start-${n}`, `sign-in-${n}`, index),
+      phoneFinalize(`finalize-${n}`, `sign-in-${n}`, `start-${n}`),
+    );
+    acquire.push(signIn(`pending-${n}`, n));
+    rows.push({
+      age,
+      steps: [
+        aged(
+          smsStart(`sms-start-aged-${n}`, `pending-${n}`, listed(`pending-${n}`)),
+          `pending-${n}`,
+          age,
+        ),
+        smsSignIn(`aged-pending-${n}`, `pending-${n}`, listed(`pending-${n}`), `sms-start-aged-${n}`),
+        signIn(`control-pending-${n}`, n),
+        smsStart(`control-start-${n}`, `control-pending-${n}`, listed(`control-pending-${n}`)),
+        smsSignIn(
+          `control-finalize-${n}`,
+          `control-pending-${n}`,
+          listed(`control-pending-${n}`),
+          `control-start-${n}`,
+        ),
+      ],
+    });
+  });
+  SHORT_TOKEN_AGES.forEach((age) => {
+    const n = `r${age}`;
+    setup.push(adminCreate(`create-${n}`, n));
+    acquire.push(signIn(`sign-in-${n}`, n));
+    rows.push({
+      age,
+      steps: [
+        aged(totpStart(`aged-token-start-${n}`, `sign-in-${n}`), `sign-in-${n}`, age),
+        signIn(`control-sign-in-${n}`, n),
+        totpStart(`control-start-${n}`, `control-sign-in-${n}`),
+      ],
+    });
+  });
+  const order = (step) => -Number(/\d+$/.exec(step.id)?.[0] ?? 0);
+  acquire.sort((a, b) => order(a) - order(b));
+  rows.sort((a, b) => a.age - b.age);
+  return [...setup, ...acquire, ...rows.flatMap((row) => row.steps)];
+}
+
+const lifetimeShort = program("auth-mfa/lifetime-short", shortLifetimeSteps(), ENABLED);
+
+/** Every program, in recording order: MFA disabled first, the waiting programs last. */
 export const PROGRAMS = [
   disabled,
   config,
@@ -890,5 +983,6 @@ export const PROGRAMS = [
   adminFactors,
   emailLinkFirstFactor,
   customTokenFirstFactor,
+  lifetimeShort,
   lifetime,
 ];

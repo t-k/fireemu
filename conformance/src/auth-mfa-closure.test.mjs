@@ -182,7 +182,7 @@ test("AUTH-MFA closure inventory cannot silently omit a declared condition", () 
 test("scope decisions are recorded, not implied", () => {
   const closure = load();
   const decided = new Set(closure.scopeDecisions.map(({ id }) => id));
-  for (const id of ["M1", "M2", "M3", "M4", "M5", "M6", "M7"]) {
+  for (const id of ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"]) {
     assert.ok(decided.has(id), `scope decision ${id} must be recorded`);
   }
   for (const decision of closure.scopeDecisions) {
@@ -238,24 +238,26 @@ test("every aged row is followed at once by a same-account control (owner decisi
   const { PROGRAMS } = await import("./auth-mfa/corpus.mjs");
   const lifetime = PROGRAMS.at(-1);
   assert.equal(lifetime.id, "auth-mfa/lifetime");
-  const steps = lifetime.steps;
-  const agedRows = steps.filter(({ id }) => id.startsWith("aged-"));
-  // The wait is on the aged row itself, or on the fresh sign-in right before it.
-  const waitOf = (row) => {
-    const index = steps.indexOf(row);
-    return row.age
-      ? row
-      : steps[index - 1]?.id.startsWith("fresh-sign-in-")
-        ? steps[index - 1]
-        : undefined;
-  };
-  const pendingAges = agedRows
+  for (const program of PROGRAMS.slice(-2)) checkAgedRows(program);
+  const pendingAges = lifetime.steps
     .filter(({ id }) => id.startsWith("aged-pending-"))
-    .map((row) => waitOf(row).age.seconds);
+    .map((row) => row.age.seconds);
   assert.deepEqual(pendingAges, [300, 450, 600, 1800]);
+});
+
+function checkAgedRows({ id: programId, steps }) {
+  const agedRows = steps.filter(({ id }) => id.startsWith("aged-"));
+  assert.ok(agedRows.length > 0, programId);
+  // The wait is on the aged row itself, or on the fresh sign-in or SMS start right before it.
+  const waitOf = (row) => {
+    const previous = steps[steps.indexOf(row) - 1];
+    if (row.age) return row;
+    return /^(fresh-sign-in|sms-start-aged)-/.test(previous?.id ?? "") ? previous : undefined;
+  };
   for (const row of agedRows) {
     const waiting = waitOf(row);
     assert.ok(waiting?.age, `${row.id} waits for its age`);
+    assert.ok(waiting.age.seconds <= 1800, row.id);
     const index = steps.indexOf(row);
     const name = row.id.replace(/^aged-(pending|session|token-start)-/, "");
     const [control, finalize] = steps.slice(index + 1, index + 3);
@@ -278,4 +280,4 @@ test("every aged row is followed at once by a same-account control (owner decisi
       `${from} is acquired before the first wait`,
     );
   }
-});
+}

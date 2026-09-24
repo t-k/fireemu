@@ -8,6 +8,7 @@ import {
   createShrinkRequestCounter,
   validateManagedClearOperation,
   validateManagedClearReadback,
+  validateLegacyDebrisDocument,
   validateShrinkBoundaryDocument,
   validateShrinkBoundaryState,
 } from "./session.mjs";
@@ -112,6 +113,52 @@ test("empty ProtoJSON may omit repeated values only when emptiness is explicitly
     validateShrinkBoundaryState(empty, corpusV3[0], 19_999, { allowEmptyOmitted: true }),
     [],
   );
+});
+
+test("legacy debris accepts only a typed deterministic integer suffix", () => {
+  const length = 12_116;
+  const suffix = {
+    name: legacy[0],
+    updateTime: "2026-09-24T00:00:00Z",
+    fields: {
+      a: {
+        arrayValue: {
+          values: Array.from({ length: 3 }, (_, index) => ({
+            integerValue: String(length - 3 + index),
+          })),
+        },
+      },
+    },
+  };
+  assert.equal(validateLegacyDebrisDocument(suffix, legacy[0], length).length, 3);
+  assert.deepEqual(
+    validateLegacyDebrisDocument(
+      { ...suffix, fields: { a: { arrayValue: {} } } },
+      legacy[0],
+      length,
+    ),
+    [],
+  );
+  for (const invalid of [
+    { ...suffix, name: legacy[1] },
+    { ...suffix, fields: { a: { arrayValue: { values: [{ integerValue: "5" }] } } } },
+    {
+      ...suffix,
+      fields: {
+        a: {
+          arrayValue: { values: [...suffix.fields.a.arrayValue.values, { integerValue: "1" }] },
+        },
+      },
+    },
+    {
+      ...suffix,
+      fields: {
+        a: { arrayValue: { unexpected: true, values: suffix.fields.a.arrayValue.values } },
+      },
+    },
+  ]) {
+    assert.throws(() => validateLegacyDebrisDocument(invalid, legacy[0], length));
+  }
 });
 
 test("managed clear is limited to distinct root collections in the fixed sandbox", () => {

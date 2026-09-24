@@ -73,6 +73,9 @@ const frozenResourceNames = (specs) =>
   );
 const LEGACY_SHRINK_NAMES = frozenResourceNames(LEGACY_SHRINK_SPECS);
 const V3_SHRINK_NAMES = frozenResourceNames(V3_SHRINK_SPECS);
+const LEGACY_SHRINK_COLLECTIONS = new Set(
+  LEGACY_SHRINK_NAMES.map((name) => name.split("/documents/")[1].split("/")[0]),
+);
 const FROZEN_ARRAY_LENGTHS = new Map(
   [...LEGACY_SHRINK_SPECS, ...V3_SHRINK_SPECS].map(
     ([collectionPrefix, collectionBytes, , length]) => [
@@ -204,6 +207,37 @@ export function validateShrinkBoundaryState(
   return values;
 }
 
+export function validateLegacyDebrisDocument(document, expectedName, expectedLength) {
+  const arrayValue = document?.fields?.a?.arrayValue;
+  const omittedEmpty = arrayValue && Object.keys(arrayValue).length === 0;
+  const values = omittedEmpty ? [] : arrayValue?.values;
+  if (
+    document?.name !== expectedName ||
+    typeof document.updateTime !== "string" ||
+    !document.updateTime ||
+    Object.keys(document.fields ?? {}).length !== 1 ||
+    Object.keys(document.fields?.a ?? {}).length !== 1 ||
+    !arrayValue ||
+    Object.keys(arrayValue).some((key) => key !== "values") ||
+    !Array.isArray(values) ||
+    !Number.isSafeInteger(expectedLength) ||
+    expectedLength <= 0 ||
+    values.length > expectedLength
+  ) {
+    throw new Error("legacy debris is not a frozen typed document");
+  }
+  const firstValue = expectedLength - values.length;
+  if (
+    values.some(
+      (value, index) =>
+        Object.keys(value ?? {}).length !== 1 || value?.integerValue !== String(firstValue + index),
+    )
+  ) {
+    throw new Error("legacy debris is not a deterministic suffix of its frozen integer sequence");
+  }
+  return values;
+}
+
 export function validateManagedClearReadback(names, rows) {
   return (
     Array.isArray(rows) &&
@@ -296,33 +330,106 @@ async function clearThroughPublicApi(database, verifyManagedScope) {
       return;
     }
     if (shrinkScopeActive) {
-      if (
-        managedClearState.shrinkScope === "v3" &&
-        collectionIds.some((collectionId) =>
-          LEGACY_SHRINK_NAMES.some(
-            (name) => name.split("/documents/")[1].split("/")[0] === collectionId,
-          ),
-        )
-      ) {
-        throw new Error(
-          "legacy debris requires recorded owner attestation before corpus-v3 cleanup",
-        );
+      if (managedClearState.shrinkScope === "v3") {
+        if (!managedClearState.legacyDebrisAudited) {
+          await auditLegacyDebris(base);
+          managedClearState.legacyDebrisAudited = true;
+        }
       }
       const shrinkCollectionIds = new Set(
         managedClearState.names.map((name) => name.split("/documents/")[1].split("/")[0]),
       );
-      if (collectionIds.some((collectionId) => shrinkCollectionIds.has(collectionId))) {
+      const cleanableCollectionIds = collectionIds.filter(
+        (collectionId) =>
+          managedClearState.shrinkScope !== "v3" || !LEGACY_SHRINK_COLLECTIONS.has(collectionId),
+      );
+      if (cleanableCollectionIds.length === 0) {
+        if (verifyManagedScope) await verifyManagedShrinkScopeAbsent(base);
+        managedClearBlocked = false;
+        return;
+      }
+      if (cleanableCollectionIds.some((collectionId) => shrinkCollectionIds.has(collectionId))) {
         await preflightManagedShrinkScope();
         managedClearState.preflightDone = true;
       }
     }
     const managedFailures = [];
     for (const collectionId of collectionIds) {
+      if (
+        shrinkScopeActive &&
+        managedClearState.shrinkScope === "v3" &&
+        LEGACY_SHRINK_COLLECTIONS.has(collectionId)
+      ) {
+        continue;
+      }
       managedFailures.push(...(await deleteCollection(base, "", collectionId)));
     }
     if (managedFailures.length > 0) await managedClear(database, managedFailures);
   }
   throw new Error("clear: the production database still lists collections after 8 rounds");
+}
+
+async function auditLegacyDebris(base) {
+  if (!managedClearState || managedClearState.shrinkScope !== "v3") {
+    throw new Error("legacy debris audit is restricted to corpus-v3 cleanup");
+  }
+  // This audit is read-only and runs once before this collector's first v3 cleanup write.
+  // External writer exclusivity remains an operator precondition; this process cannot enforce it.
+  const api = `${SCHEME}://${HOST}/v1/projects/${PROJECT}/databases/(default)`;
+  const groups = new Map();
+  for (let index = 0; index < LEGACY_SHRINK_NAMES.length; index += 1) {
+    const name = LEGACY_SHRINK_NAMES[index];
+    const collectionId = name.split("/documents/")[1].split("/")[0];
+    const groupNames = await managedGroupNames(api, collectionId);
+    if (groupNames.length > 1 || (groupNames.length === 1 && groupNames[0] !== name)) {
+      throw new Error("legacy debris collection group contains an unexpected document");
+    }
+    groups.set(name, groupNames.length === 1);
+  }
+  const readback = await trackedFetch(`${base}:batchGet`, {
+    method: "POST",
+    headers: authorized({ "content-type": "application/json" }),
+    body: JSON.stringify({ documents: LEGACY_SHRINK_NAMES }),
+    signal: timeoutSignal(),
+  });
+  if (!readback.ok) throw new Error(`legacy debris typed read ${readback.status}`);
+  const rows = await readback.json();
+  if (!Array.isArray(rows) || rows.length !== LEGACY_SHRINK_NAMES.length) {
+    throw new Error("legacy debris typed read returned an incomplete result");
+  }
+  const seen = new Set();
+  for (const row of rows) {
+    const hasFound = Object.hasOwn(row ?? {}, "found");
+    const hasMissing = Object.hasOwn(row ?? {}, "missing");
+    const name = hasFound ? row.found?.name : row?.missing;
+    if (
+      hasFound === hasMissing ||
+      !LEGACY_SHRINK_NAMES.includes(name) ||
+      seen.has(name) ||
+      row?.error ||
+      (hasMissing && row.missing !== name)
+    ) {
+      throw new Error("legacy debris typed read returned an unexpected result");
+    }
+    seen.add(name);
+    const found = Boolean(row.found);
+    if (found !== groups.get(name)) {
+      throw new Error("legacy debris changed during its read-only scope audit");
+    }
+    if (found) {
+      const collectionId = name.split("/documents/")[1].split("/")[0];
+      const expectedLength = FROZEN_ARRAY_LENGTHS.get(collectionId);
+      validateLegacyDebrisDocument(row.found, name, expectedLength);
+      const relative = name.slice(name.indexOf("/documents/") + "/documents/".length);
+      const childCollections = await listCollectionIds(base, relative);
+      if (!childCollections || childCollections.length !== 0) {
+        throw new Error("legacy debris document has unexpected subcollections");
+      }
+    }
+  }
+  if (seen.size !== LEGACY_SHRINK_NAMES.length) {
+    throw new Error("legacy debris typed read omitted a frozen name");
+  }
 }
 
 /** Every collection id under `parentPath` (all pages), or `null` for a missing database. */
@@ -875,6 +982,7 @@ async function main() {
       shrinkRequestCounter: createShrinkRequestCounter(
         SHRINK_REQUEST_CAPS[managedShrinkScope(names, PROJECT, "(default)")],
       ),
+      legacyDebrisAudited: false,
     };
     try {
       const previous = JSON.parse(await readFile(MANAGED_CLEAR_JOURNAL, "utf8"));

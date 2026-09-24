@@ -43,6 +43,7 @@ async function observeCollector({
   initialState,
   programCount = 1,
   omitEmptyValues = false,
+  childCollectionNames = [],
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "fireemu-array-shrink-"));
   const input = join(directory, "programs.json");
@@ -126,10 +127,15 @@ async function observeCollector({
       });
     } else if (
       [...records.values()].some((record) =>
-        pathname.endsWith(`/${record.document}:listCollectionIds`),
+        pathname.endsWith(`/${record.collection}/${record.document}:listCollectionIds`),
       )
     ) {
-      send(200, {});
+      const record = [...records.values()].find((item) =>
+        pathname.endsWith(`/${item.collection}/${item.document}:listCollectionIds`),
+      );
+      send(200, {
+        collectionIds: childCollectionNames.includes(record.collection) ? ["nested"] : [],
+      });
     } else if (
       [...records.values()].some((record) =>
         pathname.endsWith(`/${record.collection}/${record.document}`),
@@ -219,6 +225,12 @@ async function observeCollector({
             visible.has(name) && record.collection === queriedCollection && !record.deleted,
         )
         .map(([name]) => name);
+      if (
+        failureMode === "legacy-group-member" &&
+        legacyNames.some((name) => name.split("/documents/")[1].split("/")[0] === queriedCollection)
+      ) {
+        matching.push(`${prefix}${queriedCollection}/unexpected`);
+      }
       if (failureMode === "prefight" && matching.length) matching.push(`${prefix}g500a/other`);
       if (
         failureMode === "preflight-second" &&
@@ -240,11 +252,29 @@ async function observeCollector({
       const requestedNames = JSON.parse(body).documents;
       send(
         200,
-        requestedNames.map((name) =>
-          failureMode === "readback" && records.get(name)?.deleted
-            ? { found: { name } }
-            : { missing: name },
-        ),
+        requestedNames.map((name) => {
+          const record = records.get(name);
+          return failureMode === "legacy-disappears-during-audit" && name === legacyNames[0]
+            ? { missing: name }
+            : failureMode === "readback" && record?.deleted
+              ? { found: { name } }
+              : record && visible.has(name) && !record.deleted
+                ? {
+                    found: {
+                      name,
+                      updateTime: record.updateTime,
+                      fields: {
+                        a: {
+                          arrayValue:
+                            omitEmptyValues && record.values.length === 0
+                              ? {}
+                              : { values: record.values },
+                        },
+                      },
+                    },
+                  }
+                : { missing: name };
+        }),
       );
     } else {
       send(404, { error: { status: "NOT_FOUND" } });
@@ -381,11 +411,11 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
     assert.deepEqual([...perDocument.values()], [20, 20, 8, 8, 12, 12]);
     assert.equal(
       result.requests.filter((request) => request.pathname.endsWith("/documents:batchGet")).length,
-      7,
+      8,
     );
     assert.equal(
       result.requests.filter((request) => request.pathname.endsWith("/documents:runQuery")).length,
-      24,
+      30,
     );
     assert.equal(
       result.requests.filter((request) => request.pathname.endsWith("/documents:commit")).length,
@@ -405,7 +435,7 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
       );
     }
     const meta = JSON.parse(await readFile(result.meta, "utf8"));
-    assert.equal(meta.requestCount, 156);
+    assert.equal(meta.requestCount, 163);
     const scopedRequestCount = result.requests.filter(
       (request) =>
         request.pathname.endsWith("/documents:commit") ||
@@ -414,7 +444,7 @@ test("collector completes bounded shrink and exact cleanup for all six frozen co
         (request.method === "GET" &&
           names.some((name) => request.pathname.endsWith(name.split("/documents/")[1]))),
     ).length;
-    assert.equal(scopedRequestCount, 141);
+    assert.equal(scopedRequestCount, 148);
     assert.ok(scopedRequestCount <= 160);
     assert.deepEqual(JSON.parse(await readFile(result.output, "utf8")), {
       "empty-0": { steps: {} },
@@ -444,25 +474,177 @@ test("68 empty programs avoid repeated shrink preflight requests and stay within
   }
 });
 
-test("corpus-v3 refuses legacy residual collections before issuing writes", async () => {
+test("corpus-v3 accepts legacy documents already removed by the old delete-only operation", async () => {
+  const result = await observeCollector({
+    extraNames: legacyNames,
+    visibleNames: names,
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    const oldCollectionIds = new Set(
+      legacyNames.map((name) => name.split("/documents/")[1].split("/")[0]),
+    );
+    assert.ok(
+      result.requests
+        .filter((request) => request.pathname.endsWith("/documents:commit"))
+        .flatMap((request) => JSON.parse(request.body).writes)
+        .every(
+          (write) =>
+            !oldCollectionIds.has(
+              (write.delete ?? write.transform?.document)?.split("/documents/")[1]?.split("/")[0],
+            ),
+        ),
+    );
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("corpus-v3 skips only validated legacy debris and never writes old roots", async () => {
+  const legacyLengths = [12_116, 12_121, 12_123, 7_179, 7_183, 7_184];
+  const suffixStarts = [...Array(6).fill(0), ...legacyLengths.map((length) => length - 128)];
+  const result = await observeCollector({
+    scopeNames: names,
+    extraNames: legacyNames,
+    visibleNames: [...names, ...legacyNames],
+    arrayLength: [19_999, 20_000, 7_184, 7_185, 12_123, 12_124],
+    suffixStarts,
+    programCount: 68,
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    assert.ok(JSON.parse(await readFile(result.meta, "utf8")).requestCount <= 1000);
+    const writes = result.requests
+      .filter((request) => request.pathname.endsWith("/documents:commit"))
+      .flatMap((request) => JSON.parse(request.body).writes);
+    assert.ok(writes.some((write) => names.includes(write.delete)));
+    assert.ok(
+      writes.every((write) => !legacyNames.includes(write.delete ?? write.transform?.document)),
+    );
+    assert.equal(
+      result.requests.filter((request) => request.pathname.endsWith("/documents:runQuery")).length,
+      30,
+    );
+    assert.equal(
+      result.requests.filter((request) => request.pathname.endsWith("/documents:batchGet")).length,
+      8,
+    );
+    const scopedRequestCount = result.requests.filter(
+      (request) =>
+        request.pathname.endsWith("/documents:commit") ||
+        request.pathname.endsWith("/documents:batchGet") ||
+        request.pathname.endsWith("/documents:runQuery") ||
+        (request.pathname.endsWith(":listCollectionIds") &&
+          [...names, ...legacyNames].some((name) =>
+            request.pathname.endsWith(`${name.split("/documents/")[1]}:listCollectionIds`),
+          )) ||
+        (request.method === "GET" &&
+          [...names, ...legacyNames].some((name) =>
+            request.pathname.endsWith(name.split("/documents/")[1]),
+          )),
+    ).length;
+    assert.equal(scopedRequestCount, 160);
+    assert.ok(scopedRequestCount <= 160);
+    for (const name of legacyNames) {
+      const debris = result.snapshot.get(name);
+      assert.equal(debris.deleted, false);
+      assert.equal(debris.values.length, 128);
+      assert.equal(
+        debris.values[0].integerValue,
+        String(legacyLengths[legacyNames.indexOf(name)] - 128),
+      );
+    }
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("corpus-v3 rejects unknown members of a legacy debris group before any write", async () => {
   const result = await observeCollector({
     extraNames: legacyNames,
     visibleNames: [...names, ...legacyNames],
+    failureMode: "legacy-group-member",
   });
   try {
     assert.ok(result.failure);
-    assert.match(
-      String(result.failure.stderr),
-      /legacy debris requires recorded owner attestation/,
-    );
+    assert.match(String(result.failure.stderr), /collection group contains an unexpected document/);
     assert.equal(
-      result.requests.some((request) => {
-        if (!request.pathname.endsWith("/documents:commit")) return false;
-        return JSON.parse(request.body).writes.some((write) => write.delete || write.transform);
-      }),
+      result.requests.some(
+        (request) =>
+          request.pathname.endsWith("/documents:commit") &&
+          JSON.parse(request.body).writes.some((write) => write.delete || write.transform),
+      ),
       false,
     );
-    await assert.rejects(readFile(result.output), /ENOENT/);
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("corpus-v3 fails closed when an old document disappears between group and typed reads", async () => {
+  const result = await observeCollector({
+    extraNames: legacyNames,
+    visibleNames: [...names, ...legacyNames],
+    failureMode: "legacy-disappears-during-audit",
+  });
+  try {
+    assert.ok(result.failure);
+    assert.match(String(result.failure.stderr), /changed during its read-only scope audit/);
+    assert.equal(
+      result.requests.some(
+        (request) =>
+          request.pathname.endsWith("/documents:commit") &&
+          JSON.parse(request.body).writes.some((write) => write.delete || write.transform),
+      ),
+      false,
+    );
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("corpus-v3 rejects child collections under legacy debris before any write", async () => {
+  const result = await observeCollector({
+    extraNames: legacyNames,
+    visibleNames: [...names, ...legacyNames],
+    childCollectionNames: [legacyNames[2].split("/documents/")[1].split("/")[0]],
+  });
+  try {
+    assert.ok(result.failure);
+    assert.match(String(result.failure.stderr), /unexpected subcollections/);
+    assert.equal(
+      result.requests.some(
+        (request) =>
+          request.pathname.endsWith("/documents:commit") &&
+          JSON.parse(request.body).writes.some((write) => write.delete || write.transform),
+      ),
+      false,
+    );
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("corpus-v3 rejects a non-suffix legacy array before any write", async () => {
+  const initialState = new Map([
+    [legacyNames[0], { values: [{ integerValue: "5" }, { integerValue: "7" }] }],
+  ]);
+  const result = await observeCollector({
+    extraNames: legacyNames,
+    visibleNames: [...names, ...legacyNames],
+    initialState,
+  });
+  try {
+    assert.ok(result.failure);
+    assert.match(String(result.failure.stderr), /deterministic suffix/);
+    assert.equal(
+      result.requests.some(
+        (request) =>
+          request.pathname.endsWith("/documents:commit") &&
+          JSON.parse(request.body).writes.some((write) => write.delete || write.transform),
+      ),
+      false,
+    );
   } finally {
     await rm(result.directory, { recursive: true, force: true });
   }
@@ -614,7 +796,7 @@ test("all six target groups are preflighted before any target mutation", async (
     assert.equal(writes.length, 0);
     assert.equal(
       result.requests.filter((request) => request.pathname.endsWith("/documents:runQuery")).length,
-      2,
+      8,
     );
     await assert.rejects(readFile(result.output), /ENOENT/);
   } finally {

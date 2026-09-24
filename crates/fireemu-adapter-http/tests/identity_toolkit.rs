@@ -16652,3 +16652,41 @@ fn strict_the_action_page_applies_an_email_change_like_the_api() {
         );
     }
 }
+
+/// Strict: a verification applied from the action page finds its account by the address, as
+/// `accounts:update` does (production answers EMAIL_NOT_FOUND once the account has another);
+/// the emulator profile verifies the code's account, as the official handler does.
+#[test]
+fn strict_the_action_page_verifies_by_address_like_the_api() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        create(
+            &s,
+            &json!({"localId": "v", "email": "v@example.com", "password": "password123"}),
+        );
+        let (_, verify) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_EMAIL", "email": "v@example.com"}),
+        );
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "v", "email": "v-moved@example.com"}),
+        );
+        assert_eq!(status, 200);
+        let code = verify["oobCode"].as_str().unwrap();
+        let r = handle(
+            &s,
+            "GET",
+            &format!("/emulator/action?mode=verifyEmail&oobCode={code}&apiKey=fake-api-key"),
+            &Value::Null,
+        );
+        if strict {
+            assert_eq!(r.status, 400, "{}", r.body);
+            assert_eq!(r.body["error"]["message"], "EMAIL_NOT_FOUND", "{}", r.body);
+        } else {
+            assert_eq!(r.status, 200, "{}", r.body);
+        }
+    }
+}

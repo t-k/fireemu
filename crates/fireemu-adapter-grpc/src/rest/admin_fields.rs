@@ -624,10 +624,12 @@ impl RestState {
     /// What `operations.get` answers for a field patch now: as first answered while it is
     /// pending, and done (with the collection group's document count and the part of the field
     /// it changed) once it is applied.
-    pub(crate) fn field_operation_json(
+    /// `count` counts a collection group's documents.
+    pub(crate) fn field_operation_json_counted(
         &self,
         patch: &crate::admin::fields::FieldPatch,
         initial: &Value,
+        count: &mut dyn FnMut(&str) -> u64,
     ) -> Value {
         if !self
             .local
@@ -650,12 +652,7 @@ impl RestState {
             patch.start_time.as_nanos() + 1_000_000,
         );
         metadata["endTime"] = json!(timestamp_to_json(&encode_instant(end)));
-        let documents = crate::admin::managed::group_document_count(
-            self,
-            &patch.project,
-            &patch.database,
-            patch.group.as_str(),
-        );
+        let documents = count(patch.group.as_str());
         if documents > 0 {
             metadata["progressDocuments"] = json!({
                 "estimatedWork": documents.to_string(),

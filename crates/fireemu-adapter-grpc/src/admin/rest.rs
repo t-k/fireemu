@@ -870,9 +870,10 @@ fn delete_database(
     match admin.delete(project, database, unprompted, now) {
         Ok(tombstone) => {
             state.local.delete_database(project, database);
-            // The index-file indexes are seeded first, so the deleted list carries them too.
-            state.local.seed_configured_indexes(project, database);
-            admin.indexes().drop_database(project, database);
+            let configured = state.local.configured_composites(project, database);
+            admin
+                .indexes()
+                .drop_database(project, database, &configured);
             admin.fields().forget(|p, d| p == project && d == database);
             let resource = database_json(&tombstone.record, now, Some(tombstone.delete_time));
             let operation = operations::record(

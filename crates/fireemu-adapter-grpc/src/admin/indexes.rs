@@ -59,9 +59,11 @@ struct RegistryState {
     /// Deleted indexes, oldest first: production's link to create a missing index again
     /// names the index that was deleted.
     deleted: BTreeMap<(String, String), Vec<RuntimeIndex>>,
-    /// The databases whose index-file indexes were seeded, with those definitions: they are
-    /// the database's deployed indexes until it is deleted or they are.
-    seeded: BTreeMap<(String, String), Vec<IndexDefinition>>,
+    /// Index-file indexes deleted through the Admin API: no longer the database's indexes.
+    withdrawn: BTreeMap<(String, String), Vec<IndexDefinition>>,
+    /// Databases deleted through the Admin API: their index-file indexes went with them, and a
+    /// database recreated under the id starts with none.
+    dropped: std::collections::BTreeSet<(String, String)>,
     /// What a deleted database's index list still answers (production keeps listing them).
     tombstones: BTreeMap<(String, String), Vec<RuntimeIndex>>,
     seed: u64,
@@ -288,58 +290,106 @@ impl IndexRegistry {
         let mut state = self.lock();
         state.live.retain(|(p, d), _| !owned(p, d));
         state.deleted.retain(|(p, d), _| !owned(p, d));
-        state.seeded.retain(|(p, d), _| !owned(p, d));
+        state.withdrawn.retain(|(p, d), _| !owned(p, d));
+        state.dropped.retain(|(p, d)| !owned(p, d));
         state.tombstones.retain(|(p, d), _| !owned(p, d));
     }
 
-    /// Adds the index-file indexes of a database, once, as built (`READY`) indexes.
-    pub fn seed_configured(&self, project: &str, database: &str, composites: &[IndexDefinition]) {
-        let mut state = self.lock();
-        let key = (project.to_owned(), database.to_owned());
-        if state.seeded.contains_key(&key) {
-            return;
+    /// The index-file indexes (`configured`, read from the current configuration) that are
+    /// still a database's indexes, as built (`READY`) indexes under ids derived from them.
+    fn configured_view(
+        state: &RegistryState,
+        key: &(String, String),
+        configured: &[IndexDefinition],
+    ) -> Vec<RuntimeIndex> {
+        if state.dropped.contains(key) {
+            return Vec::new();
         }
-        state.seeded.insert(key.clone(), composites.to_vec());
-        let live = state.live.entry(key).or_default();
-        for definition in composites {
-            if live.iter().any(|i| &i.definition == definition) {
-                continue;
-            }
-            live.push(RuntimeIndex {
+        let withdrawn = state.withdrawn.get(key);
+        let live = state.live.get(key);
+        configured
+            .iter()
+            .filter(|d| !withdrawn.is_some_and(|w| w.contains(d)))
+            .filter(|d| !live.is_some_and(|all| all.iter().any(|i| &i.definition == *d)))
+            .map(|definition| RuntimeIndex {
                 id: configured_index_id(definition),
                 definition: definition.clone(),
                 started: Instant::now(),
                 start_time: LogicalInstant::UNIX_EPOCH,
                 operation: String::new(),
-            });
-        }
+            })
+            .collect()
     }
 
-    /// The index-file indexes of a database that are no longer its indexes (deleted through
-    /// the Admin API, or gone with the database): the planner must not use them.
+    /// Every index of a database: its index-file indexes, then those the Admin API created.
     #[must_use]
-    pub fn retracted(&self, project: &str, database: &str) -> Vec<IndexDefinition> {
+    pub fn view(
+        &self,
+        project: &str,
+        database: &str,
+        configured: &[IndexDefinition],
+    ) -> Vec<RuntimeIndex> {
         let state = self.lock();
         let key = (project.to_owned(), database.to_owned());
-        let Some(seeded) = state.seeded.get(&key) else {
-            return Vec::new();
-        };
-        let live = state.live.get(&key);
-        seeded
-            .iter()
-            .filter(|d| !live.is_some_and(|all| all.iter().any(|i| &i.definition == *d)))
-            .cloned()
-            .collect()
+        let mut all = Self::configured_view(&state, &key, configured);
+        all.extend(state.live.get(&key).cloned().unwrap_or_default());
+        all
+    }
+
+    /// Deletes an index of a database, whether the Admin API created it or the index file
+    /// declares it; `None` when it has no such index.
+    pub fn remove(
+        &self,
+        project: &str,
+        database: &str,
+        id: &str,
+        configured: &[IndexDefinition],
+    ) -> Option<RuntimeIndex> {
+        if let Some(removed) = self.delete(project, database, id) {
+            return Some(removed);
+        }
+        let mut state = self.lock();
+        let key = (project.to_owned(), database.to_owned());
+        let index = Self::configured_view(&state, &key, configured)
+            .into_iter()
+            .find(|i| i.id == id)?;
+        state
+            .withdrawn
+            .entry(key.clone())
+            .or_default()
+            .push(index.definition.clone());
+        state.deleted.entry(key).or_default().push(index.clone());
+        Some(index)
+    }
+
+    /// The index-file indexes the planner must not use: deleted through the Admin API, or
+    /// gone with their database. Reading only: a query never changes the registry.
+    #[must_use]
+    pub fn retracted(
+        &self,
+        project: &str,
+        database: &str,
+        configured: &[IndexDefinition],
+    ) -> Vec<IndexDefinition> {
+        let state = self.lock();
+        let key = (project.to_owned(), database.to_owned());
+        if state.dropped.contains(&key) {
+            return configured.to_vec();
+        }
+        state.withdrawn.get(&key).cloned().unwrap_or_default()
     }
 
     /// Drops a deleted database's indexes: its index list keeps answering what it had, and a
     /// database recreated under the id starts with none (production, 2026-09-24).
-    pub fn drop_database(&self, project: &str, database: &str) {
+    pub fn drop_database(&self, project: &str, database: &str, configured: &[IndexDefinition]) {
         let mut state = self.lock();
         let key = (project.to_owned(), database.to_owned());
-        let had = state.live.remove(&key).unwrap_or_default();
+        let mut had = Self::configured_view(&state, &key, configured);
+        had.extend(state.live.remove(&key).unwrap_or_default());
         state.tombstones.insert(key.clone(), had);
         state.deleted.remove(&key);
+        state.withdrawn.remove(&key);
+        state.dropped.insert(key);
     }
 
     /// What a deleted database's index list answers.

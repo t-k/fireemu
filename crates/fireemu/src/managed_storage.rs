@@ -22,6 +22,41 @@ use fireemu_core_storage::name::{BucketName, ObjectName};
 use fireemu_core_storage::store::{NewMetadata, Precondition};
 use fireemu_core_types::determinism::Clock;
 
+/// The most output bytes one managed import reads.
+const MAX_IMPORT_OUTPUT_BYTES: u64 = 1 << 30;
+
+/// What one import has read: each output object at most once, within a byte budget, so a
+/// crafted metadata cannot make it decode the same object again and again.
+#[derive(Default)]
+struct ImportBudget {
+    outputs: std::collections::BTreeSet<String>,
+    bytes: u64,
+}
+
+impl ImportBudget {
+    fn admit(&mut self, path: &str) -> Result<(), ImportRefusal> {
+        if self.outputs.insert(path.to_owned()) {
+            Ok(())
+        } else {
+            Err(ImportRefusal::Malformed(format!(
+                "{path} is named by more than one partition"
+            )))
+        }
+    }
+
+    fn read(&mut self, bytes: usize) -> Result<(), ImportRefusal> {
+        self.bytes = self
+            .bytes
+            .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        if self.bytes > MAX_IMPORT_OUTPUT_BYTES {
+            return Err(ImportRefusal::Malformed(format!(
+                "the export's outputs exceed the {MAX_IMPORT_OUTPUT_BYTES} bytes one import reads"
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// [`ManagedStorage`] over a Storage emulator.
 pub struct StorageBridge {
     storage: Arc<StorageState>,
@@ -150,6 +185,7 @@ impl ManagedStorage for StorageBridge {
         }
         let mut documents = Vec::new();
         let mut bytes: u64 = 0;
+        let mut budget = ImportBudget::default();
         for entry in selected {
             if let Partition::Namespace(_) = entry.partition {
                 continue;
@@ -164,9 +200,11 @@ impl ManagedStorage for StorageBridge {
                 .map_err(|e| ImportRefusal::Malformed(e.to_string()))?
             {
                 let path = join(&job.prefix, &join(directory, &output));
+                budget.admit(&path)?;
                 let content = self
                     .read(&job.bucket, &path)
                     .ok_or_else(|| ImportRefusal::Malformed(format!("{output} is missing")))?;
+                budget.read(content.len())?;
                 for entity in read_managed_output(&content)
                     .map_err(|e| ImportRefusal::Malformed(e.to_string()))?
                 {
@@ -183,5 +221,26 @@ impl ManagedStorage for StorageBridge {
             bytes = bytes.saturating_add(entry.bytes);
         }
         Ok(ImportOutcome { documents, bytes })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_import_reads_each_output_once_and_within_its_budget() {
+        let mut budget = ImportBudget::default();
+        assert!(budget.admit("x/all/output-0").is_ok());
+        assert!(matches!(
+            budget.admit("x/all/output-0"),
+            Err(ImportRefusal::Malformed(_))
+        ));
+        assert!(budget.read(1024).is_ok());
+        let too_much = usize::try_from(MAX_IMPORT_OUTPUT_BYTES).unwrap();
+        assert!(matches!(
+            budget.read(too_much),
+            Err(ImportRefusal::Malformed(_))
+        ));
     }
 }

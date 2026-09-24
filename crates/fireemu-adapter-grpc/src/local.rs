@@ -2576,10 +2576,14 @@ impl LocalBackend {
         let (project, database) = (parent.project.as_str(), parent.database.as_str());
         let mut set = self.configured_indexes(project, database)?;
         // The index-file indexes are the database's deployed indexes: one deleted through the
-        // Admin API, or gone with its database, no longer serves.
-        let registry = self.admin.indexes();
-        registry.seed_configured(project, database, set.composites());
-        for definition in registry.retracted(project, database) {
+        // Admin API, or gone with its database, no longer serves. Planning only reads the
+        // registry; nothing a query names is recorded.
+        let configured = set.composites().to_vec();
+        for definition in self
+            .admin
+            .indexes()
+            .retracted(project, database, &configured)
+        {
             set.remove_composite(&definition);
         }
         self.admin.indexes().overlay(
@@ -2612,13 +2616,15 @@ impl LocalBackend {
             .unwrap_or_default())
     }
 
-    /// Makes the index-file indexes of a database visible to the Admin API (once).
-    pub(crate) fn seed_configured_indexes(&self, project: &str, database: &str) {
-        if let Ok(set) = self.configured_indexes(project, database) {
-            self.admin
-                .indexes()
-                .seed_configured(project, database, set.composites());
-        }
+    /// The composite indexes the index file (or control API) declares for a database now.
+    pub(crate) fn configured_composites(
+        &self,
+        project: &str,
+        database: &str,
+    ) -> Vec<fireemu_core_firestore::index::IndexDefinition> {
+        self.configured_indexes(project, database)
+            .map(|set| set.composites().to_vec())
+            .unwrap_or_default()
     }
 
     /// A query refusal in production's words: a missing index that an Admin create is still

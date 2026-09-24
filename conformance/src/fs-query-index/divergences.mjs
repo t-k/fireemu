@@ -3,6 +3,8 @@
 // the part production decides with an internal hash fireemu cannot reproduce; everything else
 // in those rows is still compared strictly, and the raw recordings stay as they are.
 
+import { PROGRAMS } from "./corpus.mjs";
+
 const INEQUALITY_ROWS = [
   "inequality-fields-11-letters",
   "inequality-fields-12-reversed",
@@ -96,14 +98,71 @@ const unorderedMergeMembers = (recorded) =>
     return undefined;
   });
 
+/** The `index_entries_scanned` and `documents_scanned` of an analyzed answer, if any. */
+function scanCounts(recorded) {
+  let entries;
+  let documents;
+  mapEntries(recorded, (key, item) => {
+    if (key === "index_entries_scanned") entries = Number(item);
+    if (key === "documents_scanned") documents = Number(item);
+    return undefined;
+  });
+  return { entries, documents };
+}
+
+const valueEquals = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The bounds any join order's walk stays within for a merge row, from the corpus seed: every
+ * returned document is read once in each member (lower), and no walk reads more than every
+ * entry of every member (upper). A member's entries are the seed documents of the queried
+ * collection that match its equality field and hold every ordered field.
+ */
+function mergeEntryBounds(row, recorded) {
+  const [programId, stepId] = row.split("#");
+  const program = PROGRAMS.find((candidate) => candidate.id === programId);
+  const query = program?.steps.find((step) => step.id === stepId)?.body?.structuredQuery;
+  const lists = indexLists(recorded).map((list) => JSON.parse(list));
+  if (!query || lists.length !== 1) return undefined;
+  const collection = query.from[0].collectionId;
+  const equalities = (query.where?.compositeFilter?.filters ?? [query.where])
+    .map((filter) => filter?.fieldFilter)
+    .filter((filter) => filter?.op === "EQUAL");
+  const ordered = (query.orderBy ?? []).map((order) => order.field.fieldPath);
+  const documents = program.seed.filter(
+    ([path]) => path.startsWith(`${collection}/`) && path.split("/").length === 2,
+  );
+  const members = lists[0].map((used) => /^\(([^ ]+) /.exec(used.properties)?.[1]);
+  const sizes = members.map((field) => {
+    const filter = equalities.find((candidate) => candidate.field.fieldPath === field);
+    if (!filter) return undefined;
+    return documents.filter(
+      ([, fields]) =>
+        valueEquals(fields[field], filter.value) && ordered.every((name) => name in fields),
+    ).length;
+  });
+  if (sizes.some((size) => size === undefined)) return undefined;
+  const { documents: returned } = scanCounts(recorded);
+  return { lower: members.length * returned, upper: sizes.reduce((a, b) => a + b, 0) };
+}
+
 /**
  * A merge row differs only by member order: the members differ in order (when they are in the
- * same order, the walk is the same and its entry count must match too), and the rows are equal
- * with the members compared as a multiset and the walk's entry count masked.
+ * same order, the walk is the same and its entry count must match too), the rows are equal
+ * with the members compared as a multiset and the walk's entry count masked, and on an
+ * analyzed row both entry counts lie within the bounds every join order keeps to.
  */
-const mergeOrderOnly = (production, fireemu) =>
-  JSON.stringify(indexLists(production)) !== JSON.stringify(indexLists(fireemu)) &&
-  same(unorderedMergeMembers(production), unorderedMergeMembers(fireemu));
+const mergeOrderOnly = (production, fireemu, row) => {
+  if (JSON.stringify(indexLists(production)) === JSON.stringify(indexLists(fireemu))) return false;
+  if (!same(unorderedMergeMembers(production), unorderedMergeMembers(fireemu))) return false;
+  const counted = [scanCounts(production).entries, scanCounts(fireemu).entries];
+  if (counted.every((entries) => entries === undefined)) return true;
+  const bounds = mergeEntryBounds(row, production);
+  return (
+    bounds !== undefined &&
+    counted.every((entries) => entries >= bounds.lower && entries <= bounds.upper)
+  );
+};
 
 /** A partition cursor's sampled document: `.../qroot/r<k>/qp/d<nnnnn>` loses `r<k>` and the id. */
 const SAMPLED_KEY = /\/qroot\/r\d+\/qp\/d\d{5}$/;
@@ -118,19 +177,34 @@ const maskedPartitionKeys = (recorded) =>
 
 /** The fewest cursors every sample gives: the largest count answered in full (`count-8`). */
 const FEWEST_SAMPLES = 8;
+/** The sampling rate production and fireemu share (S5): about one key in 141. */
+const SAMPLE_RATE = 1 / 141;
+/** The documents of the large partition group. */
+const LARGE_GROUP_SIZE = 2000;
 
 /**
- * Every sample: at least as many cursors as the largest count answered in full and fewer than
- * requested, each with a masked key and the same shape as production's.
+ * How many samples a group of `size` plausibly has at that rate: the binomial mean within 3.5
+ * standard deviations, and never fewer than the largest count answered in full.
+ */
+export function plausibleSamples(size) {
+  const mean = size * SAMPLE_RATE;
+  const spread = 3.5 * Math.sqrt(size * SAMPLE_RATE * (1 - SAMPLE_RATE));
+  return {
+    fewest: Math.max(FEWEST_SAMPLES, Math.ceil(mean - spread)),
+    most: Math.min(ALL_SAMPLES_REQUESTED - 1, Math.floor(mean + spread)),
+  };
+}
+
+/**
+ * Every sample: a number of cursors a group of 2,000 documents plausibly samples (production
+ * 14, fireemu 20 as recorded), each with a masked key and the same shape as production's.
  */
 const allSamples = (recorded) =>
   mapEntries(maskedPartitionKeys(recorded), (key, item) => {
     if (key !== "partitions" || !Array.isArray(item)) return undefined;
     const shapes = [...new Set(item.map((cursor) => JSON.stringify(cursor)))];
-    const count =
-      item.length >= FEWEST_SAMPLES && item.length < ALL_SAMPLES_REQUESTED
-        ? "<every sample>"
-        : item.length;
+    const { fewest, most } = plausibleSamples(LARGE_GROUP_SIZE);
+    const count = item.length >= fewest && item.length <= most ? "<every sample>" : item.length;
     return { count, shapes };
   });
 
@@ -156,7 +230,7 @@ export const DIVERGENCES = [
 export function approvedDivergence(row, production, fireemu) {
   const entry = DIVERGENCES.find((candidate) => candidate.rows.includes(row));
   if (!entry || production === undefined || fireemu === undefined) return undefined;
-  return entry.approve(production, fireemu) ? entry.decision : undefined;
+  return entry.approve(production, fireemu, row) ? entry.decision : undefined;
 }
 
 /** The sum of the range counts of one side, or `undefined` when a range did not answer one. */

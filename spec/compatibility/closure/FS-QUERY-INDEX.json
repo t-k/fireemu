@@ -87,13 +87,13 @@
     },
     {
       "id": "S4",
-      "decision": "Documented divergence: production lists a set of field paths in the order of an internal hash set, in the 'distinct inequality fields: [...]' refusal and in the member order of an index merge in Explain planSummary (which also sets the order the merge walks its members, and so index_entries_scanned). The order is stable across recordings but no standard container or hash reproduces it (about 45 families tested, linear hashes ruled out by proof). fireemu lists inequality fields in field-path order and merge members in planning order. The comparison treats these lists as unordered, and the merge entry count as masked, on the named rows only (conformance/src/fs-query-index/divergences.mjs); everything else in those rows is compared strictly and the raw recordings are unchanged.",
+      "decision": "Known difference, accepted into the closure (owner, 2026-09-24): production answers deterministically (both recordings agree), but it orders a set of field paths by an internal hash set that fireemu cannot reproduce: the 'distinct inequality fields: [...]' refusal, and the member order of an Explain index merge, which also sets the order the merge walks its members and so index_entries_scanned. About 45 container and hash families were tested and linear hashes are ruled out by proof. fireemu lists inequality fields in field-path order and merge members in planning order. The comparison approves only the named rows (conformance/src/fs-query-index/divergences.mjs): the lists are compared as multisets, and on an analyzed merge row both entry counts must lie between what any join order reads (every returned document once per member) and every entry of every member, computed from the corpus seed. Everything else in those rows is compared strictly, the closure test keeps each row's differences to these paths, and the raw recordings are unchanged. Reproducing the order is a follow-up.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     },
     {
       "id": "S5",
-      "decision": "Documented divergence: production chooses PartitionQuery cursors at keys sampled by an internal hash that could not be recovered (docs.local candidate tournament, GF(2) proof against linear and CRC families). fireemu reproduces the structure: about one key in 141 is a sample, partition_count cursors (every sample when there are fewer) nested across counts, in key order, without before, with production's paging, tokens and refusals; it samples with its own stable hash, so the keys differ. The comparison masks the cursor keys (their number and shape stay strict), accepts fewer cursors than requested as every sample on the count-64 row, and masks the four range counts while requiring that they add up to the same total on both sides, on the named rows only.",
+      "decision": "Known difference, accepted into the closure (owner, 2026-09-24): production answers deterministically, but it chooses PartitionQuery cursors at keys sampled by an internal hash that could not be recovered (candidate tournament, GF(2) proof against linear and CRC families). fireemu reproduces the structure: about one key in 141 is a sample, partition_count cursors (every sample when there are fewer) nested across counts, in key order, without before, with production's paging, tokens and refusals; it samples with its own stable hash, so the keys differ. The comparison masks only the sampled document of each cursor (count, shape and group stay strict), accepts on the count-64 row a number of cursors a 2,000-document group plausibly samples at that rate (the binomial mean within 3.5 standard deviations, at least the largest count answered in full; 8 to 27, production 14, fireemu 20), requires fireemu's cursors to be in key order and nested across counts, and masks the four range counts while requiring that they add up to the same total on both sides. Reproducing the sampled keys is a follow-up.",
       "decidedBy": "owner (t-k)",
       "decidedOn": "2026-09-24"
     }
@@ -241,28 +241,28 @@
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-12-reversed",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-11",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/query-limits/not-in-and-inequalities#inequality-fields-10-and-not-equal",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           }
         ]
       }
@@ -478,98 +478,98 @@
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#count-2",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#count-3",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#count-8",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#count-64",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#count-8-repeat",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#count-4-page-1",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#count-4-page-2",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#count-4-page-size-3",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#count-4-page-size-3-next",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#range-0",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#range-1",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#range-2",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/partition-query/large-group#range-3",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           }
         ]
       }
@@ -610,98 +610,98 @@
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/queries#merge-with-order-analyze",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#larger-later-field-plan",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#larger-later-field-analyze",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#larger-earlier-field-plan",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#larger-earlier-field-analyze",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#filters-reversed-plan",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#filters-reversed-analyze",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#automatic-members-plan",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#automatic-members-analyze",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#automatic-members-reversed-plan",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#automatic-members-reversed-analyze",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#three-automatic-members-plan",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           },
           {
             "row": "fs-query-index/explain/merge-order#three-automatic-members-analyze",
             "scopeDecision": "S4",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed."
+            "reason": "Known difference (owner, 2026-09-24): production orders this field-path set by an internal hash set that fireemu cannot reproduce; the row matches with the order removed and the merge walk's entry count within the bounds every join order keeps to."
           }
         ]
       }
@@ -836,21 +836,21 @@
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/grpc/partitions#count-4-page-1",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           },
           {
             "row": "fs-query-index/grpc/partitions#count-4-page-2",
             "scopeDecision": "S5",
             "decidedBy": "owner",
             "decidedOn": "2026-09-24",
-            "reason": "Production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled keys removed."
+            "reason": "Known difference (owner, 2026-09-24): production samples PartitionQuery keys with an internal hash that fireemu cannot reproduce; the row matches with the sampled document masked."
           }
         ]
       }

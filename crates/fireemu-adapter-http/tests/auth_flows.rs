@@ -5413,6 +5413,7 @@ fn oob_authorization_state(strict: bool) -> (AuthState, Arc<Mutex<Vec<String>>>)
         s.query_limits = fireemu_adapter_http::identity_toolkit::AuthQueryLimits::ProductionBounded;
         s.fake_custom_token_expiry =
             fireemu_adapter_http::identity_toolkit::FakeCustomTokenExpiry::Reject;
+        enable_project_sms_mfa(&s);
     }
     (s, lines)
 }
@@ -8780,4 +8781,17 @@ fn generated_saml_json_shape_corpus_is_executed_by_the_native_fixture_handler() 
             assert!(body.get("pendingToken").is_none());
         }
     }
+}
+
+/// Switches the project's SMS second factors on: under production's rules (the strict
+/// profile) an enrolled factor is asked for only while the project enables MFA.
+fn enable_project_sms_mfa(s: &AuthState) {
+    let r = handle_with(
+        s,
+        "PATCH",
+        "/identitytoolkit.googleapis.com/admin/v2/projects/demo-app/config?updateMask=mfa",
+        &owner(),
+        &json!({"mfa": {"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}}),
+    );
+    assert_eq!(r.status, 200, "{}", r.body);
 }

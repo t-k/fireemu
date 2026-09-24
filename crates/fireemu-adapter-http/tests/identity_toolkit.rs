@@ -16966,3 +16966,119 @@ fn the_emulator_profile_spends_an_unowned_code_after_checking_the_password() {
         "the verification code is spent"
     );
 }
+
+/// Strict: with the project's MFA switched off, a phone enrollment is refused and an account
+/// that holds a factor (written by the Admin API) signs in without a second factor (sandbox
+/// recording 2026-09-24, `auth-mfa/disabled`). The emulator profile keeps the official
+/// emulator's answers: it enrolls phones and always asks for the second factor.
+#[test]
+fn a_project_with_mfa_off_asks_for_no_second_factor_in_strict() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let token = verified_session(&s, "off@example.com");
+        let (status, body) = post(
+            &s,
+            &format!("{V2}/accounts/mfaEnrollment:start"),
+            &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+        );
+        if strict {
+            assert_eq!(
+                (status, message(&body)),
+                (
+                    400,
+                    Some("OPERATION_NOT_ALLOWED : SMS based MFA not enabled.")
+                )
+            );
+        } else {
+            assert_eq!(status, 200, "{body}");
+        }
+        let (_, user) = post(
+            &s,
+            &format!("{V1}/accounts:lookup"),
+            &json!({"idToken": token}),
+        );
+        let uid = user["users"][0]["localId"].clone();
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": uid, "mfa": {"enrollments": [{"phoneInfo": "+16505550102", "displayName": "Admin"}]}}),
+        );
+        assert_eq!(status, 200);
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:signInWithPassword"),
+            &json!({"email": "off@example.com", "password": "password123", "returnSecureToken": true}),
+        );
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body["idToken"].is_string(),
+            strict,
+            "strict={strict} {body}"
+        );
+        assert_eq!(body["mfaPendingCredential"].is_string(), !strict, "{body}");
+    }
+}
+
+/// Strict: the answer that asks for a second factor has production's members: a password
+/// sign-in keeps `displayName` and `registered` (sandbox recording 2026-09-24,
+/// `auth-mfa/totp/sign-in#pending-1`).
+#[test]
+fn strict_the_pending_answer_has_production_members() {
+    let s = strict_state();
+    set_project_mfa(
+        &s,
+        &json!({"state": "ENABLED", "enabledProviders": ["PHONE_SMS"]}),
+    );
+    let token = verified_session(&s, "pending@example.com");
+    let (status, started) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:start"),
+        &json!({"idToken": token, "phoneEnrollmentInfo": {"phoneNumber": "+16505550101"}}),
+    );
+    assert_eq!(status, 200, "{started}");
+    let (status, body) = post(
+        &s,
+        &format!("{V2}/accounts/mfaEnrollment:finalize"),
+        &json!({"idToken": token, "displayName": "Phone", "phoneVerificationInfo": {"sessionInfo": started["phoneSessionInfo"]["sessionInfo"], "code": phone_code(&s)}}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let (status, body) = post(
+        &s,
+        &format!("{V1}/accounts:signInWithPassword"),
+        &json!({"email": "pending@example.com", "password": "password123", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{body}");
+    let mut members: Vec<&str> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    members.sort_unstable();
+    assert_eq!(
+        members,
+        [
+            "displayName",
+            "email",
+            "kind",
+            "localId",
+            "mfaInfo",
+            "mfaPendingCredential",
+            "registered"
+        ]
+    );
+    assert_eq!(body["displayName"], "");
+}
+
+/// The code of the newest outstanding phone verification.
+fn phone_code(s: &AuthState) -> String {
+    s.store
+        .lock()
+        .unwrap()
+        .verification_codes()
+        .last()
+        .expect("a code was sent")
+        .code
+        .clone()
+}

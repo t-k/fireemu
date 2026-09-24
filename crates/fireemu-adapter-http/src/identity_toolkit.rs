@@ -3082,6 +3082,7 @@ fn handle_with_policy(
     // Strict (stateful refresh sessions) follows production's action-code lifetimes: a reset
     // code lives an hour and is then refused as expired (sandbox recording 2026-09-24).
     store.set_production_oob_lifetimes(!state.stateless_refresh_tokens);
+    store.set_production_mfa(!state.stateless_refresh_tokens);
     // Expired transient credentials are swept before every request is served, so nothing
     // past its lifetime is observable (`AUTH-TRANSIENT-01`, `-02`).
     store.sweep_transient_credentials(at);
@@ -3583,6 +3584,39 @@ fn dispatch(
             emulator_action(store, query, headers, at, options.stateless_refresh_tokens)
         }
     }
+}
+
+/// Production's answers to a refused `mfa` value (sandbox recording 2026-09-24,
+/// `auth-mfa/config`): the v2 Admin API's shape, without the v1 `errors` list.
+fn mfa_config_refusal(refusal: &project_mfa::MfaConfigRefusal) -> JsonResponse {
+    use project_mfa::MfaConfigRefusal;
+    let body = match refusal {
+        MfaConfigRefusal::InvalidEnum {
+            field,
+            type_name,
+            value,
+        } => {
+            let message = format!(
+                "Invalid value at '{field}' (type.googleapis.com/google.cloud.identitytoolkit.admin.v2.{type_name}), \"{value}\""
+            );
+            json!({"error": {
+                "code": 400,
+                "message": message,
+                "status": "INVALID_ARGUMENT",
+                "details": [{
+                    "@type": "type.googleapis.com/google.rpc.BadRequest",
+                    "fieldViolations": [{"field": field, "description": message}],
+                }],
+            }})
+        }
+        MfaConfigRefusal::AdjacentIntervalRange => json!({"error": {
+            "code": 400,
+            "message": "INVALID_ADJACENT_INTERVAL_RANGE : Allowed number of adjacent intervals must be between 0 and 10, inclusive",
+            "status": "INVALID_ARGUMENT",
+        }}),
+        MfaConfigRefusal::Shape => return error(400, "INVALID_ARGUMENT"),
+    };
+    JsonResponse { status: 400, body }
 }
 
 fn install_routed_candidate(
@@ -4915,7 +4949,7 @@ fn project_config_management(
     let mfa_update = if fields.iter().any(|field| field == "mfa") {
         match project_mfa::mfa_config_from_json(body.get("mfa").unwrap_or(&Value::Null)) {
             Ok(config) => Some(config),
-            Err(()) => return error(400, "INVALID_ARGUMENT"),
+            Err(refusal) => return mfa_config_refusal(&refusal),
         }
     } else {
         None
@@ -7370,7 +7404,8 @@ fn finish_sign_in_with_attributes_and_credentials(
     inbound_credentials: Option<&PendingSignInCredentials>,
 ) -> JsonResponse {
     let factors = mfa_info(store, uid, true);
-    if !factors.is_empty() {
+    if !factors.is_empty() && store.second_factor_required() {
+        let strict = store.second_factor_rules_are_production();
         // Second factor required: no ID token yet, only a pending credential.
         let email = store.user(uid).and_then(|u| u.email.clone());
         let sign_in_provider = provider
@@ -7393,13 +7428,17 @@ fn finish_sign_in_with_attributes_and_credentials(
                 let mut body = json!({"mfaPendingCredential": pending.as_str(), "mfaInfo": factors, "localId": uid.as_str(), "email": email});
                 for (k, v) in extra {
                     // The pending-second-factor answer carries no profile fields on the
-                    // official emulator (conformance/fixtures/auth/mfa-enrollment-eligibility);
-                    // production's shape for it is unobserved, so the token answer alone
-                    // carries `displayName`.
-                    if *k == "displayName" {
-                        continue;
+                    // official emulator (conformance/fixtures/auth/mfa-enrollment-eligibility).
+                    // Production keeps a password sign-in's `displayName` and leaves out an
+                    // email link's `isNewUser` (sandbox recording 2026-09-24, auth-mfa).
+                    let dropped = if strict {
+                        *k == "isNewUser"
+                    } else {
+                        *k == "displayName"
+                    };
+                    if !dropped {
+                        body[*k] = v.clone();
                     }
-                    body[*k] = v.clone();
                 }
                 JsonResponse { status: 200, body }
             }
@@ -9569,6 +9608,12 @@ fn mfa_enrollment_start(
     };
     let uid = session.uid.clone();
     if let Some(phone) = body.get("phoneEnrollmentInfo") {
+        // Strict: production refuses a phone factor while the project does not enable SMS
+        // second factors (sandbox recording 2026-09-24, auth-mfa/disabled#phone-start); the
+        // official emulator always enrolls one.
+        if strict && !store.mfa_config().sms_enabled() {
+            return error(400, "OPERATION_NOT_ALLOWED : SMS based MFA not enabled.");
+        }
         let number = str_field(phone, "phoneNumber").unwrap_or("");
         if let Some(refusal) = phone_enrollment_refusal(store, &session, Some(number), true) {
             return refusal;

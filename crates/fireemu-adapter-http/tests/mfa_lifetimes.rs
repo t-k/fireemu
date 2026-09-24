@@ -79,6 +79,18 @@ fn state(strict: bool) -> AuthState {
         s.stateless_refresh_tokens = false;
         s.query_limits = AuthQueryLimits::ProductionBounded;
         s.fake_custom_token_expiry = FakeCustomTokenExpiry::Reject;
+        // Production asks for an enrolled factor only while the project enables MFA.
+        s.store
+            .lock()
+            .unwrap()
+            .set_mfa_config(fireemu_core_auth::mfa_config::MfaProjectConfig {
+                state: fireemu_core_auth::mfa_config::MfaConfigState::Enabled,
+                phone_sms: true,
+                totp: Some(fireemu_core_auth::mfa_config::TotpProviderConfig {
+                    state: fireemu_core_auth::mfa_config::MfaConfigState::Enabled,
+                    adjacent_intervals: None,
+                }),
+            });
     }
     s
 }

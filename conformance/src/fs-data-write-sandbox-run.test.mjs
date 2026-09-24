@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,12 +10,14 @@ import {
   assertMatchingSandboxCorpus,
   comparisonExitCode,
   localTarget,
+  legacyRecoveryEnvironment,
   prepareSandboxCorpus,
   productionRestEnvironment,
   remainingSandboxBudget,
   selectComparableSandboxRecipes,
   sessionRequestCount,
   withSandboxExclusiveLock,
+  withLegacyRecoveryReservation,
   sandboxLedgerEntry,
   sandboxLedgerPath,
   sandboxManagedClearNames,
@@ -276,6 +278,120 @@ test("sandbox lock re-reads the task ledger before admitting a recording", async
       }),
       /budget exceeded/,
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery environment is fixed to the exact sandbox names and 1000-request cap", () => {
+  const env = legacyRecoveryEnvironment({
+    token: "private",
+    meta: "/private/meta.json",
+    journal: "/private/journal.json",
+  });
+  assert.equal(env.FIRESTORE_PROBE_RECOVERY_MODE, "recover-legacy");
+  assert.equal(env.FIRESTORE_PROBE_TARGET, "production");
+  assert.equal(env.FIRESTORE_PROBE_SCHEME, "https");
+  assert.equal(env.FIRESTORE_PROBE_HOST, "firestore.googleapis.com");
+  assert.equal(env.FIRESTORE_PROBE_PROJECT, "fireemu-oracle-sbx");
+  assert.equal(env.FIRESTORE_PROBE_MAX_REQUESTS, "1000");
+  assert.equal(JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES).length, 6);
+  assert.equal(env.FIRESTORE_PROBE_TOKEN, "private");
+  assert.throws(
+    () =>
+      legacyRecoveryEnvironment({
+        token: "private",
+        meta: "/private/meta.json",
+        journal: "/private/journal.json",
+        names: ["projects/fireemu-oracle-sbx/databases/(default)/documents/other/doc"],
+      }),
+    /exact private sandbox scope/,
+  );
+});
+
+test("legacy recovery reserves its same-task budget inside the lock before invoking network work", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-recovery-reservation-"));
+  const ledger = join(directory, "sandbox-ledger.jsonl");
+  const reservation = {
+    gitSha: "a".repeat(40),
+    corpusDigest: "b".repeat(64),
+    runDir: "/private/recovery",
+  };
+  try {
+    await writeFile(
+      ledger,
+      `${JSON.stringify({ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 19.5 })}\n`,
+    );
+    const result = await withLegacyRecoveryReservation(directory, reservation, async () => {
+      const rows = (await readFile(ledger, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      assert.equal(rows[1].outcome, "reserved");
+      assert.equal(rows[1].estimatedUsd, 0.5);
+      assert.equal(rows[1].requests, null);
+      return { outcome: "recovered", requestCount: 180 };
+    });
+    assert.equal(result.outcome, "recovered");
+    const rows = (await readFile(ledger, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(rows.length, 2);
+    assert.equal(rows[1].outcome, "reserved");
+    assert.equal(rows[1].requests, null);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+
+  const blocked = await mkdtemp(join(tmpdir(), "fireemu-recovery-budget-blocked-"));
+  try {
+    await writeFile(
+      join(blocked, "sandbox-ledger.jsonl"),
+      `${JSON.stringify({ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 19.75 })}\n`,
+    );
+    let sent = false;
+    await assert.rejects(
+      withLegacyRecoveryReservation(blocked, reservation, async () => {
+        sent = true;
+      }),
+      /budget exceeded/,
+    );
+    assert.equal(sent, false);
+    assert.equal(
+      (await readFile(join(blocked, "sandbox-ledger.jsonl"), "utf8")).trim().split("\n").length,
+      1,
+    );
+  } finally {
+    await rm(blocked, { recursive: true, force: true });
+  }
+});
+
+test("failed legacy recovery keeps its single cost reservation and exclusive lock", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-recovery-failure-reservation-"));
+  try {
+    await assert.rejects(
+      withLegacyRecoveryReservation(
+        directory,
+        {
+          gitSha: "a".repeat(40),
+          corpusDigest: "b".repeat(64),
+          runDir: "/private/recovery",
+        },
+        async () => {
+          throw new Error("synthetic transport failure");
+        },
+      ),
+      /synthetic transport failure/,
+    );
+    const rows = (await readFile(join(directory, "sandbox-ledger.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].estimatedUsd, 0.5);
+    assert.equal(rows[0].outcome, "reserved");
+    assert.ok((await stat(join(directory, "fs-data-write-exclusive.lock"))).isDirectory());
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

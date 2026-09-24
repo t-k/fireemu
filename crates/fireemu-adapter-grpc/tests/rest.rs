@@ -4904,13 +4904,25 @@ fn production_only_refusals_differ_between_the_profiles() {
     );
     let (status, answered) = query(&emulator, body);
     assert!(
-        !answered.to_string().contains("Invalid JSON payload received"),
+        !answered
+            .to_string()
+            .contains("Invalid JSON payload received"),
         "{status} {answered}"
     );
     // The REST pipeline route on a Standard database.
-    let (status, _) = call(&strict, "POST", &format!("{DOCS}:executePipeline"), json!({}));
+    let (status, _) = call(
+        &strict,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        json!({}),
+    );
     assert_eq!(status, 400);
-    let (status, _) = call(&emulator, "POST", &format!("{DOCS}:executePipeline"), json!({}));
+    let (status, _) = call(
+        &emulator,
+        "POST",
+        &format!("{DOCS}:executePipeline"),
+        json!({}),
+    );
     assert_eq!(status, 404);
     // A read time half an hour before the database was created (its clock start), inside the
     // retention hour.
@@ -4924,7 +4936,9 @@ fn production_only_refusals_differ_between_the_profiles() {
     );
     let (status, answered) = query(&emulator, early);
     assert!(
-        !answered.to_string().contains("before database creation time"),
+        !answered
+            .to_string()
+            .contains("before database creation time"),
         "{status} {answered}"
     );
 }

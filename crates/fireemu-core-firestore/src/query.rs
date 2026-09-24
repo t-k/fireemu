@@ -3,6 +3,8 @@
 use core::fmt;
 use std::collections::BTreeSet;
 
+use fireemu_core_types::codec::echo;
+
 use fireemu_core_limits::catalogs::FIRESTORE_STANDARD_QUERY_2026_08_25;
 use fireemu_core_limits::model::LimitMaximum;
 use fireemu_core_types::ids::CollectionId;
@@ -452,18 +454,25 @@ impl fmt::Display for QueryError {
                 write!(f, "'{}' requires an non-empty ArrayValue.", op.name())
             }
             Self::DuplicateOrderField { field } => {
-                write!(f, "order by clause cannot contain duplicate fields {field}")
+                let field = field.to_string();
+                write!(
+                    f,
+                    "order by clause cannot contain duplicate fields {}",
+                    echo(&field)
+                )
             }
             Self::NameReserved => f.write_str("the name __key__ is reserved"),
             Self::KindRequiredForFilter { field } => {
-                write!(f, "kind is required for filter: {field}")
+                let field = field.to_string();
+                write!(f, "kind is required for filter: {}", echo(&field))
             }
             Self::KindRequiredForOrder => {
                 f.write_str("kind is required for all orders except __key__ ascending")
             }
             Self::CursorReferenceNotDocument { name } => write!(
                 f,
-                "Document parent name \"{name}\" lacks \"/\" at index {}.",
+                "Document parent name \"{}\" lacks \"/\" at index {}.",
+                echo(name),
                 name.len()
             ),
             Self::EmptyComposite => {
@@ -849,7 +858,7 @@ impl Query {
             format!("{inequality} distinct range / inequality fields"),
             format!(
                 "The query contains {inequality} distinct inequality fields: [{}]. A query may not have more than {maximum_inequality} distinct inequality fields.",
-                listed.join(", ")
+                echo(&listed.join(", "))
             ),
         );
         let components = self.component_count();

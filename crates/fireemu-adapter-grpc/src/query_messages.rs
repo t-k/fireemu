@@ -7,6 +7,8 @@
 use fireemu_core_firestore::field_path::FieldPathError;
 use fireemu_core_types::ids::IdSyntaxError;
 
+use fireemu_core_types::codec::echo;
+
 use crate::decode::{parse_parent, DecodeError, Parent};
 
 /// Production's refusal of a `runQuery` without a query (REST and gRPC alike: the transcoder
@@ -50,7 +52,7 @@ pub fn property_path_error(input: &str, error: &FieldPathError) -> DecodeError {
         FieldPathError::Empty => EMPTY_PROPERTY_PATH.to_owned(),
         FieldPathError::ReservedSegment { index } => {
             let segment = segment_text(input, *index);
-            format!("Invalid reserved name in field path {segment}")
+            format!("Invalid reserved name in field path {}", echo(segment))
         }
         FieldPathError::PathTooLong { .. } | FieldPathError::SegmentTooLong { .. } => {
             "property path is longer than 1500 bytes.".to_owned()
@@ -64,7 +66,8 @@ pub fn property_path_error(input: &str, error: &FieldPathError) -> DecodeError {
             "Invalid property path".to_owned()
         }
         _ => format!(
-            r#"Invalid property path "{input}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#
+            r#"Invalid property path "{}". Unquoted property paths must match regex ([a-zA-Z_][a-zA-Z_0-9]*), and quoted property paths must match regex (`(?:[^`\\]|(?:\\.))+`)"#,
+            echo(input)
         ),
     };
     DecodeError::Refused(message)
@@ -83,12 +86,18 @@ pub fn collection_id_error(id: &str, error: &IdSyntaxError) -> DecodeError {
             "The query kind is longer than 1500 bytes.".to_owned()
         }
         IdSyntaxError::ReservedDunder | IdSyntaxError::DotSegment => {
-            format!("Collection id \"{id}\" is invalid because it is reserved.")
+            format!(
+                "Collection id \"{}\" is invalid because it is reserved.",
+                echo(id)
+            )
         }
         IdSyntaxError::ContainsSlash => {
-            format!("Collection id \"{id}\" is invalid because it contains \"/\".")
+            format!(
+                "Collection id \"{}\" is invalid because it contains \"/\".",
+                echo(id)
+            )
         }
-        other => format!("Collection id \"{id}\" is invalid: {other}"),
+        other => format!("Collection id \"{}\" is invalid: {other}", echo(id)),
     };
     DecodeError::Refused(message)
 }
@@ -97,7 +106,8 @@ pub fn collection_id_error(id: &str, error: &IdSyntaxError) -> DecodeError {
 #[must_use]
 pub fn reference_is_not_a_document(name: &str) -> String {
     format!(
-        "Document parent name \"{name}\" lacks \"/\" at index {}.",
+        "Document parent name \"{}\" lacks \"/\" at index {}.",
+        echo(name),
         name.len()
     )
 }

@@ -16271,8 +16271,9 @@ fn an_admin_created_account_is_anonymous_only_without_a_number() {
 }
 
 /// A change code keeps its account when the account's address changed before it is applied
-/// (sandbox recording 2026-09-24, change-email#apply-c-after-admin-change); the emulator
-/// profile also applies a verification code by the account it was issued for.
+/// (sandbox recording 2026-09-24, change-email#apply-c-after-admin-change); a verification
+/// code finds no owner of its address then: production's `EMAIL_NOT_FOUND`, or the official
+/// emulator's `INVALID_OOB_CODE` (`setAccountInfo` looks the address up).
 #[test]
 fn codes_applied_after_an_administrative_address_change() {
     for strict in [true, false] {
@@ -16300,11 +16301,12 @@ fn codes_applied_after_an_administrative_address_change() {
             &format!("{V1}/accounts:update"),
             &json!({"oobCode": verify["oobCode"]}),
         );
-        if strict {
-            assert_eq!((status, message(&body)), (400, Some("EMAIL_NOT_FOUND")));
+        let refusal = if strict {
+            "EMAIL_NOT_FOUND"
         } else {
-            assert_eq!(status, 200, "{body}");
-        }
+            "INVALID_OOB_CODE"
+        };
+        assert_eq!((status, message(&body)), (400, Some(refusal)));
         let (status, body) = post(
             &s,
             &format!("{V1}/accounts:update"),
@@ -16969,5 +16971,174 @@ fn a_masked_absent_sign_up_quota_clears_it() {
         let (status, cleared) = admin(&s, "PATCH", CONFIG, &cleared_by);
         assert_eq!(status, 200, "{cleared}");
         assert_eq!(cleared["quota"], json!({}), "{cleared_by}");
+    }
+}
+
+/// A verification applied from the action page finds its account by the address, as
+/// `accounts:update` does: strict answers production's `EMAIL_NOT_FOUND` once nobody owns it,
+/// the emulator profile the official handler's expired-link page.
+#[test]
+fn strict_the_action_page_verifies_by_address_like_the_api() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        create(
+            &s,
+            &json!({"localId": "v", "email": "v@example.com", "password": "password123"}),
+        );
+        let (_, verify) = oob(
+            &s,
+            &json!({"requestType": "VERIFY_EMAIL", "email": "v@example.com"}),
+        );
+        let (status, _) = admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": "v", "email": "v-moved@example.com"}),
+        );
+        assert_eq!(status, 200);
+        let code = verify["oobCode"].as_str().unwrap();
+        let r = handle(
+            &s,
+            "GET",
+            &format!("/emulator/action?mode=verifyEmail&oobCode={code}&apiKey=fake-api-key"),
+            &Value::Null,
+        );
+        assert_eq!(r.status, 400, "{}", r.body);
+        if strict {
+            assert_eq!(r.body["error"]["message"], "EMAIL_NOT_FOUND", "{}", r.body);
+        } else {
+            // The official handler's INVALID_OOB_CODE, in the page's own words.
+            assert!(
+                r.body["authEmulator"]["error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("has expired")),
+                "{}",
+                r.body
+            );
+        }
+    }
+}
+
+/// Four accounts with a code each (reset and verification for `rr`/`rv`, the same for `gone-*`);
+/// every account moves to another address, and new accounts take over `rr` and `rv`. Answers
+/// the codes as `(reset, verify, reset_gone, verify_gone)`.
+fn codes_whose_addresses_moved(s: &AuthState) -> (String, String, String, String) {
+    for name in ["rr", "rv", "gone-r", "gone-v"] {
+        create(
+            s,
+            &json!({"localId": name, "email": format!("{name}@example.com"), "password": "password123"}),
+        );
+    }
+    let code = |request_type: &str, name: &str| {
+        let (status, body) = oob(
+            s,
+            &json!({"requestType": request_type, "email": format!("{name}@example.com")}),
+        );
+        assert_eq!(status, 200, "{body}");
+        body["oobCode"].as_str().unwrap().to_owned()
+    };
+    let reset = code("PASSWORD_RESET", "rr");
+    let verify = code("VERIFY_EMAIL", "rv");
+    let reset_gone = code("PASSWORD_RESET", "gone-r");
+    let verify_gone = code("VERIFY_EMAIL", "gone-v");
+    for name in ["rr", "rv", "gone-r", "gone-v"] {
+        let (status, _) = admin(
+            s,
+            "POST",
+            &format!("{ADMIN}/accounts:update"),
+            &json!({"localId": name, "email": format!("{name}-moved@example.com")}),
+        );
+        assert_eq!(status, 200);
+    }
+    for name in ["rr", "rv"] {
+        create(
+            s,
+            &json!({"localId": format!("{name}-b"), "email": format!("{name}@example.com"), "password": "password123"}),
+        );
+    }
+    (reset, verify, reset_gone, verify_gone)
+}
+
+/// Both profiles: a reset or verification code acts on the account that owns its address now,
+/// as production does (sandbox recording 2026-09-24, `auth-action/address-reuse`) and as the
+/// official emulator does (`resetPassword` and `setAccountInfo` look the address up). Once
+/// nobody owns it, strict answers production's error and the emulator profile the official
+/// emulator's `INVALID_OOB_CODE`.
+#[test]
+fn a_code_acts_on_the_account_that_owns_its_address_now() {
+    for strict in [true, false] {
+        let s = if strict { strict_state() } else { state() };
+        let label = format!("strict={strict}");
+        let (reset, verify, reset_gone, verify_gone) = codes_whose_addresses_moved(&s);
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:resetPassword"),
+            &json!({"oobCode": reset, "newPassword": "password456"}),
+        );
+        assert_eq!(status, 200, "{label} {body}");
+        let sign_in = |email: &str, password: &str| {
+            post(
+                &s,
+                &format!("{V1}/accounts:signInWithPassword"),
+                &json!({"email": email, "password": password, "returnSecureToken": true}),
+            )
+            .0
+        };
+        assert_eq!(
+            sign_in("rr@example.com", "password456"),
+            200,
+            "{label}: B was reset"
+        );
+        assert_eq!(
+            sign_in("rr-moved@example.com", "password456"),
+            400,
+            "{label}: A was not"
+        );
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"oobCode": verify}),
+        );
+        assert_eq!(status, 200, "{label} {body}");
+        assert_eq!(body["localId"], "rv-b", "{label}");
+        let expected_gone = |strict_error: &str| {
+            if strict {
+                strict_error.to_owned()
+            } else {
+                "INVALID_OOB_CODE".to_owned()
+            }
+        };
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:resetPassword"),
+            &json!({"oobCode": reset_gone, "newPassword": "password456"}),
+        );
+        assert_eq!(
+            (
+                status,
+                body["error"]["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            ),
+            (400, expected_gone("USER_NOT_FOUND")),
+            "{label}"
+        );
+        let (status, body) = post(
+            &s,
+            &format!("{V1}/accounts:update"),
+            &json!({"oobCode": verify_gone}),
+        );
+        assert_eq!(
+            (
+                status,
+                body["error"]["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            ),
+            (400, expected_gone("EMAIL_NOT_FOUND")),
+            "{label}"
+        );
     }
 }

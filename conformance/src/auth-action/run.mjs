@@ -39,6 +39,7 @@ import {
 } from "../auth-account/harness.mjs";
 import { configMatches, createSession as createAccountSession } from "../auth-account/session.mjs";
 import { PROGRAMS } from "./corpus.mjs";
+import { validateVerificationLinks } from "./corpus-rules.mjs";
 import { validateActionCorpus } from "./harness.mjs";
 import { runCorpus } from "./session.mjs";
 
@@ -300,6 +301,7 @@ async function recordProduction() {
     throw new Error(`the last run aborted at ${aborted.ts}; wait an hour before retrying`);
   const programs = selectedPrograms();
   const corpusRequests = validateActionCorpus(programs);
+  validateVerificationLinks(PROGRAMS);
   const meta = {
     sha: await gitSha(),
     harness: await harnessDigest(),
@@ -502,6 +504,7 @@ async function check() {
     : { programs: {} };
   const selected = selectedPrograms();
   validateActionCorpus(selected);
+  validateVerificationLinks(PROGRAMS);
   const harness = await harnessDigest();
   const local = await runLocal(selected);
   const rows = [];

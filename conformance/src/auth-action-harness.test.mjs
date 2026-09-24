@@ -9,6 +9,7 @@ import {
   normalizeActionResponse,
   validateActionCorpus,
 } from "./auth-action/harness.mjs";
+import { validateVerificationLinks } from "./auth-action/corpus-rules.mjs";
 import { createSession } from "./auth-action/session.mjs";
 
 const production = createContext({
@@ -208,6 +209,7 @@ test("an action link is recorded as its parameters, never its code or key", () =
 
 test("the corpus is valid and its rules refuse mail, config drift and early waits", () => {
   assert.ok(validateActionCorpus(PROGRAMS) > 0);
+  assert.doesNotThrow(() => validateVerificationLinks(PROGRAMS));
   const base = { id: "p", steps: [] };
   const refused = [
     { ...base, steps: [adminOob({ requestType: "PASSWORD_RESET", email: "EMAIL(a)" })] },
@@ -482,4 +484,24 @@ test("an address is no longer taken once any account was deleted or updated", ()
     noLinkExpected: true,
   };
   assert.throws(() => validateActionCorpus([{ id: "p", steps: [create, remove, change] }]));
+});
+
+test("each address gets at most one verification link", () => {
+  const verify = (id, email) => ({
+    ...adminOob({ requestType: "VERIFY_EMAIL", email, returnOobLink: true }),
+    id,
+  });
+  assert.throws(
+    () =>
+      validateVerificationLinks([
+        { id: "p", steps: [verify("one", "EMAIL(a)")] },
+        { id: "q", steps: [verify("two", "EMAILMIXED(a)")] },
+      ]),
+    /second verification link/,
+  );
+  assert.doesNotThrow(() =>
+    validateVerificationLinks([
+      { id: "p", steps: [verify("one", "EMAIL(a)"), verify("two", "EMAIL(b)")] },
+    ]),
+  );
 });

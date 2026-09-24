@@ -244,6 +244,14 @@ def test_near_limit_delete_pairs_cover_each_rest_route_with_fresh_state_reads() 
         assert "explore" not in collection_id.lower()
         groups.add(collection_id)
         assert before == {"id": "before-delete", "method": "GET", "path": f"/v1/{name}"}
+        assert after == {
+            "id": "after-delete",
+            "method": "POST",
+            "path": "/v1/projects/fireemu-oracle-sbx/databases/(default)/documents:batchGet",
+            "body": {"documents": [name]},
+        }
+        assert group["id"] == "group-after-delete"
+        assert group["method"] == "POST" and group["path"].endswith("/documents:runQuery")
         if route == "rest":
             assert delete == {"id": "delete", "method": "DELETE", "path": f"/v1/{name}"}
         elif route == "commit":
@@ -252,7 +260,6 @@ def test_near_limit_delete_pairs_cover_each_rest_route_with_fresh_state_reads() 
         else:
             assert delete["id"] == "delete" and delete["path"].endswith(":batchWrite")
             assert delete["body"] == {"writes": [{"delete": name}]}
-        assert after == {"id": "after-delete", "method": "GET", "path": f"/v1/{name}"}
         assert group["id"] == "group-after-delete" and group["method"] == "POST"
         assert group["path"].endswith(":runQuery")
         assert group["body"]["structuredQuery"]["from"] == [

@@ -24,6 +24,465 @@
     ]
   },
   "programs": {
+    "auth-action/address-reuse": {
+      "corpusDigest": "8ae52b3b95364247cdf5e9cda8a38f72606b49258dfd5a7302390b06cf34775c",
+      "harnessDigest": "be129e91e724615688253362270ded28cee94e5354ea209cf1e71fc60b33aef2",
+      "recordedAt": "2026-09-24T17:27:34.229Z",
+      "gitSha": "36a07517b322aff6b31db07308f7280421ccd74c",
+      "steps": {
+        "create-rr": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-rr@example.com",
+            "localId": "aa-<run>-rr"
+          }
+        },
+        "reset-link-rr": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-rr@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "resetPassword",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-move-rr": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-rr",
+            "email": "fireemu-aa-<run>-rr-moved@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-rr-moved@example.com",
+                "email": "fireemu-aa-<run>-rr-moved@example.com",
+                "rawId": "fireemu-aa-<run>-rr-moved@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "sign-up-rr-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-rr@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-rr@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-rr@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "lookup-rr-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-rr@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-rr@example.com",
+                    "email": "fireemu-aa-<run>-rr@example.com",
+                    "rawId": "fireemu-aa-<run>-rr@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "check-reset-after-reuse": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-rr@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "reset-after-reuse": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-rr@example.com",
+            "requestType": "PASSWORD_RESET"
+          }
+        },
+        "sign-in-rr-b-new-password": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#VerifyPasswordResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-rr@example.com",
+            "displayName": "",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-rr@example.com",
+                  "email_verified": true,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-rr@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "registered": true,
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600"
+          }
+        },
+        "sign-in-rr-b-original-password": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_LOGIN_CREDENTIALS",
+              "errors": [
+                {
+                  "message": "INVALID_LOGIN_CREDENTIALS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "sign-in-rr-a-new-password": {
+          "status": 400,
+          "body": {
+            "error": {
+              "code": 400,
+              "message": "INVALID_LOGIN_CREDENTIALS",
+              "errors": [
+                {
+                  "message": "INVALID_LOGIN_CREDENTIALS",
+                  "domain": "global",
+                  "reason": "invalid"
+                }
+              ]
+            }
+          }
+        },
+        "admin-lookup-rr-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-rr@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-rr@example.com",
+                    "email": "fireemu-aa-<run>-rr@example.com",
+                    "rawId": "fireemu-aa-<run>-rr@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "admin-lookup-rr-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-rr",
+                "email": "fireemu-aa-<run>-rr-moved@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-rr-moved@example.com",
+                    "email": "fireemu-aa-<run>-rr-moved@example.com",
+                    "rawId": "fireemu-aa-<run>-rr-moved@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        },
+        "create-rv": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "email": "fireemu-aa-<run>-rv@example.com",
+            "localId": "aa-<run>-rv"
+          }
+        },
+        "verify-link-rv": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetOobConfirmationCodeResponse",
+            "oobCode": "<oobCode>",
+            "email": "fireemu-aa-<run>-rv@example.com",
+            "oobLink": {
+              "handler": "<action-handler>",
+              "code": "the-answer-oobCode",
+              "params": {
+                "mode": "verifyEmail",
+                "apiKey": "<present>",
+                "lang": "en"
+              }
+            }
+          }
+        },
+        "admin-move-rv": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "aa-<run>-rv",
+            "email": "fireemu-aa-<run>-rv-moved@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-rv-moved@example.com",
+                "email": "fireemu-aa-<run>-rv-moved@example.com",
+                "rawId": "fireemu-aa-<run>-rv-moved@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": false
+          }
+        },
+        "sign-up-rv-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SignupNewUserResponse",
+            "idToken": {
+              "<jwt>": {
+                "header": {
+                  "alg": "RS256",
+                  "kid": "<present>",
+                  "typ": "JWT"
+                },
+                "signature": "<present>",
+                "claims": {
+                  "iss": "https://securetoken.google.com/demo-auth-account",
+                  "aud": "demo-auth-account",
+                  "auth_time": "<auth_time>",
+                  "user_id": "<generated-localId>",
+                  "sub": "<generated-localId>",
+                  "iat": "<iat>",
+                  "exp": "iat+3600",
+                  "email": "fireemu-aa-<run>-rv@example.com",
+                  "email_verified": false,
+                  "firebase": {
+                    "identities": {
+                      "email": [
+                        "fireemu-aa-<run>-rv@example.com"
+                      ]
+                    },
+                    "sign_in_provider": "password"
+                  }
+                },
+                "subIsUserId": true,
+                "subIsLocalId": true,
+                "userIdIsLocalId": true
+              }
+            },
+            "email": "fireemu-aa-<run>-rv@example.com",
+            "refreshToken": "<refreshToken>",
+            "expiresIn": "3600",
+            "localId": "<generated-localId>"
+          }
+        },
+        "lookup-rv-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-rv@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-rv@example.com",
+                    "email": "fireemu-aa-<run>-rv@example.com",
+                    "rawId": "fireemu-aa-<run>-rv@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "check-verify-after-reuse": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#ResetPasswordResponse",
+            "email": "fireemu-aa-<run>-rv@example.com",
+            "requestType": "VERIFY_EMAIL"
+          }
+        },
+        "apply-verify-after-reuse": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#SetAccountInfoResponse",
+            "localId": "<generated-localId>",
+            "email": "fireemu-aa-<run>-rv@example.com",
+            "providerUserInfo": [
+              {
+                "providerId": "password",
+                "federatedId": "fireemu-aa-<run>-rv@example.com",
+                "email": "fireemu-aa-<run>-rv@example.com",
+                "rawId": "fireemu-aa-<run>-rv@example.com"
+              }
+            ],
+            "passwordHash": "UkVEQUNURUQ=",
+            "emailVerified": true
+          },
+          "relations": {
+            "localIdVsOrigin": "same"
+          }
+        },
+        "admin-lookup-rv-b": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "<generated-localId>",
+                "email": "fireemu-aa-<run>-rv@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": true,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-rv@example.com",
+                    "email": "fireemu-aa-<run>-rv@example.com",
+                    "rawId": "fireemu-aa-<run>-rv@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "lastLoginAt": "<run-time:string:ms>",
+                "createdAt": "<run-time:string:ms>",
+                "lastRefreshAt": "<run-time:instant>"
+              }
+            ]
+          }
+        },
+        "admin-lookup-rv-a": {
+          "status": 200,
+          "body": {
+            "kind": "identitytoolkit#GetAccountInfoResponse",
+            "users": [
+              {
+                "localId": "aa-<run>-rv",
+                "email": "fireemu-aa-<run>-rv-moved@example.com",
+                "passwordHash": "UkVEQUNURUQ=",
+                "emailVerified": false,
+                "passwordUpdatedAt": "<run-time:number:ms>",
+                "providerUserInfo": [
+                  {
+                    "providerId": "password",
+                    "federatedId": "fireemu-aa-<run>-rv-moved@example.com",
+                    "email": "fireemu-aa-<run>-rv-moved@example.com",
+                    "rawId": "fireemu-aa-<run>-rv-moved@example.com"
+                  }
+                ],
+                "validSince": "<run-time:string:s>",
+                "disabled": false,
+                "createdAt": "<run-time:string:ms>"
+              }
+            ]
+          }
+        }
+      }
+    },
     "auth-action/change-email": {
       "corpusDigest": "673163ed9cc396a9f049134e0b375e676dde3684f2e1c7165259d7a3d24a6bde",
       "harnessDigest": "be129e91e724615688253362270ded28cee94e5354ea209cf1e71fc60b33aef2",

@@ -1375,6 +1375,37 @@ fn strict_valid_since_is_evaluated_live_and_may_move_back() {
 /// An anonymous session's ID token names its provider at the top level as well as under
 /// `firebase`, on sign-up and on every refresh; other accounts carry no `provider_id`
 /// (sandbox recording 2026-09-24, auth-credential/id-token/methods#anonymous-sign-up).
+/// A client update's `validSince` changes nothing; only an administrator sets it
+/// (AUTH-ACCOUNT recording 2026-09-23, privilege/valid-token-admin-fields).
+#[test]
+fn a_client_update_cannot_move_valid_since() {
+    let s = strict_state();
+    let (status, signed_in) = post(
+        &s,
+        &format!("{V1}/accounts:signUp"),
+        &json!({"email": "client-valid-since@example.com", "password": "hunter22", "returnSecureToken": true}),
+    );
+    assert_eq!(status, 200, "{signed_in}");
+    let read = || {
+        admin(
+            &s,
+            "POST",
+            &format!("{ADMIN}/accounts:lookup"),
+            &json!({"localId": [signed_in["localId"]]}),
+        )
+        .1["users"][0]["validSince"]
+            .clone()
+    };
+    let before = read();
+    let (status, updated) = post(
+        &s,
+        &format!("{V1}/accounts:update"),
+        &json!({"idToken": signed_in["idToken"], "validSince": "1700000000"}),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert_eq!(read(), before);
+}
+
 #[test]
 fn anonymous_id_tokens_carry_a_top_level_provider_id() {
     let s = strict_state();
@@ -8444,7 +8475,10 @@ fn legacy_v3_custom_token_exchange_matches_v1() {
         &json!({"token": other_issuer}),
     );
     assert_eq!(status, 200, "{body}");
-    assert_eq!(token_parts(&body["idToken"]).1["sub"], "legacy-other-issuer");
+    assert_eq!(
+        token_parts(&body["idToken"]).1["sub"],
+        "legacy-other-issuer"
+    );
 }
 
 #[test]

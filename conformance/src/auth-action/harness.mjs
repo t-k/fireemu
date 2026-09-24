@@ -244,6 +244,26 @@ function* walkStrings(value) {
 }
 
 /**
+ * Where production answers an Admin link request 200 without a link under improved email
+ * privacy, so the harness must not stop: an address that has no account (by value, never a
+ * reference), and a VERIFY_AND_CHANGE_EMAIL whose new address is the current one or an address
+ * an earlier step of the program created (production hides EMAIL_EXISTS). Everything else that
+ * answers without the link it asked for stops the run.
+ */
+function noLinkExplained(step, created) {
+  const { email, newEmail, idToken, requestType } = step.body ?? {};
+  if (step.path !== "v1/projects/{project}/accounts:sendOobCode" || idToken !== undefined)
+    return false;
+  if (typeof email !== "string") return false;
+  if (/^EMAIL\(unknown[a-z0-9-]*\)$/.test(email) || !/@|EMAIL/.test(email)) return true;
+  return (
+    requestType === "VERIFY_AND_CHANGE_EMAIL" &&
+    typeof newEmail === "string" &&
+    (newEmail === email || created.has(newEmail))
+  );
+}
+
+/**
  * Refuses a corpus that could mail a real mailbox or text a real number, change a config path
  * other than the email-link switch, address anything but a relative path, wait anywhere but in
  * the last program, or exceed the request cap. Returns the number of recorded requests.
@@ -261,6 +281,8 @@ export function validateActionCorpus(programs) {
         throw new Error(`${program.id}: ${path} is a switch`);
     }
     const stepIds = new Set();
+    // Addresses an earlier Admin create of this program gave an account.
+    const created = new Set();
     for (const step of program.steps) {
       requests += 1;
       if (stepIds.has(step.id)) throw new Error(`${program.id}: duplicate step ${step.id}`);
@@ -271,17 +293,11 @@ export function validateActionCorpus(programs) {
         throw new Error(`${step.id}: unknown api`);
       if (step.waitSeconds && index !== programs.length - 1)
         throw new Error(`${program.id}#${step.id}: only the last program may wait`);
-      if (step.noLinkExpected) {
-        // Only an address that cannot receive anything may come back without a link.
-        const email = step.body?.email;
-        if (
-          step.path !== "v1/projects/{project}/accounts:sendOobCode" ||
-          typeof email !== "string" ||
-          step.body?.idToken !== undefined ||
-          (!/^EMAIL\(unknown[a-z0-9-]*\)$/.test(email) && /@|EMAIL/.test(email))
-        )
-          throw new Error(`${step.id}: only an unknown address may expect no link`);
+      if (step.noLinkExpected && !noLinkExplained(step, created)) {
+        throw new Error(`${step.id}: no link is expected only where email privacy explains it`);
       }
+      if (step.path === "v1/projects/{project}/accounts" && typeof step.body?.email === "string")
+        created.add(step.body.email);
       for (const key of ["email", "newEmail"]) {
         const creates =
           step.path === "v1/projects/{project}/accounts" ||

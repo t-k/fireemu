@@ -432,3 +432,29 @@ test("no link may be expected unless the request names an unknown address by val
   };
   assert.throws(() => validateActionCorpus([{ id: "p", steps: [signUp] }]), /never belong/);
 });
+
+test("a taken or unchanged new address may come back without a link, nothing else", () => {
+  const create = {
+    id: "c",
+    path: "v1/projects/{project}/accounts",
+    auth: "admin",
+    body: { email: "EMAIL(d)" },
+  };
+  const change = (newEmail) => ({
+    ...adminOob({
+      requestType: "VERIFY_AND_CHANGE_EMAIL",
+      email: "EMAIL(a)",
+      newEmail,
+      returnOobLink: true,
+    }),
+    noLinkExpected: true,
+  });
+  assert.doesNotThrow(() =>
+    validateActionCorpus([{ id: "p", steps: [create, change("EMAIL(d)")] }]),
+  );
+  assert.doesNotThrow(() => validateActionCorpus([{ id: "p", steps: [change("EMAIL(a)")] }]));
+  assert.throws(() =>
+    validateActionCorpus([{ id: "p", steps: [change("EMAIL(d)"), { ...create, id: "late" }] }]),
+  );
+  assert.throws(() => validateActionCorpus([{ id: "p", steps: [change("EMAIL(fresh)")] }]));
+});

@@ -167,8 +167,9 @@ const generateAdmin = program("auth-action/generate/admin", [
   changeLink("change-link", "a", "a-new"),
   check("change-link-check", "change-link"),
   oob("change-link-missing-new-email", "VERIFY_AND_CHANGE_EMAIL", { email: "EMAIL(a)" }),
-  changeLink("change-link-taken", "a", "d"),
-  changeLink("change-link-same", "a", "a"),
+  // Email privacy hides EMAIL_EXISTS: production answers 200 without a link.
+  { ...changeLink("change-link-taken", "a", "d"), noLinkExpected: true },
+  { ...changeLink("change-link-same", "a", "a"), noLinkExpected: true },
   changeLink("change-link-invalid-new", "a", "a", { newEmail: "not-an-email" }),
   { ...changeLink("change-link-unknown", "unknown-c", "c-new"), noLinkExpected: true },
   changeLink("change-link-disabled", "d", "d-new"),

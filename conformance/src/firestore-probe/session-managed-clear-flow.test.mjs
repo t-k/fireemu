@@ -46,6 +46,8 @@ async function observeCollector({
   childCollectionNames = [],
   extraChildPageCollections = [],
   recoveryOnly = false,
+  deleteAckShape = "update-time",
+  deleteReadbackMode,
 } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "fireemu-array-shrink-"));
   const input = join(directory, "programs.json");
@@ -233,7 +235,18 @@ async function observeCollector({
         });
       } else {
         records.get(writes[0].delete).deleted = true;
-        send(200, { writeResults: [{ updateTime: records.get(writes[0].delete).updateTime }] });
+        send(
+          200,
+          deleteAckShape === "malformed"
+            ? { writeResults: "invalid" }
+            : deleteAckShape === "multiple"
+              ? { writeResults: [{}, {}] }
+              : deleteAckShape === "missing"
+                ? {}
+                : deleteAckShape === "without-update-time"
+                  ? { writeResults: [{}] }
+                  : { writeResults: [{ updateTime: records.get(writes[0].delete).updateTime }] },
+        );
       }
     } else if (pathname.endsWith("/documents:runQuery")) {
       const query = JSON.parse(body).structuredQuery;
@@ -273,6 +286,24 @@ async function observeCollector({
         200,
         requestedNames.map((name) => {
           const record = records.get(name);
+          if (deleteReadbackMode === "present" && requestedNames.length === 1 && record?.deleted) {
+            return {
+              found: {
+                name,
+                updateTime: record.updateTime,
+                fields: { a: { arrayValue: { values: record.values } } },
+              },
+            };
+          }
+          if (
+            ["unknown", "error"].includes(deleteReadbackMode) &&
+            requestedNames.length === 1 &&
+            record?.deleted
+          ) {
+            return deleteReadbackMode === "error"
+              ? { error: { status: "UNAVAILABLE" } }
+              : { unexpected: true };
+          }
           return failureMode === "legacy-disappears-during-audit" && name === legacyNames[0]
             ? { missing: name }
             : failureMode === "readback" && record?.deleted
@@ -451,6 +482,106 @@ test("legacy recovery mode preflights all names before bounded CAS shrink and ex
     assert.equal(JSON.parse(await readFile(result.journal, "utf8")).status, "complete");
   } finally {
     await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery proves exact absence when a delete result omits updateTime", async () => {
+  const result = await observeCollector({
+    scopeNames: legacyNames,
+    visibleNames: legacyNames.slice(1),
+    arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
+    recoveryOnly: true,
+    deleteAckShape: "without-update-time",
+  });
+  try {
+    assert.equal(result.failure, undefined);
+    const deletes = result.requests
+      .filter((request) => request.pathname.endsWith("/documents:commit"))
+      .flatMap((request) => JSON.parse(request.body).writes)
+      .filter((write) => write.delete);
+    assert.equal(deletes.length, 5);
+    assert.ok(deletes.every((write) => write.delete !== legacyNames[0]));
+    assert.ok(
+      result.requests.some(
+        (request) =>
+          request.pathname.endsWith("/documents:batchGet") &&
+          JSON.parse(request.body).documents.length === 1,
+      ),
+    );
+    const journal = JSON.parse(await readFile(result.journal, "utf8"));
+    assert.equal(journal.status, "complete");
+    assert.deepEqual(journal.deletedNames, legacyNames.slice(1));
+  } finally {
+    await rm(result.directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy recovery stops on malformed, missing, or multiple delete results", async (t) => {
+  for (const deleteAckShape of ["malformed", "missing", "multiple"]) {
+    await t.test(deleteAckShape, async () => {
+      const result = await observeCollector({
+        scopeNames: legacyNames,
+        visibleNames: [legacyNames[0]],
+        arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
+        recoveryOnly: true,
+        deleteAckShape,
+      });
+      try {
+        assert.ok(result.failure);
+        const deleteWrites = result.requests
+          .filter((request) => request.pathname.endsWith("/documents:commit"))
+          .flatMap((request) => JSON.parse(request.body).writes)
+          .filter((write) => write.delete);
+        assert.equal(deleteWrites.length, 1);
+        assert.equal(
+          result.requests.filter(
+            (request) =>
+              request.pathname.endsWith("/documents:batchGet") &&
+              JSON.parse(request.body).documents.length === 1,
+          ).length,
+          0,
+        );
+        assert.equal(
+          JSON.parse(await readFile(result.journal, "utf8")).status,
+          "preflight-complete",
+        );
+      } finally {
+        await rm(result.directory, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+test("legacy recovery stops when delete acknowledgement readback is not exact absence", async (t) => {
+  for (const deleteReadbackMode of ["present", "unknown", "error"]) {
+    await t.test(deleteReadbackMode, async () => {
+      const result = await observeCollector({
+        scopeNames: legacyNames,
+        visibleNames: [legacyNames[0]],
+        arrayLength: [12_116, 12_121, 12_123, 7_179, 7_183, 7_184],
+        recoveryOnly: true,
+        deleteAckShape: "without-update-time",
+        deleteReadbackMode,
+      });
+      try {
+        assert.ok(result.failure);
+        assert.match(String(result.failure.stderr), /exact delete typed absence was not proved/);
+        assert.equal(
+          result.requests.filter(
+            (request) =>
+              request.pathname.endsWith("/documents:batchGet") &&
+              JSON.parse(request.body).documents.length === 1,
+          ).length,
+          1,
+        );
+        assert.equal(
+          JSON.parse(await readFile(result.journal, "utf8")).status,
+          "preflight-complete",
+        );
+      } finally {
+        await rm(result.directory, { recursive: true, force: true });
+      }
+    });
   }
 });
 

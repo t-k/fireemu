@@ -825,15 +825,34 @@ async function recoverLegacyManagedClear() {
     if (
       !Array.isArray(acknowledgement?.writeResults) ||
       acknowledgement.writeResults.length !== 1 ||
-      typeof acknowledgement.writeResults[0]?.updateTime !== "string"
+      !acknowledgement.writeResults[0] ||
+      typeof acknowledgement.writeResults[0] !== "object" ||
+      Array.isArray(acknowledgement.writeResults[0]) ||
+      (Object.hasOwn(acknowledgement.writeResults[0], "updateTime") &&
+        typeof acknowledgement.writeResults[0].updateTime !== "string")
     ) {
       throw new Error("legacy recovery exact delete acknowledgement is uncertain");
+    }
+    if (!Object.hasOwn(acknowledgement.writeResults[0], "updateTime")) {
+      const readback = await managedShrinkRequest(
+        "legacy recovery exact delete absence",
+        `${base}:batchGet`,
+        {
+          method: "POST",
+          headers: authorized({ "content-type": "application/json" }),
+          body: JSON.stringify({ documents: [name] }),
+          signal: timeoutSignal(),
+        },
+      );
+      if (!readback.ok || !validateManagedClearReadback([name], await readback.json())) {
+        throw new Error("legacy recovery exact delete typed absence was not proved");
+      }
     }
     deletedNames.push(name);
     await writeManagedRecoveryJournal("deleting", { deletedNames });
   }
   await verifyManagedShrinkScopeAbsent(base);
-  await writeManagedRecoveryJournal("complete");
+  await writeManagedRecoveryJournal("complete", { deletedNames });
   managedClearBlocked = false;
 }
 

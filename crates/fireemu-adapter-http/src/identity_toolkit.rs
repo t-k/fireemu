@@ -7815,15 +7815,17 @@ fn malformed_custom_attributes_message(attrs: &str) -> String {
     }
 
     let key_start = cursor;
-    if !bytes.get(cursor).is_some_and(|byte| {
-        byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$')
-    }) {
+    if !bytes
+        .get(cursor)
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$'))
+    {
         return "INVALID_CLAIMS : customAttributes must be a JSON object".to_owned();
     }
     cursor += 1;
-    while bytes.get(cursor).is_some_and(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$')
-    }) {
+    while bytes
+        .get(cursor)
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
+    {
         cursor += 1;
     }
     let key_end = cursor;

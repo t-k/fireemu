@@ -13,8 +13,21 @@ fn current_node() -> Option<(PathBuf, u32)> {
         if !candidate.is_file() {
             continue;
         }
-        let program = std::fs::canonicalize(candidate).ok()?;
+        let resolved = Command::new(&candidate)
+            .args(["-p", "process.execPath"])
+            .output()
+            .ok()?;
+        if !resolved.status.success() {
+            return None;
+        }
+        let program = PathBuf::from(String::from_utf8(resolved.stdout).ok()?.trim());
+        if !program.is_absolute() || !program.is_file() {
+            return None;
+        }
         let output = Command::new(&program).arg("--version").output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
         let major = String::from_utf8_lossy(&output.stdout)
             .trim()
             .trim_start_matches('v')

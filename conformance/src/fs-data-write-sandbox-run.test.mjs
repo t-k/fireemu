@@ -11,9 +11,11 @@ import {
   assertMatchingSandboxCorpus,
   comparisonExitCode,
   findLegacyRecoveryResume,
+  findV3RecoveryResume,
   localTarget,
   prepareLegacyRecoveryRun,
   legacyRecoveryEnvironment,
+  v3RecoveryEnvironment,
   prepareSandboxCorpus,
   productionRestEnvironment,
   remainingSandboxBudget,
@@ -22,9 +24,26 @@ import {
   withSandboxExclusiveLock,
   withLegacyRecoveryReservation,
   sandboxLedgerEntry,
+  reserveProductionAttempt,
+  reserveProductionAttemptWithToken,
+  requireHistoricalUnknownHold,
   sandboxLedgerPath,
   sandboxManagedClearNames,
+  productionCleanupRequestBound,
+  requireBoundedProductionCleanup,
+  withBoundedProductionCleanup,
 } from "./fs-data-write-sandbox-run.mjs";
+
+const unknownHold = () => ({
+  ts: "2026-09-24T00:00:00.000Z",
+  project: "fireemu-oracle-sbx",
+  database: "(default)",
+  taskId: "FS-DATA-WRITE-SANDBOX",
+  outcome: "historical-unknown-hold",
+  requests: null,
+  estimatedUsd: 9.24,
+  holdId: "FS-DATA-WRITE-SANDBOX-2026-09-24-HISTORICAL-UNKNOWN",
+});
 
 test("local comparison refuses a fixture or run from a different corpus", () => {
   const corpus = { schemaVersion: 1, restPrograms: [], restRequestCount: 0 };
@@ -152,8 +171,8 @@ test("saved production comparison selects only identical program recipes and rep
 
 test("the runnable sandbox corpus combines bounded REST and live gRPC recipes", async () => {
   const { corpus, restRequestCount, liveStreamCount } = await prepareSandboxCorpus();
-  assert.equal(corpus.restPrograms.length, 68);
-  assert.equal(restRequestCount, 237);
+  assert.equal(corpus.restPrograms.length, 74);
+  assert.equal(restRequestCount, 267);
   assert.equal(liveStreamCount, 7);
   assert.equal(MAX_STREAM_FRAMES, 9);
   assert.equal(
@@ -185,6 +204,9 @@ test("production REST session fixes project, endpoint, managed scope and all-att
     token: "private",
     managedNames,
     journal: "/tmp/managed-clear.json",
+    runId: "a".repeat(32),
+    corpusDigest: "b".repeat(64),
+    sourceGitSha: "c".repeat(40),
   });
   assert.equal(env.FIRESTORE_PROBE_PROJECT, "fireemu-oracle-sbx");
   assert.equal(env.FIRESTORE_PROBE_HOST, "firestore.googleapis.com");
@@ -193,9 +215,100 @@ test("production REST session fixes project, endpoint, managed scope and all-att
   assert.equal(env.FIRESTORE_PROBE_TOKEN, "private");
   assert.equal(env.FIRESTORE_PROBE_TIMEOUT_MS, "180000");
   assert.equal(env.FIRESTORE_PROBE_MANAGED_CLEAR_JOURNAL, "/tmp/managed-clear.json");
+  assert.equal(env.FIRESTORE_PROBE_DELETE_RUN_ID, "a".repeat(32));
+  assert.equal(env.FIRESTORE_PROBE_CORPUS_DIGEST, "b".repeat(64));
+  assert.equal(env.FIRESTORE_PROBE_SOURCE_GIT_SHA, "c".repeat(40));
   assert.deepEqual(JSON.parse(env.FIRESTORE_PROBE_MANAGED_CLEAR_NAMES), managedNames);
-  assert.equal(managedNames.length, 6);
+  assert.equal(managedNames.length, 12);
   assert.throws(() => sandboxManagedClearNames({ ...corpus, restPrograms: [] }), /last/);
+});
+
+test("production cleanup is blocked before send when exact ownership exceeds fixed caps", async () => {
+  const { corpus } = await prepareSandboxCorpus();
+  assert.deepEqual(productionCleanupRequestBound(corpus), {
+    mutationNameCount: 181,
+    rootCollectionCount: 27,
+    nestedTargetCount: 109,
+    managedRequestBound: 462,
+    perProgramCleanupRequestBound: 593,
+    totalRequestBound: 1322,
+  });
+  assert.throws(
+    () => requireBoundedProductionCleanup(corpus),
+    /462 initial managed requests and 1322 total requests.*caps are 400 and 1000.*generic broad clear is disabled/,
+  );
+  let networkCalls = 0;
+  await assert.rejects(
+    withBoundedProductionCleanup(corpus, async () => {
+      networkCalls += 1;
+    }),
+    /production v3 cleanup is blocked/,
+  );
+  assert.equal(networkCalls, 0);
+});
+
+test("corpus-v3 recovery locates only a private journal bound to its durable reservation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-v3-recovery-resume-"));
+  const runDir = await mkdtemp(join(directory, "fs-data-write-production-"));
+  const { corpus } = await prepareSandboxCorpus();
+  const names = sandboxManagedClearNames(corpus);
+  const runId = "e".repeat(32);
+  const corpusDigest = "b".repeat(64);
+  const gitSha = "a".repeat(40);
+  const runtimeNames = names.map((name) => name.replaceAll("DELETE_RUN_ID", runId));
+  const journal = join(runDir, "managed-clear.json");
+  try {
+    const reservation = sandboxLedgerEntry({
+      gitSha,
+      corpusDigest,
+      requests: null,
+      outcome: "reserved",
+      runDir,
+    });
+    await writeFile(join(directory, "sandbox-ledger.jsonl"), `${JSON.stringify(reservation)}\n`, {
+      mode: 0o600,
+    });
+    await writeFile(
+      journal,
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "cleanup-corpus-v3",
+        status: "deleting",
+        project: "fireemu-oracle-sbx",
+        database: "(default)",
+        runId,
+        corpusDigest,
+        sourceGitSha: gitSha,
+        names: runtimeNames,
+        deletedNames: [],
+        deleteIntent: null,
+      }),
+      { mode: 0o600 },
+    );
+    const resume = await findV3RecoveryResume(directory, names);
+    assert.equal(resume.journalPath, journal);
+    assert.equal(resume.journal.runId, runId);
+    assert.equal(resume.sourceGitSha, gitSha);
+    assert.equal(
+      v3RecoveryEnvironment({
+        token: "private",
+        meta: join(runDir, "meta.json"),
+        journal,
+        names,
+        runId,
+        corpusDigest,
+        sourceGitSha: gitSha,
+      }).FIRESTORE_PROBE_RECOVERY_MODE,
+      "recover-v3",
+    );
+
+    await writeFile(journal, JSON.stringify({ ...resume.journal, names: runtimeNames.slice(1) }), {
+      mode: 0o600,
+    });
+    await assert.rejects(findV3RecoveryResume(directory, names), /does not match/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("a failed session still reports its bounded network attempts from metadata", () => {
@@ -203,15 +316,144 @@ test("a failed session still reports its bounded network attempts from metadata"
   assert.throws(() => sessionRequestCount({ requestCount: 1001 }), /bounded/);
 });
 
-test("the stable FS observation task carries retries into its owner-approved twenty-dollar budget", () => {
+test("the stable FS observation task carries attempts into its owner-approved thirty-dollar budget", () => {
   assert.equal(
     remainingSandboxBudget([{ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 0.5 }]),
-    19.5,
+    29.5,
+  );
+  assert.equal(
+    remainingSandboxBudget([{ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 19.75 }], 0.5),
+    10.25,
   );
   assert.throws(
-    () => remainingSandboxBudget([{ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 19.75 }], 0.5),
+    () => remainingSandboxBudget([{ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 29.6 }], 0.5),
     /budget/,
   );
+});
+
+test("admission requires exactly one explicit historical unknown hold without request attribution", () => {
+  const hold = {
+    ts: "2026-09-24T00:00:00.000Z",
+    project: "fireemu-oracle-sbx",
+    database: "(default)",
+    taskId: "FS-DATA-WRITE-SANDBOX",
+    outcome: "historical-unknown-hold",
+    requests: null,
+    estimatedUsd: 9.24,
+    holdId: "FS-DATA-WRITE-SANDBOX-2026-09-24-HISTORICAL-UNKNOWN",
+  };
+  assert.equal(requireHistoricalUnknownHold([hold]), hold);
+  assert.throws(() => requireHistoricalUnknownHold([]), /historical unknown hold/);
+  assert.throws(() => requireHistoricalUnknownHold([hold, hold]), /historical unknown hold/);
+  assert.throws(
+    () => requireHistoricalUnknownHold([{ ...hold, requests: 100 }]),
+    /historical unknown hold/,
+  );
+});
+
+test("a production attempt durably reserves budget before child work and refuses an exhausted ledger", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-recording-reservation-"));
+  const ledger = join(directory, "sandbox-ledger.jsonl");
+  const rows = [];
+  try {
+    await assert.rejects(
+      reserveProductionAttempt({
+        ledgerPath: ledger,
+        rows,
+        gitSha: "a".repeat(40),
+        corpusDigest: "b".repeat(64),
+        runDir: join(directory, "no-hold"),
+      }),
+      /historical unknown hold/,
+    );
+    rows.push(unknownHold());
+    const reservation = await reserveProductionAttempt({
+      ledgerPath: ledger,
+      rows,
+      gitSha: "a".repeat(40),
+      corpusDigest: "b".repeat(64),
+      runDir: join(directory, "attempt"),
+    });
+    assert.equal(reservation.outcome, "reserved");
+    assert.equal(reservation.requests, null);
+    assert.equal(reservation.estimatedUsd, 0.5);
+    assert.match(reservation.attemptId, /^[a-f0-9]{32}$/);
+    assert.deepEqual(JSON.parse((await readFile(ledger, "utf8")).trim()), reservation);
+    assert.ok(Math.abs(remainingSandboxBudget(rows, 0.5) - 20.26) < 1e-9);
+    const secondReservation = await reserveProductionAttempt({
+      ledgerPath: ledger,
+      rows,
+      gitSha: "a".repeat(40),
+      corpusDigest: "b".repeat(64),
+      runDir: join(directory, "attempt-2"),
+    });
+    assert.notEqual(secondReservation.attemptId, reservation.attemptId);
+    assert.equal((await readFile(ledger, "utf8")).trim().split("\n").length, 2);
+    rows.push(
+      sandboxLedgerEntry({
+        gitSha: reservation.gitSha,
+        corpusDigest: reservation.corpusDigest,
+        requests: 410,
+        outcome: "recorded",
+        runDir: reservation.runDir,
+        attemptId: reservation.attemptId,
+        estimatedUsd: 0.5,
+      }),
+    );
+    assert.ok(Math.abs(remainingSandboxBudget(rows) - 19.76) < 1e-9);
+
+    await assert.rejects(
+      reserveProductionAttempt({
+        ledgerPath: ledger,
+        rows: [rows[0], { taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 30 }],
+        gitSha: "c".repeat(40),
+        corpusDigest: "d".repeat(64),
+        runDir: join(directory, "denied"),
+      }),
+      /budget/,
+    );
+    assert.equal((await readFile(ledger, "utf8")).trim().split("\n").length, 2);
+    assert.throws(
+      () => remainingSandboxBudget([{ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 29.6 }], 0.5),
+      /budget/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("production credentials are acquired under the lock only after the durable reservation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "fireemu-token-reservation-order-"));
+  const ledger = join(directory, "sandbox-ledger.jsonl");
+  await writeFile(ledger, `${JSON.stringify(unknownHold())}\n`, { mode: 0o600 });
+  try {
+    const result = await withSandboxExclusiveLock(directory, async (rows) =>
+      reserveProductionAttemptWithToken({
+        ledgerPath: ledger,
+        rows,
+        gitSha: "a".repeat(40),
+        corpusDigest: "b".repeat(64),
+        runDir: join(directory, "attempt"),
+        acquireToken: async () => {
+          const lockExists = await stat(join(directory, "fs-data-write-exclusive.lock"))
+            .then(() => true)
+            .catch(() => false);
+          assert.equal(lockExists, true);
+          const saved = (await readFile(ledger, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          assert.equal(saved.at(-1).outcome, "reserved");
+          assert.equal(saved.at(-1).requests, null);
+          return "test-token";
+        },
+      }),
+    );
+    assert.equal(result.token, "test-token");
+    assert.equal(result.reservation.outcome, "reserved");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("private append-only ledger names project, database, bounded requests and cost", () => {
@@ -239,7 +481,7 @@ test("exclusive sandbox lock rejects competitors and remains after failed work",
         assert.ok((await stat(lock)).isDirectory());
         await assert.rejects(
           withSandboxExclusiveLock(directory, async () => {}),
-          /EEXIST/,
+          /preserve its journal and reservation/,
         );
         throw new Error("recording failed");
       }),
@@ -248,7 +490,7 @@ test("exclusive sandbox lock rejects competitors and remains after failed work",
     assert.ok((await stat(lock)).isDirectory());
     await assert.rejects(
       withSandboxExclusiveLock(directory, async () => {}),
-      /EEXIST/,
+      /preserve its journal and reservation/,
     );
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -271,13 +513,13 @@ test("sandbox lock re-reads the task ledger before admitting a recording", async
   const row = (estimatedUsd) =>
     JSON.stringify({ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd }) + "\n";
   try {
-    const staleRows = [JSON.parse(row(18.5))];
+    const staleRows = [JSON.parse(row(28.5))];
     assert.equal(remainingSandboxBudget(staleRows, 1), 1.5);
-    await writeFile(ledger, row(19.5));
+    await writeFile(ledger, row(29.6));
     await assert.rejects(
       withSandboxExclusiveLock(directory, async (lockedRows) => {
-        assert.equal(lockedRows?.[0]?.estimatedUsd, 19.5);
-        remainingSandboxBudget(lockedRows, 1);
+        assert.equal(lockedRows?.[0]?.estimatedUsd, 29.6);
+        remainingSandboxBudget(lockedRows, 0.5);
       }),
       /budget exceeded/,
     );
@@ -323,16 +565,16 @@ test("legacy recovery reserves its same-task budget inside the lock before invok
   try {
     await writeFile(
       ledger,
-      `${JSON.stringify({ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 19.5 })}\n`,
+      `${JSON.stringify(unknownHold())}\n${JSON.stringify({ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 19.5 })}\n`,
     );
     const result = await withLegacyRecoveryReservation(directory, reservation, async () => {
       const rows = (await readFile(ledger, "utf8"))
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      assert.equal(rows[1].outcome, "reserved");
-      assert.equal(rows[1].estimatedUsd, 0.5);
-      assert.equal(rows[1].requests, null);
+      assert.equal(rows[2].outcome, "reserved");
+      assert.equal(rows[2].estimatedUsd, 0.5);
+      assert.equal(rows[2].requests, null);
       return { outcome: "recovered", requestCount: 180 };
     });
     assert.equal(result.outcome, "recovered");
@@ -340,9 +582,9 @@ test("legacy recovery reserves its same-task budget inside the lock before invok
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    assert.equal(rows.length, 2);
-    assert.equal(rows[1].outcome, "reserved");
-    assert.equal(rows[1].requests, null);
+    assert.equal(rows.length, 3);
+    assert.equal(rows[2].outcome, "reserved");
+    assert.equal(rows[2].requests, null);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -351,7 +593,7 @@ test("legacy recovery reserves its same-task budget inside the lock before invok
   try {
     await writeFile(
       join(blocked, "sandbox-ledger.jsonl"),
-      `${JSON.stringify({ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 19.75 })}\n`,
+      `${JSON.stringify(unknownHold())}\n${JSON.stringify({ taskId: "FS-DATA-WRITE-SANDBOX", estimatedUsd: 20.3 })}\n`,
     );
     let sent = false;
     await assert.rejects(
@@ -363,7 +605,7 @@ test("legacy recovery reserves its same-task budget inside the lock before invok
     assert.equal(sent, false);
     assert.equal(
       (await readFile(join(blocked, "sandbox-ledger.jsonl"), "utf8")).trim().split("\n").length,
-      1,
+      2,
     );
   } finally {
     await rm(blocked, { recursive: true, force: true });
@@ -373,6 +615,7 @@ test("legacy recovery reserves its same-task budget inside the lock before invok
 test("failed legacy recovery keeps its single cost reservation and exclusive lock", async () => {
   const directory = await mkdtemp(join(tmpdir(), "fireemu-recovery-failure-reservation-"));
   try {
+    await writeFile(join(directory, "sandbox-ledger.jsonl"), `${JSON.stringify(unknownHold())}\n`);
     await assert.rejects(
       withLegacyRecoveryReservation(
         directory,
@@ -391,9 +634,9 @@ test("failed legacy recovery keeps its single cost reservation and exclusive loc
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0].estimatedUsd, 0.5);
-    assert.equal(rows[0].outcome, "reserved");
+    assert.equal(rows.length, 2);
+    assert.equal(rows[1].estimatedUsd, 0.5);
+    assert.equal(rows[1].outcome, "reserved");
     assert.ok((await stat(join(directory, "fs-data-write-exclusive.lock"))).isDirectory());
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -515,6 +758,7 @@ test("legacy recovery selects and allocates its run only while holding the exclu
     runDir: join(privateDir, "fs-data-write-legacy-recovery-placeholder"),
   };
   try {
+    await writeFile(join(privateDir, "sandbox-ledger.jsonl"), `${JSON.stringify(unknownHold())}\n`);
     await mkdir(lockPath, { mode: 0o700 });
     let selected = false;
     await assert.rejects(

@@ -60,6 +60,27 @@ export function createSession(
 ) {
   let requests = 0;
   let harnessRequests = 0;
+  /** A sleep that ends early once a stop is requested, so a signal never waits out a long wait. */
+  async function pause(ms) {
+    const until = Date.now() + ms;
+    // Cleanup waits its full time: a stop request must not turn its polling into a burst.
+    const keepWaiting = () => cleaningUp || !shouldStop();
+    while (Date.now() < until && keepWaiting()) await sleep(Math.min(1000, until - Date.now()));
+    if (shouldStop() && !cleaningUp) throw fatal("stopped by a signal");
+  }
+
+  /** Applies `action` to every item, even after one fails, then reports every failure. */
+  async function eachOf(items, action) {
+    const errors = [];
+    for (const item of items) {
+      try {
+        await action(item);
+      } catch (error) {
+        errors.push(String(error.message ?? error));
+      }
+    }
+    if (errors.length) throw fatal(errors.join("; "));
+  }
   const principals = new Map();
   /** Rulesets this session created in production, deleted at the end. */
   const createdRulesets = new Set();
@@ -326,7 +347,7 @@ export function createSession(
 
   /** Deletes every account this session created; nothing else in the project is touched. */
   async function deletePrincipals() {
-    for (const name of principals.keys()) await deletePrincipal(name);
+    await eachOf([...principals.keys()], deletePrincipal);
   }
 
   // ---- sign-in configuration -----------------------------------------------------------------
@@ -405,17 +426,23 @@ export function createSession(
       failure = error;
     }
     if (tenantConfigChanged) {
-      await admin(
-        "PATCH",
-        "itk",
-        `admin/v2/projects/${ctx.project}/config?updateMask=multiTenant.allowTenants`,
-        { multiTenant: { allowTenants: false } },
-      );
-      const { json } = await admin("GET", "itk", `admin/v2/projects/${ctx.project}/config`);
-      if (json?.multiTenant?.allowTenants === true)
-        throw fatal("multiTenant.allowTenants did not read back as restored");
-      tenantConfigChanged = false;
-      changes.push("multiTenant.allowTenants restored to false (read back)");
+      try {
+        await admin(
+          "PATCH",
+          "itk",
+          `admin/v2/projects/${ctx.project}/config?updateMask=multiTenant.allowTenants`,
+          { multiTenant: { allowTenants: false } },
+        );
+        const { json } = await admin("GET", "itk", `admin/v2/projects/${ctx.project}/config`);
+        if (json?.multiTenant?.allowTenants === true)
+          throw fatal("multiTenant.allowTenants did not read back as restored");
+        tenantConfigChanged = false;
+        changes.push("multiTenant.allowTenants restored to false (read back)");
+      } catch (error) {
+        failure = failure
+          ? fatal(`${failure.message}; and the flag restore failed: ${error.message}`)
+          : error;
+      }
     }
     if (failure) throw failure;
   }
@@ -441,18 +468,16 @@ export function createSession(
 
   async function deleteDatabases() {
     if (ctx.target.kind !== "production") return;
-    for (const id of Object.values(ctx.databases)) {
+    await eachOf(Object.values(ctx.databases), async (id) => {
       const { status, json } = await admin(
         "DELETE",
         "firestore",
         `v1/projects/${ctx.project}/databases/${id}`,
         undefined,
-        {
-          expect: [200, 404],
-        },
+        { expect: [200, 404] },
       );
       if (status === 200) await waitOperation(json);
-    }
+    });
   }
 
   async function waitOperation(operation) {
@@ -551,6 +576,10 @@ export function createSession(
     const code = await new Promise((resolve) => {
       const metadata = new grpc.Metadata();
       metadata.set("google-cloud-resource-prefix", databaseName(ctx, which));
+      metadata.set(
+        "x-goog-request-params",
+        `name=${encodeURIComponent(`${documentsName(ctx, which)}/fsr-marker/${label}`)}`,
+      );
       grpcClient.makeUnaryRequest(
         "/google.firestore.v1.Firestore/GetDocument",
         (message) => protos.google.firestore.v1.GetDocumentRequest.serialize(message),
@@ -599,7 +628,7 @@ export function createSession(
       polls += 1;
       streak = ok ? streak + 1 : 0;
       if (streak >= SETTLE_STREAK) return { settleMs: Date.now() - start, polls };
-      await sleep(1000);
+      await pause(1000);
     }
     throw fatal(`release of ${label ?? "nothing"} on ${which} did not settle`);
   }
@@ -728,10 +757,10 @@ export function createSession(
 
   /** Deletes the run's rulesets; one still in use by a release (400) is a cleanup failure. */
   async function deleteCreatedRulesets() {
-    for (const name of createdRulesets) {
+    await eachOf([...createdRulesets], async (name) => {
       await admin("DELETE", "rules", `v1/${name}`, undefined, { expect: [200, 404] });
       createdRulesets.delete(name);
-    }
+    });
   }
 
   /**
@@ -751,6 +780,10 @@ export function createSession(
     const extra = (databases?.databases ?? []).filter(({ name }) => !name.endsWith("/(default)"));
     if (extra.length) problems.push(`${extra.length} named database(s) remain`);
     if (createdRulesets.size) problems.push(`${createdRulesets.size} ruleset(s) of the run remain`);
+    // The lane owns Rules on the sandbox: any ruleset left is one a lost answer hid from the run.
+    const { json: rulesets } = await admin("GET", "rules", `v1/projects/${ctx.project}/rulesets`);
+    if ((rulesets?.rulesets ?? []).length)
+      problems.push(`${rulesets.rulesets.length} ruleset(s) remain`);
     const { json: accounts } = await admin(
       "POST",
       "itk",
@@ -933,7 +966,7 @@ export function createSession(
       case "seed":
         return seed(step.documents, raw);
       case "sleep":
-        return sleep(step.ms);
+        return pause(step.ms);
       default:
         throw fatal(`unknown action ${action}`);
     }
@@ -948,7 +981,7 @@ export function createSession(
     if (typeof base !== "number") throw fatal(`principal ${principal} has no ${claim}`);
     const target = (base + plus) * 1000 + 300;
     if (ctx.target.kind === "production") {
-      await sleep(Math.max(0, target - Date.now()));
+      await pause(Math.max(0, target - Date.now()));
       return Date.now() - target <= 200;
     }
     await call(`${ctx.target.control.url}/v1/sessions/default/clock:advanceTo`, {

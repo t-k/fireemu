@@ -238,20 +238,25 @@ impl IndexRegistry {
     }
 }
 
-/// The index with the `__name__` field production appends when the definition does not end
-/// in one: in the direction of the last ordered field, ascending otherwise.
+/// The index with the `__name__` field production adds when the definition names none: after
+/// the last field, in the direction of the last ordered field (ascending otherwise), or, for a
+/// vector index, ascending just before the vector field.
 #[must_use]
 pub fn with_implied_name(definition: &IndexDefinition) -> IndexDefinition {
     let mut out = definition.clone();
-    if out
+    if out.fields.iter().any(|f| f.path.is_document_name()) {
+        return out;
+    }
+    let name = |mode| fireemu_core_firestore::index::IndexField {
+        path: fireemu_core_firestore::field_path::FieldPath::document_name(),
+        mode,
+    };
+    if let Some(vector) = out
         .fields
-        .last()
-        .is_some_and(|last| last.path.is_document_name())
-        || out
-            .fields
-            .iter()
-            .any(|f| matches!(f.mode, IndexFieldMode::Vector { .. }))
+        .iter()
+        .position(|f| matches!(f.mode, IndexFieldMode::Vector { .. }))
     {
+        out.fields.insert(vector, name(IndexFieldMode::Ascending));
         return out;
     }
     let direction = out
@@ -263,11 +268,34 @@ pub fn with_implied_name(definition: &IndexDefinition) -> IndexDefinition {
             _ => None,
         })
         .unwrap_or(IndexFieldMode::Ascending);
-    out.fields.push(fireemu_core_firestore::index::IndexField {
-        path: fireemu_core_firestore::field_path::FieldPath::document_name(),
-        mode: direction,
-    });
+    out.fields.push(name(direction));
     out
+}
+
+/// Whether `id` is shaped like an index id production assigns: base64url of a protobuf
+/// message whose field 1 is a varint.
+#[must_use]
+pub fn is_index_id(id: &str) -> bool {
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    {
+        return false;
+    }
+    let standard: String = id
+        .chars()
+        .map(|c| match c {
+            '-' => '+',
+            '_' => '/',
+            c => c,
+        })
+        .collect();
+    let padded = format!("{standard}{}", "=".repeat((4 - standard.len() % 4) % 4));
+    let Ok(bytes) = crate::rest::json::base64_decode(&padded) else {
+        return false;
+    };
+    bytes.first() == Some(&0x08) && bytes.len() >= 2 && bytes.last().is_some_and(|b| b & 0x80 == 0)
 }
 
 /// The API spelling of a query scope.
@@ -331,6 +359,30 @@ mod tests {
         assert_eq!(set.composites(), &[definition()]);
         assert!(registry.delete("p", "d", &index.id).is_some());
         assert!(registry.delete("p", "d", &index.id).is_none());
+    }
+
+    #[test]
+    fn a_vector_index_gets_an_ascending_name_before_the_vector_field_and_ids_are_checked() {
+        let vector = IndexDefinition {
+            collection_group: CollectionId::try_new("items").unwrap(),
+            query_scope: IndexQueryScope::Collection,
+            fields: vec![IndexField {
+                path: FieldPath::parse("v").unwrap(),
+                mode: IndexFieldMode::Vector { dimension: 2 },
+            }],
+        };
+        let shown = with_implied_name(&vector);
+        assert!(shown.fields[0].path.is_document_name());
+        assert_eq!(shown.fields[0].mode, IndexFieldMode::Ascending);
+        assert!(matches!(
+            shown.fields[1].mode,
+            IndexFieldMode::Vector { .. }
+        ));
+        assert!(is_index_id("CICAgOjXh4EK"));
+        let mut seed = 1;
+        assert!(is_index_id(&index_id(&mut seed)));
+        assert!(!is_index_id("not-an-index"));
+        assert!(!is_index_id(""));
     }
 
     #[test]

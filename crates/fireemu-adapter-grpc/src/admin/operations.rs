@@ -311,12 +311,23 @@ fn current(state: &RestState, project: &str, database: &str, op: &StoredOperatio
                 "projects/{project}/databases/{database}/operations/{}",
                 op.id
             );
+            let documents = super::managed::group_document_count(
+                state,
+                project,
+                database,
+                index.definition.collection_group.as_str(),
+            );
+            // The build finished after it started: production reports two instants.
+            let end = fireemu_core_types::time::LogicalInstant::from_nanos(
+                index.start_time.as_nanos() + 1_000_000,
+            );
             super::index_rest::operation_json(
                 project,
                 database,
                 &name,
                 &index,
                 registry.state(&index, state.local.now()),
+                (documents, end),
             )
         }
         None => op.current.clone(),

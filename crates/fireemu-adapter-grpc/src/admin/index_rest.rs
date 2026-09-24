@@ -69,6 +69,7 @@ pub(crate) fn operation_json(
     operation_name: &str,
     index: &RuntimeIndex,
     state: IndexState,
+    (documents, end): (u64, fireemu_core_types::time::LogicalInstant),
 ) -> Value {
     let name = index_name(project, database, index);
     match state {
@@ -84,15 +85,22 @@ pub(crate) fn operation_json(
         IndexState::Ready => {
             let mut response = index_json(project, database, index, state);
             response["@type"] = json!(INDEX_TYPE_URL);
+            let mut metadata = json!({
+                "@type": INDEX_METADATA_TYPE_URL,
+                "startTime": instant(index.start_time),
+                "endTime": instant(end),
+                "index": name,
+                "state": "SUCCESSFUL",
+            });
+            if documents > 0 {
+                metadata["progressDocuments"] = json!({
+                    "estimatedWork": documents.to_string(),
+                    "completedWork": documents.to_string(),
+                });
+            }
             json!({
                 "name": operation_name,
-                "metadata": {
-                    "@type": INDEX_METADATA_TYPE_URL,
-                    "startTime": instant(index.start_time),
-                    "endTime": instant(index.start_time),
-                    "index": name,
-                    "state": "SUCCESSFUL",
-                },
+                "metadata": metadata,
                 "done": true,
                 "response": response,
             })
@@ -242,8 +250,14 @@ pub(crate) fn route(
                 Ok(index) => {
                     let name =
                         format!("projects/{project}/databases/{database}/operations/{operation}");
-                    let initial =
-                        operation_json(project, database, &name, &index, IndexState::Creating);
+                    let initial = operation_json(
+                        project,
+                        database,
+                        &name,
+                        &index,
+                        IndexState::Creating,
+                        (0, now),
+                    );
                     super::operations::record_index(
                         state,
                         project,
@@ -269,6 +283,11 @@ pub(crate) fn route(
                 ok(json!({ "indexes": indexes }))
             }
         }
+        ("GET", [id]) if !super::indexes::is_index_id(id) => error(
+            tonic::Code::InvalidArgument,
+            &format!("Invalid index resource id \"{id}\"."),
+            None,
+        ),
         ("GET", [id]) => match registry.get(project, database, id) {
             Some(index) if group == "-" || index.definition.collection_group.as_str() == group => {
                 ok(index_json(

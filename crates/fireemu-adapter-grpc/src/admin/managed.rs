@@ -121,6 +121,12 @@ pub trait ManagedStorage: Send + Sync {
 /// The daemon's managed storage, when it serves one.
 pub type SharedManagedStorage = Arc<dyn ManagedStorage>;
 
+/// When a local operation finished: a moment after it started, as production reports two
+/// distinct instants for work that takes it seconds.
+fn finished(start: LogicalInstant) -> LogicalInstant {
+    LogicalInstant::from_nanos(start.as_nanos() + 1_000_000)
+}
+
 fn instant(at: LogicalInstant) -> Json {
     json!(timestamp_to_json(&encode_instant(at)))
 }
@@ -217,6 +223,27 @@ fn documents_of(
         .collect())
 }
 
+/// How many documents of a database belong to one collection group (an index build's and a
+/// field change's progress counter).
+pub(crate) fn group_document_count(
+    state: &RestState,
+    project: &str,
+    database: &str,
+    group: &str,
+) -> u64 {
+    documents_of(state, project, database)
+        .map(|all| {
+            all.iter()
+                .filter(|d| {
+                    d.path
+                        .last()
+                        .is_some_and(|(collection, _)| collection == group)
+                })
+                .count() as u64
+        })
+        .unwrap_or(0)
+}
+
 /// `databases/{d}:exportDocuments`.
 pub(crate) fn export(
     state: &RestState,
@@ -266,7 +293,7 @@ pub(crate) fn export(
         prefix,
         collection_ids: collection_ids.clone(),
         namespace_ids: namespace_ids.clone(),
-        window: (start, start),
+        window: (start, finished(start)),
         documents,
     };
     let outcome = match storage.export(&job) {
@@ -287,7 +314,7 @@ pub(crate) fn export(
         "ExportDocumentsMetadata",
         start,
         &[
-            ("endTime", instant(start)),
+            ("endTime", instant(finished(start))),
             ("operationState", json!("SUCCESSFUL")),
             ("progressDocuments", progress(outcome.documents, false)),
             ("progressBytes", progress(outcome.bytes, false)),
@@ -406,7 +433,7 @@ pub(crate) fn import(
         "ImportDocumentsMetadata",
         start,
         &[
-            ("endTime", instant(start)),
+            ("endTime", instant(finished(start))),
             ("operationState", json!("SUCCESSFUL")),
             ("progressDocuments", progress(count, true)),
             ("progressBytes", progress(outcome.bytes, true)),
@@ -583,7 +610,7 @@ pub(crate) fn bulk_delete(
         "BulkDeleteDocumentsMetadata",
         start,
         &[
-            ("endTime", instant(start)),
+            ("endTime", instant(finished(start))),
             ("operationState", json!("SUCCESSFUL")),
             ("progressDocuments", progress(doomed.len() as u64, false)),
             ("progressBytes", json!({})),
